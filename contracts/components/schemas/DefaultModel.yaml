@@ -26,6 +26,14 @@ properties:
     maxLength: 256
     description: Bare catalog model id. Empty when unset.
     example: "z-ai/glm-5.2"
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Stored effort for the default model (effort-levels spec FR-067): ""
+      (Not set), "provider_default", a catalog level name, "on" or "off". Agents
+      riding the default model with no effort of their own use it. Omitted keeps
+      the stored value; null is refused.
   context_window:
     type: integer
     minimum: 0

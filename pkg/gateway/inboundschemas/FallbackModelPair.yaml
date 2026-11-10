@@ -26,3 +26,10 @@ properties:
       Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses
       this provider's connection — independent of the primary's provider.
     example: "anthropic"
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Stored effort for this model slot (effort-levels spec FR-029): ""
+      (Not set; on a recap slot, the Off default), "provider_default", a catalog
+      level name, "on" or "off". Omitted keeps the stored value; null is refused.

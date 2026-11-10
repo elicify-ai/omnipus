@@ -1,0 +1,1231 @@
+{
+  "purpose": "Author RED repair execution index, not independent CHECK or feature acceptance",
+  "generated_at_utc": "2026-11-01T00:59:51.433318+00:00",
+  "worktree": "/workspace/wt-effort",
+  "branch": "landing/effort",
+  "pre_repair_head": "e03c89dc3a22ee2dfb351ac24639d21dfd947892",
+  "specification": "/workspace/omnipus-coordination/designs-20261029/effort-levels-spec-r10.md",
+  "independent_input": "/workspace/omnipus-coordination/designs-20261029/effort-red-check-report-1.md",
+  "qualifications": [
+    "All commands were serial foreground runs through plain /usr/local/bin/heavy; Go tests used explicit feature test names, build tags, CGO_ENABLED=0 and -p 1.",
+    "Raw nonzero exits remain failures. Loud BLOCKED prerequisites do not prove their downstream assertions executed.",
+    "Passing baseline controls are PINs, not new behavior GREEN. No local full suite, production fix, mutation, UAT, push or independent CHECK was performed.",
+    "Current-source digests below were measured at handoff, not at historical run time. Read each saved raw log for exact assertions and subcase results.",
+    "Runner copy/admission failures sometimes triggered the installed wrapper automatic local-slot fallback. The final child result is recorded; no manual --local bypass was used.",
+    "Memory validation-on missing schema blocks both Memory slots, including two omitted-effort controls. Twelve other omitted-effort REST controls and eight absent-effort onboarding controls pass.",
+    "Green and mutation/proof-of-failability verification are deferred to independent CHECK."
+  ],
+  "counts": {
+    "go_top_level": 133,
+    "go_pass_baseline_pins": 16,
+    "go_fail_including_blocked": 117,
+    "component_cases": 36,
+    "component_fail": 36,
+    "browser_cases": 12,
+    "browser_pass_baseline_pin": 1,
+    "browser_fail": 11
+  },
+  "current_source_fingerprints": [
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_bedrock_loop_test.go",
+      "sha256": "76f13a2e7dd1fe5db8cf689ae012e1f96e7ecc0a2d94906912fe39394054671a"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_containment_test.go",
+      "sha256": "f8e4f26c423d4aed107b13cec6717a4789840f5da9663d832510ac9a29ce4f93"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go",
+      "sha256": "ee78a3e5de6869ee7ecee1a3512827bd162cd92694377f6efc574763d63f8d3f"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_dispatch_commands_test.go",
+      "sha256": "9f84bbae55d38adf055616d449ed301ba19e4b19e961a9dd5a0484160d27441e"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+      "sha256": "c6ffb41b89163a538bfa991c6010f294e82757420b267bad2f52b900e4d0f750"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_native_tool_loop_test.go",
+      "sha256": "31bab32d82f60a4ecc06b3a183d6adf3a08fbaba5d5fc059c88f6050179d6790"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_parent_test.go",
+      "sha256": "680b7479174989321185b026323edce075fb21024659867c9390af8cf60f9128"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_recap_adapters_test.go",
+      "sha256": "1a36b83e44ef1207f64ff13e7f66dbfccb81b2ec08fc2c5d387c54b7467b4035"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_recap_request_test.go",
+      "sha256": "cdf8000cf64d5fd8d94185bbabd0458998819723b8107b02fa079872f16c3718"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_recap_runtime_test.go",
+      "sha256": "b2bb51384d5a1a27284e6b4ae516153620863f6ee4418b54374a4257d71b4897"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_recap_timing_workflow_test.go",
+      "sha256": "2fe85ae7a5dcc69cfb5635607e5813ec39dc3baef706e96874198388aa4e7118"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_rejection_lifecycle_test.go",
+      "sha256": "207152a9279a209de3b94ee6df107363aaf7ca8e8a21a6b09a7d2ebe4f5f9ad8"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+      "sha256": "6285911c6c85203e8354e9b9a6bacec18e51bc93eb0cea4b6fbcbcbb231e09ba"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_router_tool_loop_test.go",
+      "sha256": "4b98924432e0dab25fd27b74041cd38491c5227b0cb7f252a0a9d95becbf58f1"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_state_records_test.go",
+      "sha256": "7ecb57edbbd1b25e8214ab21f2bff4dd9f681746653b4f8ecdfb5f7b4a85dcf4"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_tool_transcript_test.go",
+      "sha256": "b220a53e2d800c13c2693deaeb8b28499d077d24d389a7ddaa038b75a5b39cf3"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go",
+      "sha256": "3596628769be09cac28845f4977bcaf04750351902fe55134b1d4a3ee2c1116c"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/app/internal/run/effort_red_terminal_test.go",
+      "sha256": "649e0a0c1894a41768df30a97947776cbf6e9e200559de8d5a3b62cfed570f93"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+      "sha256": "70367c9ecaf8527643abed2e4d6266fcebca390f6e6eea09ad80c1e31e74ab34"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/config/effort_red_config_test.go",
+      "sha256": "271d862e94a5151e81270c519309b051b55439594f23468617d94119052bea82"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+      "sha256": "9f8567e1e57d96bcab464651d2d5236861da1b63b829daa878cf3f93663e41be"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_history_fixture_test.go",
+      "sha256": "bc444bb960a2de537a86bb0ecd827c01aaa7cf4f936f231b7dba550c30a79fb5"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_live_turn_test.go",
+      "sha256": "4bf5c3842a74b76d38f4dd87201892547e2b2ee93f6cc2b0d9f1b7b92c8ade28"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_multimodel_test.go",
+      "sha256": "ad5b3983c2dc540199eda64c5c2149ce04e57234a555a56ce1ba1611c6a860d7"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_native_tool_loop_test.go",
+      "sha256": "4a3a284e791d62bba3f59116bb5b212edef30296ae5f685c04b7ff2812cee3d3"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_onboarding_matrix_test.go",
+      "sha256": "0a5118eb89dd54f7a01e45758a79b9537aa3c9904e08f8d67be8628a25a67cba"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_pair_routing_test.go",
+      "sha256": "23e78f2fcb130aa17ba2890e717482cf175b2cfbe73f55dc1b2778147a5669f1"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_production_paging_test.go",
+      "sha256": "b0f3bb196c0fc2c427060820e51b6b6122df35b680c1f6210c67f00c9174b556"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_rest_boundary_matrix_test.go",
+      "sha256": "a4563db3a50e60ad782f56def52115be2820b1dcc6015b7d78951e47302d7deb"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_terminal_branch_test.go",
+      "sha256": "651ec5fba993a38d8701638a6928cf298ce182366bc7cc611793eea4f45458c8"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/providers/catalog/effort_red_served_reasoning_test.go",
+      "sha256": "42bced83736c14e600a5f67f4ca4b2b095253fd286f967fbdc1c8dab910d605e"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/providers/common/effort_red_continuation_test.go",
+      "sha256": "5b82d264cba62fcbc49e55663b98054acacf0844530a360e6d39b78871affbb9"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/providers/common/effort_red_tool_guard_test.go",
+      "sha256": "e8de1af7e9515e9a6bd8cd600e2b5830f5b3ca032bfcda7df1a95292122c4462"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/providers/common/effort_red_wire_matrix_test.go",
+      "sha256": "e3f132c7b17992595f8650c03b7057c4b5f26c50df60f34851ddc41b948b943f"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/providers/effort_red_codex_recap_test.go",
+      "sha256": "0a80361d10c0ae119af04cdb1ccce06d93d424dfcd53700d812da2c3ce84a221"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/providers/effortdialect/effortdialect_red_test.go",
+      "sha256": "e9679deed94c7820a847b248161b744f68187ce707d503ee7978eaf703324c80"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_boundary_matrix_test.go",
+      "sha256": "e788a9aae477d7f6697fea677e786102de6e2d7570e5eb9d5a10866a3973d1e1"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_catalog_test.go",
+      "sha256": "7e0b36ddde36f679f2d6c4910997afbc8dce83b46e1e5515929c310ab9308b4e"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+      "sha256": "def945a3fe430a40fcf54437452b36722f2e4cbcbf60e9cbb3c4037baca148f5"
+    },
+    {
+      "file": "/workspace/wt-effort/src/components/agents/AgentProfile.effort-inheritance.test.tsx",
+      "sha256": "54d9fa856e50299bd4914fff1689e6583e750983d44c4eb792889432d34a77f0"
+    },
+    {
+      "file": "/workspace/wt-effort/src/components/settings/effort-red-recap-limits.test.tsx",
+      "sha256": "96ce8b81456b0efd5b2f470024c0adae8f826256c297723bdadc5926cda5e110"
+    },
+    {
+      "file": "/workspace/wt-effort/src/components/ui/model-effort-picker.test.tsx",
+      "sha256": "1e76044e59a35908008eccd9a8a018063f4089d2292b904a60ee56cd58da35c6"
+    },
+    {
+      "file": "/workspace/wt-effort/tests/e2e/effort.spec.ts",
+      "sha256": "38bbccd2c4d80783719190792a1c757ced0bbae512f819846ce4a23c41b193e3"
+    },
+    {
+      "file": "/workspace/wt-effort/tests/effort/playwright.config.ts",
+      "sha256": "e637d04bc346ef2b176e07c105f9adb0d8249df86ebe2570b653945dafa58a21"
+    }
+  ],
+  "runs": [
+    {
+      "scope": "agent",
+      "log": "/workspace/logs/effort-red/fix1-authoritative-agent.log",
+      "log_sha256": "98794399bc0e0a68b326ba251e98c687d92d8cf577a5d24a440ba80d131c10af",
+      "command_as_recorded": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run \\^\\(TestT_P5_S17_S19_S35_S90_BedrockBaseFamilyAndActualLoop\\|TestT_C1_S01_DebugLogCarriesReasoningLength\\|TestT_C1_S05_RecapWarnCarriesLengthOnly\\|TestT_C3_S03_NonTruncatedReasoningOnly\\|TestT_C3_S04_SameTextOnMessengerAndParent\\|TestT_C4_S85_OutputLimitedReasoningOnly\\|TestT_C4_S06_ReasoningOnlyTaskClassification\\|TestT_C2_S02_ReasoningChannelZeroTrace\\|TestT_CMD_S36_RealRuntimeCapabilityStatusAndRefusals\\|TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart\\|TestT_S2_S87_InheritedHighChangedToOffAtRuntime\\|TestT_Tools_S65_DeniedEffortWriteCannotChangeBytes\\|TestT_CMD_S39_RealLoopAndStoreRestartKeepsConversationEffort\\|TestT_S1_Mapping_D2_Fixture\\|TestT_S1_Mapping_S09_NoteTexts\\|TestT_S1_Mapping_TurnNotes\\|TestT_S1_Mapping_S14_Cleared\\|TestT_S1_Mapping_S73_NothingSendable\\|TestT_S1_Mapping_S48_S49_StaleValues\\|TestT_S1_Mapping_S72_Inherited\\|TestT_S1_Mapping_InheritedStates_S86_S87_S91\\|TestT_P5_S34_S90_RealNativeToolExecutionRecordsAndNextLoop\\|TestT_C3_S04_RealDelegatedParentReceivesEmptyAnswerSentinel\\|TestT_L4_S80_RecapCapReachesEverySerializedAdapterField\\|TestT_C5_S71_RecapDefaultOffPerRoute\\|TestT_C5_S71_RecapNoReasonDataSendsNothing\\|TestT_C5_S78_ConfiguredRecapEffortReachesBody\\|TestT_C5_S78_RecapFallbackServesWithItsOwnEffort\\|TestT_C5_S80_RecapLimitEffects\\|TestT_L8_S97_OneOverallTimeLimit\\|TestT_L4_S79_S80_S83_RecapPromptInputDeadlineAndRetries\\|TestT_L4_S79_S80_S83_FallbackKeepsConfiguredTail\\|TestT_L4_S84_BootstrapUsesConfiguredIdleAge\\|TestT_L4_S79_S80_S83_BootstrapSpacing\\|TestT_L4_S81_S83_ClampOnlyInUseWarnsOnceAndPreservesDisk\\|TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes\\|TestT_P2_S26_ActualToolRejectionRefreshAndNewProcessState\\|TestT_P2_S28_TimeoutWithEffortHasNoEffortResend\\|TestT_P2_S24_RejectedEffortRetriedOnce\\|TestT_P2_S25_FailingRetrySurfacesOriginalError\\|TestT_P2_S26_RejectionRememberedUntilRestart\\|TestT_P2_S28_Only400And422TriggerRetry\\|TestT_P2_S29_EachAttemptAccountedSeparately\\|TestT_S2_S52_UnsetFallbackSendsNothing\\|TestT_S2_S53_FallbackUsesOwnSetting\\|TestT_S2_S51_DefaultModelEffortUsed\\|TestT_R0_S19_ProviderDefaultSendsNothing\\|TestT_R0_S20_ExtraBodyOverrideRecorded\\|TestT_C6_S30_S31_S32_ActualRouterToolLoopAndDurableRestart\\|TestT_R0_S19_CompletedProviderDefaultAndUnchosenRecords\\|TestT_S3_S91_OwnOffSurvivesExternalModelChange\\|TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice\\|TestT_Tools_S63_ActualDispatchStoresEffortCallAndResult\\|TestT_U1_S43_CallEntryCarriesReasoningTokens\\|TestT_U1_S44_UnreportedReasoningStaysAbsent\\|TestT_U1_S88_FailedAttemptKeepsItsCount\\|TestT_U1_S88_ReportedZeroBeatsAbsent\\)\\$ -v ./pkg/agent/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 7,
+        "FAIL": 50
+      },
+      "named_tests": [
+        {
+          "test": "TestT_P5_S17_S19_S35_S90_BedrockBaseFamilyAndActualLoop",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_bedrock_loop_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; the runtime id is opaque, not a family hint"
+        },
+        {
+          "test": "TestT_C1_S01_DebugLogCarriesReasoningLength",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_containment_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; the line must carry reasoning_chars (FR-016)"
+        },
+        {
+          "test": "TestT_C1_S05_RecapWarnCarriesLengthOnly",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_containment_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"-1\" is not greater than or equal to \"0\"; the warning carries response_chars (FR-041)"
+        },
+        {
+          "test": "TestT_C3_S03_NonTruncatedReasoningOnly",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_containment_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; exactly two provider requests: the original and one retry (S-03)"
+        },
+        {
+          "test": "TestT_C3_S04_SameTextOnMessengerAndParent",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_containment_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; the parent receives exactly the S-03 text (S-04)"
+        },
+        {
+          "test": "TestT_C4_S85_OutputLimitedReasoningOnly",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_containment_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_C4_S06_ReasoningOnlyTaskClassification",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_containment_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_C2_S02_ReasoningChannelZeroTrace",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_containment_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "/workspace/wt-effort/pkg/agent/loop.go contains \"ReasoningChannelID\" — the reasoning channel must be deleted outright (S-02, FR-017)"
+        },
+        {
+          "test": "TestT_CMD_S36_RealRuntimeCapabilityStatusAndRefusals",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should not be: \"ok\"; the command must not fall through to the model"
+        },
+        {
+          "test": "TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should not be: \"ok\"; registered command must handle before provider invocation"
+        },
+        {
+          "test": "TestT_S2_S87_InheritedHighChangedToOffAtRuntime",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true"
+        },
+        {
+          "test": "TestT_Tools_S65_DeniedEffortWriteCannotChangeBytes",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_dispatch_commands_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_CMD_S39_RealLoopAndStoreRestartKeepsConversationEffort",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_dispatch_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: "
+        },
+        {
+          "test": "TestT_S1_Mapping_D2_Fixture",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; D2 row 1 mapped value"
+        },
+        {
+          "test": "TestT_S1_Mapping_S09_NoteTexts",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: "
+        },
+        {
+          "test": "TestT_S1_Mapping_TurnNotes",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: "
+        },
+        {
+          "test": "TestT_S1_Mapping_S14_Cleared",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; source \"high\" cleared to Not set when the model does not reason (S-14)"
+        },
+        {
+          "test": "TestT_S1_Mapping_S73_NothingSendable",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; Off into nothing sendable must block (S-73)"
+        },
+        {
+          "test": "TestT_S1_Mapping_S48_S49_StaleValues",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; Off with no Off on target blocks at the picker (S-10/S-48)"
+        },
+        {
+          "test": "TestT_S1_Mapping_S72_Inherited",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; agent's High sent as Medium here (S-72)"
+        },
+        {
+          "test": "TestT_S1_Mapping_InheritedStates_S86_S87_S91",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_mapping_d2_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; an inherited Off on a target without Off must block into the escape step (S-86, D2 row 8) — RED: the scaffold returns the sentinel"
+        },
+        {
+          "test": "TestT_P5_S34_S90_RealNativeToolExecutionRecordsAndNextLoop",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_native_tool_loop_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; S-90 explicit Off survives each actual request"
+        },
+        {
+          "test": "TestT_C3_S04_RealDelegatedParentReceivesEmptyAnswerSentinel",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_parent_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; empty non-truncated child retries exactly once"
+        },
+        {
+          "test": "TestT_L4_S80_RecapCapReachesEverySerializedAdapterField",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_adapters_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; configured recap limit must reach serialized max_output_tokens"
+        },
+        {
+          "test": "TestT_C5_S71_RecapDefaultOffPerRoute",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_request_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; the recap body carries reasoning.effort (default Off per FD-19)"
+        },
+        {
+          "test": "TestT_C5_S71_RecapNoReasonDataSendsNothing",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_request_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_C5_S78_ConfiguredRecapEffortReachesBody",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_request_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; the configured recap effort reaches the recap body (S-78)"
+        },
+        {
+          "test": "TestT_C5_S78_RecapFallbackServesWithItsOwnEffort",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_request_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; the recap fallback carries its own effort in the switch encoding (S-53 analogue on the recap chain) — RED: the fallback's reasoning_effort member is dropped by the loader"
+        },
+        {
+          "test": "TestT_C5_S80_RecapLimitEffects",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_request_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; recap_max_output_tokens=4096 reaches the recap body (S-80 observed row) — RED: today's hardcoded 2048 ignores the setting"
+        },
+        {
+          "test": "TestT_L8_S97_OneOverallTimeLimit",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_request_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; the injected time limit must be honoured; primary tries: 3"
+        },
+        {
+          "test": "TestT_L4_S79_S80_S83_RecapPromptInputDeadlineAndRetries",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_runtime_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; settings change the actual history tail"
+        },
+        {
+          "test": "TestT_L4_S79_S80_S83_FallbackKeepsConfiguredTail",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_runtime_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; fallback setting affects kept context, not only stored settings"
+        },
+        {
+          "test": "TestT_L4_S84_BootstrapUsesConfiguredIdleAge",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_runtime_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"[]\" should have 1 item(s), but has 0; only the due session is recapped"
+        },
+        {
+          "test": "TestT_L4_S79_S80_S83_BootstrapSpacing",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_runtime_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"1.000328983s\" is not greater than or equal to \"19.95s\"; spacing setting controls actual catch-up starts"
+        },
+        {
+          "test": "TestT_L4_S81_S83_ClampOnlyInUseWarnsOnceAndPreservesDisk",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_runtime_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"[]\" should have 1 item(s), but has 0; exactly one warning per clamped key despite repeated use"
+        },
+        {
+          "test": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_timing_workflow_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Max difference between 1793493372902 and 1793493402602 allowed is 25, but difference was -29700; every received context uses the same recap deadline"
+        },
+        {
+          "test": "TestT_P2_S26_ActualToolRejectionRefreshAndNewProcessState",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_rejection_lifecycle_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; one real tool round plus the rejected attempt and exactly one resend"
+        },
+        {
+          "test": "TestT_P2_S28_TimeoutWithEffortHasNoEffortResend",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_rejection_lifecycle_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; positive control: timed-out request actually carried effort"
+        },
+        {
+          "test": "TestT_P2_S24_RejectedEffortRetriedOnce",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"[map[max_tokens:8192 messages:[map[content:## Environment; exactly two requests: the original and one resend (S-24)"
+        },
+        {
+          "test": "TestT_P2_S25_FailingRetrySurfacesOriginalError",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"[map[messages:[map[content:[map[cache_control:map[type:ephemeral] text:hi type:text]] role:user]] model:primary-m]]\" should have 2 item(s), but has 1; exactly two requests are made: the original and one resend (S-25)"
+        },
+        {
+          "test": "TestT_P2_S26_RejectionRememberedUntilRestart",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"[map[messages:[map[content:[map[cache_control:map[type:ephemeral] text:hi type:text]] role:user]] model:primary-m]]\" should have 2 item(s), but has 1"
+        },
+        {
+          "test": "TestT_P2_S28_Only400And422TriggerRetry",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; status 400: 1 extra request(s) (S-28)"
+        },
+        {
+          "test": "TestT_P2_S29_EachAttemptAccountedSeparately",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; two attempts are recorded, never one doubled and never one dropped (S-29)"
+        },
+        {
+          "test": "TestT_S2_S52_UnsetFallbackSendsNothing",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_S2_S53_FallbackUsesOwnSetting",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; the fallback sends its own stored effort max in the OpenRouter encoding (S-53) — RED: FallbackModel.reasoning_effort cannot be stored at this head"
+        },
+        {
+          "test": "TestT_S2_S51_DefaultModelEffortUsed",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; the default model's effort (medium) is sent in the route's encoding (S-51) — RED: the loader drops the default-model effort key, so nothing carries it"
+        },
+        {
+          "test": "TestT_R0_S19_ProviderDefaultSendsNothing",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_R0_S20_ExtraBodyOverrideRecorded",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; the override is recorded (S-20 — RED: no record)"
+        },
+        {
+          "test": "TestT_C6_S30_S31_S32_ActualRouterToolLoopAndDurableRestart",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_router_tool_loop_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; engine projection and durable codec preserve every opaque/unknown member"
+        },
+        {
+          "test": "TestT_R0_S19_CompletedProviderDefaultAndUnchosenRecords",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_state_records_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; no sent, reason, provider or model on explicit Provider default"
+        },
+        {
+          "test": "TestT_S3_S91_OwnOffSurvivesExternalModelChange",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_state_records_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: "
+        },
+        {
+          "test": "TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_state_records_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: "
+        },
+        {
+          "test": "TestT_Tools_S63_ActualDispatchStoresEffortCallAndResult",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_tool_transcript_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"{\\\"changed_fields\\\":[],\\\"check_scope\\\":\\\"\\\",\\\"error\\\":{\\\"message\\\":\\\"invalid arguments for tool \\\\\\\"update_agent\\\\\\\": property \\\\\\\"fallback_models[0]\\\\\\\": unexpected property \\\\\\\"reasoning_effort\\\\\\\"\\\"},\\\"missing_parts\\\":[],\\\"not_tested\\\":[],\\\"outcome\\\":\\\"failed: nothing saved\\\",\\\"reason\\\":\\\"invalid arguments for tool \\\\\\\"update_agent\\\\\\\": property \\\\\\\"fallback_models[0]\\\\\\\": unexpected property \\\\\\\"reasoning_effort"
+        },
+        {
+          "test": "TestT_U1_S43_CallEntryCarriesReasoningTokens",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; the parsed usage carries reasoning_tokens 120 (S-43/FR-024) — RED: UsageInfo has no reasoning field"
+        },
+        {
+          "test": "TestT_U1_S44_UnreportedReasoningStaysAbsent",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_U1_S88_FailedAttemptKeepsItsCount",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; A's failed call entry keeps reasoning_tokens 120 (S-88) — RED: UsageInfo has no reasoning field"
+        },
+        {
+          "test": "TestT_U1_S88_ReportedZeroBeatsAbsent",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; the reported zero is carried as 0 (D7 row 9) — RED"
+        }
+      ]
+    },
+    {
+      "scope": "gateway",
+      "log": "/workspace/logs/effort-red/fix1-authoritative-gateway-with-state.log",
+      "log_sha256": "92a1d1325982e3040a9a240c53032e161c1d0c72cf89fec524ec10a75f8eb5ec",
+      "command_as_recorded": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run \\^\\(TestT_GW_AgentPrimaryEffortSavedAndReadBack\\|TestT_GW_AgentEffortSaveValidationRows\\|TestT_GW_AgentNameOnlyEditKeepsStoredEffort\\|TestT_GW_AgentModelChangeWithoutEffortMappedOrBlocked\\|TestT_GW_DefaultModelEffortStored\\|TestT_GW_ProviderDeleteNewDefaultCarriesEffort\\|TestT_GW_OnboardingEffortStoredOnVariants\\|TestT_GW_OnboardingInvalidPlacementsRefused\\|TestT_GW_RecapEffortAndProviderStored\\|TestT_GW_RecapLimitsStoredAndBounded\\|TestT_GW_AgentNullEffortRefused\\|TestT_GW_ChatFrameEffortMetadataBoundaries\\|TestT_GW_TurnCompletionFrameCarriesEffortMetadata\\|TestT_GW_HistoryTransportsCarryEffortRecord\\|TestT_GW_ContractSchemasDeclareEffortKeys\\|TestT_GW_RealTurnDisplaysReportedReasoningSnapshot\\|TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory\\|TestT_GW_S34_S90_StreamingNativeToolLoop\\|TestT_GW_S61_BothModesVariantsAtomicPairAndAccount\\|TestT_GW_S61_RefusalsAreAtomicAcrossModesAndVariants\\|TestT_GW_S61_InvalidPlacementsKeepWholeTransactionUnchanged\\|TestT_GW_S61_AuthorityPinsWithValidEffortShape\\|TestT_GW_S15_S75_RealFrameRoutesExactPairAndMapsToServingModel\\|TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut\\|TestT_GW_S94_OmissionKeepsAndEmptyClearsStoredOverride\\|TestT_GW_S94_RESTNullEmptyOmittedAndLengthMatrix\\|TestT_GW_S70_TerminalTextUsesRealWebCommandBranch\\)\\$ -v ./pkg/gateway/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 3,
+        "FAIL": 24
+      },
+      "named_tests": [
+        {
+          "test": "TestT_GW_AgentPrimaryEffortSavedAndReadBack",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; RED S-50: the PUT must accept a per-agent primary-model effort; today the strict shape check refuses the unknown field (got 400, body={\"code\":\"invalid_input\",\"error\":\"invalid agent update: json: unknown field \\\"reasoning_effort\\\"\"}"
+        },
+        {
+          "test": "TestT_GW_AgentEffortSaveValidationRows",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; RED S-56: an unoffered level must be stored as written; today the strict shape check refuses the whole PUT (got 400, body={\"code\":\"invalid_input\",\"error\":\"invalid agent update: json: unknown field \\\"reasoning_effort\\\"\"}"
+        },
+        {
+          "test": "TestT_GW_AgentNameOnlyEditKeepsStoredEffort",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; RED S-55: the stored level must be kept as written across a name-only save (got <nil>)"
+        },
+        {
+          "test": "TestT_GW_AgentModelChangeWithoutEffortMappedOrBlocked",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; body={\"activation_status\":\"active\",\"changed_fields\":[\"model\",\"provider\"],\"color\":\"#8E9196\",\"editable_fields\":[{\"editable\":true,\"name\":\"name\"},{\"editable\":true,\"name\":\"description\"},{\"editable\":true,\"name\":\"figure\"},{\"editable\":true,\"name\":\"role\"},{\"editable\":true,\"name\":\"color\"},{\"editable\":true,\"name\":\"soul\"},{\"editable\":true,\"name\":\"skills\"},{\"editable\":true,\"name\":\"mcp_servers\"},{\"editable\":true,\"name"
+        },
+        {
+          "test": "TestT_GW_DefaultModelEffortStored",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; RED S-59: the default-model PUT must accept pair+effort together; today the strict decode refuses the unknown key (got 400, body={\"error\":\"request body does not match DefaultModelUpdateRequest: json: unknown field \\\"reasoning_effort\\\"\"}"
+        },
+        {
+          "test": "TestT_GW_ProviderDeleteNewDefaultCarriesEffort",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; RED S-62: provider removal with a replacement+effort must succeed; today the strict decode refuses the effort key (got 400, body={\"error\":\"request body does not match ProviderDeleteRequest: json: unknown field \\\"reasoning_effort\\\"\"}"
+        },
+        {
+          "test": "TestT_GW_OnboardingEffortStoredOnVariants",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; RED S-61: the api_key variant must accept reasoning_effort on the declared variant; today the strict variant decode refuses it (got 400, body={\"error\":\"field not allowed on provider auth_method \\\"api_key\\\": json: unknown field \\\"reasoning_effort\\\" — see the OnboardingProviderApiKey schema\"}"
+        },
+        {
+          "test": "TestT_GW_OnboardingInvalidPlacementsRefused",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_GW_RecapEffortAndProviderStored",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; RED S-60: GET must carry recap_reasoning_effort (got <nil>)"
+        },
+        {
+          "test": "TestT_GW_RecapLimitsStoredAndBounded",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; RED S-80: recap_max_output_tokens=4096 must be stored and read back (got <nil>)"
+        },
+        {
+          "test": "TestT_GW_AgentNullEffortRefused",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; S-94 validation-off refusal must identify null, not an unknown effort field"
+        },
+        {
+          "test": "TestT_GW_ChatFrameEffortMetadataBoundaries",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should NOT be empty, but was []; RED D5 row 6: a 65-character metadata.provider must be refused on the error-frame path independently of gateway.validate_inbound (validation on=false); today it is silently accepted (errs=[])"
+        },
+        {
+          "test": "TestT_GW_TurnCompletionFrameCarriesEffortMetadata",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; actual configured High belongs to the actual serving pair"
+        },
+        {
+          "test": "TestT_GW_HistoryTransportsCarryEffortRecord",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; persisted effort on entry-egw-a"
+        },
+        {
+          "test": "TestT_GW_ContractSchemasDeclareEffortKeys",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_gateway_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "map[string]interface {}{\"cost\":map[string]interface {}{\"description\":\"Total cost in USD for this turn.\", \"minimum\":0, \"type\":\"number\"}, \"duplicate_tool_call_id_count\":map[string]interface {}{\"description\":\"Tool call IDs that appeared more than once. Replay-only.\", \"minimum\":0, \"type\":\"integer\"}, \"duration_ms\":map[string]interface {}{\"description\":\"Wall-clock duration of the turn in milliseconds.\", \"minimum\":0, \"type\""
+        },
+        {
+          "test": "TestT_GW_RealTurnDisplaysReportedReasoningSnapshot",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_live_turn_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; display snapshot is the reported 120, never 240"
+        },
+        {
+          "test": "TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_multimodel_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; BLOCKED: streaming multi-candidate fallback not implemented — required by S-88; both actual HTTP peers completed, but A used plain Chat"
+        },
+        {
+          "test": "TestT_GW_S34_S90_StreamingNativeToolLoop",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_native_tool_loop_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; enabling positive control"
+        },
+        {
+          "test": "TestT_GW_S61_BothModesVariantsAtomicPairAndAccount",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_onboarding_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; S-61 valid effort belongs on BOTH variants: {\"error\":\"field not allowed on provider auth_method \\\"api_key\\\": json: unknown field \\\"reasoning_effort\\\" — see the OnboardingProviderApiKey schema\"}"
+        },
+        {
+          "test": "TestT_GW_S61_RefusalsAreAtomicAcrossModesAndVariants",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_onboarding_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; strict string decode, not unknown-field refusal"
+        },
+        {
+          "test": "TestT_GW_S61_InvalidPlacementsKeepWholeTransactionUnchanged",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_onboarding_matrix_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_GW_S61_AuthorityPinsWithValidEffortShape",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_onboarding_matrix_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_GW_S15_S75_RealFrameRoutesExactPairAndMapsToServingModel",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_pair_routing_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; record is about the exact serving pair and its mapped value"
+        },
+        {
+          "test": "TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_production_paging_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; BLOCKED: streaming multi-candidate fallback not implemented — required by S-95/S-88; actual fallback completed but primary used plain Chat"
+        },
+        {
+          "test": "TestT_GW_S94_OmissionKeepsAndEmptyClearsStoredOverride",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_rest_boundary_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; actual durable seed/change: {\"code\":\"invalid_input\",\"error\":\"invalid agent update: json: unknown field \\\"reasoning_effort\\\"\"}"
+        },
+        {
+          "test": "TestT_GW_S94_RESTNullEmptyOmittedAndLengthMatrix",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_rest_boundary_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; valid writer instrument/effort input: {\"error\":\"field not allowed on agent type \\\"Main\\\": json: unknown field \\\"reasoning_effort\\\" — see the AgentCreateRequestMain schema\"}"
+        },
+        {
+          "test": "TestT_GW_S70_TerminalTextUsesRealWebCommandBranch",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_terminal_branch_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; server handles the slash command without an LLM request"
+        }
+      ]
+    },
+    {
+      "scope": "tools",
+      "log": "/workspace/logs/effort-red/fix1-reconciled-tools.log",
+      "log_sha256": "d838420834d918732823ae007239f74ab0ef805e5ba50176ffe150ba30451e95",
+      "command_as_recorded": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run \\^\\(TestT_TL94_GenericCompositeAllValidStringClassesSurviveReopen\\|TestT_TL64_TypedPrimaryAndFallbackValidationIsAtomic\\|TestT_TL76_SchemaEnumAndRuntimeFieldNamesAgree\\|TestT_TL67_D8_AllCapabilityAndInheritedSlots\\|TestT_TL63_UpdateAgentSavesAndReadsEffort\\|TestT_TL64_UpdateAgentRefusesUnofferedAndOversized\\|TestT_TL66_CreateAgentKeepsFallbackEfforts\\|TestT_TL67_GetAgentEffortOptionsPerSlot\\|TestT_TL76_GetAgentFieldsProjection\\|TestT_TL77_ExternalCLIWorkerRefusesEffort\\|TestT_TL68_SetConfigWritesDefaultModelEffort\\|TestT_TL83_RecapLimitKeysRoundTrip\\|TestT_TL83_RecapSummaryWordsStoresThousand\\|TestT_TL92_CredentialMaskingStillWorks\\|TestT_TL94_UpdateToolNullEffortRefusedBeforeRun\\|TestT_TL94_SetConfigNullAndCompositeRefusals\\|TestT_TL94_AllowFromScalarToListControl\\)\\$ -v ./pkg/sysagent/tools/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 2,
+        "FAIL": 15
+      },
+      "named_tests": [
+        {
+          "test": "TestT_TL94_GenericCompositeAllValidStringClassesSurviveReopen",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_boundary_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be false; valid actual JSON composite with a <=32 string is accepted without a catalog check: {"
+        },
+        {
+          "test": "TestT_TL64_TypedPrimaryAndFallbackValidationIsAtomic",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_boundary_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"invalid arguments for tool \\\"update_agent\\\": unexpected property \\\"reasoning_effort\\\"\" does not contain \"provider_default\"; unoffered refusal lists each offered option"
+        },
+        {
+          "test": "TestT_TL76_SchemaEnumAndRuntimeFieldNamesAgree",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_boundary_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "BLOCKED: get_agent fields enum/schema not implemented — required by S-76 and T8 dependency TD-1"
+        },
+        {
+          "test": "TestT_TL67_D8_AllCapabilityAndInheritedSlots",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_catalog_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be false; BLOCKED: get_agent fields/model_chain not implemented — required by S-67 D8: invalid arguments for tool \"get_agent\": unexpected property \"fields\""
+        },
+        {
+          "test": "TestT_TL63_UpdateAgentSavesAndReadsEffort",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED: update_agent refused an offered reasoning_effort — per-agent effort setting missing: {"
+        },
+        {
+          "test": "TestT_TL64_UpdateAgentRefusesUnofferedAndOversized",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED: unoffered-level refusal must list the offered options (provider_default,none,low,high,max); message: invalid arguments for tool \"update_agent\": unexpected property \"reasoning_effort\""
+        },
+        {
+          "test": "TestT_TL66_CreateAgentKeepsFallbackEfforts",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED: create_agent refused fallback entries carrying reasoning_effort — the per-fallback effort is currently dropped: {"
+        },
+        {
+          "test": "TestT_TL67_GetAgentEffortOptionsPerSlot",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED: get_agent with fields [model_chain] refused — fields support missing: invalid arguments for tool \"get_agent\": unexpected property \"fields\""
+        },
+        {
+          "test": "TestT_TL76_GetAgentFieldsProjection",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED baseline: could not store reasoning_effort \"high\" via update_agent (feature missing): {"
+        },
+        {
+          "test": "TestT_TL77_ExternalCLIWorkerRefusesEffort",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED: refusal message = \"invalid arguments for tool \\\"update_agent\\\": unexpected property \\\"reasoning_effort\\\"\", want the exact spec sentence \"reasoning_effort does not apply to external-CLI workers; they use their own CLI's model settings.\""
+        },
+        {
+          "test": "TestT_TL68_SetConfigWritesDefaultModelEffort",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED: set_config refused agents.defaults.default_model.reasoning_effort=max (spec: stored without a catalog check; the key is not writable today): {"
+        },
+        {
+          "test": "TestT_TL83_RecapLimitKeysRoundTrip",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED: set_config(agents.defaults.recap_max_output_tokens) refused — recap limit keys not writable: {"
+        },
+        {
+          "test": "TestT_TL83_RecapSummaryWordsStoresThousand",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED: set_config(agents.defaults.recap_summary_words=1000) refused: {"
+        },
+        {
+          "test": "TestT_TL92_CredentialMaskingStillWorks",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_TL94_UpdateToolNullEffortRefusedBeforeRun",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED baseline: could not store reasoning_effort high via update_agent (feature missing): {"
+        },
+        {
+          "test": "TestT_TL94_SetConfigNullAndCompositeRefusals",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED baseline: set_config(agents.defaults.recap_summary_words) refused (composite effort settings missing): {"
+        },
+        {
+          "test": "TestT_TL94_AllowFromScalarToListControl",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_tools_test.go",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "scope": "config",
+      "log": "/workspace/logs/effort-red/fix1-final-pkg-config.log",
+      "log_sha256": "6ff6dce55f01bb9f6444706bcf88e9e58ab4403879e817af83d115a8dd21ec0e",
+      "command_as_recorded": "CGO_ENABLED=0 /usr/local/bin/heavy go test -tags goolm,stdjson -p 1 -count=1 -run ^(TestT_C2_S02_LeftoverReasoningChannelKeysAreInert|TestT_D1_S69_ThinkingLevelKeyDeleted|TestT_W2_DefaultModelEffortRoundTrip|TestT_W2_RecapEffortKeysRoundTrip)$ -v ./pkg/config/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 0,
+        "FAIL": 4
+      },
+      "named_tests": [
+        {
+          "test": "TestT_C2_S02_LeftoverReasoningChannelKeysAreInert",
+          "source": "/workspace/wt-effort/pkg/config/effort_red_config_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "map[string]interface {}{\"enabled\":false, \"group_trigger\":map[string]interface {}{}, \"placeholder\":map[string]interface {}{\"enabled\":false}, \"reasoning_channel_id\":\"old-json-destination-7731\", \"streaming\":map[string]interface {}{}, \"type\":\"telegram\", \"typing\":map[string]interface {}{}} should not contain \"reasoning_channel_id\"; S-02: retired destinations have no runtime config representation"
+        },
+        {
+          "test": "TestT_D1_S69_ThinkingLevelKeyDeleted",
+          "source": "/workspace/wt-effort/pkg/config/effort_red_config_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "map[string]interface {}{\"model\":\"legacy-m\", \"provider\":\"openrouter\", \"thinking_level\":\"high\"} should not contain \"thinking_level\"; the legacy thinking_level key is deleted from the provider model row (S-69/FR-056) — RED: config.ModelConfig.ThinkingLevel still exists"
+        },
+        {
+          "test": "TestT_W2_DefaultModelEffortRoundTrip",
+          "source": "/workspace/wt-effort/pkg/config/effort_red_config_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; the default-model effort survives the config round trip (T-W2) — RED: dropped as an unknown key"
+        },
+        {
+          "test": "TestT_W2_RecapEffortKeysRoundTrip",
+          "source": "/workspace/wt-effort/pkg/config/effort_red_config_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; recap_reasoning_effort survives the config round trip (S-83/T-W2) — RED"
+        }
+      ]
+    },
+    {
+      "scope": "encoder-filter",
+      "log": "/workspace/logs/effort-red/fix1-final-pkg-providers-effortdialect.log",
+      "log_sha256": "99d997093d54306498c1f3cf99f339c1e6c237ccf67513606ac83b040c373c99",
+      "command_as_recorded": "CGO_ENABLED=0 /usr/local/bin/heavy go test -tags goolm,stdjson -p 1 -count=1 -run ^(TestT_P1_S17_TableKnowsEachRoute|TestT_P1_S45_FilterServed)$ -v ./pkg/providers/effortdialect/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 0,
+        "FAIL": 2
+      },
+      "named_tests": [
+        {
+          "test": "TestT_P1_S17_TableKnowsEachRoute",
+          "source": "/workspace/wt-effort/pkg/providers/effortdialect/effortdialect_red_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; route is reachable in the shipped table"
+        },
+        {
+          "test": "TestT_P1_S45_FilterServed",
+          "source": "/workspace/wt-effort/pkg/providers/effortdialect/effortdialect_red_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Expected value not to be nil.; (a) levels+switch on OpenRouter serve as published: served levels are [] never nil (S-45) — RED: the scaffold returns nil"
+        }
+      ]
+    },
+    {
+      "scope": "catalog",
+      "log": "/workspace/logs/effort-red/fix1-final-pkg-providers-catalog.log",
+      "log_sha256": "f45aba1fca27682c1a78ff985f36dfaad5bb3d607b22507795d87d41354b5f1c",
+      "command_as_recorded": "CGO_ENABLED=0 /usr/local/bin/heavy go test -tags goolm,stdjson -p 1 -count=1 -run ^(TestT_K1_S45_ServedReasoningFilteredByEncoderTable|TestT_K1_S46_VendoredCatalogCarriesReasoning)$ -v ./pkg/providers/catalog/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 0,
+        "FAIL": 2
+      },
+      "named_tests": [
+        {
+          "test": "TestT_K1_S45_ServedReasoningFilteredByEncoderTable",
+          "source": "/workspace/wt-effort/pkg/providers/catalog/effort_red_served_reasoning_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; exact whole served object: order, non-null [], filtered switch and no unknown keys"
+        },
+        {
+          "test": "TestT_K1_S46_VendoredCatalogCarriesReasoning",
+          "source": "/workspace/wt-effort/pkg/providers/catalog/effort_red_served_reasoning_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "\"0\" is not greater than \"0\"; the vendored catalog carries reasoning data (S-46/SC-008) — RED: zero reasoning objects in the committed file"
+        }
+      ]
+    },
+    {
+      "scope": "common-adapters",
+      "log": "/workspace/logs/effort-red/fix1-final-pkg-providers-common.log",
+      "log_sha256": "6b37cf05fd9d32de9975b65abdbb8c10149e36c19076aa0db9c338cd22009617",
+      "command_as_recorded": "CGO_ENABLED=0 /usr/local/bin/heavy go test -tags goolm,stdjson -p 1 -count=1 -run ^(TestT_C6_S30_DecoderKeepsReasoningDetailsLosslessly|TestT_C6_S33_SerialisersNeverEmitDetailsCrossRoute|TestT_C6_S30_S31_S32_TwoToolRoundsCodecRestartAndRoutes|TestT_C6_S31_ThinkingBlocksSurviveDurableCodecRestart|TestT_C6_S33_PopulatedPrivateCarrierCrossRoute|TestT_P5_S34_S35_S90_ContinuationGuardAndExplicitOff|TestT_P1_S17_S19_SerializedRouteMatrix|TestT_P1_S18_SerializedSwitchMatrix)$ -v ./pkg/providers/common/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 2,
+        "FAIL": 6
+      },
+      "named_tests": [
+        {
+          "test": "TestT_C6_S30_DecoderKeepsReasoningDetailsLosslessly",
+          "source": "/workspace/wt-effort/pkg/providers/common/effort_red_carrier_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; the encrypted item's opaque data payload survives the decoder (S-30) — RED: dropped by the lossy ReasoningDetail struct"
+        },
+        {
+          "test": "TestT_C6_S33_SerialisersNeverEmitDetailsCrossRoute",
+          "source": "/workspace/wt-effort/pkg/providers/common/effort_red_carrier_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_C6_S30_S31_S32_TwoToolRoundsCodecRestartAndRoutes",
+          "source": "/workspace/wt-effort/pkg/providers/common/effort_red_continuation_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; response carrier is private too"
+        },
+        {
+          "test": "TestT_C6_S31_ThinkingBlocksSurviveDurableCodecRestart",
+          "source": "/workspace/wt-effort/pkg/providers/common/effort_red_continuation_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_C6_S33_PopulatedPrivateCarrierCrossRoute",
+          "source": "/workspace/wt-effort/pkg/providers/common/effort_red_continuation_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "BLOCKED: Message.ReasoningDetails private carrier not implemented — required by S-30/S-31/S-32/S-33 and FR-013"
+        },
+        {
+          "test": "TestT_P5_S34_S35_S90_ContinuationGuardAndExplicitOff",
+          "source": "/workspace/wt-effort/pkg/providers/common/effort_red_tool_guard_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; S-17/S-18 exact thinking encoding"
+        },
+        {
+          "test": "TestT_P1_S17_S19_SerializedRouteMatrix",
+          "source": "/workspace/wt-effort/pkg/providers/common/effort_red_wire_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; S-17/S-18 exact reasoning_effort encoding"
+        },
+        {
+          "test": "TestT_P1_S18_SerializedSwitchMatrix",
+          "source": "/workspace/wt-effort/pkg/providers/common/effort_red_wire_matrix_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: ; S-17/S-18 exact reasoning encoding"
+        }
+      ]
+    },
+    {
+      "scope": "codex",
+      "log": "/workspace/logs/effort-red/fix1-final-pkg-providers.log",
+      "log_sha256": "c24c3b91ef6be0aaffd21c620031cbe6dcc47f8758a64b4939cdf316529eb187",
+      "command_as_recorded": "CGO_ENABLED=0 /usr/local/bin/heavy go test -tags goolm,stdjson -p 1 -count=1 -run ^(TestT_C5_S89_CodexRecapCarriesEffortAndNoOutputLimit|TestT_C5_S89_CodexRecapDefaultOff|TestT_C5_S17_S19_CodexRequestMatrix)$ -v ./pkg/providers/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 0,
+        "FAIL": 3
+      },
+      "named_tests": [
+        {
+          "test": "TestT_C5_S89_CodexRecapCarriesEffortAndNoOutputLimit",
+          "source": "/workspace/wt-effort/pkg/providers/effort_red_codex_recap_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; the Codex body carries reasoning.effort (S-89)"
+        },
+        {
+          "test": "TestT_C5_S89_CodexRecapDefaultOff",
+          "source": "/workspace/wt-effort/pkg/providers/effort_red_codex_recap_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Should be true; default Off reaches the Codex route as reasoning.effort none (S-71)"
+        },
+        {
+          "test": "TestT_C5_S17_S19_CodexRequestMatrix",
+          "source": "/workspace/wt-effort/pkg/providers/effort_red_codex_recap_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "Not equal: "
+        }
+      ]
+    },
+    {
+      "scope": "native-adapter",
+      "log": "/workspace/logs/effort-red/fix1-final-pkg-providers-anthropic.log",
+      "log_sha256": "4e130a2f4ce112204ef8b8cb52c5d84f70a34874e64d7952dda0e7dd37e7803d",
+      "command_as_recorded": "CGO_ENABLED=0 /usr/local/bin/heavy go test -tags goolm,stdjson -p 1 -count=1 -run ^(TestT_P5_S34_S90_EffortDrivesTheAnthropicWire|TestT_D1_S69_ThinkingLevelOptionDeleted|TestT_P5_S33_ThinkingBlocksAreTheOnlyAnthropicCarrier|TestT_P5_S23_EffortClearsTemperature)$ -v ./pkg/providers/anthropic/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 1,
+        "FAIL": 3
+      },
+      "named_tests": [
+        {
+          "test": "TestT_P5_S34_S90_EffortDrivesTheAnthropicWire",
+          "source": "/workspace/wt-effort/pkg/providers/anthropic/effort_red_carrier_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "map[string]interface {}{\"max_tokens\":4096, \"messages\":[]interface {}{map[string]interface {}{\"content\":[]interface {}{map[string]interface {}{\"text\":\"hello\", \"type\":\"text\"}}, \"role\":\"user\"}}, \"model\":\"claude-m\"} does not contain \"thinking\"; effort high reaches the wire as a thinking config (S-34/S-90) — RED: the reasoning_effort option is ignored"
+        },
+        {
+          "test": "TestT_D1_S69_ThinkingLevelOptionDeleted",
+          "source": "/workspace/wt-effort/pkg/providers/anthropic/effort_red_carrier_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "map[string]interface {}{\"max_tokens\":4096, \"messages\":[]interface {}{map[string]interface {}{\"content\":[]interface {}{map[string]interface {}{\"text\":\"hello\", \"type\":\"text\"}}, \"role\":\"user\"}}, \"model\":\"claude-m\", \"thinking\":map[string]interface {}{\"budget_tokens\":4095, \"type\":\"enabled\"}} should not contain \"thinking\"; the legacy thinking_level option requests nothing after the deletion (S-69/FR-056) — RED: it still dr"
+        },
+        {
+          "test": "TestT_P5_S33_ThinkingBlocksAreTheOnlyAnthropicCarrier",
+          "source": "/workspace/wt-effort/pkg/providers/anthropic/effort_red_carrier_test.go",
+          "result": "PASS"
+        },
+        {
+          "test": "TestT_P5_S23_EffortClearsTemperature",
+          "source": "/workspace/wt-effort/pkg/providers/anthropic/effort_red_carrier_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "map[string]interface {}{\"max_tokens\":4096, \"messages\":[]interface {}{map[string]interface {}{\"content\":[]interface {}{map[string]interface {}{\"text\":\"hello\", \"type\":\"text\"}}, \"role\":\"user\"}}, \"model\":\"claude-m\", \"temperature\":0.7} does not contain \"thinking\"; effort high enables thinking (S-23 precondition) - RED"
+        }
+      ]
+    },
+    {
+      "scope": "command",
+      "log": "/workspace/logs/effort-red/fix1-final-pkg-commands.log",
+      "log_sha256": "3ad7fc75cd720d1d3c03974fe750ee9f0a167ea398729c8c5a53b25a0ef470b4",
+      "command_as_recorded": "CGO_ENABLED=0 /usr/local/bin/heavy go test -tags goolm,stdjson -p 1 -count=1 -run ^(TestT_CMD_Effort_S36_RegisteredWithSpecContract|TestT_CMD_Effort_S37_BareEffortRepliesExactStatus|TestT_CMD_Effort_S38_SetIsConversationScoped|TestT_CMD_Effort_S39_ConversationValueSurvivesRestart|TestT_CMD_Effort_S40_NeverCallsSwitchModel|TestT_CMD_Effort_S41_WebDeliveryClientNoServerRecord|TestT_CMD_Effort_S42_UnknownUnofferedAndInputForms|TestT_CMD_Effort_S70_WebBranchRepliesChipHint)$ -v ./pkg/commands/",
+      "raw_exit_code": 1,
+      "top_level_counts": {
+        "PASS": 0,
+        "FAIL": 8
+      },
+      "named_tests": [
+        {
+          "test": "TestT_CMD_Effort_S36_RegisteredWithSpecContract",
+          "source": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED (S-36): Registry.Lookup(\"effort\") not found — /effort is not registered in BuiltinDefinitions yet (spec seam table: \"No /effort\"); the scenario's behavior cannot exist"
+        },
+        {
+          "test": "TestT_CMD_Effort_S37_BareEffortRepliesExactStatus",
+          "source": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED (S-37): Registry.Lookup(\"effort\") not found — /effort is not registered in BuiltinDefinitions yet (spec seam table: \"No /effort\"); the scenario's behavior cannot exist"
+        },
+        {
+          "test": "TestT_CMD_Effort_S38_SetIsConversationScoped",
+          "source": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED (S-38): Registry.Lookup(\"effort\") not found — /effort is not registered in BuiltinDefinitions yet (spec seam table: \"No /effort\"); the scenario's behavior cannot exist"
+        },
+        {
+          "test": "TestT_CMD_Effort_S39_ConversationValueSurvivesRestart",
+          "source": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED (S-39): Registry.Lookup(\"effort\") not found — /effort is not registered in BuiltinDefinitions yet (spec seam table: \"No /effort\"); the scenario's behavior cannot exist"
+        },
+        {
+          "test": "TestT_CMD_Effort_S40_NeverCallsSwitchModel",
+          "source": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED (S-40): Registry.Lookup(\"effort\") not found — /effort is not registered in BuiltinDefinitions yet (spec seam table: \"No /effort\"); the scenario's behavior cannot exist"
+        },
+        {
+          "test": "TestT_CMD_Effort_S41_WebDeliveryClientNoServerRecord",
+          "source": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED (S-41): Registry.Lookup(\"effort\") not found — /effort is not registered in BuiltinDefinitions yet (spec seam table: \"No /effort\"); the scenario's behavior cannot exist"
+        },
+        {
+          "test": "TestT_CMD_Effort_S42_UnknownUnofferedAndInputForms",
+          "source": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED (S-42): Registry.Lookup(\"effort\") not found — /effort is not registered in BuiltinDefinitions yet (spec seam table: \"No /effort\"); the scenario's behavior cannot exist"
+        },
+        {
+          "test": "TestT_CMD_Effort_S70_WebBranchRepliesChipHint",
+          "source": "/workspace/wt-effort/pkg/commands/effort_red_commands_test.go",
+          "result": "FAIL",
+          "first_failure_excerpt": "RED (S-70): Registry.Lookup(\"effort\") not found — /effort is not registered in BuiltinDefinitions yet (spec seam table: \"No /effort\"); the scenario's behavior cannot exist"
+        }
+      ]
+    },
+    {
+      "scope": "terminal",
+      "log": "/workspace/logs/effort-red/fix1-final-pkg-app-internal-run.log",
+      "log_sha256": "1107a444cdefaf70e107364f3e21a839cc21988ebf8a03b406b2466183aebd47",
+      "command_as_recorded": "CGO_ENABLED=0 /usr/local/bin/heavy go test -tags goolm,stdjson -p 1 -count=1 -run ^(TestT_R1_S70_TerminalSendsNoEffortMetadata)$ -v ./pkg/app/internal/run/",
+      "raw_exit_code": 0,
+      "top_level_counts": {
+        "PASS": 1,
+        "FAIL": 0
+      },
+      "named_tests": [
+        {
+          "test": "TestT_R1_S70_TerminalSendsNoEffortMetadata",
+          "source": "/workspace/wt-effort/pkg/app/internal/run/effort_red_terminal_test.go",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "scope": "picker",
+      "log": "/workspace/logs/effort-red/fix1-final-ui-picker.log",
+      "log_sha256": "2f5203c09351d5c1e6b54c3147b7812c06134753d57e9beba707da1bf981ab19",
+      "command_as_recorded": "/usr/local/bin/heavy npx vitest run src/components/ui/model-effort-picker.test.tsx --reporter=verbose",
+      "raw_exit_code": 1,
+      "diagnostic_summary": [
+        "Tests  21 failed (21)"
+      ]
+    },
+    {
+      "scope": "memory",
+      "log": "/workspace/logs/effort-red/fix1-final-ui-memory.log",
+      "log_sha256": "abdadf0102404403618ee24a90db80e43f1459c1002a43104ffe03a37f099c53",
+      "command_as_recorded": "/usr/local/bin/heavy npx vitest run src/components/settings/effort-red-recap-limits.test.tsx --reporter=verbose",
+      "raw_exit_code": 1,
+      "diagnostic_summary": [
+        "Tests  10 failed (10)"
+      ]
+    },
+    {
+      "scope": "profile",
+      "log": "/workspace/logs/effort-red/fix1-profile-final.log",
+      "log_sha256": "46649b3910bbfa8504f7b4a286e4526696957ac0f9463bfe4bcbcb1ecf3ae4ac",
+      "command_as_recorded": "/usr/local/bin/heavy npx vitest run src/components/agents/AgentProfile.effort-inheritance.test.tsx",
+      "raw_exit_code": 1,
+      "diagnostic_summary": [
+        "Tests  5 failed (5)"
+      ]
+    },
+    {
+      "scope": "browser",
+      "log": "/workspace/logs/effort-red/fix1-reconciled-browser.log",
+      "log_sha256": "10be2c3a65ab08d5909d16c53e48102952b1a49ea1d12210aa51d271d5c79c91",
+      "command_as_recorded": "/usr/local/bin/heavy bash -c 'npx playwright install chromium && OMNIPUS_BINARY=/workspace/wt-effort/omnipus-effort-red OMNIPUS_HISTORY_DEV=1 OMNIPUS_HISTORY_DEV_CACHE=/workspace/wt-effort/node_modules/.vite-effort-red npx playwright test --config /workspace/wt-effort/tests/effort/playwright.config.ts effort.spec.ts'",
+      "raw_exit_code": 1,
+      "diagnostic_summary": [
+        "11 failed",
+        "1 passed (5.1m)"
+      ]
+    },
+    {
+      "scope": "typecheck",
+      "log": "/workspace/logs/effort-red/fix1-authoritative-typecheck.log",
+      "log_sha256": "b615f2f40330b02bfa630da9c8a6dbee19be7ba9f4f8b8cf9d66ed743824fb21",
+      "command_as_recorded": "/usr/local/bin/heavy env NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck",
+      "raw_exit_code": 2,
+      "diagnostic_summary": [
+        "src/lib/effort/capabilities.ts(25,44): error TS6133: 'served' is declared but its value is never read.",
+        "src/lib/effort/mapEffort.ts(67,43): error TS6133: 'target' is declared but its value is never read."
+      ]
+    },
+    {
+      "scope": "eslint",
+      "log": "/workspace/logs/effort-red/fix1-eslint-final.log",
+      "log_sha256": "25637ed69550b158ef2a14cd850f4d180db8fbf406ae0acfe382286572a73670",
+      "command_as_recorded": "/usr/local/bin/heavy npx eslint src/components/ui/model-effort-picker.test.tsx src/components/settings/effort-red-recap-limits.test.tsx src/components/agents/AgentProfile.effort-inheritance.test.tsx tests/e2e/effort.spec.ts tests/effort/playwright.config.ts",
+      "raw_exit_code": 0,
+      "diagnostic_summary": []
+    },
+    {
+      "scope": "go-vet",
+      "log": "/workspace/logs/effort-red/fix1-final-source-go-vet.log",
+      "log_sha256": "4ecc9b8777f60ee04c90b079416a04603e9b22c6d47124c24486fbe329ec7980",
+      "command_as_recorded": "/usr/local/bin/heavy env CGO_ENABLED=0 go vet -tags goolm,stdjson -p 1 ./pkg/agent/ ./pkg/gateway/ ./pkg/config/ ./pkg/commands/ ./pkg/sysagent/tools/ ./pkg/providers/ ./pkg/providers/common/ ./pkg/providers/catalog/ ./pkg/providers/effortdialect/ ./pkg/providers/anthropic/ ./pkg/app/internal/run/",
+      "raw_exit_code": 0,
+      "diagnostic_summary": []
+    },
+    {
+      "scope": "design-scanner",
+      "log": "/workspace/logs/effort-red/fix1-current-lint-design-system-locks.log",
+      "log_sha256": "7e3d75318bd5d37cad8f9b0a67c8fada0b27d85ebf805d046d7f9202e410fe05",
+      "command_as_recorded": "/usr/local/bin/heavy npm run lint:design-system-locks",
+      "raw_exit_code": 1,
+      "diagnostic_summary": [
+        "[new-debt] src/components/ui/model-effort-picker.test.tsx: new debt controls/shadcn-low-level-import src/components/ui/model-effort-picker.test.tsx import { EffortControl, type EffortValue, ModelEffortPicker } from \"src/components/ui/model-effort-picker\""
+      ]
+    },
+    {
+      "scope": "function-budget",
+      "log": "/workspace/logs/effort-red/fix1-final-source-function-budget.log",
+      "log_sha256": "84eb4d59c4ca3f8d744ffe49e631b0eefaa0ab9f73c3cc4505ad0271d83fa819",
+      "command_as_recorded": "/usr/local/bin/heavy bash scripts/check-function-budget.sh",
+      "raw_exit_code": 0,
+      "diagnostic_summary": [
+        "grandfathered: 70 functions; components over 240: 70"
+      ]
+    },
+    {
+      "scope": "file-budget",
+      "log": "/workspace/logs/effort-red/fix1-final-source-file-budget.log",
+      "log_sha256": "12dfd447f7f03fa1883afd61e52410fad0112278e72fd34d11171f51a9bc8b31",
+      "command_as_recorded": "/usr/local/bin/heavy bash scripts/check-file-budget.sh",
+      "raw_exit_code": 0,
+      "diagnostic_summary": [
+        "grandfathered: 7 files"
+      ]
+    }
+  ]
+}

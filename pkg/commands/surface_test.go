@@ -339,8 +339,8 @@ func containsSubstring(s, sub string) bool {
 // memory commands, ADR-049's /goal + /loop, ADR-20260928 D9's /stop +
 // /stop-redirect, U10a (2026-10-09) which removed /new, /agents, /start, /show,
 // /list, /switch and /check, and U10b which restored /clear (FR-030/031) —
-// leaving 16 canonical commands and ZERO hidden/deprecated commands (all
-// deprecated multiplexers are gone).
+// then effort-levels FR-023 added /effort for web and messenger surfaces —
+// leaving 17 canonical commands and ZERO hidden/deprecated commands.
 func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	defs := BuiltinDefinitions()
 
@@ -354,11 +354,11 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		}
 	}
 
-	// 16 canonical (help/model/clear/cancel/stop/stop-redirect/tasks/skills/
-	// channels/status/config/remember/recall/retrospective/goal/loop) + 0 hidden.
-	// /clear was restored by U10b (FR-030/031, founder ruling 2026-10-09).
-	if canonical != 16 {
-		t.Errorf("expected 16 canonical commands (U10a removed new+agents and deprecated multiplexers; U10b restored /clear), got %d",
+	// 17 canonical (help/model/clear/cancel/stop/stop-redirect/tasks/skills/
+	// channels/status/config/remember/recall/retrospective/goal/loop/effort) + 0 hidden.
+	// /clear was restored by U10b; effort-levels FR-023 adds /effort.
+	if canonical != 17 {
+		t.Errorf("expected 17 canonical commands (effort-levels FR-023 adds /effort), got %d",
 			canonical)
 	}
 	if hidden != 0 {
@@ -367,7 +367,7 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	}
 
 	// Web surface: help, model, clear, cancel, stop, stop-redirect, skills,
-	// remember, recall, retrospective, goal, loop = 12 (tasks/channels/status/
+	// remember, recall, retrospective, goal, loop, effort = 13 (tasks/channels/status/
 	// config are CLI/Channel only).
 	webCount := 0
 	for _, d := range defs {
@@ -375,12 +375,13 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 			webCount++
 		}
 	}
-	if webCount != 12 {
-		t.Errorf("expected 12 web-surface canonical commands (U10a removed new+agents; U10b restored /clear), got %d",
+	if webCount != 13 {
+		t.Errorf("expected 13 web-surface canonical commands (effort-levels FR-023 adds /effort), got %d",
 			webCount)
 	}
 
-	// CLI/Channel surface: all 16 canonical.
+	// The CLI keeps its original 16 commands: FR-023 explicitly does not
+	// register /effort there. Messenger surfaces gain it (17 canonical).
 	cliCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceCLI) {

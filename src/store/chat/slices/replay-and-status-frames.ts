@@ -283,9 +283,11 @@ function applyAssistantReplayCoalesce(
     replayTerminalOutcome: boolean
     replayTruncated: boolean
     replayTruncationReason: ChatMessage['truncationReason']
+    replayEffort: ReplayMessageFrame['effort']
+    replayTurnReasoningTokens: ReplayMessageFrame['turn_reasoning_tokens']
   },
 ): boolean {
-  const { text, messageId, replayAgentId, replayModel, replayTurnId, replayTerminalOutcome, replayTruncated, replayTruncationReason } = ctx
+  const { text, messageId, replayAgentId, replayModel, replayTurnId, replayTerminalOutcome, replayTruncated, replayTruncationReason, replayEffort, replayTurnReasoningTokens } = ctx
   const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
   // ADR-070 §2.2: a candidate is only eligible to receive more
   // replayed content — coalesce OR the same-turn merge below —
@@ -338,6 +340,8 @@ function applyAssistantReplayCoalesce(
       m.truncated = true
       m.truncationReason = replayTruncationReason
     }
+    // Effort levels FR-058 / FR-036: the answering entry's stored record and thinking snapshot.
+    stampReplayEffort(m, replayEffort, replayTurnReasoningTokens)
     // Coalesce path: this empty placeholder was created by the
     // turn's own tool_call_start frames, so any pending live tool
     // calls belong to THIS assistant. Bake them in before the early
@@ -469,6 +473,8 @@ function applyAssistantReplayCoalesce(
         candidate.truncated = true
         candidate.truncationReason = replayTruncationReason
       }
+      // Effort levels FR-058: the segment that carries the record is the answering entry.
+      stampReplayEffort(candidate, replayEffort, replayTurnReasoningTokens)
       // Stamp agentId when previously unknown (mirrors the
       // 'token' case). compatibleProducer already guarantees
       // this never overwrites a genuinely different producer.
@@ -600,6 +606,8 @@ interface ReplayMessageFrameFields {
   replayTerminalOutcome: boolean
   replayTruncated: boolean
   replayTruncationReason: ChatMessage['truncationReason']
+  replayEffort: ReplayMessageFrame['effort']
+  replayTurnReasoningTokens: ReplayMessageFrame['turn_reasoning_tokens']
   replayInputDiscarded: boolean
   replayParticipant: ReplayMessageFrame['participant']
   replayReplyToMessageId: string | undefined
@@ -676,6 +684,8 @@ function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayM
     replayTerminalOutcome,
     replayTruncated,
     replayTruncationReason,
+    replayEffort: replayFrame.effort,
+    replayTurnReasoningTokens: replayFrame.turn_reasoning_tokens,
     replayInputDiscarded,
     replayParticipant,
     replayReplyToMessageId,
@@ -839,7 +849,21 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     ...(replayReplyToParticipant && role === 'assistant' ? { replyToParticipant: replayReplyToParticipant } : {}),
     // K33 / FR-202: group-chat traffic (request or answer) renders collapsed.
     ...(replayRoomRef ? { roomRef: replayRoomRef } : {}),
+    // Effort levels FR-058 / FR-036: the stored record and thinking snapshot, assistant entries only.
+    ...(fields.replayEffort && role === 'assistant' ? { effort: fields.replayEffort } : {}),
+    ...(fields.replayTurnReasoningTokens !== undefined && role === 'assistant' ? { turnReasoningTokens: fields.replayTurnReasoningTokens } : {}),
   }
+}
+
+/** Effort levels FR-058 / FR-036: stamp a replayed answering entry's effort record and thinking snapshot (both history transports carry the same stored values). */
+function stampReplayEffort(
+  message: ChatMessage,
+  effort: ReplayMessageFrame['effort'],
+  turnReasoningTokens: ReplayMessageFrame['turn_reasoning_tokens'],
+): void {
+  if (message.role !== 'assistant') return
+  if (effort) message.effort = effort
+  if (turnReasoningTokens !== undefined) message.turnReasoningTokens = turnReasoningTokens
 }
 
 // ADR-051/Fix 5c/ADR-070/ADR-087 (function-budget extraction, function-size
@@ -905,6 +929,8 @@ function handleReplayMessageFrame({
           replayTerminalOutcome: fields.replayTerminalOutcome,
           replayTruncated: fields.replayTruncated,
           replayTruncationReason: fields.replayTruncationReason,
+          replayEffort: fields.replayEffort,
+          replayTurnReasoningTokens: fields.replayTurnReasoningTokens,
         })
       ) {
         return

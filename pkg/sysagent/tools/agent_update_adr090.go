@@ -101,6 +101,11 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 		}
 		out["executor"] = executorBlock
 	}
+	if err := addStoredEffort(store, id, fields, out); err != nil {
+		return tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the update was saved at revision %s, but %v", newRevision, err),
+			"Read the agent with get_agent"))
+	}
 	return changeSuccess(out, updateVerdict(activation, message))
 }
 
