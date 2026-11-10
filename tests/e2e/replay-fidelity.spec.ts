@@ -5,11 +5,9 @@
  * Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenarios 1-10, SC-I-001 to SC-I-006.
  *
  * Both Sprint I1 (pkg/gateway/replay.go) and Sprint I2 (src/store/chat.ts) are merged.
- * All tests except (c) are runnable against the current build.
- *
- * "Scenario provider" approach: since no deterministic LLM scenario provider exists yet,
- * these tests create sessions via the REST API, then seed the transcript.jsonl file
- * directly in OMNIPUS_HOME/sessions/<id>/ before navigating the browser to the session.
+ * Test (c) uses a local scripted provider; replay-only cases create sessions via
+ * the REST API, then seed transcript.jsonl directly in OMNIPUS_HOME/sessions/<id>/
+ * before navigating the browser to the session.
  * OMNIPUS_HOME is read from the OMNIPUS_HOME env var (default /tmp/omnipus-e2e-test).
  *
  * Axe accessibility check: sub-test at the end of test (a) validates WCAG 2.1 AA on a
@@ -28,9 +26,13 @@ import { expectA11yClean } from './fixtures/a11y'
 // SubagentBlock and shouldRenderSubagentSpan are deleted), so test (b)
 // asserts the default policy directly — see its own comment.
 import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
-import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
 import { attachWhileObservingTurn, observeAttachTurn } from './fixtures/turn-liveness'
 import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness'
+import { observeReplayAttach } from './fixtures/replay-attach-observer'
+import {
+  REPLAY_ATTACH_CHUNKS, REPLAY_ATTACH_PREFIX, REPLAY_ATTACH_TEXT,
+  startReplayAttachProvider, type ReplayAttachProvider,
+} from './fixtures/replay-attach-provider'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -657,235 +659,209 @@ test(
 // to avoid using a token minted for a different gateway instance.
 let AUTH_FILE: string
 
-test(
-  '(c) attach-during-active-turn: second browser context receives all events without loss',
-  // Belt-and-suspenders companion to TestAttach_RegistersLiveEventsBeforeReplay
-  // (pkg/gateway/replay_test.go). Drives a real LLM with a prompt engineered to
-  // produce a long enough response (4-12s of streaming) that page2 can attach
-  // mid-turn before the final assistant message arrives.
-  //
-  // The scripted-scenario harness this test originally used was removed
-  // 2026-05-10 along with the test_harness build tag. We now rely on the LLM's
-  // streaming latency for the "active turn" window — variance is acceptable
-  // because the assertions check final state, and the wall-clock floor is
-  // relaxed to 3s (vs. the deterministic 7s the harness provided).
-  //
-  // Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 9; TDD row 25.
-  //
-  // 660s total: the reply windows stay at 180s each, but a terminal-state gate
-  // (Step 4 below) now lets the turn itself take up to 300s of provider time
-  // before delivery is judged. Still sized for the in-suite LLM latency regime
-  // test (d) already documents (90-150s under full-suite model contention). Two
-  // CI artifacts pin the failure mode of budgeting the reply window alone:
-  // 78162a02c (90s/60s era) — BOTH contexts streamed the identical answer in
-  // lockstep while the turn was still active, and the closing nonce had not
-  // arrived on either page when the 60s window expired (`123 × locator resolved
-  // to 0 elements` at :757, retry passing in 20-28s on model speed alone) — and
-  // PR #1673's ui-heavy job 128306439762 (2026-11-07, 360s/180s era) — the CI
-  // primary (tests/e2e/e2e-model.json) streamed ~600 words over ~150s and was
-  // STILL running ("Mia is working on it"; failure screenshots show both pages
-  // byte-identical, the video's last text/usage delta at ~150s of a 189s
-  // recording) when the flat 180s reply2 wait expired at 181s (`362 × locator
-  // resolved to 0 elements` at :766, retry passing in 29.6s). In both
-  // incidents the observed pages were identical and incomplete when the
-  // window expired and a retry passed; that no event was lost and that the
-  // provider alone was slow are HYPOTHESES (the request-specific gateway
-  // evidence was not captured; a shared product stall would look the same).
-  // Earlier verdicts:
-  // /workspace/logs/t6b/fix-ci-fe/flake-verdict.md and
-  // /workspace/logs/team-a-restart-20261107/ciflake2-report.md
-  async ({ page, browser }) => {
-    test.setTimeout(660_000)
+// A fixture dependency starts the local model BEFORE canonicalGateway onboards.
+// Only (c) uses this extension; (a), (b), (d) retain their original provider and assertions.
+// not-wire-format: test-owned viewers and passive native observation state.
+type AttachViewers = {
+  sessionId: string
+  page2: Page
+  traffic1: ReturnType<typeof observeReplayAttach>
+  traffic2: ReturnType<typeof observeReplayAttach>
+  readiness2: ReturnType<typeof observeAddressedAttachReadiness>
+  attachTurn2: ReturnType<typeof observeAttachTurn>
+  atAttach: { firstText: string; doneCount: number; providerFinished: boolean }[]
+  startTurn(): number
+  arm(): void
+}
 
-    // ── Step 1: page1 — fresh session ──
-    await page.goto('/')
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
-    await waitForWsConnected(page)
-
+const attachTest = test.extend<{ replayAttachProvider: ReplayAttachProvider; replayAttachViewers: AttachViewers }>({
+  replayAttachProvider: async ({ browserName }, use, info) => {
+    await info.attach('scripted-provider-browser', { body: browserName, contentType: 'text/plain' })
+    const provider = await startReplayAttachProvider()
+    try { await use(provider) } finally { await provider.close() }
+  },
+  canonicalProviderBase: async ({ replayAttachProvider }, use) => { await use(replayAttachProvider.url) },
+  // Only this viewer fixture has a separate 120 s timeout slot. The inherited
+  // gateway/page/context setup still shares the configured 90 s test budget.
+  replayAttachViewers: [async ({ page, browser, canonicalGateway, replayAttachProvider: provider }, use) => {
+    BASE_URL = canonicalGateway.baseURL
+    AUTH_FILE = canonicalHistoryAuthFile()
     const sessionId = await createSession(page)
-    const sessionTitle = `replay-fidelity-test-c-${Date.now()}`
-    await renameSession(page, sessionId, sessionTitle)
+    const warmSessionId = await createSession(page)
+    await renameSession(page, sessionId, `replay-fidelity-test-c-${Date.now()}`)
+    const traffic1 = observeReplayAttach(page, sessionId)
+    const readiness1 = observeAddressedAttachReadiness(page)
+    const firstReady = readiness1.arm(sessionId)
+    try {
+      await Promise.all([page.goto(`/#/sessions/${sessionId}`), firstReady.wait()])
+      await expect(page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
+      await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
+      await waitForWsConnected(page)
+    } finally { firstReady.cancel(); readiness1.dispose() }
 
-    // ── Step 2: open session and send a long-form prompt on page1 ──
-    // The expected nonce concatenates two separate inputs and never appears in
-    // the user prompt. A roughly 600-word chat answer keeps the response streaming
-    // without requiring a file or a word-count tool (the central e2e model is
-    // tests/e2e/e2e-model.json) so page2 can attach mid-turn.
-    await openSession(page, sessionId)
-    await waitForReplayDone(page)
-
-    const challenge = assistantReplyChallenge('attach-during-turn')
-    const nonce = challenge.nonce
-    const prompt =
-      `Answer directly in this chat with roughly 600 words about renewable energy, using only your existing knowledge. ` +
-      `This is a plain-text chat answer, not a document or file task. Do not use tools, shell commands, scripts, ` +
-      `external research or filesystem access, and do not verify an exact word count. ` +
-      `Vary your wording and do not repeat sentences. ` +
-      `At the very end of your reply, on its own line: ${challenge.instruction}`
-    expect(prompt, 'the expected assistant nonce must not appear in the user prompt').not.toContain(nonce)
-
-    // Cold boot is not part of the active-turn attach experiment. Prepare
-    // the real second viewer first, and gate its existing ROOT banner check
-    // on that root's actual addressed completion. The unfiled target route
-    // intentionally has no banner; its own completion is required below.
+    // Warm viewer 2 on a DIFFERENT explicit session. A fresh install's root
+    // route need not attach, and an early target attach would invalidate R2.
     const context2 = await browser.newContext({ storageState: AUTH_FILE, baseURL: BASE_URL })
     const page2 = await context2.newPage()
     const readiness2 = observeAddressedAttachReadiness(page2)
+    // Wired before page2's first socket opens: it tracks the current chat
+    // socket generation only (fixtures/turn-liveness.ts).
     const attachTurn2 = observeAttachTurn(page2)
-    const rootReady = readiness2.arm()
+    let armed = false
+    let turnStart = 0
+    const atAttach: AttachViewers['atAttach'] = []
+    const traffic2 = observeReplayAttach(page2, sessionId, () => {
+      if (!armed) return
+      atAttach.push({
+        firstText: traffic1.liveTokens(turnStart).map(frame => frame.content).join(''),
+        doneCount: traffic1.received.slice(turnStart).filter(frame => frame.type === 'done' && frame.turn_id).length,
+        providerFinished: provider.state().finished,
+      })
+    })
+    const warmReady = readiness2.arm(warmSessionId)
     try {
       try {
-        await page2.goto('/')
-        const rootProof = await rootReady.wait()
-        await expect(page2.locator(`[data-active-session-id="${rootProof.completion.session_id}"]`),
-          'PREREQUISITE: second viewer renders the session whose root attach actually completed').toBeVisible()
-        await expect(page2.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+        await page2.goto(`/#/sessions/${warmSessionId}`)
+        const warmProof = await warmReady.wait()
+        expect(warmProof.request.session_id, 'warm-up is addressed to a different, explicit session').toBe(warmSessionId)
+        expect(warmProof.completion.session_id).toBe(warmSessionId)
+        await expect(page2.locator(`[data-active-session-id="${warmSessionId}"]`),
+          'PREREQUISITE: warm viewer renders the session whose attach actually completed').toBeVisible()
         await waitForWsConnected(page2)
-      } finally { rootReady.cancel() }
-
-      const input = chatInput(page)
-      await expect(input).toBeEnabled({ timeout: 10_000 })
-      // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
-      // see waitForConnected's doc comment in fixtures/selectors.ts).
-      await waitForConnected(page, { timeout: 10_000 })
-      await input.fill(prompt)
-      const sendStart = Date.now()
-      await input.press('Enter')
-
-      // The user message should appear immediately (echoed by WS).
-      const userMsgs = page.locator('[data-message-id].flex-row-reverse')
-      await expect(userMsgs).toHaveCount(1, { timeout: 5_000 })
-
-      // ── Step 2b: PROVE the turn is live before anything waits on its end ──
-      // The 2026-11-07 CHECK found the old terminal gate below
-      // ([data-status="running"] count reaching 0) passing an ACTIVE turn:
-      // the virtualized renderer hardcodes data-status="complete" on the
-      // assistant row (src/components/chat/ChatScreen.tsx
-      // VirtualAssistantMessageRow, data-status="complete" at :1209; only the
-      // flat AssistantMessage path derives it from message.status?.type,
-      // :1562), so a zero-running-row count proves nothing about the turn —
-      // and the incident traces recorded exactly that: row "complete" while
-      // the page still showed the turn as active. The turn-level liveness
-      // marker is the composer Stop button instead: SESSION_COMPOSER_PROFILE
-      // has stop:true for every chat session
-      // (src/components/chat/composer/OmnipusComposer.tsx :136-143, wired at
-      // :315), and that button mounts exactly while
-      // `profile.stop && (isStreaming || goalRunning || stopping ||
-      // stopAllArmed)` (:1017, data-testid="stop-btn" at :1032). No goal runs
-      // and nobody cancels in this test, so Stop is visible exactly while the
-      // chat store holds isStreaming=true — the turn's true live state,
-      // renderer-independent: the button lives in the composer, so this one
-      // marker gates BOTH the virtualized row path and the flat
-      // AssistantMessage path. Suite precedent: waitForTurnFullyDone
-      // (chat.spec.ts / media.spec.ts) watches the same stop-btn.
-      const turnStopButton = page.locator('[data-testid="stop-btn"]')
-      await expect(
-        turnStopButton,
-        'PREREQUISITE: the turn is live — the composer Stop button has replaced ' +
-          'Send while the turn streams (OmnipusComposer.tsx:1017/:1032). If this ' +
-          'fails, no turn was OBSERVED streaming: it never started, or it errored, ' +
-          'was cancelled or completed before Stop could be observed (this check ' +
-          'cannot tell which), so nothing below can measure a terminal transition.',
-      ).toBeVisible({ timeout: 10_000 })
-
-      // ── Step 3: while the agent is still streaming, attach page2 ──
-      // Wait ~800ms after send so we are reliably mid-stream but well before
-      // the assistant message completes.
-      await page.waitForTimeout(800)
-      const targetReady = readiness2.arm(sessionId)
-      try {
-        // Best-effort active-turn prerequisite from the SERVER (CHECK 3 F1,
-        // CHECK 4 F1/F2, CHECK 5 F1-F3): the marked attach's own session_state,
-        // on the current chat socket, must carry active_turn (a foreground turn
-        // in flight when the gateway BUILT that state). The first viewer's Stop
-        // button cannot show this (a client render that can lag the backend).
-        // This is NOT a proof of "active at bind": the gateway binds first and
-        // builds the state afterwards, so a fast turn that ended in between is
-        // rejected as a prerequisite failure (accepted and documented in
-        // fixtures/turn-liveness.ts). There is no post-sample, so a turn that
-        // ends AFTER the state was built passes. A rejected attach (error frame)
-        // fails the prerequisite with the server message. The wrapper returns the
-        // attach result only after the check has run, and this spec uses the
-        // wrapper; unit tests cover the wrapper, not this call site, so a change
-        // that bypasses the wrapper here would not be caught offline.
-        const [, targetProof] = await attachWhileObservingTurn(attachTurn2, sessionId, () =>
-          Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()]),
-        )
-        expect(targetProof.request.session_id, 'the warm second viewer actually requests the target session').toBe(sessionId)
-        expect(targetProof.completion.session_id, 'the real target catch-up completes before replay assertions').toBe(sessionId)
-        await expect(page2.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
-        await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
-        await waitForReplayDone(page2)
-
-        // page2 must replay the user message that page1 sent before page2 attached.
-        const userMsgs2 = page2.locator('[data-message-id].flex-row-reverse')
-        await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
-
-        // ── Step 4: wait for the turn's TRUE terminal state, then judge delivery ──
-        // Provider (or product) latency owns this clock. Both CI incidents in the header ended
-        // with the turn STILL active when a flat reply window expired, which
-        // makes a delivery assertion fail looking exactly like the event-loss
-        // this test exists to catch. The old gate here watched
-        // [data-status="running"] reach count 0 — but the virtualized renderer
-        // stamps every assistant row data-status="complete" (ChatScreen.tsx:1209;
-        // only the flat path uses message.status?.type, :1562), so that gate
-        // passed immediately on an active turn (CHECK 2026-11-07, finding 2).
-        // The gate now watches the proven-live marker from Step 2b instead: the
-        // composer Stop button ([data-testid="stop-btn"],
-        // OmnipusComposer.tsx:1017/:1032 — visible exactly while the store holds
-        // isStreaming) unmounting, i.e. the turn's real terminal transition.
-        // If THIS wait expires, the turn never reached a terminal state within
-        // 300s — latency or stall, of the provider OR the product (this wait
-        // alone does not distinguish them); it is NOT evidence of delivery loss.
-        // Once it passes, the unchanged delivery assertions below have their
-        // full windows to catch genuine delivery gaps (FR-I-009), and a model
-        // that finishes without emitting the sentinel no longer waits on the
-        // turn's own clock; the unchanged nonce/count assertions still bound it
-        // at their own 180s windows.
-        await expect(
-          turnStopButton,
-          'the turn reaches its terminal state (composer Stop unmounts as streaming ' +
-            'ends) within the provider budget',
-        ).not.toBeVisible({ timeout: 300_000 })
-
-        // Only completed assistant rows may satisfy the delivery oracle; user
-        // input, a running placeholder or a system cancellation notice cannot.
-        // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
-        const reply1 = assistantMessages(page).filter({ hasText: nonce })
-        const reply2 = assistantMessages(page2).filter({ hasText: nonce })
-        await expect(reply2, 'second context receives one completed assistant answer').toHaveCount(1, { timeout: 180_000 })
-        await expect(reply1, 'first context receives the same completed assistant answer').toHaveCount(1, { timeout: 180_000 })
-        await expect(page2.locator('body')).toContainText(nonce, { timeout: 60_000 })
-        await expect(page.locator('body')).toContainText(nonce, { timeout: 60_000 })
-
-        // page2 attached AFTER the turn started, so the only way it could see the
-        // assistant message is if live forwarding picked up where replay left off
-        // — that's what FR-I-009 demands and what we're verifying. That the
-        // attach was observed during live production is a best-effort
-        // prerequisite taken from the server's active_turn on the attach's own
-        // session_state (attachWhileObservingTurn above), NOT from the first
-        // viewer's Stop button or elapsed time: a wall-clock floor cannot order an attach against a
-        // turn's end. The 1.5s floor below is only a coarse sanity check that
-        // the 800ms attach delay plus page2 setup actually elapsed; the previous
-        // 3s floor failed when GLM-5v-turbo streamed the 600-word reply in <3s.
-        const wallClock = Date.now() - sendStart
-        expect(wallClock).toBeGreaterThanOrEqual(1_500)
-
-        // Final-state agreement: both browser contexts must show the same nonce.
-        // The body-text contains check above proved both saw it; belt-and-suspenders
-        // verifies the matched bubble text agrees character-for-character.
-        const text1 = await reply1.locator(`text=${nonce}`).first().innerText()
-        const text2 = await reply2.locator(`text=${nonce}`).first().innerText()
-        expect(text2.trim()).toBe(text1.trim())
-        const replyId = await reply1.getAttribute('data-message-id')
-        expect(replyId, 'the assistant answer has a stable entry identity').toEqual(expect.any(String))
-        expect(replyId).not.toBe('')
-        expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
-      } finally { targetReady.cancel() }
+      } finally { warmReady.cancel() }
+      await use({ sessionId, page2, traffic1, traffic2, readiness2, attachTurn2, atAttach,
+        startTurn() {
+          traffic1.startExperiment()
+          traffic2.startExperiment()
+          turnStart = traffic1.received.length
+          return turnStart
+        },
+        arm() { armed = true },
+      })
     } finally {
+      traffic1.dispose()
+      traffic2.dispose()
       attachTurn2.dispose()
       readiness2.dispose()
       await context2.close()
+    }
+  }, { timeout: 120_000 }],
+})
+
+attachTest(
+  '(c) attach-during-active-turn: second browser context receives all events without loss',
+  async ({ page, replayAttachProvider: provider, replayAttachViewers: viewers }, testInfo) => {
+    // Scenario 9 / TDD row 25 (archived sprint-i-historical-replay-fidelity-spec).
+    // Keep the configured 90 s test budget, including inherited gateway/browser
+    // setup, instead of lowering its already-consumed slot to 60 s. Only the
+    // viewer fixture above has a separate 120 s slot. Reply/delta waits stay
+    // 15 s (formerly 180 s); the local stream has 1.25 s of configured delay
+    // and no paid-model queue. This replaces the real-model budgets (360 s, then
+    // 660 s with a 300 s terminal-state wait on release/v0.1.1).
+    const { sessionId, page2, traffic1, traffic2, readiness2, attachTurn2, atAttach } = viewers
+    const turnStart = viewers.startTurn()
+    try {
+      await waitForConnected(page, { timeout: 10_000 })
+      await chatInput(page).fill('Start the replay attach experiment.')
+      await chatInput(page).press('Enter')
+      await expect(page.locator('[data-message-id].flex-row-reverse')).toHaveCount(1, { timeout: 5_000 })
+      await expect.poll(() => traffic1.liveTokens(turnStart).map(frame => frame.content).join(''), {
+        message: 'first viewer observes an actual live prefix before the second attaches', timeout: 15_000,
+      }).toBe(REPLAY_ATTACH_PREFIX)
+      const turnId = traffic1.liveTokens(turnStart)[0].turn_id
+      expect(turnId, 'the first live token identifies the real active turn').toEqual(expect.any(String))
+      if (!turnId) throw new Error('PREREQUISITE: live token has no turn id')
+      // The client also shows the turn as live: the composer Stop button
+      // (data-testid="stop-btn", OmnipusComposer) mounts only while the turn
+      // streams. The provider holds the remaining chunks, so the turn cannot
+      // end here; Step 4 below waits for this same marker to unmount.
+      const turnStopButton = page.locator('[data-testid="stop-btn"]')
+      await expect(turnStopButton,
+        'PREREQUISITE: the turn is live: the composer Stop button has replaced Send while the turn streams',
+      ).toBeVisible({ timeout: 10_000 })
+
+      const afterAttach1 = traffic1.received.length
+      viewers.arm()
+      const targetReady = readiness2.arm(sessionId)
+      try {
+        // Server-side prerequisite (fixtures/turn-liveness.ts): the marked
+        // attach's own session_state on page2's current chat socket must carry
+        // active_turn, and a rejected attach (session-addressed error frame)
+        // fails the prerequisite with the server message. The wrapper returns
+        // the attach result only after that check has run.
+        const [, proof] = await attachWhileObservingTurn(attachTurn2, sessionId, () =>
+          Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()]),
+        )
+        expect(proof.request.session_id, 'second viewer requests the target, not its root session').toBe(sessionId)
+        expect(proof.completion.session_id, 'real target catch-up completes').toBe(sessionId)
+        traffic1.assertNoReconnect()
+        traffic2.assertNoReconnect()
+        expect(atAttach, 'observed attach overlaps an unfinished turn that already emitted a token').toEqual([
+          { firstText: REPLAY_ATTACH_PREFIX, doneCount: 0, providerFinished: false },
+        ])
+        await expect(page2.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible()
+        await expect(page2.locator('[data-message-id].flex-row-reverse')).toHaveCount(1)
+
+        expect(traffic2.attaches, 'one native addressed attach establishes the observation boundary').toHaveLength(1)
+        const afterAttach2 = traffic2.attaches[0].receivedBefore
+        expect(traffic2.received.some(frame => frame.type === 'session_state' && frame.active_turn?.turn_id === turnId),
+          'the real gateway reports the SAME turn active on second-context attach').toBe(true)
+
+        // Snapshot/catch-up carries the prefix; these are NEW live deltas only.
+        // A final snapshot/replace repairing a lost token cannot satisfy this oracle.
+        const suffix = REPLAY_ATTACH_CHUNKS.join('')
+        provider.releaseChunks()
+        for (const [label, traffic, after] of [
+          ['second', traffic2, afterAttach2], ['first', traffic1, afterAttach1],
+        ] as const) {
+          await expect.poll(() => traffic.liveTokens(after).map(frame => frame.content).join(''), {
+            message: `${label} context receives every post-attach delta exactly once, in order`, timeout: 15_000,
+          }).toBe(suffix)
+          expect(traffic.liveTokens(after).length, `${label} context observes multiple live frames, not a completed-history-only attach`).toBeGreaterThan(1)
+          expect(traffic.liveDone(turnId), `${label} context receives these deltas before the live turn completes`).toEqual([])
+        }
+        provider.finish()
+        for (const traffic of [traffic1, traffic2]) {
+          await expect.poll(() => traffic.liveDone(turnId).length, { message: 'one live done per viewer', timeout: 15_000 }).toBe(1)
+        }
+        // Terminal-state gate before the DOM delivery oracle is judged: the
+        // first viewer's Stop button (proven visible above) unmounts once the
+        // turn ends. The assistant row's data-status cannot serve here: the
+        // virtualized renderer stamps it "complete" during a live turn.
+        await expect(turnStopButton,
+          'the turn reaches its terminal state (composer Stop unmounts as streaming ends)',
+        ).not.toBeVisible({ timeout: 15_000 })
+
+        // Count ALL completed assistants, not just a marker-filtered row. The
+        // plain scripted paragraph makes exact full-text equality unambiguous.
+        const reply1 = assistantMessages(page)
+        const reply2 = assistantMessages(page2)
+        await expect(reply2, 'second context has exactly one completed assistant answer').toHaveCount(1, { timeout: 15_000 })
+        await expect(reply1, 'first context has exactly one completed assistant answer').toHaveCount(1, { timeout: 15_000 })
+        await expect(reply1.locator('p')).toHaveCount(1)
+        await expect(reply2.locator('p')).toHaveCount(1)
+        const text1 = await reply1.locator('p').innerText()
+        const text2 = await reply2.locator('p').innerText()
+        expect(text1, 'first complete answer equals the full scripted input').toBe(REPLAY_ATTACH_TEXT)
+        expect(text2, 'second complete answer equals the full scripted input without loss or duplication').toBe(REPLAY_ATTACH_TEXT)
+        expect(text2, 'complete answer text is identical across viewers').toBe(text1)
+        const replyId = await reply1.getAttribute('data-message-id')
+        expect(replyId, 'completed answer has a stable entry id').toEqual(expect.any(String))
+        expect(replyId).not.toBe('')
+        expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
+        expect(traffic1.liveTokens(turnStart).map(frame => frame.content).join(''), 'first viewer also received the entire scripted stream').toBe(REPLAY_ATTACH_TEXT)
+        expect(traffic2.liveTokens(afterAttach2).map(frame => frame.content).join(''), 'completion did not duplicate any live delta').toBe(suffix)
+        expect(traffic1.failures).toEqual([])
+        expect(traffic2.failures).toEqual([])
+        expect(provider.failures(), 'only the expected scripted provider routes were used').toEqual([])
+        expect(provider.state()).toEqual({ calls: 1, emittedChunks: 1 + REPLAY_ATTACH_CHUNKS.length, finished: true })
+      } finally { targetReady.cancel() }
+    } finally {
+      await testInfo.attach('replay-attach-evidence', { contentType: 'application/json', body: JSON.stringify({
+        atAttach, provider: provider.state(),
+        first: traffic1.snapshot(turnStart),
+        second: traffic2.snapshot(),
+      }) })
     }
   },
 )

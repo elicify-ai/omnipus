@@ -1363,34 +1363,58 @@ func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, use
 // fan-out for the plan's other members — a single member's write failure
 // must not abort cancelling the rest).
 func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, error) {
-	failed := task.StatusFailed
-	cancelReason := task.CancelReasonStoppedByUser
-	result := fmt.Sprintf("%s Cancelled by %s via Stop.", memberCancelReasonMarker, userID)
-	now := time.Now().UTC().Format(time.RFC3339)
-	updated, err := pe.taskStore.Update(taskID, task.Patch{
-		Status:       &failed,
-		CancelReason: &cancelReason,
-		Result:       &result,
-		CompletedAt:  &now,
-	})
+	updated, err := writeTaskStoppedByPerson(pe.agentLoop, pe.taskStore, taskID, userID, nil)
 	if err != nil {
 		logger.WarnCF("plan_engine", "stop: could not mark member task cancelled",
 			map[string]any{"task_id": taskID, "error": err.Error()})
 		return nil, fmt.Errorf("plan_engine: cancel task %q: %w", taskID, err)
 	}
-	// MAJ-003 (sub-agent control plane): this user Stop keeps the member's
+	return updated, nil
+}
+
+// writeTaskStoppedByPerson is the one writer of a person's Stop outcome on a
+// task: `failed` with CancelReason stopped_by_user, the user-cancel marker
+// result and a completion time, followed by task_status_changed (so the
+// owning plan, if any, re-evaluates FR-041 on its next pass). Task cancel
+// (cancelMemberLocked) writes unconditionally under planDecisionMu; a
+// session Stop of a never-started queued task launch
+// (closeStoppedQueuedTaskLaunch) passes expected = in_progress so it never
+// overwrites an outcome another writer already landed — that case returns
+// task.ErrStatusConflict.
+func writeTaskStoppedByPerson(al *AgentLoop, store *task.Store, taskID, userID string, expected *task.Status) (*task.Task, error) {
+	failed := task.StatusFailed
+	cancelReason := task.CancelReasonStoppedByUser
+	result := fmt.Sprintf("%s Cancelled by %s via Stop.", memberCancelReasonMarker, userID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	patch := task.Patch{
+		Status:       &failed,
+		CancelReason: &cancelReason,
+		Result:       &result,
+		CompletedAt:  &now,
+	}
+	var updated *task.Task
+	var err error
+	if expected != nil {
+		updated, err = store.UpdateIfStatus(taskID, *expected, patch)
+	} else {
+		updated, err = store.Update(taskID, patch)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// MAJ-003 (sub-agent control plane): this user Stop keeps the task's
 	// paired goal record ACTIVE — a stop is not an adjudication, so no
 	// terminateTaskGoalRecord call sits here. Only the task's own met/
 	// exhaustion adjudication (tools.TerminateTaskGoalRecord from the genuine
 	// terminal writers) or an explicit clear ends a goal. Plan restart relies
 	// on the record surviving: goal id, active state and session binding all
 	// carry across (D8.10; W4 consumes this).
-	if pe.agentLoop != nil {
+	if al != nil {
 		sessionID := updated.SessionID
 		if sessionID == "" {
 			sessionID = "task:" + updated.ID
 		}
-		pe.agentLoop.EmitTaskStatusChanged(TaskStatusChangedPayload{
+		al.EmitTaskStatusChanged(TaskStatusChangedPayload{
 			TaskID:    updated.ID,
 			Status:    string(updated.Status),
 			SessionID: sessionID,
