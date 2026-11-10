@@ -422,6 +422,29 @@ func (s *wsStreamer) CutoffAtStop() {
 	s.statsMu.Unlock()
 }
 
+// SetStopLimit hands this streamer the web client's screen checkpoint for a
+// claimed Stop (#1534): Finalize saves only the first keep Unicode code points
+// of this message's whole text (continuation prefix included). Called by the
+// agent loop's finalizeStreamer (pkg/agent/turn_stream.go) before Finalize,
+// only when the checkpoint limits this streamer's message.
+func (s *wsStreamer) SetStopLimit(keep int) {
+	s.statsMu.Lock()
+	s.stopLimit = keep
+	s.stopLimitSet = true
+	s.statsMu.Unlock()
+}
+
+// SetBeforeDone registers the agent loop's write that must be readable before
+// this turn's done frame goes out (#1524: a stopped turn's turn_canceled
+// record). Called by finalizeStreamer (pkg/agent/turn_stream.go) before
+// Finalize; Finalize runs it after saving the answer and before publishing
+// done.
+func (s *wsStreamer) SetBeforeDone(fn func()) {
+	s.statsMu.Lock()
+	s.beforeDone = fn
+	s.statsMu.Unlock()
+}
+
 // SetTurnStats is called by the agent loop's finalizeStreamer just before
 // Finalize. Implements the streamerStatsSetter interface from pkg/agent.
 func (s *wsStreamer) SetTurnStats(tokens int64, costUSD float64, duration time.Duration) {
@@ -730,6 +753,11 @@ type wsStreamerFinalize struct {
 	// saved text ends at the claimed Stop, but frames past it were published.
 	stopCut           bool
 	publishedAfterCut int
+	// stopLimit/stopLimitSet snapshot SetStopLimit (#1534).
+	stopLimit    int
+	stopLimitSet bool
+	// beforeDone snapshots SetBeforeDone (#1524).
+	beforeDone func()
 	// pendingFinalContent is a new terminal outcome, not the already-saved narration.
 	pendingFinalContent string
 	systemNotice        *generated.ReplayMessageFrame
@@ -768,6 +796,11 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	if persistErr != nil {
 		wsf.persistFailed = true
 		wsf.publishSaveFailureNotice()
+	}
+	// #1524: records the turn must show at done (a stopped turn's
+	// turn_canceled record) are written after the answer and before done.
+	if wsf.beforeDone != nil {
+		wsf.beforeDone()
 	}
 	wsf.publishDone()
 	return persistErr
@@ -993,6 +1026,9 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.accumulated = wsf.s.accumulated.String()
 	wsf.stopCut = wsf.s.stopCut
 	wsf.publishedAfterCut = wsf.s.publishedAfterCut
+	wsf.stopLimit = wsf.s.stopLimit
+	wsf.stopLimitSet = wsf.s.stopLimitSet
+	wsf.beforeDone = wsf.s.beforeDone
 	wsf.s.statsMu.Unlock()
 
 	// The harness already persisted this system entry. Neither its prose
@@ -1005,11 +1041,32 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	// The persisted marker covers this round's narration, not a different
 	// terminal outcome. Neither the current buffer nor a full continuation
 	// answer should be appended or sent twice.
-	if wsf.transcriptAlreadyPersisted && wsf.finalContent != "" &&
+	// A Stop cut by the client's screen checkpoint (#1534) never derives a
+	// second, terminal entry: the stopped answer is one entry under the live
+	// message id, or none.
+	if wsf.transcriptAlreadyPersisted && wsf.finalContent != "" && !wsf.stopLimitApplies() &&
 		wsf.finalContent != wsf.accumulated &&
 		(!wsf.hasContinuation || wsf.finalContent != wsf.continuationContent) {
 		wsf.pendingFinalContent = wsf.finalContent
 	}
+}
+
+// stopLimitApplies reports whether a claimed Stop handed this streamer the
+// client's screen checkpoint (#1534).
+func (wsf *wsStreamerFinalize) stopLimitApplies() bool {
+	return wsf.stopCut && wsf.stopLimitSet
+}
+
+// cutToStopLimit keeps the first stopLimit code points of content. A
+// checkpoint ahead of the saved text keeps the text whole (the cut never adds
+// text) and warns with counts only, never the text.
+func (wsf *wsStreamerFinalize) cutToStopLimit(content string) string {
+	cut, ahead := agent.CutToCodePoints(content, wsf.stopLimit)
+	if ahead {
+		slog.Warn("stop_checkpoint_ahead", "session_id", wsf.s.sessionID,
+			"turn_id", wsf.turnID, "message_id", wsf.messageID, "code_points", wsf.stopLimit)
+	}
+	return cut
 }
 
 // persistTranscript records the final response without duplicating saved narration.
@@ -1039,6 +1096,12 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// the screen showed nothing, and finalContent would save text
 			// the user never saw.
 			content = wsf.finalContent
+		}
+		// #1534 W1: keep only what the client's screen showed of this
+		// message. Applied to the whole message text, so a continued answer
+		// is cut across its rounds.
+		if wsf.stopLimitApplies() {
+			content = wsf.cutToStopLimit(content)
 		}
 		// ADR-087 D2/D4a/D4b: a truncated turn must still get an entry even
 		// when content is empty — D4a is the deliberate "cut off before any

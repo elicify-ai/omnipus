@@ -254,7 +254,7 @@ func (ts *turnState) appendIntermediateAssistantTranscriptImpl(content, truncati
 // producedModel is the model string that emitted THIS response. Pass ""
 // to fall back to ts.lastProducedModel.
 func (ts *turnState) appendAssistantTranscript(content string, producedModel ...string) {
-	ts.appendAssistantTranscriptImpl(content, false, false, "", producedModel...)
+	ts.appendAssistantTranscriptImpl("", content, false, false, "", producedModel...)
 }
 
 // validTruncationReasonsAgent is the closed set of truncation reasons (ADR-087
@@ -290,13 +290,21 @@ var validTruncationReasonsAgent = map[string]bool{
 // content is never lost, but a bad reason can never masquerade as a valid
 // one on disk.
 func (ts *turnState) appendAssistantTranscriptTruncated(content, reason string, producedModel ...string) {
+	ts.appendAssistantTranscriptTruncatedAs("", content, reason, producedModel...)
+}
+
+// appendAssistantTranscriptTruncatedAs is appendAssistantTranscriptTruncated
+// writing the entry under entryID (a fresh id when empty). A user Stop's
+// stopped answer is saved under its live message id (#1534), so the saved
+// copy and the tokens the client showed are one message.
+func (ts *turnState) appendAssistantTranscriptTruncatedAs(entryID, content, reason string, producedModel ...string) {
 	if !validTruncationReasonsAgent[reason] {
 		logger.ErrorCF("agent", "appendAssistantTranscriptTruncated: invalid truncation reason, entry written WITHOUT truncation stamp",
 			map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "reason": reason})
-		ts.appendAssistantTranscriptImpl(content, true, false, "", producedModel...)
+		ts.appendAssistantTranscriptImpl(entryID, content, true, false, "", producedModel...)
 		return
 	}
-	ts.appendAssistantTranscriptImpl(content, true, true, reason, producedModel...)
+	ts.appendAssistantTranscriptImpl(entryID, content, true, true, reason, producedModel...)
 }
 
 // appendAssistantTranscriptImpl is the shared body behind
@@ -306,7 +314,7 @@ func (ts *turnState) appendAssistantTranscriptTruncated(content, reason string, 
 // session.TranscriptEntry's Truncated / TruncationReason fields at
 // construction, so a truncated non-streaming entry is written once instead
 // of appended-then-rewritten.
-func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bool, truncated bool, truncationReason string, producedModel ...string) {
+func (ts *turnState) appendAssistantTranscriptImpl(entryID, content string, allowEmpty bool, truncated bool, truncationReason string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendAssistantTranscript")
@@ -326,8 +334,11 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 	turnTokens, turnCost := ts.GetTurnStats()
 	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
 	turnPromptTokens, turnCompletionTokens := ts.GetTurnIOStats()
+	if entryID == "" {
+		entryID = uuid.New().String()
+	}
 	entry := session.TranscriptEntry{
-		ID:      uuid.New().String(),
+		ID:      entryID,
 		Role:    "assistant",
 		AgentID: agentID,
 		Content: content,

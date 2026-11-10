@@ -2958,6 +2958,37 @@ components:
           - session
           - tree
           default: session
+        shown:
+          type: object
+          additionalProperties: false
+          required:
+          - code_points
+          description: >
+            #1534 (founder 2026-10-31, Q3 = A). What this client's screen showed of the
+            answer being stopped when Stop was pressed. The server saves the stopped
+            answer only up to this point. Sent only by a first Stop that froze a
+            streaming answer. Absent: the server cuts at the moment it receives Stop.
+          properties:
+            turn_id:
+              type: string
+              minLength: 1
+              maxLength: 1024
+              description: turn_id of the stopped answer's tokens, when the client knows it.
+            message_id:
+              type: string
+              minLength: 1
+              maxLength: 1024
+              description: >
+                Wire message_id of the last token frame the client applied to the
+                stopped answer. Absent when no token had been applied (nothing shown).
+            code_points:
+              type: integer
+              format: int64
+              minimum: 0
+              description: >
+                Unicode code points of token content applied for message_id (a
+                replace token resets the count). Client-inserted separators are not
+                counted. 0 with no message_id means nothing of this turn was shown.
     RedirectFrame:
       title: RedirectFrame
       description: 'Client → server redirect one chat, root or helper: stop its own in-progress turn, then continue that same chat with the instruction as its next user message (D2/D9; founder rule 2026-10-06). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.'

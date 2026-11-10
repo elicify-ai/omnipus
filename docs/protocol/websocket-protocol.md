@@ -175,22 +175,40 @@ With known geometry, the browser estimates roughly three screens for opening and
 
 ### `cancel`
 
-Cancels an in-progress streaming response or tool execution for the given session.
+Stops the turn that is running in the given session. With `scope: "tree"` it also stops the helper sessions started from it (down only, never a parent or a sibling).
 
 ```json
 {
   "type": "cancel",
-  "session_id": "sess_abc123"
+  "session_id": "sess_abc123",
+  "shown": {
+    "turn_id": "turn_42",
+    "message_id": "msg_7",
+    "code_points": 128
+  }
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"cancel"` |
-| session_id | string | yes | The session whose active turn is to be cancelled |
+| session_id | string | yes | The session whose running turn is stopped |
+| scope | string | no | `"session"` (default when absent) stops this session only. `"tree"` also stops the helper sessions below it |
+| shown | object | no | What this client's screen showed of the answer being stopped, when Stop was pressed. The server saves the stopped answer only up to this point |
+| shown.turn_id | string | no | The `turn_id` of the stopped answer's tokens, when the client knows it. 1 to 1024 characters |
+| shown.message_id | string | no | The wire `message_id` of the last `token` frame the client applied to the stopped answer. Absent when no token had been applied. 1 to 1024 characters |
+| shown.code_points | integer | yes (inside `shown`) | Unicode code points of token `content` the client applied for `message_id`, 0 or more |
 
-**Producer**: Stop button in chat input (`src/components/chat/`)
-**Consumer**: Gateway WebSocket handler — cancels the LLM call and saves partial response
+**When `shown` is sent.** The client sends `shown` with every Stop that stops an answer while it is streaming, whatever the `scope`: the first Stop or Escape, `/stop`, and a typed `/cancel` (which stops the whole tree in one press). It reads the record from the answer it stops, in the same step, before the frame is sent.
+
+- **Counting.** `code_points` counts Unicode code points (an emoji is 1, an accented letter written as a letter plus a combining mark is 2), not bytes or UTF-16 units. It counts token text per wire `message_id`: a `token` with `replace: true` resets the count for its `message_id` to that frame's text, and other tokens add to it. Text the client inserts itself, such as the blank line between two steps of one answer, is not counted. Frames received but not yet applied to the screen are not counted.
+- **Nothing shown yet.** When the answer is still an empty placeholder, the client sends `{ "code_points": 0 }`, plus `turn_id` when it is known. It never sends a local placeholder id as `message_id`.
+- **No `shown`.** The client omits it for a confirming second Stop (the first press already sent it, and the answer is no longer streaming), for a Stop while nothing streams (for example between two rounds of a goal), and for an answer whose text came only from tokens without a `message_id`.
+
+Without `shown` (also from an older client), the server keeps the text it had when it received the cancel. When several Stops reach the same turn, the first one the server accepts decides; a later `shown` is ignored. Text that was already saved before the Stop reached the server (for example the text before a tool call that had started) stays whole.
+
+**Producer**: Stop button, Escape, `/stop` and `/cancel` in the chat composer (`src/store/chat/slices/outbound-lifecycle.ts::cancelStream`)
+**Consumer**: Gateway WebSocket handler. It stops the turn and saves the partial answer, cut to `shown` when present
 
 ---
 

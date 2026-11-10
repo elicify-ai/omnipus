@@ -432,7 +432,13 @@ type BrowserWebRTCStateFrame struct {
 type CancelFrame struct {
 	Scope     *string `json:"scope,omitempty"`
 	SessionId string  `json:"session_id"`
-	Type      string  `json:"type"`
+	// #1534 (founder 2026-10-31, Q3 = A). What this client's screen showed of the answer being stopped when Stop was pressed. The server saves the stopped answer only up to this point. Sent only by a first Stop that froze a streaming answer. Absent: the server cuts at the moment it receives Stop.
+	Shown *struct {
+		CodePoints int64   `json:"code_points"`
+		MessageId  *string `json:"message_id,omitempty"`
+		TurnId     *string `json:"turn_id,omitempty"`
+	} `json:"shown,omitempty"`
+	Type string `json:"type"`
 }
 
 // CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).

@@ -313,6 +313,11 @@ export interface CancelFrame {
   type: "cancel";
   session_id: string;
   scope?: "session" | "tree";
+  shown?: {
+    turn_id?: string;
+    message_id?: string;
+    code_points: number;
+  };
 }
 
 export interface RedirectFrame {

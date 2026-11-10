@@ -481,6 +481,16 @@ export interface ProviderStatusEventData {
 }
 
 /** All per-session chat state for one concurrent session. */
+/** #1534: see SessionChatState.appliedTokenPoints. */
+export interface AppliedTokenPoints { // not-wire-format: client-side counter of applied token text, never sent as-is
+  /** Last wire message_id whose token was applied to this bubble. */
+  messageId: string
+  /** turn_id carried by that token, when it had one. */
+  turnId?: string
+  /** Applied code points per wire message_id of this bubble. */
+  codePoints: Record<string, number>
+}
+
 export interface SessionChatState {
   history: SessionHistoryState
   historyNotice?: string
@@ -747,6 +757,15 @@ export interface SessionChatState {
    * `{}` / `false` and every write site initializes it first.
    */
   mergedReplayMessageIds?: Record<string, true>
+  /**
+   * #1534: per assistant bubble id, the token text this client APPLIED to
+   * it, counted in Unicode code points per wire message_id, plus the last
+   * applied message_id and its turn. Read by markLastMessageInterrupted for
+   * the Stop checkpoint (stop-checkpoint.ts). Kept on the bucket so it shares
+   * the bucket's lifetime: a reset or replaced bucket never inherits counts.
+   * Optional: absent until a keyed token is applied.
+   */
+  appliedTokenPoints?: Record<string, AppliedTokenPoints>
   /**
    * ADR-049 D6/US-12: latest `goal_status` frame for this session, or
    * null/undefined when no goal is active. Session-scoped — the frame
@@ -1148,8 +1167,11 @@ export interface ChatStore extends HistorySlice {
    * session — e.g. the browser panel's "Take over" pausing its own pinned
    * session. Omitted (the default) targets the active session, matching
    * every pre-existing call site (Stop button, Escape, `/cancel`).
+   * Returns the #1534 checkpoint of the bubble it froze (what the screen
+   * showed), or undefined when there is nothing to report
+   * (stop-checkpoint.ts::shownCheckpointFor).
    */
-  markLastMessageInterrupted: (sessionId?: string) => void
+  markLastMessageInterrupted: (sessionId?: string) => NonNullable<CancelFrame['shown']> | undefined
 
   startToolCall: (callId: string, tool: string, params: Record<string, unknown>) => void
   resolveToolCall: (callId: string, result: unknown, status: 'success' | 'error', durationMs?: number, error?: string) => void

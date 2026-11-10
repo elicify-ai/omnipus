@@ -19012,6 +19012,13 @@ export const CancelFrame = z
     type: z.literal("cancel"),
     session_id: z.string().min(1).max(255),
     scope: z.enum(["session", "tree"]).optional(),
+    shown: z
+    .object({
+      turn_id: z.string().min(1).max(1024).optional(),
+      message_id: z.string().min(1).max(1024).optional(),
+      code_points: z.number().int().min(0),
+    })
+    .strict().optional(),
   })
   .strict();
 

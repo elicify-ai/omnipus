@@ -40,6 +40,7 @@ import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
 import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
 import { recordCombinedPart, singlePart } from '../history-parts'
+import { isTokenAfterStop, recordAppliedToken, settleCancelAck } from '../stop-checkpoint'
 
 
 
@@ -597,7 +598,7 @@ function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: T
  * empty local placeholder or a text-less saved row adopts the token's id;
  * otherwise the id becomes a part and prose alias of the bubble.
  */
-function joinTurnBubble(draft: SessionChatState, turnBubbleId: string, messageId: string, frame: TokenFrameType): void {
+function joinTurnBubble(draft: SessionChatState, turnBubbleId: string, messageId: string, frame: TokenFrameType): string {
   const m = draft.messagesById[turnBubbleId]
   if (m.turnId === undefined) m.turnId = frame.turn_id // now that a token has named the turn
   m.closedBySteer = false
@@ -606,7 +607,7 @@ function joinTurnBubble(draft: SessionChatState, turnBubbleId: string, messageId
   if (rekeyable) {
     rekeyAssistantPlaceholder(draft, turnBubbleId, messageId, true)
     applyTokenContentTo(draft, messageId, frame)
-    return
+    return messageId
   }
   // #1452 S11c/S11b: a saved row with no text adopts the first text's id
   // (atomic re-key) instead of listing it as a prose alias.
@@ -614,16 +615,29 @@ function joinTurnBubble(draft: SessionChatState, turnBubbleId: string, messageId
     recordCombinedPart(m, messageId, '')
     rekeyHistoryRow(draft, turnBubbleId, messageId)
     applyTokenContentTo(draft, messageId, frame)
-    return
+    return messageId
   }
   if (m.historyPosition && !frame.replace && savedToolSeam(m)) m.pendingTextBoundary = true
   recordCombinedPart(m, messageId, !frame.replace && m.pendingTextBoundary && m.content ? '\n\n' : '') // #1452 D1 S7/S2a: the joiner the append inserts
   m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
   draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
   applyTokenContentTo(draft, turnBubbleId, frame)
+  return turnBubbleId
 }
 
-function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFrameType): void {
+/**
+ * #1534: apply a message_id-keyed token, unless it belongs to an answer the
+ * user already stopped (stop-checkpoint.ts post-Stop guards), and record the
+ * applied code points on the bubble it landed in for the Stop checkpoint.
+ */
+function applyKeyedToken(draft: SessionChatState, sid: string, frame: TokenFrameType): void {
+  if (isTokenAfterStop(sid, frame)) return
+  const bubbleId = resolveTokenBubbleByMessageId(draft, frame)
+  if (bubbleId) recordAppliedToken(draft, bubbleId, frame)
+}
+
+/** Returns the bubble the token was applied to, or null when it was discarded. */
+function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFrameType): string | null {
   const messageId = frame.message_id!
   const turnId = frame.turn_id
 
@@ -649,7 +663,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       : rawResolvedId
   if (resolvedId) {
     const existing = draft.messagesById[resolvedId]
-    if (existing.status === 'interrupted' || existing.status === 'error') return
+    if (existing.status === 'interrupted' || existing.status === 'error') return null
     if (existing.status === 'done' && !existing.isStreaming) {
       // Opus review round 3 item N2 (MEDIUM-HIGH, DO-NOT-SHIP,
       // browser-confirmed: sending a message mid-answer dropped the rest of
@@ -685,11 +699,11 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
         // already shows the full text, and live tokens with seq > W for
         // the SAME message_id that arrive afterward must never re-open or
         // duplicate it.
-        return
+        return null
       }
     }
     applyTokenContentTo(draft, resolvedId, frame)
-    return
+    return resolvedId
   }
 
   // Step 2: no bubble holds this message_id yet. Look for an OPEN bubble
@@ -746,10 +760,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       turnBubbleId = id
       break
     }
-    if (turnBubbleId) {
-      joinTurnBubble(draft, turnBubbleId, messageId, frame)
-      return
-    }
+    if (turnBubbleId) return joinTurnBubble(draft, turnBubbleId, messageId, frame)
   }
 
   // Step 3: no bubble for this turn_id either — a genuinely new turn's first
@@ -801,7 +812,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       bubble.turnId = turnId ?? prevMsg.turnId
       if (frame.room_ref) bubble.roomRef = frame.room_ref
       draft.isStreaming = true
-      return
+      return messageId
     }
     if (draft.messagesById[prevOpenId] && (prevMsg.isStreaming || prevMsg.status === 'streaming')) {
       if (ownedIds.length > 0) {
@@ -853,6 +864,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
   // actually sent after).
   insertHistoryMessageId(draft.messageOrder, draft.messagesById, bubble.id)
   draft.isStreaming = true
+  return bubble.id
 }
 
 /**
@@ -1191,7 +1203,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 // webchatChannel.Send no-stream fallback, which still has
                 // none per Lane A's report).
                 if (frame.message_id) {
-                  resolveTokenBubbleByMessageId(draft, frame)
+                  applyKeyedToken(draft, targetSid, frame)
                   return
                 }
                 let lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
@@ -1476,7 +1488,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // F-S3: this session's cancellation (if any) has now been
             // terminally acknowledged — stop treating it as "pending" so a
             // later, unrelated untagged frame doesn't get misattributed here.
-            pendingCancelAckSids.delete(sid)
+            settleCancelAck(sid)
             // A done ends the turn a pending redirect was aimed at: never carry it on.
             pendingRedirectSids.delete(sid)
             const priorBucket = get().sessionsById[sid] ?? EMPTY_BUCKET
@@ -1825,7 +1837,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // defer to a timer (cancelling any stale one first).
             const sid = targetSid
             // F-S3: see the matching comment in the 'done' case above.
-            pendingCancelAckSids.delete(sid)
+            settleCancelAck(sid)
             const redirectStoppedTurn = consumeRedirectStop(sid, llmError?.code)
             const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
             const replayElapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
