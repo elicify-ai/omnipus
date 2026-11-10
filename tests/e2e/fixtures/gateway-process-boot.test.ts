@@ -1,26 +1,31 @@
-// gateway-process-boot.test.ts — the per-test gateway's boot failure is
-// PROVEN, not inferred (CI "E2E — preview-isolation", 2026-11-10 attempt 1:
-// "/health never returned 200 after 75 consecutive failed probes" with no
-// gateway output anywhere in the job). A failed boot must put the gateway's
-// own stdout/stderr tail and its panic-log tail (scrubbed) into the job output
-// and the failure message, really stop the failed process (exit observed, port
-// released) BEFORE retrying once on a fresh home, say loudly that the retry
-// was used, and fail with every attempt's report if the retry fails too.
-// Onboarding and login are never retried.
+// gateway-process-boot.test.ts — a per-test gateway boot failure FAILS the
+// test, with the cause PROVEN, not inferred (CI "E2E — preview-isolation",
+// 2026-11-10 attempt 1: "/health never returned 200 after 75 consecutive
+// failed probes" with no gateway output anywhere in the job). A failed boot
+// must:
+//   - put the gateway's own stdout/stderr tail and panic-log tail into the
+//     job output and the thrown error, with secrets scrubbed everywhere in
+//     the emitted error (no raw output under a `cause`);
+//   - really stop the failed process (exit observed, port released, home
+//     removed only afterwards), including one that never announced its port
+//     or ignores SIGTERM;
+//   - never be retried (an unclassified first-boot crash must not pass);
+//   - keep the boot failure when cleanup fails too.
+// Onboarding and login are never retried either.
 //
 // The "gateway" here is a small fake executable (a Node script) driven by
 // environment variables, so each case is deterministic and needs no build:
 //   FAKE_MARKER   a line it writes to stderr (proves the tail is the gateway's)
 //   FAKE_MODE     which boot behaviour to play (see the script)
-//   FAKE_STATE    a folder where every boot appends its pid; a later boot
-//                 records which earlier boots were still alive when it started
+//   FAKE_STATE    a folder where every boot appends its pid
 
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { inspect } from 'node:util'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GatewayProcess } from './gateway-process.js'
+import { GatewayProcess, PANIC_LOG_READ_BYTES } from './gateway-process.js'
 
 const FAKE_SOURCE = `#!/usr/bin/env node
 const fs = require('node:fs')
@@ -30,16 +35,16 @@ const home = process.env.OMNIPUS_HOME
 const state = process.env.FAKE_STATE
 const port = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).gateway.port
 const pidsFile = path.join(state, 'pids')
-const earlier = fs.existsSync(pidsFile) ? fs.readFileSync(pidsFile, 'utf8').split('\\n').filter(Boolean).map(Number) : []
-const boot = earlier.length + 1
+const boot = (fs.existsSync(pidsFile) ? fs.readFileSync(pidsFile, 'utf8').split('\\n').filter(Boolean).length : 0) + 1
 fs.appendFileSync(pidsFile, process.pid + '\\n')
-if (boot >= 2) {
-  const alive = earlier.filter((p) => { try { process.kill(p, 0); return true } catch { return false } })
-  fs.writeFileSync(path.join(state, 'overlap-boot' + boot), alive.join(',') || 'none')
-}
 const mode = process.env.FAKE_MODE
+const env = process.env
 const announce = () => process.stdout.write('fake gateway boot ' + boot + ' announcing localhost:' + port + '\\n')
 const ignoreTerm = () => process.on('SIGTERM', () => {})
+const panicLog = (text) => {
+  fs.mkdirSync(path.join(home, 'logs'), { recursive: true })
+  fs.appendFileSync(path.join(home, 'logs', 'gateway_panic.log'), text)
+}
 const serve = (health) => http.createServer((req, res) => {
   if (req.url === '/health') { res.writeHead(health); res.end('x'); return }
   if (req.url === '/api/v1/onboarding/complete') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); return }
@@ -51,24 +56,45 @@ const serve = (health) => http.createServer((req, res) => {
   }
   res.writeHead(404); res.end()
 }).listen(port)
-const line = process.env.FAKE_MARKER + ' boot=' + boot + ' port=' + port + ' pid=' + process.pid + ' home=' + home
-if (mode === 'silent-ignore-term-then-ok' && boot === 1) {
+const line = env.FAKE_MARKER + ' boot=' + boot + ' port=' + port + ' pid=' + process.pid + ' home=' + home
+if (mode === 'silent-ignore-term') {
   ignoreTerm() // never announces the port, survives SIGTERM
   setInterval(() => {}, 1000)
+} else if (mode === 'exit-before-announce') {
+  // Raw output only (no announcement), then a crash: the startup error
+  // itself carries this output.
+  process.stdout.write(line + ' leaked=' + env.FAKE_PROVIDER_API_KEY + '\\n')
+  process.exit(7)
+} else if (mode === 'leak') {
+  announce()
+  process.stderr.write(line + '\\n')
+  // Not key=value shaped: only the env-value rule can catch these.
+  process.stdout.write('short value ' + env.FAKE_SHORT_TOKEN + ' end\\n')
+  process.stdout.write('config ' + JSON.stringify({ db: { password: env.FAKE_DB_PASSWORD } }) + '\\n')
+  // A known secret on a line that straddles the start of the panic-log read
+  // window: the window starts in the middle of the secret.
+  const secret = env.FAKE_EDGE_SECRET
+  const half = Math.floor(secret.length / 2)
+  let rest = Number(env.FAKE_WINDOW) - (secret.length - half) - 1
+  let tail = ''
+  while (rest > 0) { const n = Math.min(1000, rest); tail += 'f'.repeat(n - 1) + '\\n'; rest -= n }
+  panicLog('head ' + 'h'.repeat(5000) + ' edge ' + secret + '\\n' + tail)
+  process.exit(5)
+} else if (mode === 'restart-leak' && boot >= 2) {
+  announce()
+  process.stderr.write(line + ' restart value ' + env.FAKE_RESTART_TOKEN + '\\n')
+  process.exit(4)
 } else {
   announce()
   process.stderr.write(line + '\\n')
   if (mode === 'exit') process.exit(3)
   if (mode === 'panic') {
-    fs.mkdirSync(path.join(home, 'logs'), { recursive: true })
-    fs.appendFileSync(path.join(home, 'logs', 'gateway_panic.log'),
-      'PANIC OCCURRED: ' + process.env.FAKE_MARKER + ' boot=' + boot + ' key=' + process.env.FAKE_PROVIDER_API_KEY + '\\n')
-    process.stdout.write('provider said Bearer ' + process.env.FAKE_PROVIDER_API_KEY + '\\n')
+    panicLog('PANIC OCCURRED: ' + env.FAKE_MARKER + ' boot=' + boot + ' key=' + env.FAKE_PROVIDER_API_KEY + '\\n')
+    process.stdout.write('provider said Bearer ' + env.FAKE_PROVIDER_API_KEY + '\\n')
     process.exit(2)
   }
   if (mode === 'listen-503-ignore-term') { ignoreTerm(); serve(503) }
-  else if (mode === 'listen-on-second' && boot >= 2) serve(200)
-  else if (mode === 'silent-ignore-term-then-ok' || mode === 'login-fails') serve(200)
+  else if (mode === 'login-fails' || mode === 'restart-leak') serve(200)
   else setInterval(() => {}, 1000) // alive, never listening
   if (mode !== 'listen-503-ignore-term') process.on('SIGTERM', () => process.exit(0))
 }
@@ -141,69 +167,54 @@ async function startError(opts: Parameters<typeof GatewayProcess.start>[0]): Pro
   return err as Error
 }
 
-const RETRY_LINE = 'GATEWAY BOOT RETRY USED'
+/** Everything a reporter can print of an error: message, stack, every
+ * nested cause and own property (util.inspect walks the cause chain). */
+function emitted(err: unknown): string {
+  return inspect(err, { depth: 20, showHidden: true }) + '\n' + errors.join('\n')
+}
 
-describe('GatewayProcess boot failure evidence and retry', () => {
-  it('never listens: retries once, then fails with BOTH boots\' own output tails', async () => {
+/** The one boot started, failed and is gone: exit observed, home removed. */
+async function expectOneBootGone(state: string, message: string, marker: string): Promise<void> {
+  expect(pids(state), 'exactly one boot: a failed boot is never retried').toHaveLength(1)
+  expect(isAlive(pids(state)[0]), 'the failed boot has exited').toBe(false)
+  for (const b of bootLines(message, marker)) {
+    expect(await portAnswers(Number(b.port)), `port ${b.port} is released`).toBe(false)
+    expect(fs.existsSync(b.home), `the OMNIPUS_HOME ${b.home} is removed`).toBe(false)
+  }
+}
+
+describe('GatewayProcess boot failure: fails the test with the proven cause', () => {
+  it('never listens: fails once, with the gateway output in the error and the job output', async () => {
     const marker = `NEVER-LISTENS-${process.pid}`
     const state = newState('never-listens')
-    const retries: string[] = []
     const err = await startError({
       binary: fake,
       apiBase: 'http://127.0.0.1:9',
       healthTimeoutMs: 1_000,
       env: { FAKE_MARKER: marker, FAKE_MODE: 'never-listen', FAKE_STATE: state },
-      onBootRetry: (report) => retries.push(report),
     })
-    const message = err.message
-    expect(message).toContain('/health never returned 200')
-    const boots = bootLines(message, marker)
-    expect(boots, 'the failure message carries each boot\'s own stderr line').toHaveLength(2)
-    expect(boots[0].home, 'the retry runs in a fresh OMNIPUS_HOME').not.toBe(boots[1].home)
-    expect(message).toContain('gateway output')
-    expect(retries, 'exactly one retry is reported').toHaveLength(1)
-    expect(bootLines(retries[0], marker).map((b) => b.pid), 'the retry report carries the failed boot\'s output').toEqual([boots[0].pid])
-    expect(errors.filter((l) => l.includes(RETRY_LINE)), 'the retry is announced on a greppable line').toHaveLength(1)
-    for (const b of boots) expect(fs.existsSync(b.home), `the OMNIPUS_HOME ${b.home} is removed`).toBe(false)
+    expect(err.message).toContain('/health never returned 200')
+    expect(err.message).toContain('gateway output')
+    expect(bootLines(err.message, marker), 'the error carries the boot\'s own stderr line').toHaveLength(1)
+    expect(bootLines(errors.join('\n'), marker), 'the job output carries it too').toHaveLength(1)
+    await expectOneBootGone(state, err.message, marker)
   }, 60_000)
 
   it('exits during boot: the failure names the exit code and carries the output tail', async () => {
     const marker = `EXITS-${process.pid}`
+    const state = newState('exits')
     const err = await startError({
       binary: fake,
       apiBase: 'http://127.0.0.1:9',
       healthTimeoutMs: 1_000,
-      env: { FAKE_MARKER: marker, FAKE_MODE: 'exit', FAKE_STATE: newState('exits') },
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'exit', FAKE_STATE: state },
     })
     expect(err.message).toMatch(/code 3/)
-    expect(bootLines(err.message, marker)).toHaveLength(2)
+    expect(bootLines(err.message, marker)).toHaveLength(1)
+    await expectOneBootGone(state, err.message, marker)
   }, 60_000)
 
-  it('a boot that fails once and then answers: start() succeeds, and the retry is reported and announced', async () => {
-    const marker = `SECOND-BOOT-OK-${process.pid}`
-    const retries: string[] = []
-    const gw = await GatewayProcess.start({
-      binary: fake,
-      apiBase: 'http://127.0.0.1:9',
-      healthTimeoutMs: 1_000,
-      env: { FAKE_MARKER: marker, FAKE_MODE: 'listen-on-second', FAKE_STATE: newState('second-ok') },
-      onBootRetry: (report) => retries.push(report),
-    })
-    try {
-      const health = await fetch(`${gw.baseURL}/health`)
-      expect(health.status, 'the returned gateway is the healthy second boot').toBe(200)
-      expect(retries).toHaveLength(1)
-      expect(retries[0]).toContain('/health never returned 200')
-      expect(retries[0]).toContain(`${marker} boot=1`)
-      const loud = errors.filter((l) => l.includes(RETRY_LINE))
-      expect(loud.length, 'the retry and the recovery are both announced').toBe(2)
-      expect(loud.some((l) => /recovered on attempt 2\/2/.test(l))).toBe(true)
-    } finally {
-      await gw.stop()
-    }
-  }, 60_000)
-
-  it('a failed boot that ignores SIGTERM is killed, its exit observed and its port released before the retry', async () => {
+  it('a failed boot that ignores SIGTERM is killed: exit observed, port released, home removed', async () => {
     const marker = `IGNORES-TERM-${process.pid}`
     const state = newState('ignores-term')
     const err = await startError({
@@ -213,73 +224,148 @@ describe('GatewayProcess boot failure evidence and retry', () => {
       env: { FAKE_MARKER: marker, FAKE_MODE: 'listen-503-ignore-term', FAKE_STATE: state },
     })
     expect(err.message).toContain('/health never returned 200')
-    const boots = bootLines(err.message, marker)
-    expect(boots).toHaveLength(2)
-    expect(fs.readFileSync(path.join(state, 'overlap-boot2'), 'utf8'), 'boot 1 had exited before boot 2 started').toBe('none')
-    for (const pid of pids(state)) expect(isAlive(pid), `gateway pid ${pid} has exited`).toBe(false)
-    for (const b of boots) {
-      expect(await portAnswers(Number(b.port)), `port ${b.port} is released`).toBe(false)
-      expect(fs.existsSync(b.home), `the OMNIPUS_HOME ${b.home} is removed`).toBe(false)
-    }
-  }, 90_000)
+    expect(bootLines(err.message, marker)).toHaveLength(1)
+    await expectOneBootGone(state, err.message, marker)
+  }, 60_000)
 
-  it('a boot that fails before announcing its port (and ignores SIGTERM) is still owned, killed and gone before the retry', async () => {
-    const marker = `PRE-ANNOUNCE-${process.pid}`
+  it('a boot that never announces its port (and ignores SIGTERM) is still owned and killed', async () => {
     const state = newState('pre-announce')
-    const retries: string[] = []
-    const gw = await GatewayProcess.start({
-      binary: fake,
-      apiBase: 'http://127.0.0.1:9',
-      healthTimeoutMs: 1_000,
-      startupTimeoutMs: 1_000,
-      env: { FAKE_MARKER: marker, FAKE_MODE: 'silent-ignore-term-then-ok', FAKE_STATE: state },
-      onBootRetry: (report) => retries.push(report),
-    })
-    try {
-      expect(retries).toHaveLength(1)
-      expect(retries[0]).toContain('did not start within')
-      expect(fs.readFileSync(path.join(state, 'overlap-boot2'), 'utf8'), 'boot 1 had exited before boot 2 started').toBe('none')
-      const [first] = pids(state)
-      expect(isAlive(first), `the silent first boot (pid ${first}) has exited`).toBe(false)
-    } finally {
-      await gw.stop()
-    }
-    for (const pid of pids(state)) expect(isAlive(pid), `gateway pid ${pid} has exited after stop()`).toBe(false)
-  }, 90_000)
-
-  it('a crashing boot: the report carries the panic-log tail, with secrets scrubbed', async () => {
-    const marker = `PANICS-${process.pid}`
-    const secret = 'fake-provider-key-for-scrub-test-7f3a9c2e' // gitleaks:allow
     const err = await startError({
       binary: fake,
       apiBase: 'http://127.0.0.1:9',
       healthTimeoutMs: 1_000,
-      env: { FAKE_MARKER: marker, FAKE_MODE: 'panic', FAKE_STATE: newState('panics'), FAKE_PROVIDER_API_KEY: secret },
+      startupTimeoutMs: 1_000,
+      env: { FAKE_MARKER: 'unused', FAKE_MODE: 'silent-ignore-term', FAKE_STATE: state },
+    })
+    expect(err.message).toContain('did not start within')
+    expect(pids(state)).toHaveLength(1)
+    expect(isAlive(pids(state)[0]), 'the silent boot has exited').toBe(false)
+    const home = /OMNIPUS_HOME (\S+)/.exec(err.message)?.[1]
+    expect(home, 'the error names the home').toBeTruthy()
+    expect(fs.existsSync(home as string), 'its home is removed').toBe(false)
+  }, 60_000)
+
+  it('a crashing boot: the report carries the panic-log tail, with secrets scrubbed', async () => {
+    const marker = `PANICS-${process.pid}`
+    const secret = 'fake-provider-key-for-scrub-test-7f3a9c2e' // gitleaks:allow
+    const state = newState('panics')
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'panic', FAKE_STATE: state, FAKE_PROVIDER_API_KEY: secret },
     })
     expect(err.message).toMatch(/code 2/)
     expect(err.message).toContain('gateway_panic.log')
     expect(err.message).toContain(`PANIC OCCURRED: ${marker} boot=1`)
-    expect(err.message).toContain(`PANIC OCCURRED: ${marker} boot=2`)
-    expect(err.message, 'no secret reaches the report').not.toContain(secret)
     expect(err.message).toContain('[REDACTED')
-    for (const l of errors) expect(l, 'no secret reaches the job output').not.toContain(secret)
+    expect(emitted(err), 'no secret reaches the error or the job output').not.toContain(secret)
+    await expectOneBootGone(state, err.message, marker)
   }, 60_000)
 
-  it('a failed login is not a boot failure: no retry, one process, and it is gone', async () => {
+  it('a failed login is not a boot failure: not retried, one process, and it is gone', async () => {
     const marker = `LOGIN-FAILS-${process.pid}`
     const state = newState('login-fails')
-    const retries: string[] = []
     const err = await startError({
       binary: fake,
       apiBase: 'http://127.0.0.1:9',
       healthTimeoutMs: 1_000,
       env: { FAKE_MARKER: marker, FAKE_MODE: 'login-fails', FAKE_STATE: state },
-      onBootRetry: (report) => retries.push(report),
     })
     expect(err.message).toContain('login failed 500')
-    expect(retries).toEqual([])
-    expect(errors.filter((l) => l.includes(RETRY_LINE))).toEqual([])
-    expect(pids(state)).toHaveLength(1)
-    expect(isAlive(pids(state)[0])).toBe(false)
+    await expectOneBootGone(state, err.message, marker)
+  }, 60_000)
+
+  it('cleanup failing after a boot failure keeps BOTH failures in the error', async () => {
+    const marker = `CLEANUP-FAILS-${process.pid}`
+    const state = newState('cleanup-fails')
+    const realStop = GatewayProcess.prototype.stop
+    const stopSpy = vi
+      .spyOn(GatewayProcess.prototype, 'stop')
+      .mockRejectedValue(new Error('cleanup canary: the process would not die'))
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'never-listen', FAKE_STATE: state },
+    })
+    const owned = stopSpy.mock.contexts[0] as GatewayProcess
+    vi.restoreAllMocks()
+    // The mocked stop() left the fake running: clean it up for real.
+    expect(owned, 'stop() was called on the failed boot').toBeInstanceOf(GatewayProcess)
+    await realStop.call(owned)
+    expect(err.message, 'the boot failure is kept').toContain('/health never returned 200')
+    expect(bootLines(err.message, marker), 'with its gateway output').toHaveLength(1)
+    expect(err.message, 'and the cleanup failure is added').toContain('cleanup canary: the process would not die')
+  }, 60_000)
+})
+
+describe('GatewayProcess boot failure: no secret in anything it emits', () => {
+  it('a crash before the port announcement: the whole error graph (causes included) is scrubbed', async () => {
+    const canary = 'canary-cause-graph-6b1d0e9f4a2c' // gitleaks:allow
+    const marker = `CAUSE-${process.pid}`
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'exit-before-announce', FAKE_STATE: newState('cause'), FAKE_PROVIDER_API_KEY: canary },
+    })
+    expect(err.message).toMatch(/code 7/)
+    expect(err.message, 'the raw output is still reported, scrubbed').toContain(`${marker} boot=1`)
+    expect(emitted(err)).not.toContain(canary)
+  }, 60_000)
+
+  const leakEnv = (state: string, extra: Record<string, string>) => ({
+    FAKE_MARKER: `LEAK-${process.pid}`,
+    FAKE_MODE: 'leak',
+    FAKE_STATE: state,
+    FAKE_SHORT_TOKEN: 'q7Z',
+    FAKE_DB_PASSWORD: 'pw "json" \\ canary-json-58e2',
+    FAKE_EDGE_SECRET: 'edgecanaryAAAAAAAAAAAAAAAAAAAAbbbbbbbbbbbbbbbbbbbbbbbbbbb', // gitleaks:allow
+    FAKE_WINDOW: String(PANIC_LOG_READ_BYTES),
+    ...extra,
+  })
+
+  it('a short secret-named environment value is scrubbed', async () => {
+    const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 1_000, env: leakEnv(newState('short'), {}) })
+    expect(err.message).toContain('short value ')
+    expect(emitted(err)).not.toContain('q7Z')
+  }, 60_000)
+
+  it('a known secret printed in JSON-escaped form is scrubbed', async () => {
+    const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 1_000, env: leakEnv(newState('json'), {}) })
+    expect(err.message).toContain('"password":')
+    expect(emitted(err)).not.toContain('canary-json-58e2')
+  }, 60_000)
+
+  it('a known secret cut by the start of the panic-log read window is scrubbed', async () => {
+    const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 1_000, env: leakEnv(newState('edge'), {}) })
+    expect(err.message).toContain('gateway_panic.log')
+    expect(err.message, 'the panic tail itself is there').toContain('ffff')
+    expect(emitted(err), 'no part of the secret survives').not.toMatch(/bbbbbbbbbb|AAAAAAAAAA|edgecanary/)
+  }, 60_000)
+
+  it('a secret passed only to restart({ env }) is scrubbed from the restart failure', async () => {
+    const canary = 'canary-restart-env-3c9a71d0' // gitleaks:allow
+    const marker = `RESTART-${process.pid}`
+    const gw = await GatewayProcess.start({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'restart-leak', FAKE_STATE: newState('restart') },
+    })
+    try {
+      await gw.kill9()
+      const err = await gw.restart({ relogin: false, env: { FAKE_RESTART_TOKEN: canary } }).then(
+        () => undefined,
+        (e: unknown) => e as Error,
+      )
+      expect(err, 'the restart must fail').toBeInstanceOf(Error)
+      expect((err as Error).message).toMatch(/code 4/)
+      expect((err as Error).message).toContain('restart value ')
+      expect(emitted(err)).not.toContain(canary)
+    } finally {
+      await gw.stop()
+    }
   }, 60_000)
 })
