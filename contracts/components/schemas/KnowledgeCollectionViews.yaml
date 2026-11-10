@@ -58,8 +58,10 @@ properties:
   unloadable:
     type: array
     description: >
-      Each rejected view file, with the loader's own code and reason (UAT
+      Each rejected view file, with the loader's code and reason (UAT
       D-70's naming rule: a count alone says nothing a reader can act on).
+      File names in `paths` and `reason` are relative to the knowledge base
+      that owns the files.
       Present whenever unloadable_count is greater than zero.
     items:
       $ref: "./KnowledgeBaseUnloadableView.yaml"
