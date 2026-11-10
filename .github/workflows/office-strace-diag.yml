@@ -1,0 +1,119 @@
+name: Office strace diagnostic (never merged)
+
+# DIAGNOSTIC ONLY - lives on work/office-strace-diag, never merged.
+# One job: traces the real Linux LibreOffice conversion inside the Office
+# preview converter sandbox, and the same start without a sandbox, so the two
+# system-call traces show exactly what the sandbox refuses. A push trigger
+# filtered to this branch is used because workflow_dispatch only fires for a
+# workflow file that exists on the default branch.
+on:
+  push:
+    branches: [work/office-strace-diag]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CGO_ENABLED: "0"
+      LOGS: ${{ github.workspace }}/strace-logs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Prepare SPA embed stub
+        run: |
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+
+      - name: Install the LibreOffice system libraries (as office-preview-real) and strace
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-6 libxext6 libxinerama1 libcairo2 libcups2t64 libdbus-1-3 \
+            libfontconfig1 libfreetype6 libglib2.0-0t64 libnss3 libnspr4 fonts-liberation strace
+
+      - name: Restore downloaded archives
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/office-real-downloads
+          key: office-real-${{ hashFiles('scripts/office-preview-real/pins.env', 'native/omnipus-pdfium/pins.env') }}
+
+      - name: Provision the pinned LibreOffice and PDF renderer
+        run: bash scripts/office-preview-real/provision.sh "$RUNNER_TEMP/office-real" "$RUNNER_TEMP/office-real-downloads"
+
+      - name: Record the host
+        run: |
+          mkdir -p "$LOGS"
+          {
+            echo "head: $(git rev-parse HEAD)"
+            echo "uname -a: $(uname -a)"
+            echo "lsm: $(cat /sys/kernel/security/lsm 2>/dev/null || echo unreadable)"
+            echo "yama ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo none)"
+            echo "id: $(id)"
+            echo "/tmp: $(stat -c '%A %U' /tmp)  /var/tmp: $(stat -c '%A %U' /var/tmp)"
+            go version
+            strace -V | head -1
+            cat /etc/os-release | head -2
+          } | tee "$LOGS/host.txt"
+
+      - name: Instrument check - Landlock ABI and a traced Landlock socket denial
+        run: |
+          strace -f -yy -tt -e trace=%file,%network,%process,landlock_create_ruleset,landlock_restrict_self \
+            -o "$LOGS/probe.strace" python3 -I .github/office-strace-diag/landlock_probe.py 2>&1 | tee "$LOGS/probe.txt"
+          grep -E 'bind\(|access\("/tmp"' "$LOGS/probe.strace" | tee -a "$LOGS/probe.txt"
+
+      - name: Build the preview test binary
+        run: |
+          CGO_ENABLED=0 go test -c -tags goolm,stdjson -o "$RUNNER_TEMP/preview.test" ./pkg/preview/
+
+      - name: Sandboxed - real conversion test under strace
+        run: |
+          set +e
+          cd pkg/preview
+          for name in TestPreviewOffice_RealStaleFormulaCacheRecalculatesToTwo TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch; do
+            echo "pipes before $name: $(find /tmp /var/tmp -maxdepth 1 -name 'OSL_PIPE*' | tr '\n' ' ')" >> "$LOGS/sandboxed-pipes.txt"
+            strace -f -yy -tt -s 512 -e trace=%file,%network,%process -o "$LOGS/sandboxed-$name.strace" \
+              "$RUNNER_TEMP/preview.test" -test.v -test.count=1 -test.timeout=10m -test.run "^${name}\$" \
+              > "$LOGS/sandboxed-$name.log" 2>&1 < /dev/null
+            echo "$?" > "$LOGS/sandboxed-$name.exit"
+            echo "pipes after $name: $(find /tmp /var/tmp -maxdepth 1 -name 'OSL_PIPE*' | tr '\n' ' ')" >> "$LOGS/sandboxed-pipes.txt"
+            echo "== $name exit=$(cat "$LOGS/sandboxed-$name.exit")"
+            grep -E -- '--- (PASS|FAIL)|abi_version|conversion failed' "$LOGS/sandboxed-$name.log" | head -20
+            echo "-- denied calls (EACCES/EPERM/EXDEV/EROFS):"
+            grep -E '= -1 E(ACCES|PERM|XDEV|ROFS)' "$LOGS/sandboxed-$name.strace" | head -80
+          done
+          cat "$LOGS/sandboxed-pipes.txt"
+          exit 0
+
+      - name: Unsandboxed - the same LibreOffice start under strace
+        run: |
+          set +e
+          bash .github/office-strace-diag/unconfined.sh "$LOGS"
+          exit 0
+
+      - name: Stale socket - killed conversion and the next start
+        run: |
+          set +e
+          bash .github/office-strace-diag/stale.sh "$LOGS"
+          exit 0
+
+      - name: Upload the traces
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: office-strace-logs
+          path: strace-logs/
+          if-no-files-found: error
