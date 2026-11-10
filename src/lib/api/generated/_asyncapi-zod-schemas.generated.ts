@@ -24,6 +24,16 @@ export const SessionHistoryState = z
   })
   .strict();
 
+export const EffortRecord = z
+  .object({
+    chosen: z.string().max(32).optional(),
+    sent: z.string().max(32).optional(),
+    reason: z.enum(["mapped", "not_supported", "continuation", "rejected", "rejected_earlier", "extra_body"]).optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+  })
+  .strict();
+
 export const RoomRef = z
   .object({
     room_id: z.string().min(1).max(128),
@@ -262,6 +272,8 @@ export const MessageFrameBase = z
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
+      provider: z.string().min(1).max(64).optional(),
+      reasoning_effort: z.string().min(1).max(32).optional(),
       workspace_id: z.string().min(1).max(128).optional(),
       workspace_setup_kickoff: z.boolean().optional(),
     })
@@ -384,6 +396,8 @@ export const DoneStats = z
     turn_failed: z.boolean().optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
+    effort: EffortRecord.optional(),
+    reasoning_tokens: z.number().int().min(0).optional(),
   })
   .passthrough();
 
@@ -693,6 +707,8 @@ export const ReplayMessageFrame = z
     .strict().optional(),
     seq: z.number().int().min(1).optional(),
     terminal_outcome: z.boolean().optional(),
+    effort: EffortRecord.optional(),
+    turn_reasoning_tokens: z.number().int().min(0).optional(),
   })
   .strict();
 

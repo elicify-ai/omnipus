@@ -82,7 +82,7 @@ describe('useWorkspaceTeamIds — fetch-failure telemetry', () => {
       workspace_id: 'ws-2',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
     const logErrorSpy = vi.spyOn(telemetry, 'logError')
 

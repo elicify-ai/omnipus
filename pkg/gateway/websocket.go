@@ -1312,6 +1312,16 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 			modelName = v
 		}
 	}
+	// The per-turn provider and effort are checked in both validation
+	// modes; a refused frame publishes nothing (spec D5 rows 6-7).
+	choice, choiceRefusal := parseFrameEffortChoice(f.Metadata)
+	if choiceRefusal != "" {
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: choiceRefusal,
+		})
+		return wsHandlerReadLoopContinue
+	}
 	// M4: workspace→turn binding. When the message originates from a
 	// workspace chat the SPA sets metadata.workspace_id; we stamp it on
 	// the session meta so task_create/delegation lands on this workspace.
@@ -1355,9 +1365,9 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 	if f.Recipient != nil {
 		recipient = &addressing.Pair{WorkspaceID: f.Recipient.WorkspaceId, AgentID: f.Recipient.AgentId}
 	}
-	wh.h.handleChatMessageToRecipient(
+	wh.h.handleChatMessageWithChoice(
 		wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-		modelName, workspaceID, clientMessageID, f.AutoApprove, recipient, wh.wc,
+		modelName, choice, workspaceID, clientMessageID, f.AutoApprove, recipient, wh.wc,
 	)
 	return wsHandlerReadLoopNext
 }
@@ -1719,10 +1729,14 @@ type wsStreamer struct {
 	statsCacheWrite       int
 	callAccounting        []session.TranscriptEntry
 	callAccountingSet     bool
-	statsTokens           int64
-	statsCostUSD          float64
-	statsDuration         time.Duration
-	statsTurnFailed       bool // set by SetTurnFailed when the engine used a synthetic fallback
+	// turnReasoning is the agent's own turn sum over every call of the turn
+	// (agent.TurnReasoningStreamer); turnReasoningSet says it was handed over.
+	turnReasoning    *int
+	turnReasoningSet bool
+	statsTokens      int64
+	statsCostUSD     float64
+	statsDuration    time.Duration
+	statsTurnFailed  bool // set by SetTurnFailed when the engine used a synthetic fallback
 
 	// transcriptPersisted records that the agent loop already wrote this
 	// streamer's narration to the transcript via

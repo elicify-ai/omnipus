@@ -34,7 +34,7 @@ import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
 import { OmnipusComposer } from './composer/OmnipusComposer'
 import { MarkdownText } from './markdown-text'
 import { CATCH_UP_SMOOTH, ThreadRevealContext } from './useOpenReveal'
-import { ModelFooter } from './ModelFooter'
+import { ModelFooter, TurnEffortNote } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { isClearCommandText } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
@@ -1306,7 +1306,8 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
         {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so
             replay sessions show the same model footer as the live
             AssistantUI render. */}
-        {message.role === 'assistant' && <ModelFooter model={message.model} />}
+        {message.role === 'assistant' && <TurnEffortNote effort={message.effort} />}
+        {message.role === 'assistant' && <ModelFooter model={message.model} effort={message.effort} turnReasoningTokens={message.turnReasoningTokens} />}
         {liveRow && <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />}
       </div>
     </article>
