@@ -124,14 +124,16 @@ func (t *chatHistoryIndexTree) readFrame(off, end int64) (historyFrame, int64, e
 }
 
 // proveTornFrame decides whether the incomplete frame at off (readFrame
-// returned io.ErrUnexpectedEOF) is a torn write or framed damage (#1523). A
-// torn write leaves a literal prefix of one encoded frame, so every byte that
-// is present must still fit the writer's format: a prefix of the "CHI1" magic,
-// a size field that is (or can still become) 1..historyFrameBound, and a body
-// that is a prefix of one compact JSON object starting at body byte 0 and able
-// to close within the declared size. Bytes that rule out every writer frame
-// are framed damage. Damage that still leaves a possible writer prefix cannot
-// be told apart from an interrupted write and is not claimed here.
+// returned io.ErrUnexpectedEOF) is refused as framed damage or left to the
+// caller to redo as a cut-off write (#1523). It refuses only what these checks
+// prove cannot be a cut-off writer prefix: a magic that is not a prefix of
+// "CHI1"; a size field that is 0, over historyFrameBound, or already over it
+// whatever its missing bytes are; a body that does not start with '{', is not
+// valid JSON so far, already holds a complete value, or whose shortest JSON
+// completion (historyJSONMinCompletion) is longer than the declared size.
+// It is not a proof that an accepted tail was written by the writer: damage
+// that still leaves a possible writer prefix cannot be told apart from an
+// interrupted write and is redone.
 func (t *chatHistoryIndexTree) proveTornFrame(off, end int64) error {
 	avail := end - off
 	header := make([]byte, min(avail, historyFrameHeader))
@@ -178,9 +180,9 @@ func historyTornHeader(h []byte) error {
 	return nil
 }
 
-// historyTornBody refuses an incomplete body that is not a prefix of the
-// writer's compact JSON object, or that cannot close within size bytes. An
-// empty body (the cut right after a complete header) is a writer prefix.
+// historyTornBody refuses an incomplete body that provably cannot be a prefix
+// of a size-byte compact JSON object (see proveTornFrame). An empty body (the
+// cut right after a complete header) is accepted.
 func historyTornBody(body []byte, size int64) error {
 	if len(body) == 0 {
 		return nil
@@ -196,41 +198,10 @@ func historyTornBody(body []byte, size int64) error {
 	case !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF):
 		return fmt.Errorf("damaged history index frame body: %w", err)
 	}
-	if int64(len(body))+historyJSONCloseBytes(body) > size {
-		return errors.New("history index frame body cannot close within its length")
+	if int64(len(body))+historyJSONMinCompletion(body) > size {
+		return errors.New("history index frame body cannot complete within its length")
 	}
 	return nil
-}
-
-// historyJSONCloseBytes is a lower bound on the bytes any completion of a
-// syntactically valid JSON prefix still needs: an escaped character and a
-// closing quote for an open string, plus one bracket per open container. A
-// lower bound never refuses a genuine prefix; it only catches provable overrun.
-func historyJSONCloseBytes(prefix []byte) int64 {
-	var need int64
-	inString, escaped := false, false
-	for _, c := range prefix {
-		switch {
-		case escaped:
-			escaped = false
-		case inString && c == '\\':
-			escaped = true
-		case c == '"':
-			inString = !inString
-		case inString:
-		case c == '{' || c == '[':
-			need++
-		case c == '}' || c == ']':
-			need--
-		}
-	}
-	if inString {
-		need++
-	}
-	if escaped {
-		need++
-	}
-	return need
 }
 
 func (t *chatHistoryIndexTree) node(ref int64) (historyNode, error) {
