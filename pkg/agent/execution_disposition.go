@@ -170,6 +170,11 @@ func (al *AgentLoop) retainSelectedStop(ctx context.Context, id string, generati
 	defer unlock()
 	err = al.settleSelectedStop(selected, unlock)
 	unlock()
+	if err == nil {
+		// No run of a queued task launch ever started, so nothing else ends
+		// its task: a person's Stop closes it here (#1557).
+		err = al.closeStoppedQueuedTaskLaunch(id)
+	}
 	if promote {
 		al.promoteSteeredExecution(next)
 	}

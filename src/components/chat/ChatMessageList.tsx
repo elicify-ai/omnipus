@@ -382,6 +382,12 @@ function VirtualizedMessageListInner({
   // .Messages below needs the runtime). The parent feature-detects ResizeObserver
   // and falls back to PlainMessageList where it is unavailable.
   //
+  // useHistoryViewport owns initial, thread-switch and run-start placement. Do
+  // not also queue those placements in AssistantUI: disabling its autoScroll
+  // after entering history does not clear a pending bottom-scroll intent. A
+  // later loading-row resize can otherwise pull the reader back to the end
+  // (#1751/#1564). Keep only its at-bottom content-following behaviour enabled.
+  //
   // VirtualizerAutoFollow (rendered inside the Viewport) covers the one growth the
   // engine can't see: the virtualizer grows the transcript by setting the spacer's
   // inline `style` height (row measurement, the live→virtualized finalize, and
@@ -395,9 +401,9 @@ function VirtualizedMessageListInner({
     <ThreadPrimitive.Viewport
       ref={scrollContainerRef}
       autoScroll={!viewport.historical}
-      scrollToBottomOnRunStart={!viewport.historical}
-      scrollToBottomOnInitialize={!viewport.historical}
-      scrollToBottomOnThreadSwitch={!viewport.historical}
+      scrollToBottomOnRunStart={false}
+      scrollToBottomOnInitialize={false}
+      scrollToBottomOnThreadSwitch={false}
       onScroll={viewport.onScroll}
       role="region" aria-label="Conversation history" tabIndex={-1} aria-busy={viewport.busy || undefined}
       data-testid="virtualized-message-list"
