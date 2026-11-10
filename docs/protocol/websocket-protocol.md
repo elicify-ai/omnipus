@@ -210,13 +210,6 @@ Without `shown` (also from an older client), the server keeps the text it had wh
 **Producer**: Stop button, Escape, `/stop` and `/cancel` in the chat composer (`src/store/chat/slices/outbound-lifecycle.ts::cancelStream`)
 **Consumer**: Gateway WebSocket handler. It stops the turn and saves the partial answer, cut to `shown` when present
 
--------|------|----------|-------------|
-| type | string | yes | Always `"cancel"` |
-| session_id | string | yes | The session whose active turn is to be cancelled |
-
-**Producer**: Stop button in chat input (`src/components/chat/`)
-**Consumer**: Gateway WebSocket handler — cancels the LLM call and saves partial response
-
 ---
 
 ### `ping`
