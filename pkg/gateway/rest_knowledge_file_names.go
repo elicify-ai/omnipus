@@ -57,24 +57,90 @@ func (n collectionFileNames) names(paths []string) []string {
 	return out
 }
 
-// text rewrites a loader reason: each reported file is replaced by its
-// collection-relative name, and any other spelling of a file under the root
-// (a read error naming it, for example) loses the root prefix.
+// text rewrites a loader reason so it names files exactly as paths does.
+//
+// It is one left-to-right pass over the original reason, and text it has
+// produced is never scanned again: a relative name such as
+// ".omnipus-vault/records/a.yaml" must stay intact even when the collection
+// root is itself named /records. At each position it replaces, in order:
+//   - a reported file (longest first), with that file's name;
+//   - a file under the root that is not in paths (a read error naming it, for
+//     example), starting where a word starts, with that file's name.
+//
+// Everything else is copied unchanged.
 func (n collectionFileNames) text(reason string, paths []string) string {
-	ordered := append([]string(nil), paths...)
-	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
-	for _, p := range ordered {
+	reported := make([]reportedSpelling, 0, 2*len(paths))
+	for _, p := range paths {
 		if p == "" {
 			continue
 		}
-		reason = strings.ReplaceAll(reason, p, n.name(p))
-	}
-	for _, root := range n.roots {
-		for _, prefix := range []string{root + string(filepath.Separator), filepath.ToSlash(root) + "/"} {
-			reason = strings.ReplaceAll(reason, prefix, "")
+		reported = append(reported, reportedSpelling{p, p})
+		if slashed := filepath.ToSlash(p); slashed != p {
+			reported = append(reported, reportedSpelling{slashed, p})
 		}
 	}
-	return reason
+	sort.SliceStable(reported, func(i, j int) bool { return len(reported[i].text) > len(reported[j].text) })
+
+	var b strings.Builder
+	for i := 0; i < len(reason); {
+		rest := reason[i:]
+		if s, ok := firstPrefix(rest, reported); ok {
+			b.WriteString(n.name(s.path))
+			i += len(s.text)
+			continue
+		}
+		if wordStartsAt(reason, i) {
+			if end, ok := n.rootedFileEnd(rest); ok {
+				b.WriteString(n.name(filepath.FromSlash(rest[:end])))
+				i += end
+				continue
+			}
+		}
+		b.WriteByte(reason[i])
+		i++
+	}
+	return b.String()
+}
+
+// reportedSpelling is one way a reported file may be written in a reason.
+type reportedSpelling struct{ text, path string }
+
+func firstPrefix(s string, candidates []reportedSpelling) (reportedSpelling, bool) {
+	for _, c := range candidates {
+		if strings.HasPrefix(s, c.text) {
+			return c, true
+		}
+	}
+	return reportedSpelling{}, false
+}
+
+// isNameDelimiter reports whether b ends a file name inside reason text.
+// Only ASCII bytes are delimiters, so a multi-byte character in a file name
+// never splits it.
+func isNameDelimiter(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || strings.IndexByte("\"'(),;:[]", b) >= 0
+}
+
+func wordStartsAt(s string, i int) bool {
+	return i == 0 || isNameDelimiter(s[i-1]) || s[i-1] == '='
+}
+
+// rootedFileEnd reports the length of the file name at the start of s when it
+// begins with one of the root folders, native or slash-separated.
+func (n collectionFileNames) rootedFileEnd(s string) (int, bool) {
+	for _, root := range n.roots {
+		for _, prefix := range []string{root + string(filepath.Separator), filepath.ToSlash(root) + "/"} {
+			if !strings.HasPrefix(s, prefix) {
+				continue
+			}
+			end := len(prefix)
+			for end < len(s) && !isNameDelimiter(s[end]) {
+				end++
+			}
+			return end, true
+		}
+	}
+	return 0, false
 }
 
 func (n collectionFileNames) viewRejection(rej records.ViewRejection) records.ViewRejection {
