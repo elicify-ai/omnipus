@@ -22,8 +22,8 @@ func TrustedProgramDir(t *testing.T) string {
 		t.Fatalf("SETUP: create trusted fixture outside runtime temp: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Errorf("SETUP: remove trusted fixture: %v", err)
+		if removeErr := os.RemoveAll(dir); removeErr != nil {
+			t.Errorf("SETUP: remove trusted fixture: %v", removeErr)
 		}
 	})
 	physical, err := filepath.EvalSymlinks(dir)

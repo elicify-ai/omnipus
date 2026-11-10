@@ -33,15 +33,15 @@ func TestTrustedProgramDir_OutsideRuntimeTempWithoutEnvironmentOverride_Q49(t *t
 			assert.Equal(t, want, value{text, set}, "Q49: %s must not be changed to make a program trusted", key)
 		}
 		assert.DirExists(t, dir)
-		canonical, err := filepath.EvalSymlinks(dir)
-		require.NoError(t, err)
+		canonical, canonicalErr := filepath.EvalSymlinks(dir)
+		require.NoError(t, canonicalErr)
 		assert.Equal(t, canonical, dir, "the fixture returns the physical directory")
 		// The founder explicitly excludes the shared Unix temp folder from the
 		// writable union. A per-user/custom runtime temp is not that exception.
 		shared := runtime.GOOS != "windows" && (temp == "/tmp" || temp == "/private/tmp")
 		if !shared && strings.EqualFold(filepath.VolumeName(temp), filepath.VolumeName(dir)) {
-			rel, err := filepath.Rel(temp, dir)
-			require.NoError(t, err)
+			rel, relativeErr := filepath.Rel(temp, dir)
+			require.NoError(t, relativeErr)
 			assert.True(t, rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)),
 				"Q49: fixture %q must really be outside original runtime temp %q", dir, temp)
 		}
