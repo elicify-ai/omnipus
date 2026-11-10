@@ -110,7 +110,7 @@ func TestTrimAllEligibleContext_PositiveControl(t *testing.T) {
 		t.Errorf("live sweep trimmed %d profiles, want %d", len(results), len(caches))
 	}
 	for _, c := range caches {
-		if _, err := os.Stat(c); !os.IsNotExist(err) {
+		if _, err := os.Stat(c); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("live sweep left %s in place (stat err %v)", c, err)
 		}
 	}
