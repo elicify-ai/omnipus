@@ -31,17 +31,16 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const original = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...original,
-    Link: (props: {
+    Link: ({ to, params, search, children, ...rest }: {
       to?: unknown
       params?: Record<string, unknown>
       search?: Record<string, unknown>
       children?: ReactNode
     } & Record<string, unknown>) => {
-      let href = typeof props.to === 'string' ? props.to : ''
-      for (const [k, v] of Object.entries(props.params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(props.search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
+      let href = typeof to === 'string' ? to : ''
+      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
+      const searchEntries = Object.entries(search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
       const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      const { to: _to, params: _params, search: _search, children, ...rest } = props
       return (
         <a href={href + qs} {...rest}>
           {children}
