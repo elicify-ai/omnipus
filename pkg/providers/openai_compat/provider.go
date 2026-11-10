@@ -613,8 +613,8 @@ func parseStreamResponse(
 	if finishReason == "" {
 		if textContent.Len() == 0 && len(activeTools) == 0 {
 			// A Stop that closed the body is a cancel, not an empty answer.
-			if err := ctx.Err(); err != nil {
-				return nil, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
 			}
 			// Issue #1664 (founder decision 2026-11-07 Q3 A): the stream ended
 			// (EOF or [DONE]) with no finish_reason, no content and no tool
