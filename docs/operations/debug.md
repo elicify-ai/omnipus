@@ -30,6 +30,16 @@ Diagnostics may contain conversation and tool content, especially in debug mode.
 
 Restart the gateway after changing the value. If the selected file cannot be opened, startup fails with `error enabling file logging`; it does not silently switch back to the default file. Check the destination's permissions and available disk space. This setting moves diagnostic records only; the separate panic log and security audit log keep their own destinations.
 
+### Reading quoted values
+
+Some diagnostic fields hold values that came from a request, such as session IDs, media IDs and references, file names, and error text. These are written in quoted form with escapes, for example `"report\nfinal.pdf"`. This stops a line break or other control character in such a value from looking like a separate log record. The surrounding quotes and escape sequences such as `\n`, `\t`, `\"`, `\\` or `\u2028` are not part of the real value. Read them the way a Go string literal is read: `\n` stands for one line break, `\"` for one double quote. To match a log entry with a file or ID on disk, decode the escapes first. In the JSON log file the quoted value is itself stored inside a JSON string, so the raw line shows each quote and backslash escaped once more (`"\"report\\nfinal.pdf\""`). There are two layers: the outer one is JSON, and a JSON reader such as `jq` removes it; the inner one is the Go quoting described above.
+
+### Fields shown as `[FILTERED]`
+
+A diagnostic field can also appear as `[FILTERED]` on its own. This stands in for a field that may contain a password, API key or other secret. The field's original value is not part of that entry and cannot be decoded back from `[FILTERED]`. `[FILTERED]` can also replace only one part of a longer text, in a field or in the message. The rest of that text is still shown. To find out what happened, use the rest of the same entry: the time, the message and any IDs that are still shown. Then check the source directly, for example the file on disk or, if your provider has one, the request history in its dashboard.
+
+Before you share a log, read it. `[FILTERED]` is a safety net, not a promise that nothing sensitive is left.
+
 ## Disabling Log Truncation (Full Logs)
 
 By default, Omnipus truncates very long strings (such as the *System Prompt* or large JSON output results) in the debug logs to keep the console readable.

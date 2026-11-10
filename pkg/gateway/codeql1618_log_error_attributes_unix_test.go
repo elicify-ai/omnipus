@@ -57,7 +57,11 @@ func codeQL1618AssertSafeErrorRecord(t *testing.T, record redactionLogRecord, id
 }
 
 func TestCodeQL1618_UploadStageRollbackErrorAttributeIsSafe(t *testing.T) {
-	for _, sample := range codeQL1618ControlCases(false) {
+	// #1666 F1: the manifest loader rejects multi-byte controls in ids (see
+	// codeQL1666ManifestSafeCases), so this manifest-persisting fixture can
+	// only ever plant the loader-safe subset; the rest is covered at sites
+	// whose paths never cross a manifest key.
+	for _, sample := range codeQL1666ManifestSafeCases() {
 		t.Run(sample.name, func(t *testing.T) {
 			logs := captureRedactionSlog(t)
 			api := &restAPI{homePath: t.TempDir()}
@@ -85,7 +89,9 @@ func TestCodeQL1618_UploadStageRollbackErrorAttributeIsSafe(t *testing.T) {
 }
 
 func TestCodeQL1618_UploadAssociationRollbackErrorAttributeIsSafe(t *testing.T) {
-	for _, sample := range codeQL1618ControlCases(false) {
+	// #1666 F1: manifest-persisting fixture — loader-safe subset only (see
+	// codeQL1666ManifestSafeCases).
+	for _, sample := range codeQL1666ManifestSafeCases() {
 		t.Run(sample.name, func(t *testing.T) {
 			logs := captureRedactionSlog(t)
 			api := &restAPI{homePath: t.TempDir()}
@@ -105,7 +111,9 @@ func TestCodeQL1618_UploadAssociationRollbackErrorAttributeIsSafe(t *testing.T) 
 }
 
 func TestCodeQL1618_UploadCleanupErrorAttributeIsSafe(t *testing.T) {
-	for _, sample := range codeQL1618ControlCases(false) {
+	// #1666 F1: manifest-persisting fixture — loader-safe subset only (see
+	// codeQL1666ManifestSafeCases).
+	for _, sample := range codeQL1666ManifestSafeCases() {
 		t.Run(sample.name, func(t *testing.T) {
 			logs := captureRedactionSlog(t)
 			api := &restAPI{homePath: t.TempDir()}

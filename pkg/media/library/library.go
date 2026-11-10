@@ -800,9 +800,13 @@ func (l *Library) Read(id string) ([]byte, gen.MediaLibraryEntry, error) {
 	actualDigest := sha256.Sum256(data)
 	actualDigestHex := hex.EncodeToString(actualDigest[:])
 	if int64(len(data)) != *projection.Size || actualDigestHex != *projection.Sha256 {
+		// The ids can come from a request path and may carry control
+		// characters, so they are logged %q-quoted (same spelling as
+		// pkg/gateway's safeLogValue, which this package cannot import);
+		// pkg/logger still masks credentials inside the quoted form (#1666).
 		logger.WarnCF("media-library", "sha256 verification failed", map[string]any{
-			"workspace_id": l.workspaceID,
-			"media_id":     id,
+			"workspace_id": fmt.Sprintf("%q", l.workspaceID),
+			"media_id":     fmt.Sprintf("%q", id),
 			"expected":     *projection.Sha256,
 			"actual":       actualDigestHex,
 		})

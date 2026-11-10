@@ -135,7 +135,12 @@ func codeQL1618StoredRefLibrary(t *testing.T, home, workspaceID, control string)
 }
 
 func TestCodeQL1618_UploadAssociationRollbackLogHasSafeMediaID(t *testing.T) {
-	for _, sample := range codeQL1618ControlCases(false) {
+	// #1666 F1 extended the shared alphabet; this fixture's id persists into
+	// a manifest key, and the loader rejects multi-byte controls there
+	// (uuid.Parse's braced form — see codeQL1666ManifestSafeCases and
+	// TestCodeQL1666_ManifestLoaderRejectsMultiByteControlIDs). The excluded
+	// cases stay covered at the log sites whose paths never cross a manifest.
+	for _, sample := range codeQL1666ManifestSafeCases() {
 		t.Run(sample.name, func(t *testing.T) {
 			logs := captureRedactionSlog(t)
 			api := &restAPI{homePath: t.TempDir()}

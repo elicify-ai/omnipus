@@ -141,17 +141,12 @@ func TestRetentionRetroactiveSweep(t *testing.T) {
 //	Then GET session returns 200 with transcript data,
 //	And POST new message to the session returns an error response.
 //
-// Gap note: GET session detail surfaces agent_removed when the session's agent
-// is gone (rest_sessions.go, #103). A strict 422 on POST for a deleted-agent
-// session is not implemented. HandleSessions answers
-// POST /api/v1/sessions/{id}/message with 405 Method Not Allowed and does not
-// look up the agent (rest_sessions.go::HandleSessions). Creating a session for
-// an unknown agent returns 400, not 422 (rest_sessions.go::createSessionHTTP).
-// This test therefore asserts non-2xx rather than 422. The transcript read path
-// works because it's file-based and doesn't require the agent to exist in-memory.
-//
-// Do not tighten the assertion to 422 until that status exists on this path
-// (not yet implemented, no release scheduled).
+// Gap note: the historical acceptance text's deleted-agent 422 is not the
+// contract for POST /api/v1/sessions/{id}/message. contracts/openapi.yaml's
+// getSession defines unknown sub-paths as 404; message is not one of the listed
+// sub-resources (messages and tool-results). This test therefore asserts exactly
+// 404 Not Found for that POST, not a deleted-agent-specific routing refusal.
+// The existing transcript-read assertion remains separate from this route check.
 //
 // Traces to: temporal-puzzling-melody.md §4 Axis-3 test 7
 // Acceptance: Plan 3 §1 — "Session with deleted agent: read-only transcript + 'Agent removed' banner"
@@ -190,9 +185,9 @@ func TestDeletedAgentSessionReadOnly(t *testing.T) {
 	assert.NotEqual(t, http.StatusInternalServerError, getW.Code,
 		"GET deleted-agent session must not return 500 — file-backed read must be resilient")
 
-	// Assert (B): POST a new message to the session.
-	// The agent "alpha" is not in the agent registry (it was never added to this
-	// test's config), so the message routing must fail gracefully — not panic.
+	// Assert (B): POST to the unknown singular message sub-path.
+	// The getSession contract requires 404, independently of whether the agent
+	// exists. Keep the panic check separate from this exact route refusal.
 	postBody := `{"message":"can you still hear me?","session_id":"` + sessionID + `"}`
 	postReq := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/"+sessionID+"/message",
 		strings.NewReader(postBody))
@@ -211,17 +206,10 @@ func TestDeletedAgentSessionReadOnly(t *testing.T) {
 		api.HandleSessions(postW, postReq)
 	}()
 
-	// The POST must return a non-2xx status. On this route that is 405
-	// Method Not Allowed: HandleSessions does not dispatch
-	// /sessions/{id}/message and does not look up the agent. There is no
-	// deleted-agent 422 on this path (not yet implemented, no release scheduled).
-	//
-	// TODO: tighten to assert.Equal(t, http.StatusUnprocessableEntity, postW.Code)
-	//       only once that status is what this route returns.
-	if postW.Code >= 200 && postW.Code < 300 {
-		t.Errorf("POST to deleted-agent session must not succeed (2xx=%d); "+
-			"expected 4xx/5xx (this route is 405 Method Not Allowed)", postW.Code)
-	}
+	// Unknown sub-paths are 404, not 405 or a deleted-agent-specific 422
+	// (contracts/openapi.yaml::getSession).
+	assert.Equal(t, http.StatusNotFound, postW.Code,
+		"POST to the unknown message sub-path must return 404: body=%s", postW.Body.String())
 }
 
 // TestCredentialPermFatal verifies that a master.key file with mode 0644 causes
