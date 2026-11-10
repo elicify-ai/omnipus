@@ -15,7 +15,7 @@ import (
 
 func seedClosedProfiles(t *testing.T, f *poolFixture, workspaces ...string) []string {
 	t.Helper()
-	var caches []string
+	caches := make([]string, 0, len(workspaces))
 	for _, ws := range workspaces {
 		dir, err := f.pool.ProfileDirFor(browserTestKey(ws))
 		if err != nil {
