@@ -87,20 +87,22 @@ func TestValidateProgramPath_DirectoryLinkRetargetAfterCheck_3_6(t *testing.T) {
 	assert.True(t, os.SameFile(checked, after), "the returned path %q still names the checked file after the directory link moved", got)
 }
 
-// 3.5: a directory link into an unsafe (world-writable) container is refused.
-func TestValidateProgramPath_DirectoryLinkIntoWorldWritableDir_Refused_3_5(t *testing.T) {
+// Founder Q13 A / Q2b supersedes the old permission gate: a world-writable
+// container outside agent-writable roots is allowed. Full resolution still holds.
+func TestValidateProgramPath_DirectoryLinkIntoWorldWritableDir_Allowed_Q13(t *testing.T) {
 	f := t8DirLink(t)
 	t8WriteExe(t, filepath.Join(f.otherDir, "codex"), 0o700)
 	require.NoError(t, os.Chmod(f.otherDir, 0o777))
 	require.NoError(t, os.Symlink(f.otherDir, f.link))
 
 	got, err := ValidateProgramPath("codex", filepath.Join(f.link, "codex"))
-	t8RequireCheck(t, got, err, CheckWritableByOthers)
+	require.NoError(t, err, "Q13 A: other users' write permission is not a program-path policy")
+	assert.Equal(t, filepath.Join(f.otherDir, "codex"), got, "the fully resolved executable is still returned")
 }
 
-// 3.5: a directory link that itself sits in a world-writable folder is
-// refused: each symlink's containing folder is checked, directory links too.
-func TestValidateProgramPath_DirectoryLinkInWorldWritableFolder_Refused_3_5(t *testing.T) {
+// Founder Q13 A / Q2b: a link's containing folder is not permission-gated.
+// Forbidden agent-writable location and link-chain checks remain separate.
+func TestValidateProgramPath_DirectoryLinkInWorldWritableFolder_Allowed_Q13(t *testing.T) {
 	f := t8DirLink(t)
 	shared := filepath.Join(f.root, "shared")
 	require.NoError(t, os.Mkdir(shared, 0o755))
@@ -109,7 +111,8 @@ func TestValidateProgramPath_DirectoryLinkInWorldWritableFolder_Refused_3_5(t *t
 	require.NoError(t, os.Symlink(f.safeDir, link))
 
 	got, err := ValidateProgramPath("codex", filepath.Join(link, "codex"))
-	t8RequireCheck(t, got, err, CheckWritableByOthers)
+	require.NoError(t, err, "Q13 A: a world-writable link folder outside forbidden roots is allowed")
+	assert.Equal(t, filepath.Join(f.safeDir, "codex"), got)
 }
 
 // 3.5: a directory link into an agent-writable location is refused.
@@ -133,13 +136,15 @@ func TestValidateProgramPath_FinalLink_ReturnsTarget_Control(t *testing.T) {
 	assert.Equal(t, filepath.Join(f.safeDir, "codex"), got)
 }
 
-// Control: a final-component link to a world-writable file is refused.
-func TestValidateProgramPath_FinalLinkToWorldWritableFile_Refused_Control(t *testing.T) {
+// Founder Q13 A / Q2b also removes the file-permission gate, not only the
+// folder-permission gate. The file must still be a regular executable.
+func TestValidateProgramPath_FinalLinkToWorldWritableFile_Allowed_Q13(t *testing.T) {
 	f := t8DirLink(t)
 	t8WriteExe(t, filepath.Join(f.otherDir, "codex"), 0o777)
 	link := filepath.Join(f.root, "codex-link")
 	require.NoError(t, os.Symlink(filepath.Join(f.otherDir, "codex"), link))
 
 	got, err := ValidateProgramPath("codex", link)
-	t8RequireCheck(t, got, err, CheckWritableByOthers)
+	require.NoError(t, err, "Q13 A: who else can write this executable is the person's responsibility")
+	assert.Equal(t, filepath.Join(f.otherDir, "codex"), got)
 }

@@ -21,6 +21,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
 
 // ServedEntry holds a single web_serve static-mode registration.
@@ -203,6 +205,35 @@ func (s *ServedSubdirs) ActiveForAgent(agentID string) (token string, deadline t
 		return "", time.Time{}, false
 	}
 	return token, entry.Deadline, true
+}
+
+// LookupByLabel resolves a Mode 1 preview label (ADR-094) back to its
+// registration, or returns nil when no live entry carries that label.
+//
+// The label is not stored: it is derived (middleware.PreviewLabelForToken)
+// from each entry's token under the registry's own read lock, which is what
+// keeps the FR-008 guarantee ("the label maps to the same registry entry as
+// the Mode 2 token") and the FR-029 lifecycle structural with no second
+// store — renew-in-place keeps the token and therefore the label, while a
+// rotation (maxTokenLifetime), a different-directory replacement, or an
+// Evict retires the token and therefore the label, so every token-revocation
+// path 404s the label too. Expired-but-not-yet-janitor-cleaned entries are
+// skipped, mirroring Lookup's expiry semantics.
+func (s *ServedSubdirs) LookupByLabel(label string) *ServedEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := time.Now()
+	for tok, entry := range s.byToken {
+		if middleware.PreviewLabelForToken(tok) != label {
+			continue
+		}
+		if now.After(entry.Deadline) {
+			continue
+		}
+		cp := *entry
+		return &cp
+	}
+	return nil
 }
 
 // Evict removes all registrations for the given agentID. Called on agent

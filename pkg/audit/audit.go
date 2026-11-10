@@ -69,9 +69,11 @@ const (
 	// EventExecutorSmokeTest records a POST /agents/executor-smoke-test call,
 	// which spawns a caller-influenced external-CLI binary/path to run a real,
 	// bounded test prompt (unlike cli-validate's zero-token --version probe,
-	// this spends real model usage). Details carry {cli, binary, ok} only —
-	// never response_text (the model's actual answer) or cli_args, either of
-	// which could plausibly carry operator-sensitive content.
+	// this spends real model usage). Details carry {cli, binary, ok}, plus
+	// preset_args and note when a person's saved standard parameters were
+	// applied (filtered by the same rule as a real run's audit entry) — never
+	// response_text (the model's actual answer) or cli_args, either of which
+	// could plausibly carry operator-sensitive content.
 	// Decision is allow when the run produced a real response (ok=true) and
 	// deny otherwise (missing binary, handshake/timeout/turn-cap failure, or a
 	// denied/errored run).
@@ -183,21 +185,30 @@ var validEventNames = map[EventName]struct{}{
 	// an operator most needs to find, so the wrong name is worst here.
 	// Found by event_literal_emitters_test.go, which scans emitters rather
 	// than constants.
-	"csrf_mismatch":              {},
-	"egress_ssrf_blocked":        {},
-	"sandbox_restrict_failed":    {},
-	"git_evidence_sandbox_block": {},
-	"path.access_denied":         {},
-	"path.search_roots":          {}, // #920 FR-021: one row per agent grep search (pkg/tools/path_audit.go)
-	EventStartup:                 {},
-	EventShutdown:                {},
-	EventBootAbort:               {},
-	EventProcessKillFailed:       {},
-	EventChannelPairing:          {},
-	EventChannelMessageDropped:   {},
-	EventSystemMessageDiscarded:  {},
-	EventCliValidate:             {},
-	EventExecutorSmokeTest:       {},
+	"csrf_mismatch": {},
+	// "auth.planted_cookie_detected" is emitted by
+	// pkg/gateway/middleware/planted_cookie.go's PlantedCookieGuard when the
+	// raw Cookie header carries a duplicated reserved name (ADR-094 FR-015;
+	// fix6 SF-1). The constant lives in the middleware package, which imports
+	// pkg/audit - registering a constant here would invert the dependency.
+	// Details carry {names (reserved cookie NAMES only), path (redacted via
+	// pathredact), method, state_changing}; never cookie values, never the
+	// raw Cookie header.
+	"auth.planted_cookie_detected": {},
+	"egress_ssrf_blocked":          {},
+	"sandbox_restrict_failed":      {},
+	"git_evidence_sandbox_block":   {},
+	"path.access_denied":           {},
+	"path.search_roots":            {}, // #920 FR-021: one row per agent grep search (pkg/tools/path_audit.go)
+	EventStartup:                   {},
+	EventShutdown:                  {},
+	EventBootAbort:                 {},
+	EventProcessKillFailed:         {},
+	EventChannelPairing:            {},
+	EventChannelMessageDropped:     {},
+	EventSystemMessageDiscarded:    {},
+	EventCliValidate:               {},
+	EventExecutorSmokeTest:         {},
 	// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).
 	EventOnboardingAdminCreated: {},
 	EventOnboardingRefused:      {}, EventPlatformSignIn: {}, // omnipus.ai sign-in (pkg/gateway/rest_platform_auth.go).
@@ -369,6 +380,13 @@ var validEventNames = map[EventName]struct{}{
 	EventRoomChanged: {},
 	// 6b U2b: a held scheduled task fire that could not start. See events.go.
 	EventTaskTriggerFireNotStarted: {},
+	// Settings -> Third-party agents: a changed program path or standard
+	// parameters for one external command-line tool. See events.go. The
+	// gateway passes these names through a helper parameter, so the
+	// bare-literal emitter scan cannot see them; the constants put them under
+	// the exhaustive constant check instead.
+	EventThirdPartyAgentsPathChanged:   {},
+	EventThirdPartyAgentsPresetChanged: {},
 	// ADR-092 (shell permission modes) FR-032/FR-046 typed audit events.
 	// See shell_permission_events.go for the wire shape contract.
 	EventShellModeChange:          {},

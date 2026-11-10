@@ -318,6 +318,26 @@ type ExternalAgentRunner interface {
 	Test(ctx context.Context) ConnectionTestResult
 }
 
+// CurrentOptionsResumer is an ExternalAgentRunner that can continue its native
+// conversation under options supplied by the caller. A continuation has to run
+// the program and parameters that were just checked and audited (T11 FR-9/10),
+// so it cannot reuse the prior Run's options the way Resume does. Every real
+// driver implements it. opts carries the new instruction in Input; the driver
+// adds the native conversation id and refuses visibly when it has none
+// (FR-043).
+type CurrentOptionsResumer interface {
+	ResumeWith(ctx context.Context, opts RunOptions) (<-chan RunEvent, error)
+}
+
+// ResumeCurrent continues driver's native conversation under opts. Only a test
+// double lacks ResumeWith; it gets the plain Resume call.
+func ResumeCurrent(ctx context.Context, driver ExternalAgentRunner, opts RunOptions) (<-chan RunEvent, error) {
+	if r, ok := driver.(CurrentOptionsResumer); ok {
+		return r.ResumeWith(ctx, opts)
+	}
+	return driver.Resume(ctx, opts.RunID, opts.Input)
+}
+
 // ErrMaxTurnsRequired is returned by a driver's Run when RunOptions.MaxTurns is
 // not a positive turn cap. The dispatch site always passes the agent's resolved
 // tool-iteration limit (#904 D4), so a missing cap is a programming error; the

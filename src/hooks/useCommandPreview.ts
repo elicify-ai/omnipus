@@ -7,11 +7,8 @@
 // computed server-side for what the operator has typed, via
 // `POST /agents/executor-preview`.
 //
-// Differs from `useCliPathValidation` in ONE deliberate way: that hook is
-// imperative (`validate(cli, path)` called from onBlur) because a blur-only
-// check just needs to happen once per "the operator moved on". A live
-// command-line preview is far more useful when it visibly updates as the
-// operator types, not just after they click away — so this hook is
+// A live command-line preview updates as the operator types, rather than
+// waiting for a blur event or an explicit validation call. This hook is
 // REACTIVE: callers pass the current `ExecutorCommandPreviewRequest` (built
 // fresh from whatever state shape they own — `executor`/`model` in
 // AgentProfile, the flat `WizardSubmitPayload` in the create wizard) on
@@ -20,13 +17,11 @@
 // literal every render does not by itself trigger a re-fetch) and debounces
 // >=400ms before calling `fetchExecutorPreview`. Any pending debounce or
 // in-flight request from a previous burst is cancelled first — via
-// `clearTimeout` / `AbortController.abort()`, matching
-// `useCliPathValidation`'s cancel-in-flight semantics exactly.
+// `clearTimeout` / `AbortController.abort()`.
 //
 // `req` is `undefined` (or has no `cli`) before a CLI has been chosen —
 // `ExecutorCommandPreviewRequest.cli` is required on the wire, so that
-// resets to idle without a network call, same as `useCliPathValidation`'s
-// blank-path short-circuit.
+// resets to idle without a network call when no CLI is selected.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchExecutorPreview, isApiError } from '@/lib/api'
@@ -34,6 +29,11 @@ import type { ExecutorCommandPreviewRequest, ExecutorCommandPreviewResponse } fr
 import { MAX_TOOL_ITERATIONS_MIN, MAX_TOOL_ITERATIONS_MAX } from '@/components/settings/MaxToolIterationsCard'
 
 const DEBOUNCE_MS = 400
+
+// The 400 for a run refusal has no error code on the wire; its text is the
+// exact refusal a real run gives, and every such text opens with this prefix
+// (`thirdpartycli.NoPathText` and `CheckFailedText`).
+const RUN_REFUSAL_PREFIX = 'This agent cannot run:'
 
 export type CommandPreviewState =
   | { kind: 'idle' }
@@ -52,8 +52,12 @@ export type CommandPreviewState =
    * still apply when this agent runs", since a value THIS endpoint rejects
    * as schema-invalid is likely to misbehave at real save/dispatch time too
    * (same shared schema family) — see the finding this fixes.
+   * `isRunRefusal` is present only on the 400 that means this CLI cannot run
+   * (no saved program, or the saved one fails its checks). Nothing the
+   * operator typed here is wrong, so it is neither a validation error nor a
+   * transport failure, and `message` is shown as it stands.
    */
-  | { kind: 'error'; message: string; isValidationError: boolean }
+  | { kind: 'error'; message: string; isValidationError: boolean; isRunRefusal?: true }
 
 export interface UseCommandPreview {
   status: CommandPreviewState
@@ -65,7 +69,7 @@ export interface UseCommandPreview {
 
 /**
  * Fetches a live preview of the real command Omnipus would spawn for the
- * given `req` (cli/model/cli_path/cli_args/max_tool_iterations), debounced
+ * given `req` (cli/model/cli_args/max_tool_iterations), debounced
  * >=400ms and re-fetching automatically whenever any of those field values
  * change. Pass `undefined` (or a `req` with no `cli`) when no CLI is
  * selected yet — resolves to `{ kind: 'idle' }` without a network call.
@@ -85,7 +89,6 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
     ? JSON.stringify({
         cli: req.cli,
         model: req.model ?? '',
-        cli_path: req.cli_path ?? '',
         cli_args: req.cli_args ?? '',
         max_tool_iterations: req.max_tool_iterations ?? null,
       })
@@ -123,7 +126,12 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
               : 'Could not compute a live command preview.'
           // Any 4xx other than 429 (rate-limited, a transport-shaped
           // condition the operator can't fix by editing the field) means the
-          // server itself rejected this request body as invalid.
+          // server itself rejected this request body as invalid, except the
+          // run refusal, which is about the saved program and not this body.
+          if (isApiError(err) && err.status === 400 && message.startsWith(RUN_REFUSAL_PREFIX)) {
+            setStatus({ kind: 'error', message, isValidationError: false, isRunRefusal: true })
+            return
+          }
           const isValidationError = isApiError(err) && err.status >= 400 && err.status < 500 && err.status !== 429
           setStatus({ kind: 'error', message, isValidationError })
         })
@@ -155,7 +163,7 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
 
 /**
  * buildExecutorPreviewRequest builds an `ExecutorCommandPreviewRequest` from
- * the loose CLI/model/cli_path/cli_args values each caller owns in its own
+ * the loose CLI/model/cli_args values each caller owns in its own
  * state shape — `AgentProfile.tsx` (edit form: `executor`/top-level `model`)
  * and `Step1Identity.tsx`'s `ExecutorInputs` (create wizard: the flat
  * `WizardSubmitPayload`). Both previously duplicated identical
@@ -176,14 +184,12 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
 export function buildExecutorPreviewRequest(
   cli: ExecutorCommandPreviewRequest['cli'],
   model: string,
-  cliPath: string | undefined,
   cliArgs: string | undefined,
   maxToolIterations?: number,
 ): ExecutorCommandPreviewRequest {
   return {
     cli,
     model: model.trim() !== '' ? model.trim() : undefined,
-    cli_path: cliPath,
     cli_args: cliArgs,
     ...(maxToolIterations !== undefined &&
     maxToolIterations >= MAX_TOOL_ITERATIONS_MIN &&
