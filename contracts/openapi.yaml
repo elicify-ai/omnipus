@@ -127,6 +127,8 @@ components:
       $ref: ./components/schemas/ToolPolicyChanges.yaml
     ErrorResponse:
       $ref: ./components/schemas/ErrorResponse.yaml
+    PlantedCookieClearedError:
+      $ref: ./components/schemas/PlantedCookieClearedError.yaml
     LoginRequest:
       $ref: ./components/schemas/LoginRequest.yaml
     LoginResponse:
