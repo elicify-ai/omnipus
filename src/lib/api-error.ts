@@ -352,6 +352,21 @@ export function isApiError(err: unknown): err is ApiError {
 }
 
 /**
+ * The machine code the gateway puts on a request whose reserved cookie
+ * (omnipus-session / csrf / __Host-csrf) had a duplicate planted by a preview
+ * (ADR-094 FR-015): 403 on a state-changing call, 401 on a GET. The same
+ * response carries Set-Cookie lines that delete only the planted copies,
+ * never the genuine host-only Path=/ cookie — so this error says nothing about
+ * whether the session itself is valid; the next, clean request decides.
+ */
+export const PLANTED_COOKIE_CLEARED_CODE = 'planted_cookie_cleared'
+
+/** True for the gateway's planted-cookie-cleared error (any status). */
+export function isPlantedCookieClearedError(err: unknown): err is ApiError {
+  return isApiError(err) && err.code === PLANTED_COOKIE_CLEARED_CODE
+}
+
+/**
  * getErrorMessage extracts a human-displayable string from a caught error (or
  * a TanStack Query/`useMutation` `.error` field) for use in a toast, inline
  * form error, or `SaveStatus` message.

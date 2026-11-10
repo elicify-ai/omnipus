@@ -53,6 +53,11 @@ func newPreviewRouteTestAPI(t *testing.T) (*restAPI, *agent.ServedSubdirs) {
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
 		servedSubdirs: ss,
+		// fix4: every harness owns its preview limiter — tests never share
+		// admission state (the round-3 package var coupled the limiter RED
+		// test's 5000-label flood to every later dispatch test in the same
+		// process).
+		labelLimiters: &previewLabelLimiter{buckets: make(map[string]*previewLabelBucket)},
 	}
 	return api, ss
 }

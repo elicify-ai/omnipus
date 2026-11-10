@@ -77,10 +77,16 @@ function renderSavedToolCall({
   running = false,
 }: HistoricalToolCallArgs): ReactNode {
   // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
-  // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
-  // here too, so replayed sessions render the preview link (or the malformed
-  // result block) instead of a collapsed generic badge.
-  if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
+  // serve_web (canonical, pkg/tools/web_serve.go::ToolNameWebServe) and the
+  // legacy aliases web_serve / serve_workspace / run_in_workspace go through
+  // WebServeBlock here too, so replayed sessions render the preview link (or
+  // the malformed result block) instead of a collapsed generic badge.
+  if (
+    tc.tool === 'serve_web' ||
+    tc.tool === 'serve_workspace' ||
+    tc.tool === 'run_in_workspace' ||
+    tc.tool === 'web_serve'
+  ) {
     return delegationSlotted(callId, inlineEvents, (
       <WebServeBlock
         key={callId}

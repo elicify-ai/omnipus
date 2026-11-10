@@ -205,6 +205,30 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
     until: '2026-11-14',
     note: 'Temporary isolation-webkit-only quarantine: current CI D-106 top-level refusal failure. Chromium and Firefox remain enabled; security verification gap accepted, not evidence isolation works. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
   },
+  {
+    test: 'S-2.1: Mode 1 (Chromium/Firefox) — the label URL opens the agent-built app with working storage',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1719',
+    until: '2026-12-14',
+    note: 'Per-engine split by design, skipped on WebKit only: holdout H-2 (Linux WebKit resolves *.localhost through the system resolver, so a pass would say nothing about Safari). Chromium and Firefox run this row. Not a defect: the row runs on the other engine(s); the entry keeps the split visible and is a forced re-look date, not a resolution.',
+  },
+  {
+    test: 'S-2.2: Mode 1 (Chromium/Firefox) — the three real controls hold in a real browser',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1719',
+    until: '2026-12-14',
+    note: 'Per-engine split by design, skipped on WebKit only: holdout H-2 (see the S-2.1 entry). Chromium and Firefox run this row. Not a defect: the row runs on the other engine(s); the entry keeps the split visible and is a forced re-look date, not a resolution.',
+  },
+  {
+    test: 'S-8.1 (Chromium/Firefox): a saved serve_web result carrying isolated_url renders the Mode 1 link',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1719',
+    until: '2026-12-14',
+    note: 'Per-engine split by design, skipped on WebKit only: FR-024 gives WebKit the Mode 2 fallback link, which the next row pins. Chromium and Firefox run this row. Not a defect: the row runs on the other engine(s); the entry keeps the split visible and is a forced re-look date, not a resolution.',
+  },
+  {
+    test: 'S-8.1 (WebKit pin): the same saved serve_web result renders the Mode 2 fallback link',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1719',
+    until: '2026-12-14',
+    note: 'Per-engine split by design, skipped on Chromium and Firefox: the Mode 2 fallback link is the WebKit-specific expectation (FR-024). WebKit runs this row. Not a defect: the row runs on the other engine(s); the entry keeps the split visible and is a forced re-look date, not a resolution.',
+  },
 ];
 
 

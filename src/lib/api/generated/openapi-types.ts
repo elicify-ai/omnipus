@@ -4270,6 +4270,22 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * PlantedCookieClearedError
+         * @description Typed body for a request whose Cookie header carried a duplicated reserved gateway cookie name (omnipus-session, csrf, __Host-csrf) — ADR-094 FR-015, the planted-cookie recovery. The gateway has already attached the clearing Set-Cookie lines and refused to trust any cookie value on the request. Status 403 on a state-changing request; status 401 on a read (GET/HEAD) to an authenticated or optional-auth API route (a top-level browser navigation to an optional-auth route is served anonymously instead). The client shows one Retry action that re-issues the same request once; the retry carries only the genuine cookie. Shares the error/code convention with ErrorResponse (a valid ErrorResponse), so routes that document ErrorResponse for 401/403 also carry this body.
+         */
+        PlantedCookieClearedError: {
+            /**
+             * @description Human-readable message, safe to display (verbatim, FR-015 Q4).
+             * @example Omnipus cleared cookies set by a preview — please retry
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminant the SPA transport matches on.
+             * @enum {string}
+             */
+            code: "planted_cookie_cleared";
+        };
         /** @description Credentials for authenticating an existing user. */
         LoginRequest: {
             /**
@@ -29240,6 +29256,7 @@ export type AgentFieldDescriptor = components["schemas"]["AgentFieldDescriptor"]
 export type AgentMCPBinding = components["schemas"]["AgentMCPBinding"];
 export type ToolPolicyChanges = components["schemas"]["ToolPolicyChanges"];
 export type ErrorResponse = components["schemas"]["ErrorResponse"];
+export type PlantedCookieClearedError = components["schemas"]["PlantedCookieClearedError"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type LoginResponse = components["schemas"]["LoginResponse"];
 export type PlatformAuthStartRequest = components["schemas"]["PlatformAuthStartRequest"];

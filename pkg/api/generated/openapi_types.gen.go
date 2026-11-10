@@ -8726,6 +8726,21 @@ func (e PlanUpdateRequestState) Valid() bool {
 	}
 }
 
+// Defines values for PlantedCookieClearedErrorCode.
+const (
+	PlantedCookieClearedErrorCodePlantedCookieCleared PlantedCookieClearedErrorCode = "planted_cookie_cleared"
+)
+
+// Valid indicates whether the value is a known member of the PlantedCookieClearedErrorCode enum.
+func (e PlantedCookieClearedErrorCode) Valid() bool {
+	switch e {
+	case PlantedCookieClearedErrorCodePlantedCookieCleared:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlatformAuthStartRequestMethod.
 const (
 	PlatformAuthStartRequestMethodEmail  PlatformAuthStartRequestMethod = "email"
@@ -23762,6 +23777,18 @@ type PlanUpdateRequestDodStatus string
 
 // PlanUpdateRequestState Requested state transition. Validated against the canonical plan state machine (Plan.yaml `state` description); illegal transitions are rejected 400.
 type PlanUpdateRequestState string
+
+// PlantedCookieClearedError Typed body for a request whose Cookie header carried a duplicated reserved gateway cookie name (omnipus-session, csrf, __Host-csrf) — ADR-094 FR-015, the planted-cookie recovery. The gateway has already attached the clearing Set-Cookie lines and refused to trust any cookie value on the request. Status 403 on a state-changing request; status 401 on a read (GET/HEAD) to an authenticated or optional-auth API route (a top-level browser navigation to an optional-auth route is served anonymously instead). The client shows one Retry action that re-issues the same request once; the retry carries only the genuine cookie. Shares the error/code convention with ErrorResponse (a valid ErrorResponse), so routes that document ErrorResponse for 401/403 also carry this body.
+type PlantedCookieClearedError struct {
+	// Code Machine-readable discriminant the SPA transport matches on.
+	Code PlantedCookieClearedErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display (verbatim, FR-015 Q4).
+	Error string `json:"error"`
+}
+
+// PlantedCookieClearedErrorCode Machine-readable discriminant the SPA transport matches on.
+type PlantedCookieClearedErrorCode string
 
 // PlatformAuthClaimRequest The state the caller received from POST /auth/platform/start, presented to collect the session that the browser half of the sign-in just opened. The desktop app needs this because the browser's cookie jar is not its own: the Set-Cookie written by /auth/callback lands in the user's real browser, and without this route the application would poll for a session it can never see.
 type PlatformAuthClaimRequest struct {

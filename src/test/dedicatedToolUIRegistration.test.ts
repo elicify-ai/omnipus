@@ -114,7 +114,7 @@ const LEGACY_ALIASES: Record<string, string> = {
   list_dir: 'legacy alias of list_directory (pre-rename transcripts)',
   web_search: 'legacy alias of search_web (pre-rename transcripts)',
   web_fetch: 'legacy alias of fetch_url (pre-rename transcripts)',
-  web_serve: 'legacy form; backend canonical serve_web is unregistered (reported gap)',
+  web_serve: 'legacy form of the canonical serve_web (pre-rename transcripts)',
   serve_workspace: 'back-compat alias of web_serve',
   run_in_workspace: 'back-compat alias of web_serve',
   'browser.navigate': 'dotted form of browser_navigate',
