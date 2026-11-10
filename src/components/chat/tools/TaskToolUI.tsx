@@ -224,8 +224,10 @@ function plainSchedule(trigger: TaskTrigger): string | null {
     // detail panel renders (TaskDetailPanel.tsx::TaskDetailPanel calls
     // scheduledTriggerSummary). Its once branch is
     // `Runs once — ${new Date(at).toLocaleString()}` with no timeZone override
-    // (taskFormFields.ts::scheduledTriggerSummary).
-    return scheduledTriggerSummary(trigger)
+    // (taskFormFields.ts::scheduledTriggerSummary). The card closes it with a
+    // full stop, like every schedule line it shows (team-lead decision, round
+    // 6); the panel keeps the helper's string as it is.
+    return `${scheduledTriggerSummary(trigger)}.`
   }
   if (trigger.type !== 'recurring') return null
   const rrule = trigger.config?.rrule
