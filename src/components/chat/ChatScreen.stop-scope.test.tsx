@@ -255,7 +255,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
 
     submitCommand('/stop')
 
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }]])
     assertNoTreeScope(sentCancelFrames(send), `submitted /stop in ${sessionType ?? 'root'}`)
     expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
@@ -270,7 +270,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     expect(stopItem).not.toBeNull()
     act(() => { fireEvent.mouseDown(stopItem!) })
 
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }]])
     assertNoTreeScope(sentCancelFrames(send), 'palette /stop')
     expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
@@ -287,7 +287,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     // Founder: "/stop in chat needs to work like one escape or one stop
     // click" — it reuses the same second-activation tree path when armed.
     expect(send.mock.calls).toEqual([
-      [{ type: 'cancel', session_id: 'sess_test' }],
+      [{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }],
       [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
     ])
     expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
@@ -299,7 +299,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
 
     submitCommand('/cancel')
 
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }]])
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', scope: 'tree', shown: { code_points: 0 } }]])
     expect(composerRuntime.send).not.toHaveBeenCalled()
     expect(screen.queryByText('Stop all')).not.toBeInTheDocument()
   })
@@ -312,7 +312,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     submitCommand('/cancel')
 
     expect(send.mock.calls).toEqual([
-      [{ type: 'cancel', session_id: 'sess_test' }],
+      [{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }],
       [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
     ])
     expect(screen.queryByText('Stop all')).not.toBeInTheDocument()
@@ -323,7 +323,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     vi.useFakeTimers()
     render(<OmnipusComposer />)
     submitCommand('/stop')
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }]])
 
     // Past the 1 s label minimum but still inside the 3 s confirmation
     // window: the same Stop button, not a separate offer, must be usable.
@@ -332,7 +332,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     else pressEscape()
 
     expect(send.mock.calls).toEqual([
-      [{ type: 'cancel', session_id: 'sess_test' }],
+      [{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }],
       [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
     ])
   })
@@ -449,7 +449,7 @@ describe('Double Stop/Esc confirmation and dismissal (founder 2026-10-06)', () =
     expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
     act(() => { vi.advanceTimersByTime(1) })
     expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }]])
   })
 
   it('RED slash /cancel sends tree scope in one action', () => {
@@ -517,7 +517,7 @@ describe('Double Stop/Esc confirmation and dismissal (founder 2026-10-06)', () =
 // /stop-redirect = this chat's own redirect frame) and the generated wire
 // types — not read off the implementation.
 
-const SESSION_FRAME = { type: 'cancel', session_id: 'sess_test' }
+const SESSION_FRAME = { type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }
 const TREE_FRAME = { type: 'cancel', session_id: 'sess_test', scope: 'tree' }
 
 describe('W1 no stuck "Stopping..." after the stream ended', () => {
