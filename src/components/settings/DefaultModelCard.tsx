@@ -29,6 +29,9 @@ import {
   modelOverrideHref,
 } from '@/lib/modelOverrideLink'
 import { catalogEntryById } from '@/lib/catalogDisplay'
+import { EffortControl } from '@/components/ui/model-effort-picker'
+import { findServedRow } from '@/lib/effort/servedReasoning'
+import { useEffortSwitch, type EffortPair } from '@/lib/effort/useEffortSwitch'
 import type {
   DefaultModel,
   DefaultModelUpdateRequest,
@@ -107,6 +110,31 @@ export function DefaultModelCard({
     [usable, catalog],
   )
 
+  // Effort levels US-11 AS1 / FR-019: the default model picker stores its
+  // effort. A model change maps the stored effort (note with Change link) or
+  // waits on the blocked step; the pair and its effort are saved in one PUT.
+  // The default model has nothing above it: no Not set row, '' reads as
+  // Provider default.
+  const [effortNote, setEffortNote] = React.useState<string | null>(null)
+  const storedEffort = defaultModel?.reasoning_effort ?? ''
+  const effortValue = React.useMemo(
+    () => ({ provider: defaultModel?.provider ?? '', model: defaultModel?.model ?? '', effort: storedEffort }),
+    [defaultModel?.provider, defaultModel?.model, storedEffort],
+  )
+  const lookup = React.useCallback((pair: EffortPair) => findServedRow(catalog ?? undefined, pair.provider, pair.model), [catalog])
+  const effortSwitch = useEffortSwitch({
+    value: effortValue,
+    lookup,
+    ready: Boolean(catalog),
+    onCommit: (pair, effort, note) => {
+      setOpen(false)
+      setEffortNote(note)
+      // "" clears; when nothing is stored and nothing is chosen, omitting it
+      // keeps the same stored "" (the pre-effort request shape).
+      onChange({ provider: pair.provider, model: pair.model, ...(effort !== '' || storedEffort !== '' ? { reasoning_effort: effort } : {}) })
+    },
+  })
+
   const backingRow = defaultModel
     ? providers.find((p) => p.id === defaultModel.provider)
     : undefined
@@ -157,6 +185,29 @@ export function DefaultModelCard({
             <p className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid="default-model-unset">
               No default model yet — pick one so new agents have somewhere to run.
             </p>
+          )}
+
+          {status === 'ready' && (defaultModel || effortSwitch.pending) && (
+            <div className="mt-[var(--space-1)]">
+              <EffortControl
+                scope="default-model"
+                contextName={`Effort for the default model, ${effortSwitch.pending?.model ?? defaultModel?.model ?? ''}`}
+                value={effortValue}
+                pendingSwitch={effortSwitch.pending}
+                onSwitchComplete={effortSwitch.completePending}
+                onSwitchCancel={effortSwitch.cancelPending}
+                cancelFocusTarget={() => document.querySelector<HTMLElement>('[data-testid="default-model-change-btn"]')}
+                note={effortNote}
+                announcement={effortSwitch.announcement}
+                disabled={isSaving}
+                onChange={(effort) => {
+                  if (!defaultModel) return
+                  setEffortNote(null)
+                  onChange({ provider: defaultModel.provider, model: defaultModel.model, reasoning_effort: effort })
+                }}
+                data-testid="default-model-effort"
+              />
+            </div>
           )}
 
           {status !== 'loading' && defaultModel && (
@@ -223,7 +274,7 @@ export function DefaultModelCard({
             onPairChange={({ model, provider }) => {
               if (!provider || !model) return
               setOpen(false)
-              onChange({ provider, model })
+              effortSwitch.requestSwitch({ provider, model })
             }}
           />
         </div>

@@ -64,17 +64,19 @@ import (
 // reproduces byte-identical JSON when UnifiedMeta is marshalled again
 // (FR-057/AC-21(e)).
 type u5IdentityFile struct {
-	ID          string        `json:"id"`
-	AgentID     string        `json:"agent_id"`
-	Title       string        `json:"title,omitempty"`
-	Status      SessionStatus `json:"status"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
-	Model       string        `json:"model,omitempty"`
-	Provider    string        `json:"provider,omitempty"`
-	WorkspaceID string        `json:"workspace_id,omitempty"`
-	TaskID      string        `json:"task_id,omitempty"`
-	Channel     string        `json:"channel"`
+	ID        string        `json:"id"`
+	AgentID   string        `json:"agent_id"`
+	Title     string        `json:"title,omitempty"`
+	Status    SessionStatus `json:"status"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	Model     string        `json:"model,omitempty"`
+	Provider  string        `json:"provider,omitempty"`
+	// ReasoningEffort is the conversation effort override (/effort).
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	WorkspaceID     string `json:"workspace_id,omitempty"`
+	TaskID          string `json:"task_id,omitempty"`
+	Channel         string `json:"channel"`
 	// InstanceID is the channel INSTANCE key ("whatsapp.eu"), not the bare
 	// type. Channel alone is not an identity when an install holds many
 	// instances of one platform — see UnifiedMeta.InstanceID.
@@ -143,6 +145,7 @@ func u5IdentityFromMeta(meta *UnifiedMeta) u5IdentityFile {
 		UpdatedAt:             meta.UpdatedAt,
 		Model:                 meta.Model,
 		Provider:              meta.Provider,
+		ReasoningEffort:       meta.ReasoningEffort,
 		WorkspaceID:           meta.WorkspaceID,
 		TaskID:                meta.TaskID,
 		Channel:               meta.Channel,
@@ -204,6 +207,7 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5Loo
 			UpdatedAt:             u5LaterOf(identity.UpdatedAt, stats.UpdatedAt),
 			Model:                 identity.Model,
 			Provider:              identity.Provider,
+			ReasoningEffort:       identity.ReasoningEffort,
 			Stats:                 stats.SessionStats,
 			WorkspaceID:           identity.WorkspaceID,
 			TaskID:                identity.TaskID,
@@ -366,6 +370,7 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 		cached.CreatedAt = meta.CreatedAt
 		cached.Model = meta.Model
 		cached.Provider = meta.Provider
+		cached.ReasoningEffort = meta.ReasoningEffort
 		cached.WorkspaceID = meta.WorkspaceID
 		cached.TaskID = meta.TaskID
 		cached.Channel = meta.Channel
