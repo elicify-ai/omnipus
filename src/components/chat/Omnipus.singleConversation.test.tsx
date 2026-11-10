@@ -23,6 +23,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { DEFAULT, MIA, OMNIPUS, OMNIPUS_MAIN, SALES, SALES_MAIN, session } from '../../../tests/omnipus-l1-ui-red/fixtures'
+import { PROVIDERS_CATALOG } from '@/test/fixtures/providersCatalog'
 import { expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 // Module namespaces / props are test-only, not wire formats. This QA branch
@@ -120,6 +121,8 @@ beforeEach(() => {
       if (url.pathname === '/api/v1/security/sandbox-status') return jsonResponse(SANDBOX)
       if (url.pathname === '/api/v1/state') return jsonResponse(APP_STATE)
       if (url.pathname === '/api/v1/gateway/god-mode') return jsonResponse({ enabled: false, persisted: false, supported: true, available: true })
+      // The composer's effort chip reads the served levels (effort-levels FR-019).
+      if (url.pathname === '/api/v1/providers/catalog') return jsonResponse(PROVIDERS_CATALOG)
     }
     unexpectedHttp.push(`${method} ${path}`)
     throw new Error(`Unspecified HTTP process edge: ${method} ${path}`)

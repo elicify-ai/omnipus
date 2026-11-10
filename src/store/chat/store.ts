@@ -15,6 +15,7 @@ import { EMPTY_BUCKET, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClear
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
 import { flushHeldClearProjection, retryClearTranscriptRead } from './clear-refetch'
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState } from './types'
+import type { SessionModelChoice } from './model-choice'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
 import { createFirstSendActions, firstSendBlocksQueue, getPendingFirstSend } from './first-send'
@@ -37,6 +38,7 @@ function pendingModelChoicePatch(
   state: ChatStore,
   model: string | null,
   provider: string | null | undefined,
+  effort?: Pick<SessionModelChoice, 'effort' | 'effortByCommand'>,
 ): Partial<Pick<ChatStore, 'pendingFirstSend'>> {
   const pending = getPendingFirstSend(state)
   if (!pending || pending.sessionId !== null
@@ -45,7 +47,7 @@ function pendingModelChoicePatch(
   return {
     pendingFirstSend: {
       ...pending,
-      modelChoice: model ? { model, provider: provider ?? null } : undefined,
+      modelChoice: model ? { model, provider: provider ?? null, ...(effort?.effort ? { effort: effort.effort, ...(effort.effortByCommand ? { effortByCommand: true } : {}) } : {}) } : undefined,
     },
   }
 }
@@ -327,9 +329,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
     explicitNextModelChoice: null,
     setNextModel: (model, provider, source) => set((state) => ({
       nextModel: model, nextModelProvider: provider ?? null,
-      explicitNextModelChoice: source === 'user' && model ? { model, provider: provider ?? null } : null,
-      ...(source === 'user' ? pendingModelChoicePatch(state, model, provider) : {}),
+      explicitNextModelChoice: source === 'user' && model
+        ? { model, provider: provider ?? null, ...(state.nextEffort ? { effort: state.nextEffort, ...(state.nextEffortByCommand ? { effortByCommand: true } : {}) } : {}) }
+        : null,
+      ...(source === 'user' ? pendingModelChoicePatch(state, model, provider, { effort: state.nextEffort, effortByCommand: state.nextEffortByCommand }) : {}),
     })),
+    nextEffort: '',
+    nextEffortByCommand: false,
+    setNextEffort: (effort, byCommand, source) => set((state) => {
+      // Not set stores nothing extra: a choice without effort keeps its pre-effort shape.
+      const effortFields = effort ? { effort, ...(byCommand ? { effortByCommand: true } : {}) } : {}
+      if (source !== 'user' || !state.nextModel) return { nextEffort: effort, nextEffortByCommand: byCommand }
+      return {
+        nextEffort: effort,
+        nextEffortByCommand: byCommand,
+        explicitNextModelChoice: { model: state.nextModel, provider: state.nextModelProvider, ...effortFields },
+        ...pendingModelChoicePatch(state, state.nextModel, state.nextModelProvider, effortFields),
+      }
+    }),
 
     setReplaying: (value) => {
       const sid = getActiveSid()

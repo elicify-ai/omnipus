@@ -70,13 +70,6 @@ type StreamingProvider interface {
 	) (*LLMResponse, error)
 }
 
-// ThinkingCapable is an optional interface for providers that support
-// extended thinking (e.g. Anthropic). Used by the agent loop to warn
-// when thinking_level is configured but the active provider cannot use it.
-type ThinkingCapable interface {
-	SupportsThinking() bool
-}
-
 // NativeSearchCapable is an optional interface for providers that support
 // built-in web search during LLM inference (e.g. OpenAI web_search_preview,
 // xAI Grok search). When the active provider implements this interface and

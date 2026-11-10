@@ -26,7 +26,7 @@ plan, **that is a finding** — report it rather than adjusting the plan.
 
 | Expectation | Source |
 |---|---|
-| Delegation depth caps at **3** levels with nothing configured | `docs/settings.md` — "How deep delegation may go" |
+| Delegation depth caps at **10** levels with nothing configured | `docs/settings.md` — "How deep delegation may go" |
 | Over-cap chain is **refused**; the extra work never starts | same |
 | At the concurrency cap a delegation is **queued with its place in line**, never refused | `docs/settings.md` — "How many agents run at once" |
 | Concurrency floor is **2** when memory cannot be measured | same |
@@ -163,9 +163,13 @@ exists to fix.*
 
 ### B2 — Too deep is refused, clearly, before any work starts
 
-**Setup.** Read the depth cap from Lane P (default is **3**). Create one more level
-than the cap: with a cap of 3, create `uat-b-d1` … `uat-b-d4`, each permitted to
-delegate to the next.
+**Setup.** Read the depth cap from Lane P (default is **10**). Create one more level
+than the cap: for a configured cap of 3, create `uat-b-d1` … `uat-b-d4`, each permitted
+to delegate to the next; with the default (10) you need 11 levels (`uat-b-d1` … `uat-b-d11`).
+Note (founder decision 2026-11-08): an install upgraded from before the default was
+raised migrates any stored edge depth 3 to 10 once at first boot, so an edge that used
+to read 3 reads 10 after the upgrade; a 3 set after that migration is deliberate and
+stays.
 
 **Steps.**
 1. Open a chat with `uat-b-d1`.

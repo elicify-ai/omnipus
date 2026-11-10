@@ -46,8 +46,8 @@ Field reference (defaults applied by the boot validator when the field is omitte
 |---|---|---|
 | `mode` | `enforce` on a fresh install, otherwise the operator's last saved value | See "Modes" below. |
 | `allowed_paths` | `[]` | Extra filesystem paths granted RW (read-write strip applied to `SystemRestrictedPaths`). |
-| `ssrf.enabled` | `false` | Activates SSRF protection on gateway-controlled HTTP clients. |
-| `ssrf.allow_internal` | `[]` | Exact IPs, CIDRs, or hostnames exempted from SSRF blocking (`pkg/security/ssrf.go:65-72`). |
+| `ssrf.enabled` | `false` | Activates SSRF protection on gateway-controlled HTTP clients. When on, a provider address is checked on every save, with or without an API key, and a refused address now returns the plain-words 422 texts listed in [Providers and models](../providers-and-models.md). A local provider (Ollama, vLLM, LM Studio, or a custom row on a loopback or private host) is not refused on a local install. |
+| `ssrf.allow_internal` | `[]` | Exact IPs, CIDRs, or hostnames exempted from SSRF blocking (`pkg/security/ssrf.go:65-72`). On the hosted edition only the operator sets this list: it is not editable in Settings, and a `PUT` to the sandbox-config endpoint that changes it returns 403 ("The list of allowed internal addresses is set by the hosting service and cannot be changed here."). Provider address checks are always on there, even with `ssrf.enabled` off. |
 | `egress_allow_cidrs` | `[]` | Extra CIDRs added to the SSRFChecker allow-list (`pkg/config/sandbox.go:286-314`). |
 | `egress_allow_list` | `["registry.npmjs.org", "github.com", "raw.githubusercontent.com"]` | Host allow-list for the egress proxy used by Tier 2/Tier 3 children. |
 | `max_concurrent_dev_servers` | `4` | Tier 3 `web_serve` dev-mode cap across all agents (`pkg/config/sandbox.go:233`). |

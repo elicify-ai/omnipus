@@ -285,6 +285,11 @@ export function useOmnipusRuntime() {
   // sendMessage completes, so the picker auto-derives a fresh default
   // on the next session reopen (per spec §18 Q3).
   const nextModel = useChatStore((s) => s.nextModel);
+  // Effort levels FR-045/FR-055: the exact (provider, model) pair and the
+  // chat's effort ride the message with the model (metadata.provider,
+  // metadata.reasoning_effort). Not set sends no effort field.
+  const nextModelProvider = useChatStore((s) => s.nextModelProvider);
+  const nextEffort = useChatStore((s) => s.nextEffort);
 
   return useExternalStoreRuntime<ChatMessage>({
     messages,
@@ -360,10 +365,13 @@ export function useOmnipusRuntime() {
         return;
       }
 
+      const modelChoice = nextModel
+        ? { model_name: nextModel, ...(nextModelProvider ? { provider: nextModelProvider } : {}), ...(nextEffort ? { reasoning_effort: nextEffort } : {}) }
+        : {};
       if (mediaRefs.length > 0) {
-        sendMessage(text, { mediaRefs, attachments, ...(nextModel ? { model_name: nextModel } : {}) });
+        sendMessage(text, { mediaRefs, attachments, ...modelChoice });
       } else {
-        sendMessage(text, nextModel ? { model_name: nextModel } : undefined);
+        sendMessage(text, nextModel ? modelChoice : undefined);
       }
     },
     onCancel: async () => { cancelStream() },

@@ -354,6 +354,16 @@ type CallAccountingStreamer interface {
 	SetCallAccounting(entries []session.TranscriptEntry)
 }
 
+// TurnReasoningStreamer receives the turn's reasoning-token sum over EVERY
+// provider call of the turn (nil when no call reported a count). The calls
+// handed to SetCallAccounting are only the ones still pending at the end: a
+// no-text call (a tool-call response) books its accounting the moment it
+// completes, so a sum over the pending calls alone undercounts the turn
+// (effort-levels S-95, FR-058).
+type TurnReasoningStreamer interface {
+	SetTurnReasoningTokens(n *int)
+}
+
 func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 	accountingErr := ts.callAccountingError()
 	// B4: if the turn has been abandoned, suppress the final "done" frame so
@@ -395,6 +405,9 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 			pending, seen := ts.takeCallAccounting()
 			if seen {
 				setter.SetCallAccounting(pending)
+			}
+			if rs, ok := s.(TurnReasoningStreamer); ok {
+				rs.SetTurnReasoningTokens(ts.turnReasoningTokens())
 			}
 		} else {
 			accountingErr = errors.Join(accountingErr, ts.flushPendingCallAccounting())
