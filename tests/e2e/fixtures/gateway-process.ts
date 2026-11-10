@@ -628,10 +628,9 @@ export class GatewayProcess {
     // Keep the bearer this SAME login returned (LoginResponse.token) for
     // reloadBearer(): no second login is ever made for it, so the session
     // cookie handed to the browser is not rotated.
+    // A login reply without a token (a stub gateway in a boot-failure test)
+    // is tolerated here; reloadBearer() refuses loudly if it is then asked.
     const body = (await res.json()) as { token?: string };
-    if (!body.token) {
-      throw new Error('GatewayProcess: POST /api/v1/auth/login response has no token field');
-    }
     const state = await ctx.storageState();
     const csrf = state.cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf');
     if (!csrf) {
@@ -642,7 +641,7 @@ export class GatewayProcess {
     }
     this.ctx = ctx;
     this.csrfToken = csrf.value;
-    this.loginBearer = body.token;
+    this.loginBearer = body.token ?? '';
   }
 
   /**
@@ -654,7 +653,9 @@ export class GatewayProcess {
    */
   reloadBearer(): string {
     if (!this.loginBearer) {
-      throw new Error('GatewayProcess.reloadBearer: not authenticated — call start() first');
+      throw new Error(
+        'GatewayProcess.reloadBearer: no bearer — not started, or the login response carried no token field',
+      );
     }
     return this.loginBearer;
   }
