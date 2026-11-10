@@ -747,19 +747,21 @@ func LoadSchemas(vaultRoot string) (*SchemaSet, *SchemaLoadReport, error) {
 	}
 	sort.Strings(paths) // deterministic order, so reports are reproducible
 
-	return loadSchemaPaths(paths)
+	return loadSchemaPaths(paths, os.ReadFile)
 }
 
 // loadSchemaPaths does the two-pass load. The two passes exist for FR-003: a
 // duplicate type cannot be detected until every file has declared its type, and
 // the requirement is that BOTH files are rejected — so nothing may be committed
-// to the set until the conflict check has run.
-func loadSchemaPaths(paths []string) (*SchemaSet, *SchemaLoadReport, error) {
+// to the set until the conflict check has run. read supplies each file's
+// bytes: os.ReadFile for LoadSchemas, a checked and bounded reader for
+// LoadViewSetChecked.
+func loadSchemaPaths(paths []string, read func(string) ([]byte, error)) (*SchemaSet, *SchemaLoadReport, error) {
 	report := &SchemaLoadReport{ScannedFiles: append([]string(nil), paths...)}
 	parsed := make([]*Schema, 0, len(paths))
 
 	for _, p := range paths {
-		data, err := os.ReadFile(p)
+		data, err := read(p)
 		if err != nil {
 			report.Rejections = append(report.Rejections, SchemaRejection{
 				Paths:  []string{p},

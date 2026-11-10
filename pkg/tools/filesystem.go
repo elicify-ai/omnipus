@@ -1254,7 +1254,15 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		emitFileReadAudit(ctx, t.auditLogger, t.Name(), resolved, "list")
 	}
 
-	return formatDirEntries(handle, entries, int(offset), int(limit))
+	return formatDirEntries(ctx, handle, entries, boundedListDirInt(offset), boundedListDirInt(limit))
+}
+
+// boundedListDirInt narrows validated nonnegative paging values safely on 32-bit hosts.
+func boundedListDirInt(value int64) int {
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int(value)
 }
 
 // maxListDirEntries bounds one list_directory page (ADR-066 §15 task 1,
@@ -1324,14 +1332,22 @@ func isKnowledgeBaseEntry(handle *PathHandle, entry os.DirEntry) bool {
 // checked, matching the cost discipline
 // pkg/gateway/rest_library.go's own detectKnowledgeBaseInRoot documents for
 // the identical question over the REST listing.
-func formatDirEntries(handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
+func formatDirEntries(ctx context.Context, handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
 	entries = fspolicy.VisibleDirectoryEntries(handle.abs, entries, handle.policy)
-	total := len(entries)
+	// #1017: saved views placed in this folder follow the folder's own
+	// entries as VIEW: lines, inside the same paging.
+	viewLines := placedViewLines(ctx, handle)
+	total := len(entries) + len(viewLines)
 	start := min(offset, total)
 	end := min(start+limit, total)
 
 	var result strings.Builder
-	for _, entry := range entries[start:end] {
+	for i := start; i < end; i++ {
+		if i >= len(entries) {
+			result.WriteString(viewLines[i-len(entries)] + "\n")
+			continue
+		}
+		entry := entries[i]
 		switch {
 		case isKnowledgeBaseEntry(handle, entry):
 			result.WriteString("KB:   " + entry.Name() + "\n")

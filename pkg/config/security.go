@@ -7,6 +7,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -22,13 +23,14 @@ import (
 //     LLM responses and logs (used throughout the agent loop)
 //   - SecureString: typed wrapper for credential values that is redacted on
 //     JSON serialization
+//   - RegisterSensitiveValues and EnsureSensitiveValues: the registered
+//     credential set and its publication as the process-wide replacer
+//     (pkg/logger)
 //
-// The old PicoClaw ".security.yml" credential-separation mechanism has been
-// removed. Credential separation is now handled exclusively by the Omnipus
-// encrypted credentials.json store (pkg/credentials) referenced via
-// ModelConfig.APIKeyRef — see pkg/gateway/rest.go and pkg/sysagent/tools/deps.go
-// for the resolution path. The credentials.json store uses AES-256-GCM +
-// Argon2id per CLAUDE.md and BRD SEC-23.
+// Credential values are held by the encrypted credentials.json store
+// (pkg/credentials: AES-256-GCM, Argon2id) and referenced from config by name
+// (for example APIKeyRef); pkg/credentials/inject.go::InjectFromConfig
+// resolves those names.
 
 // SensitiveDataCache holds the compiled strings.Replacer for filtering
 // sensitive data out of LLM responses and logs.
@@ -63,26 +65,31 @@ func (sec *Config) SensitiveDataReplacer() *strings.Replacer {
 	return sec.sensitiveCache.replacer
 }
 
-// RegisterSensitiveValues replaces the runtime sensitive-data list with the
-// supplied values and resets the compiled replacer cache so the next call to
+// sensitiveRegistrationMu is held by every call that publishes the
+// process-wide credential replacer, so two publications never interleave.
+var sensitiveRegistrationMu sync.Mutex
+
+// RegisterSensitiveValues replaces the registered sensitive-data list with
+// values plus every value the stored source returns (SetStoredSensitiveSource),
+// and resets the compiled replacer cache so the next call to
 // SensitiveDataReplacer rebuilds with the new set. Semantics are "replace not
-// append" so that rotated or removed secrets are evicted on every reload; callers
-// must pass the COMPLETE current set of plaintexts each time.
+// append" so that rotated or removed secrets are evicted on every reload;
+// callers must pass the COMPLETE current set of plaintexts each time (ADR-004
+// boot step 6 and each re-registration after it). When the stored source
+// cannot be read, the previously registered values are kept as well, so an
+// error never removes a value from the set.
 //
 // Thread-safe: safe to call concurrently with SensitiveDataReplacer.
 //
-// It also publishes the registered set as the process-wide credential replacer
+// It also publishes the process-wide credential replacer
 // (logger.SetSensitiveValueReplacer), which scrubs the gateway log and the
-// Verbose-chat error detail — the operator-only surfaces allowed to keep a raw
-// provider error. Every registration supplies the complete current set (ADR-004
-// boot step 6 and each re-registration after it), so the most recent call is
-// the set in force; publishing under sensitiveMu keeps two registrations on one
-// config from publishing out of order. Only the registered plaintexts are
-// published — the reflection-walked SecureString values stay on this config's
-// own lazily built replacer — so building the published replacer reads no other
-// config field.
-var sensitiveRegistrationMu sync.Mutex
-
+// Verbose-chat error detail, the operator-only surfaces allowed to keep a raw
+// provider error. The published set is the registered values plus the
+// environment values of external workers (agentEnvSensitiveValues: the last
+// read of the stored worker env values and the env overrides in this config's
+// agent list). The reflection-walked SecureString values stay on this
+// config's own lazily built replacer only. Publications hold
+// sensitiveRegistrationMu, so the most recent call is the set in force.
 func (sec *Config) RegisterSensitiveValues(values []string) {
 	sensitiveRegistrationMu.Lock()
 	defer sensitiveRegistrationMu.Unlock()
@@ -108,7 +115,7 @@ func (sec *Config) RegisterSensitiveValues(values []string) {
 // set and republishes the process-wide replacer, keeping everything already
 // registered. It is for a value about to be handed to a child process before
 // the next full registration has run: a private variable injected into a
-// command must already be masked in its output (gate r1 M3, security T2-S1).
+// command must already be masked in its output.
 // The next RegisterSensitiveValues replaces the set as usual; the stored
 // source it reads includes these values, so nothing is lost.
 func (sec *Config) EnsureSensitiveValues(values []string) {
@@ -136,17 +143,42 @@ func (sec *Config) EnsureSensitiveValues(values []string) {
 	logger.SetSensitiveValueReplacer(newSensitiveReplacer(sec.publishedSensitiveValues()))
 }
 
-// sensitiveReplacementPairs builds the old/new pairs of a credential replacer:
-// every value longer than 3 bytes is replaced by "[FILTERED]". The one rule for
-// both this config's own replacer and the published process-wide one.
+// sensitiveReplacementPairs builds the old/new pairs of a credential replacer,
+// the one rule for both this config's own replacer and the published
+// process-wide one: every value longer than 3 bytes is replaced by
+// "[FILTERED]", and a value that latin1EscapedSpelling changes is replaced in
+// that spelling as well. A value longer than 3 bytes adds one pair, or two
+// when latin1EscapedSpelling changes it; how that changes the cost of
+// replacing a logged field has not been measured.
 func sensitiveReplacementPairs(values []string) []string {
 	var pairs []string
 	for _, v := range values {
-		if len(v) > 3 {
-			pairs = append(pairs, v, "[FILTERED]")
+		if len(v) <= 3 {
+			continue
+		}
+		pairs = append(pairs, v, "[FILTERED]")
+		if spelled, ok := latin1EscapedSpelling(v); ok {
+			pairs = append(pairs, spelled, "[FILTERED]")
 		}
 	}
 	return pairs
+}
+
+// latin1EscapedSpelling returns v with every character in U+00A0..U+00FF
+// written as a backslash, x and the two lowercase hex digits of its code
+// point; other characters are kept. ok is false when v has no such character.
+func latin1EscapedSpelling(v string) (string, bool) {
+	var b strings.Builder
+	changed := false
+	for _, r := range v {
+		if r >= 0xa0 && r <= 0xff {
+			fmt.Fprintf(&b, `\x%02x`, r)
+			changed = true
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String(), changed
 }
 
 // newSensitiveReplacer returns the credential replacer for values, or nil when
@@ -164,11 +196,13 @@ func newSensitiveReplacer(values []string) *strings.Replacer {
 func (sec *Config) buildAndPopulateSensitiveCache() {
 	cache := &SensitiveDataCache{}
 
-	// (a) Reflection-walked SecureString fields (kept for backward compat).
+	// (a) Reflection-walked SecureString fields.
 	values := sec.collectSensitiveValues()
 	// (b) Runtime-registered plaintexts — read under the already-held write lock.
 	values = unique(append(values, sec.registeredSensitive...))
-	// (c) r17 SR-2: every external worker's stored env value in this roster.
+	// (c) The external workers' env values: the last read of the stored
+	// records plus the env overrides in this config's agent list
+	// (agentEnvSensitiveValues).
 	values = unique(append(values, sec.agentEnvSensitiveValues()...))
 
 	if len(values) == 0 {
@@ -177,13 +211,8 @@ func (sec *Config) buildAndPopulateSensitiveCache() {
 		return
 	}
 
-	// Build old/new pairs for strings.Replacer.
-	var pairs []string
-	for _, v := range values {
-		if len(v) > 3 {
-			pairs = append(pairs, v, "[FILTERED]")
-		}
-	}
+	// The same pairs the published process-wide replacer uses.
+	pairs := sensitiveReplacementPairs(values)
 	if len(pairs) == 0 {
 		cache.replacer = strings.NewReplacer()
 	} else {

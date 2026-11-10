@@ -1321,10 +1321,15 @@ func (t *DescribeTool) gather(
 		return nil, err
 	}
 
-	schemas, schemaReport, err := records.LoadSchemas(root.Path())
+	// The same checked, bounded load as the Library listing, the views
+	// endpoints and knowledge_find (#1017): only regular files inside the
+	// collection, within records.ListingLoadLimits, so the views described
+	// here are the views a listing shows and knowledge_find serves.
+	loaded, err := records.LoadControlCheckedAt(ctx, root.Path(), records.ListingLoadLimits())
 	if err != nil {
 		return nil, err
 	}
+	schemas, schemaReport := loaded.Schemas, loaded.SchemaReport
 	if opts.RecordType != "" {
 		if _, ok := schemas.Get(opts.RecordType); !ok {
 			// AC-D2 — an unknown record_type is REFUSED with the declared
@@ -1337,10 +1342,7 @@ func (t *DescribeTool) gather(
 		}
 	}
 
-	views, viewReport, err := records.LoadViews(root.Path(), schemas)
-	if err != nil {
-		return nil, err
-	}
+	views, viewReport := loaded.Views, loaded.ViewReport
 
 	data := &DescribeData{
 		Collection:         col.Name,

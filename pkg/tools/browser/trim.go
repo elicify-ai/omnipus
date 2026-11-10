@@ -37,6 +37,7 @@ package browser
 // is trimmed (Chromium put it there, and re-fetches it).
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -289,7 +290,21 @@ func dirSizeBytes(path string) int64 {
 //
 // Triggers 1 and 3 cannot race destructively on one profile: both take the
 // per-key launch lock, and the loser skips.
+//
+// It never stops early; the gateway's schedule uses TrimAllEligibleContext so
+// that its shutdown cancel stops the pass.
 func (p *BrowserPool) TrimAllEligible() []TrimResult {
+	return p.TrimAllEligibleContext(context.Background())
+}
+
+// TrimAllEligibleContext is TrimAllEligible that stops before the next profile
+// once ctx is done (#1730). Each profile's trim creates a sibling lock file and
+// removes cache directories; a pass over many profiles that ignored the
+// gateway's shutdown cancel could outlast the drain's budget and keep writing
+// into a home the caller was already removing. A stopped pass loses nothing:
+// the untouched profiles are trimmed by the next boot's pass. The profile in
+// progress when ctx is cancelled is finished, never left half-trimmed.
+func (p *BrowserPool) TrimAllEligibleContext(ctx context.Context) []TrimResult {
 	root := p.profileRoot()
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -297,6 +312,9 @@ func (p *BrowserPool) TrimAllEligible() []TrimResult {
 	}
 	var out []TrimResult
 	for _, e := range entries {
+		if ctx.Err() != nil {
+			return out
+		}
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), browsingProfileSegmentPrefix) {
 			continue
 		}
