@@ -25,7 +25,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { inspect } from 'node:util'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GatewayProcess, PANIC_LOG_READ_BYTES } from './gateway-process.js'
+import { GatewayProcess, REPORT_TAIL_BYTES } from './gateway-process.js'
 
 const FAKE_SOURCE = `#!/usr/bin/env node
 const fs = require('node:fs')
@@ -80,6 +80,31 @@ if (mode === 'silent-ignore-term') {
   while (rest > 0) { const n = Math.min(1000, rest); tail += 'f'.repeat(n - 1) + '\\n'; rest -= n }
   panicLog('head ' + 'h'.repeat(5000) + ' edge ' + secret + '\\n' + tail)
   process.exit(5)
+} else if (mode === 'ml-edge') {
+  // A known THREE-line secret whose first line straddles the start of the
+  // last FAKE_WINDOW bytes of the panic log.
+  announce()
+  const secret = env.FAKE_ML_SECRET
+  const half = Math.floor(secret.split('\\n')[0].length / 2)
+  let rest = Number(env.FAKE_WINDOW) - (secret.length - half) - 1
+  let tail = ''
+  while (rest > 0) { const n = Math.min(1000, rest); tail += 'f'.repeat(n - 1) + '\\n'; rest -= n }
+  panicLog('head ' + 'h'.repeat(5000) + ' edge ' + secret + '\\n' + tail)
+  process.exit(5)
+} else if (mode === 'bare-print') {
+  // Values printed bare (no key=value shape), then a crash.
+  for (const name of (env.FAKE_PRINT_VARS || '').split(',').filter(Boolean)) {
+    process.stdout.write('bare ' + env[name] + ' end\\n')
+  }
+  if (env.FAKE_PRINT_LINE2) process.stdout.write('line2 ' + env[env.FAKE_PRINT_LINE2].split('\\n')[1] + ' end\\n')
+  process.exit(6)
+} else if (mode === 'restart-chain' && boot >= 2) {
+  // Boot 2 (first restart) prints its secret and is healthy; boot 3 (second
+  // restart) prints its own and crashes.
+  announce()
+  process.stderr.write(line + ' restart value ' + env.FAKE_RESTART_TOKEN + '\\n')
+  if (boot >= 3) process.exit(4)
+  serve(200)
 } else if (mode === 'restart-leak' && boot >= 2) {
   announce()
   process.stderr.write(line + ' restart value ' + env.FAKE_RESTART_TOKEN + '\\n')
@@ -94,7 +119,7 @@ if (mode === 'silent-ignore-term') {
     process.exit(2)
   }
   if (mode === 'listen-503-ignore-term') { ignoreTerm(); serve(503) }
-  else if (mode === 'login-fails' || mode === 'restart-leak') serve(200)
+  else if (mode === 'login-fails' || mode === 'restart-leak' || mode === 'restart-chain') serve(200)
   else setInterval(() => {}, 1000) // alive, never listening
   if (mode !== 'listen-503-ignore-term') process.on('SIGTERM', () => process.exit(0))
 }
@@ -322,7 +347,7 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     FAKE_SHORT_TOKEN: 'q7Z',
     FAKE_DB_PASSWORD: 'pw "json" \\ canary-json-58e2',
     FAKE_EDGE_SECRET: 'edgecanaryAAAAAAAAAAAAAAAAAAAAbbbbbbbbbbbbbbbbbbbbbbbbbbb', // gitleaks:allow
-    FAKE_WINDOW: String(PANIC_LOG_READ_BYTES),
+    FAKE_WINDOW: String(REPORT_TAIL_BYTES),
     ...extra,
   })
 
@@ -364,6 +389,77 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
       expect((err as Error).message).toMatch(/code 4/)
       expect((err as Error).message).toContain('restart value ')
       expect(emitted(err)).not.toContain(canary)
+    } finally {
+      await gw.stop()
+    }
+  }, 60_000)
+
+  const ML_SECRET = 'mlcanary-one-AAAAAAAAAAAAAAAAAAAA\nmlcanary-two-BBBBBBBBBBBBBBBBBBBB\nmlcanary-three-CCCCCCCCCCCCCCCCCC' // gitleaks:allow
+
+  it('a three-line secret whose first line is cut by the reported tail window is scrubbed, every line', async () => {
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: {
+        FAKE_MARKER: 'ml',
+        FAKE_MODE: 'ml-edge',
+        FAKE_STATE: newState('ml-edge'),
+        FAKE_ML_SECRET: ML_SECRET,
+        FAKE_WINDOW: String(REPORT_TAIL_BYTES),
+      },
+    })
+    expect(err.message).toContain('gateway_panic.log')
+    expect(err.message, 'the panic tail itself is there').toContain('ffff')
+    expect(emitted(err), 'no line of the secret survives').not.toMatch(/AAAAAAAAAA|BBBBBBBBBB|CCCCCCCCCC|mlcanary/)
+  }, 60_000)
+
+  it('one line of a multi-line secret printed on its own is scrubbed', async () => {
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: 'l2', FAKE_MODE: 'bare-print', FAKE_STATE: newState('line2'), FAKE_ML_SECRET: ML_SECRET, FAKE_PRINT_LINE2: 'FAKE_ML_SECRET' },
+    })
+    expect(err.message).toContain('line2 ')
+    expect(emitted(err)).not.toContain('mlcanary-two')
+  }, 60_000)
+
+  it('a compound credential variable name (PGPASSWORD) printed bare is scrubbed', async () => {
+    const canary = 'canary-pgpassword-41d7' // gitleaks:allow
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: 'pg', FAKE_MODE: 'bare-print', FAKE_STATE: newState('pgpassword'), PGPASSWORD: canary, FAKE_PRINT_VARS: 'PGPASSWORD' },
+    })
+    expect(err.message).toContain('bare ')
+    expect(emitted(err)).not.toContain(canary)
+  }, 60_000)
+
+  it('a secret from an EARLIER restart is scrubbed when a later restart fails', async () => {
+    const first = 'canary-restart-first-8e02c1' // gitleaks:allow
+    const second = 'canary-restart-second-5f7ab3' // gitleaks:allow
+    const marker = `CHAIN-${process.pid}`
+    const gw = await GatewayProcess.start({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'restart-chain', FAKE_STATE: newState('restart-chain') },
+    })
+    try {
+      await gw.kill9()
+      await gw.restart({ relogin: false, env: { FAKE_RESTART_TOKEN: first } })
+      await gw.kill9()
+      const err = await gw.restart({ relogin: false, env: { FAKE_RESTART_TOKEN: second } }).then(
+        () => undefined,
+        (e: unknown) => e as Error,
+      )
+      expect(err, 'the second restart must fail').toBeInstanceOf(Error)
+      expect((err as Error).message).toMatch(/code 4/)
+      expect((err as Error).message, 'the retained output of both restarts is reported').toMatch(/restart value [\s\S]*restart value /)
+      expect(emitted(err)).not.toContain(first)
+      expect(emitted(err)).not.toContain(second)
     } finally {
       await gw.stop()
     }

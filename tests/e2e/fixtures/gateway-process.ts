@@ -107,8 +107,13 @@ export interface GatewayProcessOptions {
 const OUTPUT_KEEP_BYTES = 256 * 1024;
 /** Lines of gateway output put into a boot-failure report. */
 const OUTPUT_TAIL_LINES = 80;
-/** Bytes read from the end of the gateway's panic log for a report. */
-export const PANIC_LOG_READ_BYTES = 64 * 1024;
+/** Bytes read (and scrubbed as a whole) from the end of the gateway's panic
+ * log for a report. Much larger than REPORT_TAIL_BYTES, so the edge of this
+ * read window is never inside the part that is reported. */
+export const PANIC_LOG_READ_BYTES = 1024 * 1024;
+/** At most this many characters of each tail (output, panic log) are
+ * reported; the cut is made after scrubbing and drops the partial line. */
+export const REPORT_TAIL_BYTES = 64 * 1024;
 /** How long stop() waits after SIGTERM before SIGKILL, and after SIGKILL. */
 const STOP_GRACE_MS = 10_000;
 const KILL_WAIT_MS = 10_000;
@@ -134,33 +139,45 @@ function waitForExit(proc: ChildProcess, ms: number): Promise<boolean> {
   });
 }
 
-/** Env names whose values are treated as secrets in a boot report: a
- * KEY/TOKEN/SECRET/PASSWORD/PASSWD/CREDENTIAL(S) word anywhere in the name
- * (OPENROUTER_API_KEY, GITHUB_TOKEN, DB_PASSWORD, ...). */
-const SECRET_ENV_NAME = /(^|[_-])(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)($|[_-])/i;
+/** Env names whose values are treated as secrets in a boot report: KEY,
+ * TOKEN, SECRET, PASSWORD, PASSWD or CREDENTIAL anywhere in the name, with
+ * no word-boundary requirement (OPENROUTER_API_KEY, GITHUB_TOKEN,
+ * PGPASSWORD, ...). Over-scrubbing a harmless value is accepted. */
+const SECRET_ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL/i;
+/** A line of a multi-line secret shorter than this (after trimming) is not
+ * redacted on its own (it would be an ordinary word or a bracket). */
+const SECRET_LINE_MIN = 4;
 
 /** The forms a known secret may take in output: as is, JSON-escaped (once
- * and twice, e.g. a JSON string logged inside JSON) and URL-encoded. */
+ * and twice, e.g. a JSON string logged inside JSON) and URL-encoded, plus
+ * every non-trivial line of a multi-line secret on its own (a cut or a
+ * line-by-line log can show a single line without the rest). */
 function secretForms(value: string): string[] {
-  const json = JSON.stringify(value).slice(1, -1);
-  const json2 = JSON.stringify(json).slice(1, -1);
-  return [...new Set([value, json, json2, encodeURIComponent(value)])];
+  const forms = (v: string) => {
+    const json = JSON.stringify(v).slice(1, -1);
+    return [v, json, JSON.stringify(json).slice(1, -1), encodeURIComponent(v)];
+  };
+  const lines = value.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= SECRET_LINE_MIN);
+  return [...new Set([...forms(value), ...(lines.length > 1 ? lines.flatMap(forms) : [])])];
 }
 
 /**
  * Blank out secrets before gateway output reaches the job log or an error.
- * Covers the value (any length) of every secret-named variable in the
- * environment the gateway was actually started with, including restart()
- * overrides, the admin password, each in its JSON-escaped and URL-encoded
+ * Covers the value (any length) of every secret-named variable in every
+ * environment the gateway was started with (each restart() override
+ * included, since the output of earlier processes is still retained), the
+ * admin password, each in its JSON-escaped and URL-encoded
  * forms, and key-shaped text: sk- keys, bearer tokens and
  * key/token/secret/password assignments. Callers scrub BEFORE cutting text
  * to a tail, so a cut never splits a known secret out of recognition.
  */
-function scrubSecrets(text: string, env: Record<string, string | undefined>, extra: string[]): string {
+function scrubSecrets(text: string, envs: Record<string, string | undefined>[], extra: string[]): string {
   const labels = new Map<string, string>();
-  for (const [name, value] of Object.entries(env)) {
-    if (value && SECRET_ENV_NAME.test(name)) {
-      for (const form of secretForms(value)) labels.set(form, name);
+  for (const env of envs) {
+    for (const [name, value] of Object.entries(env)) {
+      if (value && SECRET_ENV_NAME.test(name)) {
+        for (const form of secretForms(value)) labels.set(form, name);
+      }
     }
   }
   for (const value of extra) {
@@ -180,12 +197,20 @@ function scrubSecrets(text: string, env: Record<string, string | undefined>, ext
     );
 }
 
-/** The last `lines` lines of `text`. When `cut` (the text is the end of a
- * longer stream), the first line is partial and is dropped. */
-function lastLines(text: string, lines: number, cut: boolean): string {
+/** The last `lines` lines of already-scrubbed `text`, at most
+ * REPORT_TAIL_BYTES characters. When `cut` (the text is the end of a longer
+ * stream), the first line is partial and is dropped; so is the partial line
+ * left by the character cap. */
+function reportTail(text: string, lines: number, cut: boolean): string {
   let all = text.replace(/\n$/, '').split('\n');
   if (cut) all = all.slice(1);
-  return all.slice(-lines).join('\n');
+  let tail = all.slice(-lines).join('\n');
+  if (tail.length > REPORT_TAIL_BYTES) {
+    tail = tail.slice(-REPORT_TAIL_BYTES);
+    const nl = tail.indexOf('\n');
+    if (nl >= 0) tail = tail.slice(nl + 1);
+  }
+  return tail;
 }
 
 /**
@@ -213,17 +238,18 @@ export class GatewayProcess {
   private output = '';
   /** Whether `output` lost its beginning to the OUTPUT_KEEP_BYTES bound. */
   private outputCut = false;
-  /** The environment the current process was spawned with (for scrubbing). */
-  private spawnEnv: Record<string, string | undefined> = {};
+  /** Every environment a process of this gateway was spawned with: `output`
+   * keeps the output of all of them, so all their secrets are scrubbed. */
+  private readonly spawnEnvs: Record<string, string | undefined>[] = [];
 
   /** The last `lines` lines of this gateway's stdout+stderr (unscrubbed). */
   outputTail(lines = OUTPUT_TAIL_LINES): string {
-    return lastLines(this.output, lines, this.outputCut);
+    return reportTail(this.output, lines, this.outputCut);
   }
 
   /** `text` with every known secret of this gateway blanked out. */
   private scrub(text: string): string {
-    return scrubSecrets(text, { ...process.env, ...this.extraEnv, ...this.spawnEnv }, [this.adminPassword]);
+    return scrubSecrets(text, [process.env, this.extraEnv, ...this.spawnEnvs], [this.adminPassword]);
   }
 
   /**
@@ -242,11 +268,11 @@ export class GatewayProcess {
       const len = Math.min(size, PANIC_LOG_READ_BYTES);
       const buf = Buffer.alloc(len);
       fs.readSync(fd, buf, 0, len, size - len);
-      // Scrub the whole read window first, then cut: a window that starts
-      // inside a line drops that partial line, so a secret it splits can
-      // neither escape recognition nor be shown in part.
+      // Scrub the whole read window first, then cut to the reported tail.
+      // The read window's own edge (which may split a secret) lies far
+      // outside that tail, and its partial line is dropped as well.
       const text = this.scrub(buf.toString('utf8'));
-      return lastLines(text, lines, len < size) || '(empty)';
+      return reportTail(text, lines, len < size) || '(empty)';
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '(no panic log: the gateway did not get that far)';
       return `(could not read ${file}: ${err instanceof Error ? err.message : String(err)})`;
@@ -259,7 +285,7 @@ export class GatewayProcess {
    * secrets scrubbed: the cause, not a guess. */
   private bootFailureReport(err: unknown, what: string): string {
     const message = this.scrub(err instanceof Error ? err.message : String(err));
-    const output = lastLines(this.scrub(this.output), OUTPUT_TAIL_LINES, this.outputCut);
+    const output = reportTail(this.scrub(this.output), OUTPUT_TAIL_LINES, this.outputCut);
     return (
       `GatewayProcess ${what} failed (port ${this.port}, OMNIPUS_HOME ${this.homeDir}, binary ${this.binary}): ${message}\n` +
       `--- gateway output (last ${OUTPUT_TAIL_LINES} lines, stdout+stderr) ---\n` +
@@ -406,8 +432,8 @@ export class GatewayProcess {
       ...this.extraEnv,
       ...envOverrides,
     };
-    // Kept so a report scrubs the secrets of THIS spawn (restart overrides too).
-    this.spawnEnv = env;
+    // Kept so a report scrubs the secrets of every spawn (restart overrides too).
+    this.spawnEnvs.push(env);
     this.proc = await new Promise<ChildProcess>((resolve, reject) => {
       const child = spawn(this.binary, args, {
         env,
