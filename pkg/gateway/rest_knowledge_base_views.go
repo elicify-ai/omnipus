@@ -185,8 +185,10 @@ func (a *restAPI) handleKnowledgeBaseViews(w http.ResponseWriter, r *http.Reques
 	// UAT D-70: the count alone said "2 views could not be loaded" and
 	// withheld WHICH two and WHY, although the loader's rejection carries
 	// the name, the files, the code and the reason. Each is surfaced.
+	names := newCollectionFileNames(col.Root)
 	for _, rej := range report.Rejections {
 		if rej.Source == source {
+			rej = names.viewRejection(rej)
 			out.UnloadableCount += len(rej.Paths)
 			entry := gen.KnowledgeBaseUnloadableView{
 				Paths:  append([]string(nil), rej.Paths...),
