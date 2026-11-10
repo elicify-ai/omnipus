@@ -886,21 +886,15 @@ func (rs *restartServicesState) restartCron() (error, bool) {
 	return nil, false
 }
 
-// restartSchedulersAndDrains restarts the plan engine, schedulers, and background task and mailbox drains.
+// restartSchedulersAndDrains restarts the /loop scheduler and the background task and mailbox drains.
 func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
-	// Restart the SAME plan-engine instance (ADR-049 D4) — unlike CronService,
-	// the engine is not reconstructed on reload: it was Stop()'d in
-	// stopAndCleanupServices(isReload=true) above, and Start() on an
-	// already-constructed *PlanEngine is safe to call again (fresh stopCh,
-	// re-subscribes to the event bus, re-runs boot reconciliation). taskStore/
-	// taskExecutor are themselves stable across a reload (owned by the SAME
-	// al, never recreated), so there is nothing to re-wire.
-	if rs.runningServices.PlanEngine != nil {
-		if startErr := rs.runningServices.PlanEngine.Start(context.Background()); startErr != nil {
-			return fmt.Errorf("error restarting plan engine: %w", startErr), true
-		}
-		fmt.Println("  ✓ Plan engine restarted")
-	}
+	// The plan engine is NOT restarted: a configuration reload keeps the one
+	// live instance (ADR-049 D4, #1725; stopAndCleanupServices skips it on
+	// reload), so its event subscription, tick loop and in-flight wake turns
+	// and Judge rounds carry on untouched. It reads planning config live off
+	// the same al, and its taskStore/taskExecutor are owned by that al and
+	// never recreated, so there is nothing to re-wire — on the success path
+	// and on handleConfigReload's rollback restarts alike.
 
 	// The task time-trigger scheduler is NOT restarted: a configuration reload
 	// keeps the one live instance (r17 TK-30, 18.40; stopAndCleanupServices

@@ -112,6 +112,7 @@ After a correction the plan returns to running. Append and Supersede also give e
 - **Restart exists only for plans you stopped.** A plan that failed on its own — rounds exhausted, idle too long, DoD unreachable, supervisor unavailable — is closed for good. Write a new plan.
 - **Restart re-runs only unfinished tasks**, each from scratch. Finished tasks and their evidence are kept.
 - **Stop is a hard cancel** — in-flight tasks, checks, and shell commands. A stopped plan never resumes on its own.
+- **Saving settings does not stop or restart a running plan.** Its replies and checks carry on through the settings reload; only **Stop** ends them early.
 - **Run slots follow the install-wide active-loop cap**—16 by default—shared by plans, conversation goals and recurring loops. A plan can wait at Approved and stays stoppable there.
 - **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days; an agent can set a bound only up to the global value in Settings. A plan idle that long ends failed — but only when nothing is running: a member task in progress or waiting to start, a judge round, or an owner or supervisor turn keeps the plan alive however long it takes.
 - **A running plan can pause.** If its owner agent is disabled, the plan pauses and the tile shows the reason.

@@ -2052,7 +2052,17 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if !isReload {
 		stopKnowledgeLifecycles()
 	}
-	if runningServices.PlanEngine != nil {
+	// RELOAD MUST NOT STOP IT (#1725; same rule as the task-trigger scheduler
+	// below, r17 §7.2 TK-30): the plan engine is not reconstructed on reload
+	// and captures no config — it reads planning config live through
+	// agentLoop.GetConfig on the same *AgentLoop that handleConfigReload
+	// swaps in place — so stopping and restarting it applied nothing. Its
+	// Stop drains in-flight wake turns and Judge rounds for up to 30 s, so a
+	// reload that stopped it stalled while a plan was running; and an
+	// in-flight plan turn is a running turn that only an explicit Stop may
+	// end (ADR-082 D1), never a settings save. Shutdown, boot abort and test
+	// teardown (isReload=false) still stop it with that bounded drain.
+	if !isReload && runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
 	}
 	// RELOAD MUST NOT STOP IT (tool-parity spec r17 §7.2 TK-30, 18.40): the
