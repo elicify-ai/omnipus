@@ -316,7 +316,8 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.BedrockInferenceProfiles,
 		)
 
-		opts := make([]bedrock.Option, 0, 2)
+		opts := make([]bedrock.Option, 0, 3)
+		opts = append(opts, bedrock.WithBaseModel(resolvedModelID, modelID))
 		if customEndpoint := strings.TrimSpace(cfg.APIBase); customEndpoint != "" {
 			opts = append(opts, bedrock.WithBaseEndpoint(customEndpoint))
 		} else {

@@ -2500,6 +2500,7 @@ const (
 	CliValidateResponseReasonHandshakeFailed CliValidateResponseReason = "handshake-failed"
 	CliValidateResponseReasonMissingBinary   CliValidateResponseReason = "missing-binary"
 	CliValidateResponseReasonOk              CliValidateResponseReason = "ok"
+	CliValidateResponseReasonPathNotAllowed  CliValidateResponseReason = "path-not-allowed"
 	CliValidateResponseReasonUnauthenticated CliValidateResponseReason = "unauthenticated"
 	CliValidateResponseReasonUnknownCli      CliValidateResponseReason = "unknown-cli"
 )
@@ -2512,6 +2513,8 @@ func (e CliValidateResponseReason) Valid() bool {
 	case CliValidateResponseReasonMissingBinary:
 		return true
 	case CliValidateResponseReasonOk:
+		return true
+	case CliValidateResponseReasonPathNotAllowed:
 		return true
 	case CliValidateResponseReasonUnauthenticated:
 		return true
@@ -6656,6 +6659,36 @@ func (e MessageContextWindowNoticeKind) Valid() bool {
 	case MessageContextWindowNoticeKindMidTurn:
 		return true
 	case MessageContextWindowNoticeKindProviderRetry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageEffortReason.
+const (
+	MessageEffortReasonContinuation    MessageEffortReason = "continuation"
+	MessageEffortReasonExtraBody       MessageEffortReason = "extra_body"
+	MessageEffortReasonMapped          MessageEffortReason = "mapped"
+	MessageEffortReasonNotSupported    MessageEffortReason = "not_supported"
+	MessageEffortReasonRejected        MessageEffortReason = "rejected"
+	MessageEffortReasonRejectedEarlier MessageEffortReason = "rejected_earlier"
+)
+
+// Valid indicates whether the value is a known member of the MessageEffortReason enum.
+func (e MessageEffortReason) Valid() bool {
+	switch e {
+	case MessageEffortReasonContinuation:
+		return true
+	case MessageEffortReasonExtraBody:
+		return true
+	case MessageEffortReasonMapped:
+		return true
+	case MessageEffortReasonNotSupported:
+		return true
+	case MessageEffortReasonRejected:
+		return true
+	case MessageEffortReasonRejectedEarlier:
 		return true
 	default:
 		return false
@@ -14597,7 +14630,7 @@ type Agent struct {
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentExecutorKind `json:"kind,omitempty"`
 
-		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
@@ -14653,6 +14686,9 @@ type Agent struct {
 
 	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -14840,6 +14876,9 @@ type AgentCreateRequestMain struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role *AgentRole `json:"role,omitempty"`
 
@@ -14930,6 +14969,9 @@ type AgentCreateRequestSubagent struct {
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role *AgentRole `json:"role,omitempty"`
@@ -15053,7 +15095,7 @@ type AgentDependencyList struct {
 // AgentDependencyListDependenciesKind defines model for AgentDependencyList.Dependencies.Kind.
 type AgentDependencyListDependenciesKind string
 
-// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
+// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
 type AgentDetail struct {
 	// AbsentFields Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none.
 	AbsentFields *[]string `json:"absent_fields,omitempty"`
@@ -15106,7 +15148,7 @@ type AgentDetail struct {
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentDetailExecutorKind `json:"kind,omitempty"`
 
-		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
@@ -15134,6 +15176,9 @@ type AgentDetail struct {
 	ModelChain *[]struct {
 		// AcceptsImages The resolved model's image-input capability; null when not known.
 		AcceptsImages *bool `json:"accepts_images"`
+
+		// EffortOptions The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+		EffortOptions *[]string `json:"effort_options"`
 
 		// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
 		Model string `json:"model"`
@@ -15169,6 +15214,9 @@ type AgentDetail struct {
 
 	// Provider The stored primary provider key ("" when not pinned).
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort The primary model's stored effort as written ("high", "provider_default", "on", "off"), never the resolved value. null when Not set (stored "") or when it does not apply (subagent_3p external-CLI workers). Effort-levels spec FR-071, S-76.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -15289,6 +15337,9 @@ type AgentMCPBinding struct {
 type AgentModelChainEntry struct {
 	// AcceptsImages The resolved model's image-input capability; null when not known.
 	AcceptsImages *bool `json:"accepts_images"`
+
+	// EffortOptions The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+	EffortOptions *[]string `json:"effort_options"`
 
 	// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
 	Model string `json:"model"`
@@ -15416,6 +15467,9 @@ type AgentTokenEntry struct {
 
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
+
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
 
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
@@ -15685,6 +15739,9 @@ type AgentUpdateRequest struct {
 
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -16081,6 +16138,15 @@ type CatalogModel struct {
 	// Name Display name (Unicode preserved).
 	Name string `json:"name"`
 
+	// Reasoning Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+	Reasoning *struct {
+		// Levels Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+		Levels []string `json:"levels"`
+
+		// Switch True when reasoning can be turned on and off as a switch.
+		Switch bool `json:"switch"`
+	} `json:"reasoning,omitempty"`
+
 	// ReleaseDate Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
 	ReleaseDate *string `json:"release_date,omitempty"`
 
@@ -16108,6 +16174,15 @@ type CatalogModelStatus string
 
 // CatalogModelWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 type CatalogModelWindowSource string
+
+// CatalogModelReasoning Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+type CatalogModelReasoning struct {
+	// Levels Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+	Levels []string `json:"levels"`
+
+	// Switch True when reasoning can be turned on and off as a switch.
+	Switch bool `json:"switch"`
+}
 
 // CatalogProtocol One wire protocol a catalog provider offers, with the base URL to use for it. When a provider lists protocols[], the list MUST include the primary protocol with the same api URL; entries are unique (ADR-067 FR-002, F-19).
 type CatalogProtocol struct {
@@ -16247,14 +16322,14 @@ type ChangePasswordRequest struct {
 
 // ChannelAvailability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
 type ChannelAvailability struct {
-	// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+	// Reason Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
 	Reason *string `json:"reason,omitempty"`
 
-	// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+	// State running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
 	State ChannelAvailabilityState `json:"state"`
 }
 
-// ChannelAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+// ChannelAvailabilityState running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
 type ChannelAvailabilityState string
 
 // ChannelConfigureError 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
@@ -16479,10 +16554,10 @@ type ChannelOutboundPolicy string
 type ChannelOutboundRead struct {
 	// Availability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
 	Availability struct {
-		// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+		// Reason Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
 		Reason *string `json:"reason,omitempty"`
 
-		// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+		// State running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
 		State ChannelOutboundReadAvailabilityState `json:"state"`
 	} `json:"availability"`
 
@@ -16502,7 +16577,7 @@ type ChannelOutboundRead struct {
 	StartSupported bool `json:"start_supported"`
 }
 
-// ChannelOutboundReadAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+// ChannelOutboundReadAvailabilityState running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
 type ChannelOutboundReadAvailabilityState string
 
 // ChannelOutboundReadOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
@@ -16630,7 +16705,7 @@ type ClearAllSessionsResponse struct {
 // ClearAllSessionsResponseStatus defines model for ClearAllSessionsResponse.Status.
 type ClearAllSessionsResponseStatus string
 
-// CliDetect Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs the host cannot actually run, and by the create wizard / edit form to prefill the executor cli_path field. Read-only, unaudited — detection never spawns a subprocess.
+// CliDetect Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. The web app does not call this endpoint: Settings -> Third-party agents receives the same detection result inside its own settings view and uses it to pre-fill a Program path that is not saved yet. Read-only, unaudited — detection never spawns a subprocess.
 type CliDetect struct {
 	// Claude Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
 	Claude struct {
@@ -16707,7 +16782,7 @@ type CliDetectEntrySource string
 
 // CliPreset One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
 type CliPreset struct {
-	// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+	// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.CheckProgramPath on save (absolute; the final file, every symlink and every symlink's folder not inside a folder agents can write to: the Omnipus home, an agent home, a workspace folder, a workspace mount, an extra folder the sandbox lets agents write (sandbox.allowed_paths) or the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When the list of folders agents can write to cannot be read in full, the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
 	Path string `json:"path"`
 
 	// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
@@ -16741,34 +16816,34 @@ type CliPresetView struct {
 // CliPresetViewDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
 type CliPresetViewDetectedSource string
 
-// CliValidateRequest Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
+// CliValidateRequest Request body for POST /api/v1/system/cli-validate. A stateless check of a caller-supplied external CLI program, used by Check CLI in Settings -> Third-party agents: confirms the binary at cli_path actually runs and reports a version. It saves neither settings nor an agent. The shared program-file check runs first; the version handshake then runs on exactly the checked resolved pathname, with no second lookup, on Linux, macOS and Windows (runner.TestConnectionCheckedFile, the same checked-file handshake POST /api/v1/agents/{id}/runner/test uses).
 type CliValidateRequest struct {
 	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 	Cli ExternalCliTool `json:"cli"`
 
-	// CliPath Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty value is classified "missing-binary" without a spawn attempt; the target MUST be a regular, executable file before it is spawned.
+	// CliPath Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty or whitespace-only value is classified "missing-binary" without a spawn attempt. Any other value is checked exactly as given, surrounding whitespace included, the same bytes Settings Save stores and every run checks; it must pass the program-file check (absolute, outside every agent-writable folder, a regular file; executable for the gateway user on Linux/macOS), else "path-not-allowed" and nothing is spawned.
 	CliPath string `json:"cli_path"`
 }
 
-// CliValidateResponse Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". `detail` is always one of a fixed set of classified messages — never raw stderr from the spawned process.
+// CliValidateResponse Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Clients classify the result by `reason`, never by the raw `ok` boolean, because "unauthenticated" also reports ok=true. Check CLI in Settings -> Third-party agents shows the result as a notice and saves nothing; the result does not gate saving settings or an agent. `detail` is never raw stderr from the spawned process: it is a fixed classified message per reason, except for "path-not-allowed", where it is "not allowed: <cli>: check <name> failed", naming the program and the failed check. It never carries a path, an operating-system error or file contents; the path goes to the server log only.
 type CliValidateResponse struct {
-	// Detail Fixed, classified human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli").
+	// Detail Human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli"); for "path-not-allowed" it is "not allowed: <cli>: check <name> failed", where <name> is one of the cli_path_invalid check names (for example agent_writable_location or location_unverifiable). A path is never included; it goes to the server log only.
 	Detail *string `json:"detail,omitempty"`
 
-	// Ok True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST gate blocking on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
+	// Ok True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST classify on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
 	Ok bool `json:"ok"`
 
-	// Reason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+	// Reason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty or whitespace-only; nothing is started. A non-empty cli_path that is missing, not a regular file, or not executable is refused by the program-file check as "path-not-allowed" instead and is never started. "handshake-failed": the checked program could not be started, or ran but did not return a valid version-shaped response within the timeout. "unauthenticated": the binary runs and reports a version, but the local credential check found no usable credentials. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. "path-not-allowed": the shared program-file check refused cli_path (not absolute, missing, not a regular file, not executable for the gateway user on Linux/macOS, inside or linked through the Omnipus home, an agent home, a workspace, a mount, an extra folder the sandbox lets agents write or the per-user temporary folder (unless it is the shared /tmp), or the list of those folders could not be read in full); nothing is spawned. Ownership and writability of the program are the operator's responsibility and are not checked. Maps runner.ReasonOK (empty string) to "ok".
 	Reason CliValidateResponseReason `json:"reason"`
 
-	// ResolvedPath Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary" and "unknown-cli".
+	// ResolvedPath Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary", "unknown-cli" and "path-not-allowed".
 	ResolvedPath *string `json:"resolved_path,omitempty"`
 
 	// Version Version string reported by the CLI's `--version` handshake. Populated only for "ok" and "unauthenticated"; null otherwise.
 	Version *string `json:"version,omitempty"`
 }
 
-// CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+// CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty or whitespace-only; nothing is started. A non-empty cli_path that is missing, not a regular file, or not executable is refused by the program-file check as "path-not-allowed" instead and is never started. "handshake-failed": the checked program could not be started, or ran but did not return a valid version-shaped response within the timeout. "unauthenticated": the binary runs and reports a version, but the local credential check found no usable credentials. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. "path-not-allowed": the shared program-file check refused cli_path (not absolute, missing, not a regular file, not executable for the gateway user on Linux/macOS, inside or linked through the Omnipus home, an agent home, a workspace, a mount, an extra folder the sandbox lets agents write or the per-user temporary folder (unless it is the shared /tmp), or the list of those folders could not be read in full); nothing is spawned. Ownership and writability of the program are the operator's responsibility and are not checked. Maps runner.ReasonOK (empty string) to "ok".
 type CliValidateResponseReason string
 
 // ConfigurationActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
@@ -17015,6 +17090,9 @@ type DefaultModel struct {
 	// Provider Catalog provider id or operator-named custom row id. Empty when unset.
 	Provider string `json:"provider"`
 
+	// ReasoningEffort Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	WindowSource *DefaultModelWindowSource `json:"window_source,omitempty"`
 
@@ -17029,6 +17107,9 @@ type DefaultModelWindowSource string
 type DefaultModelUpdateRequest struct {
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
+
+	// ReasoningEffort Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and `follow_up` is renamed `resume`, no alias path; `redirect` and `resume` are new actions). Steering is always available for a direct delegation (see ADR-053 Amendment).
@@ -18209,10 +18290,10 @@ type EnumValueDefGroup string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
-	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
+	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
 	Code *string `json:"code,omitempty"`
 
-	// Details Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file).
+	// Details Optional structured details about the error. For `cli_path_invalid` and `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and `check` (the failed check's name). No path is returned; path-check diagnostics are recorded in the server log.
 	Details *map[string]interface{} `json:"details,omitempty"`
 
 	// Error Human-readable error message.
@@ -18270,16 +18351,13 @@ type ExecProxyStatus struct {
 	Running bool `json:"running"`
 }
 
-// ExecutorCommandPreviewRequest Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate) so it works both from the create wizard, where no agent id exists yet, and from an existing agent's edit form.
+// ExecutorCommandPreviewRequest Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate), so it needs no existing agent id. The web app uses it for the command preview on an existing external worker's Runtime tab. There is no cli_path member (T11 C-B1): the program for the CLI is the path a person saved in Settings -> Third-party agents, and a request that carries cli_path is refused with 400 in every inbound-validation mode.
 type ExecutorCommandPreviewRequest struct {
 	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 	Cli ExternalCliTool `json:"cli"`
 
 	// CliArgs Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why.
 	CliArgs *string `json:"cli_args,omitempty"`
-
-	// CliPath Optional executor.cli_path override to preview. Empty means "resolved via the OS $PATH at spawn time" and the response's binary field reflects that (the bare command name, not an absolute path).
-	CliPath *string `json:"cli_path,omitempty"`
 
 	// MaxToolIterations Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
@@ -18290,10 +18368,10 @@ type ExecutorCommandPreviewRequest struct {
 
 // ExecutorCommandPreviewResponse The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored.
 type ExecutorCommandPreviewResponse struct {
-	// Argv The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_path/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+	// Argv The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why), followed by the person's saved standard parameters, which are not filtered. Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
 	Argv []string `json:"argv"`
 
-	// Binary The resolved binary name or path that would be spawned — the previewed cli_path verbatim when non-empty, otherwise the CLI's bare default command name (resolved via the OS $PATH at actual spawn time, which this preview cannot see into).
+	// Binary The program that would be spawned: the path a person saved in Settings -> Third-party agents for this CLI, exactly as saved. With no saved path, or a saved path that fails the program checks, the route refuses with 400 and the text a run would be refused with.
 	Binary string `json:"binary"`
 
 	// CommandLine argv joined into a single, shell-quoted display string (binary first), suitable for showing directly in the UI or copying into a terminal.
@@ -18344,7 +18422,7 @@ type ExecutorConfig struct {
 	// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 	Kind *ExecutorConfigKind `json:"kind,omitempty"`
 
-	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 	ProgramWarning *string `json:"program_warning,omitempty"`
 }
 
@@ -18387,9 +18465,9 @@ type ExecutorDefaults struct {
 	Notes string `json:"notes"`
 }
 
-// ExecutorSmokeTestRequest Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape so it works from the create wizard too, but is NOT fully agent-agnostic like those two: when agent_id names a real, saved agent, the run happens in THAT agent's own dedicated directory ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — NOT the separate, multi-agent pkg/workspace.Workspace feature; see agent.ResolveAgentWorkspace's own doc comment) — matching exactly where a genuine delegation to this agent would run, so the test is representative of real behavior (project files, AGENTS.md/CLAUDE.md/opencode.json context the CLI would actually see). Omitting agent_id (the create-wizard case, before the agent has been saved) or naming an agent that doesn't resolve falls back to a disposable, ephemeral scratch directory instead — the response's used_agent_workspace field says which one happened.
+// ExecutorSmokeTestRequest Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape, so it needs no existing agent id; in the web app, Send a test message is on an existing external worker's Runtime tab. When agent_id identifies a saved agent, the test starts from that agent's resolved home folder. If workspace lookup finds the agent's workspace and its project-work folder can be prepared, that workspace folder is used instead. Otherwise the test keeps the agent home; if that chosen folder cannot be prepared either, the test returns a failure before starting the program. These are persistent folders and this handler does not remove them. If agent_id is omitted, blank or does not identify a saved agent, the test prepares a disposable scratch folder instead and cleans it up after the run. The used_agent_workspace flag distinguishes the prepared persistent branch from the scratch branch; a preparation failure can return before any program starts. There is no cli_path member (T11 C-B1): the program for the CLI is the path a person saved in Settings -> Third-party agents, and a request that carries cli_path is refused with 400 in every inbound-validation mode.
 type ExecutorSmokeTestRequest struct {
-	// AgentId Optional id of an existing, saved agent whose own dedicated directory ($OMNIPUS_HOME/agents/{id}/ — a per-agent folder, not the separate pkg/workspace.Workspace feature) this test should run in. When it resolves to a real agent, the run uses that directory (never deleted afterward — only the ephemeral scratch-directory fallback is cleaned up). When omitted, empty, or naming an agent that no longer exists, falls back to a disposable ephemeral scratch directory instead.
+	// AgentId Optional ID of an existing saved agent. When found, the run uses its resolved home, overridden by the workspace project-work folder only when workspace lookup and preparation succeed. Otherwise it keeps the agent home. That persistent folder is not removed by this handler. An omitted, blank or unrecognized ID selects disposable scratch preparation instead.
 	AgentId *string `json:"agent_id,omitempty"`
 
 	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
@@ -18397,9 +18475,6 @@ type ExecutorSmokeTestRequest struct {
 
 	// CliArgs Free-form additional CLI arguments, same tokenizer and safety filter as ExecutorConfig.cli_args.
 	CliArgs *string `json:"cli_args,omitempty"`
-
-	// CliPath Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path.
-	CliPath *string `json:"cli_path,omitempty"`
 
 	// Model Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model.
 	Model *string `json:"model,omitempty"`
@@ -18419,7 +18494,7 @@ type ExecutorSmokeTestResponse struct {
 	// ResponseText The CLI's actual final response text. Present when ok is true; absent (or empty) otherwise.
 	ResponseText *string `json:"response_text,omitempty"`
 
-	// UsedAgentWorkspace True when the request's agent_id resolved to a real, saved agent and the run happened in that agent's own dedicated directory ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — a per-agent folder, NOT the separate, multi-agent pkg/workspace.Workspace feature — this field name refers only to the former) — the same place a genuine delegation to it would run. False means the run happened in a disposable ephemeral scratch directory instead (agent_id was omitted, blank, or didn't resolve to an existing agent — e.g. testing from the create wizard before the agent has been saved).
+	// UsedAgentWorkspace True when a saved agent's persistent directory was prepared for the test: its resolved home, or its workspace project-work folder when workspace lookup and preparation succeeded. Workspace preparation failure falls back to the agent home. That persistent directory is not removed by this handler. False denotes the scratch branch, but can also be returned by a failure before any directory or subprocess is prepared. The flag alone does not prove that a program ran.
 	UsedAgentWorkspace bool `json:"used_agent_workspace"`
 }
 
@@ -18427,15 +18502,18 @@ type ExecutorSmokeTestResponse struct {
 type ExternalCliTool string
 
 // FallbackModel One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
-// Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+// Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>", "reasoning_effort": "<effort>" }` (reasoning_effort optional).
 // Order matters — entries are tried in the order they appear in the parent's `fallback_models` array.
-// `additionalProperties: false` — the wire type has exactly two fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
+// `additionalProperties: false` — the wire type has exactly these fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
 type FallbackModel struct {
 	// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
 	Model string `json:"model"`
 
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // FallbackModelPair One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected.
@@ -18445,6 +18523,9 @@ type FallbackModelPair struct {
 
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses this provider's connection — independent of the primary's provider.
 	Provider string `json:"provider"`
+
+	// ReasoningEffort Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
@@ -19982,6 +20063,9 @@ type LibraryEntry struct {
 	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 	IsTextEditable bool `json:"is_text_editable"`
 
+	// IsView True when this entry is a saved view (#1017): a file the knowledge base's view loader accepted from `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by GET .../entries called with include_views=true; there it is true on a view entry and absent on every other entry. On any other response that returns a LibraryEntry (write, rename, move, copy, upload), and on a listing made without include_views, it is absent and states nothing. `view` is present exactly when this is true.
+	IsView *bool `json:"is_view,omitempty"`
+
 	// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
 	Mime *string `json:"mime,omitempty"`
 
@@ -20015,6 +20099,17 @@ type LibraryEntry struct {
 
 	// Size File size in bytes. Always 0 for directories.
 	Size int64 `json:"size"`
+
+	// View The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+	//
+	// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+	//
+	// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+	//
+	// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+	//
+	// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+	View *LibraryEntryView `json:"view,omitempty"`
 }
 
 // LibraryEntryPreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
@@ -20031,6 +20126,32 @@ type LibraryEntryMount struct {
 
 	// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
 	Name string `json:"name"`
+}
+
+// LibraryEntryView The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+//
+// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+//
+// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+//
+// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+//
+// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+type LibraryEntryView struct {
+	// CollectionId The opaque id of the knowledge base that owns this view — the same value KnowledgeBaseInfo.collection_id and KnowledgeCollectionViews.collection_id carry for that knowledge base. Pass it as `collection_id` to GET .../knowledge/view. Never parse a path out of it.
+	CollectionId string `json:"collection_id"`
+
+	// Kind The view kind declared in the view file (ViewDef.kind), echoed verbatim — today one of table, list, tiles, board, calendar, summary, trend or breakdown, the values ViewDef.kind allows. Absent when the file declares no kind: views imported from a `.base` file and views written before the kinds existed usually have none, and no kind is ever invented for them. A plain string rather than an enum, like KnowledgeBaseView.kind and ViewResult.kind, so a kind added to ViewDef later can never make this listing fail client-side validation; a client that does not recognise a value shows its generic view icon.
+	Kind *string `json:"kind,omitempty"`
+
+	// Label What to show a reader: the view's declared `label` when it has one, otherwise its `name` (records.SavedView.DisplayLabel, the same value KnowledgeBaseView.label carries).
+	Label string `json:"label"`
+
+	// Name The saved view's own name (records.SavedView.Name) — the server's slug and the view's only address. Pass it VERBATIM as the `view` query parameter of GET .../knowledge/view. Never reconstructed by a client, and not the same thing as the entry's `name` (which is the file name, `<slug>.yaml`).
+	Name string `json:"name"`
+
+	// Source The `.base` file this view was imported from: the view file's own `source` key (records.SavedView.DeclaredSource), echoed verbatim — a path relative to the knowledge base root, exactly as KnowledgeBaseView.source reports it. Absent for a view authored in place (knowledge_configure create_view / write_view), which belongs to the knowledge base as a whole rather than to any file. It is also what decides which folder lists the view (see the include_views parameter of GET .../entries); it does not imply the `.base` file still exists.
+	Source *string `json:"source,omitempty"`
 }
 
 // LibraryInlineDisposition Inline-preview metadata for one Library file (ADR-067 D18 / D15). Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
@@ -20345,6 +20466,9 @@ type MailAttachmentSaveResponse struct {
 		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 		IsTextEditable bool `json:"is_text_editable"`
 
+		// IsView True when this entry is a saved view (#1017): a file the knowledge base's view loader accepted from `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by GET .../entries called with include_views=true; there it is true on a view entry and absent on every other entry. On any other response that returns a LibraryEntry (write, rename, move, copy, upload), and on a listing made without include_views, it is absent and states nothing. `view` is present exactly when this is true.
+		IsView *bool `json:"is_view,omitempty"`
+
 		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
 		Mime *string `json:"mime,omitempty"`
 
@@ -20378,6 +20502,17 @@ type MailAttachmentSaveResponse struct {
 
 		// Size File size in bytes. Always 0 for directories.
 		Size int64 `json:"size"`
+
+		// View The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+		//
+		// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+		//
+		// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+		//
+		// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+		//
+		// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+		View *LibraryEntryView `json:"view,omitempty"`
 	} `json:"entry"`
 
 	// Path Final workspace-relative path of the saved file — includes any numbered collision suffix; identical to entry.path. The actual saved name is entry.name.
@@ -21611,17 +21746,53 @@ type MemorySettings struct {
 	// BootstrapRecapMaxPerMinute Maximum number of bootstrap recap operations to run per minute (rate-limit / throttle). This is the only bound on a boot sweep. Maps to agents.defaults.bootstrap_recap_max_per_minute.
 	BootstrapRecapMaxPerMinute *int `json:"bootstrap_recap_max_per_minute,omitempty"`
 
+	// BootstrapRecapMinSpacingSeconds Least time between two boot-time recaps, in seconds. Default 1. A stored value outside the range is clamped on use. Maps to agents.defaults.bootstrap_recap_min_spacing_seconds.
+	BootstrapRecapMinSpacingSeconds *int `json:"bootstrap_recap_min_spacing_seconds,omitempty"`
+
 	// IdleTimeoutMinutes Minutes of inactivity after which a session is considered idle and a recap is triggered. Maps to agents.defaults.idle_timeout_minutes.
 	IdleTimeoutMinutes *int `json:"idle_timeout_minutes,omitempty"`
 
 	// MemoryRetrosDays Number of days to retain memory retrospective files. Defaults longer than session retention (180 vs 90) so reflections outlive their transcripts. Maps to storage.retention.memory_retros_days.
 	MemoryRetrosDays *int `json:"memory_retros_days,omitempty"`
 
+	// RecapCharsPerToken Characters counted as one token when sizing recap input. Default 4. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_chars_per_token.
+	RecapCharsPerToken *int `json:"recap_chars_per_token,omitempty"`
+
+	// RecapFallbackContextChars Characters of recent context kept when no recap model answers. Default 1500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_fallback_context_chars.
+	RecapFallbackContextChars *int `json:"recap_fallback_context_chars,omitempty"`
+
 	// RecapFallbackModels Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models.
 	RecapFallbackModels *[]FallbackModel `json:"recap_fallback_models,omitempty"`
 
+	// RecapInputTokens Token budget of the transcript text sent to the recap model. Default 2000. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_input_tokens.
+	RecapInputTokens *int `json:"recap_input_tokens,omitempty"`
+
+	// RecapListItems Most items in each recap list (topics, decisions, open items). Default 5. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_list_items.
+	RecapListItems *int `json:"recap_list_items,omitempty"`
+
+	// RecapMaxOutputTokens Most output tokens one recap call may produce. Default 2048. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_max_output_tokens.
+	RecapMaxOutputTokens *int `json:"recap_max_output_tokens,omitempty"`
+
 	// RecapModel Model slug used for session recap / summarization. A fast, cheap model is recommended. Empty → falls back to agents.defaults.model_name (the overall default model), then to the session's own agent model. Maps to agents.defaults.recap_model.
 	RecapModel *string `json:"recap_model,omitempty"`
+
+	// RecapProvider Provider of the recap model (#1291), stored with recap_model so the recap routes through it. Maps to agents.defaults.recap_provider.
+	RecapProvider *string `json:"recap_provider,omitempty"`
+
+	// RecapReasoningEffort Effort for the recap model (effort-levels spec FR-072): absent or "" means Off (the recap default); "provider_default", a catalog level name or "on" turn reasoning on. null is refused.
+	RecapReasoningEffort *string `json:"recap_reasoning_effort,omitempty"`
+
+	// RecapRetryPauseMs Base pause between recap retries, in milliseconds (try n waits n times this). Default 500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_retry_pause_ms.
+	RecapRetryPauseMs *int `json:"recap_retry_pause_ms,omitempty"`
+
+	// RecapStreamRetries Retries of a recap call whose stream broke. Default 2. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_stream_retries.
+	RecapStreamRetries *int `json:"recap_stream_retries,omitempty"`
+
+	// RecapSummaryWords Target length of the recap summary, in words. Default 150. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_summary_words.
+	RecapSummaryWords *int `json:"recap_summary_words,omitempty"`
+
+	// RecapTimeoutSeconds Overall time limit for one recap, across every model tried and every retry. Default 60. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_timeout_seconds.
+	RecapTimeoutSeconds *int `json:"recap_timeout_seconds,omitempty"`
 
 	// SessionDays Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
 	SessionDays *int `json:"session_days,omitempty"`
@@ -21676,6 +21847,24 @@ type Message struct {
 
 	// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 	DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
+
+	// Effort Effort levels spec (effort-levels-spec-r10, FR-058). The per-turn effort record of the answering candidate: what was chosen, what the final request body actually carried, and why the two differ. One record per answering candidate, on the live done frame and on the answering transcript entry; both history transports project the stored record unchanged. A note is shown only when `sent` differs from `chosen`. Never carries reasoning text or signature material (FR-043).
+	Effort *struct {
+		// Chosen The resolved setting for the answering candidate, as stored (for example "high", "off", "on", "provider_default"). Absent when nothing was chosen.
+		Chosen *string `json:"chosen,omitempty"`
+
+		// Model The answering candidate's model id.
+		Model *string `json:"model,omitempty"`
+
+		// Provider The answering candidate's provider id.
+		Provider *string `json:"provider,omitempty"`
+
+		// Reason Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+		Reason *MessageEffortReason `json:"reason,omitempty"`
+
+		// Sent The effort value actually present in the final serialised request body, after mapping, guards and extra_body. Absent when nothing was sent.
+		Sent *string `json:"sent,omitempty"`
+	} `json:"effort,omitempty"`
 
 	// GoalId session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
 	GoalId *string `json:"goal_id,omitempty"`
@@ -22033,6 +22222,9 @@ type Message struct {
 	// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
 	TurnId *string `json:"turn_id,omitempty"`
 
+	// TurnReasoningTokens Effort levels spec (FR-024). The stored display-only snapshot of the turn's reported reasoning-token sum, copied from the answering entry; never summed at read time. Absent = no call of the turn reported a count; 0 = reported zero.
+	TurnReasoningTokens *int `json:"turn_reasoning_tokens,omitempty"`
+
 	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 	Type *MessageType `json:"type,omitempty"`
 
@@ -22123,6 +22315,9 @@ type MessageCancelMethod string
 
 // MessageContextWindowNoticeKind defines model for Message.ContextWindowNotice.Kind.
 type MessageContextWindowNoticeKind string
+
+// MessageEffortReason Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+type MessageEffortReason string
 
 // MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type MessageGoalOutcomeEnding string
@@ -22362,6 +22557,9 @@ type ModelTokens struct {
 	// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 	Out *int `json:"out,omitempty"`
 
+	// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+	Reasoning *int `json:"reasoning,omitempty"`
+
 	// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 	Total int `json:"total"`
 }
@@ -22525,6 +22723,9 @@ type OnboardingProviderApiKey struct {
 	// Protocol Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
 	Protocol *OnboardingProviderApiKeyProtocol `json:"protocol,omitempty"`
 
+	// ReasoningEffort Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// Region Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
 	Region *string `json:"region,omitempty"`
 }
@@ -22548,6 +22749,9 @@ type OnboardingProviderSignIn struct {
 
 	// Model The model chosen for the first agent — the sign-in-probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
 	Model *string `json:"model,omitempty"`
+
+	// ReasoningEffort Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // OnboardingProviderSignInAuthMethod Discriminator — this variant uses the vendor CLI's saved login.
@@ -24773,7 +24977,7 @@ type RunNowRequest struct {
 	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
 }
 
-// RunnerTestResponse Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+// RunnerTestResponse Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the program saved in Settings -> Third-party agents for the agent's CLI (claude-code, codex, opencode) passes the checks a real run applies, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
 type RunnerTestResponse struct {
 	// Cli The external CLI name that was tested (the agent's executor.cli value).
 	Cli *string `json:"cli,omitempty"`
@@ -24781,17 +24985,17 @@ type RunnerTestResponse struct {
 	// CliVersion Detected CLI version string when the handshake succeeded; empty otherwise.
 	CliVersion *string `json:"cli_version,omitempty"`
 
-	// Message Human-readable description of the result (success detail or failure reason + remedy).
+	// Message Human-readable description of the result (success detail or failure reason + remedy). Fixed text per reason: it never carries a file path, the program's output or an operating-system error, which go to the server log only.
 	Message string `json:"message"`
 
 	// Ok True when the CLI is present, authenticated, and the version handshake succeeded.
 	Ok bool `json:"ok"`
 
-	// Reason Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+	// Reason Failure classifier. Empty when ok=true. One of: "missing-binary" (no program saved in Settings, or the saved one fails the program checks; message is the text a run would be refused with), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
 	Reason RunnerTestResponseReason `json:"reason"`
 }
 
-// RunnerTestResponseReason Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+// RunnerTestResponseReason Failure classifier. Empty when ok=true. One of: "missing-binary" (no program saved in Settings, or the saved one fails the program checks; message is the text a run would be refused with), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
 type RunnerTestResponseReason string
 
 // SandboxConfig Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
@@ -25439,6 +25643,9 @@ type Session struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
+
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
@@ -25459,6 +25666,9 @@ type Session struct {
 
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
+
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
 
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
@@ -25662,6 +25872,9 @@ type SessionDetail struct {
 				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
 
+				// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+				Reasoning *int `json:"reasoning,omitempty"`
+
 				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
@@ -25682,6 +25895,9 @@ type SessionDetail struct {
 
 				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
+
+				// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+				Reasoning *int `json:"reasoning,omitempty"`
 
 				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 				Total int `json:"total"`
@@ -26128,7 +26344,7 @@ type SessionMessageProgress struct {
 	// CreatedAt RFC3339 timestamp this message was created.
 	CreatedAt time.Time `json:"created_at"`
 
-	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 10, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
 	Depth int `json:"depth"`
 
 	// Direction M8 — the unused `human` value is dropped. `progress` is always child -> parent.
@@ -26394,6 +26610,9 @@ type SessionStats struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
@@ -26414,6 +26633,9 @@ type SessionStats struct {
 
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
+
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
 
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
@@ -27886,7 +28108,7 @@ type ThirdPartyAgentSettings struct {
 	Clis struct {
 		// ClaudeCode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
 		ClaudeCode *struct {
-			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.CheckProgramPath on save (absolute; the final file, every symlink and every symlink's folder not inside a folder agents can write to: the Omnipus home, an agent home, a workspace folder, a workspace mount, an extra folder the sandbox lets agents write (sandbox.allowed_paths) or the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When the list of folders agents can write to cannot be read in full, the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
 			Path string `json:"path"`
 
 			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
@@ -27895,7 +28117,7 @@ type ThirdPartyAgentSettings struct {
 
 		// Codex One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
 		Codex *struct {
-			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.CheckProgramPath on save (absolute; the final file, every symlink and every symlink's folder not inside a folder agents can write to: the Omnipus home, an agent home, a workspace folder, a workspace mount, an extra folder the sandbox lets agents write (sandbox.allowed_paths) or the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When the list of folders agents can write to cannot be read in full, the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
 			Path string `json:"path"`
 
 			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
@@ -27904,7 +28126,7 @@ type ThirdPartyAgentSettings struct {
 
 		// Opencode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
 		Opencode *struct {
-			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.CheckProgramPath on save (absolute; the final file, every symlink and every symlink's folder not inside a folder agents can write to: the Omnipus home, an agent home, a workspace folder, a workspace mount, an extra folder the sandbox lets agents write (sandbox.allowed_paths) or the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When the list of folders agents can write to cannot be read in full, the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
 			Path string `json:"path"`
 
 			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
@@ -28037,6 +28259,9 @@ type TokenUsageSummary struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
+
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
@@ -28071,6 +28296,9 @@ type TokenUsageSummary struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
@@ -28091,6 +28319,9 @@ type TokenUsageSummary struct {
 
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
+
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
 
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
@@ -29867,6 +30098,21 @@ type ListLibraryEntriesParams struct {
 
 	// IncludeHidden When true, also returns entries whose name begins with a dot (".") — e.g. the reserved work/.library/ upload directory. Defaults to false (hidden entries omitted) so the explorer's default view matches a conventional file browser.
 	IncludeHidden *bool `form:"include_hidden,omitempty" json:"include_hidden,omitempty"`
+
+	// IncludeViews When true, the knowledge base's saved views are listed in the folder they belong to, as ordinary rows with is_view=true and a `view` object (LibraryEntryView; #1017). Defaults to false, and with false the response is exactly what it was before this parameter existed (no view rows, no is_view, no view object), so a client that does not ask is unaffected.
+	//
+	// WHICH VIEWS. Only views of the knowledge base that most closely encloses the listed directory (the deepest one, when knowledge bases are nested), and only when that knowledge base is itself one of the collections of this workspace's knowledge scope. The set is the `views` GET .../knowledge/views returns for that knowledge base: same parser, same record schemas, and every emitted (view.collection_id, view.name) is listed by GET .../knowledge/views?collection_id=<that id> and opens through GET .../knowledge/view. A view file that failed to load is not listed here; that endpoint's `unloadable` list remains where it is reported. The listing, like that endpoint, reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per listing; a view file beyond those limits is left out and the listing still succeeds.
+	//
+	// NESTED KNOWLEDGE BASES. A knowledge base that is not itself a collection of the workspace's knowledge scope (for example, one nested inside another knowledge base) contributes no view rows. No folder at or below its root lists one, including its own `.omnipus-vault/views` reached with include_hidden=true. Views of the enclosing collection are still placed by the folder rule below, which never places them inside the nested knowledge base.
+	//
+	// WHICH FOLDER. A view whose `source` is a clean relative path (no ".." segment, not absolute, not inside `.omnipus-vault/`) whose parent folder exists as a directory of the same knowledge base, and not inside a deeper nested knowledge base, is listed in that parent folder — next to its `.base` file, whether or not that file still exists. Every other view (no `source`, or a `source` that fails any of those conditions) is listed at the knowledge base root.
+	//
+	// WHAT A VIEW ROW LOOKS LIKE. It describes the saved view file itself: `path` is that file's real workspace-relative path (`<knowledge base root>/.omnipus-vault/views/<slug>.yaml`), `name` is its file name, and size, modified_at, mime and is_text_editable are that file's own. A view row is therefore the one kind of row whose `path` is NOT inside the listed directory. It is a file row and sorts with the files by `name`, like every other row. Its is_hidden follows the usual dot rule on `name`, and include_hidden applies to it as to any row.
+	//
+	// THE STORAGE FOLDER. When `.omnipus-vault/views/` itself is listed (include_hidden is needed to reach it), each file there that is a loaded view also carries is_view=true and the same `view` object, so a path is described the same way wherever it is listed.
+	//
+	// FAILURE. If the views cannot be read (unreadable folder, schema load error), the listing still succeeds without view rows and the server logs a warning; a views failure never fails the listing.
+	IncludeViews *bool `form:"include_views,omitempty" json:"include_views,omitempty"`
 }
 
 // GetLibraryInlineDispositionParams defines parameters for GetLibraryInlineDisposition.

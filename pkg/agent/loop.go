@@ -59,6 +59,8 @@ type AgentLoop struct {
 	cfg      *config.Config
 	registry *AgentRegistry
 	state    *state.Manager
+	// effortRejected remembers rejected effort pairs until restart (FR-057).
+	effortRejected effortRejections
 
 	// configGen is a monotonic counter bumped every time al.cfg is replaced
 	// with a new pointer, under al.mu.Lock() — currently by SwapConfig and by
@@ -741,6 +743,10 @@ func NewAgentLoop(
 	provider providers.LLMProvider,
 ) (*AgentLoop, error) {
 	nal := &newAgentLoop{cfg: cfg, msgBus: msgBus, provider: provider}
+	// Parse the provider catalog once at construction: every request's
+	// effort plan reads it, and a first parse inside the recap's one overall
+	// time limit would spend that budget before the first call (S-97).
+	_ = providers.ProviderCatalog()
 
 	// CONV saved-chat cutover boot step (architect Q10/Q11): convert any
 	// pre-cutover saved chat in the shared archive BEFORE registry/per-agent
@@ -1829,63 +1835,6 @@ func (al *AgentLoop) runAgentLoopBody(
 	}
 
 	return result.finalContent, nil
-}
-
-func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {
-	cm := al.getChannelManager()
-	if cm == nil {
-		return ""
-	}
-	if ch, ok := cm.GetChannel(channelName); ok {
-		return ch.ReasoningChannelID()
-	}
-	return ""
-}
-
-func (al *AgentLoop) handleReasoning(
-	ctx context.Context,
-	reasoningContent, channelName, channelID string,
-) {
-	if reasoningContent == "" || channelName == "" || channelID == "" {
-		return
-	}
-
-	// Check context cancellation before attempting to publish, since
-	// PublishOutbound's select may race between send and ctx.Done().
-	if reasoningPublishCanceledOnEntry(ctx, channelName) {
-		return
-	}
-
-	// Use a short timeout so the goroutine does not block indefinitely when
-	// the outbound bus is full.  Reasoning output is best-effort; dropping it
-	// is acceptable to avoid goroutine accumulation.
-	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer pubCancel()
-
-	if err := al.bus.PublishOutbound(pubCtx, bus.OutboundMessage{
-		Channel: channelName,
-		ChatID:  channelID,
-		Content: reasoningContent,
-	}); err != nil {
-		// Treat context.DeadlineExceeded / context.Canceled as expected
-		// (bus full under load, or parent canceled).  Check the error
-		// itself rather than ctx.Err(), because pubCtx may time out
-		// (5 s) while the parent ctx is still active.
-		// Also treat ErrBusClosed as expected — it occurs during normal
-		// shutdown when the bus is closed before all goroutines finish.
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
-			errors.Is(err, bus.ErrBusClosed) {
-			logger.DebugCF("agent", "Reasoning publish skipped (timeout/cancel)", map[string]any{
-				"channel": channelName,
-				"error":   err.Error(),
-			})
-		} else {
-			logger.WarnCF("agent", "Failed to publish reasoning (best-effort)", map[string]any{
-				"channel": channelName,
-				"error":   err.Error(),
-			})
-		}
-	}
 }
 
 // isMessagingChannel returns true for external human-messaging channel types.

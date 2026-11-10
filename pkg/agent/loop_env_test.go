@@ -49,9 +49,14 @@ func wireTestLoopWithGraphAndMaxDepth(t *testing.T, agentID string, maxDepth int
 // TestWireDelegationInjectors_AdvertisesEffectiveDepthNotRawUncapped is the
 // headline #477 regression test: when an operator has set NEITHER a per-edge
 // Depth NOR performance.max_delegation_depth, the delegation system-prompt block must
-// advertise "max chain depth: 3" (the actual effective cap that will be
+// advertise "max chain depth: 10" (the actual effective cap that will be
 // enforced) — never "uncapped", which silently mismatched the spawn-time
 // backstop's real default before this fix.
+//
+// The advertised number is the shipped backstop default (raised from 3 to 10 by
+// the founder ruling of 2026-10-27), so it is pinned as a LITERAL here: a
+// wrong defaultMaxSubTurnDepth must fail this test, not silently redefine
+// the expectation.
 func TestWireDelegationInjectors_AdvertisesEffectiveDepthNotRawUncapped(t *testing.T) {
 	const wsID = "01JWDEPTHPROMPT0000000001"
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
@@ -61,12 +66,12 @@ func TestWireDelegationInjectors_AdvertisesEffectiveDepthNotRawUncapped(t *testi
 	_, cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 0)
 
 	got := cb.buildDynamicContext(0, "", "", "", "", "")
-	if !strings.Contains(got, "max chain depth: 3") {
-		t.Fatalf("expected the effective backstop default (3) to be advertised, got:\n%s", got)
+	if !strings.Contains(got, "max chain depth: 10") {
+		t.Fatalf("expected the effective backstop default (10) to be advertised, got:\n%s", got)
 	}
 	if strings.Contains(got, "max chain depth: uncapped") {
 		t.Fatalf(
-			"must NOT advertise 'uncapped' when a 4th hop will actually be rejected at the effective cap; got:\n%s",
+			"must NOT advertise 'uncapped' when an 11th hop will actually be rejected at the effective cap; got:\n%s",
 			got,
 		)
 	}

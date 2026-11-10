@@ -161,12 +161,39 @@ type services struct {
 	CronService          *cron.CronService
 	// LiveLimits is ADR-066 rung 4; retained so shutdown can Close it (abort
 	// in-flight fetches, forbid cache writes) — see agent.LiveLimits.Close.
+	// Both drains close it: the graceful shutdown's stopBackgroundWriters and
+	// the shared non-reload teardown's drainBootBackgroundWriters (CHECK 3
+	// finding R1, 2026-11-08); the reload teardown must not.
 	LiveLimits *agent.LiveLimits
 	// catalogRefreshCancel / catalogRefreshDone are startCatalogRefreshLoop's
 	// handles; shutdown cancels, then waits on done (bounded).
 	catalogRefreshCancel context.CancelFunc
 	catalogRefreshDone   <-chan struct{}
-	TaskTrigger          *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
+	// bootBackgroundCancel / bootBackgroundDone are the handles of the
+	// boot-stage writer goroutines initializeAgentLoop starts (the browser
+	// cache-trim schedule, the managed-Chromium preprovision download and the
+	// unknown-window primer). runContextWithOptions.startServices attaches
+	// them here once services exists; they are nil on services objects built
+	// by callers that never ran initializeAgentLoop (every
+	// setupAndStartServices harness) — every consumer is nil-safe. Both
+	// shutdown drains cancel and then join them: an unjoined preprovision
+	// download kept writing browser/chromium/*.zip.part-* into the test home
+	// past every cleanup and raced t.TempDir removal
+	// (#1644/#1695 — the TempDir-cleanup family).
+	bootBackgroundCancel context.CancelFunc
+	bootBackgroundDone   <-chan struct{}
+	// orphanGCDone joins startBackgroundServices' media-library orphan-GC
+	// goroutine, whose FIRST act at boot is repairLibraryAssociationsOnce —
+	// a writer under workspaces/ (#1598's "workspaces: directory not
+	// empty"). orphanGCCancel is the goroutine's own cancel handle (its
+	// context is a child of the boot ctx): both shutdown drains call it
+	// BEFORE waiting on done, because on a partial-boot abort or a test
+	// harness teardown the parent ctx stays live and a join-only drain would
+	// wait out its whole budget while the goroutine kept running (CHECK 1
+	// finding F2, 2026-11-08).
+	orphanGCDone   chan struct{}
+	orphanGCCancel context.CancelFunc
+	TaskTrigger    *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
 	// independent of which heartbeat path is active. The now-removed global
 	// HeartbeatService was skipped whenever a per-agent heartbeat was active,
@@ -503,6 +530,20 @@ type runContextWithOptions struct {
 	smConsumerCancel   context.CancelFunc
 	configReloadChan   <-chan watchedConfigChange
 	stopWatch          func()
+	// Boot-stage background writers (initializeAgentLoop): the browser
+	// cache-trim schedule, the managed-Chromium preprovision download and
+	// the unknown-window primer. They derive from bootBackgroundCtx so one
+	// cancel stops all three, and bootBackgroundDone closes when the
+	// WaitGroup has joined them — the same cancel-and-join contract the
+	// catalog refresh loop has had since its own TempDir-race fix
+	// (gateway_boot.go's startCatalogRefreshLoop doc comment). Without the
+	// join, a caller whose teardown removes homePath (every in-process
+	// gateway test) raced the preprovision download's .part-* writes
+	// (#1644/#1695).
+	bootBackgroundCtx    context.Context
+	bootBackgroundCancel context.CancelFunc
+	bootBackgroundWG     sync.WaitGroup
+	bootBackgroundDone   chan struct{}
 }
 
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
@@ -883,6 +924,28 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 	rc.liveLimits = newLiveLimitsForBoot(rc.homePath, rc.credStore, rc.agentLoop, reloadOnLiveWindow(rc.agentLoop))
 	agent.SetLiveWindowLookup(rc.liveLimits.Lookup)
 
+	// Boot-stage background writers, under one cancel-and-join umbrella. The
+	// three goroutines below used to be bare `go` statements: nothing
+	// stopped them and nothing waited for them, so a gateway that shut down
+	// (or a test whose t.TempDir cleanup ran — every in-process gateway
+	// test) raced whatever they were still writing. Measured 2026-11-08
+	// (TempDir-cleanup family #1644/#1695): the preprovision download was
+	// still growing browser/chromium/<version>/chrome-linux64.zip.part-*
+	// seconds AFTER the test's full cleanup sequence had returned, which is
+	// exactly the "TempDir RemoveAll cleanup: ... browser: directory not
+	// empty" CI failure. The same cancel-and-join contract the catalog
+	// refresh loop got for its identical failure (gateway_boot.go
+	// startCatalogRefreshLoop's doc comment) now covers these three: one
+	// derived context (rc.bootBackgroundCtx, child of rc.ctx — production
+	// RunContextWithOptions shutdown cancels rc.ctx; the explicit drains
+	// call stopBootBackgroundWriters, which cancels AND joins), one
+	// WaitGroup, one done channel. rc.startServices attaches both handles
+	// onto runningServices so stopBackgroundWriters (graceful shutdown) and
+	// stopAndCleanupServices (partial-boot abort, reload teardown, and every
+	// setupAndStartServices-based test harness) drain them.
+	rc.bootBackgroundCtx, rc.bootBackgroundCancel = context.WithCancel(rc.ctx)
+	rc.bootBackgroundDone = make(chan struct{})
+
 	// FR-007 / US-2.AC2: an agent on a `locality: local` row the catalog
 	// cannot size resolved UNKNOWN above (the rung was not installed yet) and
 	// every one of its turns is refused with context_window_unknown. Ask the
@@ -892,7 +955,11 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 	// stays refused indefinitely and the refusal points the operator at a
 	// control (Settings → Models → Model overrides) they should not have
 	// needed. Not a timer: one pass, only for agents that are already broken.
-	go primeUnknownWindows(rc.agentLoop)
+	rc.bootBackgroundWG.Add(1)
+	go func() {
+		defer rc.bootBackgroundWG.Done()
+		primeUnknownWindowsFn(rc.agentLoop)
+	}()
 
 	// Boot-time browser provisioning: NewAgentLoop above just finished
 	// registering browser tools for every agent (registerSharedTools →
@@ -941,9 +1008,14 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 		// reaper does a map scan, this walks directories. It is not the
 		// primary trigger either; pool.Close(k) returning is, and that fires
 		// within milliseconds with no interval to wait for.
-		go runBrowserCacheTrimSchedule(rc.ctx, pool)
+		rc.bootBackgroundWG.Add(2)
 		go func() {
-			path, ppErr := pool.Preprovision(rc.ctx)
+			defer rc.bootBackgroundWG.Done()
+			runBrowserCacheTrimSchedule(rc.bootBackgroundCtx, pool)
+		}()
+		go func() {
+			defer rc.bootBackgroundWG.Done()
+			path, ppErr := pool.Preprovision(rc.bootBackgroundCtx)
 			if ppErr != nil {
 				// logger (not slog): slog writes to fd 2, which boot's
 				// initPanicFile redirects to gateway_panic.log — operators
@@ -959,6 +1031,15 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 		}()
 	}
 
+	// The joiner starts only AFTER every Add above: a Wait that begins before
+	// the first positive-delta Add would see a zero counter, return at once,
+	// and close bootBackgroundDone before the writers even started (the
+	// sync.WaitGroup doc's ordering rule).
+	go func() {
+		rc.bootBackgroundWG.Wait()
+		close(rc.bootBackgroundDone)
+	}()
+
 	// B1.2(d) + ADR-053 D17: wire the sandbox → audit bridges now that the
 	// agent loop (and thus the audit logger) is constructed. See
 	// sandbox_audit_hooks.go; unwired symmetrically in shutdown.go.
@@ -966,8 +1047,93 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 	return nil, false
 }
 
+// stopBootBackgroundWriters cancels the boot-stage background writer
+// goroutines (browser cache-trim schedule, managed-Chromium preprovision,
+// unknown-window primer — the WaitGroup initializeAgentLoop started them
+// under) and waits, bounded by ctx, until all of them have returned. Every
+// teardown that removes homePath while the process is still alive —
+// RunContextWithOptions' graceful shutdown (via stopBackgroundWriters), the
+// boot-abort branch of startServices, and in-process gateway tests'
+// t.TempDir cleanup — must drain them BEFORE that removal: the preprovision
+// download's browser/chromium/*.zip.part-* writes raced t.TempDir removal
+// and produced "TempDir RemoveAll cleanup: ... browser: directory not empty"
+// in CI (#1644/#1695).
+//
+// The WaitGroup join does NOT cover the primer's fetch: primeUnknownWindows
+// calls agent.ResolveWindow, whose rung-4 Lookup starts a fetch whose writer
+// runs under the LiveLimits instance's own lifetime (agent.NewLiveLimits
+// derives it from context.Background(), deliberately independent of every
+// gateway context). A boot abort that returned after the join alone left
+// that fetch running: releasing its held HTTP answer afterwards wrote
+// cache/model_limits.json into a home the caller had already started
+// removing (CHECK 2, 2026-11-08, defect 1). So after the join this drain
+// also Closes rc.liveLimits — cancelling any fetch the primer (or a reload,
+// or a settings write) started and waiting, bounded by the same ctx, for
+// its writer to exit; a call still running at the deadline is not abandoned
+// half-way, matching stopBackgroundWriters' posture for its own bounded
+// waits. LiveLimits.Close is once-guarded (agent.LiveLimits.Close), so the
+// later teardown closes — the startServices abort branch, the graceful
+// shutdown, every test cleanup — stay idempotent, never a double-close
+// panic. Nil-safe twice over: a boot that stopped before
+// initializeAgentLoop has neither a WaitGroup nor a LiveLimits to close.
+func (rc *runContextWithOptions) stopBootBackgroundWriters(ctx context.Context) {
+	if rc == nil || rc.bootBackgroundCancel == nil {
+		return
+	}
+	rc.bootBackgroundCancel()
+	select {
+	case <-rc.bootBackgroundDone:
+	case <-ctx.Done():
+		slog.Warn("gateway: boot background writers did not stop within the shutdown budget; continuing",
+			"error", ctx.Err())
+	}
+	if rc.liveLimits != nil {
+		closed := make(chan struct{})
+		go func() {
+			rc.liveLimits.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-ctx.Done():
+			slog.Warn("gateway: live-limits close did not finish within the shutdown budget; continuing",
+				"error", ctx.Err())
+		}
+	}
+}
+
+// bootAbortDrainTimeout bounds the boot-abort drain of the boot-stage
+// background writers in validateAndApplySandbox and startServices. The cancel
+// is already delivered when the wait starts, so this only waits out the
+// writers' exit after cancellation — the same posture as
+// bootBackgroundStopTimeout, just tighter: a boot that is already aborting
+// should not spend its full stop budget waiting for a download to notice.
+const bootAbortDrainTimeout = 5 * time.Second
+
 // validateAndApplySandbox cleans orphaned runs, validates policies, applies the sandbox, and starts its nag banner.
-func (rc *runContextWithOptions) validateAndApplySandbox() (error, bool) {
+//
+// Every stop=true return below runs AFTER initializeAgentLoop started the
+// boot-stage background writers (the browser cache-trim schedule, the
+// managed-Chromium preprovision download, the unknown-window primer —
+// TempDir-cleanup family #1644/#1695), so each one must cancel and join them
+// before returning: the preprovision download keeps writing
+// browser/chromium/*.zip.part-* under homePath until it is cancelled, and a
+// test (or a supervisor) that treats this return as "the gateway is gone"
+// removes homePath right after it. The deferred guard drains once for all
+// four abort returns. validateAndApplySandbox runs on the boot path only —
+// the reload path never calls it — so this cannot cut short a live gateway's
+// writers, and stopBootBackgroundWriters is nil-safe for a boot that stopped
+// before initializeAgentLoop.
+func (rc *runContextWithOptions) validateAndApplySandbox() (err error, stop bool) {
+	defer func() {
+		if !stop {
+			return
+		}
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), bootAbortDrainTimeout)
+		defer stopCancel()
+		rc.stopBootBackgroundWriters(stopCtx)
+	}()
+
 	// Spec-4 FR-5.3 (M-4): GC orphaned external-CLI run directories left behind by
 	// a prior process (crash / SIGKILL / power loss). Runs ONCE at boot, BEFORE any
 	// new external-cli sub-agent run can be dispatched, so every run dir present is
@@ -1184,10 +1350,21 @@ func (rc *runContextWithOptions) startServices() (error, bool) {
 	if rc.err != nil {
 		rc.stopNag() // don't leak the nag goroutine if service setup fails.
 		rc.liveLimits.Close()
+		// Boot aborted: join the boot-stage writers before returning, or the
+		// preprovision download keeps writing into homePath after this
+		// returns (#1644/#1695 — same race as the teardown paths below).
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), bootAbortDrainTimeout)
+		defer stopCancel()
+		rc.stopBootBackgroundWriters(stopCtx)
 		return rc.err, true
 	}
 	rc.runningServices.stopNagBanner = rc.stopNag
 	rc.runningServices.LiveLimits = rc.liveLimits
+	// Attach the boot-stage writers' cancel-and-join handles so both shutdown
+	// drains (stopBackgroundWriters on the graceful path, stopAndCleanupServices
+	// on the reload/teardown path) can reach them through runningServices.
+	rc.runningServices.bootBackgroundCancel = rc.bootBackgroundCancel
+	rc.runningServices.bootBackgroundDone = rc.bootBackgroundDone
 
 	// Boot-time browser warm-up steps 1 and 2 — the first TAB and the WebRTC
 	// CAPTURE (see startBrowserWarmBoot's block comment). Deliberately here,
@@ -1800,6 +1977,13 @@ type catalogLogAdapter struct{}
 // against a wedged transport.
 const catalogRefreshStopTimeout = 10 * time.Second
 
+// bootBackgroundStopTimeout bounds each single-writer join wait in
+// drainBootBackgroundWriters / waitBootBackgroundDone. Same rationale as
+// catalogRefreshStopTimeout: the cancel is already delivered, so this only
+// guards against a wedged transport or a mid-download writer whose HTTP
+// client is slow to observe the cancelled context.
+const bootBackgroundStopTimeout = 10 * time.Second
+
 // stopPollersReporting stops the queued-task and mail pollers. Each Stop
 // waits, bounded, for a cycle already in flight; when that wait runs out the
 // cycle is still running (it is never cancelled mid-cycle), so the operator
@@ -1888,6 +2072,102 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 			fms.Stop()
 		}
 	}
+	// TempDir-cleanup family (#1644/#1695/#1598): this function is the
+	// teardown every setupAndStartServices harness (production boot-abort,
+	// reload teardown, and the in-process gateway tests) runs, so it must
+	// also drain the boot-stage writers the graceful shutdown's
+	// stopBackgroundWriters drains: the provider-catalog refresh loop (cancel
+	// + join — its startup pull writes providers_catalog.json at homePath and
+	// raced t.TempDir removal), the browser cache-trim schedule, the
+	// managed-Chromium preprovision download, the library orphan-GC
+	// goroutine (whose boot pass repairs associations under workspaces/) and
+	// the retained live-limits instance (close + join — the unknown-window
+	// primer's fetch boundary; CHECK 3 finding R1, 2026-11-08).
+	// RELOAD MUST NOT STOP THEM — same rule as the channel manager and the
+	// knowledge lifecycle above: reload restarts into the same process with
+	// these loops still live, and nothing here reconstructs them.
+	if !isReload {
+		drainBootBackgroundWriters(shutdownCtx, runningServices)
+	}
+}
+
+// drainBootBackgroundWriters cancels and joins the background writers that
+// outlive the services they were started by: the provider-catalog refresh
+// loop, the boot-stage browser/preprovision/prime goroutines, the media
+// orphan-GC goroutine and the retained live-limits instance. Every handle is
+// nil-safe — a services object built by a harness that never started a given
+// writer has nothing to drain. Waits are bounded by ctx, mirroring
+// stopBackgroundWriters' budgeted waits.
+func drainBootBackgroundWriters(ctx context.Context, rs *services) {
+	if rs == nil {
+		return
+	}
+	// Cancel everything first, then join, so the writers settle concurrently
+	// instead of serializing their exit waits.
+	//
+	// The retained LiveLimits instance joins the same scheme (CHECK 3 finding
+	// R1, 2026-11-08): the non-reload teardown used to drain the three
+	// goroutine handles but never Close the instance, so a fetch the
+	// unknown-window primer (or a settings write) had started stayed live
+	// past the return and wrote cache/model_limits.json when its answer
+	// landed afterwards. Close IS LiveLimits' cancel and join in one — it
+	// aborts every in-flight fetch and then waits for the writer goroutine —
+	// so it runs on its own goroutine here and is awaited with the other
+	// joins below. It is once-guarded (agent.LiveLimits.Close), so a drain
+	// racing the graceful shutdown's close or the boot-abort paths'
+	// stopBootBackgroundWriters close stays idempotent, never a double-close
+	// panic. Reload never reaches this drain (the !isReload guard in
+	// stopAndCleanupServices), so the process-lifetime instance survives a
+	// reload untouched, exactly like the channel manager and the knowledge
+	// lifecycle above.
+	var liveLimitsClosed <-chan struct{}
+	if rs.LiveLimits != nil {
+		closed := make(chan struct{})
+		go func() {
+			rs.LiveLimits.Close()
+			close(closed)
+		}()
+		liveLimitsClosed = closed
+	}
+	if rs.catalogRefreshCancel != nil {
+		rs.catalogRefreshCancel()
+	}
+	if rs.bootBackgroundCancel != nil {
+		rs.bootBackgroundCancel()
+	}
+	if rs.orphanGCCancel != nil {
+		rs.orphanGCCancel()
+	}
+	if rs.catalogRefreshDone != nil {
+		waitBootBackgroundDone(ctx, rs.catalogRefreshDone, "provider-catalog refresh loop")
+	}
+	if rs.bootBackgroundDone != nil {
+		waitBootBackgroundDone(ctx, rs.bootBackgroundDone, "boot browser/preprovision goroutines")
+	}
+	if rs.orphanGCDone != nil {
+		waitBootBackgroundDone(ctx, rs.orphanGCDone, "media library orphan-GC goroutine")
+	}
+	if liveLimitsClosed != nil {
+		waitBootBackgroundDone(ctx, liveLimitsClosed, "live model-limits close")
+	}
+}
+
+// waitBootBackgroundDone waits for one writer goroutine's done channel,
+// bounded by ctx. A writer still running at the deadline has already had its
+// cancel delivered and finishes on its own; teardown continues without it —
+// the same posture stopBackgroundWriters documents for the catalog loop.
+func waitBootBackgroundDone(ctx context.Context, done <-chan struct{}, what string) {
+	timer := time.NewTimer(bootBackgroundStopTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		slog.Warn("gateway: boot background writer did not exit in time; continuing",
+			"what", what, "timeout", bootBackgroundStopTimeout.String())
+	case <-ctx.Done():
+		slog.Warn("gateway: boot background writer did not exit within the shutdown budget; continuing",
+			"what", what, "error", ctx.Err())
+	}
 }
 
 // browserCacheTrimReconcileEvery bounds how long a LIVE change to
@@ -1921,8 +2201,13 @@ const minBrowserCacheTrimInterval = time.Second
 // scheduled cache trim needs. Declared so the schedule can be tested against a
 // fake whose interval an operator's config.json really drives, without a Chrome,
 // a pool, or a profile directory anywhere in the test.
+//
+// The sweep takes the schedule's ctx (#1730): the boot drain cancels it and
+// then waits, under a budget, for this goroutine; a sweep over many profiles
+// that ignored the cancel could outlast that budget and keep writing into a
+// home the caller was removing.
 type browserCacheTrimScheduler interface {
-	TrimAllEligible() []browser.TrimResult
+	TrimAllEligibleContext(ctx context.Context) []browser.TrimResult
 	CacheTrimInterval() time.Duration
 }
 
@@ -1943,7 +2228,7 @@ func runBrowserCacheTrimSchedule(ctx context.Context, pool browserCacheTrimSched
 			slog.Error("browser-trim: cache trim panicked; skipped", "panic", fmt.Sprintf("%v", r))
 		}
 	}()
-	if results := pool.TrimAllEligible(); len(results) > 0 {
+	if results := pool.TrimAllEligibleContext(ctx); len(results) > 0 {
 		slog.Info("browser-trim: trimmed closed workspace browser caches at boot",
 			"profiles", len(results))
 	}
@@ -1981,7 +2266,7 @@ func runBrowserCacheTrimSchedule(ctx context.Context, pool browserCacheTrimSched
 						"panic", fmt.Sprintf("%v", r))
 				}
 			}()
-			if results := pool.TrimAllEligible(); len(results) > 0 {
+			if results := pool.TrimAllEligibleContext(ctx); len(results) > 0 {
 				slog.Info("browser-trim: trimmed closed workspace browser caches",
 					"profiles", len(results))
 			}

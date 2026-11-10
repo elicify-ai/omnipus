@@ -32,7 +32,6 @@ package gateway
 
 import (
 	"bytes"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -75,11 +74,11 @@ func TestPostAgentsExecutorSmokeTest_RawErrorLoggedServerSide(t *testing.T) {
 	})
 
 	const rawErr = "boom happened raw provider text 4f8c9"
-	stub := writeScript(t, `#!/bin/sh
+	installSmokeTestSavedCLI(t, api, `#!/bin/sh
 printf '%s\n' '{"type":"result","subtype":"error","error":"boom happened raw provider text 4f8c9"}'
 exit 0
 `)
-	body := fmt.Sprintf(`{"cli":"claude-code","cli_path":%q}`, stub)
+	body := `{"cli":"claude-code"}`
 
 	code, resp := postExecutorSmokeTest(t, api, body)
 	require.Equal(t, http.StatusOK, code)

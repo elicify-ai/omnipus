@@ -357,18 +357,18 @@ export interface paths {
         };
         /**
          * Get session metadata and bounded latest history
-         * @description Returns authorized session metadata and required history_state. When history is available, messages and canonical page_info/continuation describe the bounded latest page (limit 40, min_rows 20), never the complete lifetime. This endpoint accepts no paging selectors. When history is unavailable after the bounded known-prefix recovery attempt, return metadata-only SessionDetail with history_state.status=unavailable, omitting messages, page_info and every continuation field. This is not successful empty history or a missing session; routing and authorized live attach remain usable. Authentication, session-ID syntax and addressed-session eligibility/existence precede history access. No lifetime rebuild, preparation state or 503 path.
+         * @description Returns authorized session metadata and required history_state. When history is available, messages and canonical page_info/continuation describe the bounded latest page (limit 40, min_rows 20), never the complete lifetime. This endpoint accepts no paging selectors. When history is unavailable after the bounded known-prefix recovery attempt, return metadata-only SessionDetail with history_state.status=unavailable, omitting messages, page_info and every continuation field. This is not successful empty history or a missing session; routing and authorized live attach remain usable. Authentication, session-ID syntax and addressed-session eligibility/existence precede history access. No lifetime rebuild, preparation state or 503 path. Session detail, rename (PUT) and delete (DELETE) apply only to the bare /sessions/{id} address, with no sub-path. Unknown sub-paths return 404, never session detail. Known sub-paths are messages and tool-results, including their descendants; non-GET methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session. GET messages/{history_position} is getSessionHistoryEntry, which validates the position itself.
          */
         get: operations["getSession"];
         /**
          * Rename a session
-         * @description Updates the session title. Returns the updated session metadata.
+         * @description Updates the session title. Returns the updated session metadata. Rename applies only to PUT /sessions/{id}, with no sub-path. PUT on a known sub-path (messages or tool-results, including descendants) returns 405 with Allow: GET; an unknown sub-path returns 404. Neither refusal renames or deletes the session.
          */
         put: operations["renameSession"];
         post?: never;
         /**
          * Delete a session and all its data
-         * @description Permanently removes the session directory including transcript and context. Returns {"success": true} on success.
+         * @description Permanently removes the session directory including transcript and context. Returns {"success": true} on success. Delete applies only to DELETE /sessions/{id}, with no sub-path. DELETE on a known sub-path (messages or tool-results, including descendants) returns 405 with Allow: GET; an unknown sub-path returns 404. Neither refusal renames or deletes the session.
          */
         delete: operations["deleteSession"];
         options?: never;
@@ -385,7 +385,7 @@ export interface paths {
         };
         /**
          * Get a bounded session-history page
-         * @description Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group's drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)"). No lifetime read/rebuild, 503/preparing state or full-history fallback.
+         * @description Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group's drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)"). No lifetime read/rebuild, 503/preparing state or full-history fallback. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address. Nested messages/... paths are the getSessionHistoryEntry address: GET there validates the position, and other methods (OPTIONS preflight aside) return 405 with Allow: GET.
          */
         get: operations["getSessionMessages"];
         put?: never;
@@ -405,7 +405,7 @@ export interface paths {
         };
         /**
          * Read one saved history occurrence in full
-         * @description Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server's current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 "session not found", 400 "invalid history position", 404 "history position not found", 410 "history entry expired". This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410.
+         * @description Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server's current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 "session not found", 400 "invalid history position", 404 "history position not found", 410 "history entry expired". This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address.
          */
         get: operations["getSessionHistoryEntry"];
         put?: never;
@@ -425,7 +425,7 @@ export interface paths {
         };
         /**
          * Fetch a previously-stored tool result body
-         * @description Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B's path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity.
+         * @description Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B's path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address. The tool-results prefix and its descendants are known sub-paths; the read handler still validates the path and ref and answers 400 for a malformed one (for example a missing ref), so a known prefix alone does not guarantee a successful GET.
          */
         get: operations["getToolResult"];
         put?: never;
@@ -469,18 +469,18 @@ export interface paths {
         };
         /**
          * Get a single agent configuration
-         * @description Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+         * @description Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed). Update (PUT) and delete (DELETE) apply only to the bare /agents/{id} address, with no sub-path. Unknown sub-paths, including undeclared descendants of known ones (a malformed mailboxes address is the exception, below), return 404, never agent detail. Known sub-paths are sessions, activity-runs, runner/test, tools, mailboxes/{workspaceId} and dependencies; a method a sub-path does not serve (OPTIONS preflight aside) returns 405 with an Allow header listing the methods it serves, without updating or deleting the agent. A malformed mailboxes address returns 400 for every method (OPTIONS preflight aside).
          */
         get: operations["getAgent"];
         /**
          * Update agent configuration
-         * @description Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
+         * @description Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state. Update applies only to PUT /agents/{id}, with no sub-path. PUT on a known sub-path that does not serve PUT returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
          */
         put: operations["updateAgent"];
         post?: never;
         /**
          * Delete a custom agent
-         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event `agent.delete`).
+         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event `agent.delete`). Delete applies only to DELETE /agents/{id}, with no sub-path. DELETE on a known sub-path that does not serve DELETE returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
          */
         delete: operations["deleteAgent"];
         options?: never;
@@ -563,7 +563,7 @@ export interface paths {
         put?: never;
         /**
          * Test an external-CLI runner connection for an agent
-         * @description Connection/health check for the agent's configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent's executor is native/remote-a2a (no runner to test).
+         * @description Connection/health check for the agent's configured external-CLI runner (Spec-4 FR-4.2). Validates the program a person saved in Settings -> Third-party agents, checked as at real dispatch, runs and is authenticated WITHOUT running real work (no tokens spent). With no saved program, or one that fails the checks, nothing is started and the response is ok false, reason missing-binary, message the text a run would be refused with; a program on $PATH or a stored cli_path is never used. Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent's executor is native/remote-a2a (no runner to test).
          */
         post: operations["testAgentRunner"];
         delete?: never;
@@ -603,7 +603,7 @@ export interface paths {
         put?: never;
         /**
          * Preview the real command Omnipus would run for these executor settings
-         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_path/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent's edit form alike — mirrors POST /system/cli-validate's stateless, body-driven shape. No subprocess is spawned.
+         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Needs no existing agent id — mirrors POST /system/cli-validate's stateless, body-driven shape; the web app uses it for the command preview on an existing external worker's Runtime tab. No subprocess is spawned. The program is the path a person saved in Settings -> Third-party agents: with none saved, or one that fails the program checks, the route refuses with 400 and the text a run would be refused with, never falling back to a program on $PATH. The argv ends with the person's saved standard parameters, as a real run's does.
          */
         post: operations["postAgentsExecutorPreview"];
         delete?: never;
@@ -623,7 +623,7 @@ export interface paths {
         put?: never;
         /**
          * Actually run a trivial test prompt through an external-CLI worker
-         * @description Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in a dedicated ephemeral workspace — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate's 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call, since — like cli-validate — it spawns a caller-influenced binary/path. Body-driven and agent-agnostic; works from the create wizard and an existing agent's edit form alike.
+         * @description Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in the selected agent's resolved home folder, using its workspace's project-work folder instead when workspace lookup and folder preparation succeed, or in a disposable scratch folder when no saved agent is identified — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate's 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call. The run applies the person's saved standard parameters; the audit event then adds them, through the sensitive-data filter while tools.filter_sensitive_data is on, with the preset-use note. The program is the path a person saved in Settings -> Third-party agents, checked as at real dispatch: with none saved, or one that fails the checks, nothing is spawned and the body is ok false with the text a run would be refused with, never falling back to a program on $PATH. Body-driven; needs no existing agent id. In the web app, Send a test message is on an existing external worker's Runtime tab.
          */
         post: operations["postAgentsExecutorSmokeTest"];
         delete?: never;
@@ -1131,7 +1131,7 @@ export interface paths {
         get: operations["getThirdPartyAgentSettings"];
         /**
          * Replace the Settings -> Third-party agents section
-         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check; never the path, which goes to the server log only) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it.
          */
         put: operations["updateThirdPartyAgentSettings"];
         post?: never;
@@ -3282,6 +3282,8 @@ export interface paths {
          *     Each entry carries the slug it is actually addressed by (pass it VERBATIM to GET .../knowledge/view), its display label, its kind, whether it can be served, and — for an imported view — the `.base` it came from. Base previews and dashboard embeds keep listing by source; this is the collection's own list.
          *
          *     A collection_id outside this workspace's scope returns the same empty-but-complete shape as an unknown collection (FR-052/FR-053) — never a 403 or 404, which would confirm the collection exists. View files the loader rejected are counted in unloadable_count and named in unloadable, never silently dropped.
+         *
+         *     The loader is the one the Library listing uses (include_views on GET .../entries): it reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per load. A view file it does not read is not listed, cannot be opened through GET .../knowledge/view, and is named in unloadable.
          */
         get: operations["listKnowledgeViews"];
         put?: never;
@@ -3969,7 +3971,7 @@ export interface paths {
         };
         /**
          * Probe host PATH and well-known locations for the three external-CLI runners
-         * @description Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The SPA roster uses this to grey-out CLIs the host cannot run, and the create wizard / edit form use the returned path to prefill executor.cli_path. Pure Go probe (no shell-out).
+         * @description Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The web app does not call this endpoint: Settings -> Third-party agents receives the same detection result inside its own settings view and uses it to pre-fill a Program path that is not saved yet. Pure Go probe (no shell-out).
          */
         get: operations["getHostCliDetect"];
         put?: never;
@@ -3991,7 +3993,7 @@ export interface paths {
         put?: never;
         /**
          * Validate that an external-CLI binary runs at a given path
-         * @description Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent). Rejects a target that is not a regular, executable file before spawning it (classified "missing-binary", no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+         * @description Stateless check of a caller-supplied external CLI program, used by Check CLI in Settings -> Third-party agents: confirms the binary at cli_path actually runs and reports a version. It saves neither settings nor an agent. The version handshake (the same as POST /agents/{id}/runner/test) runs on the checked pathname with no second lookup — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. A signed-in person only (T11, RequirePersonSession): CLI-token, development-bypass and user-less requests get 403 before the body is read. Before anything starts, the shared program-file check (thirdpartycli.CheckProgramPath against the folders agents can write to) must accept cli_path: an absolute path whose final file, every link and every link's folder lie outside the Omnipus home, agent homes, workspaces, mounts, the extra folders the sandbox lets agents write and the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder, and whose final file is a regular file (executable for the gateway user on Linux/macOS). When the list of those folders cannot be read in full, the candidate is refused with the check location_unverifiable. Ownership and writability of the program are the operator's responsibility and are not checked. A refusal is classified "path-not-allowed" and nothing is spawned; an accepted candidate launches exactly the checked resolved file. An empty or whitespace-only cli_path is "missing-binary"; any other cli_path is checked exactly as given, surrounding whitespace included. Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
          */
         post: operations["postSystemCliValidate"];
         delete?: never;
@@ -4254,7 +4256,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
              * @example csrf_missing
              */
             code?: string;
@@ -4263,7 +4265,7 @@ export interface components {
              * @example provider
              */
             field?: string;
-            /** @description Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file). */
+            /** @description Optional structured details about the error. For `cli_path_invalid` and `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and `check` (the failed check's name). No path is returned; path-check diagnostics are recorded in the server log. */
             details?: {
                 [key: string]: unknown;
             };
@@ -4441,6 +4443,8 @@ export interface components {
              * @example claude-sonnet-4-6
              */
             model?: string;
+            /** @description Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused. */
+            reasoning_effort?: string;
             /**
              * @description Base URL, persisted as the provider entry's api_base. For a catalog provider: optional override of its base URL. For a custom endpoint (see `protocol`): required, the endpoint's base URL.
              * @example https://llm.example.com/v1
@@ -4475,6 +4479,8 @@ export interface components {
              * @example gpt-5.4
              */
             model?: string;
+            /** @description Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused. */
+            reasoning_effort?: string;
             /**
              * @description Optional custom API base URL, persisted as the provider entry's api_base.
              * @example https://api.example.com/v1
@@ -5140,6 +5146,13 @@ export interface components {
             terminal_outcome?: boolean;
             /** @description Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry. */
             room_ref?: components["schemas"]["RoomRef"];
+            /** @description Effort levels spec (FR-058). Copied from this entry's own stored effort record (answering assistant entries only). Absent when the entry has none. */
+            effort?: components["schemas"]["EffortRecord"];
+            /**
+             * @description Effort levels spec (FR-024). The stored display-only snapshot of the turn's reported reasoning-token sum, copied from the answering entry; never summed at read time. Absent = no call of the turn reported a count; 0 = reported zero.
+             * @example 120
+             */
+            turn_reasoning_tokens?: number;
         };
         /** @description The DISPLAY/STATUS projection of a single tool invocation in a transcript entry — the {id, tool, status, parameters, result} form the SPA renders. This is NOT providers.ToolCall (the provider wire shape on the Go side): it carries no provider call identity beyond `id`, no thought signature and no raw function-argument string, and it must never be used in place of the provider call shape (session-core C-ARCHIVE / U2; FR-004). Maps to session.ToolCall on the Go side and the ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -5432,6 +5445,12 @@ export interface components {
              */
             is_text_editable: boolean;
             /**
+             * @description True when this entry is a saved view (#1017): a file the knowledge base's view loader accepted from `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by GET .../entries called with include_views=true; there it is true on a view entry and absent on every other entry. On any other response that returns a LibraryEntry (write, rename, move, copy, upload), and on a listing made without include_views, it is absent and states nothing. `view` is present exactly when this is true.
+             * @example true
+             */
+            is_view?: boolean;
+            view?: components["schemas"]["LibraryEntryView"];
+            /**
              * @description Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
              * @example mail_restricted
              * @enum {string}
@@ -5469,6 +5488,52 @@ export interface components {
              * @example false
              */
             broad: boolean;
+        };
+        /**
+         * LibraryEntryView
+         * @description The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+         *
+         *     A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+         *
+         *     To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+         *
+         *     Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+         *
+         *     Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+         * @example {
+         *       "name": "invoices--outstanding",
+         *       "label": "Outstanding",
+         *       "collection_id": "kb_3d1c9a7e5b2f4806",
+         *       "kind": "summary",
+         *       "source": "CRM/Invoices.base"
+         *     }
+         */
+        LibraryEntryView: {
+            /**
+             * @description The saved view's own name (records.SavedView.Name) — the server's slug and the view's only address. Pass it VERBATIM as the `view` query parameter of GET .../knowledge/view. Never reconstructed by a client, and not the same thing as the entry's `name` (which is the file name, `<slug>.yaml`).
+             * @example projects--active-projects
+             */
+            name: string;
+            /**
+             * @description What to show a reader: the view's declared `label` when it has one, otherwise its `name` (records.SavedView.DisplayLabel, the same value KnowledgeBaseView.label carries).
+             * @example Active projects
+             */
+            label: string;
+            /**
+             * @description The opaque id of the knowledge base that owns this view — the same value KnowledgeBaseInfo.collection_id and KnowledgeCollectionViews.collection_id carry for that knowledge base. Pass it as `collection_id` to GET .../knowledge/view. Never parse a path out of it.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description The view kind declared in the view file (ViewDef.kind), echoed verbatim — today one of table, list, tiles, board, calendar, summary, trend or breakdown, the values ViewDef.kind allows. Absent when the file declares no kind: views imported from a `.base` file and views written before the kinds existed usually have none, and no kind is ever invented for them. A plain string rather than an enum, like KnowledgeBaseView.kind and ViewResult.kind, so a kind added to ViewDef later can never make this listing fail client-side validation; a client that does not recognise a value shows its generic view icon.
+             * @example summary
+             */
+            kind?: string;
+            /**
+             * @description The `.base` file this view was imported from: the view file's own `source` key (records.SavedView.DeclaredSource), echoed verbatim — a path relative to the knowledge base root, exactly as KnowledgeBaseView.source reports it. Absent for a view authored in place (knowledge_configure create_view / write_view), which belongs to the knowledge base as a whole rather than to any file. It is also what decides which folder lists the view (see the include_views parameter of GET .../entries); it does not imply the `.base` file still exists.
+             * @example CRM/Invoices.base
+             */
+            source?: string;
         };
         /**
          * LibraryContentResponse
@@ -8767,6 +8832,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             /**
              * @description Short description of the agent's purpose.
              * @example General-purpose coding assistant
@@ -9033,6 +9100,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
@@ -9120,6 +9189,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
@@ -9235,6 +9306,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             /**
              * @description Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
              * @example 200000
@@ -9300,9 +9373,9 @@ export interface components {
         };
         /**
          * @description One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
-         *     Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+         *     Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>", "reasoning_effort": "<effort>" }` (reasoning_effort optional).
          *     Order matters — entries are tried in the order they appear in the parent's `fallback_models` array.
-         *     `additionalProperties: false` — the wire type has exactly two fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
+         *     `additionalProperties: false` — the wire type has exactly these fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
          */
         FallbackModel: {
             /**
@@ -9315,6 +9388,8 @@ export interface components {
              * @example anthropic
              */
             provider?: string;
+            /** @description Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
         };
         /** @description One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected. */
         FallbackModelPair: {
@@ -9328,6 +9403,8 @@ export interface components {
              * @example anthropic
              */
             provider: string;
+            /** @description Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
         };
         ExternalCliTool: components["schemas"]["ExternalCli"];
         /**
@@ -9357,7 +9434,7 @@ export interface components {
              * @example --max-turns 40
              */
             readonly effective_preset_args?: string;
-            /** @description Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start. */
+            /** @description Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start. */
             readonly program_warning?: string;
             /**
              * @description Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
@@ -9425,7 +9502,7 @@ export interface components {
         };
         /**
          * AgentDetail
-         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
+         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
          */
         AgentDetail: {
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
@@ -9444,6 +9521,11 @@ export interface components {
             model?: string;
             /** @description The stored primary provider key ("" when not pinned). */
             provider?: string;
+            /**
+             * @description The primary model's stored effort as written ("high", "provider_default", "on", "off"), never the resolved value. null when Not set (stored "") or when it does not apply (subagent_3p external-CLI workers). Effort-levels spec FR-071, S-76.
+             * @example high
+             */
+            readonly reasoning_effort?: string | null;
             /** @description The stored fallback entries, as stored. */
             fallback_models?: components["schemas"]["FallbackModel"][];
             model_params?: components["schemas"]["AgentModelParams"];
@@ -9523,6 +9605,15 @@ export interface components {
              * @example false
              */
             accepts_images: boolean | null;
+            /**
+             * @description The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+             * @example [
+             *       "provider_default",
+             *       "low",
+             *       "high"
+             *     ]
+             */
+            effort_options: string[] | null;
             /** @description Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise. */
             warning?: string;
         };
@@ -9625,13 +9716,11 @@ export interface components {
              */
             notes: string;
         };
-        /** @description Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate) so it works both from the create wizard, where no agent id exists yet, and from an existing agent's edit form. */
+        /** @description Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate), so it needs no existing agent id. The web app uses it for the command preview on an existing external worker's Runtime tab. There is no cli_path member (T11 C-B1): the program for the CLI is the path a person saved in Settings -> Third-party agents, and a request that carries cli_path is refused with 400 in every inbound-validation mode. */
         ExecutorCommandPreviewRequest: {
             cli: components["schemas"]["ExternalCli"];
             /** @description Model slug/shape to preview with. Omit or leave empty to preview the "no model configured" case (the --model/-m flag is simply absent from the resulting command for claude-code and codex; for opencode the flag is also absent when the value is not "provider/model"-shaped — see the response's model_dropped_reason for that case). */
             model?: string;
-            /** @description Optional executor.cli_path override to preview. Empty means "resolved via the OS $PATH at spawn time" and the response's binary field reflects that (the bare command name, not an absolute path). */
-            cli_path?: string;
             /** @description Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why. */
             cli_args?: string;
             /** @description Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted. */
@@ -9640,12 +9729,12 @@ export interface components {
         /** @description The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored. */
         ExecutorCommandPreviewResponse: {
             /**
-             * @description The resolved binary name or path that would be spawned — the previewed cli_path verbatim when non-empty, otherwise the CLI's bare default command name (resolved via the OS $PATH at actual spawn time, which this preview cannot see into).
+             * @description The program that would be spawned: the path a person saved in Settings -> Third-party agents for this CLI, exactly as saved. With no saved path, or a saved path that fails the program checks, the route refuses with 400 and the text a run would be refused with.
              * @example claude
              */
             binary: string;
             /**
-             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_path/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why), followed by the person's saved standard parameters, which are not filtered. Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
              * @example [
              *       "-p",
              *       "--output-format",
@@ -9681,15 +9770,13 @@ export interface components {
                 reason: string;
             }[];
         };
-        /** @description Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape so it works from the create wizard too, but is NOT fully agent-agnostic like those two: when agent_id names a real, saved agent, the run happens in THAT agent's own dedicated directory ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — NOT the separate, multi-agent pkg/workspace.Workspace feature; see agent.ResolveAgentWorkspace's own doc comment) — matching exactly where a genuine delegation to this agent would run, so the test is representative of real behavior (project files, AGENTS.md/CLAUDE.md/opencode.json context the CLI would actually see). Omitting agent_id (the create-wizard case, before the agent has been saved) or naming an agent that doesn't resolve falls back to a disposable, ephemeral scratch directory instead — the response's used_agent_workspace field says which one happened. */
+        /** @description Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape, so it needs no existing agent id; in the web app, Send a test message is on an existing external worker's Runtime tab. When agent_id identifies a saved agent, the test starts from that agent's resolved home folder. If workspace lookup finds the agent's workspace and its project-work folder can be prepared, that workspace folder is used instead. Otherwise the test keeps the agent home; if that chosen folder cannot be prepared either, the test returns a failure before starting the program. These are persistent folders and this handler does not remove them. If agent_id is omitted, blank or does not identify a saved agent, the test prepares a disposable scratch folder instead and cleans it up after the run. The used_agent_workspace flag distinguishes the prepared persistent branch from the scratch branch; a preparation failure can return before any program starts. There is no cli_path member (T11 C-B1): the program for the CLI is the path a person saved in Settings -> Third-party agents, and a request that carries cli_path is refused with 400 in every inbound-validation mode. */
         ExecutorSmokeTestRequest: {
             cli: components["schemas"]["ExternalCli"];
-            /** @description Optional id of an existing, saved agent whose own dedicated directory ($OMNIPUS_HOME/agents/{id}/ — a per-agent folder, not the separate pkg/workspace.Workspace feature) this test should run in. When it resolves to a real agent, the run uses that directory (never deleted afterward — only the ephemeral scratch-directory fallback is cleaned up). When omitted, empty, or naming an agent that no longer exists, falls back to a disposable ephemeral scratch directory instead. */
+            /** @description Optional ID of an existing saved agent. When found, the run uses its resolved home, overridden by the workspace project-work folder only when workspace lookup and preparation succeed. Otherwise it keeps the agent home. That persistent folder is not removed by this handler. An omitted, blank or unrecognized ID selects disposable scratch preparation instead. */
             agent_id?: string;
             /** @description Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model. */
             model?: string;
-            /** @description Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path. */
-            cli_path?: string;
             /** @description Free-form additional CLI arguments, same tokenizer and safety filter as ExecutorConfig.cli_args. */
             cli_args?: string;
         };
@@ -9703,7 +9790,7 @@ export interface components {
             error?: string;
             /** @description Wall-clock time the run actually took, in milliseconds. */
             duration_ms: number;
-            /** @description True when the request's agent_id resolved to a real, saved agent and the run happened in that agent's own dedicated directory ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — a per-agent folder, NOT the separate, multi-agent pkg/workspace.Workspace feature — this field name refers only to the former) — the same place a genuine delegation to it would run. False means the run happened in a disposable ephemeral scratch directory instead (agent_id was omitted, blank, or didn't resolve to an existing agent — e.g. testing from the create wizard before the agent has been saved). */
+            /** @description True when a saved agent's persistent directory was prepared for the test: its resolved home, or its workspace project-work folder when workspace lookup and preparation succeeded. Workspace preparation failure falls back to the agent home. That persistent directory is not removed by this handler. False denotes the scratch branch, but can also be returned by a failure before any directory or subprocess is prepared. The flag alone does not prove that a program ran. */
             used_agent_workspace: boolean;
         };
         /** @description Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over. */
@@ -10999,6 +11086,8 @@ export interface components {
              * @example z-ai/glm-5.2
              */
             model: string;
+            /** @description Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
             /**
              * @description Effective context window in tokens; 0 for exempt rows.
              * @example 1048576
@@ -11020,6 +11109,8 @@ export interface components {
             provider: string;
             /** @example claude-sonnet-4-6 */
             model: string;
+            /** @description Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
         };
         /**
          * EntitlementModel
@@ -11279,6 +11370,28 @@ export interface components {
              * @example false
              */
             window_unknown?: boolean;
+            /** @description Effort levels spec (FR-035). Optional served reasoning capability, filtered by the gateway's encoder table (FR-049). Absent when the model does not reason. */
+            reasoning?: components["schemas"]["CatalogModelReasoning"];
+        };
+        /**
+         * CatalogModelReasoning
+         * @description Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+         */
+        CatalogModelReasoning: {
+            /**
+             * @description Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+             * @example [
+             *       "low",
+             *       "medium",
+             *       "high"
+             *     ]
+             */
+            levels: string[];
+            /**
+             * @description True when reasoning can be turned on and off as a switch.
+             * @example false
+             */
+            switch: boolean;
         };
         /**
          * CatalogProtocol
@@ -12906,7 +13019,7 @@ export interface components {
         };
         /**
          * RunnerTestResponse
-         * @description Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+         * @description Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the program saved in Settings -> Third-party agents for the agent's CLI (claude-code, codex, opencode) passes the checks a real run applies, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
          */
         RunnerTestResponse: {
             /**
@@ -12915,14 +13028,14 @@ export interface components {
              */
             ok: boolean;
             /**
-             * @description Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+             * @description Failure classifier. Empty when ok=true. One of: "missing-binary" (no program saved in Settings, or the saved one fails the program checks; message is the text a run would be refused with), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
              * @example
              * @enum {string}
              */
             reason: "" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli" | "not-external-cli";
             /**
-             * @description Human-readable description of the result (success detail or failure reason + remedy).
-             * @example "claude-code" ready: binary /usr/local/bin/claude present, v1.2.3, authenticated
+             * @description Human-readable description of the result (success detail or failure reason + remedy). Fixed text per reason: it never carries a file path, the program's output or an operating-system error, which go to the server log only.
+             * @example "claude-code" ready: binary present, authenticated
              */
             message: string;
             /**
@@ -13012,13 +13125,13 @@ export interface components {
          */
         ChannelAvailability: {
             /**
-             * @description running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+             * @description running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
              * @example running
              * @enum {string}
              */
             state: "running" | "not_running" | "not_loaded";
             /**
-             * @description Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+             * @description Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
              * @example not started
              */
             reason?: string;
@@ -15320,7 +15433,7 @@ export interface components {
         };
         /**
          * CliDetect
-         * @description Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs the host cannot actually run, and by the create wizard / edit form to prefill the executor cli_path field. Read-only, unaudited — detection never spawns a subprocess.
+         * @description Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. The web app does not call this endpoint: Settings -> Third-party agents receives the same detection result inside its own settings view and uses it to pre-fill a Program path that is not saved yet. Read-only, unaudited — detection never spawns a subprocess.
          */
         CliDetect: {
             claude: components["schemas"]["CliDetectEntry"];
@@ -15360,7 +15473,7 @@ export interface components {
          */
         CliPreset: {
             /**
-             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.CheckProgramPath on save (absolute; the final file, every symlink and every symlink's folder not inside a folder agents can write to: the Omnipus home, an agent home, a workspace folder, a workspace mount, an extra folder the sandbox lets agents write (sandbox.allowed_paths) or the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When the list of folders agents can write to cannot be read in full, the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
              * @example /opt/homebrew/bin/claude
              */
             path: string;
@@ -15412,34 +15525,34 @@ export interface components {
         };
         /**
          * CliValidateRequest
-         * @description Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
+         * @description Request body for POST /api/v1/system/cli-validate. A stateless check of a caller-supplied external CLI program, used by Check CLI in Settings -> Third-party agents: confirms the binary at cli_path actually runs and reports a version. It saves neither settings nor an agent. The shared program-file check runs first; the version handshake then runs on exactly the checked resolved pathname, with no second lookup, on Linux, macOS and Windows (runner.TestConnectionCheckedFile, the same checked-file handshake POST /api/v1/agents/{id}/runner/test uses).
          */
         CliValidateRequest: {
             cli: components["schemas"]["ExternalCli"];
             /**
-             * @description Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty value is classified "missing-binary" without a spawn attempt; the target MUST be a regular, executable file before it is spawned.
+             * @description Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty or whitespace-only value is classified "missing-binary" without a spawn attempt. Any other value is checked exactly as given, surrounding whitespace included, the same bytes Settings Save stores and every run checks; it must pass the program-file check (absolute, outside every agent-writable folder, a regular file; executable for the gateway user on Linux/macOS), else "path-not-allowed" and nothing is spawned.
              * @example /usr/local/bin/claude
              */
             cli_path: string;
         };
         /**
          * CliValidateResponse
-         * @description Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". `detail` is always one of a fixed set of classified messages — never raw stderr from the spawned process.
+         * @description Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Clients classify the result by `reason`, never by the raw `ok` boolean, because "unauthenticated" also reports ok=true. Check CLI in Settings -> Third-party agents shows the result as a notice and saves nothing; the result does not gate saving settings or an agent. `detail` is never raw stderr from the spawned process: it is a fixed classified message per reason, except for "path-not-allowed", where it is "not allowed: <cli>: check <name> failed", naming the program and the failed check. It never carries a path, an operating-system error or file contents; the path goes to the server log only.
          */
         CliValidateResponse: {
             /**
-             * @description True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST gate blocking on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
+             * @description True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST classify on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
              * @example true
              */
             ok: boolean;
             /**
-             * @description Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+             * @description Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty or whitespace-only; nothing is started. A non-empty cli_path that is missing, not a regular file, or not executable is refused by the program-file check as "path-not-allowed" instead and is never started. "handshake-failed": the checked program could not be started, or ran but did not return a valid version-shaped response within the timeout. "unauthenticated": the binary runs and reports a version, but the local credential check found no usable credentials. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. "path-not-allowed": the shared program-file check refused cli_path (not absolute, missing, not a regular file, not executable for the gateway user on Linux/macOS, inside or linked through the Omnipus home, an agent home, a workspace, a mount, an extra folder the sandbox lets agents write or the per-user temporary folder (unless it is the shared /tmp), or the list of those folders could not be read in full); nothing is spawned. Ownership and writability of the program are the operator's responsibility and are not checked. Maps runner.ReasonOK (empty string) to "ok".
              * @example ok
              * @enum {string}
              */
-            reason: "ok" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli";
+            reason: "ok" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli" | "path-not-allowed";
             /**
-             * @description Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary" and "unknown-cli".
+             * @description Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary", "unknown-cli" and "path-not-allowed".
              * @example /usr/local/bin/claude
              */
             resolved_path?: string | null;
@@ -15449,7 +15562,7 @@ export interface components {
              */
             version?: string | null;
             /**
-             * @description Fixed, classified human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli").
+             * @description Human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli"); for "path-not-allowed" it is "not allowed: <cli>: check <name> failed", where <name> is one of the cli_path_invalid check names (for example agent_writable_location or location_unverifiable). A path is never included; it goes to the server log only.
              * @example OK
              */
             detail?: string;
@@ -15898,6 +16011,63 @@ export interface components {
             /** @description Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models. */
             recap_fallback_models?: components["schemas"]["FallbackModel"][];
             /**
+             * @description Provider of the recap model (#1291), stored with recap_model so the recap routes through it. Maps to agents.defaults.recap_provider.
+             * @example openrouter
+             */
+            recap_provider?: string;
+            /** @description Effort for the recap model (effort-levels spec FR-072): absent or "" means Off (the recap default); "provider_default", a catalog level name or "on" turn reasoning on. null is refused. */
+            recap_reasoning_effort?: string;
+            /**
+             * @description Most output tokens one recap call may produce. Default 2048. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_max_output_tokens.
+             * @example 2048
+             */
+            recap_max_output_tokens?: number;
+            /**
+             * @description Token budget of the transcript text sent to the recap model. Default 2000. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_input_tokens.
+             * @example 2000
+             */
+            recap_input_tokens?: number;
+            /**
+             * @description Target length of the recap summary, in words. Default 150. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_summary_words.
+             * @example 150
+             */
+            recap_summary_words?: number;
+            /**
+             * @description Most items in each recap list (topics, decisions, open items). Default 5. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_list_items.
+             * @example 5
+             */
+            recap_list_items?: number;
+            /**
+             * @description Characters of recent context kept when no recap model answers. Default 1500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_fallback_context_chars.
+             * @example 1500
+             */
+            recap_fallback_context_chars?: number;
+            /**
+             * @description Overall time limit for one recap, across every model tried and every retry. Default 60. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_timeout_seconds.
+             * @example 60
+             */
+            recap_timeout_seconds?: number;
+            /**
+             * @description Retries of a recap call whose stream broke. Default 2. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_stream_retries.
+             * @example 2
+             */
+            recap_stream_retries?: number;
+            /**
+             * @description Base pause between recap retries, in milliseconds (try n waits n times this). Default 500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_retry_pause_ms.
+             * @example 500
+             */
+            recap_retry_pause_ms?: number;
+            /**
+             * @description Characters counted as one token when sizing recap input. Default 4. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_chars_per_token.
+             * @example 4
+             */
+            recap_chars_per_token?: number;
+            /**
+             * @description Least time between two boot-time recaps, in seconds. Default 1. A stored value outside the range is clamped on use. Maps to agents.defaults.bootstrap_recap_min_spacing_seconds.
+             * @example 1
+             */
+            bootstrap_recap_min_spacing_seconds?: number;
+            /**
              * @description Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
              * @example 90
              */
@@ -15991,7 +16161,7 @@ export interface components {
             team?: string[];
             /**
              * @description The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
-             * @example 3
+             * @example 10
              */
             default_depth: number;
         };
@@ -16951,6 +17121,11 @@ export interface components {
              */
             cache_hit_ratio?: number | null;
             /**
+             * @description Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+             * @example 120
+             */
+            reasoning?: number;
+            /**
              * @description Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
              * @example 1000
              */
@@ -16995,7 +17170,7 @@ export interface components {
              */
             kind: "progress";
             /**
-             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 10, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
              * @example 0
              */
             depth: number;
@@ -19204,6 +19379,38 @@ export interface components {
             role: "request" | "answer";
         };
         /**
+         * EffortRecord
+         * @description Effort levels spec (effort-levels-spec-r10, FR-058). The per-turn effort record of the answering candidate: what was chosen, what the final request body actually carried, and why the two differ. One record per answering candidate, on the live done frame and on the answering transcript entry; both history transports project the stored record unchanged. A note is shown only when `sent` differs from `chosen`. Never carries reasoning text or signature material (FR-043).
+         */
+        EffortRecord: {
+            /**
+             * @description The resolved setting for the answering candidate, as stored (for example "high", "off", "on", "provider_default"). Absent when nothing was chosen.
+             * @example medium
+             */
+            chosen?: string;
+            /**
+             * @description The effort value actually present in the final serialised request body, after mapping, guards and extra_body. Absent when nothing was sent.
+             * @example low
+             */
+            sent?: string;
+            /**
+             * @description Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+             * @example mapped
+             * @enum {string}
+             */
+            reason?: "mapped" | "not_supported" | "continuation" | "rejected" | "rejected_earlier" | "extra_body";
+            /**
+             * @description The answering candidate's provider id.
+             * @example openrouter
+             */
+            provider?: string;
+            /**
+             * @description The answering candidate's model id.
+             * @example deepseek/deepseek-v4.1-flash
+             */
+            model?: string;
+        };
+        /**
          * SessionHistoryContext
          * @description Bounded public dependencies of selected history groups (chat history paging D4/D10). Resolve only selected/current relevant spans and duplicate identities, never all session spans. Each optional lifecycle payload is the actual recorded generated public frame, not a fabricated start, running state or success. No competing cancellation/disposition value, private archive mark or copied content store.
          */
@@ -20210,6 +20417,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For messages this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "This conversation's history could not be loaded." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
             500: {
                 headers: {
@@ -20263,6 +20481,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For a history entry this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description ErrorResponse.error is exactly "history entry expired": a same-session position proven expired by its retention tombstone, including a sweep during the read. No content and no other metadata. A corrupt or missing index is never reported as expiry; it is the 500 below. */
             410: {
                 headers: {
@@ -20308,6 +20537,17 @@ export interface operations {
             };
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For tool-results this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20535,6 +20775,17 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For sessions this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20567,6 +20818,17 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For activity-runs this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20597,6 +20859,17 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For tools this is GET, PUT. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20640,6 +20913,17 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For tools this is GET, PUT. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Revision or inherited global policy changed; no writes occurred. */
             409: {
                 headers: {
@@ -20694,6 +20978,17 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts POST only. Any other method returns 405 with response header Allow: POST, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For runner/test this is POST. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -21941,6 +22236,7 @@ export interface operations {
             };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     listChannels: {
@@ -22559,6 +22855,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -22614,6 +22921,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -22650,6 +22968,17 @@ export interface operations {
             /** @description Agent not found, or no mailbox configured for the agent in this workspace. */
             404: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -25825,6 +26154,23 @@ export interface operations {
                  * @example false
                  */
                 include_hidden?: boolean;
+                /**
+                 * @description When true, the knowledge base's saved views are listed in the folder they belong to, as ordinary rows with is_view=true and a `view` object (LibraryEntryView; #1017). Defaults to false, and with false the response is exactly what it was before this parameter existed (no view rows, no is_view, no view object), so a client that does not ask is unaffected.
+                 *
+                 *     WHICH VIEWS. Only views of the knowledge base that most closely encloses the listed directory (the deepest one, when knowledge bases are nested), and only when that knowledge base is itself one of the collections of this workspace's knowledge scope. The set is the `views` GET .../knowledge/views returns for that knowledge base: same parser, same record schemas, and every emitted (view.collection_id, view.name) is listed by GET .../knowledge/views?collection_id=<that id> and opens through GET .../knowledge/view. A view file that failed to load is not listed here; that endpoint's `unloadable` list remains where it is reported. The listing, like that endpoint, reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per listing; a view file beyond those limits is left out and the listing still succeeds.
+                 *
+                 *     NESTED KNOWLEDGE BASES. A knowledge base that is not itself a collection of the workspace's knowledge scope (for example, one nested inside another knowledge base) contributes no view rows. No folder at or below its root lists one, including its own `.omnipus-vault/views` reached with include_hidden=true. Views of the enclosing collection are still placed by the folder rule below, which never places them inside the nested knowledge base.
+                 *
+                 *     WHICH FOLDER. A view whose `source` is a clean relative path (no ".." segment, not absolute, not inside `.omnipus-vault/`) whose parent folder exists as a directory of the same knowledge base, and not inside a deeper nested knowledge base, is listed in that parent folder — next to its `.base` file, whether or not that file still exists. Every other view (no `source`, or a `source` that fails any of those conditions) is listed at the knowledge base root.
+                 *
+                 *     WHAT A VIEW ROW LOOKS LIKE. It describes the saved view file itself: `path` is that file's real workspace-relative path (`<knowledge base root>/.omnipus-vault/views/<slug>.yaml`), `name` is its file name, and size, modified_at, mime and is_text_editable are that file's own. A view row is therefore the one kind of row whose `path` is NOT inside the listed directory. It is a file row and sorts with the files by `name`, like every other row. Its is_hidden follows the usual dot rule on `name`, and include_hidden applies to it as to any row.
+                 *
+                 *     THE STORAGE FOLDER. When `.omnipus-vault/views/` itself is listed (include_hidden is needed to reach it), each file there that is a loaded view also carries is_view=true and the same `view` object, so a path is described the same way wherever it is listed.
+                 *
+                 *     FAILURE. If the views cannot be read (unreadable folder, schema load error), the listing still succeeds without view rows and the server logs a warning; a views failure never fails the listing.
+                 * @example true
+                 */
+                include_views?: boolean;
             };
             header?: never;
             path: {
@@ -28466,6 +28812,15 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The caller is not a signed-in person: the request authenticated with the CLI token or the legacy environment token, the gateway is in development-bypass mode, or no configured user account is attached. Refused before the body is read; nothing is started. The ErrorResponse `code` is "person_session_required", which tells this refusal apart from other 403s such as a CSRF failure. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             429: components["responses"]["429TooManyRequests"];
         };
     };
@@ -28651,6 +29006,17 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For dependencies this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     listWorkspaceRooms: {
@@ -28913,6 +29279,7 @@ export type HostFolderListing = components["schemas"]["HostFolderListing"];
 export type HostFolderEntry = components["schemas"]["HostFolderEntry"];
 export type LibraryEntry = components["schemas"]["LibraryEntry"];
 export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
+export type LibraryEntryView = components["schemas"]["LibraryEntryView"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
 export type LibraryBinaryContentRequest = components["schemas"]["LibraryBinaryContentRequest"];
@@ -29083,6 +29450,7 @@ export type EntitlementResponse = components["schemas"]["EntitlementResponse"];
 export type ProvidersCatalog = components["schemas"]["ProvidersCatalog"];
 export type CatalogProvider = components["schemas"]["CatalogProvider"];
 export type CatalogModel = components["schemas"]["CatalogModel"];
+export type CatalogModelReasoning = components["schemas"]["CatalogModelReasoning"];
 export type CatalogProtocol = components["schemas"]["CatalogProtocol"];
 export type CatalogProviderRegion = components["schemas"]["CatalogProviderRegion"];
 export type CatalogResizeLimits = components["schemas"]["CatalogResizeLimits"];

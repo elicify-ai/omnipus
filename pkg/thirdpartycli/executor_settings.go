@@ -13,12 +13,17 @@ package thirdpartycli
 import (
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/agenthome"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // EnvMask replaces every env_overrides value on every read (EX-01).
@@ -201,38 +206,205 @@ func MaskEnv(env map[string]string) map[string]string {
 	return out
 }
 
-// AgentWritableRoots lists the agent-writable locations a program path must
-// stay outside beyond $OMNIPUS_HOME: the gateway's home folder (every
-// workspace root lives under it) and the sandbox's read+write grants
-// (sandbox.allowed_paths), r17 §3.5. The Settings save, the read model and
-// the agent tools all use this one list.
-func AgentWritableRoots(home string, cfg *config.Config) []string {
-	out := []string{home}
-	if cfg != nil {
-		out = append(out, cfg.Sandbox.AllowedPaths...)
+// AgentWritableRoots returns the folders agents can write to, which a
+// program path must therefore not live in or be linked through (T11 spec
+// §3.2, founder Q28 A): the Omnipus home, every agent home cfg configures
+// (resolved exactly as the runtime resolves it, through agenthome.Resolve),
+// the sandbox's extra read+write folders (sandbox.allowed_paths, "~"
+// expanded), the per-user temporary folder (runtimeTempRoots), every workspace
+// folder and the host folder of every workspace mount. Every entry is
+// absolute: a relative one is made absolute against the working directory, as
+// the runtime does. It is read on every call, so a
+// mount or agent added after a program was saved counts at the next check.
+// The Settings save, cli-validate, every run, the read model and the agent
+// tools all use this one list; $OMNIPUS_HOME is added by the check itself.
+//
+// The list is complete or it is an error, and on error it is nil. A blank
+// home, an entry that cannot be made absolute, a workspace listing that
+// fails, an unsafe workspace id, a temporary folder that cannot be resolved,
+// or a mount record that cannot be read or had entries dropped is an error,
+// never a shorter list: a missing root would silently turn "refuse" into
+// "allow". Callers pass the error to
+// CheckProgramPath, which refuses as CheckLocationUnverifiable. A missing
+// mount record is an empty list, not an error.
+func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
+	if strings.TrimSpace(home) == "" {
+		return nil, errors.New("the Omnipus data folder is not known, so the folders agents can write to cannot be listed")
 	}
-	return out
+	var roots []string
+	var absErr error
+	add := func(p string) {
+		if strings.TrimSpace(p) == "" {
+			return
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			if absErr == nil {
+				absErr = fmt.Errorf("the agent-writable folder %q could not be made absolute: %w", p, err)
+			}
+			return
+		}
+		roots = append(roots, abs)
+	}
+	// addHome adds a runtime-resolved agent home and, when it differs, its
+	// whitespace-trimmed spelling: the runtime trims a per-agent home but uses
+	// the default home as written, and other components read the trimmed
+	// form, so both spellings are refused (extra roots only ever refuse more).
+	addHome := func(p string) {
+		add(p)
+		if t := strings.TrimSpace(p); t != p {
+			add(agenthome.ExpandHome(t))
+		}
+	}
+	add(home)
+	if cfg != nil {
+		addHome(agenthome.Resolve(nil, &cfg.Agents.Defaults))
+		for i := range cfg.Agents.List {
+			addHome(agenthome.Resolve(&cfg.Agents.List[i], &cfg.Agents.Defaults))
+		}
+		for _, p := range cfg.Sandbox.AllowedPaths {
+			add(expandUserHome(strings.TrimSpace(p)))
+		}
+	}
+	if absErr != nil {
+		return nil, absErr
+	}
+	tempRoots, err := runtimeTempRoots()
+	if err != nil {
+		return nil, err
+	}
+	roots = append(roots, tempRoots...)
+	ids, err := workspace.ListWorkspaceIDs(home)
+	if err != nil {
+		return nil, fmt.Errorf("the workspaces could not be listed: %w", err)
+	}
+	for _, id := range ids {
+		dir, derr := workspace.SafeWorkspaceDir(home, id)
+		if derr != nil {
+			return nil, fmt.Errorf("workspace %q has an unsafe id, so its folders cannot be listed: %w", id, derr)
+		}
+		add(dir)
+		mounts, ok, dropped := workspace.LoadMountsWithDropStatus(home, id)
+		if !ok || dropped {
+			return nil, fmt.Errorf("the mount record of workspace %q could not be read in full", id)
+		}
+		for _, m := range mounts {
+			add(m.HostPath)
+		}
+	}
+	if absErr != nil {
+		return nil, absErr
+	}
+	return roots, nil
+}
+
+// runtimeTempRoots returns the per-user temporary folder and, when it differs,
+// its symlink-resolved form. It mirrors the kernel policy agents run under:
+// pkg/sandbox/sandbox.go::DefaultPolicyForModel grants os.TempDir() read, write
+// and execute when it is absolute and not /tmp, and
+// pkg/sandbox/derive_from_fspolicy.go::narrowSharedTmpWrite takes write away
+// only on the shared /tmp and /private/tmp. So the shared folder is left out,
+// in either spelling, and everything else is a place an agent can plant a
+// program (macOS $TMPDIR is /var/folders/.../T, resolved under /private).
+//
+// A folder that does not exist has no other spelling. Any other failure to
+// resolve it is an error, because the unresolved spelling alone may not match
+// the real location.
+func runtimeTempRoots() ([]string, error) {
+	temp := filepath.Clean(os.TempDir())
+	if !filepath.IsAbs(temp) || isSharedTemp(temp) {
+		return nil, nil
+	}
+	roots := []string{temp}
+	resolved, err := filepath.EvalSymlinks(temp)
+	switch {
+	case err == nil:
+		if resolved != temp && !isSharedTemp(resolved) {
+			roots = append(roots, resolved)
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, fmt.Errorf("the temporary folder %q could not be resolved: %w", temp, err)
+	}
+	return roots, nil
+}
+
+// isSharedTemp reports whether p is the shared /tmp itself, in its declared or
+// resolved spelling (pkg/sandbox/derive_from_fspolicy.go::isSharedTmpPath).
+func isSharedTemp(p string) bool {
+	return p == "/tmp" || p == "/private/tmp"
+}
+
+// expandUserHome expands a leading "~" (alone, or followed by a separator)
+// in a trimmed sandbox.allowed_paths entry to the user's home folder, before
+// the entry is made absolute. The entry is returned unchanged when the home
+// folder is unknown; it is then made absolute as written, which only ever
+// refuses more.
+func expandUserHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, "~"+string(filepath.Separator)) {
+		return p
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil || userHome == "" {
+		return p
+	}
+	return filepath.Join(userHome, p[1:])
+}
+
+// PresetUseNote is the plain-text note on the audit entry of every run or test
+// message that applies preset parameters (T11 §4 Audit).
+const PresetUseNote = "person preset used; flag filter bypassed for preset parameters"
+
+// PresetAuditWithheld stands in for preset text in an audit entry when the
+// configuration is missing: the entry says so rather than holding clear text.
+const PresetAuditWithheld = "[not recorded: the sensitive-data filter is unavailable]"
+
+// PresetAuditFilter returns the function preset text goes through on its way
+// into an audit entry (T11 §4 Audit). It obeys tools.filter_sensitive_data the
+// way pkg/agent's filterExternalString does: switch on, the config's
+// sensitive-data replacer with no short-content fast path; switch off, the text
+// as typed. Only the audit copy is filtered; the worker gets the preset as
+// typed. With no config the switch cannot be read, so nothing is known to allow
+// clear text: every non-empty value becomes PresetAuditWithheld and the failure
+// is logged. The same applies to a missing replacer with the switch on.
+func PresetAuditFilter(cfg *config.Config) func(string) string {
+	if cfg != nil && !cfg.Tools.IsFilterSensitiveDataEnabled() {
+		return func(s string) string { return s }
+	}
+	var replacer *strings.Replacer
+	if cfg != nil {
+		replacer = cfg.SensitiveDataReplacer()
+	}
+	if replacer == nil {
+		slog.Error("audit: sensitive-data filter unavailable; preset text withheld from the audit entry")
+		return func(s string) string {
+			if s == "" {
+				return ""
+			}
+			return PresetAuditWithheld
+		}
+	}
+	return replacer.Replace
 }
 
 // ProgramWarning returns the exact text a run of an external worker on cli
 // would be refused with right now, given the program path a person saved in
 // Settings, or "" when a run would start (r17 §3.8, §3.11). The path is
-// checked with the same ValidateProgramPath the Settings save and the spawn
-// use.
-func ProgramWarning(cli, settingsPath string, agentWritable ...string) string {
-	_, refusal := RunProgram(cli, settingsPath, agentWritable...)
+// checked with the same CheckProgramPath the Settings save and the spawn use;
+// agentWritable and rootsErr are AgentWritableRoots' results.
+func ProgramWarning(cli, settingsPath string, agentWritable []string, rootsErr error) string {
+	_, refusal := RunProgram(cli, settingsPath, agentWritable, rootsErr)
 	return refusal
 }
 
 // RunProgram is the spawn-time program decision (r17 §3.6): with no saved
-// path the refusal is NoPath; otherwise ValidateProgramPath runs again and a
+// path the refusal is NoPath; otherwise CheckProgramPath runs again and a
 // failure is CheckFailed. On success resolvedPath is the checked file, the
 // one the driver must exec. There is no fallback to any other program.
-func RunProgram(cli, settingsPath string, agentWritable ...string) (resolvedPath, refusal string) {
+func RunProgram(cli, settingsPath string, agentWritable []string, rootsErr error) (resolvedPath, refusal string) {
 	if strings.TrimSpace(settingsPath) == "" {
 		return "", NoPathText(cli)
 	}
-	resolved, err := ValidateProgramPath(cli, settingsPath, agentWritable...)
+	resolved, err := CheckProgramPath(cli, settingsPath, agentWritable, rootsErr)
 	if err != nil {
 		var ce *CheckError
 		if errors.As(err, &ce) {

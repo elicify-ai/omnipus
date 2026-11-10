@@ -7,37 +7,41 @@
 // read-only cli-detect probe, it is therefore hardened as a privileged
 // diagnostic (F-01, CRITICAL):
 //
-//   - Auth: withAuth at CREATE-PARITY — the SAME gating as createAgent (plain
-//     withAuth, NOT admin, NOT RequireNotBypass). Anyone who can add the
-//     subagent can validate it; wired in registerAdditionalEndpoints.
+//   - Auth: a signed-in person only (T11 spec §3.2, ADR-030 §11 as amended
+//     2026-10-29): withAuth then middleware.RequirePersonSession, which
+//     answers 403 before the body is read for CLI-token, development-bypass
+//     and user-less requests. Wired in registerAdditionalEndpoints.
 //   - Rate limit: a DEDICATED per-IP limiter (cliValidateLimiter), tighter than
 //     the read-only endpoints, applied via withRateLimit at registration.
 //   - Concurrency: a per-caller in-flight cap (cliValidateInflight) so a single
 //     principal cannot fan out unbounded concurrent spawns (self-DoS). It is
 //     per-caller, not a global slot — a global cap would let one caller starve
 //     everyone else.
-//   - Pre-spawn guard: the target MUST be a regular, executable file, else it is
-//     classified missing-binary WITHOUT a spawn. An empty path short-circuits to
-//     missing-binary (never a silent $PATH fallback — FR-014). Per the operator
-//     decision there is NO basename/identity check — a runnable binary that
-//     returns a version passes even if mis-pointed (F-03).
+//   - Pre-spawn guard: the shared program-file check
+//     (thirdpartycli.CheckProgramPath against thirdpartycli.AgentWritableRoots,
+//     the same check the Settings save and every run use) must accept the
+//     target, else it is classified path-not-allowed WITHOUT a spawn; the
+//     checked resolved file is the one launched. An empty path
+//     short-circuits to missing-binary (never a silent $PATH fallback —
+//     FR-014). Per the operator decision there is NO basename/identity check —
+//     a runnable binary that returns a version passes even if mis-pointed
+//     (F-03).
 //   - Audit: exactly one audit event {cli, resolved_path, reason} per call
 //     (EventCliValidate), including the no-spawn classifications.
 //   - Response hygiene: `detail` is a fixed classified message per reason — NEVER
-//     raw stderr from the spawned process (FR-017). The classified-message set is
-//     closed, so process output cannot be smuggled through the response.
+//     raw stderr from the spawned process (FR-017). The one non-fixed detail is
+//     path-not-allowed's, "not allowed: <cli>: check <name> failed" (the program
+//     and the failed check; the path goes to the server log only, founder Q48
+//     A), so neither a path nor process output reaches the response.
 
 package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -45,6 +49,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 // cliValidateInflight caps concurrent in-flight validations PER CALLER (not a
@@ -53,12 +58,12 @@ import (
 // no silent wait, no unbounded fan-out of caller-supplied spawns.
 var cliValidateInflight = newInflightLimiter(2)
 
-// cliTestConnection performs the actual spawn-based connection test. It is a
-// package var (not a direct runner.TestConnectionWithPath call) so tests can
-// inject a deterministic / blocking stand-in to exercise the per-caller
-// in-flight cap without spawning a real binary. In production this is always
-// runner.TestConnectionWithPath.
-var cliTestConnection = runner.TestConnectionWithPath
+// cliTestConnection performs the actual spawn-based connection test on the
+// checked program file. It is a package var so tests can inject a
+// deterministic / blocking stand-in. In production it is
+// runner.TestConnectionCheckedFile, which runs exactly the checked path bytes
+// (no trimming, no PATH lookup) — T11 code review R2-C1.
+var cliTestConnection = runner.TestConnectionCheckedFile
 
 // inflightLimiter is a per-key bounded counter used to cap concurrent in-flight
 // operations for one caller.
@@ -109,8 +114,9 @@ func cliValidateCallerKey(r *http.Request) string {
 // HandleSystemCliValidate handles POST /api/v1/system/cli-validate.
 //
 // It decodes {cli, cli_path}, enforces the per-caller in-flight cap, classifies
-// the target (delegating the actual spawn to runner.TestConnectionWithPath,
-// reused as-is), audits the call, and returns the classified CliValidateResponse.
+// the target (delegating the actual spawn to runner.TestConnectionCheckedFile,
+// which runs exactly the file the shared check accepted), audits the call, and
+// returns the classified CliValidateResponse.
 func (a *restAPI) HandleSystemCliValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -133,11 +139,14 @@ func (a *restAPI) HandleSystemCliValidate(w http.ResponseWriter, r *http.Request
 	}
 	defer cliValidateInflight.release(key)
 
-	// Trim leading/trailing whitespace on the path (D-3.5) before classifying,
-	// but keep the RAW requested value for the audit record (M-1 — forensics need
-	// exactly what the caller asked for, including a no-spawn classification).
+	// The path is checked exactly as given, never trimmed: Save stores and
+	// every run checks the literal bytes, and a trimmed spelling could name a
+	// different program. A blank or whitespace-only path is classified as
+	// missing inside validateCLI. The audit record keeps the same raw value
+	// (M-1 — forensics need exactly what the caller asked for, including a
+	// no-spawn classification).
 	rawPath := req.CliPath
-	resp := a.validateCLI(r.Context(), string(req.Cli), strings.TrimSpace(rawPath))
+	resp := a.validateCLI(r.Context(), string(req.Cli), rawPath)
 
 	// Audit exactly one event per call (FR-013 / M-1), including the no-spawn
 	// classifications (unknown-cli / empty / non-regular). The authenticated
@@ -153,52 +162,76 @@ func (a *restAPI) HandleSystemCliValidate(w http.ResponseWriter, r *http.Request
 // directly unit-testable. Order matters and is fail-closed: an unknown cli and
 // an empty / non-regular / non-executable target are rejected WITHOUT a spawn;
 // only a supported cli pointing at a real regular executable file reaches
-// runner.TestConnectionWithPath.
+// runner.TestConnectionCheckedFile.
 func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliValidateResponse {
 	// 1. Unknown cli — no spawn (FR-012).
 	if !isSupportedCLI(cli) {
 		return buildCliValidateResponse(gen.CliValidateResponseReasonUnknownCli, nil, nil)
 	}
-	// 2. Empty path — short-circuit to missing-binary; NEVER a silent $PATH
-	//    fallback (FR-014). This MUST stay before the LookPath resolve below so an
-	//    empty path never triggers a $PATH search for the default binary name.
-	if cliPath == "" {
+	// 2. Blank path (empty or whitespace-only) — short-circuit to
+	//    missing-binary; NEVER a silent $PATH fallback (FR-014). This MUST stay
+	//    before the program check below. Any other path is checked literally,
+	//    surrounding whitespace included.
+	if strings.TrimSpace(cliPath) == "" {
 		return buildCliValidateResponse(gen.CliValidateResponseReasonMissingBinary, nil, nil)
 	}
-	// 3. Pre-spawn target constraint (FR-013 / MAJ-004): resolve the spawn target
-	//    the SAME way the runtime spawn does before guarding it, so the guard is
-	//    authoritative over what would actually be exec'd. exec.LookPath handles
-	//    BOTH a bare name (resolved via $PATH — the US-4 override case a raw
-	//    os.Stat wrongly rejected) AND an absolute/relative path (stat'd as-is).
-	//    A LookPath miss OR a resolved target that is not a REGULAR executable
-	//    file (e.g. a FIFO or device the OS reports X_OK on) classifies
-	//    missing-binary WITHOUT a spawn. No basename / identity check (F-03).
-	resolvedTarget, lpErr := exec.LookPath(cliPath)
-	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
-		return buildCliValidateResponse(gen.CliValidateResponseReasonMissingBinary, nil, nil)
+	// 3. Shared program-file check BEFORE any spawn (T11 spec §3.2, FR-5;
+	//    founder Q28 A): the same check the Settings save and every run use,
+	//    over the same folders agents can write to. It requires an absolute
+	//    path whose final file, links and link folders stay out of those
+	//    folders and whose final file is a regular executable. A refusal is
+	//    path-not-allowed and starts nothing; an incomplete folder list is
+	//    refused as location_unverifiable (logged by the check). A bare name
+	//    is refused (not absolute) rather than resolved on $PATH. The
+	//    request's config snapshot is preferred; the live config is the
+	//    fallback.
+	cfg := configFromContext(ctx)
+	if cfg == nil && a.agentLoop != nil {
+		cfg = a.agentLoop.GetConfig()
 	}
-	// 4. Delegate to the shared connection test AS-IS (no identity extension). It
-	//    re-resolves cliPath itself with the identical precedence, so passing the
-	//    raw cliPath keeps Test validating exactly what a real run would exec.
-	res := cliTestConnection(ctx, cli, cliPath)
+	roots, rootsErr := thirdPartyAgentWritable(a.homePath, cfg)
+	finalFile, checkErr := thirdpartycli.CheckProgramPath(cli, cliPath, roots, rootsErr)
+	if checkErr != nil {
+		return pathNotAllowedResponse(checkErr)
+	}
+	// 4. Delegate to the shared connection test AS-IS (no identity extension),
+	//    on exactly the checked resolved file — never a second resolution.
+	res := cliTestConnection(ctx, cli, finalFile)
 	reason := mapValidateReason(res.Reason)
 
 	var resolved, version *string
 	switch reason {
 	case gen.CliValidateResponseReasonOk, gen.CliValidateResponseReasonUnauthenticated:
-		resolved = strPtr(absResolvePath(cliPath))
+		resolved = strPtr(finalFile)
 		if res.CLIVersion != "" {
 			version = strPtr(res.CLIVersion)
 		}
 	case gen.CliValidateResponseReasonHandshakeFailed:
 		// A target was found and spawned but did not report a version — surface
 		// the resolved path (no version).
-		resolved = strPtr(absResolvePath(cliPath))
-	case gen.CliValidateResponseReasonMissingBinary, gen.CliValidateResponseReasonUnknownCli:
+		resolved = strPtr(finalFile)
+	case gen.CliValidateResponseReasonMissingBinary, gen.CliValidateResponseReasonUnknownCli,
+		gen.CliValidateResponseReasonPathNotAllowed:
 		// No binary was found/spawned for these reasons, so there is nothing
 		// to resolve — resolved and version stay nil.
 	}
 	return buildCliValidateResponse(reason, resolved, version)
+}
+
+// pathNotAllowedResponse is the path-not-allowed classification: not ok,
+// nothing resolved or run, and a detail naming the program and the failed
+// check (spec §3.2 C-A2 as amended by founder Q48 A): "not allowed: <cli>:
+// check <name> failed" (thirdpartycli.CheckError.ClientSummary). The path the
+// check failed at goes to the server log only. An error that is not a
+// CheckError keeps the fixed "not allowed" detail.
+func pathNotAllowedResponse(checkErr error) gen.CliValidateResponse {
+	slog.Warn("cli-validate: the program is refused", "error", checkErr)
+	resp := buildCliValidateResponse(gen.CliValidateResponseReasonPathNotAllowed, nil, nil)
+	var ce *thirdpartycli.CheckError
+	if errors.As(checkErr, &ce) {
+		resp.Detail = strPtr("not allowed: " + ce.ClientSummary())
+	}
+	return resp
 }
 
 // isSupportedCLI reports whether cli is one of the recognized external CLIs.
@@ -240,39 +273,6 @@ func derefTrimStr(p *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*p)
-}
-
-// isRegularExecutableFile reports whether p is a regular file the OS would
-// execute. Symlinks are followed (os.Stat). On Windows the execute bit is not
-// meaningful, so a regular file suffices; elsewhere at least one execute bit must
-// be set. A directory, socket, device, or missing path returns false — the
-// caller then classifies missing-binary WITHOUT a spawn.
-func isRegularExecutableFile(p string) bool {
-	fi, err := os.Stat(p)
-	if err != nil {
-		return false
-	}
-	if !fi.Mode().IsRegular() {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return fi.Mode().Perm()&0o111 != 0
-}
-
-// absResolvePath returns the absolute, best-effort symlink-resolved form of p
-// for the resolved_path response field. EvalSymlinks failure falls back to Abs
-// of the raw path so a real target is never dropped.
-func absResolvePath(p string) string {
-	resolved := p
-	if ev, err := filepath.EvalSymlinks(p); err == nil && ev != "" {
-		resolved = ev
-	}
-	if abs, err := filepath.Abs(resolved); err == nil {
-		return abs
-	}
-	return resolved
 }
 
 // mapValidateReason maps runner.FailureReason to the wire enum, mapping
@@ -319,6 +319,8 @@ func classifiedDetail(reason gen.CliValidateResponseReason) string {
 		return "did not run or returned no version"
 	case gen.CliValidateResponseReasonUnknownCli:
 		return "unsupported cli"
+	case gen.CliValidateResponseReasonPathNotAllowed:
+		return "not allowed"
 	default:
 		return "validation failed"
 	}

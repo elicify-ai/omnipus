@@ -67,7 +67,7 @@ const DELEGATION: WorkspaceDelegation = {
   workspace_id: WS,
   team: ['mia', 'jim'],
   edges: [{ from_agent: 'mia', to_agent: 'jim', modes: ['direct'] }],
-  default_depth: 3,
+  default_depth: 10,
 }
 
 function chatSession(id: string, agentId: string): Session {

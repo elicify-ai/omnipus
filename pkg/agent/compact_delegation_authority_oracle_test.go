@@ -143,7 +143,7 @@ func testCompactGuidanceUnlistedDenialPolarity(t *testing.T) {
 
 func testCompactGuidanceExclusivityIndexPolarity(t *testing.T) {
 	const beforeRule = "## Delegation\n<delegation_guidance>\nUnrelated preface.\n"
-	const afterRule = "\n</delegation_guidance>\n\nmax chain depth: 3"
+	const afterRule = "\n</delegation_guidance>\n\nmax chain depth: 10"
 	found := false
 	for _, fixture := range compactGuidanceFactFixtures() {
 		if fixture.fact != "exclusive" {

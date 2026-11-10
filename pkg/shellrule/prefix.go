@@ -36,8 +36,8 @@ func SuggestedPrefix(command string, platform Platform, resolve HeadResolver) (s
 		return "", false
 	}
 
-	if head == "sh" && len(args) > 0 && args[0] == "-c" {
-		return "sh -c", true
+	if IsShHead(head) && len(args) > 0 && args[0] == "-c" {
+		return head + " -c", true
 	}
 	if IsWrapperCommand(head) {
 		return head, true
@@ -63,4 +63,11 @@ func isFlagShaped(tok string) bool {
 // algorithm's third stop-token class.
 func isURLShaped(tok string) bool {
 	return strings.Contains(tok, "://")
+}
+
+// IsShHead reports whether head names sh in any letter case, through
+// FoldedName. SuggestedPrefix's `sh -c` shape and pkg/tools' prefix-grant
+// exclusion both use it, so they agree on which spellings are sh.
+func IsShHead(head string) bool {
+	return FoldedName(head, []string{"sh"}) != ""
 }

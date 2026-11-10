@@ -4,11 +4,11 @@ description: >
   Host-side CLI detection result. Probes whether each external-CLI runner
   binary (claude-code/codex/opencode) is present for the gateway process —
   searching $PATH first, then a curated per-OS well-known-install-location
-  list — and returns the resolved absolute path and how it was found. Used
-  by the roster screen's "+ Add Subagent (External)" disclosure to grey-out
-  CLIs the host cannot actually run, and by the create wizard / edit form to
-  prefill the executor cli_path field. Read-only, unaudited — detection never
-  spawns a subprocess.
+  list — and returns the resolved absolute path and how it was found. The
+  web app does not call this endpoint: Settings -> Third-party agents
+  receives the same detection result inside its own settings view and uses
+  it to pre-fill a Program path that is not saved yet. Read-only, unaudited —
+  detection never spawns a subprocess.
 required:
   - claude
   - codex

@@ -41,8 +41,7 @@ Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple s
       "placeholder": {
         "enabled": false,
         "text": "Thinking..."
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -61,7 +60,6 @@ Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple s
 | `group_trigger` | object | No | Group-chat trigger rules — `mention_only` (bool) and/or `prefixes` ([]string). |
 | `typing` | object | No | Typing indicator configuration (bot mode only). |
 | `placeholder` | object | No | Placeholder message configuration — `enabled` (bool) and `text` (string or []string). |
-| `reasoning_channel_id` | string | No | Space name to route reasoning/thinking output to a separate conversation. |
 
 ## Setup
 

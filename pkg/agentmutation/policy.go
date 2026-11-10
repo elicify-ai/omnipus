@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 type ErrorCode string
@@ -18,9 +19,21 @@ type FieldError struct {
 	Code   ErrorCode
 	Fields []string
 	Reason string
+	// Message, when set, is the complete user-facing sentence the spec pins
+	// for this refusal; Error returns it verbatim instead of the
+	// "<code>: fields <names>: <reason>" form.
+	Message string
 }
 
+// ExternalCLIEffortRefusal is the pinned refusal of reasoning_effort on an
+// external-CLI worker (effort-levels spec S-77): the worker runs its own CLI's
+// model settings, so no Omnipus effort applies.
+const ExternalCLIEffortRefusal = "reasoning_effort does not apply to external-CLI workers; they use their own CLI's model settings."
+
 func (e *FieldError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
 	return fmt.Sprintf("%s: fields %s: %s", e.Code, strings.Join(e.Fields, ", "), e.Reason)
 }
 
@@ -29,6 +42,7 @@ var knownFields = map[string]struct{}{
 	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
 	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {},
+	"reasoning_effort": {}, // the primary model's effort (effort-levels spec FR-048)
 	// cli_path is not a field (r17 §7.5 AG-10: removed from every
 	// agent-writable surface). The flattened tool arguments env_overrides,
 	// env_overrides_remove and cli_args are validated as "executor".
@@ -62,7 +76,19 @@ type FieldDescriptor struct {
 	Reason   string
 }
 
-var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
+var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "reasoning_effort", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
+
+// Executor descriptors, named and worded as the Agent contract's
+// editable_fields description states them. The runtime fields are editable on
+// an external-CLI worker only; the fixed fields are never editable on any
+// agent (the program path and its parameters are set in Settings).
+var executorRuntimeFields = []string{"executor.env_overrides", "executor.env_overrides_remove", "executor.cli_args"}
+
+var executorFixedFields = []FieldDescriptor{
+	{Name: "executor.cli", Reason: "Locked after create; create a new agent to switch CLIs."},
+	{Name: "executor.effective_cli_path", Reason: "Set in Settings -> Third-party agents."},
+	{Name: "executor.kind", Reason: "Derived from the agent type."},
+}
 
 // metadataFileFields are the agent metadata files the update_agent tool writes
 // beside SOUL.md (#1064). They are described separately because the REST
@@ -90,7 +116,7 @@ func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {
 }
 
 func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, []string) error) []FieldDescriptor {
-	out := make([]FieldDescriptor, 0, len(describedFields))
+	out := make([]FieldDescriptor, 0, len(describedFields)+len(executorRuntimeFields)+len(executorFixedFields))
 	for _, field := range describedFields {
 		err := validate(agent, []string{field})
 		descriptor := FieldDescriptor{Name: field, Editable: err == nil}
@@ -99,12 +125,43 @@ func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, 
 		}
 		out = append(out, descriptor)
 	}
-	return out
+	return append(out, executorDescriptors(agent, validate)...)
+}
+
+// executorDescriptors reports the executor descriptors for agent. The runtime
+// fields are written as "executor" (the REST update and update_agent refuse
+// them on any agent that is not an external-CLI worker, with the same text
+// the contract gives); on an external-CLI worker they follow that field's
+// ordinary validation.
+func executorDescriptors(agent config.AgentConfig, validate func(config.AgentConfig, []string) error) []FieldDescriptor {
+	runtime := FieldDescriptor{Editable: true}
+	if !agent.IsExternalCLIWorker() {
+		runtime = FieldDescriptor{Reason: thirdpartycli.NativeRuntimeRefusalText}
+	} else if err := validate(agent, []string{"executor"}); err != nil {
+		runtime = FieldDescriptor{Reason: err.Error()}
+	}
+	out := make([]FieldDescriptor, 0, len(executorRuntimeFields)+len(executorFixedFields))
+	for _, name := range executorRuntimeFields {
+		descriptor := runtime
+		descriptor.Name = name
+		out = append(out, descriptor)
+	}
+	return append(out, executorFixedFields...)
 }
 
 // ValidateFields validates a write to supplied agent fields: the ADR-090
 // role matrix.
 func ValidateFields(agent config.AgentConfig, supplied []string) error {
+	if agent.IsExternalCLIWorker() {
+		for _, field := range supplied {
+			if field == "reasoning_effort" {
+				return &FieldError{
+					Code: InvalidInput, Fields: []string{field},
+					Reason: ExternalCLIEffortRefusal, Message: ExternalCLIEffortRefusal,
+				}
+			}
+		}
+	}
 	var invalid []string
 	for _, field := range supplied {
 		if _, ok := knownFields[field]; !ok {
@@ -210,9 +267,13 @@ func Subagent3pForbiddenUpdateFields() []string {
 	return append([]string(nil), subagent3pForbiddenUpdateFields...)
 }
 
+// sharedAgentLeaves includes the effort rows (effort-levels spec "Agent-tool
+// parity", FR-064/FR-071): the primary's reasoning_effort and each
+// fallback's own, on both create and update.
 var sharedAgentLeaves = []string{
-	"color", "description", "fallback_models[].model", "fallback_models[].provider", "figure", "max_tool_iterations",
-	"model", "model_params.max_tokens", "model_params.temperature", "name", "provider", "role", "skills[]", "soul", "voice",
+	"color", "description", "fallback_models[].model", "fallback_models[].provider", "fallback_models[].reasoning_effort",
+	"figure", "max_tool_iterations", "model", "model_params.max_tokens", "model_params.temperature", "name", "provider",
+	"reasoning_effort", "role", "skills[]", "soul", "voice",
 }
 
 const agentPermissionsReason = "AG-07: on an existing agent these change only through set_agent_permissions; update_agent refuses them"

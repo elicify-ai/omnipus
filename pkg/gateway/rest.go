@@ -74,6 +74,12 @@ type restAPI struct {
 	// beforeWorkspaceDetailPreparation is a scheduling observer for lifecycle
 	// interleaving tests. Nil in production; never replaces reads or writes.
 	beforeWorkspaceDetailPreparation func()
+	// sessionHubs is the chat WebSocket hub registry. The setup-offer poster
+	// publishes each saved offer line into Omnipus's main hub so an already
+	// attached chat receives it and an incremental re-attach replays it from
+	// the journal. Nil in tests and partial boots that have no WebSocket
+	// handler: the saved transcript line stays, and the miss is logged.
+	sessionHubs *hubRegistry
 	// stopSession, when set, replaces agentLoop.StopSession in the delete
 	// path (a test seam for outcomes a real Stop cannot be made to produce
 	// portably, such as a failed background-shell kill). Nil in production.
@@ -715,14 +721,16 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	rae.cm.RegisterHTTPHandler("/api/v1/system/folders", rae.a.withAuth(rae.a.HandleSystemFolders))
 	// POST /api/v1/system/cli-validate — spawns a caller-supplied path
 	// (<cli> --version), so it is hardened as a privileged diagnostic (ADR-030
-	// §11 F-01). CREATE-PARITY auth: plain withAuth, exactly like createAgent /
-	// HandleAgents below — NOT admin, NOT RequireNotBypass (anyone who can add
-	// the subagent can validate it). A DEDICATED rate limiter (cliValidateLimiter,
+	// §11 F-01, amended by T11 spec §3.2): a signed-in person only —
+	// RequirePersonSession answers 403 before the body is read for CLI-token,
+	// development-bypass and user-less requests (it is not RequireNotBypass,
+	// which would answer 503). A DEDICATED rate limiter (cliValidateLimiter,
 	// distinct from validateLimiter) throttles the spawn endpoint; the handler
-	// additionally enforces a per-caller in-flight cap and audits each call.
+	// runs thirdpartycli.CheckProgramPath before any spawn, enforces a per-caller
+	// in-flight cap and audits each call.
 	rae.cm.RegisterHTTPHandler(
 		"/api/v1/system/cli-validate",
-		rae.a.withAuth(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate)),
+		rae.a.withAuth(middleware.RequirePersonSession(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate))),
 	)
 	rae.cm.RegisterHTTPHandler("/api/v1/status", rae.a.withAuth(rae.a.HandleStatus))
 	// GET /api/v1/tasks/occurrences — Calendar Recurrence Redesign occurrence

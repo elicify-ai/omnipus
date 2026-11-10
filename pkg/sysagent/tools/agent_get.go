@@ -233,7 +233,8 @@ func (t *AgentGetTool) storedDetail(home string, state *agentstore.State, cfg *c
 		"name": a.Name, "description": a.Description, "type": wireAgentType(*a), "locked": a.Locked,
 		"figure": string(figure), "role": string(role), "color": string(color), "voice": a.Voice,
 		"model": model, "provider": provider, "fallback_models": nonNilFallbacks(a.FallbackModels),
-		"model_chain": agentModelChain(a, cfg), "max_tool_iterations": nil,
+		"reasoning_effort": storedEffortView(*a),
+		"model_chain":      agentModelChain(a, cfg), "max_tool_iterations": nil,
 		"context_window_override": a.ContextWindowOverride, "memory_enabled": a.MemoryEnabledEffective(),
 		"skills": nonNilStrings(a.Skills), "stored_overrides": storedOverrides(a),
 		"connectors": storedMCPBindings(a), "activation_status": activation,
@@ -297,7 +298,8 @@ func agentExecutorView(a *config.AgentConfig, cfg *config.Config, home string) (
 	if row.PresetArgs != "" {
 		view["effective_preset_args"] = row.PresetArgs
 	}
-	warning := thirdpartycli.ProgramWarning(ec.CLI, row.Path, thirdpartycli.AgentWritableRoots(home, cfg)...)
+	writable, rootsErr := thirdpartycli.AgentWritableRoots(home, cfg)
+	warning := thirdpartycli.ProgramWarning(ec.CLI, row.Path, writable, rootsErr)
 	if warning != "" {
 		view["program_warning"] = warning
 	}

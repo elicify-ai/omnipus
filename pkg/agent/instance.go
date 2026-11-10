@@ -11,8 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/google/uuid"
-
+	"github.com/elicify-ai/omnipus/pkg/agenthome"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
@@ -29,7 +28,7 @@ import (
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
-	// mu protects Model, Provider, Candidates, and ThinkingLevel which may be
+	// mu protects Model, Provider, and Candidates which may be
 	// written by SwitchModel while runTurn reads them concurrently.
 	mu sync.RWMutex
 
@@ -51,9 +50,17 @@ type AgentInstance struct {
 	// slice reaches the agent every entry carries a populated Provider (or an
 	// empty one if no configured provider matched).
 	FallbackModels []config.FallbackModel
-	Home           string
-	MaxIterations  int
-	MaxTokens      int
+	// PrimaryEffort is the primary model's stored effort (effort-levels spec
+	// FR-029/FR-045): the agent's own setting, or — only when the agent rides
+	// the default model and sets none — the default model's. "" = Not set.
+	PrimaryEffort string
+	// PrimaryEffortProvider is the provider the primary model is pinned to
+	// ("" = default-provider resolution); it names the pair in the per-call
+	// effort record when the turn's candidate carries no provider (FR-058).
+	PrimaryEffortProvider string
+	Home                  string
+	MaxIterations         int
+	MaxTokens             int
 	// configuredMaxTokens is the CONFIGURED max_tokens, before the FR-005b
 	// window clamp. MaxTokens is the clamped value the turn actually uses.
 	//
@@ -66,7 +73,6 @@ type AgentInstance struct {
 	// this field, never MaxTokens.
 	configuredMaxTokens int
 	Temperature         float64
-	ThinkingLevel       ThinkingLevel
 	// ContextWindow is the effective window resolved by the ADR-066 D2
 	// ladder (ResolveWindow) at construction and on every model switch. 0
 	// when the provider is exempt (WindowExempt) or the window is unknown
@@ -193,7 +199,6 @@ type newAgentInstance struct {
 	maxIter             int
 	maxTokens           int
 	temperature         float64
-	thinkingLevel       ThinkingLevel
 	candidates          []providers.FallbackCandidate
 	poolBuild           providerPoolBuild
 	window              WindowResolution
@@ -442,7 +447,7 @@ func (nai *newAgentInstance) prepareIdentity() {
 	nai.toolsRegistry.Register(tools.NewRetrospectiveTool(memAdapter, nil))
 }
 
-// resolveRuntimeLimits resolves iteration, sampling, and thinking-level settings.
+// resolveRuntimeLimits resolves iteration and sampling settings.
 func (nai *newAgentInstance) resolveRuntimeLimits() {
 	// Per-turn tool-round cap (#904): the single resolver —
 	// min(global in force, agent's own value), the global when the agent has
@@ -475,12 +480,6 @@ func (nai *newAgentInstance) resolveRuntimeLimits() {
 	if nai.agentCfg != nil && nai.agentCfg.ModelParams != nil && nai.agentCfg.ModelParams.Temperature != nil {
 		nai.temperature = *nai.agentCfg.ModelParams.Temperature
 	}
-
-	var thinkingLevelStr string
-	if mc, err := nai.cfg.FindModelConfigBySlug(nai.model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
-	}
-	nai.thinkingLevel = parseThinkingLevel(thinkingLevelStr)
 }
 
 // resolveCandidates resolves provider candidates, provider pool, and context-window limits.
@@ -570,37 +569,38 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 	// There is no default agent (omnipus-system-agent FR-120): an instance
 	// carries no routing-default flag of any kind.
 	inst := &AgentInstance{
-		ID:                  nai.agentID,
-		Name:                nai.agentName,
-		Model:               nai.model,
-		Fallbacks:           nai.fallbacks,
-		FallbackModels:      nai.fallbackModels,
-		Home:                nai.workspace,
-		MaxIterations:       nai.maxIter,
-		MaxTokens:           nai.maxTokens,
-		configuredMaxTokens: nai.configuredMaxTokens,
-		Temperature:         nai.temperature,
-		ThinkingLevel:       nai.thinkingLevel,
-		ContextWindow:       nai.contextWindow,
-		WindowSource:        nai.window.Source,
-		WindowClamped:       nai.window.Clamped,
-		WindowExempt:        nai.window.Exempt,
-		WindowUnknown:       nai.window.Unknown,
-		needsProvider:       nai.poolBuild.primaryUnknown,
-		needsProviderID:     nai.poolBuild.primaryProvider,
-		Provider:            nai.provider,
-		Sessions:            nai.sessions,
-		ContextBuilder:      nai.contextBuilder,
-		Tools:               nai.toolsRegistry,
-		Subagents:           nai.subagents,
-		SkillsFilter:        nai.skillsFilter,
-		Candidates:          nai.candidates,
-		Router:              nai.router,
-		LightCandidates:     nai.lightCandidates,
-		LightProvider:       nai.lightProvider,
-		lightProviderPair:   nai.lightProviderPair,
-		DocumentRuntime:     nai.documentRuntime,
-		AgentType:           resolvedAgentType,
+		ID:                    nai.agentID,
+		Name:                  nai.agentName,
+		Model:                 nai.model,
+		Fallbacks:             nai.fallbacks,
+		FallbackModels:        nai.fallbackModels,
+		PrimaryEffort:         resolveAgentPrimaryEffort(nai.agentCfg, nai.defaults),
+		PrimaryEffortProvider: resolveAgentPrimaryProvider(nai.agentCfg, nai.defaults),
+		Home:                  nai.workspace,
+		MaxIterations:         nai.maxIter,
+		MaxTokens:             nai.maxTokens,
+		configuredMaxTokens:   nai.configuredMaxTokens,
+		Temperature:           nai.temperature,
+		ContextWindow:         nai.contextWindow,
+		WindowSource:          nai.window.Source,
+		WindowClamped:         nai.window.Clamped,
+		WindowExempt:          nai.window.Exempt,
+		WindowUnknown:         nai.window.Unknown,
+		needsProvider:         nai.poolBuild.primaryUnknown,
+		needsProviderID:       nai.poolBuild.primaryProvider,
+		Provider:              nai.provider,
+		Sessions:              nai.sessions,
+		ContextBuilder:        nai.contextBuilder,
+		Tools:                 nai.toolsRegistry,
+		Subagents:             nai.subagents,
+		SkillsFilter:          nai.skillsFilter,
+		Candidates:            nai.candidates,
+		Router:                nai.router,
+		LightCandidates:       nai.lightCandidates,
+		LightProvider:         nai.lightProvider,
+		lightProviderPair:     nai.lightProviderPair,
+		DocumentRuntime:       nai.documentRuntime,
+		AgentType:             resolvedAgentType,
 	}
 	if nai.agentCfg != nil {
 		inst.sourceConfigJSON, _ = json.Marshal(nai.agentCfg)
@@ -734,7 +734,7 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 // to a long-running dispatch that executes OUTSIDE of a.mu's protection
 // window (e.g. an external-CLI run, which can take minutes) — a itself may be
 // the LIVE registry instance, and SwitchModel/ApplyAgentModel can concurrently
-// rewrite its Model/Provider/Candidates/ThinkingLevel (+ providerPool) tuple
+// rewrite its Model/Provider/Candidates (+ providerPool) tuple
 // while the dispatched run is in flight (see mu's doc comment above).
 //
 // FIX 1 (7-reviewer gate, data race): processTaskDirectExternalCLI used to
@@ -762,7 +762,6 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	model := a.Model
 	provider := a.Provider
 	candidates := a.Candidates
-	thinkingLevel := a.ThinkingLevel
 	contextWindow := a.ContextWindow
 	windowSource := a.WindowSource
 	windowClamped := a.WindowClamped
@@ -776,36 +775,37 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	a.mu.RUnlock()
 
 	out := &AgentInstance{
-		ID:                a.ID,
-		Name:              a.Name,
-		Model:             model,
-		Fallbacks:         a.Fallbacks,
-		FallbackModels:    a.FallbackModels,
-		Home:              a.Home,
-		MaxIterations:     a.MaxIterations,
-		MaxTokens:         a.MaxTokens,
-		Temperature:       a.Temperature,
-		ThinkingLevel:     thinkingLevel,
-		ContextWindow:     contextWindow,
-		WindowSource:      windowSource,
-		WindowClamped:     windowClamped,
-		WindowExempt:      windowExempt,
-		WindowUnknown:     windowUnknown,
-		needsProvider:     needsProvider,
-		needsProviderID:   needsProviderID,
-		Provider:          provider,
-		Sessions:          a.Sessions,
-		ContextBuilder:    a.ContextBuilder,
-		Tools:             a.Tools,
-		Subagents:         a.Subagents,
-		SkillsFilter:      a.SkillsFilter,
-		Candidates:        candidates,
-		AgentType:         a.AgentType,
-		Router:            a.Router,
-		LightCandidates:   a.LightCandidates,
-		LightProvider:     a.LightProvider,
-		lightProviderPair: a.lightProviderPair,
-		DocumentRuntime:   a.DocumentRuntime,
+		ID:                    a.ID,
+		Name:                  a.Name,
+		Model:                 model,
+		Fallbacks:             a.Fallbacks,
+		FallbackModels:        a.FallbackModels,
+		PrimaryEffort:         a.PrimaryEffort,
+		PrimaryEffortProvider: a.PrimaryEffortProvider,
+		Home:                  a.Home,
+		MaxIterations:         a.MaxIterations,
+		MaxTokens:             a.MaxTokens,
+		Temperature:           a.Temperature,
+		ContextWindow:         contextWindow,
+		WindowSource:          windowSource,
+		WindowClamped:         windowClamped,
+		WindowExempt:          windowExempt,
+		WindowUnknown:         windowUnknown,
+		needsProvider:         needsProvider,
+		needsProviderID:       needsProviderID,
+		Provider:              provider,
+		Sessions:              a.Sessions,
+		ContextBuilder:        a.ContextBuilder,
+		Tools:                 a.Tools,
+		Subagents:             a.Subagents,
+		SkillsFilter:          a.SkillsFilter,
+		Candidates:            candidates,
+		AgentType:             a.AgentType,
+		Router:                a.Router,
+		LightCandidates:       a.LightCandidates,
+		LightProvider:         a.LightProvider,
+		lightProviderPair:     a.lightProviderPair,
+		DocumentRuntime:       a.DocumentRuntime,
 	}
 	if pool != nil {
 		out.StoreProviderPool(*pool)
@@ -1151,54 +1151,10 @@ func ResolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 	return resolveAgentHome(agentCfg, defaults)
 }
 
-// resolveAgentHome determines the workspace directory for an agent.
+// resolveAgentHome determines the workspace directory for an agent. It
+// delegates to agenthome.Resolve, the single resolver pkg/thirdpartycli also uses.
 func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	if agentCfg != nil && strings.TrimSpace(agentCfg.Home) != "" {
-		return expandHome(strings.TrimSpace(agentCfg.Home))
-	}
-	// Use the configured default workspace (respects OMNIPUS_HOME) for the
-	// unidentified agent. The agentCfg.Default flag means "this agent is the
-	// routing default for inbound messages" — it does NOT mean "share the
-	// workspace". A routing-default agent (e.g. Mia with Default=true) must
-	// still get its own per-agent workspace (FUNC-11). Only a caller with no
-	// agent identity at all falls back to the shared default workspace; the
-	// "main" sentinel that used to land here has been removed.
-	if agentCfg == nil || agentCfg.ID == "" {
-		return expandHome(defaults.Home)
-	}
-	// Per-agent isolated workspace (FUNC-11). Each custom agent gets its own
-	// directory under $OMNIPUS_HOME/agents/{id}/ (or ~/.omnipus/agents/{id}/ when
-	// OMNIPUS_HOME is unset), matching the REST API convention.
-	// H4: validate that the resolved path is actually under the agents base
-	// directory after cleaning, to guard against path traversal via crafted agent IDs.
-	safeBase := filepath.Join(omnipusHome(), "agents")
-	// Strip any path separators or ".." from the agent ID.
-	sanitizedID := filepath.Base(filepath.Clean(agentCfg.ID))
-	if sanitizedID == "." || sanitizedID == ".." || sanitizedID == "" {
-		// The agent ID sanitized to an unusable value. Use a UUID-based
-		// directory name so this degenerate case still gets a unique,
-		// collision-free workspace. (routing.NormalizeAgentID used to return
-		// the "main" sentinel for empty/dot inputs, which made a collision
-		// with the sentinel's own workspace a real risk here; with the
-		// sentinel retired, NormalizeAgentID("") returns empty string and
-		// there is no reserved name left to collide with — the UUID fallback
-		// remains simply for uniqueness.)
-		fallbackID := "agent-" + uuid.New().String()
-		logger.WarnCF("agent", "Suspicious agent ID after sanitization; using UUID fallback workspace",
-			map[string]any{"original_id": agentCfg.ID, "sanitized": sanitizedID, "fallback_id": fallbackID})
-		return filepath.Join(safeBase, fallbackID)
-	}
-	resolved := filepath.Join(safeBase, sanitizedID)
-	if !strings.HasPrefix(filepath.Clean(resolved), safeBase) {
-		logger.WarnCF("agent", "Agent workspace path escapes base directory; using fallback",
-			map[string]any{"agent_id": agentCfg.ID, "resolved": resolved})
-		return filepath.Join(
-			expandHome(defaults.Home),
-			"..",
-			"workspace-"+routing.NormalizeAgentID(agentCfg.ID),
-		)
-	}
-	return resolved
+	return agenthome.Resolve(agentCfg, defaults)
 }
 
 // resolveAgentModel resolves the primary model for an agent: its own
@@ -1206,6 +1162,21 @@ func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 // (ADR-068 D14.1). Empty when neither is set.
 func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	return modelresolve.AgentPrimaryModel(agentCfg, defaults)
+}
+
+// resolveAgentPrimaryEffort returns the primary model's stored effort: the
+// agent's own reasoning_effort; when the agent has no model of its own and
+// no effort of its own, the default model's effort (FR-045).
+func resolveAgentPrimaryEffort(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+	own := ""
+	if agentCfg != nil {
+		own = strings.TrimSpace(agentCfg.ReasoningEffort)
+	}
+	ridesDefault := agentCfg == nil || agentCfg.Model == nil || strings.TrimSpace(agentCfg.Model.Primary) == ""
+	if own != "" || !ridesDefault || defaults == nil {
+		return own
+	}
+	return strings.TrimSpace(defaults.DefaultModel.ReasoningEffort)
 }
 
 // resolveAgentPrimaryProvider returns the provider the agent's primary model is
@@ -1300,58 +1271,8 @@ func (a *AgentInstance) Close() error {
 	return nil
 }
 
-// omnipusHome returns the Omnipus data directory.
-// Priority: $OMNIPUS_HOME > ~/.omnipus.
-// Falls back to /tmp/.omnipus when both os.UserHomeDir and OMNIPUS_HOME are unavailable.
-func omnipusHome() string {
-	if h := os.Getenv("OMNIPUS_HOME"); h != "" {
-		return h
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "/tmp/.omnipus"
-	}
-	return filepath.Join(home, ".omnipus")
-}
-
-func expandHome(path string) string {
-	if path == "" {
-		return path
-	}
-	if path[0] == '~' {
-		// When OMNIPUS_HOME is set, expand ~ to the parent of OMNIPUS_HOME so
-		// that paths like ~/.omnipus/sessions resolve under OMNIPUS_HOME.
-		// When OMNIPUS_HOME is not set, use os.UserHomeDir() for byte-identical
-		// behavior to the pre-OMNIPUS_HOME code.
-		var home string
-		if h := os.Getenv("OMNIPUS_HOME"); h != "" {
-			// OMNIPUS_HOME is already the .omnipus directory; its parent is the
-			// effective ~ for paths of the form ~/.omnipus/...
-			home = filepath.Dir(h)
-		} else {
-			var err error
-			home, err = os.UserHomeDir()
-			if err != nil {
-				logger.WarnCF("agent", "UserHomeDir failed in expandHome; attempting Getwd fallback",
-					map[string]any{"path": path, "error": err.Error()})
-				// M20: prefer an absolute path fallback — "." is relative and ambiguous.
-				if wd, wdErr := os.Getwd(); wdErr == nil {
-					home = wd
-				} else {
-					// Both UserHomeDir and Getwd failed; use /tmp as a last resort.
-					logger.WarnCF("agent", "Getwd also failed in expandHome; using /tmp fallback",
-						map[string]any{"path": path, "error": wdErr.Error()})
-					home = os.TempDir()
-				}
-			}
-		}
-		if len(path) > 1 && (path[1] == '/' || path[1] == filepath.Separator) {
-			return home + path[1:]
-		}
-		return home
-	}
-	return path
-}
+// omnipusHome returns the Omnipus data directory (agenthome.OmnipusHome).
+func omnipusHome() string { return agenthome.OmnipusHome() }
 
 // primaryWindowPair is the (provider, model) pair ResolveWindow is keyed by:
 // the primary candidate's, which already carries the configured provider

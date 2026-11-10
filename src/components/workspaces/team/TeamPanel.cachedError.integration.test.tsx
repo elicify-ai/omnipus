@@ -60,7 +60,7 @@ const UPDATED_WORKSPACE: Workspace = {
 }
 const DELEGATION: WorkspaceDelegation = {
   workspace_id: WORKSPACE_ID, revision: INITIAL_WORKSPACE.revision,
-  edges: [], default_depth: 3,
+  edges: [], default_depth: 10,
   // The contract makes the informational team field optional. Leaving it
   // absent gives a valid edge-free response whose membership comes from the
   // workspace record, so a NEW record must actually reach the real editor.

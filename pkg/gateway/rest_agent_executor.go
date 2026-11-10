@@ -188,7 +188,8 @@ func executorProgramView(cli string, cfg *config.Config, homePath string) (path,
 		pa := row.PresetArgs
 		preset = &pa
 	}
-	if text := thirdpartycli.ProgramWarning(cli, row.Path, thirdPartyAgentWritable(homePath, cfg)...); text != "" {
+	writable, rootsErr := thirdPartyAgentWritable(homePath, cfg)
+	if text := thirdpartycli.ProgramWarning(cli, row.Path, writable, rootsErr); text != "" {
 		warning = &text
 	}
 	return path, preset, warning

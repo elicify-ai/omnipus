@@ -247,11 +247,15 @@ func TestProbeVersion_ScrubsGatewaySecrets(t *testing.T) {
 
 func TestExtractVersion(t *testing.T) {
 	cases := map[string]string{
-		"claude 1.2.3":        "1.2.3",
-		"opencode v0.1.7":     "0.1.7",
-		"codex-cli 0.4.0":     "0.4.0",
-		"version 10.20.30-rc": "10.20.30-rc",
-		"no-version-here":     "no-version-here",
+		"claude 1.2.3":            "1.2.3",
+		"opencode v0.1.7":         "0.1.7",
+		"codex-cli 0.4.0":         "0.4.0",
+		"version 10.20.30-rc":     "10.20.30-rc",
+		"no-version-here":         "", // Q59: never substitute raw output for a version.
+		"":                        "",
+		"permission denied":       "",
+		"plain diagnostic":        "",
+		"private-report-2026.txt": "", // A filename with a digit and dot is not a version.
 	}
 	for in, want := range cases {
 		if got := extractVersion(in); got != want {

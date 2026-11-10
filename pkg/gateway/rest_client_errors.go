@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 )
@@ -21,9 +22,11 @@ func jsonServerFailure(w http.ResponseWriter, status int, what string, err error
 // serverFailureText logs err and returns the fixed client text for what. It is
 // the one place a server-side cause is turned into client-safe prose, for the
 // callers that carry the text in a field rather than an HTTP error body (a
-// diagnostic inside an HTTP 200, a WebSocket error frame).
+// diagnostic inside an HTTP 200, a WebSocket error frame). The logged cause is
+// passed through safeLogValue because it can embed request-derived ids or
+// names (#1666); fmt.Sprint keeps a nil err loggable as "<nil>".
 func serverFailureText(what string, err error) string {
-	slog.Error("rest: server-side failure", "what", what, "error", err)
+	slog.Error("rest: server-side failure", "what", what, "error", safeLogValue(fmt.Sprint(err)))
 	return what + ": server storage or configuration failed. " +
 		"Check disk space and permissions, then retry. Details are in the server log."
 }
