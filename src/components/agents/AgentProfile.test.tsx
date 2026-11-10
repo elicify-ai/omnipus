@@ -708,7 +708,6 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
   })
 
   it('keeps a native worker runtime kind disabled and never saves a transition', async () => {
-    // The old transition premise contradicts the derived executor.kind contract.
     vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
@@ -719,6 +718,7 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     fireEvent.click(kind)
     fireEvent.keyDown(kind, { key: 'ArrowDown' })
     expect(screen.queryByRole('option', { name: /External CLI/i })).toBeNull()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1800)) }) // beyond the real 1500ms debounce
     expect(updateAgent).not.toHaveBeenCalled()
   })
 
