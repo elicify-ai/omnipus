@@ -21,6 +21,7 @@ package tools
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -263,6 +264,45 @@ func TestListDirTool_HugeOffsetMatchesPastEndPage(t *testing.T) {
 	huge := tool.Execute(ctx, map[string]any{"path": ".", "offset": int64(1) << 40})
 	require.False(t, huge.IsError, huge.ForLLM)
 	assert.Equal(t, atEnd, huge, "a huge offset must preserve the complete terminal-page result")
+}
+
+// Characterization test: oversized limits must preserve the existing 1,000-entry cap.
+func TestListDirTool_HugeLimitMatchesCappedPage(t *testing.T) {
+	ws := seedDirEntries(t, 1001) // One more entry than the documented 1,000-entry cap.
+	tool := NewListDirTool(ws, true)
+	ctx := context.Background()
+	capped := tool.Execute(ctx, map[string]any{"path": ".", "limit": 1000})
+	require.False(t, capped.IsError, capped.ForLLM)
+	require.Len(t, listedEntryNames(capped.ForLLM), 1000)
+	_, footer, found := strings.Cut(capped.ForLLM, "[listing:")
+	require.True(t, found, "a capped page must advertise the remaining entry")
+	require.Equal(t, " entries 0-1000 of 1001, offset=0, next_offset=1000]\n", footer)
+
+	huge := tool.Execute(ctx, map[string]any{"path": ".", "limit": int64(1) << 40})
+	require.False(t, huge.IsError, huge.ForLLM)
+	assert.Equal(t, capped, huge, "a huge limit must preserve the complete capped-page result")
+}
+
+func TestListDirBoundedInt(t *testing.T) {
+	cases := []struct {
+		name  string
+		value int64
+		want  int
+	}{
+		{"zero", 0, 0},
+		{"one", 1, 1},
+		{"below maximum", math.MaxInt32 - 1, math.MaxInt32 - 1},
+		{"at maximum", math.MaxInt32, math.MaxInt32},
+		{"above maximum", math.MaxInt32 + 1, math.MaxInt32},
+		{"huge", int64(1) << 40, math.MaxInt32},
+		{"maximum int64", math.MaxInt64, math.MaxInt32},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, boundedListDirInt(tc.value),
+				"the paging conversion must preserve values through MaxInt32 and cap larger ones")
+		})
+	}
 }
 
 // TestListDirTool_DeepNestedKnowledgeBaseShowsNoViewLines is the agent-side

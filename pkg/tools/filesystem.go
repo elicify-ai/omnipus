@@ -1213,10 +1213,6 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if offset < 0 {
 		return ErrorResult("offset must be >= 0")
 	}
-	// Keep the int conversion safe on 32-bit hosts while preserving past-the-end pages.
-	if offset > math.MaxInt32 {
-		offset = math.MaxInt32
-	}
 	limit, err := getInt64Arg(args, "limit", maxListDirEntries)
 	if err != nil {
 		return ErrorResult(err.Error())
@@ -1257,7 +1253,15 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		emitFileReadAudit(ctx, t.auditLogger, t.Name(), resolved, "list")
 	}
 
-	return formatDirEntries(ctx, handle, entries, int(offset), int(limit))
+	return formatDirEntries(ctx, handle, entries, boundedListDirInt(offset), boundedListDirInt(limit))
+}
+
+// boundedListDirInt narrows validated nonnegative paging values safely on 32-bit hosts.
+func boundedListDirInt(value int64) int {
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int(value)
 }
 
 // maxListDirEntries bounds one list_directory page (ADR-066 §15 task 1,
