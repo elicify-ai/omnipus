@@ -69,45 +69,17 @@ jobs:
             cat /etc/os-release | head -2
           } | tee "$LOGS/host.txt"
 
-      - name: Instrument check - Landlock ABI and a traced Landlock socket denial
-        run: |
-          strace -f -yy -tt -e trace=%file,%network,%process,landlock_create_ruleset,landlock_restrict_self \
-            -o "$LOGS/probe.strace" python3 -I .github/office-strace-diag/landlock_probe.py 2>&1 | tee "$LOGS/probe.txt"
-          grep -E 'bind\(|access\("/tmp"' "$LOGS/probe.strace" | tee -a "$LOGS/probe.txt"
-
-      - name: Build the preview test binary
-        run: |
-          CGO_ENABLED=0 go test -c -tags goolm,stdjson -o "$RUNNER_TEMP/preview.test" ./pkg/preview/
-
-      - name: Sandboxed - real conversion test under strace
+      - name: Emulated converter ruleset - control (no extra rights), /tmp make-sock, /tmp make-sock + remove-file
+        # Run 42793021593 already traced the real confined tests, the
+        # unconfined start and the stale-socket cases; this run re-creates the
+        # converter ruleset outside Omnipus to find every denial AFTER the
+        # socket bind, which the real run never reaches.
         run: |
           set +e
-          cd pkg/preview
-          for name in TestPreviewOffice_RealStaleFormulaCacheRecalculatesToTwo TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch; do
-            echo "pipes before $name: $(find /tmp /var/tmp -maxdepth 1 -name 'OSL_PIPE*' | tr '\n' ' ')" >> "$LOGS/sandboxed-pipes.txt"
-            strace -f -yy -tt -s 512 -e trace=%file,%network,%process -o "$LOGS/sandboxed-$name.strace" \
-              "$RUNNER_TEMP/preview.test" -test.v -test.count=1 -test.timeout=10m -test.run "^${name}\$" \
-              > "$LOGS/sandboxed-$name.log" 2>&1 < /dev/null
-            echo "$?" > "$LOGS/sandboxed-$name.exit"
-            echo "pipes after $name: $(find /tmp /var/tmp -maxdepth 1 -name 'OSL_PIPE*' | tr '\n' ' ')" >> "$LOGS/sandboxed-pipes.txt"
-            echo "== $name exit=$(cat "$LOGS/sandboxed-$name.exit")"
-            grep -E -- '--- (PASS|FAIL)|abi_version|conversion failed' "$LOGS/sandboxed-$name.log" | head -20
-            echo "-- denied calls (EACCES/EPERM/EXDEV/EROFS):"
-            grep -E '= -1 E(ACCES|PERM|XDEV|ROFS)' "$LOGS/sandboxed-$name.strace" | head -80
+          for v in none sock sock+remove; do
+            echo "===== variant $v"
+            bash .github/office-strace-diag/emulated.sh "$LOGS" "$v"
           done
-          cat "$LOGS/sandboxed-pipes.txt"
-          exit 0
-
-      - name: Unsandboxed - the same LibreOffice start under strace
-        run: |
-          set +e
-          bash .github/office-strace-diag/unconfined.sh "$LOGS"
-          exit 0
-
-      - name: Stale socket - killed conversion and the next start
-        run: |
-          set +e
-          bash .github/office-strace-diag/stale.sh "$LOGS"
           exit 0
 
       - name: Upload the traces
