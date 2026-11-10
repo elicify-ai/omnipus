@@ -44,11 +44,13 @@ import (
 // importer actually used, counter and all) and its `label`. This endpoint
 // reports them, and the SPA re-derives nothing — the .base parser is deleted.
 //
-// THE LOADER IS records.LoadViews AND NOTHING ELSE. There is one view parser
-// in this system (pkg/records/view.go, which states in its own header why
-// three readers were collapsed into one); a second one here — even a small
-// one, even only to read a `source:` key — would be the same mistake at a
-// different layer.
+// THE LOADER IS loadKnowledgeViewSet AND NOTHING ELSE. There is one view
+// parser in this system (pkg/records/view.go, which states in its own header
+// why three readers were collapsed into one); a second one here — even a
+// small one, even only to read a `source:` key — would be the same mistake at
+// a different layer. It is the Library listing's checked load (records'
+// LoadControlChecked): only regular files inside the collection, within the
+// listing limits (#1017).
 //
 // THE CONFINEMENT CHAIN IS THE EXISTING ONE. The `.base` is path-addressed, so
 // it resolves exactly as every rest_library.go handler resolves a path —
@@ -139,21 +141,14 @@ func (a *restAPI) handleKnowledgeBaseViews(w http.ResponseWriter, r *http.Reques
 	collectionRoot := workspaceRelCollectionRoot(rel, source)
 	out.CollectionRoot = &collectionRoot
 
-	// LoadViews needs the schemas, and the distinction is not a convenience:
-	// without them a view naming a type or property the vault no longer
-	// declares loads clean and queries nothing (LoadViews' own doc comment).
-	// This surface reports such a view as unloadable, which is only possible
-	// if the schemas were passed.
-	schemas, _, schemaErr := records.LoadSchemas(col.Root)
-	if schemaErr != nil {
-		logger.ErrorCF("rest", "knowledge: loading record schemas for base views",
-			map[string]any{"workspace_id": workspaceID, "error": schemaErr.Error()})
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	views, report, viewsErr := records.LoadViews(col.Root, schemas)
+	// The views are validated against the schemas, and the distinction is not
+	// a convenience: without them a view naming a type or property the vault
+	// no longer declares loads clean and queries nothing (LoadViews' own doc
+	// comment). This surface reports such a view as unloadable, which is only
+	// possible if the schemas were passed; loadKnowledgeViewSet loads both.
+	views, report, viewsErr := loadKnowledgeViewSet(r.Context(), col.Root)
 	if viewsErr != nil {
-		logger.ErrorCF("rest", "knowledge: loading saved views for base views",
+		logger.ErrorCF("rest", "knowledge: loading record schemas and saved views for base views",
 			map[string]any{"workspace_id": workspaceID, "error": viewsErr.Error()})
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return

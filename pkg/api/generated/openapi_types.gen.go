@@ -16334,14 +16334,14 @@ type ChangePasswordRequest struct {
 
 // ChannelAvailability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
 type ChannelAvailability struct {
-	// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+	// Reason Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
 	Reason *string `json:"reason,omitempty"`
 
-	// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+	// State running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
 	State ChannelAvailabilityState `json:"state"`
 }
 
-// ChannelAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+// ChannelAvailabilityState running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
 type ChannelAvailabilityState string
 
 // ChannelConfigureError 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
@@ -16566,10 +16566,10 @@ type ChannelOutboundPolicy string
 type ChannelOutboundRead struct {
 	// Availability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
 	Availability struct {
-		// Reason Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+		// Reason Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
 		Reason *string `json:"reason,omitempty"`
 
-		// State running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+		// State running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
 		State ChannelOutboundReadAvailabilityState `json:"state"`
 	} `json:"availability"`
 
@@ -16589,7 +16589,7 @@ type ChannelOutboundRead struct {
 	StartSupported bool `json:"start_supported"`
 }
 
-// ChannelOutboundReadAvailabilityState running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+// ChannelOutboundReadAvailabilityState running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
 type ChannelOutboundReadAvailabilityState string
 
 // ChannelOutboundReadOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
@@ -20081,6 +20081,9 @@ type LibraryEntry struct {
 	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 	IsTextEditable bool `json:"is_text_editable"`
 
+	// IsView True when this entry is a saved view (#1017): a file the knowledge base's view loader accepted from `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by GET .../entries called with include_views=true; there it is true on a view entry and absent on every other entry. On any other response that returns a LibraryEntry (write, rename, move, copy, upload), and on a listing made without include_views, it is absent and states nothing. `view` is present exactly when this is true.
+	IsView *bool `json:"is_view,omitempty"`
+
 	// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
 	Mime *string `json:"mime,omitempty"`
 
@@ -20114,6 +20117,17 @@ type LibraryEntry struct {
 
 	// Size File size in bytes. Always 0 for directories.
 	Size int64 `json:"size"`
+
+	// View The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+	//
+	// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+	//
+	// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+	//
+	// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+	//
+	// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+	View *LibraryEntryView `json:"view,omitempty"`
 }
 
 // LibraryEntryPreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
@@ -20130,6 +20144,32 @@ type LibraryEntryMount struct {
 
 	// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
 	Name string `json:"name"`
+}
+
+// LibraryEntryView The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+//
+// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+//
+// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+//
+// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+//
+// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+type LibraryEntryView struct {
+	// CollectionId The opaque id of the knowledge base that owns this view — the same value KnowledgeBaseInfo.collection_id and KnowledgeCollectionViews.collection_id carry for that knowledge base. Pass it as `collection_id` to GET .../knowledge/view. Never parse a path out of it.
+	CollectionId string `json:"collection_id"`
+
+	// Kind The view kind declared in the view file (ViewDef.kind), echoed verbatim — today one of table, list, tiles, board, calendar, summary, trend or breakdown, the values ViewDef.kind allows. Absent when the file declares no kind: views imported from a `.base` file and views written before the kinds existed usually have none, and no kind is ever invented for them. A plain string rather than an enum, like KnowledgeBaseView.kind and ViewResult.kind, so a kind added to ViewDef later can never make this listing fail client-side validation; a client that does not recognise a value shows its generic view icon.
+	Kind *string `json:"kind,omitempty"`
+
+	// Label What to show a reader: the view's declared `label` when it has one, otherwise its `name` (records.SavedView.DisplayLabel, the same value KnowledgeBaseView.label carries).
+	Label string `json:"label"`
+
+	// Name The saved view's own name (records.SavedView.Name) — the server's slug and the view's only address. Pass it VERBATIM as the `view` query parameter of GET .../knowledge/view. Never reconstructed by a client, and not the same thing as the entry's `name` (which is the file name, `<slug>.yaml`).
+	Name string `json:"name"`
+
+	// Source The `.base` file this view was imported from: the view file's own `source` key (records.SavedView.DeclaredSource), echoed verbatim — a path relative to the knowledge base root, exactly as KnowledgeBaseView.source reports it. Absent for a view authored in place (knowledge_configure create_view / write_view), which belongs to the knowledge base as a whole rather than to any file. It is also what decides which folder lists the view (see the include_views parameter of GET .../entries); it does not imply the `.base` file still exists.
+	Source *string `json:"source,omitempty"`
 }
 
 // LibraryInlineDisposition Inline-preview metadata for one Library file (ADR-067 D18 / D15). Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
@@ -20444,6 +20484,9 @@ type MailAttachmentSaveResponse struct {
 		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 		IsTextEditable bool `json:"is_text_editable"`
 
+		// IsView True when this entry is a saved view (#1017): a file the knowledge base's view loader accepted from `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by GET .../entries called with include_views=true; there it is true on a view entry and absent on every other entry. On any other response that returns a LibraryEntry (write, rename, move, copy, upload), and on a listing made without include_views, it is absent and states nothing. `view` is present exactly when this is true.
+		IsView *bool `json:"is_view,omitempty"`
+
 		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
 		Mime *string `json:"mime,omitempty"`
 
@@ -20477,6 +20520,17 @@ type MailAttachmentSaveResponse struct {
 
 		// Size File size in bytes. Always 0 for directories.
 		Size int64 `json:"size"`
+
+		// View The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+		//
+		// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+		//
+		// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+		//
+		// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+		//
+		// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+		View *LibraryEntryView `json:"view,omitempty"`
 	} `json:"entry"`
 
 	// Path Final workspace-relative path of the saved file — includes any numbered collision suffix; identical to entry.path. The actual saved name is entry.name.
@@ -30074,6 +30128,21 @@ type ListLibraryEntriesParams struct {
 
 	// IncludeHidden When true, also returns entries whose name begins with a dot (".") — e.g. the reserved work/.library/ upload directory. Defaults to false (hidden entries omitted) so the explorer's default view matches a conventional file browser.
 	IncludeHidden *bool `form:"include_hidden,omitempty" json:"include_hidden,omitempty"`
+
+	// IncludeViews When true, the knowledge base's saved views are listed in the folder they belong to, as ordinary rows with is_view=true and a `view` object (LibraryEntryView; #1017). Defaults to false, and with false the response is exactly what it was before this parameter existed (no view rows, no is_view, no view object), so a client that does not ask is unaffected.
+	//
+	// WHICH VIEWS. Only views of the knowledge base that most closely encloses the listed directory (the deepest one, when knowledge bases are nested), and only when that knowledge base is itself one of the collections of this workspace's knowledge scope. The set is the `views` GET .../knowledge/views returns for that knowledge base: same parser, same record schemas, and every emitted (view.collection_id, view.name) is listed by GET .../knowledge/views?collection_id=<that id> and opens through GET .../knowledge/view. A view file that failed to load is not listed here; that endpoint's `unloadable` list remains where it is reported. The listing, like that endpoint, reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per listing; a view file beyond those limits is left out and the listing still succeeds.
+	//
+	// NESTED KNOWLEDGE BASES. A knowledge base that is not itself a collection of the workspace's knowledge scope (for example, one nested inside another knowledge base) contributes no view rows. No folder at or below its root lists one, including its own `.omnipus-vault/views` reached with include_hidden=true. Views of the enclosing collection are still placed by the folder rule below, which never places them inside the nested knowledge base.
+	//
+	// WHICH FOLDER. A view whose `source` is a clean relative path (no ".." segment, not absolute, not inside `.omnipus-vault/`) whose parent folder exists as a directory of the same knowledge base, and not inside a deeper nested knowledge base, is listed in that parent folder — next to its `.base` file, whether or not that file still exists. Every other view (no `source`, or a `source` that fails any of those conditions) is listed at the knowledge base root.
+	//
+	// WHAT A VIEW ROW LOOKS LIKE. It describes the saved view file itself: `path` is that file's real workspace-relative path (`<knowledge base root>/.omnipus-vault/views/<slug>.yaml`), `name` is its file name, and size, modified_at, mime and is_text_editable are that file's own. A view row is therefore the one kind of row whose `path` is NOT inside the listed directory. It is a file row and sorts with the files by `name`, like every other row. Its is_hidden follows the usual dot rule on `name`, and include_hidden applies to it as to any row.
+	//
+	// THE STORAGE FOLDER. When `.omnipus-vault/views/` itself is listed (include_hidden is needed to reach it), each file there that is a loaded view also carries is_view=true and the same `view` object, so a path is described the same way wherever it is listed.
+	//
+	// FAILURE. If the views cannot be read (unreadable folder, schema load error), the listing still succeeds without view rows and the server logs a warning; a views failure never fails the listing.
+	IncludeViews *bool `form:"include_views,omitempty" json:"include_views,omitempty"`
 }
 
 // GetLibraryInlineDispositionParams defines parameters for GetLibraryInlineDisposition.
