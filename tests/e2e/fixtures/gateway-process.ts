@@ -95,7 +95,24 @@ export interface GatewayProcessOptions {
    * Mode 1 isolated address (ADR-094 FR-001/FR-011).
    */
   loopbackPublicURL?: boolean;
+  /** The /health budget for each boot attempt (default 15 s, passed to
+   * setup.ts::waitForHealth). Tests of this fixture lower it. */
+  healthTimeoutMs?: number;
+  /**
+   * Called when a boot attempt failed and start() is about to retry once on
+   * a fresh port and home, with the failure and that boot's own output tail
+   * (the same text start() also writes to the job output). A test fixture
+   * records it as an annotation so a recovered boot stays visible.
+   */
+  onBootRetry?: (report: string) => void;
 }
+
+/** How many times start() boots a fresh gateway before giving up. */
+const BOOT_ATTEMPTS = 2;
+/** Gateway output kept in memory per process (the tail is what is reported). */
+const OUTPUT_KEEP_BYTES = 256 * 1024;
+/** Lines of gateway output put into a boot-failure report. */
+const OUTPUT_TAIL_LINES = 80;
 
 /**
  * An isolated, killable, restartable omnipus gateway process for tests that
@@ -118,6 +135,25 @@ export class GatewayProcess {
   private proc: ChildProcess | null = null;
   private ctx: APIRequestContext | null = null;
   private csrfToken = '';
+  /** This process's stdout+stderr (last OUTPUT_KEEP_BYTES), for boot-failure reports. */
+  private output = '';
+
+  /** The last `lines` lines of this gateway's stdout+stderr. */
+  outputTail(lines = OUTPUT_TAIL_LINES): string {
+    const all = this.output.replace(/\n$/, '').split('\n');
+    return all.slice(-lines).join('\n');
+  }
+
+  /** A boot failure plus this gateway's own output tail: the cause, not a guess. */
+  private bootFailureReport(err: unknown, what: string): string {
+    const message = err instanceof Error ? err.message : String(err);
+    return (
+      `GatewayProcess ${what} failed (port ${this.port}, binary ${this.binary}): ${message}\n` +
+      `--- gateway output (last ${OUTPUT_TAIL_LINES} lines, stdout+stderr) ---\n` +
+      `${this.outputTail() || '(the gateway wrote no output)'}\n` +
+      `--- end gateway output ---`
+    );
+  }
 
   private constructor(
     opts: { binary: string; adminUsername: string; adminPassword: string; model: string; apiBase: string; extraArgs: string[]; extraEnv: Record<string, string> },
@@ -147,6 +183,52 @@ export class GatewayProcess {
           `  CGO_ENABLED=0 go build -tags goolm,stdjson -o ${binary} ./cmd/omnipus/`,
       );
     }
+    const healthTimeoutMs = opts.healthTimeoutMs ?? 15_000;
+
+    // A boot (spawn + /health) that fails is retried ONCE on a fresh port
+    // and home. Every failed boot is written to the job output with the
+    // gateway's own stdout/stderr tail and reported to onBootRetry, so the
+    // cause is proven, not inferred (CI 2026-11-10: "/health never returned
+    // 200" with no gateway output anywhere). If the retry also fails, the
+    // error carries every attempt's report. Onboarding and login are not
+    // retried: their failure is not a boot failure.
+    const reports: string[] = [];
+    for (let attempt = 1; attempt <= BOOT_ATTEMPTS; attempt++) {
+      const gw = await GatewayProcess.create(binary, opts);
+      try {
+        await gw.spawnProcess();
+        await waitForHealth(gw.baseURL, healthTimeoutMs, gw.proc ?? undefined);
+      } catch (err) {
+        const report = gw.bootFailureReport(err, `boot attempt ${attempt}/${BOOT_ATTEMPTS}`);
+        // A failed boot must not leave the process running or its temp
+        // OMNIPUS_HOME behind: the caller never receives a handle to stop().
+        await gw.stop();
+        reports.push(report);
+        console.error(report);
+        if (attempt < BOOT_ATTEMPTS) {
+          opts.onBootRetry?.(report);
+          continue;
+        }
+        throw new Error(`GatewayProcess: no healthy boot in ${BOOT_ATTEMPTS} attempts.\n${reports.join('\n')}`, {
+          cause: err,
+        });
+      }
+      // A failed onboarding (a missing key, a refused probe) must not leave
+      // the process running or its temp OMNIPUS_HOME behind either.
+      try {
+        await gw.onboardAndLogin();
+      } catch (err) {
+        await gw.stop();
+        throw err;
+      }
+      return gw;
+    }
+    throw new Error('GatewayProcess: unreachable, the boot loop always returns or throws');
+  }
+
+  /** One fresh gateway instance: own free port, own OMNIPUS_HOME with its
+   * config.json. Not yet spawned. */
+  private static async create(binary: string, opts: GatewayProcessOptions): Promise<GatewayProcess> {
     const port = await getFreePort();
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-gwproc-${port}-`));
     // A mock-provider gateway onboards a catalog provider with its endpoint
@@ -162,7 +244,7 @@ export class GatewayProcess {
       { mode: 0o600 },
     );
 
-    const gw = new GatewayProcess(
+    return new GatewayProcess(
       {
         binary,
         adminUsername: opts.adminUsername ?? 'admin',
@@ -181,19 +263,6 @@ export class GatewayProcess {
       homeDir,
       port,
     );
-
-    // A failed boot or onboarding (a missing key, a refused probe) must not
-    // leave the process running or its temp OMNIPUS_HOME behind: the caller
-    // never receives a handle to stop().
-    try {
-      await gw.spawnProcess();
-      await waitForHealth(gw.baseURL, 15_000, gw.proc ?? undefined);
-      await gw.onboardAndLogin();
-    } catch (err) {
-      await gw.stop();
-      throw err;
-    }
-    return gw;
   }
 
   /** Spawn the binary against this.homeDir/this.port and resolve once the
@@ -220,7 +289,10 @@ export class GatewayProcess {
 
       let output = '';
       const onData = (chunk: Buffer) => {
-        output += chunk.toString();
+        const text = chunk.toString();
+        output += text;
+        // Kept for the life of the process (bounded), for boot-failure reports.
+        this.output = (this.output + text).slice(-OUTPUT_KEEP_BYTES);
         if (
           output.includes(`localhost:${this.port}`) ||
           output.includes(`0.0.0.0:${this.port}`) ||
@@ -444,8 +516,14 @@ export class GatewayProcess {
     // Test-only process knobs can be phase-scoped without changing the saved
     // home, port, binary or credentials. Overrides apply to this boot only;
     // omitted keys retain the fixture's original environment.
-    await this.spawnProcess(opts.env);
-    await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
+    // No retry here: a restart must reuse this home and port. A failed
+    // restart still carries the gateway's own output tail.
+    try {
+      await this.spawnProcess(opts.env);
+      await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
+    } catch (err) {
+      throw new Error(this.bootFailureReport(err, 'restart'), { cause: err });
+    }
     if (opts.relogin ?? true) {
       await this.login();
     }

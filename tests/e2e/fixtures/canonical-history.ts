@@ -17,7 +17,15 @@ export const test = base.extend<{ canonicalGateway: GatewayProcess; canonicalPag
     if (!canonicalProviderBase) {
       requireLiveModelKeys('the canonical-history real-gateway fixture (CI-only without the keys)');
     }
-    const gateway = await GatewayProcess.start({ adminUsername: 'admin', adminPassword: 'admin123', apiBase: canonicalProviderBase, loopbackPublicURL: canonicalLoopbackPublicURL });
+    const gateway = await GatewayProcess.start({
+      adminUsername: 'admin',
+      adminPassword: 'admin123',
+      apiBase: canonicalProviderBase,
+      loopbackPublicURL: canonicalLoopbackPublicURL,
+      // A recovered boot stays visible in the report: the failed boot's
+      // error and its gateway output tail (also printed to the job output).
+      onBootRetry: (report) => info.annotations.push({ type: 'gateway-boot-retry', description: report }),
+    });
     const authFile = info.outputPath('canonical-auth.json');
     fs.mkdirSync(path.dirname(authFile), { recursive: true });
     fs.writeFileSync(authFile, JSON.stringify(await gateway.browserStorageState()), { mode: 0o600 });
