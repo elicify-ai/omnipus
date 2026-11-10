@@ -303,6 +303,15 @@ type restAPI struct {
 	// directory. Nil when web_serve is not configured.
 	servedSubdirs *agent.ServedSubdirs
 
+	// labelLimiters is THIS gateway instance's preview per-label rate
+	// limiter (fix4): admission state belongs to the restAPI/dispatcher
+	// instance, not to package state, so two instances in one process
+	// (boot plus tests, or parallel harnesses) never throttle each other
+	// through a shared map. Set at boot and in the preview chain harness;
+	// nil (bare test literals) falls back to the package default
+	// previewLabelLimiters — see previewLabelLimiter().
+	labelLimiters *previewLabelLimiter
+
 	// approvalReg is the in-process tool-approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway; nil in test setups that do not exercise approvals.
 	approvalReg *approvalRegistryV2
@@ -721,14 +730,16 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	rae.cm.RegisterHTTPHandler("/api/v1/system/folders", rae.a.withAuth(rae.a.HandleSystemFolders))
 	// POST /api/v1/system/cli-validate — spawns a caller-supplied path
 	// (<cli> --version), so it is hardened as a privileged diagnostic (ADR-030
-	// §11 F-01). CREATE-PARITY auth: plain withAuth, exactly like createAgent /
-	// HandleAgents below — NOT admin, NOT RequireNotBypass (anyone who can add
-	// the subagent can validate it). A DEDICATED rate limiter (cliValidateLimiter,
+	// §11 F-01, amended by T11 spec §3.2): a signed-in person only —
+	// RequirePersonSession answers 403 before the body is read for CLI-token,
+	// development-bypass and user-less requests (it is not RequireNotBypass,
+	// which would answer 503). A DEDICATED rate limiter (cliValidateLimiter,
 	// distinct from validateLimiter) throttles the spawn endpoint; the handler
-	// additionally enforces a per-caller in-flight cap and audits each call.
+	// runs thirdpartycli.CheckProgramPath before any spawn, enforces a per-caller
+	// in-flight cap and audits each call.
 	rae.cm.RegisterHTTPHandler(
 		"/api/v1/system/cli-validate",
-		rae.a.withAuth(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate)),
+		rae.a.withAuth(middleware.RequirePersonSession(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate))),
 	)
 	rae.cm.RegisterHTTPHandler("/api/v1/status", rae.a.withAuth(rae.a.HandleStatus))
 	// GET /api/v1/tasks/occurrences — Calendar Recurrence Redesign occurrence
@@ -1059,9 +1070,11 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerAncillaryRoutes() {
 // tested reference helper — FR-023a documents the /preview/ exemption it
 // would need — but it is not wired into gateway.go for ANY route, so this is
 // not something /preview/ specifically forgoes.) It DOES inherit the global
-// configSnapshotMiddleware (and the CSRF middleware, which exempts the
-// /preview/ prefix — see middleware/csrf.go's defaultExemptPrefixes) because
-// those are wrapped around the whole main mux in gateway.go, not per-route.
+// configSnapshotMiddleware (and the CSRF middleware — its
+// defaultExemptPrefixes set lists PreviewPathPrefix, WebhookPathPrefix and
+// LibraryPreviewPathPrefix, which is why /preview/ is exempt while /serve/
+// and /dev/ are not) because those are wrapped around the whole main mux in
+// gateway.go, not per-route.
 // HandlePreview itself checks cfg.IsPreviewEnabled() live on every request
 // and 404s when disabled (FR-006) — toggling it never requires a restart.
 //
@@ -1107,7 +1120,8 @@ const (
 // state-changing method (POST/PUT/PATCH/DELETE) never actually reaches this
 // handler: /serve/ and /dev/ are deliberately NOT in the CSRF
 // exempt-prefixes set (middleware/csrf.go's defaultExemptPrefixes, which
-// lists only middleware.PreviewPathPrefix), so the CSRF middleware rejects
+// lists PreviewPathPrefix, WebhookPathPrefix and LibraryPreviewPathPrefix —
+// never /serve/ or /dev/), so the CSRF middleware rejects
 // those methods with 403 first. Either outcome — this handler's 404 or the
 // CSRF middleware's 403 — keeps the retired prefixes off the 200 SPA shell,
 // which is the invariant that matters.

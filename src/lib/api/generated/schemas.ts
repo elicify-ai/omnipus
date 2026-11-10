@@ -1891,7 +1891,6 @@ type ExecutorDefaults = {
 type ExecutorCommandPreviewRequest = {
   cli: ExternalCliTool;
   model?: string | undefined;
-  cli_path?: string | undefined;
   cli_args?: string | undefined;
   max_tool_iterations?: number | undefined;
 };
@@ -1899,7 +1898,6 @@ type ExecutorSmokeTestRequest = {
   cli: ExternalCliTool;
   agent_id?: string | undefined;
   model?: string | undefined;
-  cli_path?: string | undefined;
   cli_args?: string | undefined;
 };
 type ChannelEntry = {
@@ -5053,7 +5051,6 @@ export const ExecutorCommandPreviewRequest: z.ZodType<ExecutorCommandPreviewRequ
   z.object({
     cli: ExternalCliTool,
     model: z.string().max(256).optional(),
-    cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
     max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   });
@@ -5070,7 +5067,6 @@ export const ExecutorSmokeTestRequest: z.ZodType<ExecutorSmokeTestRequest> =
     cli: ExternalCliTool,
     agent_id: z.string().max(128).optional(),
     model: z.string().max(256).optional(),
-    cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
   });
 export const ExecutorSmokeTestResponse = z.object({
@@ -7840,6 +7836,7 @@ export const CliValidateResponse = z.object({
     "handshake-failed",
     "unauthenticated",
     "unknown-cli",
+    "path-not-allowed",
   ]),
   resolved_path: z.string().nullish(),
   version: z.string().nullish(),
@@ -7951,6 +7948,9 @@ export const RoomMessageRequest = z.object({
   media: z.array(z.string()).max(16).optional(),
   mentions: z.array(z.string().min(1).max(128)).max(256),
 });
+export const PlantedCookieClearedError = z
+  .object({ error: z.string(), code: z.literal("planted_cookie_cleared") })
+  .passthrough();
 export const KnowledgeMountConflictError = z.object({
   error: z.string().min(1),
   code: z.literal("knowledge_mount_conflict"),
@@ -9520,7 +9520,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/agents/:id/runner/test",
     alias: "testAgentRunner",
-    description: `Connection/health check for the agent&#x27;s configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason &quot;not-external-cli&quot; when the agent&#x27;s executor is native/remote-a2a (no runner to test).
+    description: `Connection/health check for the agent&#x27;s configured external-CLI runner (Spec-4 FR-4.2). Validates the program a person saved in Settings -&gt; Third-party agents, checked as at real dispatch, runs and is authenticated WITHOUT running real work (no tokens spent). With no saved program, or one that fails the checks, nothing is started and the response is ok false, reason missing-binary, message the text a run would be refused with; a program on $PATH or a stored cli_path is never used. Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason &quot;not-external-cli&quot; when the agent&#x27;s executor is native/remote-a2a (no runner to test).
 `,
     requestFormat: "json",
     parameters: [
@@ -9729,7 +9729,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/agents/executor-preview",
     alias: "postAgentsExecutorPreview",
-    description: `Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_path/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent&#x27;s edit form alike — mirrors POST /system/cli-validate&#x27;s stateless, body-driven shape. No subprocess is spawned.
+    description: `Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Needs no existing agent id — mirrors POST /system/cli-validate&#x27;s stateless, body-driven shape; the web app uses it for the command preview on an existing external worker&#x27;s Runtime tab. No subprocess is spawned. The program is the path a person saved in Settings -&gt; Third-party agents: with none saved, or one that fails the program checks, the route refuses with 400 and the text a run would be refused with, never falling back to a program on $PATH. The argv ends with the person&#x27;s saved standard parameters, as a real run&#x27;s does.
 `,
     requestFormat: "json",
     parameters: [
@@ -9757,7 +9757,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/agents/executor-smoke-test",
     alias: "postAgentsExecutorSmokeTest",
-    description: `Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in a dedicated ephemeral workspace — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate&#x27;s 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call, since — like cli-validate — it spawns a caller-influenced binary/path. Body-driven and agent-agnostic; works from the create wizard and an existing agent&#x27;s edit form alike.
+    description: `Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in the selected agent&#x27;s resolved home folder, using its workspace&#x27;s project-work folder instead when workspace lookup and folder preparation succeed, or in a disposable scratch folder when no saved agent is identified — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate&#x27;s 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call. The run applies the person&#x27;s saved standard parameters; the audit event then adds them, through the sensitive-data filter while tools.filter_sensitive_data is on, with the preset-use note. The program is the path a person saved in Settings -&gt; Third-party agents, checked as at real dispatch: with none saved, or one that fails the checks, nothing is spawned and the body is ok false with the text a run would be refused with, never falling back to a program on $PATH. Body-driven; needs no existing agent id. In the web app, Send a test message is on an existing external worker&#x27;s Runtime tab.
 `,
     requestFormat: "json",
     parameters: [
@@ -15765,7 +15765,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/settings/third-party-agents",
     alias: "updateThirdPartyAgentSettings",
-    description: `Replaces the whole section in one call (a CLI key absent from &#x60;clis&#x60; is saved as {path: &quot;&quot;, preset_args: &quot;&quot;}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.&lt;cli&gt;.path or clis.&lt;cli&gt;.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+    description: `Replaces the whole section in one call (a CLI key absent from &#x60;clis&#x60; is saved as {path: &quot;&quot;, preset_args: &quot;&quot;}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.&lt;cli&gt;.path or clis.&lt;cli&gt;.preset_args, details.cli, details.check; never the path, which goes to the server log only) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it.
 `,
     requestFormat: "json",
     parameters: [
@@ -15790,6 +15790,11 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 403,
         description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -16157,7 +16162,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/system/cli-detect",
     alias: "getHostCliDetect",
-    description: `Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The SPA roster uses this to grey-out CLIs the host cannot run, and the create wizard / edit form use the returned path to prefill executor.cli_path. Pure Go probe (no shell-out).
+    description: `Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The web app does not call this endpoint: Settings -&gt; Third-party agents receives the same detection result inside its own settings view and uses it to pre-fill a Program path that is not saved yet. Pure Go probe (no shell-out).
 `,
     requestFormat: "json",
     response: CliDetect,
@@ -16173,7 +16178,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "post",
     path: "/system/cli-validate",
     alias: "postSystemCliValidate",
-    description: `Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent). Rejects a target that is not a regular, executable file before spawning it (classified &quot;missing-binary&quot;, no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+    description: `Stateless check of a caller-supplied external CLI program, used by Check CLI in Settings -&gt; Third-party agents: confirms the binary at cli_path actually runs and reports a version. It saves neither settings nor an agent. The version handshake (the same as POST /agents/{id}/runner/test) runs on the checked pathname with no second lookup — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. A signed-in person only (T11, RequirePersonSession): CLI-token, development-bypass and user-less requests get 403 before the body is read. Before anything starts, the shared program-file check (thirdpartycli.CheckProgramPath against the folders agents can write to) must accept cli_path: an absolute path whose final file, every link and every link&#x27;s folder lie outside the Omnipus home, agent homes, workspaces, mounts, the extra folders the sandbox lets agents write and the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder, and whose final file is a regular file (executable for the gateway user on Linux/macOS). When the list of those folders cannot be read in full, the candidate is refused with the check location_unverifiable. Ownership and writability of the program are the operator&#x27;s responsibility and are not checked. A refusal is classified &quot;path-not-allowed&quot; and nothing is spawned; an accepted candidate launches exactly the checked resolved file. An empty or whitespace-only cli_path is &quot;missing-binary&quot;; any other cli_path is checked exactly as given, surrounding whitespace included. Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
 `,
     requestFormat: "json",
     parameters: [
@@ -16193,6 +16198,12 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `The caller is not a signed-in person: the request authenticated with the CLI token or the legacy environment token, the gateway is in development-bypass mode, or no configured user account is attached. Refused before the body is read; nothing is started. The ErrorResponse &#x60;code&#x60; is &quot;person_session_required&quot;, which tells this refusal apart from other 403s such as a CSRF failure.
+`,
         schema: ErrorResponse,
       },
       {

@@ -563,7 +563,7 @@ export interface paths {
         put?: never;
         /**
          * Test an external-CLI runner connection for an agent
-         * @description Connection/health check for the agent's configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent's executor is native/remote-a2a (no runner to test).
+         * @description Connection/health check for the agent's configured external-CLI runner (Spec-4 FR-4.2). Validates the program a person saved in Settings -> Third-party agents, checked as at real dispatch, runs and is authenticated WITHOUT running real work (no tokens spent). With no saved program, or one that fails the checks, nothing is started and the response is ok false, reason missing-binary, message the text a run would be refused with; a program on $PATH or a stored cli_path is never used. Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent's executor is native/remote-a2a (no runner to test).
          */
         post: operations["testAgentRunner"];
         delete?: never;
@@ -603,7 +603,7 @@ export interface paths {
         put?: never;
         /**
          * Preview the real command Omnipus would run for these executor settings
-         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_path/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent's edit form alike — mirrors POST /system/cli-validate's stateless, body-driven shape. No subprocess is spawned.
+         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Needs no existing agent id — mirrors POST /system/cli-validate's stateless, body-driven shape; the web app uses it for the command preview on an existing external worker's Runtime tab. No subprocess is spawned. The program is the path a person saved in Settings -> Third-party agents: with none saved, or one that fails the program checks, the route refuses with 400 and the text a run would be refused with, never falling back to a program on $PATH. The argv ends with the person's saved standard parameters, as a real run's does.
          */
         post: operations["postAgentsExecutorPreview"];
         delete?: never;
@@ -623,7 +623,7 @@ export interface paths {
         put?: never;
         /**
          * Actually run a trivial test prompt through an external-CLI worker
-         * @description Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in a dedicated ephemeral workspace — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate's 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call, since — like cli-validate — it spawns a caller-influenced binary/path. Body-driven and agent-agnostic; works from the create wizard and an existing agent's edit form alike.
+         * @description Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in the selected agent's resolved home folder, using its workspace's project-work folder instead when workspace lookup and folder preparation succeed, or in a disposable scratch folder when no saved agent is identified — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate's 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call. The run applies the person's saved standard parameters; the audit event then adds them, through the sensitive-data filter while tools.filter_sensitive_data is on, with the preset-use note. The program is the path a person saved in Settings -> Third-party agents, checked as at real dispatch: with none saved, or one that fails the checks, nothing is spawned and the body is ok false with the text a run would be refused with, never falling back to a program on $PATH. Body-driven; needs no existing agent id. In the web app, Send a test message is on an existing external worker's Runtime tab.
          */
         post: operations["postAgentsExecutorSmokeTest"];
         delete?: never;
@@ -1131,7 +1131,7 @@ export interface paths {
         get: operations["getThirdPartyAgentSettings"];
         /**
          * Replace the Settings -> Third-party agents section
-         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check; never the path, which goes to the server log only) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it.
          */
         put: operations["updateThirdPartyAgentSettings"];
         post?: never;
@@ -3971,7 +3971,7 @@ export interface paths {
         };
         /**
          * Probe host PATH and well-known locations for the three external-CLI runners
-         * @description Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The SPA roster uses this to grey-out CLIs the host cannot run, and the create wizard / edit form use the returned path to prefill executor.cli_path. Pure Go probe (no shell-out).
+         * @description Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The web app does not call this endpoint: Settings -> Third-party agents receives the same detection result inside its own settings view and uses it to pre-fill a Program path that is not saved yet. Pure Go probe (no shell-out).
          */
         get: operations["getHostCliDetect"];
         put?: never;
@@ -3993,7 +3993,7 @@ export interface paths {
         put?: never;
         /**
          * Validate that an external-CLI binary runs at a given path
-         * @description Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent). Rejects a target that is not a regular, executable file before spawning it (classified "missing-binary", no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+         * @description Stateless check of a caller-supplied external CLI program, used by Check CLI in Settings -> Third-party agents: confirms the binary at cli_path actually runs and reports a version. It saves neither settings nor an agent. The version handshake (the same as POST /agents/{id}/runner/test) runs on the checked pathname with no second lookup — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. A signed-in person only (T11, RequirePersonSession): CLI-token, development-bypass and user-less requests get 403 before the body is read. Before anything starts, the shared program-file check (thirdpartycli.CheckProgramPath against the folders agents can write to) must accept cli_path: an absolute path whose final file, every link and every link's folder lie outside the Omnipus home, agent homes, workspaces, mounts, the extra folders the sandbox lets agents write and the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder, and whose final file is a regular file (executable for the gateway user on Linux/macOS). When the list of those folders cannot be read in full, the candidate is refused with the check location_unverifiable. Ownership and writability of the program are the operator's responsibility and are not checked. A refusal is classified "path-not-allowed" and nothing is spawned; an accepted candidate launches exactly the checked resolved file. An empty or whitespace-only cli_path is "missing-binary"; any other cli_path is checked exactly as given, surrounding whitespace included. Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
          */
         post: operations["postSystemCliValidate"];
         delete?: never;
@@ -4256,7 +4256,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
              * @example csrf_missing
              */
             code?: string;
@@ -4265,10 +4265,26 @@ export interface components {
              * @example provider
              */
             field?: string;
-            /** @description Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file). */
+            /** @description Optional structured details about the error. For `cli_path_invalid` and `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and `check` (the failed check's name). No path is returned; path-check diagnostics are recorded in the server log. */
             details?: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * PlantedCookieClearedError
+         * @description Typed body for a request whose Cookie header carried a duplicated reserved gateway cookie name (omnipus-session, csrf, __Host-csrf) — ADR-094 FR-015, the planted-cookie recovery. The gateway has already attached the clearing Set-Cookie lines and refused to trust any cookie value on the request. Status 403 on a state-changing request; status 401 on a read (GET/HEAD) to an authenticated or optional-auth API route (a top-level browser navigation to an optional-auth route is served anonymously instead). The client shows one Retry action that re-issues the same request once; the retry carries only the genuine cookie. Shares the error/code convention with ErrorResponse (a valid ErrorResponse), so routes that document ErrorResponse for 401/403 also carry this body.
+         */
+        PlantedCookieClearedError: {
+            /**
+             * @description Human-readable message, safe to display (verbatim, FR-015 Q4).
+             * @example Omnipus cleared cookies set by a preview — please retry
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminant the SPA transport matches on.
+             * @enum {string}
+             */
+            code: "planted_cookie_cleared";
         };
         /** @description Credentials for authenticating an existing user. */
         LoginRequest: {
@@ -9434,7 +9450,7 @@ export interface components {
              * @example --max-turns 40
              */
             readonly effective_preset_args?: string;
-            /** @description Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start. */
+            /** @description Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start. */
             readonly program_warning?: string;
             /**
              * @description Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
@@ -9716,13 +9732,11 @@ export interface components {
              */
             notes: string;
         };
-        /** @description Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate) so it works both from the create wizard, where no agent id exists yet, and from an existing agent's edit form. */
+        /** @description Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate), so it needs no existing agent id. The web app uses it for the command preview on an existing external worker's Runtime tab. There is no cli_path member (T11 C-B1): the program for the CLI is the path a person saved in Settings -> Third-party agents, and a request that carries cli_path is refused with 400 in every inbound-validation mode. */
         ExecutorCommandPreviewRequest: {
             cli: components["schemas"]["ExternalCli"];
             /** @description Model slug/shape to preview with. Omit or leave empty to preview the "no model configured" case (the --model/-m flag is simply absent from the resulting command for claude-code and codex; for opencode the flag is also absent when the value is not "provider/model"-shaped — see the response's model_dropped_reason for that case). */
             model?: string;
-            /** @description Optional executor.cli_path override to preview. Empty means "resolved via the OS $PATH at spawn time" and the response's binary field reflects that (the bare command name, not an absolute path). */
-            cli_path?: string;
             /** @description Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why. */
             cli_args?: string;
             /** @description Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted. */
@@ -9731,12 +9745,12 @@ export interface components {
         /** @description The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored. */
         ExecutorCommandPreviewResponse: {
             /**
-             * @description The resolved binary name or path that would be spawned — the previewed cli_path verbatim when non-empty, otherwise the CLI's bare default command name (resolved via the OS $PATH at actual spawn time, which this preview cannot see into).
+             * @description The program that would be spawned: the path a person saved in Settings -> Third-party agents for this CLI, exactly as saved. With no saved path, or a saved path that fails the program checks, the route refuses with 400 and the text a run would be refused with.
              * @example claude
              */
             binary: string;
             /**
-             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_path/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why), followed by the person's saved standard parameters, which are not filtered. Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
              * @example [
              *       "-p",
              *       "--output-format",
@@ -9772,15 +9786,13 @@ export interface components {
                 reason: string;
             }[];
         };
-        /** @description Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape so it works from the create wizard too, but is NOT fully agent-agnostic like those two: when agent_id names a real, saved agent, the run happens in THAT agent's own dedicated directory ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — NOT the separate, multi-agent pkg/workspace.Workspace feature; see agent.ResolveAgentWorkspace's own doc comment) — matching exactly where a genuine delegation to this agent would run, so the test is representative of real behavior (project files, AGENTS.md/CLAUDE.md/opencode.json context the CLI would actually see). Omitting agent_id (the create-wizard case, before the agent has been saved) or naming an agent that doesn't resolve falls back to a disposable, ephemeral scratch directory instead — the response's used_agent_workspace field says which one happened. */
+        /** @description Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape, so it needs no existing agent id; in the web app, Send a test message is on an existing external worker's Runtime tab. When agent_id identifies a saved agent, the test starts from that agent's resolved home folder. If workspace lookup finds the agent's workspace and its project-work folder can be prepared, that workspace folder is used instead. Otherwise the test keeps the agent home; if that chosen folder cannot be prepared either, the test returns a failure before starting the program. These are persistent folders and this handler does not remove them. If agent_id is omitted, blank or does not identify a saved agent, the test prepares a disposable scratch folder instead and cleans it up after the run. The used_agent_workspace flag distinguishes the prepared persistent branch from the scratch branch; a preparation failure can return before any program starts. There is no cli_path member (T11 C-B1): the program for the CLI is the path a person saved in Settings -> Third-party agents, and a request that carries cli_path is refused with 400 in every inbound-validation mode. */
         ExecutorSmokeTestRequest: {
             cli: components["schemas"]["ExternalCli"];
-            /** @description Optional id of an existing, saved agent whose own dedicated directory ($OMNIPUS_HOME/agents/{id}/ — a per-agent folder, not the separate pkg/workspace.Workspace feature) this test should run in. When it resolves to a real agent, the run uses that directory (never deleted afterward — only the ephemeral scratch-directory fallback is cleaned up). When omitted, empty, or naming an agent that no longer exists, falls back to a disposable ephemeral scratch directory instead. */
+            /** @description Optional ID of an existing saved agent. When found, the run uses its resolved home, overridden by the workspace project-work folder only when workspace lookup and preparation succeed. Otherwise it keeps the agent home. That persistent folder is not removed by this handler. An omitted, blank or unrecognized ID selects disposable scratch preparation instead. */
             agent_id?: string;
             /** @description Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model. */
             model?: string;
-            /** @description Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path. */
-            cli_path?: string;
             /** @description Free-form additional CLI arguments, same tokenizer and safety filter as ExecutorConfig.cli_args. */
             cli_args?: string;
         };
@@ -9794,7 +9806,7 @@ export interface components {
             error?: string;
             /** @description Wall-clock time the run actually took, in milliseconds. */
             duration_ms: number;
-            /** @description True when the request's agent_id resolved to a real, saved agent and the run happened in that agent's own dedicated directory ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — a per-agent folder, NOT the separate, multi-agent pkg/workspace.Workspace feature — this field name refers only to the former) — the same place a genuine delegation to it would run. False means the run happened in a disposable ephemeral scratch directory instead (agent_id was omitted, blank, or didn't resolve to an existing agent — e.g. testing from the create wizard before the agent has been saved). */
+            /** @description True when a saved agent's persistent directory was prepared for the test: its resolved home, or its workspace project-work folder when workspace lookup and preparation succeeded. Workspace preparation failure falls back to the agent home. That persistent directory is not removed by this handler. False denotes the scratch branch, but can also be returned by a failure before any directory or subprocess is prepared. The flag alone does not prove that a program ran. */
             used_agent_workspace: boolean;
         };
         /** @description Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over. */
@@ -13023,7 +13035,7 @@ export interface components {
         };
         /**
          * RunnerTestResponse
-         * @description Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+         * @description Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the program saved in Settings -> Third-party agents for the agent's CLI (claude-code, codex, opencode) passes the checks a real run applies, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
          */
         RunnerTestResponse: {
             /**
@@ -13032,14 +13044,14 @@ export interface components {
              */
             ok: boolean;
             /**
-             * @description Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+             * @description Failure classifier. Empty when ok=true. One of: "missing-binary" (no program saved in Settings, or the saved one fails the program checks; message is the text a run would be refused with), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
              * @example
              * @enum {string}
              */
             reason: "" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli" | "not-external-cli";
             /**
-             * @description Human-readable description of the result (success detail or failure reason + remedy).
-             * @example "claude-code" ready: binary /usr/local/bin/claude present, v1.2.3, authenticated
+             * @description Human-readable description of the result (success detail or failure reason + remedy). Fixed text per reason: it never carries a file path, the program's output or an operating-system error, which go to the server log only.
+             * @example "claude-code" ready: binary present, authenticated
              */
             message: string;
             /**
@@ -15437,7 +15449,7 @@ export interface components {
         };
         /**
          * CliDetect
-         * @description Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. Used by the roster screen's "+ Add Subagent (External)" disclosure to grey-out CLIs the host cannot actually run, and by the create wizard / edit form to prefill the executor cli_path field. Read-only, unaudited — detection never spawns a subprocess.
+         * @description Host-side CLI detection result. Probes whether each external-CLI runner binary (claude-code/codex/opencode) is present for the gateway process — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path and how it was found. The web app does not call this endpoint: Settings -> Third-party agents receives the same detection result inside its own settings view and uses it to pre-fill a Program path that is not saved yet. Read-only, unaudited — detection never spawns a subprocess.
          */
         CliDetect: {
             claude: components["schemas"]["CliDetectEntry"];
@@ -15477,7 +15489,7 @@ export interface components {
          */
         CliPreset: {
             /**
-             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.CheckProgramPath on save (absolute; the final file, every symlink and every symlink's folder not inside a folder agents can write to: the Omnipus home, an agent home, a workspace folder, a workspace mount, an extra folder the sandbox lets agents write (sandbox.allowed_paths) or the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When the list of folders agents can write to cannot be read in full, the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
              * @example /opt/homebrew/bin/claude
              */
             path: string;
@@ -15529,34 +15541,34 @@ export interface components {
         };
         /**
          * CliValidateRequest
-         * @description Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
+         * @description Request body for POST /api/v1/system/cli-validate. A stateless check of a caller-supplied external CLI program, used by Check CLI in Settings -> Third-party agents: confirms the binary at cli_path actually runs and reports a version. It saves neither settings nor an agent. The shared program-file check runs first; the version handshake then runs on exactly the checked resolved pathname, with no second lookup, on Linux, macOS and Windows (runner.TestConnectionCheckedFile, the same checked-file handshake POST /api/v1/agents/{id}/runner/test uses).
          */
         CliValidateRequest: {
             cli: components["schemas"]["ExternalCli"];
             /**
-             * @description Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty value is classified "missing-binary" without a spawn attempt; the target MUST be a regular, executable file before it is spawned.
+             * @description Filesystem path to the CLI binary to validate — either the detected prefill or an operator-entered override. An empty or whitespace-only value is classified "missing-binary" without a spawn attempt. Any other value is checked exactly as given, surrounding whitespace included, the same bytes Settings Save stores and every run checks; it must pass the program-file check (absolute, outside every agent-writable folder, a regular file; executable for the gateway user on Linux/macOS), else "path-not-allowed" and nothing is spawned.
              * @example /usr/local/bin/claude
              */
             cli_path: string;
         };
         /**
          * CliValidateResponse
-         * @description Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Blocking is keyed off `reason` alone (never the raw `ok` boolean): the SPA blocks Create/Save on "missing-binary" or "handshake-failed", warns-but-allows on "unauthenticated", and allows on "ok". `detail` is always one of a fixed set of classified messages — never raw stderr from the spawned process.
+         * @description Result of POST /api/v1/system/cli-validate. Classifies whether the given cli_path is a runnable, version-reporting instance of the selected CLI. The handshake only requires that the binary runs and returns a valid version-shaped response — no per-CLI identity/name match is performed. Clients classify the result by `reason`, never by the raw `ok` boolean, because "unauthenticated" also reports ok=true. Check CLI in Settings -> Third-party agents shows the result as a notice and saves nothing; the result does not gate saving settings or an agent. `detail` is never raw stderr from the spawned process: it is a fixed classified message per reason, except for "path-not-allowed", where it is "not allowed: <cli>: check <name> failed", naming the program and the failed check. It never carries a path, an operating-system error or file contents; the path goes to the server log only.
          */
         CliValidateResponse: {
             /**
-             * @description True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST gate blocking on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
+             * @description True when the binary is present, runs, and returns a valid version-shaped response (reason "ok" or "unauthenticated"). Retained for convenience only — clients MUST classify on `reason`, not on this field, because "unauthenticated" also reports ok=true but must not be conflated with "ok".
              * @example true
              */
             ok: boolean;
             /**
-             * @description Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+             * @description Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty or whitespace-only; nothing is started. A non-empty cli_path that is missing, not a regular file, or not executable is refused by the program-file check as "path-not-allowed" instead and is never started. "handshake-failed": the checked program could not be started, or ran but did not return a valid version-shaped response within the timeout. "unauthenticated": the binary runs and reports a version, but the local credential check found no usable credentials. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. "path-not-allowed": the shared program-file check refused cli_path (not absolute, missing, not a regular file, not executable for the gateway user on Linux/macOS, inside or linked through the Omnipus home, an agent home, a workspace, a mount, an extra folder the sandbox lets agents write or the per-user temporary folder (unless it is the shared /tmp), or the list of those folders could not be read in full); nothing is spawned. Ownership and writability of the program are the operator's responsibility and are not checked. Maps runner.ReasonOK (empty string) to "ok".
              * @example ok
              * @enum {string}
              */
-            reason: "ok" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli";
+            reason: "ok" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli" | "path-not-allowed";
             /**
-             * @description Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary" and "unknown-cli".
+             * @description Absolute path actually spawned. Populated for "ok" and "unauthenticated", and for "handshake-failed" when a target was found to spawn. Null for "missing-binary", "unknown-cli" and "path-not-allowed".
              * @example /usr/local/bin/claude
              */
             resolved_path?: string | null;
@@ -15566,7 +15578,7 @@ export interface components {
              */
             version?: string | null;
             /**
-             * @description Fixed, classified human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli").
+             * @description Human-readable message for the reason — never raw stderr from the spawned process. One of a small allowlisted set per reason (e.g. "OK", "installed; not logged in", "not found", "did not run or returned no version", "unsupported cli"); for "path-not-allowed" it is "not allowed: <cli>: check <name> failed", where <name> is one of the cli_path_invalid check names (for example agent_writable_location or location_unverifiable). A path is never included; it goes to the server log only.
              * @example OK
              */
             detail?: string;
@@ -22240,6 +22252,7 @@ export interface operations {
             };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     listChannels: {
@@ -28815,6 +28828,15 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The caller is not a signed-in person: the request authenticated with the CLI token or the legacy environment token, the gateway is in development-bypass mode, or no configured user account is attached. Refused before the body is read; nothing is started. The ErrorResponse `code` is "person_session_required", which tells this refusal apart from other 403s such as a CSRF failure. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             429: components["responses"]["429TooManyRequests"];
         };
     };
@@ -29234,6 +29256,7 @@ export type AgentFieldDescriptor = components["schemas"]["AgentFieldDescriptor"]
 export type AgentMCPBinding = components["schemas"]["AgentMCPBinding"];
 export type ToolPolicyChanges = components["schemas"]["ToolPolicyChanges"];
 export type ErrorResponse = components["schemas"]["ErrorResponse"];
+export type PlantedCookieClearedError = components["schemas"]["PlantedCookieClearedError"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type LoginResponse = components["schemas"]["LoginResponse"];
 export type PlatformAuthStartRequest = components["schemas"]["PlatformAuthStartRequest"];

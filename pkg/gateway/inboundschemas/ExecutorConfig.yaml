@@ -86,8 +86,8 @@ properties:
     description: >
       Read-only. The exact text a run of this agent would be refused with
       right now: "This agent cannot run: no program path is set for <Name>. A
-      person can set it in Settings -> Third-party agents -> <Name>." or "This
-      agent cannot run: the program set for <Name> in Settings -> Third-party
+      person can set it in Settings → Third-party agents → <Name>." or "This
+      agent cannot run: the program set for <Name> in Settings → Third-party
       agents does not pass its checks (<check> at <at>). A person can fix it
       there." Absent when a run would start.
   env_overrides:

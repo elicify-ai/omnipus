@@ -609,7 +609,7 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	// full config reload otherwise. UpsertAgentFastFunc mirrors
 	// pkg/gateway/rest.go's fastAgentUpsert: it swaps ONLY this agent's
 	// *AgentInstance into the live AgentRegistry (AgentLoop.UpsertAgentFast)
-	// instead of restarting channels/cron/schedulers/the plan engine for a
+	// instead of restarting channels/cron/schedulers for a
 	// one-agent change. See Deps.UpsertAgentFastFunc's doc comment.
 	// publishWarning surfaces a live-publish failure IN the success payload
 	// (fix-wave finding #3) rather than only in the server log: the entity

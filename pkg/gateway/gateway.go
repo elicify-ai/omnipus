@@ -1576,7 +1576,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// — on the fast-path-success branch (UpsertAgentFastFunc updated the
 		// live registry inline, nothing queued) this returns immediately,
 		// where WaitForReloadFunc above would unconditionally kick off a
-		// fresh, unnecessary full reload cycle (channels/cron/plan-engine/
+		// fresh, unnecessary full reload cycle (channels/cron/
 		// scheduler restart cascade, the exact ~60s-under-load mechanism
 		// issue #571 exists to avoid). On the fallback-reload branch (the
 		// closure above fell back to rc.reloadTrigger()), beginReload has
@@ -1589,7 +1589,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// fastAgentUpsert so system.agent.create/update (an agent creating or
 		// updating another agent) gets the same fast-path publish REST
 		// already has, instead of triggering the full restartServices
-		// cascade (channels/cron/plan-engine/schedulers) on every call. Defers
+		// cascade (channels/cron/schedulers) on every call. Defers
 		// to an already in-flight full reload rather than racing it, exactly
 		// like fastAgentUpsert's own IsReloadPending check; any fast-path
 		// failure falls back to the full reload trigger so the caller here
@@ -2052,7 +2052,17 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if !isReload {
 		stopKnowledgeLifecycles()
 	}
-	if runningServices.PlanEngine != nil {
+	// RELOAD MUST NOT STOP IT (#1725; same rule as the task-trigger scheduler
+	// below, r17 §7.2 TK-30): the plan engine is not reconstructed on reload
+	// and captures no config — it reads planning config live through
+	// agentLoop.GetConfig on the same *AgentLoop that handleConfigReload
+	// swaps in place — so stopping and restarting it applied nothing. Its
+	// Stop drains in-flight wake turns and Judge rounds for up to 30 s, so a
+	// reload that stopped it stalled while a plan was running; and an
+	// in-flight plan turn is a running turn that only an explicit Stop may
+	// end (ADR-082 D1), never a settings save. Shutdown, boot abort and test
+	// teardown (isReload=false) still stop it with that bounded drain.
+	if !isReload && runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
 	}
 	// RELOAD MUST NOT STOP IT (tool-parity spec r17 §7.2 TK-30, 18.40): the

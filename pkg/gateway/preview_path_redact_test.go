@@ -470,7 +470,7 @@ func TestRequestPathRedaction_EveryLoggingSite(t *testing.T) {
 
 // redactionRecordingSite names one place in pkg/gateway that writes a request path into
 // a log record or an audit entry. This inventory is the FR-003e claim written
-// down: eight sites, all redacted.
+// down: ten sites, all redacted.
 type redactionRecordingSite struct {
 	file string
 	what string
@@ -481,8 +481,10 @@ var expectedRedactionSites = []redactionRecordingSite{
 	{file: "gateway_boot.go", what: "CSRF mismatch reporter: slog fallback when no audit logger is wired"},
 	{file: "gateway_boot.go", what: "CSRF mismatch reporter: the AUDIT entry (HMAC-chained, outlives log rotation)"},
 	{file: "rest_preview_audit.go", what: "emitPreviewAuditEntry: details[\"sanitized_path\"]"},
+	{file: "preview_response_policy.go", what: "previewRedirectRefused: redirect-refused 502 warning (gate wave-2 SF-2, via previewRedactedLocation)"},
 	{file: filepath.Join("middleware", "bypass_gate.go"), what: "RequireNotBypass: 503 forensic warning"},
 	{file: filepath.Join("middleware", "csrf.go"), what: "CSRFMiddleware: safe-method cookie re-mint failure"},
+	{file: filepath.Join("middleware", "planted_cookie.go"), what: "PlantedCookieGuard: duplicated reserved cookie names warning (gate wave-2 SF-1)"},
 	{file: filepath.Join("middleware", "person_session.go"), what: "RequirePersonSession: person-session refusal warning (r17 Settings endpoint)"},
 	// WU-24 (PLAN-omnipus-L1-v2-20261013.md §10): Copilot CLI model
 	// provider and its sign-in handler are deleted, including its log sink.
@@ -497,8 +499,8 @@ const redactionImplFile = "preview_path_redact.go"
 // scanned so a new raw site in either package fails the build.
 var redactionScannedDirs = []string{".", "middleware"}
 
-// TestRequestPathRedaction_SourceInventory fails when a ninth recording site
-// appears, and fails when an existing one stops redacting.
+// TestRequestPathRedaction_SourceInventory fails when an uninventoried
+// recording site appears, and fails when an existing one stops redacting.
 //
 // Two independent properties, because each catches what the other misses:
 //
@@ -532,11 +534,11 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 				"or the audit chain (FR-003e).\ninventory: %+v", expectedRedactionSites)
 	})
 
-	t.Run("inventory_is_eight_sites", func(t *testing.T) {
+	t.Run("inventory_is_ten_sites", func(t *testing.T) {
 		// WU-24 retired the Copilot sign-in sink; the person-session refusal
-		// (r17 Settings endpoint) added one redacted site: an exact eight-site set.
-		assert.Len(t, expectedRedactionSites, 8,
-			"WU-24 removes the Copilot sink; all eight recording sites must stay redacted")
+		// (r17 Settings endpoint) added one redacted site: plus the #798 redirect-refusal and planted-cookie sites: an exact ten-site set.
+		assert.Len(t, expectedRedactionSites, 10,
+			"WU-24 removes the Copilot sink; all ten recording sites must stay redacted")
 	})
 }
 

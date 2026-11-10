@@ -23,5 +23,9 @@ func canExecute(path string) error {
 // isAbsolutePath is the Unix rule: the path starts with "/".
 func isAbsolutePath(p string) bool { return filepath.IsAbs(p) }
 
+// fileSystemTop is the folder every absolute path ends at when walked upward.
+// On Unix there is only one.
+func fileSystemTop(string) string { return "/" }
+
 // windowsNameCheck applies only on Windows.
 func windowsNameCheck(string) string { return "" }

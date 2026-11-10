@@ -1543,7 +1543,13 @@ type UserConfig struct {
 	// removes a single entry; password reset clears all.
 	Tokens           []TokenEntry `json:"tokens,omitempty"`
 	SessionTokenHash BcryptHash   `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
-	Name             string       `json:"name,omitempty"`
+	// SessionIssuedAt is the RFC 3339 UTC time the current session cookie was
+	// issued, written together with SessionTokenHash. The cookie's expiry is
+	// this time plus SessionCookieMaxAge; the ADR-094 FR-015 planted-cookie
+	// guard re-sends the genuine cookie with exactly that expiry. Empty for a
+	// session issued before the field existed (that session is never re-sent).
+	SessionIssuedAt string `json:"session_issued_at,omitempty"`
+	Name            string `json:"name,omitempty"`
 }
 
 // MaxUserTokens caps the number of concurrent bearer tokens kept per user.

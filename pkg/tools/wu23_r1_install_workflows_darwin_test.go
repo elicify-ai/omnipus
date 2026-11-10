@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -164,8 +163,18 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	}
 	// A real launcher delegates to the actual interpreter. It never prints a
 	// fabricated document result; the bundled ZIP/XML inspector does the work.
-	fixture.Write(t, filepath.Join(layout.Bin, "python"), "#!/bin/sh\nprintf 'managed-prefix\\n' > \"$XDG_CACHE_HOME/managed-launcher.txt\" || exit 90\nexec "+wu23R1Quote(python)+" \"$@\"\n")
-	wu23R1OwnerWritable(t, filepath.Join(layout.Bin, "python"))
+	// Keep the cache write/read probe in this real child, before exec, so the
+	// instructed script invocation needs no inline Python or runpy wrapper.
+	cacheProbe := `import os; cache=os.environ["XDG_CACHE_HOME"]; open(os.path.join(cache,"document-cache.txt"),"w").write("document-cache"); assert open(os.path.join(cache,"document-cache.txt")).read()=="document-cache"`
+	managedPython := filepath.Join(layout.Bin, "python")
+	fixture.Write(t, managedPython, "#!/bin/sh\nprintf 'managed-prefix\\n' > \"$XDG_CACHE_HOME/managed-launcher.txt\" || exit 90\n"+
+		wu23R1Quote(python)+" -I -c "+wu23R1Quote(cacheProbe)+" || exit 91\nexec "+wu23R1Quote(python)+" \"$@\"\n")
+	wu23R1OwnerWritable(t, managedPython)
+	// #1652: the instructed python3 name must reach this same managed launcher,
+	// not the host PATH. Provision its alias only inside the test fixture.
+	if err := os.Symlink("python", filepath.Join(layout.Bin, "python3")); err != nil {
+		t.Fatal(err)
+	}
 	input := filepath.Join(f.Work, "input.docx")
 	original := wu23R1DocumentArtifact(t, input)
 	inspector := filepath.Join(registryRoot, "elicify-docx", "scripts", "inspect_docx.py")
@@ -186,8 +195,9 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	})
 	// The helper is reached from the actual document environment, not a host
 	// PATH fallback or fake interpreter. The input is a literal Word package.
-	code := `import os,runpy,sys; cache=os.environ["XDG_CACHE_HOME"]; open(os.path.join(cache,"document-cache.txt"),"w").write("document-cache"); assert open(os.path.join(cache,"document-cache.txt")).read()=="document-cache"; sys.argv=["inspect_docx.py","input.docx"]; runpy.run_path(` + strconv.Quote(inspector) + `,run_name="__main__")`
-	result := wu23R1Bash(t, bash, ctx, "python -I -c "+wu23R1Quote(code))
+	command := "python3 " + inspector + " " + input
+	t.Logf("document tool invocation: %s", command)
+	result := wu23R1Bash(t, bash, ctx, command)
 	if result.IsError || result.ExitCode == nil || *result.ExitCode != 0 {
 		t.Fatalf("real managed document tool must execute under god=%t: %s", god, result.ForLLM)
 	}

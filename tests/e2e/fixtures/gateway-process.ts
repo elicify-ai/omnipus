@@ -87,6 +87,163 @@ export interface GatewayProcessOptions {
    * other scenario in a spec file uses.
    */
   env?: Record<string, string>;
+  /**
+   * Boot with gateway.public_url set to this process's own loopback origin
+   * (http://localhost:<port>, via OMNIPUS_GATEWAY_PUBLIC_URL; an explicit
+   * `env` entry still wins). The port is only known inside start(), so a
+   * caller cannot compute it. Without a public URL a gateway cannot mint a
+   * Mode 1 isolated address (ADR-094 FR-001/FR-011).
+   */
+  loopbackPublicURL?: boolean;
+  /** The /health budget for each boot attempt (default 15 s, passed to
+   * setup.ts::waitForHealth). Tests of this fixture lower it. */
+  healthTimeoutMs?: number;
+  /** How long a boot may take to announce its port (default 30 s). Tests of
+   * this fixture lower it. */
+  startupTimeoutMs?: number;
+}
+
+/** Gateway output kept in memory per process (the tail is what is reported). */
+const OUTPUT_KEEP_BYTES = 256 * 1024;
+/** Lines of gateway output put into a boot-failure report. */
+const OUTPUT_TAIL_LINES = 80;
+/** Bytes read (and scrubbed as a whole) from the end of the gateway's panic
+ * log for a report. Much larger than REPORT_TAIL_BYTES, so the edge of this
+ * read window is never inside the part that is reported. */
+export const PANIC_LOG_READ_BYTES = 1024 * 1024;
+/** At most this many characters of each tail (output, panic log) are
+ * reported; the cut is made after scrubbing and drops the partial line. */
+export const REPORT_TAIL_BYTES = 64 * 1024;
+/** At most this many characters of the failure message itself (a startup
+ * error carries the gateway's whole output, an onboarding error a whole
+ * response body); cut after scrubbing. */
+const REPORT_MESSAGE_MAX = 256 * 1024;
+
+/** `scrubbed` cut to REPORT_MESSAGE_MAX characters. Only ever called on
+ * scrubbed text, so the cut cannot split a secret out of recognition. */
+function capMessage(scrubbed: string, rest: string): string {
+  if (scrubbed.length <= REPORT_MESSAGE_MAX) return scrubbed;
+  return (
+    `${scrubbed.slice(0, REPORT_MESSAGE_MAX)}\n` +
+    `[... ${scrubbed.length - REPORT_MESSAGE_MAX} more characters cut; ${rest} ...]`
+  );
+}
+/** How long stop() waits after SIGTERM before SIGKILL, and after SIGKILL. */
+const STOP_GRACE_MS = 10_000;
+const KILL_WAIT_MS = 10_000;
+
+/** Whether a child has really exited (or never started: no pid). */
+function hasExited(proc: ChildProcess): boolean {
+  return proc.pid === undefined || proc.exitCode !== null || proc.signalCode !== null;
+}
+
+/** Resolves true when the child has exited, false after `ms` without exit. */
+function waitForExit(proc: ChildProcess, ms: number): Promise<boolean> {
+  if (hasExited(proc)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      proc.off('exit', onExit);
+      resolve(hasExited(proc));
+    }, ms);
+    proc.once('exit', onExit);
+  });
+}
+
+/** Env names whose values are treated as secrets in a boot report: KEY,
+ * TOKEN, SECRET, PASSWORD, PASSWD or CREDENTIAL anywhere in the name, with
+ * no word-boundary requirement (OPENROUTER_API_KEY, GITHUB_TOKEN,
+ * PGPASSWORD, ...). Over-scrubbing a harmless value is accepted. */
+const SECRET_ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL/i;
+/** A line of a multi-line secret shorter than this (after trimming) is not
+ * redacted on its own (it would be an ordinary word or a bracket). */
+const SECRET_LINE_MIN = 4;
+
+/** `v` URL-encoded, or nothing when it cannot be: encodeURIComponent throws
+ * on an unpaired UTF-16 surrogate, which a JavaScript option value may hold
+ * (such a value cannot appear URL-encoded in output either). */
+function urlEncoded(v: string): string[] {
+  try {
+    return [encodeURIComponent(v)];
+  } catch {
+    return [];
+  }
+}
+
+/** The forms a known secret may take in output: as is and trimmed of
+ * surrounding whitespace (spaces, tabs, CR, LF: e2e-model-keys.ts::
+ * lookupModelKey trims a key before it is sent), each JSON-escaped (once and
+ * twice, e.g. a JSON string logged inside JSON) and URL-encoded, plus, when
+ * the ORIGINAL value contains a line break (a trailing CR/LF counts), every
+ * component line of at least SECRET_LINE_MIN characters on its own, even if
+ * only one qualifies (a log can show one line, or the value without its
+ * trailing line break). */
+function secretForms(value: string): string[] {
+  const forms = (v: string) => {
+    const json = JSON.stringify(v).slice(1, -1);
+    return [v, json, JSON.stringify(json).slice(1, -1), ...urlEncoded(v)];
+  };
+  const multiline = /[\r\n]/.test(value);
+  const lines = multiline
+    ? value.split(/\r?\n|\r/).map((l) => l.trim()).filter((l) => l.length >= SECRET_LINE_MIN)
+    : [];
+  const trimmed = value.trim();
+  return [...new Set([...forms(value), ...(trimmed ? forms(trimmed) : []), ...lines.flatMap(forms)])];
+}
+
+/**
+ * Blank out secrets before gateway output reaches the job log or an error.
+ * Covers the value (any length) of every secret-named variable in every
+ * environment the gateway was started with (each restart() override
+ * included, since the output of earlier processes is still retained), the
+ * admin password, each in its JSON-escaped and URL-encoded
+ * forms, and key-shaped text: sk- keys, bearer tokens and
+ * key/token/secret/password assignments. Callers scrub BEFORE cutting text
+ * to a tail, so a cut never splits a known secret out of recognition.
+ */
+function scrubSecrets(text: string, envs: Record<string, string | undefined>[], extra: string[]): string {
+  const labels = new Map<string, string>();
+  for (const env of envs) {
+    for (const [name, value] of Object.entries(env)) {
+      if (value && SECRET_ENV_NAME.test(name)) {
+        for (const form of secretForms(value)) labels.set(form, name);
+      }
+    }
+  }
+  for (const value of extra) {
+    if (!value) continue;
+    for (const form of secretForms(value)) if (!labels.has(form)) labels.set(form, 'password');
+  }
+  let out = text;
+  for (const form of [...labels.keys()].sort((a, b) => b.length - a.length)) {
+    out = out.split(form).join(`[REDACTED:${labels.get(form)}]`);
+  }
+  return out
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, '[REDACTED:sk-key]')
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi, '$1[REDACTED:bearer]')
+    .replace(
+      /((?:api[_-]?key|token|secret|password|passwd)\\?["']?\s*[:=]\s*\\?["']?)(?!\[REDACTED)([^\s"'\\,;}]{4,})/gi,
+      '$1[REDACTED:value]',
+    );
+}
+
+/** The last `lines` lines of already-scrubbed `text`, at most
+ * REPORT_TAIL_BYTES characters. When `cut` (the text is the end of a longer
+ * stream), the first line is partial and is dropped; so is the partial line
+ * left by the character cap. */
+function reportTail(text: string, lines: number, cut: boolean): string {
+  let all = text.replace(/\n$/, '').split('\n');
+  if (cut) all = all.slice(1);
+  let tail = all.slice(-lines).join('\n');
+  if (tail.length > REPORT_TAIL_BYTES) {
+    tail = tail.slice(-REPORT_TAIL_BYTES);
+    const nl = tail.indexOf('\n');
+    if (nl >= 0) tail = tail.slice(nl + 1);
+  }
+  return tail;
 }
 
 /**
@@ -112,6 +269,113 @@ export class GatewayProcess {
   private csrfToken = '';
   /** Bearer from this process's own most recent login (see reloadBearer()). */
   private loginBearer = '';
+  /** This process's stdout+stderr (last OUTPUT_KEEP_BYTES), for boot-failure reports. */
+  private output = '';
+  /** Whether `output` lost its beginning to the OUTPUT_KEEP_BYTES bound. */
+  private outputCut = false;
+  /** Every environment a process of this gateway was spawned with: `output`
+   * keeps the output of all of them, so all their secrets are scrubbed. */
+  private readonly spawnEnvs: Record<string, string | undefined>[] = [];
+
+  /** The last `lines` lines of this gateway's stdout+stderr (unscrubbed). */
+  outputTail(lines = OUTPUT_TAIL_LINES): string {
+    return reportTail(this.output, lines, this.outputCut);
+  }
+
+  /** `text` with every known secret of this gateway blanked out. */
+  private scrub(text: string): string {
+    return scrubSecrets(text, [process.env, this.extraEnv, ...this.spawnEnvs], [this.adminPassword]);
+  }
+
+  /**
+   * The last `lines` lines of $OMNIPUS_HOME/logs/gateway_panic.log. Once the
+   * gateway initializes logging it redirects its stderr into that file
+   * (pkg/logger/panic_unix.go::initPanicFile) and writes recovered panics
+   * there (pkg/logger/panic.go::InitPanic), so a crash after that point is
+   * only visible here. Read before the home is deleted.
+   */
+  private panicLogTail(lines = OUTPUT_TAIL_LINES): string {
+    const file = path.join(this.homeDir, 'logs', 'gateway_panic.log');
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(file, 'r');
+      const size = fs.fstatSync(fd).size;
+      const len = Math.min(size, PANIC_LOG_READ_BYTES);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      // Scrub the whole read window first, then cut to the reported tail.
+      // The read window's own edge (which may split a secret) lies far
+      // outside that tail, and its partial line is dropped as well.
+      const text = this.scrub(buf.toString('utf8'));
+      return reportTail(text, lines, len < size) || '(empty)';
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '(no panic log: the gateway did not get that far)';
+      return `(could not read ${file}: ${err instanceof Error ? err.message : String(err)})`;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  }
+
+  /** A boot failure plus this gateway's own output and panic-log tails,
+   * secrets scrubbed: the cause, not a guess. */
+  private bootFailureReport(err: unknown, what: string): string {
+    const message = capMessage(
+      this.scrub(err instanceof Error ? err.message : String(err)),
+      'see the output tail below',
+    );
+    const output = reportTail(this.scrub(this.output), OUTPUT_TAIL_LINES, this.outputCut);
+    return (
+      `GatewayProcess ${what} failed (port ${this.port}, OMNIPUS_HOME ${this.homeDir}, binary ${this.binary}): ${message}\n` +
+      `--- gateway output (last ${OUTPUT_TAIL_LINES} lines, stdout+stderr) ---\n` +
+      `${output || '(the gateway wrote no output)'}\n` +
+      `--- gateway_panic.log (last ${OUTPUT_TAIL_LINES} lines; the gateway redirects its stderr here once logging starts) ---\n` +
+      `${this.panicLogTail()}\n` +
+      `--- end gateway output ---`
+    );
+  }
+
+  /**
+   * The failure text when a report could not be built (scrubbing or
+   * formatting threw): it names the failure and why, and withholds the
+   * original message and output, which could not be scrubbed. Never throws,
+   * so cleanup always runs after it.
+   */
+  private unreportable(what: string, formatErr: unknown): string {
+    const why = formatErr instanceof Error ? `${formatErr.name}: ${formatErr.message}` : String(formatErr);
+    return (
+      `GatewayProcess ${what} failed (port ${this.port}, OMNIPUS_HOME ${this.homeDir}, binary ${this.binary}), ` +
+      `but its report could not be built (${why}); the original message and the gateway output are ` +
+      'withheld because they could not be scrubbed'
+    );
+  }
+
+  /** bootFailureReport(), or unreportable() if building it throws. */
+  private safeFailureReport(err: unknown, what: string): string {
+    try {
+      return this.bootFailureReport(err, what);
+    } catch (formatErr) {
+      return this.unreportable(what, formatErr);
+    }
+  }
+
+  /**
+   * stop() after a failure, keeping that failure if cleanup fails too: the
+   * returned text is `failure` plus the (scrubbed) cleanup error, or
+   * undefined when stop() succeeded.
+   */
+  private async stopAfterFailure(failure: string): Promise<string | undefined> {
+    let cleanup: string | undefined;
+    try {
+      await this.stop();
+    } catch (stopErr) {
+      try {
+        cleanup = this.scrub(stopErr instanceof Error ? stopErr.message : String(stopErr));
+      } catch {
+        cleanup = '(the cleanup error is withheld: it could not be scrubbed)';
+      }
+    }
+    return cleanup === undefined ? undefined : `${failure}\n--- cleanup after that failure also failed ---\n${cleanup}`;
+  }
 
   private constructor(
     opts: { binary: string; adminUsername: string; adminPassword: string; model: string; apiBase: string; extraArgs: string[]; extraEnv: Record<string, string> },
@@ -141,6 +405,60 @@ export class GatewayProcess {
           `  CGO_ENABLED=0 go build -tags goolm,stdjson -o ${binary} ./cmd/omnipus/`,
       );
     }
+    const healthTimeoutMs = opts.healthTimeoutMs ?? 15_000;
+    const startupTimeoutMs = opts.startupTimeoutMs ?? 30_000;
+
+    // A boot (spawn + /health) that fails FAILS: it is never retried, so an
+    // unexplained crash cannot turn into a pass. Its proof goes to the job
+    // output and the thrown error: the gateway's own stdout/stderr and
+    // panic-log tails, scrubbed (CI 2026-11-10: "/health never returned 200"
+    // with no gateway output anywhere). The error is built from that
+    // scrubbed text only, never with the raw error as its cause, because a
+    // startup error carries the gateway's raw output. Onboarding and login
+    // are not retried either.
+    const gw = await GatewayProcess.create(binary, opts);
+    let bootFailure: string | undefined;
+    try {
+      await gw.spawnProcess({}, startupTimeoutMs);
+      await waitForHealth(gw.baseURL, healthTimeoutMs, gw.proc ?? undefined);
+    } catch (err) {
+      // The report reads the panic log, so it is built before stop()
+      // deletes the home.
+      bootFailure = gw.safeFailureReport(err, 'boot');
+    }
+    if (bootFailure !== undefined) {
+      console.error(bootFailure);
+      // The failed boot is really gone (exit observed, port released, home
+      // removed) before the failure is thrown.
+      throw new Error((await gw.stopAfterFailure(bootFailure)) ?? bootFailure);
+    }
+    // A failed onboarding (a missing key, a refused probe) must not leave
+    // the process running or its temp OMNIPUS_HOME behind either. If that
+    // cleanup fails too, the error keeps both (scrubbed, no raw cause).
+    // The error is always rebuilt from scrubbed text (the raw one can carry
+    // a response body or a provider key), with or without a cleanup failure.
+    try {
+      await gw.onboardAndLogin();
+    } catch (err) {
+      let failure: string;
+      try {
+        failure = capMessage(
+          gw.scrub(`GatewayProcess onboarding/login failed: ${err instanceof Error ? err.message : String(err)}`),
+          'the rest of the response is not reported',
+        );
+      } catch (formatErr) {
+        // Cleanup below runs whatever happened while formatting.
+        failure = gw.unreportable('onboarding/login', formatErr);
+      }
+      bootFailure = (await gw.stopAfterFailure(failure)) ?? failure;
+    }
+    if (bootFailure !== undefined) throw new Error(bootFailure);
+    return gw;
+  }
+
+  /** One fresh gateway instance: own free port, own OMNIPUS_HOME with its
+   * config.json. Not yet spawned. */
+  private static async create(binary: string, opts: GatewayProcessOptions): Promise<GatewayProcess> {
     const port = await getFreePort();
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-gwproc-${port}-`));
     // A mock-provider gateway onboards a catalog provider with its endpoint
@@ -156,7 +474,7 @@ export class GatewayProcess {
       { mode: 0o600 },
     );
 
-    const gw = new GatewayProcess(
+    return new GatewayProcess(
       {
         binary,
         adminUsername: opts.adminUsername ?? 'admin',
@@ -167,51 +485,52 @@ export class GatewayProcess {
         model: opts.model ?? (opts.apiBase ? E2E_FALLBACK.model : E2E_PRIMARY.model),
         apiBase: opts.apiBase ?? '',
         extraArgs: opts.extraArgs ?? ['--sandbox=off'],
-        extraEnv: opts.env ?? {},
+        extraEnv: {
+          ...(opts.loopbackPublicURL ? { OMNIPUS_GATEWAY_PUBLIC_URL: `http://localhost:${port}` } : {}),
+          ...(opts.env ?? {}),
+        },
       },
       homeDir,
       port,
     );
-
-    // A failed boot or onboarding (a missing key, a refused probe) must not
-    // leave the process running or its temp OMNIPUS_HOME behind: the caller
-    // never receives a handle to stop().
-    try {
-      await gw.spawnProcess();
-      await waitForHealth(gw.baseURL, 15_000, gw.proc ?? undefined);
-      await gw.onboardAndLogin();
-    } catch (err) {
-      await gw.stop();
-      throw err;
-    }
-    return gw;
   }
 
   /** Spawn the binary against this.homeDir/this.port and resolve once the
    * process has logged that it is listening (mirrors setup.ts:startGateway's
    * log-matching + fatal-exit-during-boot handling exactly). */
-  private async spawnProcess(envOverrides: Record<string, string> = {}): Promise<void> {
+  private async spawnProcess(envOverrides: Record<string, string> = {}, startupTimeoutMs = 30_000): Promise<void> {
     const args = ['gateway', '--allow-empty', ...this.extraArgs];
+    const env = {
+      ...process.env,
+      OMNIPUS_HOME: this.homeDir,
+      OMNIPUS_BEARER_TOKEN: '',
+      ...this.extraEnv,
+      ...envOverrides,
+    };
+    // Kept so a report scrubs the secrets of every spawn (restart overrides too).
+    this.spawnEnvs.push(env);
     this.proc = await new Promise<ChildProcess>((resolve, reject) => {
       const child = spawn(this.binary, args, {
-        env: {
-          ...process.env,
-          OMNIPUS_HOME: this.homeDir,
-          OMNIPUS_BEARER_TOKEN: '',
-          ...this.extraEnv,
-          ...envOverrides,
-        },
+        env,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      // Owned from spawn time, not only after the port announcement: a boot
+      // that fails before announcing must still be stoppable by stop().
+      this.proc = child;
 
       const timeout = setTimeout(() => {
         child.kill();
-        reject(new Error(`GatewayProcess: gateway did not start within 30s on port ${this.port}`));
-      }, 30_000);
+        reject(new Error(`GatewayProcess: gateway did not start within ${startupTimeoutMs / 1000}s on port ${this.port}`));
+      }, startupTimeoutMs);
 
       let output = '';
       const onData = (chunk: Buffer) => {
-        output += chunk.toString();
+        const text = chunk.toString();
+        output += text;
+        // Kept for the life of the process (bounded), for boot-failure reports.
+        const kept = this.output + text;
+        if (kept.length > OUTPUT_KEEP_BYTES) this.outputCut = true;
+        this.output = kept.slice(-OUTPUT_KEEP_BYTES);
         if (
           output.includes(`localhost:${this.port}`) ||
           output.includes(`0.0.0.0:${this.port}`) ||
@@ -457,8 +776,17 @@ export class GatewayProcess {
     // Test-only process knobs can be phase-scoped without changing the saved
     // home, port, binary or credentials. Overrides apply to this boot only;
     // omitted keys retain the fixture's original environment.
-    await this.spawnProcess(opts.env);
-    await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
+    // No retry here: a restart must reuse this home and port. A failed
+    // restart still carries the gateway's own output tail.
+    // The error is built from the scrubbed report only (no raw cause).
+    let failure: string | undefined;
+    try {
+      await this.spawnProcess(opts.env);
+      await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
+    } catch (err) {
+      failure = this.safeFailureReport(err, 'restart');
+    }
+    if (failure !== undefined) throw new Error(failure);
     if (opts.relogin ?? true) {
       await this.login();
     }
@@ -472,15 +800,36 @@ export class GatewayProcess {
     }
   }
 
-  /** Graceful shutdown (SIGTERM) + best-effort OMNIPUS_HOME cleanup. */
+  /**
+   * Shut the gateway down and wait until it has really exited: SIGTERM, then
+   * SIGKILL after STOP_GRACE_MS. Only then is OMNIPUS_HOME removed, so a
+   * still-running process never writes into a deleted home and its port is
+   * free when stop() returns. Throws (keeping the home) if the process
+   * survives SIGKILL.
+   */
   async stop(): Promise<void> {
-    if (this.proc && this.proc.exitCode === null && !this.proc.killed) {
-      this.proc.kill('SIGTERM');
+    const proc = this.proc;
+    let survivor: Error | undefined;
+    if (proc && !hasExited(proc)) {
+      proc.kill('SIGTERM');
+      if (!(await waitForExit(proc, STOP_GRACE_MS))) {
+        console.error(
+          `GatewayProcess.stop: pid ${proc.pid} (port ${this.port}) ignored SIGTERM for ${STOP_GRACE_MS / 1000}s; sending SIGKILL`,
+        );
+        proc.kill('SIGKILL');
+        if (!(await waitForExit(proc, KILL_WAIT_MS))) {
+          survivor = new Error(
+            `GatewayProcess.stop: pid ${proc.pid} (port ${this.port}) did not exit after SIGTERM and SIGKILL; ` +
+              `keeping its OMNIPUS_HOME ${this.homeDir}`,
+          );
+        }
+      }
     }
     if (this.ctx) {
       await this.ctx.dispose().catch(() => {});
       this.ctx = null;
     }
+    if (survivor) throw survivor;
     if (fs.existsSync(this.homeDir)) {
       try {
         fs.rmSync(this.homeDir, { recursive: true, force: true });

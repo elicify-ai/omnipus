@@ -24,6 +24,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 // setAgentModelProvider echoes the agent's explicit primary-model provider (O3
@@ -45,8 +46,8 @@ func setAgentModelProvider(ag *gen.Agent, model *config.AgentModelConfig) {
 // of /api/v1/agents/{id}, reporting whether it handled the request:
 //   - GET  executor-defaults    — static reference data;
 //   - POST executor-preview     — stateless real-command preview
-//     (rest_executor_preview.go), body-driven and agent-agnostic so it works
-//     from the create wizard where no agent id exists yet;
+//     (rest_executor_preview.go), body-driven and agent-agnostic: it needs no
+//     agent id, so it does not depend on an agent being saved;
 //   - POST executor-smoke-test  — runs a bounded, real test prompt through an
 //     external-CLI worker (rest_executor_smoketest.go); it spends real tokens
 //     and enforces its own rate limit and in-flight cap inline, since it shares
@@ -315,10 +316,27 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 		return
 	}
 
-	// Validate the agent's CONFIGURED binary (executor.cli_path), not just the
-	// default $PATH binary — otherwise a custom cli_path that does not exist
-	// would false-green. Empty cli_path falls back to the default name.
-	res := runner.TestConnectionWithPath(r.Context(), cli, executor.CLIPath)
+	// Test the program a real run would start: the one saved in Settings, with
+	// the same check and the same refusal, never executor.cli_path or a program
+	// on $PATH (T11 FR-9). The file that passed is the file probed, exactly as
+	// returned by the check (TestConnectionCheckedFile: no trimming, no lookup).
+	// An unsupported cli has no Settings row and gets unknown-cli below. Every
+	// Message sent here is fixed text naming the class: the path, the program's
+	// output and OS errors are in the server log only (founder Q48 A, Q50 A).
+	resolved := ""
+	if thirdpartycli.IsKnownCLI(cli) {
+		var refusal string
+		if _, resolved, refusal = a.executorProgram(cli); refusal != "" {
+			jsonOK(w, gen.RunnerTestResponse{
+				Ok:      false,
+				Reason:  gen.RunnerTestResponseReasonMissingBinary,
+				Message: refusal,
+				Cli:     strPtr(cli),
+			})
+			return
+		}
+	}
+	res := runner.TestConnectionCheckedFile(r.Context(), cli, resolved)
 	resp := gen.RunnerTestResponse{
 		Ok:      res.OK,
 		Reason:  gen.RunnerTestResponseReason(res.Reason),
@@ -1449,8 +1467,9 @@ var cliDetectAll = clidetect.DetectAll
 // Reports, per external-CLI runner (claude-code / codex / opencode), whether the
 // binary is installed and — when it is — its absolute resolved path and how it
 // was located ("path" via the gateway $PATH, "well-known" via a curated per-OS
-// install-dir scan). The roster screen greys-out CLIs the host cannot run, and
-// the create wizard / edit form prefill the executor cli_path field from `path`.
+// install-dir scan). The web app receives live detection through the
+// Settings → Third-party agents view, not by calling this endpoint. It
+// pre-fills an unsaved Program path from link_path when present, otherwise path.
 //
 // Pure-Go filesystem probe — detection NEVER spawns a subprocess (FR-004) and is
 // unaudited by design: no caller-supplied path is executed here (auditing is
