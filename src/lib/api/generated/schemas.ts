@@ -750,6 +750,8 @@ type LibraryEntry = {
   mount?: LibraryEntryMount | undefined;
   is_knowledge_base?: boolean | undefined;
   is_text_editable: boolean;
+  is_view?: boolean | undefined;
+  view?: LibraryEntryView | undefined;
   preview_profile?: ("workspace" | "mail_restricted") | undefined;
   chat_copy?: boolean | undefined;
   preview_scripts_allowed?: boolean | undefined;
@@ -758,6 +760,13 @@ type LibraryEntryMount = {
   name: string;
   host_path: string;
   broad: boolean;
+};
+type LibraryEntryView = {
+  name: string;
+  label: string;
+  collection_id: string;
+  kind?: string | undefined;
+  source?: string | undefined;
 };
 type LibraryUploadResponse = {
   entries: Array<LibraryEntry>;
@@ -6661,6 +6670,13 @@ export const LibraryEntryMount: z.ZodType<LibraryEntryMount> = z.object({
   host_path: z.string().min(1),
   broad: z.boolean(),
 });
+export const LibraryEntryView: z.ZodType<LibraryEntryView> = z.object({
+  name: z.string().min(1),
+  label: z.string().min(1),
+  collection_id: z.string().min(1),
+  kind: z.string().min(1).optional(),
+  source: z.string().min(1).optional(),
+});
 export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
@@ -6672,6 +6688,8 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   mount: LibraryEntryMount.optional(),
   is_knowledge_base: z.boolean().optional(),
   is_text_editable: z.boolean(),
+  is_view: z.boolean().optional(),
+  view: LibraryEntryView.optional(),
   preview_profile: z.enum(["workspace", "mail_restricted"]).optional(),
   chat_copy: z.boolean().optional(),
   preview_scripts_allowed: z.boolean().optional(),
@@ -11281,6 +11299,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         type: "Query",
         schema: z.boolean().optional().default(false),
       },
+      {
+        name: "include_views",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
     ],
     response: z.array(LibraryEntry),
     errors: [
@@ -12080,6 +12103,8 @@ A view that cannot be answered — unknown, stored disabled (FR-105), refused at
 Each entry carries the slug it is actually addressed by (pass it VERBATIM to GET .../knowledge/view), its display label, its kind, whether it can be served, and — for an imported view — the &#x60;.base&#x60; it came from. Base previews and dashboard embeds keep listing by source; this is the collection&#x27;s own list.
 
 A collection_id outside this workspace&#x27;s scope returns the same empty-but-complete shape as an unknown collection (FR-052/FR-053) — never a 403 or 404, which would confirm the collection exists. View files the loader rejected are counted in unloadable_count and named in unloadable, never silently dropped.
+
+The loader is the one the Library listing uses (include_views on GET .../entries): it reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per load. A view file it does not read is not listed, cannot be opened through GET .../knowledge/view, and is named in unloadable.
 `,
     requestFormat: "json",
     parameters: [
