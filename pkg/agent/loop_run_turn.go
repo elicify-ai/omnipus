@@ -12,7 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -480,12 +480,19 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 	// loaded model, run handleModelSwitch BEFORE the first LLM call so the next
 	// request sees the compressed, annotated history. handleModelSwitch is a
 	// no-op when no switch is requested.
-	if requested := strings.TrimSpace(
+	requested := strings.TrimSpace(
 		inboundMetadata(bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata}, "model_name"),
-	); requested != "" {
-		// Skip when the requested model is the same as the agent's currently
-		// loaded one — this is the no-op case in spec §11 Dataset 3 row 1.
-		if requested != rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Model {
+	)
+	// S-15: a frame naming only the provider asks for the loaded model on
+	// that provider.
+	pairProvider := frameProvider(rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata)
+	if requested == "" && pairProvider != "" {
+		requested = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Model
+	}
+	if requested != "" {
+		// Skip when the requested pair is the one currently loaded — this
+		// is the no-op case in spec §11 Dataset 3 row 1.
+		if pairSwitchNeeded(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, pairProvider, requested) {
 			switchedAgent, switchErr := rp.rc.rx.rr.rq.ri.rf.rt.al.handleModelSwitch(
 				rp.rc.rx.ctx,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.agent,
@@ -494,6 +501,12 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 				requested,
 				bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata},
 			)
+			if switchErr != nil && pairProvider != "" {
+				// D5 row 8: an explicit pair that does not resolve is refused
+				// on the error path; the turn never borrows another
+				// configured provider (S-15).
+				return rp.refuseUnresolvedPair(pairProvider, requested, switchErr)
+			}
 			if switchErr != nil {
 				logger.WarnCF("agent", "switch-time compress failed; continuing with current model",
 					map[string]any{
@@ -1110,16 +1123,8 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 	if rq.useNativeSearch && !narrowingActive {
 		rq.ri.rf.rt.llmOpts["native_search"] = true
 	}
-	rq.ri.rf.rt.ts.agent.mu.RLock()
-	agentThinkingLevel := rq.ri.rf.rt.ts.agent.ThinkingLevel
-	rq.ri.rf.rt.ts.agent.mu.RUnlock()
-	if agentThinkingLevel != ThinkingOff {
-		if tc, ok := rq.ri.rf.rt.activeProvider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
-			rq.ri.rf.rt.llmOpts["thinking_level"] = string(agentThinkingLevel)
-		} else {
-			logger.WarnCF("agent", "thinking_level is set but current provider does not support it, ignoring",
-				map[string]any{"agent_id": rq.ri.rf.rt.ts.agent.ID, "thinking_level": string(agentThinkingLevel)})
-		}
+	if v := rq.ri.rf.rt.primaryEffortChoice(); v != "" {
+		rq.ri.rf.rt.llmOpts[effortdialect.EffortOptionKey] = v
 	}
 
 	rq.ri.rf.rt.llmModel = rq.ri.activeModel
@@ -1668,36 +1673,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					// for one candidate. Keep this attempt path for streaming
 					// and rt.llmModel: a BeforeLLM hook may have overridden the
 					// selected model, which the chain's model would discard.
-					rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
-					return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
-				}
-				cat := rt.al.getCapabilityCatalog()
-				budget := resizeBudgetForModel(cat, provider, model, int(catalog.DefaultResizeLimits.MaxBytes))
-				// §7.4 (read paths): one attach per candidate, reused across
-				// this candidate's in-place retries — same request re-sent
-				// (cache reset per round in callProviderOnce; see
-				// runProviderAttempt's block for the cache-miss-on-error rule).
-				attachKey := provider + "/" + model
-				candidateMessages, imageErr := func() ([]providers.Message, error) {
-					if cached, ok := rt.providerCallAttachCache[attachKey]; ok {
-						return cached, nil
-					}
-					m, err := attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, provider, model), budget)
-					if err != nil {
-						return nil, err
-					}
-					// Issue #1435 R1: this candidate's own budget applies to
-					// ordinary inline image media too — a tighter fallback
-					// candidate must not receive the looser primary's image
-					// bytes. Request-local fit; history stays canonical.
-					m = fitOrdinaryImageMediaToBudget(m, budget)
-					if rt.providerCallAttachCache != nil {
-						rt.providerCallAttachCache[attachKey] = m
-					}
-					return m, nil
-				}()
-				if imageErr != nil {
-					return nil, imageErr
+					return rt.callWithEffort(provider, rt.llmModel, func(opts map[string]any) (*providers.LLMResponse, error) {
+						rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
+						return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
+					})
 				}
 				// Resolve the exact configured pair. A missing named fallback
 				// is a refusal, never permission to borrow another client.
@@ -1710,11 +1689,15 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 				if p == nil {
 					p = rt.activeProvider // legacy, explicitly unpinned candidate
 				}
-				rt.ts.setLastProducedModel(model)
-				rt.ts.setLastProducedProvider(provider)
-				response, err := p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
-				rt.accountProviderAttempt(provider, model, response, err)
-				return response, err
+				// Effort-levels S-88/S-95: every candidate runs the same attempt
+				// body as a single candidate (image attach once per candidate,
+				// streaming when the provider and channel allow it, accounting
+				// of the attempt). C-10 counts THIS attempt only; the chain
+				// ends instead of falling back once bytes of an attempt showed.
+				return rt.callWithEffort(provider, model, func(opts map[string]any) (*providers.LLMResponse, error) {
+					rt.providerCallStreamedBytes.Store(0)
+					return rt.runProviderAttempt(ctx, p, provider, model, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
+				})
 			},
 		)
 		if fbErr != nil {
@@ -1745,5 +1728,8 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	if len(rt.activeCandidates) > 0 {
 		providerName = rt.activeCandidates[0].Provider
 	}
-	return rt.runProviderAttempt(providerCtx, rt.activeProvider, providerName, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
+	// callWithEffort names an unpinned primary by the agent's provider.
+	return rt.callWithEffort(providerName, rt.llmModel, func(opts map[string]any) (*providers.LLMResponse, error) {
+		return rt.runProviderAttempt(providerCtx, rt.activeProvider, providerName, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
+	})
 }

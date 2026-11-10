@@ -29,6 +29,7 @@ import { expectA11yClean } from './fixtures/a11y'
 // asserts the default policy directly — see its own comment.
 import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
 import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
+import { attachWhileObservingTurn, observeAttachTurn } from './fixtures/turn-liveness'
 import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -671,16 +672,30 @@ test(
   //
   // Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 9; TDD row 25.
   //
-  // 360s total / 180s per reply window — sized for the in-suite LLM latency regime
-  // test (d) already documents (90-150s under full-suite model contention). The
-  // 78162a02c CI artifacts show the failure mode when this test keeps the old
-  // 90s/60s budget: BOTH contexts streamed the identical answer in lockstep while
-  // the turn was still active, and the closing nonce had not arrived on either
-  // page when the 60s window expired (`123 × locator resolved to 0 elements` at
-  // :757, retry passing in 20-28s on model speed alone). No event was lost; the
-  // window was shorter than the provider. Verdict: /workspace/logs/t6b/fix-ci-fe/flake-verdict.md
+  // 660s total: the reply windows stay at 180s each, but a terminal-state gate
+  // (Step 4 below) now lets the turn itself take up to 300s of provider time
+  // before delivery is judged. Still sized for the in-suite LLM latency regime
+  // test (d) already documents (90-150s under full-suite model contention). Two
+  // CI artifacts pin the failure mode of budgeting the reply window alone:
+  // 78162a02c (90s/60s era) — BOTH contexts streamed the identical answer in
+  // lockstep while the turn was still active, and the closing nonce had not
+  // arrived on either page when the 60s window expired (`123 × locator resolved
+  // to 0 elements` at :757, retry passing in 20-28s on model speed alone) — and
+  // PR #1673's ui-heavy job 128306439762 (2026-11-07, 360s/180s era) — the CI
+  // primary (tests/e2e/e2e-model.json) streamed ~600 words over ~150s and was
+  // STILL running ("Mia is working on it"; failure screenshots show both pages
+  // byte-identical, the video's last text/usage delta at ~150s of a 189s
+  // recording) when the flat 180s reply2 wait expired at 181s (`362 × locator
+  // resolved to 0 elements` at :766, retry passing in 29.6s). In both
+  // incidents the observed pages were identical and incomplete when the
+  // window expired and a retry passed; that no event was lost and that the
+  // provider alone was slow are HYPOTHESES (the request-specific gateway
+  // evidence was not captured; a shared product stall would look the same).
+  // Earlier verdicts:
+  // /workspace/logs/t6b/fix-ci-fe/flake-verdict.md and
+  // /workspace/logs/team-a-restart-20261107/ciflake2-report.md
   async ({ page, browser }) => {
-    test.setTimeout(360_000)
+    test.setTimeout(660_000)
 
     // ── Step 1: page1 — fresh session ──
     await page.goto('/')
@@ -716,6 +731,7 @@ test(
     const context2 = await browser.newContext({ storageState: AUTH_FILE, baseURL: BASE_URL })
     const page2 = await context2.newPage()
     const readiness2 = observeAddressedAttachReadiness(page2)
+    const attachTurn2 = observeAttachTurn(page2)
     const rootReady = readiness2.arm()
     try {
       try {
@@ -740,13 +756,61 @@ test(
       const userMsgs = page.locator('[data-message-id].flex-row-reverse')
       await expect(userMsgs).toHaveCount(1, { timeout: 5_000 })
 
+      // ── Step 2b: PROVE the turn is live before anything waits on its end ──
+      // The 2026-11-07 CHECK found the old terminal gate below
+      // ([data-status="running"] count reaching 0) passing an ACTIVE turn:
+      // the virtualized renderer hardcodes data-status="complete" on the
+      // assistant row (src/components/chat/ChatScreen.tsx
+      // VirtualAssistantMessageRow, data-status="complete" at :1209; only the
+      // flat AssistantMessage path derives it from message.status?.type,
+      // :1562), so a zero-running-row count proves nothing about the turn —
+      // and the incident traces recorded exactly that: row "complete" while
+      // the page still showed the turn as active. The turn-level liveness
+      // marker is the composer Stop button instead: SESSION_COMPOSER_PROFILE
+      // has stop:true for every chat session
+      // (src/components/chat/composer/OmnipusComposer.tsx :136-143, wired at
+      // :315), and that button mounts exactly while
+      // `profile.stop && (isStreaming || goalRunning || stopping ||
+      // stopAllArmed)` (:1017, data-testid="stop-btn" at :1032). No goal runs
+      // and nobody cancels in this test, so Stop is visible exactly while the
+      // chat store holds isStreaming=true — the turn's true live state,
+      // renderer-independent: the button lives in the composer, so this one
+      // marker gates BOTH the virtualized row path and the flat
+      // AssistantMessage path. Suite precedent: waitForTurnFullyDone
+      // (chat.spec.ts / media.spec.ts) watches the same stop-btn.
+      const turnStopButton = page.locator('[data-testid="stop-btn"]')
+      await expect(
+        turnStopButton,
+        'PREREQUISITE: the turn is live — the composer Stop button has replaced ' +
+          'Send while the turn streams (OmnipusComposer.tsx:1017/:1032). If this ' +
+          'fails, no turn was OBSERVED streaming: it never started, or it errored, ' +
+          'was cancelled or completed before Stop could be observed (this check ' +
+          'cannot tell which), so nothing below can measure a terminal transition.',
+      ).toBeVisible({ timeout: 10_000 })
+
       // ── Step 3: while the agent is still streaming, attach page2 ──
       // Wait ~800ms after send so we are reliably mid-stream but well before
       // the assistant message completes.
       await page.waitForTimeout(800)
       const targetReady = readiness2.arm(sessionId)
       try {
-        const [, targetProof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
+        // Best-effort active-turn prerequisite from the SERVER (CHECK 3 F1,
+        // CHECK 4 F1/F2, CHECK 5 F1-F3): the marked attach's own session_state,
+        // on the current chat socket, must carry active_turn (a foreground turn
+        // in flight when the gateway BUILT that state). The first viewer's Stop
+        // button cannot show this (a client render that can lag the backend).
+        // This is NOT a proof of "active at bind": the gateway binds first and
+        // builds the state afterwards, so a fast turn that ended in between is
+        // rejected as a prerequisite failure (accepted and documented in
+        // fixtures/turn-liveness.ts). There is no post-sample, so a turn that
+        // ends AFTER the state was built passes. A rejected attach (error frame)
+        // fails the prerequisite with the server message. The wrapper returns the
+        // attach result only after the check has run, and this spec uses the
+        // wrapper; unit tests cover the wrapper, not this call site, so a change
+        // that bypasses the wrapper here would not be caught offline.
+        const [, targetProof] = await attachWhileObservingTurn(attachTurn2, sessionId, () =>
+          Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()]),
+        )
         expect(targetProof.request.session_id, 'the warm second viewer actually requests the target session').toBe(sessionId)
         expect(targetProof.completion.session_id, 'the real target catch-up completes before replay assertions').toBe(sessionId)
         await expect(page2.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
@@ -757,7 +821,33 @@ test(
         const userMsgs2 = page2.locator('[data-message-id].flex-row-reverse')
         await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
 
-        // ── Step 4: both contexts receive the final assistant message ──
+        // ── Step 4: wait for the turn's TRUE terminal state, then judge delivery ──
+        // Provider (or product) latency owns this clock. Both CI incidents in the header ended
+        // with the turn STILL active when a flat reply window expired, which
+        // makes a delivery assertion fail looking exactly like the event-loss
+        // this test exists to catch. The old gate here watched
+        // [data-status="running"] reach count 0 — but the virtualized renderer
+        // stamps every assistant row data-status="complete" (ChatScreen.tsx:1209;
+        // only the flat path uses message.status?.type, :1562), so that gate
+        // passed immediately on an active turn (CHECK 2026-11-07, finding 2).
+        // The gate now watches the proven-live marker from Step 2b instead: the
+        // composer Stop button ([data-testid="stop-btn"],
+        // OmnipusComposer.tsx:1017/:1032 — visible exactly while the store holds
+        // isStreaming) unmounting, i.e. the turn's real terminal transition.
+        // If THIS wait expires, the turn never reached a terminal state within
+        // 300s — latency or stall, of the provider OR the product (this wait
+        // alone does not distinguish them); it is NOT evidence of delivery loss.
+        // Once it passes, the unchanged delivery assertions below have their
+        // full windows to catch genuine delivery gaps (FR-I-009), and a model
+        // that finishes without emitting the sentinel no longer waits on the
+        // turn's own clock; the unchanged nonce/count assertions still bound it
+        // at their own 180s windows.
+        await expect(
+          turnStopButton,
+          'the turn reaches its terminal state (composer Stop unmounts as streaming ' +
+            'ends) within the provider budget',
+        ).not.toBeVisible({ timeout: 300_000 })
+
         // Only completed assistant rows may satisfy the delivery oracle; user
         // input, a running placeholder or a system cancellation notice cannot.
         // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
@@ -770,14 +860,14 @@ test(
 
         // page2 attached AFTER the turn started, so the only way it could see the
         // assistant message is if live forwarding picked up where replay left off
-        // — that's what FR-I-009 demands and what we're verifying. We require at
-        // least 1.5s of wall-clock since send to confirm we observed a real
-        // mid-turn attach (the 800ms attach delay + page2 setup means anything
-        // above that floor proves page2 attached *after* the user message but
-        // *during* the turn). The previous 3s floor failed when GLM-5v-turbo
-        // streamed the 600-word reply in <3s, even though the mid-turn-attach
-        // contract was still satisfied (page2 attached at 800ms, well within
-        // the streaming window).
+        // — that's what FR-I-009 demands and what we're verifying. That the
+        // attach was observed during live production is a best-effort
+        // prerequisite taken from the server's active_turn on the attach's own
+        // session_state (attachWhileObservingTurn above), NOT from the first
+        // viewer's Stop button or elapsed time: a wall-clock floor cannot order an attach against a
+        // turn's end. The 1.5s floor below is only a coarse sanity check that
+        // the 800ms attach delay plus page2 setup actually elapsed; the previous
+        // 3s floor failed when GLM-5v-turbo streamed the 600-word reply in <3s.
         const wallClock = Date.now() - sendStart
         expect(wallClock).toBeGreaterThanOrEqual(1_500)
 
@@ -793,6 +883,7 @@ test(
         expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
       } finally { targetReady.cancel() }
     } finally {
+      attachTurn2.dispose()
       readiness2.dispose()
       await context2.close()
     }

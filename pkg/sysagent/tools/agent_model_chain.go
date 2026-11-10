@@ -26,11 +26,15 @@ func agentModelChain(a *config.AgentConfig, cfg *config.Config) []map[string]any
 	}
 	fallbacks := modelresolve.AgentFallbackModels(a)
 	chain := make([]map[string]any, 0, 1+len(fallbacks))
-	chain = append(chain, modelChainEntry(cfg, "primary", 0,
-		modelresolve.AgentPrimaryProvider(a, defaults), modelresolve.AgentPrimaryModel(a, defaults), false))
+	primaryProvider, primaryModel := modelresolve.AgentPrimaryProvider(a, defaults), modelresolve.AgentPrimaryModel(a, defaults)
+	primary := modelChainEntry(cfg, "primary", 0, primaryProvider, primaryModel, false)
+	primary["effort_options"] = chainEffortOptions(a, primary, primaryProvider, primaryModel, ridesDefaultModel(a))
+	chain = append(chain, primary)
 	for i, fb := range fallbacks {
-		chain = append(chain, modelChainEntry(cfg, fmt.Sprintf("fallback_%d", i+1), i+1,
-			strings.TrimSpace(fb.Provider), strings.TrimSpace(fb.Model), true))
+		provider, model := strings.TrimSpace(fb.Provider), strings.TrimSpace(fb.Model)
+		entry := modelChainEntry(cfg, fmt.Sprintf("fallback_%d", i+1), i+1, provider, model, true)
+		entry["effort_options"] = chainEffortOptions(a, entry, provider, model, false)
+		chain = append(chain, entry)
 	}
 	return chain
 }

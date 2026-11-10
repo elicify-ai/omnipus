@@ -27,7 +27,6 @@ Build through the make targets — they inject the required `goolm,stdjson` buil
       "enabled": true,
       "session_store_path": "",
       "allow_from": [],
-      "reasoning_channel_id": "",
       "group_trigger": {
         "mention_only": false,
         "prefixes": []
@@ -42,7 +41,6 @@ Build through the make targets — they inject the required `goolm,stdjson` buil
 | `enabled` | bool | Yes | Activate the WhatsApp channel. |
 | `session_store_path` | string | No | Directory for the SQLite session database (`store.db`). Defaults to `<workspace>/whatsapp` when empty (typically `~/.omnipus/workspace/whatsapp`). |
 | `allow_from` | []string | No | Allowlist of WhatsApp JIDs (sender phone numbers or group IDs). Empty means all senders are accepted. |
-| `reasoning_channel_id` | string | No | Chat ID where extended reasoning traces are sent separately. |
 | `group_trigger` | object | No | Controls when the bot responds in group chats. `mention_only: true` restricts responses to @-mentions (reads `ContextInfo.MentionedJID`); `prefixes` lists additional trigger strings. |
 
 ## Setup

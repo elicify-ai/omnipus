@@ -167,12 +167,12 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 }
 
 // TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth guards the SHAPE
-// of the ADR-090 FR-006 fix: "Fresh self-edges explicitly set max_depth 3 (or
+// of the ADR-090 FR-006 fix: "Fresh self-edges explicitly set max_depth 10 (or
 // the lower configured ceiling)" is a PER-EDGE statement about the workspace
 // graph, and config.DelegationPolicy.Depth is POLICY-WIDE — one value covering
 // every target the role seeds. Setting Depth on Jim's or Worker's seed policy
 // here would clamp their NON-self edges (jim→ava, jim→worker, jim→planner,
-// jim→researcher) to the same 3, which FR-006 does not ask for and the
+// jim→researcher) to the same 10, which FR-006 does not ask for and the
 // founder's task explicitly forbids. The pin is applied where policies become
 // edges: defaultWorkspaceDelegationEdges (pkg/gateway) and
 // seedDelegationEdgesForNewMembers (pkg/sysagent/tools).
