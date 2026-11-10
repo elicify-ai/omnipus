@@ -58,6 +58,10 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 		meta.Owner = *patch.Owner
 		identityTouched = true
 	}
+	if patch.ReasoningEffort != nil {
+		meta.ReasoningEffort = *patch.ReasoningEffort
+		identityTouched = true
+	}
 	if patch.WorkspaceID != nil {
 		// session-core U1 / C-MAIN: a main's identity is immutable — its
 		// computed id IS the (workspace, agent) pair, so re-pointing the
