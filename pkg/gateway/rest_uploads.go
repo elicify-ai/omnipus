@@ -360,8 +360,8 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 	if stageErr != nil {
 		logger.ErrorCF("rest", "upload: could not stage workspace library copy for agent access",
 			map[string]any{
-				"workspace_id": ru.workspaceID, "media_id": mediaID,
-				"filename": fileName, "error": stageErr.Error(),
+				"workspace_id": safeLogValue(ru.workspaceID), "media_id": safeLogValue(mediaID),
+				"filename": safeLogValue(fileName), "error": safeLogValue(stageErr.Error()),
 			})
 		if _, delErr := ru.workspaceLib.Delete(mediaID); delErr != nil {
 			slog.Warn("rest: upload: rollback of media-library entry failed after stage failure",
@@ -374,7 +374,10 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 	// #1449 D26, FR-077: the durable association between the two copies.
 	if assocErr := associateLibraryFile(ru.workspaceLib, ref, mediaID, workRelPath); assocErr != nil {
 		logger.ErrorCF("rest", "upload: could not record the library file of the upload",
-			map[string]any{"workspace_id": ru.workspaceID, "media_id": mediaID, "error": assocErr.Error()})
+			map[string]any{
+				"workspace_id": safeLogValue(ru.workspaceID), "media_id": safeLogValue(mediaID),
+				"error": safeLogValue(assocErr.Error()),
+			})
 		if _, delErr := ru.workspaceLib.Delete(mediaID); delErr != nil {
 			slog.Warn("rest: upload: rollback of media-library entry failed after association failure",
 				"media_id", safeLogValue(mediaID), "error", safeLogValue(delErr.Error()))
@@ -610,7 +613,8 @@ func (a *restAPI) HandleServeUpload(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusNotFound, "file not found")
 			return
 		}
-		slog.Error("rest: uploads: serve failed", "session_id", sessionID, "error", err)
+		slog.Error("rest: uploads: serve failed",
+			"session_id", safeLogValue(sessionID), "error", safeLogValue(err.Error()))
 		jsonErr(w, http.StatusInternalServerError, "could not read file")
 		return
 	}
@@ -677,7 +681,7 @@ func (a *restAPI) serveMedia(
 	localPath, meta, err := store.ResolveWithMetaOpts(ref, opts)
 	if err != nil {
 		if errors.Is(err, media.ErrCrossWorkspaceRef) || errors.Is(err, library.ErrWorkspaceMismatch) {
-			slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
+			slog.Warn("rest: media ref not found", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 			jsonErr(w, http.StatusForbidden, "media access denied")
 			return
 		}
@@ -702,7 +706,7 @@ func (a *restAPI) serveMedia(
 			// reach this catch in practice. Should the resolution path ever
 			// change to route through the integrity-checked reader, this
 			// error deserves the same non-404 treatment as ErrEntryStranded.
-			slog.Error("rest: media: entry stranded (manifest/disk diverged)", "ref", logRef, "error", err.Error())
+			slog.Error("rest: media: entry stranded (manifest/disk diverged)", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 			jsonErr(w, http.StatusInternalServerError, "media entry is in an inconsistent state")
 			return
 		}
@@ -717,7 +721,7 @@ func (a *restAPI) serveMedia(
 			// correct and matches the workspace-media handlers' own mapping
 			// for the same library.ErrNotFound sentinel
 			// (rest_workspace_media.go's handleWorkspaceMediaGet/Delete).
-			slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
+			slog.Warn("rest: media ref not found", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 			jsonErr(w, http.StatusNotFound, "media not found")
 			return
 		}
@@ -730,7 +734,7 @@ func (a *restAPI) serveMedia(
 		// media.ErrNotFound is deliberately NEVER used to wrap that error —
 		// see its doc comment — so this catch-all is unreachable for a
 		// routine absent ref and only fires on a real backend fault.
-		slog.Error("rest: media: resolve failed", "ref", logRef, "error", err.Error())
+		slog.Error("rest: media: resolve failed", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -754,11 +758,11 @@ func (a *restAPI) serveMedia(
 	}
 	if err := serveLibraryPath(w, r, localPath, displayName); err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errLibraryBytesNotAFile) {
-			slog.Warn("rest: media: resolved path is not a readable file", "ref", logRef, "error", err.Error())
+			slog.Warn("rest: media: resolved path is not a readable file", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 			jsonErr(w, http.StatusNotFound, "media not found")
 			return
 		}
-		slog.Error("rest: media: serve failed", "ref", logRef, "error", err.Error())
+		slog.Error("rest: media: serve failed", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
