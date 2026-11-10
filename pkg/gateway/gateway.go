@@ -2211,8 +2211,13 @@ const minBrowserCacheTrimInterval = time.Second
 // scheduled cache trim needs. Declared so the schedule can be tested against a
 // fake whose interval an operator's config.json really drives, without a Chrome,
 // a pool, or a profile directory anywhere in the test.
+//
+// The sweep takes the schedule's ctx (#1730): the boot drain cancels it and
+// then waits, under a budget, for this goroutine; a sweep over many profiles
+// that ignored the cancel could outlast that budget and keep writing into a
+// home the caller was removing.
 type browserCacheTrimScheduler interface {
-	TrimAllEligible() []browser.TrimResult
+	TrimAllEligibleContext(ctx context.Context) []browser.TrimResult
 	CacheTrimInterval() time.Duration
 }
 
@@ -2233,7 +2238,7 @@ func runBrowserCacheTrimSchedule(ctx context.Context, pool browserCacheTrimSched
 			slog.Error("browser-trim: cache trim panicked; skipped", "panic", fmt.Sprintf("%v", r))
 		}
 	}()
-	if results := pool.TrimAllEligible(); len(results) > 0 {
+	if results := pool.TrimAllEligibleContext(ctx); len(results) > 0 {
 		slog.Info("browser-trim: trimmed closed workspace browser caches at boot",
 			"profiles", len(results))
 	}
@@ -2271,7 +2276,7 @@ func runBrowserCacheTrimSchedule(ctx context.Context, pool browserCacheTrimSched
 						"panic", fmt.Sprintf("%v", r))
 				}
 			}()
-			if results := pool.TrimAllEligible(); len(results) > 0 {
+			if results := pool.TrimAllEligibleContext(ctx); len(results) > 0 {
 				slog.Info("browser-trim: trimmed closed workspace browser caches",
 					"profiles", len(results))
 			}
