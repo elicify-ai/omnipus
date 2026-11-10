@@ -246,6 +246,25 @@ func TestListDirTool_ViewLinesPageWithExplicitOffsetAndLimit(t *testing.T) {
 	}
 }
 
+// Characterization test: huge offsets must preserve the existing terminal-page result.
+func TestListDirTool_HugeOffsetMatchesPastEndPage(t *testing.T) {
+	ws := t.TempDir()
+	for _, name := range []string{"first.txt", "second.txt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(ws, name), []byte("x"), 0o600))
+	}
+
+	tool := NewListDirTool(ws, true)
+	ctx := context.Background()
+	atEnd := tool.Execute(ctx, map[string]any{"path": ".", "offset": 2})
+	require.False(t, atEnd.IsError, atEnd.ForLLM)
+	require.Equal(t, "[listing: entries 2-2 of 2, offset=2, next_offset=end]\n", atEnd.ForLLM,
+		"the two-file control must be the existing past-the-end page")
+
+	huge := tool.Execute(ctx, map[string]any{"path": ".", "offset": int64(1) << 40})
+	require.False(t, huge.IsError, huge.ForLLM)
+	assert.Equal(t, atEnd, huge, "a huge offset must preserve the complete terminal-page result")
+}
+
 // TestListDirTool_DeepNestedKnowledgeBaseShowsNoViewLines is the agent-side
 // parity of architect decision A1, item 5: list_directory on a knowledge base
 // nested inside another prints no VIEW line; on the enclosing knowledge base

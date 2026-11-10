@@ -1213,6 +1213,10 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if offset < 0 {
 		return ErrorResult("offset must be >= 0")
 	}
+	// Keep the int conversion safe on 32-bit hosts while preserving past-the-end pages.
+	if offset > math.MaxInt32 {
+		offset = math.MaxInt32
+	}
 	limit, err := getInt64Arg(args, "limit", maxListDirEntries)
 	if err != nil {
 		return ErrorResult(err.Error())
