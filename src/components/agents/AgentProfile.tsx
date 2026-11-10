@@ -1914,7 +1914,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       env_overrides: next,
                     }))
                   }}
-                  disabled={!isFieldEditable('executor')}
+                  canSet={isFieldEditable('executor.env_overrides')}
+                  canRemove={isFieldEditable('executor.env_overrides_remove')}
                 />
               </div>
               <div data-testid="profile-cli-args" className="space-y-[var(--space-1)]">
@@ -1929,7 +1930,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     }}
                     placeholder="e.g. --add-dir /extra/path"
                     className="text-[length:var(--type-utility-xs-size)] h-8 font-mono"
-                    disabled={!isFieldEditable('executor')}
+                    disabled={!isFieldEditable('executor.cli_args')}
                   />
                 </div>
                 <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
@@ -2758,14 +2759,20 @@ function findEnvDuplicateKeys(rows: EnvRow[]): Set<string> {
 // Each row is two inputs (key, value) plus a remove button. New rows are
 // appended; empty rows are dropped on save. Locked agents get a read-only
 // static list. Renders inline within the Runtime tab.
+// Editability follows the contract's per-field descriptors (Agent.yaml
+// editable_fields): adding, naming and changing a row follow
+// executor.env_overrides (`canSet`); removing a row follows
+// executor.env_overrides_remove (`canRemove`).
 function EnvironmentOverridesEditor({
   value,
   onChange,
-  disabled,
+  canSet,
+  canRemove,
 }: {
   value: Record<string, string>
   onChange: (next: Record<string, string>) => void
-  disabled?: boolean
+  canSet: boolean
+  canRemove: boolean
 }) {
   const [rows, setRows] = useState<EnvRow[]>(() => envRecordToRows(value))
   const rowIdCounter = useRef(rows.length)
@@ -2845,7 +2852,7 @@ function EnvironmentOverridesEditor({
                   className="text-[length:var(--type-utility-xs-size)] h-8 font-mono flex-1"
                   aria-label="Environment variable name"
                   aria-invalid={isDuplicate || undefined}
-                  disabled={disabled}
+                  disabled={!canSet}
                 />
                 <span className="text-[var(--color-muted)]">=</span>
                 <Input
@@ -2854,7 +2861,7 @@ function EnvironmentOverridesEditor({
                   placeholder="value"
                   className="text-[length:var(--type-utility-xs-size)] h-8 font-mono flex-1"
                   aria-label="Environment variable value"
-                  disabled={disabled}
+                  disabled={!canSet}
                 />
                 <IconButton
                   variant="ghost"
@@ -2862,7 +2869,7 @@ function EnvironmentOverridesEditor({
                   onClick={() => removeRow(row.id)}
                   className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] disabled:opacity-50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                   aria-label={`Remove env override ${row.key || 'entry'}`}
-                  disabled={disabled}
+                  disabled={!canRemove}
                 >
                   <X size={12} />
                 </IconButton>
@@ -2879,7 +2886,7 @@ function EnvironmentOverridesEditor({
           )
         })
       )}
-      {!disabled && (
+      {canSet && (
         <Button
           variant="link"
           data-testid="profile-env-add"

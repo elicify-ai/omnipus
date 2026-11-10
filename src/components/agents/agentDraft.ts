@@ -33,9 +33,16 @@ export function buildAgentUpdate(
     if (field === 'executor' && baseline.type === 'subagent_3p') {
       const executorUpdate = buildExecutorUpdate(baseline.executor, draftValue as ExecutorConfig)
       if (!executorUpdate) continue
-      const descriptor = descriptors.get(field)
-      if (!descriptor?.editable) {
-        throw new ProtectedAgentFieldChangeError(field, descriptor?.reason)
+      // Each part checks its own descriptor (Agent.yaml editable_fields:
+      // executor.env_overrides, executor.env_overrides_remove,
+      // executor.cli_args), so an arguments-only save is not refused by an
+      // environment descriptor, nor the reverse.
+      for (const part of Object.keys(executorUpdate)) {
+        const name = `executor.${part}`
+        const descriptor = descriptors.get(name)
+        if (!descriptor?.editable) {
+          throw new ProtectedAgentFieldChangeError(name, descriptor?.reason)
+        }
       }
       changes[field] = executorUpdate
       continue
