@@ -951,13 +951,14 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // server must never cascade — and keeps the frame byte-identical to
         // the pre-stop-all shape. Only the confirmed tree stop passes
         // 'tree' (server dispatches on scope before cancelSteeredSubtree;
-        // never up or sideways — ADR D7). #1534: `shown` rides only a
-        // session Stop that froze an answer; the confirming tree press omits
-        // it (the first press already carried it, and the first claim wins).
+        // never up or sideways — ADR D7). #1534: `shown` rides every Stop
+        // that froze a streaming answer, whatever the scope (a first Stop, a
+        // typed /cancel). A confirming second press freezes nothing (the
+        // answer is no longer streaming), so it carries none.
         const cancelFrame: CancelFrame = {
           type: 'cancel', session_id: targetSid,
           ...(scope ? { scope } : {}),
-          ...(shown && scope !== 'tree' ? { shown } : {}),
+          ...(shown ? { shown } : {}),
         }
         const sent = connection.send(cancelFrame)
         if (!sent) {

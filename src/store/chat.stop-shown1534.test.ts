@@ -171,8 +171,17 @@ describe('#1534 applied code-point checkpoint', () => {
     expect(rows().map(m => [m.content, m.status])).toEqual([['COMPLETE', 'done']])
   })
 
-  it('confirming tree press omits shown even if another answer is streaming', () => {
+  it('confirming second tree press omits shown after the first tree press freezes the answer', () => {
+    expect.assertions(5)
     token('SCREEN')
+    expect(useChatStore.getState().cancelStream(SID, 'tree')).toBe(true)
+    expect(rows().map(m => [m.id, m.content, m.status])).toEqual([[MID, 'SCREEN', 'interrupted']])
+    // Keep a missing first checkpoint RED while still checking the second press.
+    expect.soft(sender.send.mock.calls, 'first tree Stop carries the frozen SCREEN checkpoint').toEqual([[{
+      type: 'cancel', session_id: SID, scope: 'tree',
+      shown: { message_id: MID, turn_id: TURN, code_points: 6 }, // SCREEN = six code points
+    }]])
+    sender.send.mockClear() // Only the recorder resets; the frozen store state stays real.
     expect(useChatStore.getState().cancelStream(SID, 'tree')).toBe(true)
     expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID, scope: 'tree' }]])
   })

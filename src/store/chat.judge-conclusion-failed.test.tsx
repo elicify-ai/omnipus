@@ -173,7 +173,7 @@ describe('G5 — judge_conclusion_failed is a visible non-terminal notice', () =
       'G5 a notice cannot poison the continuing token path').toBe(NARRATION + ' Still making progress.')
     act(() => { fireEvent.click(stopBefore) })
     expect(send.mock.calls.map(([frame]) => frame), 'G5 real Stop must still reach the WebSocket edge')
-      .toContainEqual({ type: 'cancel', session_id: SID })
+      .toContainEqual({ type: 'cancel', session_id: SID, shown: { code_points: [...NARRATION].length, message_id: MESSAGE, turn_id: TURN } })
   })
 
   it('control: an ordinary terminal error still closes the streaming turn and removes Stop', () => {
