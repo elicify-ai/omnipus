@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -47,7 +48,7 @@ func t11Q48AssertServerOnlyPath(t *testing.T, logs *capturedLogs, refusal, check
 		add(filepath.Join(parent, filepath.Base(path)))
 		if resolved, err := filepath.EvalSymlinks(path); err == nil {
 			add(resolved)
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("Q48 SETUP: resolve existing fixture program: %v", err)
 		}
 	}
