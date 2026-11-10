@@ -442,7 +442,16 @@ func (a *restAPI) clientIPWithLiveFallback(r *http.Request) string {
 //
 // A nil onboardingMgr (test constructions only — gateway.go always sets one)
 // is treated as signal 2 satisfied, leaving signals 1 and 3 to decide.
+//
+// The window exists in LOCAL mode only. In platform mode (hosted, desktop)
+// onboarding runs after the platform sign-in (authMode.onboardingWrap), so
+// nothing needs an anonymous caller here, and an open window let anyone who
+// reached a not-yet-signed-in hosted tenant plant a provider endpoint the
+// owner's key would later be sent to. An unknown edition fails closed too.
 func (a *restAPI) preAuthOnboardingWindowOpen(r *http.Request) bool {
+	if config.EditionAuthMode() != config.AuthModeLocal {
+		return false
+	}
 	if a.onboardingStateUnknown {
 		return false
 	}

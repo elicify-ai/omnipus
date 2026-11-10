@@ -170,8 +170,9 @@ func (f *FallbackModelSlice) UnmarshalJSON(data []byte) error {
 // round-trip.
 func (f FallbackModelSlice) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Model    string `json:"model"`
-		Provider string `json:"provider,omitempty"`
+		Model           string `json:"model"`
+		Provider        string `json:"provider,omitempty"`
+		ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	}
 	if len(f) == 0 {
 		return []byte("[]"), nil
@@ -418,22 +419,6 @@ func (ec *ExecutorConfig) EffectiveKind() ExecutorKind {
 		return ExecutorKindNative
 	}
 	return ec.Kind
-}
-
-// GetIdleTimeoutMinutes returns the idle timeout, defaulting to 30.
-func (d *AgentDefaults) GetIdleTimeoutMinutes() int {
-	if d.IdleTimeoutMinutes <= 0 {
-		return 30
-	}
-	return d.IdleTimeoutMinutes
-}
-
-// GetBootstrapRecapMaxPerMinute returns the rate limit, defaulting to 5.
-func (d *AgentDefaults) GetBootstrapRecapMaxPerMinute() int {
-	if d.BootstrapRecapMaxPerMinute <= 0 {
-		return 5
-	}
-	return d.BootstrapRecapMaxPerMinute
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024

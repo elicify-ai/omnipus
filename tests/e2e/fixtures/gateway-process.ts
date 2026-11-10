@@ -149,9 +149,16 @@ export class GatewayProcess {
     }
     const port = await getFreePort();
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-gwproc-${port}-`));
+    // A mock-provider gateway onboards a catalog provider with its endpoint
+    // pointed at the loopback mock. A hosted-stamped binary accepts that
+    // endpoint override only when the operator SSRF allow list names its host,
+    // so the mock gateway's config names loopback, as such an operator would.
+    const sandbox = opts.apiBase
+      ? { sandbox: { ssrf: { allow_internal: ['127.0.0.1', '::1', 'localhost'] } } }
+      : {};
     fs.writeFileSync(
       path.join(homeDir, 'config.json'),
-      JSON.stringify({ version: 1, gateway: { port } }, null, 2),
+      JSON.stringify({ version: 1, gateway: { port }, ...sandbox }, null, 2),
       { mode: 0o600 },
     );
 

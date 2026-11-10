@@ -85,6 +85,7 @@
         "tests/e2e/sidebar-agent-row-menu.spec.ts",
         "tests/e2e/side-panel-signin-return.spec.ts",
         "tests/e2e/chat-composer-focus-replay.spec.ts",
+        "tests/e2e/effort.spec.ts",
         "tests/e2e/skills-builtin-copy.spec.ts"
       ]
     },
@@ -202,7 +203,7 @@
       ]
     },
     {
-      "_comment": "ADR-067 §13.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. No test here calls an LLM, so the key_slot is irrelevant (the suite's global setup still preflights the live keys and onboards this shard's gateway): preview-isolation-webserve.spec.ts boots a private gateway per test whose model edge is a local scripted provider (tests/e2e/fixtures/preview-isolation/mint-provider.ts), so its minting turns make no live-model call.",
+      "_comment": "ADR-067 \u00a713.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. No test here calls an LLM, so the key_slot is irrelevant (the suite's global setup still preflights the live keys and onboards this shard's gateway): preview-isolation-webserve.spec.ts boots a private gateway per test whose model edge is a local scripted provider (tests/e2e/fixtures/preview-isolation/mint-provider.ts), so its minting turns make no live-model call.",
       "group": "preview-isolation",
       "key_slot": "c",
       "port": 6083,
@@ -214,7 +215,7 @@
       ]
     },
     {
-      "_comment": "ADR-067 §13.4 item 4 / §0. The only two headed cases -- the browser's OWN PDF handling, which headless Chromium does not have. Needs a display (xvfb-run, or GitHub Actions' bundled X server) because playwright.config.ts sets headless:false on the `preview-headed` project. Separate shard so that requirement lands on one job rather than all of them.",
+      "_comment": "ADR-067 \u00a713.4 item 4 / \u00a70. The only two headed cases -- the browser's OWN PDF handling, which headless Chromium does not have. Needs a display (xvfb-run, or GitHub Actions' bundled X server) because playwright.config.ts sets headless:false on the `preview-headed` project. Separate shard so that requirement lands on one job rather than all of them.",
       "group": "preview-headed",
       "key_slot": "c",
       "port": 6073,

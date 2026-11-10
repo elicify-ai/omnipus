@@ -29,8 +29,7 @@ Omnipus connects to any IRC server via a persistent TCP connection (optionally T
       },
       "typing": {
         "enabled": false
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -53,7 +52,6 @@ Omnipus connects to any IRC server via a persistent TCP connection (optionally T
 | `allow_from` | []string | No | Allowlist of IRC nicks. Empty means all nicks are accepted. |
 | `group_trigger` | object | No | Controls when the bot responds in channel messages. `mention_only: true` restricts to `nick:` / `nick,` prefix or word-boundary @-mention. `prefixes` lists additional trigger strings. |
 | `typing` | object | No | `enabled: true` sends IRCv3 `+typing=active` TAGMSG while processing; requires `message-tags` capability to be acknowledged by the server. |
-| `reasoning_channel_id` | string | No | IRC channel name where extended reasoning traces are sent separately. |
 
 ## Setup
 

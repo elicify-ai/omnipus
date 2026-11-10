@@ -15,6 +15,8 @@ properties:
     example: true
   idle_timeout_minutes:
     type: integer
+    minimum: 1
+    maximum: 1440
     description: >
       Minutes of inactivity after which a session is considered idle and a recap
       is triggered. Maps to agents.defaults.idle_timeout_minutes.
@@ -28,6 +30,8 @@ properties:
     example: true
   bootstrap_recap_max_per_minute:
     type: integer
+    minimum: 1
+    maximum: 60
     description: >
       Maximum number of bootstrap recap operations to run per minute (rate-limit
       / throttle). This is the only bound on a boot sweep. Maps to
@@ -50,6 +54,100 @@ properties:
       Ordered fallback chain for the recap model, tried in order when the primary
       recap model fails — same shape and behaviour as an agent's fallback_models.
       Maps to agents.defaults.recap_fallback_models.
+  recap_provider:
+    type: string
+    maxLength: 64
+    description: >
+      Provider of the recap model (#1291), stored with recap_model so the
+      recap routes through it. Maps to agents.defaults.recap_provider.
+    example: "openrouter"
+  recap_reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Effort for the recap model (effort-levels spec FR-072): absent or ""
+      means Off (the recap default); "provider_default", a catalog level name or
+      "on" turn reasoning on. null is refused.
+  recap_max_output_tokens:
+    type: integer
+    minimum: 512
+    maximum: 16384
+    description: >
+      Most output tokens one recap call may produce. Default 2048. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_max_output_tokens.
+    example: 2048
+  recap_input_tokens:
+    type: integer
+    minimum: 500
+    maximum: 32000
+    description: >
+      Token budget of the transcript text sent to the recap model. Default 2000. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_input_tokens.
+    example: 2000
+  recap_summary_words:
+    type: integer
+    minimum: 50
+    maximum: 500
+    description: >
+      Target length of the recap summary, in words. Default 150. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_summary_words.
+    example: 150
+  recap_list_items:
+    type: integer
+    minimum: 1
+    maximum: 10
+    description: >
+      Most items in each recap list (topics, decisions, open items). Default 5. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_list_items.
+    example: 5
+  recap_fallback_context_chars:
+    type: integer
+    minimum: 200
+    maximum: 8000
+    description: >
+      Characters of recent context kept when no recap model answers. Default 1500. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_fallback_context_chars.
+    example: 1500
+  recap_timeout_seconds:
+    type: integer
+    minimum: 15
+    maximum: 300
+    description: >
+      Overall time limit for one recap, across every model tried and every retry. Default 60. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_timeout_seconds.
+    example: 60
+  recap_stream_retries:
+    type: integer
+    minimum: 0
+    maximum: 5
+    description: >
+      Retries of a recap call whose stream broke. Default 2. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_stream_retries.
+    example: 2
+  recap_retry_pause_ms:
+    type: integer
+    minimum: 100
+    maximum: 5000
+    description: >
+      Base pause between recap retries, in milliseconds (try n waits n times this). Default 500. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_retry_pause_ms.
+    example: 500
+  recap_chars_per_token:
+    type: integer
+    minimum: 2
+    maximum: 8
+    description: >
+      Characters counted as one token when sizing recap input. Default 4. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.recap_chars_per_token.
+    example: 4
+  bootstrap_recap_min_spacing_seconds:
+    type: integer
+    minimum: 1
+    maximum: 60
+    description: >
+      Least time between two boot-time recaps, in seconds. Default 1. A stored value outside the range is clamped on use.
+      Maps to agents.defaults.bootstrap_recap_min_spacing_seconds.
+    example: 1
   session_days:
     type: integer
     description: >

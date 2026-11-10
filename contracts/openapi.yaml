@@ -1589,6 +1589,8 @@ components:
       $ref: ./components/schemas/CatalogProvider.yaml
     CatalogModel:
       $ref: ./components/schemas/CatalogModel.yaml
+    CatalogModelReasoning:
+      $ref: ./components/schemas/CatalogModelReasoning.yaml
     CatalogProtocol:
       $ref: ./components/schemas/CatalogProtocol.yaml
     CatalogProviderRegion:
