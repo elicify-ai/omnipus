@@ -38,6 +38,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { agedTranscript, agedSessionExists } from './fixtures/aging';
 import { resumeCanonicalHistory } from './fixtures/chat-history';
+import { postReloadWithBearer, type ReloadResult } from './fixtures/reload-bearer';
 
 // ── Auth helpers ─────────────────────────────────────────────────────────────
 
@@ -91,54 +92,36 @@ async function authHeaders(page: import('@playwright/test').Page): Promise<Recor
 }
 
 /**
- * Read the admin reload bearer from the sidecar file global-setup.ts wrote at
- * suite start and return the Authorization header value for it. The /reload
- * endpoint on the health server accepts ONLY a bearer matching a Gateway.Users
- * account or Gateway.CLIToken (issues #276/#640) — never the omnipus-session
- * cookie, never dev_mode_bypass — and the only non-rotating such bearer this
- * suite has is the one minted by global-setup.ts's own sanctioned login
- * (HandleLogin appends account tokens, so it stays valid until the
- * MaxUserTokens cap evicts it — which needs 11 mints — or logout, which no
- * spec ever calls).
+ * POST /reload on this spec's private canonical gateway with the admin bearer
+ * from that gateway's OWN login (GatewayProcess.reloadBearer). The /reload
+ * endpoint accepts ONLY a bearer matching a Gateway.Users account or
+ * Gateway.CLIToken (issues #276/#640) — never the omnipus-session cookie,
+ * never dev_mode_bypass. HandleLogin appends account bearers, so this one
+ * stays valid; and config.json, read below after that login, already holds its
+ * hash, so the bypass flip and the restore both keep it.
  *
- * NEVER mint a fresh one here: every POST /api/v1/auth/login re-mints the
+ * NEVER mint a fresh login here: every POST /api/v1/auth/login re-mints the
  * SINGLE-SLOT session_token_hash (pkg/gateway/rest_auth.go::HandleLogin),
- * invalidating the omnipus-session cookie in the shared storageState for every
- * spec after this one — the exact crosstalk
+ * invalidating the omnipus-session cookie this page carries — the crosstalk
  * scripts/check-e2e-login-crosstalk.sh exists to prevent (the 2026-09-27
- * ui-heavy incident: this spec's login-minted reload bearers — specifically
- * the one the config-restore finally issued AFTER restoring originalRaw, whose
- * session_token_hash still held the suite-start session — killed the shared
- * cookie and failed settings-memory.spec.ts 4/4 at its banner assert).
+ * ui-heavy incident). The bearer goes through Node fetch
+ * (fixtures/reload-bearer.ts), never the page's traced request client, so it
+ * never reaches a retained trace.
  */
-function storedReloadBearer(): string {
-  const bearerFile = path.join(path.dirname(AUTH_FILE), 'admin-reload-bearer.txt');
-  if (!fs.existsSync(bearerFile)) {
-    throw new Error(
-      `storedReloadBearer: no admin reload bearer at ${bearerFile}. ` +
-        'global-setup.ts writes it next to the storageState at suite start ' +
-        '(OMNIPUS_AUTH_FILE overrides the directory). Do NOT fall back to ' +
-        'POST /api/v1/auth/login here — that rotates the shared session.',
-    );
-  }
-  const token = fs.readFileSync(bearerFile, 'utf-8').trim();
-  if (!token) {
-    throw new Error(
-      `storedReloadBearer: ${bearerFile} is empty — rerun the suite so ` +
-        'global-setup.ts re-mints it.',
-    );
-  }
-  return `Bearer ${token}`;
+async function reloadWithBearer(): Promise<ReloadResult> {
+  return postReloadWithBearer(BASE_URL, RELOAD_BEARER);
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 let BASE_URL: string;
 let OMNIPUS_HOME: string;
+let RELOAD_BEARER: string;
 test.beforeEach(async ({ canonicalGateway }) => {
   BASE_URL = canonicalGateway.baseURL;
   OMNIPUS_HOME = canonicalGateway.homeDir;
   AUTH_FILE = canonicalHistoryAuthFile();
+  RELOAD_BEARER = canonicalGateway.reloadBearer();
 });
 
 // Default retention period enforced by the gateway.
@@ -333,9 +316,9 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
   // test only, run the sweep, then restore so the rest of the suite is
   // unaffected. The /reload endpoint requires a Gateway.Users bearer (issues
   // #276/#640 — it accepts no cookie and no bypass), so each /reload below
-  // sends the non-rotating bearer global-setup.ts stored at suite start; see
-  // storedReloadBearer() for why a fresh login here would break every later
-  // spec in the shard.
+  // sends the bearer of the canonical gateway's own login; see
+  // reloadWithBearer() for why a fresh login here would break this page's
+  // session.
   const configPath = path.join(OMNIPUS_HOME, 'config.json');
   // config.json may not exist when the gateway was started with in-memory defaults
   // (e.g., started via env-only config without a persistent config file).
@@ -367,13 +350,10 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
     if (!cfgObj.gateway) cfgObj.gateway = {};
     cfgObj.gateway.dev_mode_bypass = false;
     fs.writeFileSync(configPath, JSON.stringify(cfgObj, null, 2));
-    const reloadResp = await page.request.post(`${BASE_URL}/reload`, {
-      headers: { Authorization: storedReloadBearer() },
-      failOnStatusCode: false,
-    });
+    const reloadResp = await reloadWithBearer();
     expect(
-      reloadResp.ok(),
-      `POST /reload returned ${reloadResp.status()} ${await reloadResp.text()}`,
+      reloadResp.ok,
+      `POST /reload returned ${reloadResp.status} ${reloadResp.text}`,
     ).toBeTruthy();
     // Reload propagation is asynchronous; give the manualReloadChan a moment
     // to drain and the config-snapshot pointer to swap.
@@ -454,17 +434,14 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
       } else {
         fs.writeFileSync(configPath, originalRaw);
       }
-      const reloadResp = await page.request.post(`${BASE_URL}/reload`, {
-        headers: { Authorization: storedReloadBearer() },
-        failOnStatusCode: false,
-      });
+      const reloadResp = await reloadWithBearer();
       // Best-effort restore: if reload fails here, surface a warning but do
       // not fail the test (the assertion above is what matters; later tests
       // get a fresh OMNIPUS_HOME in CI anyway).
-      if (!reloadResp.ok()) {
+      if (!reloadResp.ok) {
          
         console.warn(
-          `retention.spec: post-test config restore reload returned ${reloadResp.status()}`,
+          `retention.spec: post-test config restore reload returned ${reloadResp.status}`,
         );
       }
     }

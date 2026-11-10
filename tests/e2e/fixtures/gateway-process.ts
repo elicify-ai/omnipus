@@ -110,6 +110,8 @@ export class GatewayProcess {
   private proc: ChildProcess | null = null;
   private ctx: APIRequestContext | null = null;
   private csrfToken = '';
+  /** Bearer from this process's own most recent login (see reloadBearer()). */
+  private loginBearer = '';
 
   private constructor(
     opts: { binary: string; adminUsername: string; adminPassword: string; model: string; apiBase: string; extraArgs: string[]; extraEnv: Record<string, string> },
@@ -304,6 +306,13 @@ export class GatewayProcess {
     if (!res.ok()) {
       throw new Error(`GatewayProcess: login failed ${res.status()}: ${await res.text()}`);
     }
+    // Keep the bearer this SAME login returned (LoginResponse.token) for
+    // reloadBearer(): no second login is ever made for it, so the session
+    // cookie handed to the browser is not rotated.
+    const body = (await res.json()) as { token?: string };
+    if (!body.token) {
+      throw new Error('GatewayProcess: POST /api/v1/auth/login response has no token field');
+    }
     const state = await ctx.storageState();
     const csrf = state.cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf');
     if (!csrf) {
@@ -314,6 +323,21 @@ export class GatewayProcess {
     }
     this.ctx = ctx;
     this.csrfToken = csrf.value;
+    this.loginBearer = body.token;
+  }
+
+  /**
+   * The admin bearer from this process's own login, for POST /reload — which
+   * accepts ONLY a Gateway.Users/CLIToken bearer (issues #276/#640), never
+   * the session cookie. HandleLogin appends account bearers, so it stays
+   * valid across later logins. Send it with fixtures/reload-bearer.ts::
+   * postReloadWithBearer (Node fetch), never a traced Playwright request.
+   */
+  reloadBearer(): string {
+    if (!this.loginBearer) {
+      throw new Error('GatewayProcess.reloadBearer: not authenticated — call start() first');
+    }
+    return this.loginBearer;
   }
 
   /** Storage state for a browser aimed at THIS gateway only. Cookies are for
