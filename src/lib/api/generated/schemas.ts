@@ -41,6 +41,7 @@ type OnboardingProviderApiKey = {
   id: string;
   api_key: string;
   model?: string | undefined;
+  reasoning_effort?: string | undefined;
   endpoint?: string | undefined;
   protocol?: ("openai-compatible" | "anthropic") | undefined;
   region?: string | undefined;
@@ -49,6 +50,7 @@ type OnboardingProviderSignIn = {
   auth_method: "sign_in";
   id: string;
   model?: string | undefined;
+  reasoning_effort?: string | undefined;
   endpoint?: string | undefined;
 };
 type OnboardingPreferences = {
@@ -152,6 +154,7 @@ type ModelTokens = {
   cache_read?: number | undefined;
   cache_write?: number | undefined;
   cache_hit_ratio?: (number | null) | undefined;
+  reasoning?: number | undefined;
   total: number;
 };
 type SessionDetail = {
@@ -429,6 +432,22 @@ type Message = {
         role: "request" | "answer";
       }
     | undefined;
+  effort?:
+    | Partial<{
+        chosen: string;
+        sent: string;
+        reason:
+          | "mapped"
+          | "not_supported"
+          | "continuation"
+          | "rejected"
+          | "rejected_earlier"
+          | "extra_body";
+        provider: string;
+        model: string;
+      }>
+    | undefined;
+  turn_reasoning_tokens?: number | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -1548,6 +1567,7 @@ type Agent = {
   color?: AgentColor | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   description?: string | undefined;
   status: "active" | "idle" | "draft" | "error";
   soul: string;
@@ -1639,6 +1659,7 @@ type AgentToolsMcpServerBinding = {
 type FallbackModel = {
   model: string;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
 };
 type AgentModelParams = Partial<{
   temperature: number;
@@ -1690,6 +1711,7 @@ type AgentCreateRequestMain = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
@@ -1722,6 +1744,7 @@ type AgentCreateRequestSubagent = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
@@ -1762,6 +1785,7 @@ type AgentUpdateRequest = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   context_window_override?: (number | null) | undefined;
   soul?: string | undefined;
   max_tool_iterations?: (number | null) | undefined;
@@ -1784,6 +1808,7 @@ type AgentUpdateRequest = {
 type FallbackModelPair = {
   model: string;
   provider: string;
+  reasoning_effort?: string | undefined;
 };
 type ExecutorConfigUpdate = Partial<{
   env_overrides: {};
@@ -1798,6 +1823,7 @@ type AgentDetail = {
   locked?: boolean | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: (string | null) | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
   max_tool_iterations?: (number | null) | undefined;
@@ -1838,6 +1864,7 @@ type AgentModelChainEntry = {
   provider_configured: boolean;
   model_offered: boolean | null;
   accepts_images: boolean | null;
+  effort_options: Array<string> | null;
   warning?: string | undefined;
 };
 type AgentPreview = {
@@ -2034,6 +2061,7 @@ type ProviderDeleteRequest = Partial<{
 type DefaultModelUpdateRequest = {
   provider: string;
   model: string;
+  reasoning_effort?: string | undefined;
 };
 type ProviderDeleteResponse = {
   deleted: boolean;
@@ -2044,6 +2072,7 @@ type ProviderDeleteResponse = {
 type DefaultModel = {
   provider: string;
   model: string;
+  reasoning_effort?: string | undefined;
   context_window?: number | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
@@ -2119,6 +2148,11 @@ type CatalogModel = {
     | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
+  reasoning?: CatalogModelReasoning | undefined;
+};
+type CatalogModelReasoning = {
+  levels: Array<string>;
+  switch: boolean;
 };
 type ContextSettings = {
   mcp_result_cap: number;
@@ -2914,6 +2948,18 @@ type MemorySettings = Partial<{
   bootstrap_recap_max_per_minute: number;
   recap_model: string;
   recap_fallback_models: Array<FallbackModel>;
+  recap_provider: string;
+  recap_reasoning_effort: string;
+  recap_max_output_tokens: number;
+  recap_input_tokens: number;
+  recap_summary_words: number;
+  recap_list_items: number;
+  recap_fallback_context_chars: number;
+  recap_timeout_seconds: number;
+  recap_stream_retries: number;
+  recap_retry_pause_ms: number;
+  recap_chars_per_token: number;
+  bootstrap_recap_min_spacing_seconds: number;
   session_days: number;
   memory_retros_days: number;
 }>;
@@ -3763,6 +3809,7 @@ export const OnboardingProviderApiKey =
     id: z.string().min(1).max(64),
     api_key: z.string().min(1),
     model: z.string().min(1).max(256).optional(),
+    reasoning_effort: z.string().max(32).optional(),
     endpoint: z.string().optional(),
     protocol: z.enum(["openai-compatible", "anthropic"]).optional(),
     region: z.string().max(128).optional(),
@@ -3772,6 +3819,7 @@ export const OnboardingProviderSignIn =
     auth_method: z.literal("sign_in"),
     id: z.string().min(1).max(64),
     model: z.string().min(1).max(256).optional(),
+    reasoning_effort: z.string().max(32).optional(),
     endpoint: z.string().optional(),
   }) satisfies z.ZodType<OnboardingProviderSignIn>;
 export const OnboardingPreferences: z.ZodType<OnboardingPreferences> = z.object(
@@ -3833,6 +3881,7 @@ export const ModelTokens: z.ZodType<ModelTokens> = z
     cache_read: z.number().int().gte(0).optional(),
     cache_write: z.number().int().gte(0).optional(),
     cache_hit_ratio: z.number().gte(0).lte(1).nullish(),
+    reasoning: z.number().int().gte(0).optional(),
     total: z.number().int().gte(0),
   })
   .passthrough();
@@ -4269,6 +4318,24 @@ export const Message: z.ZodType<Message> = z.object({
       role: z.enum(["request", "answer"]),
     })
     .optional(),
+  effort: z
+    .object({
+      chosen: z.string().max(32),
+      sent: z.string().max(32),
+      reason: z.enum([
+        "mapped",
+        "not_supported",
+        "continuation",
+        "rejected",
+        "rejected_earlier",
+        "extra_body",
+      ]),
+      provider: z.string(),
+      model: z.string(),
+    })
+    .partial()
+    .optional(),
+  turn_reasoning_tokens: z.number().int().gte(0).optional(),
 });
 export const subagent_start: z.ZodType<subagent_start> = z.object({
   history_origin: history_origin.optional(),
@@ -4671,6 +4738,7 @@ export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
 export const FallbackModel: z.ZodType<FallbackModel> = z.object({
   model: z.string().max(256),
   provider: z.string().max(64).optional(),
+  reasoning_effort: z.string().max(32).optional(),
 }).strict();
 export const AgentModelParams: z.ZodType<AgentModelParams> = z
   .object({
@@ -4723,6 +4791,7 @@ export const Agent: z.ZodType<Agent> = z
     color: AgentColor.optional(),
     model: z.string().max(256).optional(),
     provider: z.string().max(64).optional(),
+    reasoning_effort: z.string().max(32).optional(),
     description: z.string().optional(),
     status: z.enum(["active", "idle", "draft", "error"]),
     soul: z.string(),
@@ -4769,6 +4838,7 @@ export const AgentCreateRequestMain =
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
+    reasoning_effort: z.string().max(32).optional(),
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
@@ -4793,6 +4863,7 @@ export const AgentCreateRequestSubagent =
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
+    reasoning_effort: z.string().max(32).optional(),
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
@@ -4834,6 +4905,7 @@ export const AgentCreateRequest =
 export const FallbackModelPair: z.ZodType<FallbackModelPair> = z.object({
   model: z.string().min(1).max(256),
   provider: z.string().min(1).max(64),
+  reasoning_effort: z.string().max(32).optional(),
 });
 export const ExecutorConfigUpdate: z.ZodType<ExecutorConfigUpdate> = z
   .object({
@@ -4850,6 +4922,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   description: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().max(64).optional(),
+  reasoning_effort: z.string().max(32).optional(),
   context_window_override: z.number().int().gte(1).nullish(),
   soul: z.string().min(1).optional(),
   max_tool_iterations: z.number().int().gte(1).lte(1000).nullish(),
@@ -5323,11 +5396,23 @@ export const MaxToolIterationsLoweringConflict: z.ZodType<MaxToolIterationsLower
 export const MemorySettings: z.ZodType<MemorySettings> = z
   .object({
     auto_recap_enabled: z.boolean(),
-    idle_timeout_minutes: z.number().int(),
+    idle_timeout_minutes: z.number().int().gte(1).lte(1440),
     bootstrap_recap_enabled: z.boolean(),
-    bootstrap_recap_max_per_minute: z.number().int(),
+    bootstrap_recap_max_per_minute: z.number().int().gte(1).lte(60),
     recap_model: z.string().max(256),
     recap_fallback_models: z.array(FallbackModel),
+    recap_provider: z.string().max(64),
+    recap_reasoning_effort: z.string().max(32),
+    recap_max_output_tokens: z.number().int().gte(512).lte(16384),
+    recap_input_tokens: z.number().int().gte(500).lte(32000),
+    recap_summary_words: z.number().int().gte(50).lte(500),
+    recap_list_items: z.number().int().gte(1).lte(10),
+    recap_fallback_context_chars: z.number().int().gte(200).lte(8000),
+    recap_timeout_seconds: z.number().int().gte(15).lte(300),
+    recap_stream_retries: z.number().int().gte(0).lte(5),
+    recap_retry_pause_ms: z.number().int().gte(100).lte(5000),
+    recap_chars_per_token: z.number().int().gte(2).lte(8),
+    bootstrap_recap_min_spacing_seconds: z.number().int().gte(1).lte(60),
     session_days: z.number().int(),
     memory_retros_days: z.number().int(),
   })
@@ -5721,6 +5806,9 @@ export const CatalogProviderRegion: z.ZodType<CatalogProviderRegion> = z.object(
     group: z.enum(["", "us", "eu", "apac", "jp", "au", "global"]),
   }
 );
+export const CatalogModelReasoning: z.ZodType<CatalogModelReasoning> = z.object(
+  { levels: z.array(z.string().min(1).max(32)), switch: z.boolean() }
+);
 export const CatalogModel: z.ZodType<CatalogModel> = z.object({
   id: z.string().min(1).max(256),
   name: z.string().min(1),
@@ -5738,6 +5826,7 @@ export const CatalogModel: z.ZodType<CatalogModel> = z.object({
     .optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
+  reasoning: CatalogModelReasoning.optional(),
 });
 export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   id: z.string().min(1).max(64),
@@ -5775,6 +5864,7 @@ export const ProvidersCatalog: z.ZodType<ProvidersCatalog> = z.object({
 export const DefaultModel: z.ZodType<DefaultModel> = z.object({
   provider: z.string().max(64),
   model: z.string().max(256),
+  reasoning_effort: z.string().max(32).optional(),
   context_window: z.number().int().gte(0).optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
@@ -5783,6 +5873,7 @@ export const DefaultModelUpdateRequest: z.ZodType<DefaultModelUpdateRequest> =
   z.object({
     provider: z.string().min(1).max(64),
     model: z.string().min(1).max(256),
+    reasoning_effort: z.string().max(32).optional(),
   });
 export const ProviderUpdateRequest = z
   .object({
@@ -8143,6 +8234,7 @@ export const AgentModelChainEntry: z.ZodType<AgentModelChainEntry> = z.object({
   provider_configured: z.boolean(),
   model_offered: z.boolean().nullable(),
   accepts_images: z.boolean().nullable(),
+  effort_options: z.array(z.string()).nullable(),
   warning: z.string().optional(),
 });
 export const AgentDetail: z.ZodType<AgentDetail> = z.object({
@@ -8155,6 +8247,7 @@ export const AgentDetail: z.ZodType<AgentDetail> = z.object({
   locked: z.boolean().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),
+  reasoning_effort: z.string().max(32).nullish(),
   fallback_models: z.array(FallbackModel).optional(),
   model_params: AgentModelParams.optional(),
   max_tool_iterations: z.number().int().gte(1).nullish(),
@@ -18656,6 +18749,16 @@ export const SessionHistoryState = z
   })
   .strict();
 
+export const EffortRecord = z
+  .object({
+    chosen: z.string().max(32).optional(),
+    sent: z.string().max(32).optional(),
+    reason: z.enum(["mapped", "not_supported", "continuation", "rejected", "rejected_earlier", "extra_body"]).optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+  })
+  .strict();
+
 export const RoomRef = z
   .object({
     room_id: z.string().min(1).max(128),
@@ -18886,6 +18989,8 @@ export const MessageFrameBase = z
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
+      provider: z.string().min(1).max(64).optional(),
+      reasoning_effort: z.string().min(1).max(32).optional(),
       workspace_id: z.string().min(1).max(128).optional(),
       workspace_setup_kickoff: z.boolean().optional(),
     })
@@ -19013,6 +19118,8 @@ export const DoneStats = z
     turn_failed: z.boolean().optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
+    effort: EffortRecord.optional(),
+    reasoning_tokens: z.number().int().min(0).optional(),
   })
   .passthrough();
 
@@ -19322,6 +19429,8 @@ export const ReplayMessageFrame = z
     .strict().optional(),
     seq: z.number().int().min(1).optional(),
     terminal_outcome: z.boolean().optional(),
+    effort: EffortRecord.optional(),
+    turn_reasoning_tokens: z.number().int().min(0).optional(),
   })
   .strict();
 

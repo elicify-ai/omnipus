@@ -776,10 +776,8 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	//     reported — handled in the no-tool-calls branch below. Silence
 	//     is the defect there, not the malformation.
 	//
-	// ReasoningContent is stripped too: the no-tool-calls branch falls
-	// back to it when Content is empty, so leaving it alone would just
-	// move the leak. Mutating it here is safe — handleReasoning below
-	// receives its own string copy.
+	// ReasoningContent is stripped too, so no downstream consumer of the
+	// private reasoning carrier sees the residue either.
 	rr.orphanMarkup, rr.hasOrphanMarkup = stripOrphanToolCallMarkup(rr.rq.ri.rf.response)
 	if rr.hasOrphanMarkup {
 		logger.WarnCF("agent", "LLM emitted unparseable tool-call markup as text; markup suppressed",
@@ -795,15 +793,12 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 			})
 	}
 
+	// Reasoning text is never published or logged (effort-levels spec FR-016,
+	// FR-017): the debug line below carries only its length.
 	reasoningContent := rr.rq.ri.rf.response.Reasoning
 	if reasoningContent == "" {
 		reasoningContent = rr.rq.ri.rf.response.ReasoningContent
 	}
-	rr.rq.ri.rf.rt.spawnReasoningPublish(
-		reasoningContent,
-		rr.rq.ri.rf.rt.ts.channel,
-		rr.rq.ri.rf.rt.al.targetReasoningChannelID(rr.rq.ri.rf.rt.ts.channel),
-	)
 	rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindLLMResponse,
 		rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.response"),
@@ -815,13 +810,12 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	)
 
 	llmResponseFields := map[string]any{
-		"agent_id":       rr.rq.ri.rf.rt.ts.agent.ID,
-		"iteration":      rr.rq.ri.rf.rt.iteration,
-		"content_chars":  len(rr.rq.ri.rf.response.Content),
-		"tool_calls":     len(rr.rq.ri.rf.response.ToolCalls),
-		"reasoning":      rr.rq.ri.rf.response.Reasoning,
-		"target_channel": rr.rq.ri.rf.rt.al.targetReasoningChannelID(rr.rq.ri.rf.rt.ts.channel),
-		"channel":        rr.rq.ri.rf.rt.ts.channel,
+		"agent_id":        rr.rq.ri.rf.rt.ts.agent.ID,
+		"iteration":       rr.rq.ri.rf.rt.iteration,
+		"content_chars":   len(rr.rq.ri.rf.response.Content),
+		"tool_calls":      len(rr.rq.ri.rf.response.ToolCalls),
+		"reasoning_chars": len([]rune(reasoningContent)),
+		"channel":         rr.rq.ri.rf.rt.ts.channel,
 	}
 	if rr.rq.ri.rf.response.Usage != nil {
 		llmResponseFields["prompt_tokens"] = rr.rq.ri.rf.response.Usage.PromptTokens
@@ -830,56 +824,6 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	}
 	logger.DebugCF("agent", "LLM response", llmResponseFields)
 	return agentLoopRunTurnResponseNext
-}
-
-// reasoningPublishCanceledOnEntry reports whether ctx is already canceled,
-// logging when it is — the one path in handleReasoning (loop.go) that
-// silently drops the reasoning trace, so it must at least explain why.
-// Extracted into this sibling file rather than inlined in loop.go, which is
-// pinned at its exact grandfathered line count (scripts/budgets/files.txt)
-// and may only shrink.
-func reasoningPublishCanceledOnEntry(ctx context.Context, channelName string) bool {
-	if ctx.Err() == nil {
-		return false
-	}
-	logger.DebugCF("agent", "Reasoning publish skipped (context already canceled on entry)", map[string]any{
-		"channel": channelName,
-		"error":   ctx.Err().Error(),
-	})
-	return true
-}
-
-// reasoningPublishScheduledHook is a test-only synchronization seam. When
-// non-nil, it runs synchronously on the reasoning-publish goroutine started
-// by spawnReasoningPublish below, immediately after the goroutine starts and
-// before any publish work happens. A test uses it to pin that goroutine at a
-// chosen point in time relative to when the turn itself ends and cancels
-// turnCtx — an ordering otherwise reproducible only by chance under load.
-// Always nil in production; never set outside a test.
-var reasoningPublishScheduledHook func()
-
-// spawnReasoningPublish launches the best-effort reasoning-trace publish for
-// this turn on its own goroutine. Nothing in runTurn waits for it — it is
-// fire-and-forget — and runTurn cancels its own turnCtx via defer
-// (loop.go::runTurn, "defer rz.rc.turnCancel()") as soon as it returns. If
-// the Go scheduler does not run this goroutine until after that
-// cancellation (plausible under load — reproduced deterministically in
-// loop_reasoning_turn_cancel_test.go), handing it turnCtx directly would
-// make handleReasoning observe an already-canceled context on entry and
-// return without publishing: the reasoning trace silently dropped, with no
-// error surfaced anywhere. context.WithoutCancel detaches the goroutine from
-// turnCtx's cancellation (and from its own turn timeout) while
-// handleReasoning's own bounded 5s publish timeout remains the sole
-// lifetime bound, so the goroutine can never leak and the publish attempt
-// is never skipped merely because the turn ended first.
-func (rt *agentLoopRunTurn) spawnReasoningPublish(reasoningContent, channel, channelID string) {
-	detachedCtx := context.WithoutCancel(rt.turnCtx)
-	go func() {
-		if reasoningPublishScheduledHook != nil {
-			reasoningPublishScheduledHook()
-		}
-		rt.al.handleReasoning(detachedCtx, reasoningContent, channel, channelID)
-	}()
 }
 
 // recordToolCalls normalizes and records tool calls before execution begins.
@@ -938,6 +882,9 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 		Content:          rr.rq.ri.rf.response.Content,
 		ReasoningContent: rr.rq.ri.rf.response.ReasoningContent,
 		ThinkingBlocks:   append([]string(nil), rr.rq.ri.rf.response.ThinkingBlocks...),
+		// FR-013: the OpenRouter carrier rides the tool-call message so the
+		// continuation (and every reload) replays it to that route.
+		ReasoningDetails: cloneReasoningDetails(rr.rq.ri.rf.response.ReasoningDetails),
 	}
 	for i, tc := range rr.normalizedToolCalls {
 		argumentsJSON, marshalErr := json.Marshal(rr.recordToolArgs[i])

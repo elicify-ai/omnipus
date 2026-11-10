@@ -327,6 +327,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			// PUT /api/v1/agents/{id} model change.
 			return al.ApplyAgentModel(agent.ID, value)
 		}
+		al.wireEffortCommand(rt, agent, opts)
 
 		rt.ClearHistory = func() error {
 			if opts == nil {

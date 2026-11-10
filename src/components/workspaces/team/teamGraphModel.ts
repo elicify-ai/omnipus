@@ -49,7 +49,7 @@ export const DEFAULT_EDGE_MODES: readonly DelegationMode[] = ['direct', 'task']
  * `WorkspaceDelegation` response always carries a concrete, server-computed
  * `default_depth`.
  */
-export const DEFAULT_DEPTH_FALLBACK = 3
+export const DEFAULT_DEPTH_FALLBACK = 10
 
 const VALID_MODE = new Set<string>(ALL_MODES)
 
