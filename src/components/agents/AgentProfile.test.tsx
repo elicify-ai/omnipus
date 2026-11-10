@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, Skill } from '@/lib/api'
+import type { AgentUpdateRequest } from '@/lib/api/generated/openapi-types'
 import { expectEditableIdentityChoices, expectLockedFigureAndRole, expectLockedIdentityColours } from '@/test/agentIdentityAssertions'
 
 // ResizeObserver is required by cmdk (used inside the ModelSelector popover);
@@ -68,10 +69,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchProviders: vi.fn(),
     testAgentRunner: vi.fn(),
+    fetchExecutorPreview: vi.fn(),
   }
 })
 
-import { fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, fetchProviders, testAgentRunner } from '@/lib/api'
+import { fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, fetchProviders, testAgentRunner, fetchExecutorPreview } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ApiError } from '@/lib/api-error'
@@ -80,6 +82,17 @@ import { ApiError } from '@/lib/api-error'
 // agentProfileTestFixtures.ts so AgentProfile.providerPair.test.tsx can
 // reuse them without duplicating them.
 import { COMMON_EDITABLE_FIELDS, BUILTIN_EDITABLE_FIELDS, mockCoreAgent } from './agentProfileTestFixtures'
+
+function runtimeFields(external: boolean, base = COMMON_EDITABLE_FIELDS): NonNullable<Agent['editable_fields']> {
+  const reason = 'Only external-CLI workers have a runtime environment.'
+  return [
+    ...base.filter(field => field.name !== 'executor'),
+    ...['executor.env_overrides', 'executor.env_overrides_remove', 'executor.cli_args'].map(name => ({ name, editable: external, ...(external ? {} : { reason }) })),
+    { name: 'executor.cli', editable: false, reason: 'Locked after create; create a new agent to switch CLIs.' },
+    { name: 'executor.effective_cli_path', editable: false, reason: 'Set in Settings -> Third-party agents.' },
+    { name: 'executor.kind', editable: false, reason: 'Derived from the agent type.' },
+  ]
+}
 
 const mockLockedCoreAgent: Agent = {
   revision: '0'.repeat(64),
@@ -102,20 +115,16 @@ const mockLockedCoreAgent: Agent = {
   editable_fields: BUILTIN_EDITABLE_FIELDS,
 }
 
-// Tier-branched form fixtures (Spec-4 FR-4.1 + locked concept in
-// `.preview-doc/agents.html`): workers carry an executor; base agents do not.
-// `mockWorkerAgent` is the canonical editable worker; `mockLockedWorkerAgent`
-// is a worker that has been locked down (e.g. a marketplace-supplied worker).
+// Native workers have a derived, never-editable runtime kind (Agent contract).
+// Locked workers keep the existing non-runtime capability restrictions.
 const mockWorkerAgent: Agent = {
   ...mockCoreAgent,
   id: 'web-researcher',
   name: 'Web Researcher',
   type: 'Subagent',
   description: 'Delegation-only labour agent — no heartbeat, optional soul',
-  // Spec-4 FR-4.1: every worker has a runner. Absent → native default in
-  // the component layer; we set one explicitly so the executor accordion
-  // hydrates to a meaningful kind for the tests.
-  executor: { kind: 'external-cli', cli: 'claude-code' },
+  executor: { kind: 'native' },
+  editable_fields: runtimeFields(false),
 }
 
 const mockLockedWorkerAgent: Agent = {
@@ -123,16 +132,11 @@ const mockLockedWorkerAgent: Agent = {
   id: 'marketplace-pack-worker',
   name: 'Marketplace Worker',
   locked: true,
-  editable_fields: BUILTIN_EDITABLE_FIELDS,
+  editable_fields: runtimeFields(false, BUILTIN_EDITABLE_FIELDS),
 }
 
-// W2c / field matrix (docs/internal/architecture/agent-types-field-matrix.md):
-// isExternal/isNativeWorker are TYPE-based, not executor-based — a
-// `subagent_3p` agent is the ONLY kind that is genuinely external. This
-// fixture is the canonical "truly external" agent (contrast with
-// `mockWorkerAgent`, which is `type: 'Subagent'` — native — even though it
-// happens to carry an `external-cli` executor value in some fixtures above;
-// that combination is legacy-test shorthand, not a real subagent_3p).
+// The field matrix makes only subagent_3p genuinely external. Its env/args
+// descriptors are editable; kind, CLI and the saved program remain protected.
 const mockSubagent3pAgent: Agent = {
   ...mockCoreAgent,
   id: 'external-researcher',
@@ -140,6 +144,7 @@ const mockSubagent3pAgent: Agent = {
   type: 'subagent_3p',
   description: 'Delegation-only worker on an external CLI runner',
   executor: { kind: 'external-cli', cli: 'claude-code' },
+  editable_fields: runtimeFields(true),
 }
 
 // ADR-052 FR-038/FR-039 — the seeded Judge System Agent. Locked + type
@@ -203,6 +208,9 @@ beforeEach(() => {
     reason: '',
     message: 'ready',
     cli: 'claude-code',
+  })
+  vi.mocked(fetchExecutorPreview).mockReset().mockResolvedValue({
+    binary: 'claude', argv: [], command_line: 'claude', prompt_delivery: 'stdin', dropped_args: [],
   })
   // Default: two connected providers with model lists — the provider-aware
   // fallback editor needs ≥2 provider groups to exercise the provider-grouped
@@ -651,13 +659,16 @@ describe('AgentProfile — ordinary built-in skill assignments', () => {
   })
 })
 
-// Open the ExecutorSelector Runtime <Select> (Radix) and pick an option by
-// accessible name. Radix renders options into a portal only when open.
-function pickExecutorKind(optionName: RegExp) {
-  fireEvent.click(screen.getByTestId('executor-kind-select'))
-  const option = screen.getByRole('option', { name: optionName })
-  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
-  fireEvent.click(option)
+// FR-8 saves use the closed WRITE schema, not a native runtime transition.
+async function expectExternalWrite(expected: Required<NonNullable<AgentUpdateRequest['executor']>>) {
+  await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 6000 })
+  const [id, payload] = vi.mocked(updateAgent).mock.calls.at(-1)!
+  expect(id).toBe(mockSubagent3pAgent.id)
+  expect(payload.executor).toBeDefined()
+  const executor = payload.executor!
+  expect(Object.keys(executor).filter(key => !['env_overrides', 'env_overrides_remove', 'cli_args'].includes(key))).toEqual([])
+  expect({ env_overrides: executor.env_overrides ?? {}, env_overrides_remove: executor.env_overrides_remove ?? [], cli_args: executor.cli_args ?? '' }).toEqual(expected)
+  expect(testAgentRunner).not.toHaveBeenCalled()
 }
 
 // Spec-4 FR-4.1 — Executor section wired into the worker agent profile.
@@ -696,29 +707,19 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     expect(cli).toHaveTextContent(/Codex/i)
   })
 
-  it('persists a worker runtime change through updateAgent (auto-save)', async () => {
-    vi.mocked(updateAgent).mockResolvedValue(mockWorkerAgent)
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
+  it('keeps a native worker runtime kind disabled and never saves a transition', async () => {
+    // The old transition premise contradicts the derived executor.kind contract.
+    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
-    if (!screen.queryByTestId('executor-kind-select')) {
-      switchTab('tab-advanced')
-    }
-    await screen.findByTestId('executor-kind-select')
-    pickExecutorKind(/External CLI/i)
-    // The cli select now appears with the claude-code default.
-    const cli = await screen.findByTestId('executor-cli-select')
-    expect(cli).toHaveTextContent(/Claude Code/i)
-    // Auto-save debounces, then PUTs the executor with the worker id.
-    await waitFor(
-      () => {
-        expect(updateAgent).toHaveBeenCalled()
-        const lastCall = vi.mocked(updateAgent).mock.calls.at(-1)!
-        expect(lastCall[0]).toBe('web-researcher')
-        expect(lastCall[1].executor).toEqual({ kind: 'external-cli', cli: 'claude-code' })
-      },
-      { timeout: 6000 },
-    )
+    switchTab('tab-advanced')
+    const kind = await screen.findByTestId('executor-kind-select')
+    expect(kind).toHaveTextContent(/Native/i)
+    expect(kind).toBeDisabled()
+    fireEvent.click(kind)
+    fireEvent.keyDown(kind, { key: 'ArrowDown' })
+    expect(screen.queryByRole('option', { name: /External CLI/i })).toBeNull()
+    expect(updateAgent).not.toHaveBeenCalled()
   })
 
   it('renders the worker runtime selector disabled for locked workers', async () => {
@@ -737,44 +738,37 @@ describe('AgentProfile — Executor section is worker-only (Spec-4)', () => {
     expect(screen.queryByTestId('runner-test-button')).toBeNull()
   })
 
-  // T11 FR-8 supersedes I12's pre-save runner gate. Keep both transition
-  // scenarios, but assert a real save and zero automatic runner checks.
-  it('FR-8: saves an external-cli transition without a pre-save runner test', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
-    renderProfile('web-researcher')
-    await screen.findByText('Web Researcher')
-    if (!screen.queryByTestId('executor-kind-select')) {
-      switchTab('tab-advanced')
-    }
-    await screen.findByTestId('executor-kind-select')
-    pickExecutorKind(/External CLI/i)
-    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith(
-      'web-researcher',
-      expect.objectContaining({ executor: { kind: 'external-cli', cli: 'claude-code' } }),
-    ), { timeout: 6000 })
-    expect(testAgentRunner).not.toHaveBeenCalled()
+  // FR-8 is real, but a native runtime transition is not: save allowed fields
+  // on a third-party worker and retain the zero-automatic-runner-check oracle.
+  it('FR-8: saves external-worker arguments without a pre-save runner test', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    vi.mocked(updateAgent).mockResolvedValue({ ...mockSubagent3pAgent, executor: { ...mockSubagent3pAgent.executor, cli_args: '--max-turns 7' } })
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    switchTab('tab-runtime')
+    const input = within(screen.getByTestId('profile-cli-args')).getByRole('textbox')
+    expect(input).toBeEnabled()
+    fireEvent.change(input, { target: { value: '--max-turns 7' } })
+    fireEvent.blur(input)
+    await expectExternalWrite({ env_overrides: {}, env_overrides_remove: [], cli_args: '--max-turns 7' })
   })
 
-  it('FR-8: a missing-binary runner result cannot block an external-cli save', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockWorkerAgent, executor: undefined })
-    vi.mocked(testAgentRunner).mockResolvedValue({
-      ok: false,
-      reason: 'missing-binary',
-      message: 'claude not found on PATH',
-      cli: 'claude-code',
-    })
-    renderProfile('web-researcher')
-    await screen.findByText('Web Researcher')
-    if (!screen.queryByTestId('executor-kind-select')) {
-      switchTab('tab-advanced')
-    }
-    await screen.findByTestId('executor-kind-select')
-    pickExecutorKind(/External CLI/i)
-    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith(
-      'web-researcher',
-      expect.objectContaining({ executor: { kind: 'external-cli', cli: 'claude-code' } }),
-    ), { timeout: 6000 })
-    expect(testAgentRunner).not.toHaveBeenCalled()
+  it('FR-8: a missing-binary runner result cannot block saving an external worker key', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    vi.mocked(updateAgent).mockResolvedValue({ ...mockSubagent3pAgent, executor: { ...mockSubagent3pAgent.executor, env_overrides: { AUTH_TOKEN: '••••••' } } })
+    vi.mocked(testAgentRunner).mockResolvedValue({ ok: false, reason: 'missing-binary', message: 'claude not found on PATH', cli: 'claude-code' })
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    switchTab('tab-runtime')
+    fireEvent.click(await screen.findByTestId('profile-env-add'))
+    const key = await screen.findByLabelText('Environment variable name')
+    const value = screen.getByLabelText('Environment variable value')
+    fireEvent.change(key, { target: { value: 'AUTH_TOKEN' } })
+    fireEvent.blur(key)
+    fireEvent.change(value, { target: { value: 'repair-value' } })
+    expect(key).toHaveValue('AUTH_TOKEN')
+    expect(value).toHaveValue('repair-value')
+    await expectExternalWrite({ env_overrides: { AUTH_TOKEN: 'repair-value' }, env_overrides_remove: [], cli_args: '' })
   })
 
   it('I12: skips testAgentRunner when executor is native (no need to test native runners)', async () => {
@@ -843,18 +837,15 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     expect(screen.queryByRole('button', { name: /set as default/i })).toBeNull()
   })
 
-  it('worker form: shows the runtime selector AND a Test-run path on external-cli', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
-    renderProfile('web-researcher')
-    await screen.findByText('Web Researcher')
-    // Executor is in the default-open set for workers (W6-B1 / I1); only
-    // click to open if the runner-test button is not yet on screen.
-    if (!screen.queryByTestId('runner-test-button')) {
-      switchTab('tab-advanced')
-    }
-    // Test Connection button is part of the ExecutorSelector and only
-    // renders for workers. Confirms the "Test-run" action requirement.
-    expect(await screen.findByTestId('runner-test-button')).toBeInTheDocument()
+  it('external-worker form: keeps an explicit Test-run path with a read-only program', async () => {
+    // A native-to-external selector was an invalid premise; explicit testing remains.
+    vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
+    renderProfile('external-researcher')
+    await screen.findByText('External Researcher')
+    switchTab('tab-runtime')
+    await waitFor(() => expect(screen.getByTestId('profile-command-preview')).toHaveAttribute('data-preview-status', 'ready'), { timeout: 2000 })
+    expect(screen.getByTestId('profile-command-preview-smoke-test-button')).toBeInTheDocument()
+    expect(screen.getByTestId('profile-cli-path').querySelectorAll('input, textarea, [contenteditable]')).toHaveLength(0)
   })
 
   it('base (core) form: hides Executor, hides Schedules, no agent-level heartbeat (now workspace-scoped)', async () => {
@@ -2444,11 +2435,13 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
       ...mockWorkerAgent,
       type: 'subagent_3p',
       executor: { kind: 'external-cli', cli: 'claude-code' },
+      editable_fields: runtimeFields(true),
     })
     vi.mocked(updateAgent).mockReset().mockResolvedValue({
       ...mockWorkerAgent,
       type: 'subagent_3p',
       executor: { kind: 'external-cli', cli: 'claude-code' },
+      editable_fields: runtimeFields(true),
     })
     vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   })
@@ -2809,8 +2802,8 @@ describe('AgentProfile — skills visibility by agent kind (field matrix, W2c)',
   it('a native Subagent (type: Subagent) DOES get a Skills section (matrix: optional/inherit)', async () => {
     // The old (!isWorkerAgent) gate over-corrected and hid Skills for every
     // worker, including native Subagents that may legitimately be granted
-    // skills. mockWorkerAgent is `type: 'Subagent'` — always native per
-    // agentKindFlags, regardless of its (legacy-shorthand) executor value.
+    // skills. mockWorkerAgent is type Subagent with a derived native kind;
+    // capability descriptors do not change its native classification.
     vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
     renderProfile('web-researcher')
     await screen.findByText('Web Researcher')
