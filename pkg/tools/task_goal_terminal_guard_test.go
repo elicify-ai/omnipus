@@ -29,7 +29,9 @@
 // terminal writer therefore fails this test until its author either wires the
 // hook or writes down why the writer cannot reach a terminal status. One
 // writer is deliberately exempt WHILE reaching a terminal status:
-// PlanEngine.cancelMemberLocked's user Stop — MAJ-003/D8.10
+// writeTaskStoppedByPerson, the one person-Stop writer (task cancel through
+// PlanEngine.cancelMemberLocked, and a session Stop of a never-started queued
+// task launch, #1557) — MAJ-003/D8.10
 // (ADR-20260928-sub-agent-control-plane) keep the goal active and the shared
 // mapper tools.GoalStateForTerminalTask refuses that disposition; its row
 // below carries that why, and no other writer may join it without its own.
@@ -96,7 +98,9 @@ var knownStatusWriters = []statusWriter{
 	// reversal; no other writer may join this exemption without its own
 	// written why.
 	{
-		where: "pkg/agent.PlanEngine.cancelMemberLocked",
+		// Shared by PlanEngine.cancelMemberLocked (task/plan Stop) and
+		// AgentLoop.closeStoppedQueuedTaskLaunch (#1557), which both call it.
+		where: "pkg/agent.writeTaskStoppedByPerson",
 		why: "writes failed(stopped_by_user) — a user Stop, which MAJ-003/D8.10 keep " +
 			"goal-non-terminal: the paired record stays ACTIVE with its original id and " +
 			"session binding so plan restart can reuse it (T17/T20). The policy point is " +
