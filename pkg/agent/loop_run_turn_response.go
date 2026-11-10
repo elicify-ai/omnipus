@@ -585,6 +585,13 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		if backoff < 500*time.Millisecond {
 			backoff = 500 * time.Millisecond
 		}
+		// Issue #1664 R3-8: a Stop can land after the checks above (during
+		// the turn-timeout event or the window trim). Re-check right before
+		// announcing the retry so no retry frame follows a Stop.
+		if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+			cr.rr.rq.ri.rf.err = context.Canceled
+			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+		}
 		cr.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindLLMRetry,
 			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),

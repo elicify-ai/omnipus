@@ -129,13 +129,12 @@ func (ts *turnState) closeCancelWakeLocked() {
 
 // cancelRequestedBeforeRetry reports whether a claimed Stop/cancel has
 // already reached this turn, so an announced retry must not start (issue
-// #1664 B7). Hard abort is checked separately by its callers.
+// #1664 B7). The claim alone decides: once an administrative cancel's
+// wrap-up request is built, gracefulInterruptRequested reports false, yet a
+// timed-out wrap-up call must still not be retried (#1664 R3-7). Hard abort
+// is checked separately by its callers.
 func (ts *turnState) cancelRequestedBeforeRetry() bool {
-	if !ts.cancelFired.Load() {
-		return false
-	}
-	graceful, _ := ts.gracefulInterruptRequested()
-	return graceful
+	return ts.cancelFired.Load()
 }
 
 // waitRetryBackoff waits out a provider-retry backoff. It returns ctx's error
