@@ -138,3 +138,199 @@ describe('held-stream provider fixture', () => {
     }
   });
 });
+
+/**
+ * Unit tests for the scripts branch (#1661 Bug-3-a / Bug-5 move): branch the
+ * reply PER PROMPT — hold one tab's message, answer another's — with per-
+ * prompt evidence records, instead of the single global held prompt. The
+ * browser tests assert the same branch end-to-end; these pin the fixture's
+ * own protocol (matching, exact answer text, the wire-level cancel counter,
+ * later-turn-wins over sent history) in milliseconds.
+ */
+describe('held-stream provider scripts branch (per-prompt branch)', () => {
+  const HOLD_PROMPT = 'scripts-hold-this-tab';
+  const ANSWER_PROMPT = 'scripts-answer-this-tab';
+  const ANSWER_TEXT = 'MOCK-REPLY-SCRIPTS: the answered tab gets exactly this text.';
+  const TURN_ONE_PROMPT = 'scripts-turn-one';
+  const TURN_TWO_PROMPT = 'scripts-turn-two';
+  const TURN_ONE_TEXT = 'MOCK-REPLY-SCRIPTS-ONE: first turn scripted answer.';
+  const TURN_TWO_TEXT = 'MOCK-REPLY-SCRIPTS-TWO: second turn scripted answer.';
+
+  function scriptRequestBody(...userTexts: string[]): string {
+    return JSON.stringify({
+      model: 'fixture/model', stream: true,
+      messages: userTexts.map((content) => ({ role: 'user', content })),
+    });
+  }
+
+  /** Concatenate every scripted delta content from an SSE body — the exact
+   * text the SPA must ultimately render, whitespace-normalized like the
+   * browser-side oracle normalizes. */
+  function streamedContent(sseBody: string): string {
+    let text = '';
+    for (const line of sseBody.split('\n')) {
+      if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
+      const parsed = JSON.parse(line.slice('data: '.length)) as {
+        choices: { delta: { content?: string } }[];
+      };
+      text += parsed.choices[0].delta.content ?? '';
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  function recordsOf(provider: Awaited<ReturnType<typeof startHeldStreamProvider>>, prompt: string) {
+    const record = provider.evidence.promptRecords.find((entry) => entry.promptIncludes === prompt);
+    expect(record, `a promptRecords entry must exist for ${prompt}`).toBeDefined();
+    return record!;
+  }
+
+  it('holds one script while answering another with the EXACT scripted text', async () => {
+    const provider = await startHeldStreamProvider({
+      promptIncludes: HOLD_PROMPT,
+      chunkIntervalMs: 20,
+      scripts: [
+        { promptIncludes: HOLD_PROMPT, behavior: 'hold' },
+        { promptIncludes: ANSWER_PROMPT, behavior: 'answer', answerText: ANSWER_TEXT },
+      ],
+    });
+    try {
+      // The hold tab streams first and stays open.
+      const held = await fetch(`${provider.url}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: scriptRequestBody(`please hold: ${HOLD_PROMPT}`),
+      });
+      expect(held.status).toBe(200);
+      const heldReader = held.body!.getReader();
+      await heldReader.read();
+      const holdRecord = recordsOf(provider, HOLD_PROMPT);
+      expect(holdRecord.held, 'the hold script must be holding').toBe(true);
+      expect(holdRecord.requests).toBe(1);
+
+      // The answered tab, WHILE the hold is open: completes with the exact text.
+      const answered = await fetch(`${provider.url}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: scriptRequestBody(`please answer: ${ANSWER_PROMPT}`),
+      });
+      const sseBody = await answered.text();
+      expect(answered.status).toBe(200);
+      expect(sseBody).toContain('data: [DONE]');
+      expect(sseBody).toContain('"finish_reason":"stop"');
+      expect(streamedContent(sseBody)).toBe(ANSWER_TEXT);
+
+      const answerRecord = recordsOf(provider, ANSWER_PROMPT);
+      expect(answerRecord.answered).toBe(1);
+      expect(answerRecord.requests).toBe(1);
+      expect(answerRecord.held, 'an answer script never holds').toBe(false);
+
+      // The hold is untouched by the answer, and nothing was flagged.
+      expect(holdRecord.held).toBe(true);
+      expect(provider.evidence.streamRequests).toBe(2);
+      expect(provider.evidence.unmatchedStreams).toBe(0);
+      expect(provider.evidence.errors).toHaveLength(0);
+      heldReader.cancel();
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it('records a client abort on the held script as clientClosed without touching the answered script', async () => {
+    const provider = await startHeldStreamProvider({
+      promptIncludes: HOLD_PROMPT,
+      chunkIntervalMs: 20,
+      scripts: [
+        { promptIncludes: HOLD_PROMPT, behavior: 'hold' },
+        { promptIncludes: ANSWER_PROMPT, behavior: 'answer', answerText: ANSWER_TEXT },
+      ],
+    });
+    try {
+      const abort = new AbortController();
+      const held = await fetch(`${provider.url}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: scriptRequestBody(`please hold: ${HOLD_PROMPT}`),
+        signal: abort.signal,
+      });
+      await held.body!.getReader().read();
+      expect(recordsOf(provider, HOLD_PROMPT).held).toBe(true);
+
+      const answered = await fetch(`${provider.url}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: scriptRequestBody(`please answer: ${ANSWER_PROMPT}`),
+      });
+      await answered.text();
+      expect(recordsOf(provider, ANSWER_PROMPT).answered).toBe(1);
+
+      // The wire-level cancel: the client aborts the held stream.
+      abort.abort();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const holdRecord = recordsOf(provider, HOLD_PROMPT);
+      expect(holdRecord.clientClosed, 'the abort must land on the held prompt’s own record').toBe(1);
+      expect(holdRecord.held, 'the held prompt is no longer holding after the abort').toBe(false);
+      expect(provider.evidence.released, 'no release() was involved').toBe(0);
+      expect(recordsOf(provider, ANSWER_PROMPT).answered, 'the answered script is untouched by the cancel').toBe(1);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it('answers an answer-script prompt that arrives BEFORE any hold exists', async () => {
+    const provider = await startHeldStreamProvider({
+      promptIncludes: HOLD_PROMPT,
+      chunkIntervalMs: 20,
+      scripts: [
+        { promptIncludes: ANSWER_PROMPT, behavior: 'answer', answerText: ANSWER_TEXT },
+        { promptIncludes: HOLD_PROMPT, behavior: 'hold' },
+      ],
+    });
+    try {
+      // Answered first — no hold slot is open yet; must still complete.
+      const answered = await fetch(`${provider.url}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: scriptRequestBody(`please answer: ${ANSWER_PROMPT}`),
+      });
+      expect(streamedContent(await answered.text())).toBe(ANSWER_TEXT);
+      expect(recordsOf(provider, ANSWER_PROMPT).answered).toBe(1);
+      expect(provider.evidence.retried).toBe(0);
+
+      // Only then is the hold prompt seen and held.
+      const held = await fetch(`${provider.url}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: scriptRequestBody(`please hold: ${HOLD_PROMPT}`),
+      });
+      const heldReader = held.body!.getReader();
+      await heldReader.read();
+      expect(recordsOf(provider, HOLD_PROMPT).held).toBe(true);
+      heldReader.cancel();
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it('matches a later turn’s own script, not an earlier turn’s marker still in the sent history', async () => {
+    const provider = await startHeldStreamProvider({
+      promptIncludes: TURN_ONE_PROMPT,
+      chunkIntervalMs: 20,
+      scripts: [
+        { promptIncludes: TURN_ONE_PROMPT, behavior: 'answer', answerText: TURN_ONE_TEXT },
+        { promptIncludes: TURN_TWO_PROMPT, behavior: 'answer', answerText: TURN_TWO_TEXT },
+      ],
+    });
+    try {
+      // Turn 2's request carries the whole conversation: turn 1's user message
+      // (with its marker) is still in the history. LAST matching user message wins.
+      const turnTwo = await fetch(`${provider.url}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: scriptRequestBody(
+          `first message ${TURN_ONE_PROMPT}`,
+          'assistant placeholder is not a user message',
+          `second message ${TURN_TWO_PROMPT}`,
+        ),
+      });
+      expect(streamedContent(await turnTwo.text())).toBe(TURN_TWO_TEXT);
+      expect(recordsOf(provider, TURN_TWO_PROMPT).answered).toBe(1);
+      expect(recordsOf(provider, TURN_ONE_PROMPT).answered, 'turn 1’s script must not answer turn 2’s request').toBe(0);
+      expect(recordsOf(provider, TURN_ONE_PROMPT).requests).toBe(0);
+    } finally {
+      await provider.close();
+    }
+  });
+});

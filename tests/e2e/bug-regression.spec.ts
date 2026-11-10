@@ -31,6 +31,9 @@ import {
 import { freshChat } from './fixtures/session-setup'
 import { assistantReplyChallenge, assertHansReplyPersisted } from './fixtures/assistant-reply-acceptance'
 import { assertHansSessionUnfiled, provisionHansWorkspaceTeam } from './fixtures/hans-workspace'
+import { GatewayProcess } from './fixtures/gateway-process'
+import { E2E_FALLBACK } from './fixtures/e2e-model'
+import { startHeldStreamProvider, type HeldStreamProvider } from './fixtures/held-stream-provider'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -179,90 +182,530 @@ test.describe('Bug-1: No skip button in onboarding welcome step', () => {
   })
 })
 
+// ─── Deterministic mock provider (issue #1661) ────────────────────────────────
+//
+// Bug-3-a and Bug-5-a/5-b no longer call a paid model (chief decision on
+// #1661, 2026-11-06 13:55Z): the live 90 s `expect.poll` assertions flaked on
+// real-model latency (traced run 42202300235: tab 1's model call silent for
+// ~82 s, the test's own teardown Stop then rewrote the artifact into
+// "turn_canceled", and the no-flaky gate failed the job on the passing retry).
+//
+// The mock is a node:http OpenAI-compatible SSE provider (the proven
+// provider-retry.spec.ts::startMockProvider pattern), wired through
+// GatewayProcess.start({ apiBase }) so the REAL gateway, agent loop, WS hub,
+// session store and replay path stay under test — only the paid-model edge is
+// replaced. Two deliberate differences from startMockProvider:
+//
+//   1. The script branches on the USER MESSAGE TEXT in the request body —
+//      never on a call counter. startMockProvider's counter is global across
+//      the mock, and the same agent (mia) issues one streaming call per tool
+//      iteration across ALL sessions, so a counter cannot tell tab A from tab
+//      B (hunt report, "Q4 fixes" #3).
+//   2. A scripted entry can HOLD a request open — SSE headers are written,
+//      the body is never written — so a turn can be made deterministically
+//      "still in flight". The mock records every streaming request with its
+//      marker and open/answered state, which gives the tests a deterministic
+//      signal ("B's request is still open at the mock") instead of a
+//      wall-clock budget.
+
+// Per-test markers. They ride INSIDE the user message text, so the mock can
+// tell the two tabs'/turns' requests apart by content alone.
+const BUG3A_MARKER_TAB_A = 'bug3a-mock-tab-a'
+const BUG3A_MARKER_TAB_B = 'bug3a-mock-tab-b'
+const BUG5A_MARKER = 'bug5a-mock-turn-one'
+const BUG5B_MARKER_ONE = 'bug5b-mock-turn-one'
+const BUG5B_MARKER_TWO = 'bug5b-mock-turn-two'
+
+// Scripted answers — the exact expected reply text each oracle asserts. Plain
+// ASCII so markdown rendering cannot transform them.
+const BUG3A_ANSWER_TAB_A = 'MOCK-REPLY-BUG3A-TAB-A: tab A settled while tab B was still in flight.'
+const BUG5A_ANSWER = 'MOCK-REPLY-BUG5A: single-turn scripted answer for the replay-order test.'
+const BUG5B_ANSWER_ONE = 'MOCK-REPLY-BUG5B-ONE: first turn scripted answer.'
+const BUG5B_ANSWER_TWO = 'MOCK-REPLY-BUG5B-TWO: second turn scripted answer.'
+
+/** Exact suffix the product renders for a cancelled/interrupted turn (src/lib/truncation.ts::INTERRUPTED_SUFFIX_TEXT). */
+const INTERRUPTED_SUFFIX_TEXT = '(interrupted)'
+
+/**
+ * Authenticate the browser against an isolated GatewayProcess gateway by
+ * injecting the cookies of the fixture's own REST login into the browser
+ * context — the repo's proven isolated-gateway browser-auth path
+ * (catchup-scenarios.spec.ts::addCookies(gw.browserStorageState()), also
+ * agent-grep.spec.ts / mail-panel.spec.ts / cancel-cross-channel.spec.ts via
+ * newContext({ storageState })). A UI form login was tried first and is NOT
+ * viable here: against a fresh isolated gateway it rendered the shell but
+ * every subsequent authenticated fetch failed (workspace-load error state,
+ * receipts in logs/bug3a/ta/bug3a-run.log), while the same flow over curl and
+ * via cookie injection passes. The REST-issued omnipus-session cookie is what
+ * the SPA's fetches authenticate with (FR-009 cutover; pkg/gateway/auth.go
+ * ResolveUserFromCookie fallback), so the injected cookie pair is the
+ * product's own real session, not a test stub.
+ */
+async function loginToGateway(page: Page, gw: GatewayProcess): Promise<void> {
+  await page.context().addCookies((await gw.browserStorageState()).cookies)
+  await page.goto(gw.baseURL)
+  await expect(page).not.toHaveURL(/\/#\/login/, { timeout: 15_000 })
+}
+
+/**
+ * Wait for the workspace chrome to be laid out before driving it. The
+ * readiness element is the workspace top bar (data-testid="workspace-top-bar",
+ * src/components/workspaces/WorkspaceTabContainer.tsx) — it renders whenever a
+ * workspace has resolved, in BOTH sidebar states.
+ *
+ * The earlier probe waited for the "Show sidebar" hamburger, which is NOT a
+ * readiness signal: SidebarShowButton renders null whenever the sidebar is
+ * pinned and can dock, or open in this tab (`const visible = (isPinned &&
+ * canPin) || isOpen; if (visible) return null`). Corrected mechanism (CHECK
+ * round 2 — this comment previously said the store persists isOpen and that
+ * tab A's freshChat rehydrates tab B open; BOTH wrong):
+ * src/store/sidebar.ts::useSidebarStore persists ONLY isPinned (partialize,
+ * "Only persist the pin preference, not open/close state"), and both tabs'
+ * readiness waits run BEFORE either freshChat, so isOpen is false on both
+ * tabs at this point and the legitimate hamburger-free state here is a
+ * persisted pin. Which state actually hid the hamburger in CHECK round 1's
+ * second-tab timeout remains Unknown — what matters for readiness is that
+ * the hamburger is not guaranteed to exist while the top bar is.
+ */
+async function awaitWorkspaceChrome(page: Page): Promise<void> {
+  await page.getByTestId('workspace-top-bar').waitFor({ state: 'visible', timeout: 45_000 })
+}
+
+// ta4-cleanup-helper (probe-bound) start — settleCleanup owns the whole
+// clean-up error contract; the ta4 probe compiles this exact slice.
+interface CleanupStep {
+  name: string
+  run: () => Promise<void>
+}
+
+/**
+ * Run every clean-up step independently, then settle the error contract
+ * demanded by CHECK round 2 (R2-F1, R2-F2):
+ * - every step runs even when an earlier step rejects — each is awaited in
+ *   its own try and its failure collected, so no clean-up is skipped (R2-F2);
+ * - if the body failed, its own thrown value wins and is NEVER swallowed: a
+ *   rejection whose VALUE is undefined still throws (R2-F1 — the test tracks
+ *   failure with a separate boolean, not the value), rethrown verbatim when
+ *   no step failed, else as an AggregateError whose FIRST entry is the body
+ *   value with the step failures appended. AggregateError over annotations:
+ *   every failure stays in the thrown error itself, the helper needs no
+ *   Playwright scope, and no step failure can be dropped;
+ * - if only steps failed, one failure is rethrown verbatim, several as one
+ *   AggregateError;
+ * - on success it fulfils.
+ */
+async function settleCleanup(
+  body: { failed: boolean; error: unknown },
+  steps: CleanupStep[],
+): Promise<void> {
+  const stepErrors: unknown[] = []
+  const stepNames: string[] = []
+  for (const step of steps) {
+    try {
+      await step.run()
+    } catch (err) {
+      stepErrors.push(err)
+      stepNames.push(`${step.name}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  if (body.failed) {
+    if (stepErrors.length > 0) {
+      throw new AggregateError(
+        [body.error, ...stepErrors],
+        `the test body failed AND ${stepErrors.length} clean-up step(s) also failed (${stepNames.join('; ')})`,
+      )
+    }
+    throw body.error
+  }
+  if (stepErrors.length === 1) {
+    throw stepErrors[0]
+  }
+  if (stepErrors.length > 1) {
+    throw new AggregateError(
+      stepErrors,
+      `${stepErrors.length} clean-up steps failed (${stepNames.join('; ')})`,
+    )
+  }
+}
+// ta4-cleanup-helper end
+
+/**
+ * A SETTLED assistant reply and nothing else: the assistantMessages shape
+ * (non-user, non-system) further narrowed to data-status="complete". The
+ * product renders data-status="incomplete" for BOTH error and interrupted
+ * store statuses (src/lib/omnipus-runtime.ts::buildMessageStatus) and
+ * "running" for the streaming placeholder (ChatScreen.tsx assistant root:
+ * data-status={message.status?.type ?? 'complete'}) — none of those is ever
+ * a reply here. This is the replacement for the removed Bug-3 rule that
+ * admitted an interrupted/incomplete message as a "serviced reply" (issue
+ * #1661: an interrupted turn must NEVER count as a reply).
+ */
+const SETTLED_REPLY_SELECTOR =
+  '[data-message-id]:not(.flex-row-reverse):not([data-message-role="system"])[data-status="complete"]'
+const settledReplies = (page: Page) => page.locator(SETTLED_REPLY_SELECTOR)
+const settledReplyWithText = (page: Page, text: string) =>
+  page.locator(SETTLED_REPLY_SELECTOR).filter({ hasText: text })
+
+/**
+ * The reply's TEXT BODY — the content container inside a settled assistant
+ * row (ChatScreen.tsx::VirtualAssistantMessageRow's `div.leading-relaxed`):
+ * InlineMedia + MessagePrimitive.Parts (AssistantTextPart → MarkdownText)
+ * render the reply text here. The agent label ("Mia"), the action bar
+ * (Copy/Retry) and the "(interrupted)" status suffix live OUTSIDE this
+ * element, so its text is exactly the reply text for a plain scripted
+ * answer (InlineThinkingIndicator returns null for settled rows:
+ * `if (!showsFeedMark(phase)) return null`).
+ *
+ * Assertions on this locator use toHaveText — EXACT (whitespace-normalized)
+ * per-element equality — because filter({hasText})/toContainText are
+ * substring checks: a replay that appends, drops or merges text around the
+ * scripted constant still contains it, and only an exact body comparison
+ * rejects that (CHECK F2).
+ */
+const settledReplyBodies = (page: Page) =>
+  settledReplies(page).locator('div.leading-relaxed')
+
+/** The assistant row the product renders for a cancelled/interrupted turn. */
+const interruptedReplyRow = (page: Page) =>
+  page
+    .locator(
+      '[data-message-id]:not(.flex-row-reverse):not([data-message-role="system"])[data-status="incomplete"]',
+    )
+    .filter({ hasText: INTERRUPTED_SUFFIX_TEXT })
+
+/**
+ * The held-stream fixture's per-script record (evidence.promptRecords): the
+ * per-PROMPT state the Bug-3-a overlap/cancel oracles poll on. A missing entry
+ * throws loudly instead of silently reading undefined booleans.
+ */
+function recordFor(mock: HeldStreamProvider, prompt: string) {
+  const record = mock.evidence.promptRecords.find((entry) => entry.promptIncludes === prompt)
+  expect(record, `a promptRecords entry must exist for ${prompt}`).toBeDefined()
+  return record!
+}
+
+// ─── Bug-3-a step helpers (round 6, CHECK R3-F2 function-budget fix) ─────────
+// The Bug-3-a test body exceeded the 240-line function budget; its steps are
+// extracted into these named helpers. Comments travel with their code
+// verbatim; no assertion, poll budget or timeout is touched.
+
+/** The Bug-3-a mock: tab A answered with the exact scripted text, tab B held
+ * open — the shared fixture's scripts branch (no fork). */
+async function startBug3aMock(): Promise<HeldStreamProvider> {
+  return startHeldStreamProvider({
+    // The fixture's `scripts` branch branches the reply PER PROMPT (the
+    // shared fixture, extended in round 5 — not a fork): tab A answered
+    // with the exact scripted text, tab B held open. promptIncludes stays
+    // required by the option type; with scripts set, matching walks the
+    // scripts (last user message backwards), not promptIncludes.
+    promptIncludes: BUG3A_MARKER_TAB_B,
+    chunkIntervalMs: 20,
+    scripts: [
+      { promptIncludes: BUG3A_MARKER_TAB_A, behavior: 'answer', answerText: BUG3A_ANSWER_TAB_A },
+      { promptIncludes: BUG3A_MARKER_TAB_B, behavior: 'hold' },
+    ],
+  })
+}
+
+/** An isolated gateway pointed at the mock provider. */
+async function startBug3aGateway(mock: HeldStreamProvider): Promise<GatewayProcess> {
+  return GatewayProcess.start({
+    apiBase: mock.url,
+    model: E2E_FALLBACK.model,
+    adminPassword: 'admin1234',
+  })
+}
+
+/** Tab A logs in through the UI and waits for the workspace chrome. */
+async function openBug3aTabA(page: Page, gw: GatewayProcess): Promise<void> {
+  await loginToGateway(page, gw)
+  await awaitWorkspaceChrome(page)
+}
+
+/** Tab B shares the context's cookies, so it needs no second login (and the
+ * session-token slot stays single): it only navigates and waits for the
+ * chrome. The CALLER creates B (`context.newPage()`) and publishes it to the
+ * clean-up owner in that same statement, BEFORE calling this — both awaits
+ * below can fail, and a failure must still find B in the clean-up list so it
+ * closes before the gateway stops (CHECK round 4, R4-F1: the round-6
+ * extraction had moved the page creation into a helper that returned B only
+ * after these awaits succeeded, so a failure here left B open across
+ * gw.stop()). */
+async function loadBug3aTabB(page2: Page, gw: GatewayProcess): Promise<void> {
+  await page2.goto(gw.baseURL)
+  await awaitWorkspaceChrome(page2)
+}
+
+/** Fresh chats on both tabs — two genuinely distinct, empty sessions of the
+ * same agent (freshChat, fixtures/session-setup.ts: public REST + the SPA's
+ * own deep-link route; the agent-row "New chat" button is gone by founder
+ * decision D7). */
+async function freshBug3aChats(page: Page, page2: Page): Promise<void> {
+  const tabA = await freshChat(page)
+  const tabB = await freshChat(page2)
+  expect(
+    tabA.sessionId,
+    'the two tabs must chat in two DISTINCT sessions for the concurrency property to mean anything',
+  ).not.toBe(tabB.sessionId)
+  await expect(settledReplies(page)).toHaveCount(0, { timeout: 10_000 })
+  await expect(settledReplies(page2)).toHaveCount(0, { timeout: 10_000 })
+}
+
+/** Send on tab B FIRST, and do not send tab A until the mock has RECEIVED and
+ * held B's request. This is what turns the later assertions into a real
+ * overlap proof (CHECK F1): a gateway that services one session at a time
+ * cannot pass, because A is only sent once B is verifiably in flight, and A's
+ * completion is only accepted while that SAME B request is still open. The
+ * marker inside each message is what the MOCK branches on (hold B, answer A) —
+ * no call counter, which could never tell the two tabs' streaming calls apart
+ * on a shared agent. */
+async function sendTabBAndAwaitHeld(page2: Page, mock: HeldStreamProvider): Promise<void> {
+  const input2 = chatInput(page2)
+  await input2.fill(`${BUG3A_MARKER_TAB_B} — Bug-3 mock concurrent test, tab B`)
+  await input2.press('Enter')
+
+  // 0. B's request must arrive at the mock BEFORE A is sent. From here
+  //    on, "B in flight" is an observed fact, not an assumption.
+  await expect
+    .poll(() => recordFor(mock, BUG3A_MARKER_TAB_B).held, {
+      timeout: 30_000,
+      intervals: [250, 500, 1_000],
+    })
+    .toBe(true)
+}
+
+/** Send tab A (the mock answers A with a final "stop"-finished answer carrying
+ * no tool calls, so A's turn ends on its first model call), then the
+ * deterministic overlap proof at the mock. */
+async function sendTabAAndAwaitOverlap(page: Page, mock: HeldStreamProvider): Promise<void> {
+  const input1 = chatInput(page)
+  await input1.fill(`${BUG3A_MARKER_TAB_A} — Bug-3 mock concurrent test, tab A`)
+  await input1.press('Enter')
+
+  // 1. Deterministic overlap proof at the mock: A's request ANSWERED
+  //    while the SAME B request observed above is STILL OPEN. The
+  //    fixture's per-prompt record has no per-request ids, so continuity
+  //    is pinned by requests === 1: exactly ONE B request has ever
+  //    arrived and it is still the one held — close/reopen churn would
+  //    push requests ≥ 2 and fail this poll exactly as the old seq pin
+  //    did.
+  await expect
+    .poll(
+      () => {
+        const a = recordFor(mock, BUG3A_MARKER_TAB_A)
+        const b = recordFor(mock, BUG3A_MARKER_TAB_B)
+        return {
+          tabAAnswered: a.answered >= 1,
+          tabBStillOpen: b.held && !b.clientClosed && b.requests === 1,
+        }
+      },
+      { timeout: 30_000, intervals: [250, 500, 1_000] },
+    )
+    .toEqual({ tabAAnswered: true, tabBStillOpen: true })
+}
+
+/** 2. Tab A's settled reply is visible NOW — while tab B's request is still
+ * open at the mock — and it is A's ONLY settled reply, with its body EXACTLY
+ * the scripted text (toHaveText, not a substring check — CHECK F2). The B-open
+ * re-read immediately after the DOM assertion pins the overlap to the same
+ * moment: A's reply was settled while B had not even closed its held request. */
+async function assertTabASettledWhileBHeld(page: Page, mock: HeldStreamProvider): Promise<void> {
+  await expect(settledReplyWithText(page, BUG3A_ANSWER_TAB_A)).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(settledReplyBodies(page)).toHaveText([BUG3A_ANSWER_TAB_A])
+  await expect(settledReplies(page)).toHaveCount(1)
+  const tabBHeld = recordFor(mock, BUG3A_MARKER_TAB_B)
+  expect(
+    tabBHeld.held && tabBHeld.requests === 1,
+    'the held tab-B request observed before tab A was sent must STILL be the one open request at the moment tab A’s reply is settled in the DOM',
+  ).toBe(true)
+}
+
+/** 3–5. Tab B has NO reply yet and is still streaming; the user stops tab B —
+ * foregrounding the tab first (a background tab throttles its renderer and
+ * queues the click past any budget) — and the wire-level cancel proof pins
+ * WHICH side closed B's held request. */
+async function stopTabBAndAwaitCancel(page2: Page, mock: HeldStreamProvider): Promise<void> {
+  // 3. Tab B has NO reply yet: no settled row (a running placeholder
+  //    wouldn't pass this locator, and neither would an interrupted one),
+  //    and its turn is still streaming (the Stop button is up).
+  await expect(settledReplies(page2)).toHaveCount(0)
+  // Stop is clicked in the tab the user is viewing: bring tab B to the
+  // foreground first. A BACKGROUND tab throttles its renderer, and the
+  // click can otherwise sit in Chromium's input-dispatch queue past any
+  // reasonable budget — observed with every actionability check already
+  // green ("visible, enabled and stable" → "performing click action" →
+  // stall; the queued click eventually landed and cancelled the turn,
+  // receipt bug3a-run2). Foregrounding the tab is what a human does; a
+  // realism fix, not a timeout increase.
+  await page2.bringToFront()
+  await expect(page2.getByTestId('stop-btn')).toBeVisible({ timeout: 15_000 })
+
+  // 4. Stop on tab B — the user action under test.
+  await page2.getByTestId('stop-btn').click({ timeout: 5_000 })
+
+  // 5. Deterministic cancel proof at the wire: the gateway canceled B's
+  //    provider call, so B's held request is no longer open at the mock
+  //    (the client closed it — the same cancel that the gateway logs as
+  //    turn_canceled). clientClosed is incremented in the same close
+  //    event that clears held, and never by a fixture-side finish
+  //    (release() is not used here), so open:false together with
+  //    cancelledByClient pins WHICH side closed B — the gateway's cancel.
+  await expect
+    .poll(
+      () => {
+        const b = recordFor(mock, BUG3A_MARKER_TAB_B)
+        return { open: b.held, cancelledByClient: b.clientClosed >= 1 }
+      },
+      { timeout: 15_000, intervals: [250, 500, 1_000] },
+    )
+    .toEqual({ open: false, cancelledByClient: true })
+}
+
+/** 6. Tab B ends CANCELLED: an interrupted-status row carrying the product's
+ * "(interrupted)" suffix — and still no settled reply. An
+ * interrupted/incomplete message is data-status="incomplete"
+ * (buildMessageStatus maps the store's interrupted status there), which the
+ * settledReplies oracle never admits. */
+async function assertTabBCancelled(page2: Page): Promise<void> {
+  await expect(interruptedReplyRow(page2)).toBeVisible({ timeout: 30_000 })
+  await expect(settledReplies(page2)).toHaveCount(0)
+}
+
+/** 7. Tab A unaffected by B's cancel: its settled reply is still there, still
+ * its only one, and the mock answered A exactly once (no re-send, no second
+ * streaming call for A's turn). The body equality check (R3-F1) fails on any
+ * text appended to A by B's Stop — a gap the previous substring/count pair
+ * could not see. */
+async function assertTabAUnaffectedByBCancel(page: Page, mock: HeldStreamProvider): Promise<void> {
+  await expect(settledReplyWithText(page, BUG3A_ANSWER_TAB_A)).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(settledReplyBodies(page)).toHaveText([BUG3A_ANSWER_TAB_A])
+  await expect(settledReplies(page)).toHaveCount(1)
+  expect(
+    recordFor(mock, BUG3A_MARKER_TAB_A).answered,
+    'tab A must have been answered exactly once at the mock',
+  ).toBe(1)
+}
+
 // ─── Bug-3: Concurrent sessions both respond ──────────────────────────────────
 
 test.describe('Bug-3: Concurrent sessions both respond', () => {
   test(
     '(Bug-3-a) two chats opened in parallel both receive replies',
     async ({ page, context }) => {
-      // Real LLM turns in two tabs; the central e2e model (tests/e2e/e2e-model.json) is reliable
-      // but slower than the old gemini pick, so budget the full slow ceiling.
-      test.slow()
-      // BDD: Given two browser tabs open to different chat sessions
-      //      When a message is sent in each tab within a short window
-      //      Then both tabs receive at least one assistant message within 30s
+      // Deterministic mock-provider replacement (issue #1661, chief decision
+      // 2026-11-06 13:55Z). The previous version drove two REAL model turns and
+      // polled 90 s for both replies; every checked CI failure was that fixed
+      // wall-clock budget losing to real-model latency (traced run 42202300235:
+      // tab 1's model call silent ~82 s, then the test's own teardown Stop
+      // rewrote the artifact into "turn_canceled" and the no-flaky gate fired
+      // on the passing retry). The contract under test — "both sessions are
+      // serviced concurrently" — is now asserted on deterministic signals:
+      //   1. the mock's own record, in a B-FIRST order: tab B is sent first
+      //      and the test does not send tab A until the mock has RECEIVED and
+      //      held B's request; the concurrency proof is that A's streaming
+      //      request is ANSWERED while that SAME B request is STILL OPEN —
+      //      a gateway that services one session at a time cannot pass,
+      //      because A is only sent once B is verifiably in flight (CHECK F1);
+      //   2. tab A's settled reply visible in that exact window;
+      //   3. Stop on tab B cancels B (its provider request CLOSES at the mock;
+      //      the UI shows the "(interrupted)" state) without touching A;
+      //   4. an interrupted/incomplete message NEVER counts as a reply
+      //      (settledReplies only admits data-status="complete").
+      // No paid model, no wall-clock budget: every wait polls the mock's
+      // request record or a settled DOM status.
+      test.setTimeout(240_000) // bounds gateway boot + onboarding + UI setup, not model latency
+      // BDD: Given two browser tabs open to two distinct chat sessions of the
+      //      same agent, with a mock provider that answers tab A's message and
+      //      holds tab B's open
+      //      When a message is sent in each tab
+      //      Then tab A's settled reply is visible while tab B's request is
+      //           still open at the mock, and stopping tab B ends it as
+      //           cancelled — never as a reply — without affecting tab A
       //
-      // Traces to: Bug-3 (concurrent sessions both respond)
+      // Traces to: Bug-3 (concurrent sessions both respond); issue #1661.
 
-      // Navigate to first chat.
-      await page.goto('/')
-      const input1 = chatInput(page)
-      await expect(input1).toBeVisible({ timeout: 15_000 })
+      const mock = await startBug3aMock()
+      let gw: GatewayProcess | null = null
+      // Hoisted so the finally can close every page this test opened BEFORE
+      // stopping the gateway (round-3 cleanup-order fix, diag D1): a page left
+      // open across gw.stop() retries against a stopped endpoint, and the
+      // failure trace then shows a misleading connection-refused burst that is
+      // the test's own teardown noise, not gateway deafness. Tab B is assigned
+      // here in the body, in the statement that creates it and before any
+      // failable await on it (CHECK round 4, R4-F1) — never inside a helper
+      // that returns it only after its own awaits succeed.
+      let page2: Page | null = null
+      // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1):
+      // a body rejection whose value is undefined must still count as a
+      // failure, never as success.
+      let bodyFailed = false
+      let bodyError: unknown
+      try {
+        gw = await startBug3aGateway(mock)
+        await openBug3aTabA(page, gw)
+        // Create AND publish tab B to the clean-up owner in one statement;
+        // the failable goto/chrome wait run only afterwards (R4-F1).
+        page2 = await context.newPage()
+        await loadBug3aTabB(page2, gw)
+        await freshBug3aChats(page, page2)
 
-      // Open a second tab.
-      const page2 = await context.newPage()
-      await page2.goto('/')
-      const input2 = chatInput(page2)
-      await expect(input2).toBeVisible({ timeout: 15_000 })
+        // B is sent FIRST and A only once the mock has RECEIVED and held B's
+        // request (CHECK F1) — the overlap proof's premise; full rationale on
+        // sendTabBAndAwaitHeld.
+        await sendTabBAndAwaitHeld(page2, mock)
 
-      // Fresh chats on both tabs. The agent row's "New chat with <Agent>"
-      // action this used to click is REMOVED (founder decision D7 — capability
-      // stays, UI access point gone; FR-029/FR-031 still govern). freshChat
-      // (fixtures/session-setup.ts) creates each tab's session via the public
-      // REST API and deep-links it, restoring the intended fresh-session
-      // setup: two tabs on two genuinely distinct, empty sessions.
-      await freshChat(page)
-      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      await freshChat(page2)
-      await expect(assistantMessages(page2)).toHaveCount(0, { timeout: 10_000 })
+        // Now send tab A (A's turn ends on its first model call) and prove
+        // the overlap at the mock; see sendTabAAndAwaitOverlap.
+        await sendTabAAndAwaitOverlap(page, mock)
 
-      // Send messages on both tabs nearly simultaneously. Dismiss first
-      // (BOTH tabs): a retry attempt's fresh page rehydrates any approval the
-      // failed attempt left pending (session_state frame on every WS connect),
-      // and that Radix dialog's focus trap hijacks the composer's Enter press
-      // (activates the focused Deny button), so the message is never sent at
-      // all. Same guard as Bug-5-a/5-b's turns.
-      await dismissAndAnnotate(page)
-      await dismissAndAnnotate(page2)
-      await input1.fill('Bug-3 concurrent test hello tab1')
-      await input2.fill('Bug-3 concurrent test hello tab2')
-      await input1.press('Enter')
-      await input2.press('Enter')
+        // 2. A's reply settled while B is still open at the mock (step 2 in
+        //    assertTabASettledWhileBHeld, with the exact-body check).
+        await assertTabASettledWhileBHeld(page, mock)
 
-      // Both must get a settled reply. The central e2e model (tests/e2e/e2e-model.json) is
-      // reliable but slower than the old gemini pick, and concurrent turns share
-      // the model, so allow generous headroom.
-      const replyTimeout = 90_000
+        // 3–5. The user action under test: stop tab B; the wire-level cancel
+        // proof pins WHICH side closed B (stopTabBAndAwaitCancel).
+        await stopTabBAndAwaitCancel(page2, mock)
 
-      // The contract under test is "both sessions are serviced concurrently"
-      // (no session starvation). The assertion MUST wait for a SETTLED reply, not
-      // the optimistic empty assistant placeholder the SPA renders synchronously
-      // on send (ChatScreen.tsx ~860 emits data-message-id + data-status="running"
-      // before any token arrives). Without the `:not([data-status="running"])`
-      // exclusion the test would go green the instant Enter is pressed — even under
-      // total session starvation, the exact bug it guards. So the drain waits reuse
-      // the `assistantMessages` helper (selectors.ts), which excludes running
-      // placeholders. This STILL tolerates a provider-interrupted reply: an
-      // interrupted/incomplete message has data-status "incomplete"/"interrupted",
-      // NOT "running", so it is still admitted as a serviced reply.
-      await expectAnyAssistantMessageWithApprovalDrain(page, replyTimeout).catch((e) => {
-        throw new Error(
-          `BUG-3: Tab 1 did not receive a reply within ${replyTimeout / 1000}s. ` +
-          `This indicates session starvation — while tab 2 was processing, ` +
-          `tab 1 was blocked. Original error: ${e.message}`,
+        // 6. Tab B ends CANCELLED (assertTabBCancelled).
+        await assertTabBCancelled(page2)
+
+        // 7. Tab A unaffected by B's cancel — its reply body is still EXACTLY
+        //    the scripted text after the cancel (R3-F1), its only settled
+        //    reply, answered exactly once at the mock.
+        await assertTabAUnaffectedByBCancel(page, mock)
+      } catch (err) {
+        bodyFailed = true
+        bodyError = err
+      } finally {
+        // Pages still close BEFORE the gateway stops (round-3 diag D1); every
+        // clean-up step runs independently with its failure collected (CHECK
+        // R2-F2); the body's own thrown value — undefined included — always
+        // wins and is never swallowed (CHECK R2-F1). settleCleanup owns the
+        // full contract; see its doc comment.
+        await settleCleanup(
+          { failed: bodyFailed, error: bodyError },
+          [
+            {
+              name: 'close tab B page',
+              run: async () => {
+                if (page2) await page2.close()
+              },
+            },
+            { name: 'close tab A page', run: () => page.close() },
+            {
+              name: 'stop gateway',
+              run: async () => {
+                if (gw) await gw.stop()
+              },
+            },
+            { name: 'close mock provider', run: () => mock.close() },
+          ],
         )
-      })
-
-      // Wait for at least one assistant reply in tab 2.
-      await expectAnyAssistantMessageWithApprovalDrain(page2, replyTimeout).catch((e) => {
-        throw new Error(
-          `BUG-3: Tab 2 did not receive a reply within ${replyTimeout / 1000}s. ` +
-          `This indicates session starvation — while tab 1 was processing, ` +
-          `tab 2 was blocked. Original error: ${e.message}`,
-        )
-      })
-
-      await page2.close()
+      }
     },
   )
 })
@@ -313,99 +756,109 @@ async function expectAssistantMessagesWithApprovalDrain(
     .toBe(count)
 }
 
-/**
- * Bug-3 variant: waits for AT LEAST ONE settled assistant message to be
- * visible — the exact predicate of the plain wait it replaces
- * (expect(assistantMessages(p).first()).toBeVisible()), poll-shaped so the
- * approval drain fits inside, with the SAME budget the plain waits used. No
- * weakening: the settled-reply requirement is unchanged (assistantMessages
- * excludes the data-status="running" placeholder ChatScreen.tsx ~860 renders
- * synchronously on send, so the test cannot go green the instant Enter is
- * pressed — the session-starvation signal it guards); only the drain ticks
- * are added.
- */
-async function expectAnyAssistantMessageWithApprovalDrain(
-  page: Page,
-  timeoutMs: number,
-): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        await drainApprovalDialogsAndCount(page)
-        return assistantMessages(page).first().isVisible()
-      },
-      { timeout: timeoutMs, intervals: [500, 1_000, 2_000, 4_000] },
-    )
-    .toBe(true)
-}
-
 // ─── Bug-5: Replay frame ordering preserved on reconnect ─────────────────────
 
 test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-a) navigating away and back to a session preserves message order',
     async ({ page }) => {
-      // Real LLM turn + replay; the central e2e model (tests/e2e/e2e-model.json) is reliable but
-      // slower than the old gemini pick, so budget the full slow ceiling.
-      test.slow()
+      // Deterministic mock-provider replacement (issue #1661): the reply text
+      // is scripted by the mock, so the replay assertion no longer rides a
+      // live-model 90 s predicate (the same fixed-budget-vs-latency flake
+      // class as Bug-3-a — hunt report, "Bug-5 — the report's 'passed in all
+      // checked logs' is false").
+      test.setTimeout(180_000)
       // BDD: Given a chat session with at least 1 assistant message
       //      When the user navigates to another page and back
       //      Then the messages appear in the same order as before
       //
-      // Traces to: Bug-5 (replay frame ordering preserved when leaving + returning to chat)
+      // Traces to: Bug-5 (replay frame ordering preserved when leaving +
+      // returning to chat); issue #1661.
 
-      await page.goto('/')
-      const input = chatInput(page)
-      await expect(input).toBeVisible({ timeout: 15_000 })
-
-      // Get a fresh session (freshChat — public REST + deep-link; the
-      // agent-row "New chat" button is removed by D7).
-      await freshChat(page)
-      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-
-      // Send a message and wait for reply. Dismiss first: a retry attempt's
-      // fresh page rehydrates any approval the failed attempt left pending
-      // (session_state frame on every WS connect), and that dialog's focus
-      // trap hijacks the composer's Enter press (activates the focused Deny
-      // button), so the message is never sent. Same guard as Bug-5-b's turns.
-      await dismissAndAnnotate(page)
-      await input.fill('Bug-5 replay order test message one')
-      await input.press('Enter')
-      await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
-
-      // Capture the text of the first assistant message.
-      const firstMessageText = await assistantMessages(page).first().textContent()
-
-      // Capture the URL of the current session to return to it.
-      const sessionURL = page.url()
-
-      // Navigate away. (WU-11 FR-108: away-surface is a surviving library
-      // route — the retired /#/agents no longer navigates.)
-      await page.goto('/#/skills')
-      await page.waitForLoadState('networkidle')
-
-      // Navigate back to the session.
-      await page.goto(sessionURL)
-      await page.waitForLoadState('networkidle')
-
-      // Wait for messages to restore via replay.
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 45_000 })
-        .catch((e) => {
-          throw new Error(
-            `BUG-5: After navigating back to the session, the assistant message ` +
-            `did not appear. This indicates the replay path failed to restore ` +
-            `the session state. Original error: ${e.message}`,
-          )
+      const mock = await startHeldStreamProvider({
+        // The fixture's `scripts` branch (the shared #1668 fixture, extended in
+        // round 5 — not a fork): this prompt answered with the exact scripted
+        // text at the fixture's paced cadence. promptIncludes stays required
+        // by the option type; matching walks the scripts when scripts is set.
+        promptIncludes: BUG5A_MARKER,
+        chunkIntervalMs: 20,
+        scripts: [
+          { promptIncludes: BUG5A_MARKER, behavior: 'answer', answerText: BUG5A_ANSWER },
+        ],
+      })
+      let gw: GatewayProcess | null = null
+      // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1).
+      let bodyFailed = false
+      let bodyError: unknown
+      try {
+        gw = await GatewayProcess.start({
+          apiBase: mock.url,
+          model: E2E_FALLBACK.model,
+          adminPassword: 'admin1234',
         })
+        await loginToGateway(page, gw)
+        await awaitWorkspaceChrome(page)
 
-      // The replayed message must have the same content as before navigation.
-      const replayedText = await assistantMessages(page).first().textContent()
-      if (firstMessageText !== replayedText) {
-        throw new Error(
-          `BUG-5: Replayed message content differs from original. ` +
-          `Before: "${firstMessageText}" | After replay: "${replayedText}". ` +
-          `This indicates the replay stream produced frames in the wrong order ` +
-          `or overwrote the message content.`,
+        // Fresh session (freshChat — public REST + deep-link; the
+        // agent-row "New chat" button is removed by D7).
+        await freshChat(page)
+        await expect(settledReplies(page)).toHaveCount(0, { timeout: 10_000 })
+
+        // Send a message; the mock answers it with the exact scripted text.
+        const input = chatInput(page)
+        await input.fill(`${BUG5A_MARKER} — Bug-5 mock replay order test, turn one`)
+        await input.press('Enter')
+
+        // The settled reply (complete status, EXACT scripted body — toHaveText,
+        // not a substring check, CHECK F2) must be the session's only assistant
+        // reply before navigating away.
+        await expect(settledReplyWithText(page, BUG5A_ANSWER)).toBeVisible({ timeout: 30_000 })
+        await expect(settledReplyBodies(page)).toHaveText([BUG5A_ANSWER])
+        await expect(settledReplies(page)).toHaveCount(1)
+
+        // Capture the URL of the current session to return to it.
+        const sessionURL = page.url()
+
+        // Navigate away. (WU-11 FR-108: away-surface is a surviving library
+        // route — the retired /#/agents no longer navigates.)
+        await page.goto('/#/skills')
+        await page.waitForLoadState('networkidle')
+
+        // Navigate back to the session.
+        await page.goto(sessionURL)
+        await page.waitForLoadState('networkidle')
+
+        // Wait for messages to restore via replay.
+        await expect(settledReplies(page)).toHaveCount(1, { timeout: 45_000 })
+
+        // The replayed message must carry the SAME scripted content — asserted
+        // against the mock's script constant (the spec-derived expected value),
+        // not against whatever the DOM happened to show before navigation. The
+        // body comparison is EXACT (toHaveText): a replay that appends, drops
+        // or merges text around the constant still contains it, and only this
+        // equality rejects that (CHECK F2).
+        await expect(settledReplyWithText(page, BUG5A_ANSWER)).toBeVisible({ timeout: 15_000 })
+        await expect(settledReplyBodies(page)).toHaveText([BUG5A_ANSWER], { timeout: 15_000 })
+      } catch (err) {
+        bodyFailed = true
+        bodyError = err
+      } finally {
+        // Same contract as Bug-3-a (CHECK R2-F1/R2-F2): the page closes before
+        // the gateway stops, every clean-up step runs independently with
+        // failures collected, and the body's own thrown value — undefined
+        // included — always wins and is never swallowed.
+        await settleCleanup(
+          { failed: bodyFailed, error: bodyError },
+          [
+            { name: 'close page', run: () => page.close() },
+            {
+              name: 'stop gateway',
+              run: async () => {
+                if (gw) await gw.stop()
+              },
+            },
+            { name: 'close mock provider', run: () => mock.close() },
+          ],
         )
       }
     },
@@ -414,70 +867,108 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-b) two-turn session: turns appear in chronological order after replay',
     async ({ page }) => {
-      // Two real LLM turns + replay; the central e2e model (tests/e2e/e2e-model.json) is reliable
-      // but slower than the old gemini pick, so budget the full slow ceiling.
-      test.slow()
+      // Deterministic mock-provider replacement (issue #1661): both replies are
+      // scripted by the mock, so the chronological-order assertion runs without
+      // a live model and asserts EXACT scripted content in EXACT positions.
+      test.setTimeout(180_000)
       // BDD: Given a session with 2 turns (user→assistant, user→assistant)
       //      When the user navigates away and back
       //      Then turn 1 appears before turn 2 (causal order preserved)
       //
-      // Traces to: Bug-5 multi-turn replay ordering
+      // Traces to: Bug-5 multi-turn replay ordering; issue #1661.
 
-      await page.goto('/')
-      const input = chatInput(page)
-      await expect(input).toBeVisible({ timeout: 15_000 })
-
-      // Fresh session (freshChat — public REST + deep-link; the agent-row
-      // "New chat" button is removed by D7).
-      await freshChat(page)
-      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-
-      // Turn 1. Dismiss first: a retry attempt's fresh page rehydrates any
-      // approval the failed attempt left pending (session_state frame on
-      // every WS connect), and that dialog's focus trap hijacks the
-      // composer's Enter press (activates the focused Deny button), so the
-      // message is never sent.
-      await dismissAndAnnotate(page)
-      await input.fill('Reply with one short sentence: turn one received. Do not use tools.')
-      await input.press('Enter')
-      await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
-
-      // Turn 2.
-      await dismissAndAnnotate(page)
-      await input.fill('Reply with one short sentence: turn two received. Do not use tools.')
-      await input.press('Enter')
-      await expectAssistantMessagesWithApprovalDrain(page, 2, 90_000)
-
-      // Capture original ordering.
-      const originalTexts = await assistantMessages(page).allTextContents()
-      const sessionURL = page.url()
-
-      // Navigate away and back. (WU-11 FR-108: surviving away-surface.)
-      await page.goto('/#/skills')
-      await page.waitForLoadState('networkidle')
-      await page.goto(sessionURL)
-      await page.waitForLoadState('networkidle')
-
-      // Wait for 2 messages to restore.
-      await expect(assistantMessages(page)).toHaveCount(2, { timeout: 45_000 })
-        .catch((e) => {
-          throw new Error(
-            `BUG-5: After navigating back, expected 2 assistant messages but got fewer. ` +
-            `Original error: ${e.message}`,
-          )
+      const mock = await startHeldStreamProvider({
+        // The fixture's `scripts` branch (the shared #1668 fixture, extended in
+        // round 5 — not a fork): turn 1's prompt answered with ONE's exact
+        // text, turn 2's with TWO's. Matching scans the LAST user message
+        // backwards, so turn 2's request — whose sent history still contains
+        // turn 1's marker — matches its OWN script. promptIncludes stays
+        // required by the option type.
+        promptIncludes: BUG5B_MARKER_ONE,
+        chunkIntervalMs: 20,
+        scripts: [
+          { promptIncludes: BUG5B_MARKER_ONE, behavior: 'answer', answerText: BUG5B_ANSWER_ONE },
+          { promptIncludes: BUG5B_MARKER_TWO, behavior: 'answer', answerText: BUG5B_ANSWER_TWO },
+        ],
+      })
+      let gw: GatewayProcess | null = null
+      // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1).
+      let bodyFailed = false
+      let bodyError: unknown
+      try {
+        gw = await GatewayProcess.start({
+          apiBase: mock.url,
+          model: E2E_FALLBACK.model,
+          adminPassword: 'admin1234',
         })
+        await loginToGateway(page, gw)
+        await awaitWorkspaceChrome(page)
 
-      // Messages must be in the same order.
-      const replayedTexts = await assistantMessages(page).allTextContents()
-      if (originalTexts.length === replayedTexts.length) {
-        for (let i = 0; i < originalTexts.length; i++) {
-          if (originalTexts[i] !== replayedTexts[i]) {
-            throw new Error(
-              `BUG-5: Replayed message[${i}] content changed. ` +
-              `Original: "${originalTexts[i]}" | Replayed: "${replayedTexts[i]}".`,
-            )
-          }
-        }
+        // Fresh session (freshChat — public REST + deep-link; the agent-row
+        // "New chat" button is removed by D7).
+        await freshChat(page)
+        await expect(settledReplies(page)).toHaveCount(0, { timeout: 10_000 })
+
+        const input = chatInput(page)
+
+        // Turn 1 — the mock answers with the scripted ONE text.
+        await input.fill(`${BUG5B_MARKER_ONE} — Bug-5 mock turn 1, first message`)
+        await input.press('Enter')
+        await expect(settledReplyWithText(page, BUG5B_ANSWER_ONE)).toBeVisible({ timeout: 30_000 })
+
+        // Turn 2 — the mock answers with the scripted TWO text.
+        await input.fill(`${BUG5B_MARKER_TWO} — Bug-5 mock turn 2, second message`)
+        await input.press('Enter')
+        await expect(settledReplyWithText(page, BUG5B_ANSWER_TWO)).toBeVisible({ timeout: 30_000 })
+
+        // Exactly two settled replies, in causal order, with EXACT bodies:
+        // toHaveText over the ordered body list asserts each element's exact
+        // (whitespace-normalized) text AND the order in one check — turn 1's
+        // reply first with ONE's constant, turn 2's second with TWO's. A
+        // substring check (toContainText) would admit appended/merged text
+        // around the constants (CHECK F2); this equality does not.
+        await expect(settledReplies(page)).toHaveCount(2)
+        await expect(settledReplyBodies(page)).toHaveText([BUG5B_ANSWER_ONE, BUG5B_ANSWER_TWO])
+
+        // Navigate away and back. (WU-11 FR-108: surviving away-surface.)
+        const sessionURL = page.url()
+        await page.goto('/#/skills')
+        await page.waitForLoadState('networkidle')
+        await page.goto(sessionURL)
+        await page.waitForLoadState('networkidle')
+
+        // Wait for 2 messages to restore, then require the SAME chronological
+        // order with the SAME EXACT bodies (order preserved = turn 1's reply
+        // is still first with ONE's constant, turn 2's still second with TWO's
+        // — exact per-element equality over the ordered list, so replay-time
+        // text corruption fails here even though every marker substring is
+        // still present; CHECK F2).
+        await expect(settledReplies(page)).toHaveCount(2, { timeout: 45_000 })
+        await expect(settledReplyBodies(page)).toHaveText(
+          [BUG5B_ANSWER_ONE, BUG5B_ANSWER_TWO],
+          { timeout: 15_000 },
+        )
+      } catch (err) {
+        bodyFailed = true
+        bodyError = err
+      } finally {
+        // Same contract as Bug-3-a (CHECK R2-F1/R2-F2): the page closes before
+        // the gateway stops, every clean-up step runs independently with
+        // failures collected, and the body's own thrown value — undefined
+        // included — always wins and is never swallowed.
+        await settleCleanup(
+          { failed: bodyFailed, error: bodyError },
+          [
+            { name: 'close page', run: () => page.close() },
+            {
+              name: 'stop gateway',
+              run: async () => {
+                if (gw) await gw.stop()
+              },
+            },
+            { name: 'close mock provider', run: () => mock.close() },
+          ],
+        )
       }
     },
   )

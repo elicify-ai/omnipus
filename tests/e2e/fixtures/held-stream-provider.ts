@@ -57,6 +57,29 @@ export interface HeldStreamEvidence {
   retried: number;
   /** Unexpected or failed scripted-provider traffic. */
   errors: string[];
+  /** Per-script state when `scripts` is used (empty otherwise): the
+   * multi-prompt branch (#1661 Bug-3-a) asserts on these — one tab's prompt
+   * held while another's is answered, per prompt, not as one global count. */
+  promptRecords: HeldStreamPromptRecord[];
+}
+
+/** Per-script record for the `scripts` branch (see HeldStreamOptions.scripts). */
+export interface HeldStreamPromptRecord {
+  /** The script's prompt substring (same matching rule as promptIncludes). */
+  promptIncludes: string;
+  /** What this script does: keep the stream open, or answer it complete. */
+  behavior: 'hold' | 'answer';
+  /** Matching streaming requests seen for this prompt. */
+  requests: number;
+  /** True while this prompt's stream is currently held open. */
+  held: boolean;
+  /** Completed answers served for an 'answer' script. */
+  answered: number;
+  /** Times the client aborted while this prompt's stream was held — the
+   * wire-level cancel signal (the gateway cancelling the provider call). */
+  clientClosed: number;
+  /** Times release() finished this prompt's held stream. */
+  released: number;
 }
 
 // not-wire-format: a test fixture handle, not an Omnipus wire type.
@@ -76,6 +99,18 @@ export interface HeldStreamProvider {
   close(): Promise<void>;
 }
 
+/** One branch of the multi-prompt script (see HeldStreamOptions.scripts). */
+export interface HeldStreamScript {
+  /** Substring identifying this prompt (same matching rule as promptIncludes). */
+  promptIncludes: string;
+  /** 'hold' keeps this prompt's stream open until release() or a real cancel;
+   * 'answer' completes it with answerText (streamed at the fixture's cadence
+   * so the answer stays observable mid-flight, like the retry path). */
+  behavior: 'hold' | 'answer';
+  /** Reply text for behavior 'answer' (required there). */
+  answerText?: string;
+}
+
 export interface HeldStreamOptions {
   /** Substring identifying the user prompt of the turn to hold (the same
    * matching rule T25's stop-label provider uses: any user message that
@@ -88,12 +123,328 @@ export interface HeldStreamOptions {
   chunkText?: string;
   /** Text of the final delta written by release(). */
   releaseText?: string;
+  /** Multi-prompt branch (#1661 Bug-3-a and the replay tests): branch the
+   * reply per prompt instead of the single held prompt — hold one tab's
+   * message, answer another's. When set, matching walks these scripts and
+   * each gets a record in evidence.promptRecords. Matching scans the LAST
+   * user message backwards so a later turn's request matches its own script
+   * rather than an earlier turn's marker still present in the sent history
+   * (the gateway sends the whole conversation). Single-hold behaviour
+   * (promptIncludes) is unchanged and still used when scripts is omitted. */
+  scripts?: HeldStreamScript[];
 }
 
 interface HeldStream {
   res: http.ServerResponse;
   timer: NodeJS.Timeout;
   finished: boolean;
+  /** The script record this stream is held for (scripts branch only). */
+  record: HeldStreamPromptRecord | null;
+}
+
+/**
+ * The text of a chat message's content — a plain string or an OpenAI-style
+ * content-parts array (module scope: pure, instance-independent).
+ */
+const userText = (content: unknown): string => typeof content === 'string' ? content : Array.isArray(content) ?
+  content.map((part: Record<string, unknown>) => part.type === 'text' ? part.text : '').join('') : '';
+
+// External OpenAI-compatible protocol, not a gateway/SPA wire format.
+const chunk = (delta: Record<string, unknown>, finish: string | null) =>
+  'data: ' + JSON.stringify({
+    id: 'held-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
+    created: Math.floor(Date.now() / 1000),
+    choices: [{ index: 0, delta, finish_reason: finish }],
+  }) + '\n\n';
+
+/**
+ * Mutable per-instance state the module-scope handlers operate on — the
+ * former closure variables of startHeldStreamProvider, in one object. One
+ * runtime per provider instance; nothing is shared across instances.
+ */
+interface HeldStreamRuntime {
+  opts: HeldStreamOptions;
+  evidence: HeldStreamEvidence;
+  chunkIntervalMs: number;
+  releaseText: string;
+  retryAnswer: string;
+  // Each scripted delta is UNIQUELY numbered. A periodic delta stream cannot
+  // prove catch-up byte-continuity — a dropped middle chunk is invisible in
+  // repeated prose — so every delta carries its own sequence number and
+  // expectedHeldAnswer() reconstructs the exact answer the SPA must render.
+  deltaText: (n: number) => string;
+  /** The single hold slot (null = nothing held). */
+  held: HeldStream | null;
+}
+
+function completeNow(res: http.ServerResponse, content: string): void {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  res.end(chunk({ role: 'assistant', content }, 'stop') + 'data: [DONE]\n\n');
+}
+
+// A scripted completion that still STREAMS at the fixture's cadence: the
+// tests pin the running row while a response renders (catchup h's
+// "Generate again" assertions observe the retry mid-stream), so a retry
+// must not arrive in one burst — that would make the running state
+// unobservable and the original assertion unsatisfiable.
+function completePaced(rt: HeldStreamRuntime, res: http.ServerResponse, content: string): void {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  const parts = content.match(/.{1,40}(\s|$)/g) ?? [content];
+  let i = 0;
+  const timer = setInterval(() => {
+    if (i < parts.length - 1) {
+      res.write(chunk({ content: parts[i] }, null));
+      i += 1;
+      return;
+    }
+    clearInterval(timer);
+    res.end(chunk({ content: parts[i] }, 'stop') + 'data: [DONE]\n\n');
+  }, rt.chunkIntervalMs);
+  res.once('close', () => clearInterval(timer));
+}
+
+function createEvidence(opts: HeldStreamOptions): HeldStreamEvidence {
+  return {
+    streamRequests: 0,
+    unmatchedStreams: 0,
+    chunksSent: 0,
+    streamsClosed: 0,
+    released: 0,
+    retried: 0,
+    errors: [],
+    promptRecords: (opts.scripts ?? []).map((script) => ({
+      promptIncludes: script.promptIncludes,
+      behavior: script.behavior,
+      requests: 0,
+      held: false,
+      answered: 0,
+      clientClosed: 0,
+      released: 0,
+    })),
+  };
+}
+
+function serveModelList(res: http.ServerResponse): void {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_FALLBACK.model, object: 'model' }] }));
+}
+
+function serveUnexpectedRoute(rt: HeldStreamRuntime, req: http.IncomingMessage, res: http.ServerResponse): void {
+  rt.evidence.errors.push(`unexpected provider route: ${req.method} ${req.url}`);
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: { message: 'unexpected provider route' } }));
+}
+
+// Onboarding/key validation does not start the held stream.
+function serveValidationProbe(res: http.ServerResponse): void {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    id: 'held-stream-validation', object: 'chat.completion', model: E2E_FALLBACK.model,
+    choices: [{ index: 0, message: { role: 'assistant', content: 'probe ok' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+  }));
+}
+
+// Answer complete so no turn can hang on the fixture; evidence flags it.
+function answerUnmatched(rt: HeldStreamRuntime, res: http.ServerResponse, reason: string): void {
+  rt.evidence.unmatchedStreams += 1;
+  rt.evidence.errors.push(reason);
+  completeNow(res, 'FIXTURE_ERROR: unexpected streaming prompt');
+}
+
+/** THE HELD STREAM for a script: deltas on a timer, no finish chunk, no
+ * [DONE] — the turn cannot complete until release(), a real cancel or a
+ * crash. The per-script record is the test's branch oracle. */
+function holdScriptsStream(rt: HeldStreamRuntime, res: http.ServerResponse, record: HeldStreamPromptRecord): void {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  const stream: HeldStream = {
+    res,
+    timer: setInterval(() => {
+      res.write(chunk({ content: rt.deltaText(rt.evidence.chunksSent + 1) }, null));
+      rt.evidence.chunksSent += 1;
+    }, rt.chunkIntervalMs),
+    finished: false,
+    record,
+  };
+  res.once('close', () => {
+    clearInterval(stream.timer);
+    if (!stream.finished) {
+      stream.finished = true;
+      rt.evidence.streamsClosed += 1;
+      // The client (the gateway cancelling the provider call on turn
+      // Stop) closed a stream the fixture did not finish: the wire-level
+      // cancel signal for this prompt.
+      record.clientClosed += 1;
+    }
+    if (rt.held === stream) rt.held = null;
+    record.held = false;
+  });
+  res.on('error', (error) => rt.evidence.errors.push(`provider response: ${error.message}`));
+  rt.held = stream;
+  record.held = true;
+  res.write(chunk({ role: 'assistant', content: rt.deltaText(1) }, null));
+  rt.evidence.chunksSent += 1;
+}
+
+function handleScriptsBranch(rt: HeldStreamRuntime, res: http.ServerResponse, messages: Record<string, unknown>[]): void {
+  const scripts = rt.opts.scripts!;
+  // Multi-prompt branch: walk the user messages BACKWARDS so a later
+  // turn's request matches its own script, not an earlier turn's marker
+  // still present in the sent conversation history.
+  let matched: HeldStreamScript | null = null;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== 'user') continue;
+    const text = userText(message.content);
+    const hit = scripts.find((script) => text.includes(script.promptIncludes));
+    if (hit) {
+      matched = hit;
+      break;
+    }
+  }
+  const record = matched ?
+    rt.evidence.promptRecords.find((entry) => entry.promptIncludes === matched!.promptIncludes) ?? null :
+    null;
+  rt.evidence.streamRequests += 1;
+  if (!matched || !record) {
+    answerUnmatched(rt, res, `unexpected streaming prompt (only scripted prompts are held or answered)`);
+    return;
+  }
+  record.requests += 1;
+  if (matched.behavior === 'answer') {
+    record.answered += 1;
+    completePaced(rt, res, matched.answerText ?? `FIXTURE_ERROR: answer script for "${matched.promptIncludes}" has no answerText`);
+    return;
+  }
+  if (rt.held !== null) {
+    // One hold slot, as in the single-prompt path: a second hold cannot
+    // be served — answer at cadence and flag instead of hanging a turn.
+    rt.evidence.retried += 1;
+    rt.evidence.errors.push(`hold requested for "${matched.promptIncludes}" while another stream is already held`);
+    completePaced(rt, res, rt.retryAnswer);
+    return;
+  }
+  holdScriptsStream(rt, res, record);
+}
+
+/** THE HELD STREAM (single-prompt path): deltas on a timer, no finish chunk,
+ * no [DONE] — the turn cannot complete until release() or a real teardown
+ * (cancel/crash). */
+function holdSingleStream(rt: HeldStreamRuntime, res: http.ServerResponse): void {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  const stream: HeldStream = {
+    res,
+    timer: setInterval(() => {
+      res.write(chunk({ content: rt.deltaText(rt.evidence.chunksSent + 1) }, null));
+      rt.evidence.chunksSent += 1;
+    }, rt.chunkIntervalMs),
+    finished: false,
+    record: null,
+  };
+  res.once('close', () => {
+    clearInterval(stream.timer);
+    if (!stream.finished) {
+      stream.finished = true;
+      rt.evidence.streamsClosed += 1;
+    }
+    if (rt.held === stream) rt.held = null;
+  });
+  res.on('error', (error) => rt.evidence.errors.push(`provider response: ${error.message}`));
+  rt.held = stream;
+  res.write(chunk({ role: 'assistant', content: rt.deltaText(1) }, null));
+  rt.evidence.chunksSent += 1;
+}
+
+function handleSinglePromptBranch(rt: HeldStreamRuntime, res: http.ServerResponse, messages: Record<string, unknown>[]): void {
+  const hasPrompt = messages.some((message) => {
+    if (message.role !== 'user') return false;
+    return userText(message.content).includes(rt.opts.promptIncludes);
+  });
+  rt.evidence.streamRequests += 1;
+  if (!hasPrompt) {
+    answerUnmatched(rt, res, `unexpected streaming prompt (only the scripted prompt is held)`);
+    return;
+  }
+  if (rt.held !== null || rt.evidence.streamRequests > 1) {
+    // A later scripted turn (retry/regenerate): answer complete, do not
+    // hold — but stream it at cadence so the retry stays observable
+    // mid-flight.
+    rt.evidence.retried += 1;
+    completePaced(rt, res, rt.retryAnswer);
+    return;
+  }
+  holdSingleStream(rt, res);
+}
+
+function handleHttpRequest(rt: HeldStreamRuntime, req: http.IncomingMessage, res: http.ServerResponse): void {
+  const bodyChunks: Buffer[] = [];
+  req.on('data', (data: Buffer) => bodyChunks.push(data));
+  req.on('error', (error) => rt.evidence.errors.push(`provider request: ${error.message}`));
+  req.on('end', () => {
+    if (req.method === 'GET' && req.url?.includes('/models')) {
+      serveModelList(res);
+      return;
+    }
+    if (req.method !== 'POST' || !req.url?.includes('/chat/completions')) {
+      serveUnexpectedRoute(rt, req, res);
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(Buffer.concat(bodyChunks).toString('utf8')) as Record<string, unknown>;
+    } catch (error) {
+      rt.evidence.errors.push(`invalid provider request JSON: ${String(error)}`);
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'invalid provider request JSON' } }));
+      return;
+    }
+    if (body.stream !== true) {
+      serveValidationProbe(res);
+      return;
+    }
+    const messages = Array.isArray(body.messages) ? body.messages as Record<string, unknown>[] : [];
+    if (rt.opts.scripts) {
+      handleScriptsBranch(rt, res, messages);
+      return;
+    }
+    handleSinglePromptBranch(rt, res, messages);
+  });
+}
+
+function releaseHeld(rt: HeldStreamRuntime): void {
+  const stream = rt.held;
+  rt.held = null;
+  if (!stream || stream.finished) return;
+  stream.finished = true;
+  rt.evidence.released += 1;
+  rt.evidence.streamsClosed += 1;
+  if (stream.record) stream.record.released += 1;
+  clearInterval(stream.timer);
+  stream.res.write(chunk({ content: rt.releaseText }, 'stop') + 'data: [DONE]\n\n');
+  stream.res.end();
+}
+
+function expectedHeldAnswerText(rt: HeldStreamRuntime): string {
+  const parts: string[] = [];
+  for (let n = 1; n <= rt.evidence.chunksSent; n += 1) parts.push(rt.deltaText(n));
+  if (rt.evidence.released > 0) parts.push(rt.releaseText);
+  return parts.join('').replace(/\s+/g, ' ').trim();
+}
+
+function closeProvider(server: http.Server, rt: HeldStreamRuntime): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const stream = rt.held;
+    rt.held = null;
+    if (stream && !stream.finished) {
+      // Test teardown with the turn still held: stop the timer so Node can
+      // exit; a teardown is neither a cancel nor a release, so evidence
+      // deliberately does not count it.
+      stream.finished = true;
+      clearInterval(stream.timer);
+    }
+    server.close((error) => error ? reject(error) : resolve());
+    server.closeAllConnections();
+  });
 }
 
 /**
@@ -105,147 +456,19 @@ interface HeldStream {
  * errors/unmatchedStreams so evidence exposes it instead of hanging a turn.
  */
 export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<HeldStreamProvider> {
-  const chunkIntervalMs = opts.chunkIntervalMs ?? 150;
   const chunkText = opts.chunkText ?? 'The tide keeps its own steady rhythm in this scripted stream.';
-  const releaseText = opts.releaseText ?? ' The scripted stream now finishes.';
-  const retryAnswer =
-    'The scripted retry answer completes without holding. The held turn was already finished before this request arrived.';
-
-  // Each scripted delta is UNIQUELY numbered. A periodic delta stream cannot
-  // prove catch-up byte-continuity — a dropped middle chunk is invisible in
-  // repeated prose — so every delta carries its own sequence number and
-  // expectedHeldAnswer() reconstructs the exact answer the SPA must render.
-  const deltaText = (n: number): string => `${chunkText} (part ${n})`;
-
-  const evidence: HeldStreamEvidence = {
-    streamRequests: 0,
-    unmatchedStreams: 0,
-    chunksSent: 0,
-    streamsClosed: 0,
-    released: 0,
-    retried: 0,
-    errors: [],
-  };
-  let held: HeldStream | null = null;
-
-  // External OpenAI-compatible protocol, not a gateway/SPA wire format.
-  const chunk = (delta: Record<string, unknown>, finish: string | null) =>
-    'data: ' + JSON.stringify({
-      id: 'held-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
-      created: Math.floor(Date.now() / 1000),
-      choices: [{ index: 0, delta, finish_reason: finish }],
-    }) + '\n\n';
-
-  const completeNow = (res: http.ServerResponse, content: string) => {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    res.end(chunk({ role: 'assistant', content }, 'stop') + 'data: [DONE]\n\n');
+  const rt: HeldStreamRuntime = {
+    opts,
+    evidence: createEvidence(opts),
+    chunkIntervalMs: opts.chunkIntervalMs ?? 150,
+    releaseText: opts.releaseText ?? ' The scripted stream now finishes.',
+    retryAnswer:
+      'The scripted retry answer completes without holding. The held turn was already finished before this request arrived.',
+    deltaText: (n: number): string => `${chunkText} (part ${n})`,
+    held: null,
   };
 
-  // A scripted completion that still STREAMS at the fixture's cadence: the
-  // tests pin the running row while a response renders (catchup h's
-  // "Generate again" assertions observe the retry mid-stream), so a retry
-  // must not arrive in one burst — that would make the running state
-  // unobservable and the original assertion unsatisfiable.
-  const completePaced = (res: http.ServerResponse, content: string) => {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    const parts = content.match(/.{1,40}(\s|$)/g) ?? [content];
-    let i = 0;
-    const timer = setInterval(() => {
-      if (i < parts.length - 1) {
-        res.write(chunk({ content: parts[i] }, null));
-        i += 1;
-        return;
-      }
-      clearInterval(timer);
-      res.end(chunk({ content: parts[i] }, 'stop') + 'data: [DONE]\n\n');
-    }, chunkIntervalMs);
-    res.once('close', () => clearInterval(timer));
-  };
-
-  const server = http.createServer((req, res) => {
-    const bodyChunks: Buffer[] = [];
-    req.on('data', (data: Buffer) => bodyChunks.push(data));
-    req.on('error', (error) => evidence.errors.push(`provider request: ${error.message}`));
-    req.on('end', () => {
-      if (req.method === 'GET' && req.url?.includes('/models')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_FALLBACK.model, object: 'model' }] }));
-        return;
-      }
-      if (req.method !== 'POST' || !req.url?.includes('/chat/completions')) {
-        evidence.errors.push(`unexpected provider route: ${req.method} ${req.url}`);
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'unexpected provider route' } }));
-        return;
-      }
-      let body: Record<string, unknown>;
-      try {
-        body = JSON.parse(Buffer.concat(bodyChunks).toString('utf8')) as Record<string, unknown>;
-      } catch (error) {
-        evidence.errors.push(`invalid provider request JSON: ${String(error)}`);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'invalid provider request JSON' } }));
-        return;
-      }
-      if (body.stream !== true) {
-        // Onboarding/key validation does not start the held stream.
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          id: 'held-stream-validation', object: 'chat.completion', model: E2E_FALLBACK.model,
-          choices: [{ index: 0, message: { role: 'assistant', content: 'probe ok' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-        }));
-        return;
-      }
-      const messages = Array.isArray(body.messages) ? body.messages as Record<string, unknown>[] : [];
-      const hasPrompt = messages.some((message) => {
-        if (message.role !== 'user') return false;
-        const content = message.content;
-        const text = typeof content === 'string' ? content : Array.isArray(content) ?
-          content.map((part: Record<string, unknown>) => part.type === 'text' ? part.text : '').join('') : '';
-        return text.includes(opts.promptIncludes);
-      });
-      evidence.streamRequests += 1;
-      if (!hasPrompt) {
-        // Answer complete so no turn can hang on the fixture; evidence flags it.
-        evidence.unmatchedStreams += 1;
-        evidence.errors.push(`unexpected streaming prompt (only the scripted prompt is held)`);
-        completeNow(res, 'FIXTURE_ERROR: unexpected streaming prompt');
-        return;
-      }
-      if (held !== null || evidence.streamRequests > 1) {
-        // A later scripted turn (retry/regenerate): answer complete, do not
-        // hold — but stream it at cadence so the retry stays observable
-        // mid-flight.
-        evidence.retried += 1;
-        completePaced(res, retryAnswer);
-        return;
-      }
-      // THE HELD STREAM: deltas on a timer, no finish chunk, no [DONE] — the
-      // turn cannot complete until release() or a real teardown (cancel/crash).
-      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      const stream: HeldStream = {
-        res,
-        timer: setInterval(() => {
-          res.write(chunk({ content: deltaText(evidence.chunksSent + 1) }, null));
-          evidence.chunksSent += 1;
-        }, chunkIntervalMs),
-        finished: false,
-      };
-      res.once('close', () => {
-        clearInterval(stream.timer);
-        if (!stream.finished) {
-          stream.finished = true;
-          evidence.streamsClosed += 1;
-        }
-        if (held === stream) held = null;
-      });
-      res.on('error', (error) => evidence.errors.push(`provider response: ${error.message}`));
-      held = stream;
-      res.write(chunk({ role: 'assistant', content: deltaText(1) }, null));
-      evidence.chunksSent += 1;
-    });
-  });
+  const server = http.createServer((req, res) => handleHttpRequest(rt, req, res));
 
   const url = await new Promise<string>((resolve, reject) => {
     server.once('error', reject);
@@ -258,37 +481,14 @@ export async function startHeldStreamProvider(opts: HeldStreamOptions): Promise<
 
   return {
     url,
-    evidence,
+    evidence: rt.evidence,
     release(): void {
-      const stream = held;
-      held = null;
-      if (!stream || stream.finished) return;
-      stream.finished = true;
-      evidence.released += 1;
-      evidence.streamsClosed += 1;
-      clearInterval(stream.timer);
-      stream.res.write(chunk({ content: releaseText }, 'stop') + 'data: [DONE]\n\n');
-      stream.res.end();
+      releaseHeld(rt);
     },
     expectedHeldAnswer(): string {
-      const parts: string[] = [];
-      for (let n = 1; n <= evidence.chunksSent; n += 1) parts.push(deltaText(n));
-      if (evidence.released > 0) parts.push(releaseText);
-      return parts.join('').replace(/\s+/g, ' ').trim();
+      return expectedHeldAnswerText(rt);
     },
-    close: () => new Promise<void>((resolve, reject) => {
-      const stream = held;
-      held = null;
-      if (stream && !stream.finished) {
-        // Test teardown with the turn still held: stop the timer so Node can
-        // exit; a teardown is neither a cancel nor a release, so evidence
-        // deliberately does not count it.
-        stream.finished = true;
-        clearInterval(stream.timer);
-      }
-      server.close((error) => error ? reject(error) : resolve());
-      server.closeAllConnections();
-    }),
+    close: () => closeProvider(server, rt),
   };
 }
 

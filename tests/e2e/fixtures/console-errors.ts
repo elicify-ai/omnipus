@@ -104,15 +104,31 @@ export const test = base.extend<{
         // just started has a chance to land in the DOM.
         const stopBtn = page.locator('[data-testid="stop-btn"]');
         if (await stopBtn.isVisible().catch(() => false)) {
-          await stopBtn.click({ timeout: 2_000 }).catch(() => undefined);
+          // Issue #1661: a failed Stop click used to be swallowed silently
+          // (`.catch(() => undefined)`), which is how a teardown cancel could
+          // silently NOT happen — the same silent-failure shape that hid the
+          // Bug-3-a teardown cancel from the run's artifacts. Still best
+          // effort (the click failure never fails the test), but now visible.
+          await stopBtn
+            .click({ timeout: 2_000 })
+            .catch((err: unknown) => {
+              console.warn(
+                `[cancelOnTeardown] Stop click failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
           // Brief settling window so the cancel frame is actually sent over the
           // WebSocket before Playwright tears the context down.
           await page.waitForTimeout(250).catch(() => undefined);
         }
-      } catch {
+      } catch (err) {
         // Best effort: any failure here (page closing, navigation in flight,
         // store not initialised) is harmless — we only want to cancel when
-        // there is a clear streaming turn to cancel.
+        // there is a clear streaming turn to cancel. Logged (issue #1661)
+        // instead of swallowed silently, so a teardown cancel that never ran
+        // leaves a trace in the report.
+        console.warn(
+          `[cancelOnTeardown] teardown cancel did not run: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     },
     { auto: true },
