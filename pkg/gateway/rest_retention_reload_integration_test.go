@@ -20,22 +20,30 @@ package gateway
 //     gateway.dev_mode_bypass to false, write it back — byte-for-byte the
 //     same technique retention.spec.ts uses via fs.readFileSync +
 //     JSON.parse/JSON.stringify + fs.writeFileSync.
-//  4. POST /reload — the exact health-server endpoint the E2E test drives.
+//  4. POST /reload — issues #276/#640: the health endpoint requires a valid
+//     bearer now. The flow proves BOTH acceptance lines: without a bearer the
+//     reload is refused 401; with the bearer the login in step 2 minted for
+//     the admin (gen.LoginResponse.Token — a Gateway.Users account bearer,
+//     exactly what the production authorizer accepts) it fires and returns
+//     200.
 //  5. POST /api/v1/security/retention/sweep carrying ONLY the cookie from
 //     step 2 (no Authorization header — matches ADR-044, where the SPA has
 //     no JS-visible bearer token and authHeaders() in the E2E test never
 //     finds one either).
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
 
@@ -81,6 +89,14 @@ func TestRetentionSweepE2E_SessionCookieSurvivesBypassFlipAndReload(t *testing.T
 	)
 	require.NotEmpty(t, csrfCookie.Value)
 
+	// Issue #276's acceptance needs the login-minted BEARER for step 4 —
+	// login returns it in the response body (gen.LoginResponse.Token).
+	loginRespRaw, err := io.ReadAll(loginResp.Body)
+	require.NoError(t, err)
+	var minted gen.LoginResponse
+	require.NoError(t, json.Unmarshal(loginRespRaw, &minted), "login must return a parseable body")
+	require.NotEmpty(t, minted.Token, "login must mint a bearer token for the account")
+
 	// Step 3: mimic retention.spec.ts's raw config.json read -> JSON.parse ->
 	// flip gateway.dev_mode_bypass -> JSON.stringify -> write back.
 	raw, err := os.ReadFile(gw.ConfigPath())
@@ -95,13 +111,33 @@ func TestRetentionSweepE2E_SessionCookieSurvivesBypassFlipAndReload(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(gw.ConfigPath(), rewritten, 0o600))
 
-	// Step 4: POST /reload — the exact call the E2E test makes.
+	// Step 4a — issue #276 acceptance line 1: POST /reload WITHOUT a valid
+	// token is 401. The session cookie alone (the old, insecure pin this test
+	// used to make) does not authenticate the health endpoint.
+	noBearerReloadReq, err := gw.NewRequest(http.MethodPost, "/reload", nil)
+	require.NoError(t, err)
+	noBearerReloadReq.Header.Del("Authorization")
+	noBearerReloadResp, err := gw.Do(noBearerReloadReq)
+	require.NoError(t, err)
+	defer noBearerReloadResp.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, noBearerReloadResp.StatusCode,
+		"issue #276: POST /reload without a bearer is 401 (cookie-only does not authenticate the health endpoint)")
+
+	// Step 4b — issue #276 acceptance line 2: the login-minted bearer (a
+	// Gateway.Users account bearer, exactly what the production reload
+	// authorizer accepts) fires the reload and returns 200.
 	reloadReq, err := gw.NewRequest(http.MethodPost, "/reload", nil)
 	require.NoError(t, err)
+	reloadReq.Header.Set("Authorization", "Bearer "+minted.Token)
 	reloadResp, err := gw.Do(reloadReq)
 	require.NoError(t, err)
 	defer reloadResp.Body.Close()
-	require.Equal(t, http.StatusOK, reloadResp.StatusCode, "POST /reload must succeed")
+	require.Equal(t, http.StatusOK, reloadResp.StatusCode,
+		"issue #276: POST /reload with the account bearer must succeed")
+	reloadRaw, err := io.ReadAll(reloadResp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(reloadRaw), "reload triggered",
+		"issue #640: a valid admin bearer returns the triggered-reload status")
 
 	// Same grace period the E2E test waits for async reload propagation.
 	time.Sleep(500 * time.Millisecond)
