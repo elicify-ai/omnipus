@@ -19560,6 +19560,16 @@ export interface components {
             agent_id?: string;
         };
         /**
+         * LibraryRef
+         * @description Address of a file in a workspace Library (chat-links spec, Contract section). Navigation data only: it never grants access; opening the file still goes through the viewer's own Library access. Mirrored inline in contracts/asyncapi.yaml (components.schemas.LibraryRef), which is the copy the generated Go and Zod types come from — keep both copies in sync by hand.
+         */
+        LibraryRef: {
+            /** @description Workspace whose Library holds the file. */
+            workspace_id: string;
+            /** @description Library path of the file, relative to the workspace Library root. For a file in a mounted folder the mount name comes first. Never empty: the Library root is not a valid target. */
+            path: string;
+        };
+        /**
          * MediaPart
          * @description One media attachment within a MediaFrame. Each part maps to a single file stored in the media registry and accessible via /api/v1/media/{ref}.
          */
@@ -19577,6 +19587,8 @@ export interface components {
             content_type: string;
             /** @description Optional human-readable caption for display below the media. */
             caption?: string;
+            /** @description Library address of the sent file (chat-links spec, R5 and FR-021). Present for a file in a workspace Library or one of its mounted folders, for every media type; the web chat shows "Open in Library" on non-image file cards only. Omitted for a file outside every Library and when the session's workspace is unknown. */
+            library_ref?: components["schemas"]["LibraryRef"];
         };
         /**
          * RoomDeliveryState

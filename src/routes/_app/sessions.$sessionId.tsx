@@ -4,6 +4,8 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
 import { ChatScreen } from '@/components/chat/ChatScreen'
+import { LibraryOpenNotice } from '@/components/chat/LibraryOpenNotice'
+import { useChatPresence } from '@/hooks/useChatPresence'
 import { TaskKindLabel } from '@/components/chat/FeedKindLabel'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -328,6 +330,32 @@ function SessionRoute() {
   // started or ended -- every Sidebar refresh cycle for an archived
   // workspace's chat.
   return (
+    <SessionChatSlot
+      sessionId={sessionId}
+      workspaceId={wsId ?? null}
+      notice={notice}
+      agentRemoved={detail?.agent_removed ?? false}
+      isTask={detail?.session?.type === 'task'}
+    />
+  )
+}
+
+/**
+ * The inline chat view (chat-links spec "Watching"): mounted only while this
+ * route actually shows ChatScreen, so presence and the mounted-view record
+ * never claim a session that is still loading, missing or being redirected.
+ * `workspaceId` is the workspace the session itself recorded (none means bare
+ * chat links stay plain text).
+ */
+function SessionChatSlot({ sessionId, workspaceId, notice, agentRemoved, isTask }: {
+  sessionId: string
+  workspaceId: string | null
+  notice: ReactNode
+  agentRemoved: boolean
+  isTask: boolean
+}) {
+  useChatPresence(sessionId, workspaceId)
+  return (
     <div className="absolute inset-0 flex flex-col">
       {notice}
       {/* #1449 D13: this standalone shell has NO workspace header line, so
@@ -336,7 +364,7 @@ function SessionRoute() {
           still says what it is ("Task: <title>"). Only the task identity is
           shown: the standalone shell has no workspace, so the main title
           and the helper breadcrumb have nothing to name. */}
-      {detail?.session?.type === 'task' && (
+      {isTask && (
         <div className="flex min-w-0 items-center px-[var(--space-3)] py-[var(--space-1)]">
           <TaskKindLabel />
         </div>
@@ -344,7 +372,8 @@ function SessionRoute() {
       {/* ChatScreen's root is absolute inset-0: give it its own positioned
           slot below the notice so the two never overlap. */}
       <div className="relative min-h-0 flex-1" data-testid="workspace-lookup-chat-slot">
-        <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
+        <ChatScreen agentRemoved={agentRemoved} />
+        <LibraryOpenNotice sessionId={sessionId} />
       </div>
     </div>
   )

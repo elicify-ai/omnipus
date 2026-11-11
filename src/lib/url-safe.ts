@@ -1,12 +1,15 @@
 /**
  * URL scheme safety helpers — shared across chat and iframe preview components.
  *
- * Allow-list: http, https, mailto, tel.
+ * Allow-list: http, https, mailto.
  * Everything else (javascript:, data:, vbscript:, file:, ftp:, schemeless
  * absolute URLs that browser engines resolve to javascript:, etc.) is rejected.
  */
 
-const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:'])
+// `tel:` was removed (chat-links follow-up 4): react-markdown's default URL
+// transform already blanks it, so the entry was dead for chat links, and no
+// other caller (previews, web fetch, mail deep links) needs a phone link.
+const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 
 /**
  * Returns true only when `href` is parseable by the URL constructor and its

@@ -1,0 +1,30 @@
+title: ChatPresenceFrame
+description: >
+  Client → server (chat-links spec, "Watching"). Reports whether this tab is
+  watching the chat of session_id: the tab is visible and that chat's screen
+  is mounted. Sent with watching true when the tab starts watching and again
+  periodically while it stays watching, and with watching false when the tab
+  is hidden, the chat changes or the chat screen unmounts. The server keeps
+  the claim in memory only, bound to this connection, and accepts it only
+  for a session this connection may attach to; an unrefreshed claim expires
+  and a closed connection drops its claims. Not journaled, not replayed, not
+  persisted. Mirrored inline in contracts/asyncapi.yaml
+  (components.schemas.ChatPresenceFrame) — keep both copies in sync by hand.
+type: object
+required:
+  - type
+  - session_id
+  - watching
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: chat_presence
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: Chat session this tab is (or stopped) watching.
+  watching:
+    type: boolean
+    description: True while this tab is watching that chat; false when it stops.

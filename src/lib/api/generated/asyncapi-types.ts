@@ -93,7 +93,9 @@ export type WsFrameType =
   | "room_snapshot"
   | "room_entry"
   | "room_member_state"
-  | "room_meta";
+  | "room_meta"
+  | "open_in_library"
+  | "chat_presence";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -198,12 +200,18 @@ export interface RoomDeliveryState {
   reason?: string;
 }
 
+export interface LibraryRef {
+  workspace_id: string;
+  path: string;
+}
+
 export interface MediaPart {
   type: "image" | "audio" | "video" | "file";
   url: string;
   filename: string;
   content_type: string;
   caption?: string;
+  library_ref?: LibraryRef;
 }
 
 export interface RoomEntry {
@@ -332,6 +340,12 @@ export interface PingFrame {
 
 export interface PongFrame {
   type: "pong";
+}
+
+export interface ChatPresenceFrame {
+  type: "chat_presence";
+  session_id: string;
+  watching: boolean;
 }
 
 export interface AttachSessionFrame {
@@ -779,6 +793,15 @@ export interface MediaFrame {
   session_id: string;
   parts: Array<MediaPart>;
   seq?: number;
+}
+
+export interface OpenInLibraryFrame {
+  type: "open_in_library";
+  session_id: string;
+  call_id: string;
+  request_id: string;
+  workspace_id: string;
+  path: string;
 }
 
 export interface CommandSegmentInfo {
@@ -1522,6 +1545,7 @@ export type WsFrame =
   | RedirectFrame
   | PingFrame
   | PongFrame
+  | ChatPresenceFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | SessionStartedFrame
@@ -1548,6 +1572,7 @@ export type WsFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
+  | OpenInLibraryFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
@@ -1607,6 +1632,7 @@ export type ClientFrame =
   | CancelFrame
   | RedirectFrame
   | PingFrame
+  | ChatPresenceFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | AskUserAnswerFrame
@@ -1625,7 +1651,7 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["attach_room", "auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
+export const ClientFrameTypes = ["attach_room", "auth", "message", "cancel", "redirect", "ping", "chat_presence", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -1661,6 +1687,7 @@ export type ServerFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
+  | OpenInLibraryFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame

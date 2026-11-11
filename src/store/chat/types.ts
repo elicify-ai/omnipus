@@ -14,6 +14,7 @@ import type {
   CancelFrame,
   ServerFrame,
   LLMError as GeneratedLLMError,
+  LibraryRef,
   WorkflowStart,
   ProviderStatusFrame,
 } from '@/lib/api/generated/asyncapi-types'
@@ -40,6 +41,8 @@ export interface MediaAttachment {
   filename: string
   contentType: string
   caption?: string
+  /** chat-links FR-021: the sent file's Library location (generated wire type), when it has one. */
+  libraryRef?: LibraryRef
 }
 
 // FR-H-008/FR-H-009: a subagent span brackets one sub-turn.

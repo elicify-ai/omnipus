@@ -470,7 +470,7 @@ func TestRequestPathRedaction_EveryLoggingSite(t *testing.T) {
 
 // redactionRecordingSite names one place in pkg/gateway that writes a request path into
 // a log record or an audit entry. This inventory is the FR-003e claim written
-// down: ten sites, all redacted.
+// down: eleven sites, all redacted.
 type redactionRecordingSite struct {
 	file string
 	what string
@@ -489,6 +489,7 @@ var expectedRedactionSites = []redactionRecordingSite{
 	// WU-24 (PLAN-omnipus-L1-v2-20261013.md §10): Copilot CLI model
 	// provider and its sign-in handler are deleted, including its log sink.
 	{file: "rest_knowledge.go", what: "allowKnowledgeRetrieval: knowledge rate-limit 429 warning (2026-09-14 limiter fix)"},
+	{file: "rest_reload_write_deadline.go", what: "reloadWaitWriteDeadlineMiddleware: write-deadline extension failure warning"},
 }
 
 // redactionImplFile is where redactRequestPath is DEFINED. Its own call
@@ -534,11 +535,14 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 				"or the audit chain (FR-003e).\ninventory: %+v", expectedRedactionSites)
 	})
 
-	t.Run("inventory_is_ten_sites", func(t *testing.T) {
+	t.Run("inventory_is_eleven_sites", func(t *testing.T) {
 		// WU-24 retired the Copilot sign-in sink; the person-session refusal
-		// (r17 Settings endpoint) added one redacted site: plus the #798 redirect-refusal and planted-cookie sites: an exact ten-site set.
-		assert.Len(t, expectedRedactionSites, 10,
-			"WU-24 removes the Copilot sink; all ten recording sites must stay redacted")
+		// (r17 Settings endpoint) added one redacted site; the #798 redirect-refusal
+		// and planted-cookie sites make an exact ten-site set on release; the
+		// reload-wait write-deadline warning (chat links) makes eleven. The per-file
+		// equality check stays strict.
+		assert.Len(t, expectedRedactionSites, 11,
+			"WU-24 removes the Copilot sink; all eleven recording sites, including the reload-wait warning, must stay redacted")
 	})
 }
 
