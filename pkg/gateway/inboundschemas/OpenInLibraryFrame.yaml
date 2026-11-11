@@ -1,0 +1,55 @@
+title: OpenInLibraryFrame
+description: >
+  Server → client, live only (chat-links spec, "Replay guarantee" and
+  "Tool-to-hub seam"). Sent after a successful show_to_user call to every
+  connection bound to the chat session at that moment, asking the tab to open
+  the workspace Library at a file. Delivered unsequenced: never numbered,
+  journaled, persisted or replayed, so it has no seq property and a reload or
+  reconnect never receives it. Each tab decides once, on arrival, whether to
+  open the Library or to show an "Open in Library" notice instead.
+  Mirrored inline in contracts/asyncapi.yaml
+  (components.schemas.OpenInLibraryFrame) — keep both copies in sync by hand.
+type: object
+required:
+  - type
+  - session_id
+  - call_id
+  - request_id
+  - workspace_id
+  - path
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: open_in_library
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: Chat session the show_to_user call ran in.
+  call_id:
+    type: string
+    minLength: 1
+    description: >
+      Tool call id of the show_to_user call. Correlates the frame with its
+      tool card only; it is not unique and is never a de-duplication key.
+  request_id:
+    type: string
+    minLength: 32
+    maxLength: 32
+    pattern: '^[0-9a-f]{32}$'
+    description: >
+      Server-minted identity of this open request: 16 random bytes as 32
+      lowercase hex characters. The client de-duplicates on session_id plus
+      request_id.
+  workspace_id:
+    type: string
+    minLength: 1
+    description: Workspace whose Library should open.
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Library path of the file, relative to the workspace Library root. For a
+      file in a mounted folder the mount name comes first. Never empty: the
+      Library root is not a valid target.

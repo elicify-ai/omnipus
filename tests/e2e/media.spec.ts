@@ -193,7 +193,7 @@ test(
 );
 
 test(
-  '(b) file-download fallback: send_file delivers a non-image file that renders a working download link',
+  '(b) file-download fallback: send_file delivers a non-image file that renders a working download button',
   // T0.1 (re-investigated): the #107 blocker no longer holds. It was written
   // when no tool could reliably produce a non-image media frame without a
   // mock. This branch (sendfile-fix) now ships a real `send_file` tool
@@ -206,10 +206,10 @@ test(
   // already relies on elsewhere in this suite — no LLM judgment call, no
   // mock gateway tool needed.
   //
-  // Why this exercises the NON-image branch deterministically: InlineMedia
-  // (ChatScreen.tsx:366-387) renders <img> only when a media part's `type`
-  // is "image"; every other type renders the `<a download>` branch. `type`
-  // comes from inferMediaType(filename, contentType) (pkg/agent/loop.go),
+  // Why this exercises the NON-image branch deterministically: a non-image
+  // file is a file card with a download button (docs/using-omnipus-ui.md),
+  // never an <img>. `type` comes from inferMediaType(filename, contentType)
+  // (pkg/agent/loop.go),
   // which classifies a `.txt` file as "file" (it's in none of the
   // image/audio/video extension lists) regardless of what content-type
   // detection returns for a plain-text file — so this is robust even if
@@ -310,25 +310,24 @@ test(
     // function default.
     await waitForTurnFullyDone(page, 8_000, 60_000);
 
-    // Structural assertion: the non-image branch of InlineMedia renders an
-    // <a download="..."> link (ChatScreen.tsx:378-386), never an <img>, for
-    // a file classified as "file" — not "some link appeared".
-    const downloadLink = page.locator(`a[download="${fileName}"]`);
-    await expect(downloadLink).toBeVisible({ timeout: 15_000 });
+    // Structural assertion: a non-image file renders a button named
+    // "Download <filename>" (docs/using-omnipus-ui.md), never an <img>.
+    // The button has no href. The click still fetches /api/v1/media/.
+    const downloadButton = page.getByRole('button', { name: `Download ${fileName}`, exact: true });
+    await expect(downloadButton).toBeVisible({ timeout: 15_000 });
     await expect(page.locator(`img[src*="${fileName}"]`)).toHaveCount(0);
-
-    const href = await downloadLink.getAttribute('href');
-    expect(href).toMatch(/\/api\/v1\/media\//);
 
     // Differentiation + persistence test: actually download the file through
     // the real HTTP endpoint and assert the exact nonce-bearing bytes round-
     // tripped (local disk -> send_file -> MediaStore -> HTTP -> browser).
     // A hardcoded/stub send_file, or one that registers a ref without really
     // persisting the file, cannot reproduce this nonce.
-    const [download] = await Promise.all([
+    const [download, mediaRequest] = await Promise.all([
       page.waitForEvent('download'),
-      downloadLink.click(),
+      page.waitForRequest((req) => /\/api\/v1\/media\//.test(req.url())),
+      downloadButton.click(),
     ]);
+    expect(mediaRequest.url()).toMatch(/\/api\/v1\/media\//);
     expect(download.suggestedFilename()).toBe(fileName);
     const downloadPath = await download.path();
     expect(downloadPath).toBeTruthy();

@@ -68,6 +68,8 @@ import { LibraryDownloadCard } from './preview/LibraryDownloadCard'
 import { PreviewHeaderSlotProvider } from './preview/previewHeaderSlot'
 import { IconButton } from '@/components/ui/icon-button'
 import { Button } from '@/components/ui/button'
+import { isApiError } from '@/lib/api-error'
+import { LibraryErrorBanner } from './LibraryErrorBanner'
 
 // Every control in the single header row is a bare icon, matching the browser
 // panel's toolbar treatment: no border, no fill, hover as the only chrome.
@@ -236,16 +238,31 @@ export function LibraryPreviewPane({
           }
           return loadingBody
         }
+        // R5-SF-1: a refresh that failed while a body is on screen keeps the
+        // body (and any unsaved draft) but is never silent — a persistent
+        // notice says the text is the earlier version, or that the file is
+        // gone. Always the same two slots, so the notice appearing or
+        // clearing never remounts the editor below it. No Retry (founder
+        // Q10, R6-SF-1): a successful re-read would clear the notice while
+        // the mounted editor still showed the old text; re-basing an open
+        // editor is a separate future epic.
         return (
-          <LibraryTextBody
-            workspaceId={workspaceId}
-            entry={liveEntry}
-            kind={kind}
-            content={contentQuery.data}
-            onDownload={onDownload}
-            onSaved={setLiveEntry}
-            {...(onOpenNote ? { onOpenNote } : {})}
-          />
+          <>
+            {contentQuery.isError && (
+              <ContentRefreshNotice
+                missing={isApiError(contentQuery.error) && contentQuery.error.status === 404}
+              />
+            )}
+            <LibraryTextBody
+              workspaceId={workspaceId}
+              entry={liveEntry}
+              kind={kind}
+              content={contentQuery.data}
+              onDownload={onDownload}
+              onSaved={setLiveEntry}
+              {...(onOpenNote ? { onOpenNote } : {})}
+            />
+          </>
         )
       }
       case 'other':
@@ -338,6 +355,28 @@ function UntrustedContentBoundary() {
         Untrusted content — Omnipus did not write this page. It runs isolated: it cannot read your
         session or reach the network.
       </p>
+    </div>
+  )
+}
+
+/**
+ * R5-SF-1: shown above a text body whose latest read failed while an earlier
+ * body is still on screen (TanStack keeps `data` on a failed refetch). A 404
+ * means the file is gone, so the text must not pass for the current file;
+ * any other failure means the text may be out of date. Stays until the file
+ * is read successfully again (the banner has no dismiss and no Retry — see
+ * the call site).
+ */
+function ContentRefreshNotice({ missing }: { missing: boolean }) {
+  return (
+    <div className="flex shrink-0 px-[var(--space-2-5)] pt-[var(--space-2)]">
+      <LibraryErrorBanner
+        className="flex-1"
+        testId={missing ? 'library-content-missing' : 'library-content-refresh-failed'}
+        message={missing
+          ? 'This file is no longer in the Library — showing the earlier version.'
+          : 'Could not refresh this file — showing the earlier version.'}
+      />
     </div>
   )
 }

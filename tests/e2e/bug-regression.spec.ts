@@ -438,13 +438,13 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       // composer's Enter press (activates the focused Deny button), so the
       // message is never sent.
       await dismissAndAnnotate(page)
-      await input.fill('Bug-5 turn 1 — first message')
+      await input.fill('Reply with one short sentence: turn one received. Do not use tools.')
       await input.press('Enter')
       await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
 
       // Turn 2.
       await dismissAndAnnotate(page)
-      await input.fill('Bug-5 turn 2 — second message')
+      await input.fill('Reply with one short sentence: turn two received. Do not use tools.')
       await input.press('Enter')
       await expectAssistantMessagesWithApprovalDrain(page, 2, 90_000)
 

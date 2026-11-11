@@ -13,6 +13,7 @@ import { FileReadBlock } from './FileReadPreview'
 import { FileTreeBlock } from './FileTreeView'
 import { WebSearchBlock } from './WebSearchResult'
 import { WebFetchBlock } from './WebFetchPreview'
+import { FileOpReplayBlock, isFileOpToolName } from './FileWriteConfirm'
 import { GoalSetupFailureLine } from './GoalSetupFailureLine'
 import { delegationSlotted } from '../DelegationEventLine'
 import { isHistoryResultPreview } from '@/lib/historyPreview'
@@ -34,6 +35,33 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled',
   // 6c Done card: a live running call is not complete.
   if (running) return { type: 'running' }
   return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
+}
+
+/**
+ * write/edit/append on a finished or reloaded reply: the same FileOpBlock row
+ * the live registrations render (FileWriteConfirm.tsx), so the row keeps its
+ * status, failure reason and server link:-line Library link (code-reviewer
+ * C2). Kept outside renderHistoricalToolCall for its line budget.
+ */
+function renderFileOpReplay(
+  tc: ToolCall,
+  callId: string,
+  inlineEvents: readonly DelegationEvent[] | undefined,
+  verboseChatEnabled: boolean,
+  running: boolean,
+): ReactNode {
+  return delegationSlotted(callId, inlineEvents, (
+    <FileOpReplayBlock
+      key={callId}
+      toolName={tc.tool}
+      params={tc.params as Record<string, unknown> | undefined}
+      result={tc.result}
+      // 6c Done card: only a call the row decided is live shows as running.
+      status={tc.status === 'running' && !running ? 'success' : tc.status}
+      error={tc.error}
+      verboseChatEnabled={verboseChatEnabled}
+    />
+  ))
 }
 
 interface HistoricalToolCallArgs {
@@ -189,6 +217,8 @@ function renderSavedToolCall({
       />
     ))
   }
+  // write/edit/append: the live FileOpBlock row (code-reviewer C2).
+  if (isFileOpToolName(tc.tool)) return renderFileOpReplay(tc, callId, inlineEvents, verboseChatEnabled, running)
   if (tc.tool === 'read_file' || tc.tool === 'file.read') {
     return delegationSlotted(callId, inlineEvents, (
       <FileReadBlock
