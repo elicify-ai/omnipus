@@ -474,7 +474,9 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 		// the same once-only write to run between saving the answer and
 		// publishing done. The record still lands after the assistant entry.
 		if bd, ok := s.(streamerBeforeDoneSetter); ok {
-			bd.SetBeforeDone(ts.persistCancelBeforeDone)
+			// #1775: a typed exit's stop notice is saved here too, between
+			// the answer and the marker, so it is readable at done.
+			bd.SetBeforeDone(ts.persistExitNoticeThenCancel)
 		}
 		// Pass finalContent so the streamer can persist the assistant message
 		// even when its own accumulated-from-token buffer is empty — happens

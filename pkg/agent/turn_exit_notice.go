@@ -35,6 +35,15 @@ func (ts *turnState) queueExitNotice(kind, stage string, llm LLMError) {
 	}
 }
 
+// persistExitNoticeThenCancel is the streamer's before-done callback (#1524,
+// #1775): the queued stop notice first, then the turn_canceled marker, so a
+// reload taken at done reads partial, notice, marker. Both writes are
+// once-only, so the deferred finishAfterExitNotice finds nothing left to do.
+func (ts *turnState) persistExitNoticeThenCancel() {
+	ts.flushExitNotice()
+	ts.persistCancelBeforeDone()
+}
+
 // finishAfterExitNotice is runTurn's Finish defer: it runs after
 // finalizeStreamer has written the interrupted answer, writes the queued
 // notice, and only then calls Finish, which appends the turn_canceled marker.

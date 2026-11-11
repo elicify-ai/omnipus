@@ -92,6 +92,49 @@ func TestStoppedTurn_SavedOrderIsPartialNoticeMarker(t *testing.T) {
 	require.Equal(t, []string{"assistant", "notice", "turn_canceled"}, savedKinds(t, store, sessionID))
 }
 
+// doneBoundaryStreamer mimics pkg/gateway wsStreamer.Finalize: save the
+// answer, run the before-done callback, then "publish done" — recording what a
+// reload taken at that instant would read.
+type doneBoundaryStreamer struct {
+	ts         *turnState
+	beforeDone func()
+	atDone     []string
+	store      *session.UnifiedStore
+	sessionID  string
+	t          *testing.T
+}
+
+func (s *doneBoundaryStreamer) Update(context.Context, string) error { return nil }
+func (s *doneBoundaryStreamer) Cancel(context.Context)               {}
+func (s *doneBoundaryStreamer) SetBeforeDone(fn func())              { s.beforeDone = fn }
+func (s *doneBoundaryStreamer) Finalize(_ context.Context, content string) error {
+	s.ts.appendAssistantTranscriptTruncatedAs("", content, "cancelled")
+	if s.beforeDone != nil {
+		s.beforeDone()
+	}
+	s.atDone = savedKinds(s.t, s.store, s.sessionID)
+	return nil
+}
+
+// The streamed (webchat) path: the real finalizeStreamer hands the streamer
+// the before-done write. At the done boundary a reload must already read
+// partial, notice, marker, and the deferred finish adds nothing after it.
+func TestStoppedTurn_StreamedPathNoticeIsSavedBeforeDone(t *testing.T) {
+	t.Parallel()
+	al, ts, store, sessionID := stoppedTurnFixture(t)
+	st := &doneBoundaryStreamer{ts: ts, store: store, sessionID: sessionID, t: t}
+	ts.setLastStreamer(st)
+	ts.SetFinalContent("The three sentences are above, and")
+
+	_, _, err := al.typedTurnExit(ts, 1, "stop-order-model", context.Canceled)
+	require.Error(t, err)
+	require.NoError(t, ts.finalizeStreamer(context.Background()))
+	require.Equal(t, []string{"assistant", "notice", "turn_canceled"}, st.atDone, "what a reload at done reads")
+
+	ts.finishAfterExitNotice()
+	require.Equal(t, []string{"assistant", "notice", "turn_canceled"}, savedKinds(t, store, sessionID), "no duplicate after the deferred finish")
+}
+
 // No partial (Stop before the first token): the notice is still saved, once.
 func TestStoppedTurn_NoticeSavedOnceWithoutPartial(t *testing.T) {
 	t.Parallel()
