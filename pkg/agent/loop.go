@@ -1961,7 +1961,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// the assistant answer entry, on the streaming path (finalizeStreamer
 	// writes the answer) and the non-streaming path alike.
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.writePendingFallbackNotes()
-	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.Finish(rz.rc.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested()) }()
+	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.finishAfterExitNotice() }() // #1775: notice after the answer, before the marker
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx)
 	// ADR-087 D6.8, the ONE choke point (see preserveTruncatedAccumulator's
 	// doc comment). REGISTRATION ORDER IS LOAD-BEARING, the same way the
@@ -2172,7 +2172,7 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
+	al.emitTurnExitFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm) // #1775: transcript write deferred
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,
