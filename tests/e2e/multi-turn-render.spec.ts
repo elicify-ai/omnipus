@@ -16,6 +16,7 @@
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/canonical-history'
 import { seedAndOpenSession, openSessionByDeepLink } from './fixtures/session-setup'
+import { assistantMessages } from './fixtures/selectors'
 
 // ── Helper: get data-message-id from the ancestor message bubble ──────────────
 
@@ -111,17 +112,19 @@ test(
 
     // Step 1: Verify initial render has 2 assistant messages and 2 badges
     // Exclude data-status="running" — only count completed messages, not placeholders.
-    const assistants = page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])')
+    const assistants = assistantMessages(page)
     await expect(assistants).toHaveCount(2, { timeout: 15_000 })
 
     const badges = page.locator('[data-testid="tool-call-badge"]')
     await expect(badges).toHaveCount(2, { timeout: 10_000 })
 
     // Capture the message IDs for the two completed assistant messages.
-    // Filter out data-status="running" to exclude in-progress placeholders.
+    // Filter out data-status="running" to exclude in-progress placeholders, and
+    // system rows (e.g. the provider-fallback note), as the shared
+    // assistantMessages locator does.
     const msgIds = await page.evaluate(() => {
       const msgs = Array.from(document.querySelectorAll('[data-message-id]'))
-        .filter((el) => !el.classList.contains('flex-row-reverse') && el.getAttribute('data-status') !== 'running')
+        .filter((el) => !el.classList.contains('flex-row-reverse') && el.getAttribute('data-status') !== 'running' && el.getAttribute('data-message-role') !== 'system')
       return msgs.map((el) => el.getAttribute('data-message-id'))
     })
 
@@ -202,7 +205,7 @@ test(
     // Get new message IDs (they may be re-generated on replay, so we re-query)
     const msgIdsAfterReplay = await page.evaluate(() => {
       const msgs = Array.from(document.querySelectorAll('[data-message-id]'))
-        .filter((el) => !el.classList.contains('flex-row-reverse'))
+        .filter((el) => !el.classList.contains('flex-row-reverse') && el.getAttribute('data-message-role') !== 'system')
       return msgs.map((el) => el.getAttribute('data-message-id'))
     })
 
