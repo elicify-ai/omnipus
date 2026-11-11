@@ -25,8 +25,8 @@ import { createHistoryFrameOwner } from './history-replay'
 import { applyHistoryPageToBucket } from './history-merge'
 import { advanceHistoryEntryGenerations } from '@/lib/historyEntryReads'
 import { mergeRecordedSessionTokens } from './session-usage'
-import { currentHistoryState, liveProjectionBucket, withLiveHistoryBucket } from './history-live'
-import { armStopGuard, shownCheckpointFor, type CancelShown } from './stop-checkpoint'
+import { currentHistoryState, withLiveHistoryBucket } from './history-live'
+import { armStopGuard, interruptStreamingInOtherBucket, shownCheckpointFor, type CancelShown } from './stop-checkpoint'
 
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
 // On threshold (5), promotes to a user-visible warning toast.
@@ -631,43 +631,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // If no streaming assistant message was found in the active bucket, search
       // all buckets. This handles scenarios where a message was appended to a
       // different bucket before the active session was set (e.g. in test scaffolding).
-      const state = get()
-      const activeBucket = sid ? state.sessionsById[sid] : undefined
-      const hasInterruptedInActive = activeBucket && getMessages(liveProjectionBucket(activeBucket)).some(
-        (m: ChatMessage) => m.role === 'assistant' && m.status === 'interrupted'
-      )
-      if (!hasInterruptedInActive) {
-        for (const [bucketSid, bucket] of Object.entries(state.sessionsById)) {
-          if (bucketSid === sid) continue
-          const lastMsgId = findLastAssistantMessageId(bucket.messageOrder, bucket.messagesById)
-          if (lastMsgId && bucket.messagesById[lastMsgId].isStreaming) {
-            // Update the background bucket AND sync the updated messages to the foreground
-            // flat field so callers reading get().messages can see the change.
-            useChatStore.setState((s) => {
-              const b = s.sessionsById[bucketSid]
-              if (!b) return {}
-              const updatedById = { ...b.messagesById }
-              const target = updatedById[lastMsgId!]
-              if (target && target.role === 'assistant') {
-                // #3: role guard ensures status:'interrupted' is only stamped onto
-                // AssistantMessage where that status is legal per the discriminated union.
-                // The outer loop already restricts lastMsgId to role:'assistant' entries,
-                // so this guard is defence-in-depth against future refactors that could
-                // break that invariant.
-                updatedById[lastMsgId!] = { ...target, isStreaming: false, status: 'interrupted', pendingTextBoundary: false } as ChatMessage
-              }
-              const updated: SessionChatState = { ...b, messagesById: updatedById }
-              const updatedSessions = { ...s.sessionsById, [bucketSid]: updated }
-              // Propagate to flat foreground so observers see the interrupted message.
-              return {
-                sessionsById: updatedSessions,
-                messages: getMessages(updated),
-              }
-            })
-            break
-          }
-        }
-      }
+      interruptStreamingInOtherBucket(get(), sid, useChatStore.setState)
       // This turn is over (interrupted) — send the next drained message, if any.
       maybeDrainNext()
       return shown

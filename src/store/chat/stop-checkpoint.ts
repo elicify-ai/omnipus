@@ -14,9 +14,12 @@
 // inserts between two wire messages of one bubble is not wire text and is
 // never counted.
 
+import type { StoreApi } from 'zustand'
 import type { CancelFrame, TokenFrame } from '@/lib/api/generated/asyncapi-types'
+import { liveProjectionBucket } from './history-live'
+import { findLastAssistantMessageId, getMessages } from './messages'
 import { pendingCancelAckSids } from './runtime-state'
-import type { ChatMessage, SessionChatState } from './types'
+import type { ChatMessage, ChatStore, SessionChatState } from './types'
 
 export type CancelShown = NonNullable<CancelFrame['shown']>
 
@@ -129,4 +132,55 @@ export function isTokenAfterStop(sid: string, frame: TokenFrame): boolean {
   if (!guard) return false
   if (guard.kind === 'placeholder') return true
   return frame.turn_id === guard.turnId
+}
+
+// ── Stop's cross-bucket fallback (store.ts::markLastMessageInterrupted) ─────
+
+/**
+ * For a Stop on the active session only: when the active bucket holds no
+ * interrupted assistant message, interrupt the streaming last assistant
+ * message of the first other bucket that has one. This covers a message that
+ * was appended to a different bucket before the active session was set.
+ */
+export function interruptStreamingInOtherBucket(
+  state: ChatStore,
+  sid: string | null,
+  setState: StoreApi<ChatStore>['setState'],
+): void {
+  const activeBucket = sid ? state.sessionsById[sid] : undefined
+  const hasInterruptedInActive = activeBucket && getMessages(liveProjectionBucket(activeBucket)).some(
+    (m: ChatMessage) => m.role === 'assistant' && m.status === 'interrupted'
+  )
+  if (!hasInterruptedInActive) {
+    for (const [bucketSid, bucket] of Object.entries(state.sessionsById)) {
+      if (bucketSid === sid) continue
+      const lastMsgId = findLastAssistantMessageId(bucket.messageOrder, bucket.messagesById)
+      if (lastMsgId && bucket.messagesById[lastMsgId].isStreaming) {
+        // Update the background bucket AND sync the updated messages to the foreground
+        // flat field so callers reading get().messages can see the change.
+        setState((s) => {
+          const b = s.sessionsById[bucketSid]
+          if (!b) return {}
+          const updatedById = { ...b.messagesById }
+          const target = updatedById[lastMsgId!]
+          if (target && target.role === 'assistant') {
+            // #3: role guard ensures status:'interrupted' is only stamped onto
+            // AssistantMessage where that status is legal per the discriminated union.
+            // The outer loop already restricts lastMsgId to role:'assistant' entries,
+            // so this guard is defence-in-depth against future refactors that could
+            // break that invariant.
+            updatedById[lastMsgId!] = { ...target, isStreaming: false, status: 'interrupted', pendingTextBoundary: false } as ChatMessage
+          }
+          const updated: SessionChatState = { ...b, messagesById: updatedById }
+          const updatedSessions = { ...s.sessionsById, [bucketSid]: updated }
+          // Propagate to flat foreground so observers see the interrupted message.
+          return {
+            sessionsById: updatedSessions,
+            messages: getMessages(updated),
+          }
+        })
+        break
+      }
+    }
+  }
 }
