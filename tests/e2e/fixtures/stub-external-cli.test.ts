@@ -9,6 +9,21 @@ import type { Page } from '@playwright/test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { saveStubCliProgram } from './stub-external-cli'
 
+// The helper sends POST /reload with the stored admin bearer through Node
+// fetch (reload-bearer.ts), not through the page's request client, so the
+// simulated gateway is wired in at that module boundary. The bearer value is
+// a fixed unit-test string and is asserted on every call.
+const reloadHook = vi.hoisted(() => ({
+  handle: undefined as undefined | ((url: string, token: string) => Promise<{ ok: boolean; status: number; text: string }>),
+}))
+vi.mock('./reload-bearer', () => ({
+  readReloadBearer: () => 'unit-bearer',
+  postReloadWithBearer: async (baseURL: string, token: string) => {
+    if (!reloadHook.handle) throw new Error('unit test: no simulated gateway installed')
+    return reloadHook.handle(new URL('/reload', baseURL).toString(), token)
+  },
+}))
+
 let home: string
 const originalConfig = { gateway: { dev_mode_bypass: true }, untouched: 'keep this key' }
 
@@ -62,8 +77,9 @@ function gateway(options: {
   let readyAt = 0
   let notifyOffProbe: (() => void) | undefined
   const firstOffProbe = new Promise<void>((resolve) => { notifyOffProbe = resolve })
-  const post = vi.fn(async (url: string) => {
+  const post = vi.fn(async (url: string, token: string) => {
     expect(new URL(url).pathname).toBe('/reload')
+    expect(token).toBe('unit-bearer')
     const value = readBypass()
     events.push(`reload:${value}`)
     const ordinal = post.mock.calls.length
@@ -89,8 +105,12 @@ function gateway(options: {
     // Fake Settings storage echoes the submitted view, just like the gateway.
     return response(200, JSON.parse(request.data) as unknown)
   })
+  reloadHook.handle = async (url, token) => {
+    const res = await post(url, token)
+    return { ok: res.ok(), status: res.status(), text: await res.text() }
+  }
   const page = {
-    request: { post, get, fetch: put },
+    request: { get, fetch: put },
     context: () => ({ cookies: async () => [{ name: 'csrf', value: 'unit-csrf' }] }),
   } as unknown as Page
   return { page, events, post, get, put, firstOffProbe }
