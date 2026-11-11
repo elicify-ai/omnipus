@@ -115,3 +115,137 @@ describe('#1775 stopped turn: live and reload read the same', () => {
     expect(old.findIndex(r => r.text.includes('stopped'))).toBeLessThan(old.findIndex(r => r.text.startsWith('The three')))
   })
 })
+
+// #1789: a reload inside the slow-write window. History is read before the
+// engine has saved the notice, so the page ends at the partial reply; the live
+// stop frame then renders the notice; the saved notice arrives from history
+// afterwards. The live frame carries no entry id, so the two must still merge.
+describe('#1789 stop notice is shown once when history catches up after the live frame', () => {
+  it('control: a history page that catches up after the live error frame already merges (passes without the #1789 fix)', async () => {
+    seedCanonicalSession(SID, 'jim', WORKSPACE)
+    const feed = (f: Record<string, unknown>) => useChatStore.getState().handleFrame({ session_id: SID, ...f } as never)
+    const rows = [
+      entry(1, { id: 'u1', role: 'user', content: 'Write a story.', client_message_id: 'u1', agent_id: 'jim' }),
+      entry(2, { id: 'a1', role: 'assistant', content: 'Once upon a time', agent_id: 'jim', turn_id: 'jim-turn-1', truncated: true, truncation_reason: 'cancelled' }),
+    ]
+    reset()
+    act(() => { useSessionStore.getState().setActiveSession(SID, 'jim') })
+    await act(async () => { await reopenFixtureHistory(useChatStore, SID, page(rows, { sessionId: SID, rows: 2 })) })
+    const frame: ErrorFrame = { type: 'error', session_id: SID, message: STOP_COPY,
+      payload: { llm_error: { code: 'turn_canceled', message: STOP_COPY, retryable: true } } }
+    act(() => { feed(frame as unknown as Record<string, unknown>) })
+    const mid = shape()
+    expect(mid.filter(r => r.text.includes('stopped'))).toHaveLength(1)
+    const full = [...rows,
+      entry(3, { id: 'sys1', type: 'system', role: undefined, content: STOP_COPY, status: 'error', agent_id: 'jim' } as never),
+      entry(4, { id: 'tc1', type: 'turn_canceled', role: undefined, content: undefined, agent_id: '', turn_id: 'jim-turn-1' } as never)]
+    await act(async () => { await reopenFixtureHistory(useChatStore, SID, page(full, { sessionId: SID, rows: 4 })) })
+    const notices = shape().filter(r => r.text.includes('stopped'))
+    expect(notices).toHaveLength(1)
+  })
+})
+
+describe('#1789 replay of the saved notice after the live frame', () => {
+  it('keeps one notice row when replay_error (with entry_id) follows the live error frame', async () => {
+    seedCanonicalSession(SID, 'jim', WORKSPACE)
+    const feed = (f: Record<string, unknown>) => useChatStore.getState().handleFrame({ session_id: SID, ...f } as never)
+    reset()
+    act(() => { useSessionStore.getState().setActiveSession(SID, 'jim') })
+    await act(async () => { await reopenFixtureHistory(useChatStore, SID, page([
+      entry(1, { id: 'u1', role: 'user', content: 'Write a story.', client_message_id: 'u1', agent_id: 'jim' }),
+      entry(2, { id: 'a1', role: 'assistant', content: 'Once upon a time', agent_id: 'jim', turn_id: 'jim-turn-1', truncated: true, truncation_reason: 'cancelled' }),
+    ], { sessionId: SID, rows: 2 })) })
+    act(() => {
+      feed({ type: 'error', message: STOP_COPY, payload: { llm_error: { code: 'turn_canceled', message: STOP_COPY, retryable: true } } })
+    })
+    expect(shape().filter(r => r.text.includes('stopped'))).toHaveLength(1)
+    act(() => {
+      feed({ type: 'replay_error', entry_id: 'sys1', timestamp: new Date().toISOString(), message: STOP_COPY, payload: { llm_error: { code: 'turn_canceled', message: STOP_COPY, retryable: true } } })
+    })
+    expect(shape().filter(r => r.text.includes('stopped'))).toHaveLength(1)
+    const [notice] = getMessages(useChatStore.getState().sessionsById[SID]).filter(m => String(m.content).includes('stopped'))
+    expect(notice.errorEntryId).toBe('sys1')
+    // The same saved entry again changes nothing.
+    act(() => { feed({ type: 'replay_error', entry_id: 'sys1', timestamp: new Date().toISOString(), message: STOP_COPY, payload: { llm_error: { code: 'turn_canceled', message: STOP_COPY, retryable: true } } }) })
+    expect(shape().filter(r => r.text.includes('stopped'))).toHaveLength(1)
+    // An OLDER saved stop with its own id is a different event and stays a row.
+    act(() => { feed({ type: 'replay_error', entry_id: 'sys0', timestamp: new Date(Date.now() - 600_000).toISOString(), message: STOP_COPY, payload: { llm_error: { code: 'turn_canceled', message: STOP_COPY, retryable: true } } }) })
+    expect(shape().filter(r => r.text.includes('stopped'))).toHaveLength(2)
+  })
+})
+
+// #1789 negative cases, each from a fresh state BEFORE adoption, so each guard
+// is tested on its own: a replayed error that is not the same event must stay
+// its own row and must not take the live bubble's identity.
+describe('#1789 adoption guards', () => {
+  const llm = { llm_error: { code: 'turn_canceled', message: STOP_COPY, retryable: true } }
+  async function liveStop(opts: { agent?: string; prior?: boolean } = {}) {
+    seedCanonicalSession(SID, 'jim', WORKSPACE)
+    reset()
+    act(() => { useSessionStore.getState().setActiveSession(SID, 'jim') })
+    const rows = [entry(1, { id: 'u1', role: 'user', content: 'Go.', client_message_id: 'u1', agent_id: 'jim' })]
+    if (opts.prior) rows.push(entry(2, { id: 'a1', role: 'assistant', content: 'Hi', agent_id: 'jim', turn_id: 't1' }))
+    await act(async () => { await reopenFixtureHistory(useChatStore, SID, page(rows, { sessionId: SID, rows: rows.length })) })
+    act(() => { useChatStore.getState().handleFrame({ type: 'error', session_id: SID, message: STOP_COPY, payload: llm } as never) })
+    const live = getMessages(useChatStore.getState().sessionsById[SID]).filter(m => String(m.content).includes('stopped'))
+    expect(live).toHaveLength(1)
+    return live[0]
+  }
+  const replay = (over: Record<string, unknown>) => act(() => {
+    useChatStore.getState().handleFrame({ type: 'replay_error', session_id: SID, entry_id: 'old1', timestamp: new Date().toISOString(),
+      message: STOP_COPY, payload: llm, ...over } as never)
+  })
+  const notices = () => getMessages(useChatStore.getState().sessionsById[SID]).filter(m => String(m.content).includes('stopped'))
+
+  it('does not adopt a replay from much earlier', async () => {
+    const live = await liveStop()
+    replay({ timestamp: new Date(Date.now() - 600_000).toISOString() })
+    expect(notices()).toHaveLength(2)
+    expect(notices().find(m => m.id === live.id)?.errorEntryId).toBeUndefined()
+  })
+  it('does not adopt a replay from another agent', async () => {
+    const live = await liveStop()
+    // The live bubble carries no agent id (real path); the session's active agent (jim) stands in.
+    expect(live.agentId).toBeUndefined()
+    replay({ agent_id: 'mia' })
+    expect(notices()).toHaveLength(2)
+  })
+  it('does not adopt a replay with a different code', async () => {
+    await liveStop()
+    replay({ payload: { llm_error: { code: 'network_error', message: 'net', retryable: true } }, message: 'net' })
+    expect(notices()).toHaveLength(1)
+    const all = getMessages(useChatStore.getState().sessionsById[SID])
+    expect(all.filter(m => m.errorEntryId === 'old1')).toHaveLength(1)
+    expect(notices()[0].errorEntryId).toBeUndefined()
+  })
+  it('does not stamp a live notice from before the last user message', async () => {
+    const live = await liveStop()
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'user_message', session_id: SID, id: 'u2', content: 'Next question.', timestamp: live.timestamp } as never)
+    })
+    const before = getMessages(useChatStore.getState().sessionsById[SID])
+    expect(before.slice(-2).map(m => m.id)).toStrictEqual([live.id, 'u2'])
+    replay({ timestamp: live.timestamp, kind: 'error' })
+    const after = getMessages(useChatStore.getState().sessionsById[SID])
+    expect(after.find(m => m.id === live.id)).toMatchObject({ content: STOP_COPY })
+    expect(after.find(m => m.id === live.id)?.errorEntryId).toBeUndefined()
+    expect(after.filter(m => m.errorEntryId === 'old1')).toHaveLength(1)
+  })
+  it('uses the session owner, not the foreground agent, for a background session', async () => {
+    seedCanonicalSession(SID, 'jim', WORKSPACE)
+    const feed = (f: Record<string, unknown>) => useChatStore.getState().handleFrame({ session_id: SID, ...f } as never)
+    act(() => {
+      useChatStore.getState().sendMessage('Start.', { clientMessageId: 'u1' })
+      feed({ type: 'token', agent_id: 'jim', content: 'Working', message_id: 'm1', turn_id: 'jim-turn-1', seq: 1 })
+    })
+    act(() => { useChatStore.getState().cancelStream() })
+    act(() => { feed({ type: 'error', message: STOP_COPY, payload: llm }); feed({ type: 'done' }) })
+    // The user moves to another agent's chat; SID is now a background session.
+    act(() => { useSessionStore.setState({ activeAgentId: 'mia' } as never) })
+    replay({ agent_id: 'mia' })
+    expect(notices()).toHaveLength(2)
+    replay({ agent_id: 'jim', entry_id: 'jim-saved' })
+    expect(notices().filter(m => m.errorEntryId === 'jim-saved')).toHaveLength(1)
+    expect(notices()).toHaveLength(2)
+  })
+})
