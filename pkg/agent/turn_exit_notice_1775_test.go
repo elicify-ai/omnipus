@@ -154,7 +154,8 @@ func TestStoppedTurn_NoticeSavedOnceWithoutPartial(t *testing.T) {
 // the notice and marker saved 3 s after the partial answer.
 func TestStoppedTurn_QueueingNoticeDoesNotWaitForTurnLock(t *testing.T) {
 	t.Parallel()
-	_, ts, _, _ := stoppedTurnFixture(t)
+	al, ts, _, _ := stoppedTurnFixture(t)
+	_ = al
 
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
