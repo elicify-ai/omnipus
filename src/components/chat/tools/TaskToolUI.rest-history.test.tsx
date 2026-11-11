@@ -41,39 +41,13 @@
 // appears only when workspace_id is present (Q2 C). Every row above the last
 // describe carries workspace_id (TASK_ARGS) and keeps its workspace target.
 
-import { render, screen, within } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { screen, within } from '@testing-library/react'
+import { renderWithTaskRouter } from '../../../../tests/task-tool-card/router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DelegationFailure } from '@/lib/api/generated/asyncapi-types'
 import type { ToolCall as WireToolCall } from '@/lib/api/generated/openapi-types'
 import { SID, entry, expectValidPage, page, pos } from '../../../../tests/chat-history-paging/fixtures'
 import { renderHistoricalToolCall } from './HistoricalToolCallBlock'
-
-// Same Link shim as the live-wiring file: the "Open tasks" link needs a router
-// the unit mount does not have, so it renders as an <a> whose href is the
-// route with its params and search folded in.
-vi.mock('@tanstack/react-router', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@tanstack/react-router')>()
-  return {
-    ...original,
-    Link: ({ to, params, search, children, ...rest }: {
-      to?: unknown
-      params?: Record<string, unknown>
-      search?: Record<string, unknown>
-      children?: ReactNode
-    } & Record<string, unknown>) => {
-      let href = typeof to === 'string' ? to : ''
-      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
-      const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      return (
-        <a href={href + qs} {...rest}>
-          {children}
-        </a>
-      )
-    },
-  }
-})
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn())
@@ -129,7 +103,7 @@ function renderSaved(tc: SavedTc) {
     goalRecordEmpty: false,
     liteMode: false,
   })
-  return render(<>{node}</>)
+  return renderWithTaskRouter(<>{node}</>)
 }
 
 const NO_REASON_RE = /no reason was given/i
@@ -152,13 +126,13 @@ function expectKnownReasonFailure(verb: string, reason: string): void {
 describe('R2-1 — a saved failed task call loaded through the REST adapter keeps the server reason', () => {
   it('update_task: wire status "error" + error "task not found: task_99" + no result -> D8 sentence and the Open tasks link', async () => {
     const tc = await loadThroughRest(wireCall('update_task', { error: 'task not found: task_99' }))
-    renderSaved(tc)
+    await renderSaved(tc)
     expectKnownReasonFailure('update', 'task not found: task_99')
   })
 
   it('control: the same call with NO error and NO result still gets the no-reason sentence (D5)', async () => {
     const tc = await loadThroughRest(wireCall('update_task'))
-    renderSaved(tc)
+    await renderSaved(tc)
     const sentence = screen.getByText("I couldn't update the task, and no reason was given. Try again.")
     expect(sentence.closest('[role="alert"]')).not.toBeNull()
     // The instrument tells the two outcomes apart: the D8 framing is absent.
@@ -177,7 +151,7 @@ describe('R2-1 — a saved failed task call loaded through the REST adapter keep
         result: { text: JSON.stringify({ task_id: 'task_99', status: 'inbox', updated_fields: ['title'] }) },
       }),
     )
-    renderSaved(tc)
+    await renderSaved(tc)
     const card = screen.getByTestId('task-tool-card')
     expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe('I updated the task')
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
@@ -197,7 +171,7 @@ describe('R2-1 — a saved failed task call loaded through the REST adapter keep
     ['delete_task', 'delete', 'Task task_99 was already deleted'],
   ])('%s: a stored error is shown after "I couldn\'t %s the task." with the reason unchanged', async (tool, verb, reason) => {
     const tc = await loadThroughRest(wireCall(tool, { error: reason }))
-    renderSaved(tc)
+    await renderSaved(tc)
     expectKnownReasonFailure(verb, reason)
   })
 })
@@ -205,7 +179,7 @@ describe('R2-1 — a saved failed task call loaded through the REST adapter keep
 describe('5a — a reason carried only in a {text} result is still a reason (D5/D8), on the saved path', () => {
   it('update_task: wire status "error", no error field, result { text: "task not found: task_99" } -> D8', async () => {
     const tc = await loadThroughRest(wireCall('update_task', { result: { text: 'task not found: task_99' } }))
-    renderSaved(tc)
+    await renderSaved(tc)
     expectKnownReasonFailure('update', 'task not found: task_99')
   })
 
@@ -215,7 +189,7 @@ describe('5a — a reason carried only in a {text} result is still a reason (D5/
     ['delete_task', 'delete', 'Task task_99 is running and cannot be deleted'],
   ])('%s: a {text}-only reason is framed for the %s action', async (tool, verb, reason) => {
     const tc = await loadThroughRest(wireCall(tool, { result: { text: reason } }))
-    renderSaved(tc)
+    await renderSaved(tc)
     expectKnownReasonFailure(verb, reason)
   })
 })
@@ -233,7 +207,7 @@ describe('D5 — the reason field of a structured delegation_denied failure is a
 
   it('run_task: status "error", no error field, result = the structured failure -> D8 with the denial reason', async () => {
     const tc = await loadThroughRest(wireCall('run_task', { result: { ...DENIAL } }))
-    renderSaved(tc)
+    await renderSaved(tc)
     expectKnownReasonFailure('start', DENIAL.reason)
   })
 })
@@ -292,7 +266,7 @@ describe('Round 5b / Q2 C — a saved task call that names no workspace, on the 
     '$tool: a stored error and no workspace_id -> the alert carries the reason, "Open tasks" links to /tasks, no calendar link',
     async ({ tool, parameters, reason }) => {
       const tc = await loadThroughRest(wireCall(tool, { parameters, error: reason }))
-      renderSaved(tc)
+      await renderSaved(tc)
       expectTasksIndexLinkAndNoCalendar()
       expect(screen.getByRole('alert').textContent ?? '').toContain(reason)
       expect(screen.queryByTestId('tool-call-badge')).toBeNull()
@@ -303,7 +277,7 @@ describe('Round 5b / Q2 C — a saved task call that names no workspace, on the 
     '$tool: no error, no result and no workspace_id -> the D5 sentence, "Open tasks" links to /tasks, no calendar link',
     async ({ tool, parameters, noReason }) => {
       const tc = await loadThroughRest(wireCall(tool, { parameters }))
-      renderSaved(tc)
+      await renderSaved(tc)
       expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(noReason)
       expect(screen.queryByTestId('tool-call-badge')).toBeNull()
       expectTasksIndexLinkAndNoCalendar()
@@ -318,7 +292,7 @@ describe('Round 5b / Q2 C — a saved task call that names no workspace, on the 
       const tc = await loadThroughRest(
         wireCall(tool, { parameters, status: 'success', result: { text: JSON.stringify(payload) } }),
       )
-      renderSaved(tc)
+      await renderSaved(tc)
       const card = screen.getByTestId('task-tool-card')
       const open = within(card).getByTestId('task-tool-link-open')
       expect((open.textContent ?? '').trim()).toBe('Open tasks')
@@ -370,7 +344,7 @@ describe('Round 6 / R3-2 — a saved failed task call that names a workspace off
     '$tool, reason in $carrier: the D8 sentence, then "Open tasks" alone',
     async ({ tool, verb, reason, overrides }) => {
       const tc = await loadThroughRest(wireCall(tool, overrides))
-      renderSaved(tc)
+      await renderSaved(tc)
       expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(`I couldn't ${verb} the task. ${reason}`)
       expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
     },
@@ -378,7 +352,7 @@ describe('Round 6 / R3-2 — a saved failed task call that names a workspace off
 
   it.each(NAMED_WORKSPACE_ROWS)('$tool with no reason: the D5 sentence, then "Open tasks" alone', async ({ tool, verb }) => {
     const tc = await loadThroughRest(wireCall(tool))
-    renderSaved(tc)
+    await renderSaved(tc)
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(
       `I couldn't ${verb} the task, and no reason was given. Try again.`,
     )
@@ -395,7 +369,7 @@ describe('Round 6 / R3-2 — a saved failed task call that names a workspace off
       target_agent_id: 'scout',
     }
     const tc = await loadThroughRest(wireCall('run_task', { result: { ...denial } }))
-    renderSaved(tc)
+    await renderSaved(tc)
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(`I couldn't start the task. ${denial.reason}`)
     expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
   })
@@ -407,7 +381,7 @@ describe('Round 6 / R3-2 — a saved failed task call that names a workspace off
         result: { text: JSON.stringify({ task_id: 'task_99', status: 'inbox' }) },
       }),
     )
-    renderSaved(tc)
+    await renderSaved(tc)
     const card = screen.getByTestId('task-tool-card')
     expect(within(card).getByTestId('task-tool-link-calendar')).toHaveAttribute('href', '/workspaces/ws_1/calendar')
     expect((within(card).getByTestId('task-tool-link-calendar').textContent ?? '').trim()).toBe('Open calendar')

@@ -48,37 +48,10 @@
  * appears only when workspace_id is present (Q2 C).
  */
 
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { describe, it, expect } from 'vitest'
+import { screen, within } from '@testing-library/react'
+import { renderWithTaskRouter } from '../../../../tests/task-tool-card/router'
 import type { ToolCall } from '@/lib/api'
-
-// Same Link shim as the live-wiring file: assert navigation TARGETS without
-// a full router (case (g) parity on replay).
-vi.mock('@tanstack/react-router', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@tanstack/react-router')>()
-  return {
-    ...original,
-    Link: ({ to, params, search, children, ...rest }: {
-      to?: unknown
-      params?: Record<string, unknown>
-      search?: Record<string, unknown>
-      children?: ReactNode
-    } & Record<string, unknown>) => {
-      let href = typeof to === 'string' ? to : ''
-      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(search ?? {}).map(
-        ([k, v]) => [k, String(v)] as [string, string],
-      )
-      const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      return (
-        <a href={href + qs} {...rest}>
-          {children}
-        </a>
-      )
-    },
-  }
-})
 
 import { ToolCallBadge } from '../ToolCallBadge'
 
@@ -145,10 +118,10 @@ function makeTaskCall(overrides: Partial<ToolCallWithId>): ToolCallWithId {
 
 // ── (f) replay renders the same card as live ────────────────────────────────
 describe('case (f) — history replay renders the same readable card', () => {
-  it('a replayed create_task renders the card — not the raw-JSON generic badge', () => {
+  it('a replayed create_task renders the card — not the raw-JSON generic badge', async () => {
     // The persisted shape: every plain-text tool result is stored under the
     // `{ text: "<payload json>" }` envelope and replay forwards it unchanged.
-    render(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
     const card = screen.getByTestId('task-tool-card')
     const schedule = within(card).getByTestId('task-tool-schedule')
     expect(schedule.textContent ?? '').toMatch(/0?9[:.]00/)
@@ -162,15 +135,15 @@ describe('case (f) — history replay renders the same readable card', () => {
     ['envelope shape', { text: RESULT_CREATE }],
     ['live-style JSON string shape', RESULT_CREATE],
     ['already-parsed object shape', JSON.parse(RESULT_CREATE)],
-  ])('renders the card for the %s result shape (same card as live)', (_name, result) => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ result })} />)
+  ])('renders the card for the %s result shape (same card as live)', async (_name, result) => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ result })} />)
     const card = screen.getByTestId('task-tool-card')
     expect(within(card).getByTestId('task-tool-schedule')).toBeTruthy()
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
-  it('replay card links carry the same route-truth targets as live', () => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
+  it('replay card links carry the same route-truth targets as live', async () => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
     const card = screen.getByTestId('task-tool-card')
     expect(within(card).getByTestId('task-tool-link-open')).toHaveAttribute(
       'href',
@@ -186,7 +159,7 @@ describe('case (f) — history replay renders the same readable card', () => {
     expect((within(card).getByTestId('task-tool-link-calendar').textContent ?? '').trim()).toBe('Open calendar')
   })
 
-  it('a replayed once trigger shows the VIEWER-local time, not the trigger-zone time (C1 B)', () => {
+  it('a replayed once trigger shows the VIEWER-local time, not the trigger-zone time (C1 B)', async () => {
     // C1 B (founder 2026-11-07 11:16Z) on the replay path too: the detail
     // panel's display (taskFormFields.ts:135) formats in the viewer's zone;
     // with the pinned viewer UTC the fixture instant (09:00 Europe/Berlin)
@@ -194,7 +167,7 @@ describe('case (f) — history replay renders the same readable card', () => {
     // (src/lib/calendar/eventMapping.test.ts:289–297; vite.config.ts:264),
     // not a runtime TZ override.
     expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
-    render(
+    await renderWithTaskRouter(
       <ToolCallBadge
         toolCall={makeTaskCall({
           params: { ...BASE_ARGS, trigger: ONCE_TRIGGER },
@@ -212,8 +185,8 @@ describe('case (f) — history replay renders the same readable card', () => {
     expect(schedule.textContent ?? '').not.toMatch(/(^|\D)0?9[:.]00/)
   })
 
-  it('a replayed refused create shows the refusal — never a success card ((h) parity)', () => {
-    render(
+  it('a replayed refused create shows the refusal — never a success card ((h) parity)', async () => {
+    await renderWithTaskRouter(
       <ToolCallBadge
         toolCall={makeTaskCall({ status: 'error', error: FOREIGN_REFUSAL, result: undefined })}
       />,
@@ -234,8 +207,8 @@ describe('case (f) — history replay renders the same readable card', () => {
     expect(screen.queryByTestId('task-tool-verb')).toBeNull()
   })
 
-  it('a replayed update keeps the saved-but-not-active warning ((d) parity)', () => {
-    render(
+  it('a replayed update keeps the saved-but-not-active warning ((d) parity)', async () => {
+    await renderWithTaskRouter(
       <ToolCallBadge
         toolCall={makeTaskCall({
           tool: 'update_task',
@@ -254,10 +227,10 @@ describe('case (f) — history replay renders the same readable card', () => {
     expect(within(card).getByTestId('task-tool-verb')).toBeTruthy()
   })
 
-  it("a replayed create's heading is exactly the scheduled-create heading (D3 parity)", () => {
+  it("a replayed create's heading is exactly the scheduled-create heading (D3 parity)", async () => {
     // Round 4 / D3 on the replay path: same exact heading as live for a
     // create with a schedule. RED today: "Task scheduled".
-    render(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
     const card = screen.getByTestId('task-tool-card')
     expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe('I scheduled the task')
   })
@@ -324,22 +297,22 @@ describe('Round 5 / D8 — a replayed failed call with a known reason', () => {
     expect(screen.queryByText(SUCCESS_HEADING_RE)).toBeNull()
   }
 
-  it.each(ROWS)('$tool: a stored error field is shown after "I couldn\'t $verb the task."', ({ tool, verb, params, reason, href }) => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', error: reason, result: undefined })} />)
+  it.each(ROWS)('$tool: a stored error field is shown after "I couldn\'t $verb the task."', async ({ tool, verb, params, reason, href }) => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', error: reason, result: undefined })} />)
     expectKnownReasonFailure(verb, reason, href)
   })
 
-  it.each(ROWS)('5a, $tool: a reason carried only in a {text} result gets the same framing', ({ tool, verb, params, reason, href }) => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: { text: reason } })} />)
+  it.each(ROWS)('5a, $tool: a reason carried only in a {text} result gets the same framing', async ({ tool, verb, params, reason, href }) => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: { text: reason } })} />)
     expectKnownReasonFailure(verb, reason, href)
   })
 
-  it.each(ROWS)('$tool: a reason carried as a string result gets the same framing', ({ tool, verb, params, reason, href }) => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: reason })} />)
+  it.each(ROWS)('$tool: a reason carried as a string result gets the same framing', async ({ tool, verb, params, reason, href }) => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: reason })} />)
     expectKnownReasonFailure(verb, reason, href)
   })
 
-  it('D5: the reason field of a structured delegation_denied failure counts as a reason', () => {
+  it('D5: the reason field of a structured delegation_denied failure counts as a reason', async () => {
     // Shaped by the generated DelegationFailure contract (asyncapi.yaml) and
     // pkg/tools/result.go::DelegationDeniedResult — not by the card's code.
     const denial = {
@@ -349,7 +322,7 @@ describe('Round 5 / D8 — a replayed failed call with a known reason', () => {
       tool: 'run_task',
       target_agent_id: 'scout',
     }
-    render(
+    await renderWithTaskRouter(
       <ToolCallBadge
         toolCall={makeTaskCall({
           tool: 'run_task',
@@ -364,8 +337,8 @@ describe('Round 5 / D8 — a replayed failed call with a known reason', () => {
 
   // Round 5b / Q1 A: the D5 control ALSO asserts the "Open tasks" link (added in
   // place; the sentence assertions are unchanged). ARGS_UPDATE names workspace_id.
-  it('D5 control: with no error and no result the no-reason sentence is still shown (the checks above can tell the two apart)', () => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ tool: 'update_task', params: ARGS_UPDATE, status: 'error', result: undefined })} />)
+  it('D5 control: with no error and no result the no-reason sentence is still shown (the checks above can tell the two apart)', async () => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool: 'update_task', params: ARGS_UPDATE, status: 'error', result: undefined })} />)
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(
       "I couldn't update the task, and no reason was given. Try again.",
     )
@@ -433,8 +406,8 @@ describe('Round 5b / Q2 C — a replayed call that names no workspace', () => {
 
   it.each(NO_WORKSPACE_ROWS)(
     '$tool: a failed call with a stored reason and no workspace_id links "Open tasks" to /tasks and has no calendar link',
-    ({ tool, params, reason }) => {
-      render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', error: reason, result: undefined })} />)
+    async ({ tool, params, reason }) => {
+      await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', error: reason, result: undefined })} />)
       expect(screen.getByRole('alert').textContent ?? '').toContain(reason)
       expect(screen.queryByTestId('tool-call-badge')).toBeNull()
       expectTasksIndexLinkAndNoCalendar()
@@ -443,8 +416,8 @@ describe('Round 5b / Q2 C — a replayed call that names no workspace', () => {
 
   it.each(NO_WORKSPACE_ROWS)(
     '$tool: a failed call with no reason and no workspace_id keeps the D5 sentence, links "Open tasks" to /tasks and has no calendar link',
-    ({ tool, params, noReason }) => {
-      render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: undefined })} />)
+    async ({ tool, params, noReason }) => {
+      await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: undefined })} />)
       expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(noReason)
       expect(screen.queryByTestId('tool-call-badge')).toBeNull()
       expectTasksIndexLinkAndNoCalendar()
@@ -453,8 +426,8 @@ describe('Round 5b / Q2 C — a replayed call that names no workspace', () => {
 
   it.each(NO_WORKSPACE_ROWS)(
     '$tool: a successful call with no workspace_id links "Open tasks" to /tasks and has no calendar link',
-    ({ tool, params, result }) => {
-      render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, result: { text: result } })} />)
+    async ({ tool, params, result }) => {
+      await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool, params, result: { text: result } })} />)
       const card = screen.getByTestId('task-tool-card')
       const open = within(card).getByTestId('task-tool-link-open')
       expect((open.textContent ?? '').trim()).toBe('Open tasks')
@@ -504,22 +477,22 @@ describe('Round 6 / R3-2 — a replayed failed call that names a workspace offer
 
   it.each(WITH_REASON_ROWS)(
     '$tool, reason in $carrier: the D8 sentence, then "Open tasks" alone',
-    ({ tool, verb, params, reason, overrides }) => {
-      render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', ...overrides })} />)
+    async ({ tool, verb, params, reason, overrides }) => {
+      await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', ...overrides })} />)
       expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(`I couldn't ${verb} the task. ${reason}`)
       expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
     },
   )
 
-  it.each(NAMED_WORKSPACE_ROWS)('$tool with no reason: the D5 sentence, then "Open tasks" alone', ({ tool, verb, params }) => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: undefined })} />)
+  it.each(NAMED_WORKSPACE_ROWS)('$tool with no reason: the D5 sentence, then "Open tasks" alone', async ({ tool, verb, params }) => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: undefined })} />)
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(
       `I couldn't ${verb} the task, and no reason was given. Try again.`,
     )
     expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
   })
 
-  it('a structured delegation_denied failure that names a workspace offers "Open tasks" alone', () => {
+  it('a structured delegation_denied failure that names a workspace offers "Open tasks" alone', async () => {
     // Shaped by the generated DelegationFailure contract (asyncapi.yaml), as in the D5 row above.
     const denial = {
       error: 'delegation_denied',
@@ -528,7 +501,7 @@ describe('Round 6 / R3-2 — a replayed failed call that names a workspace offer
       tool: 'run_task',
       target_agent_id: 'scout',
     }
-    render(
+    await renderWithTaskRouter(
       <ToolCallBadge
         toolCall={makeTaskCall({ tool: 'run_task', params: { task_id: 'task_1', workspace_id: 'ws_1' }, status: 'error', result: denial })}
       />,
@@ -537,8 +510,8 @@ describe('Round 6 / R3-2 — a replayed failed call that names a workspace offer
     expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
   })
 
-  it('control: the SAME create call, once it succeeded, does offer "Open calendar" — the rows above can see the link', () => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
+  it('control: the SAME create call, once it succeeded, does offer "Open calendar" — the rows above can see the link', async () => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
     const card = screen.getByTestId('task-tool-card')
     expect(within(card).getByTestId('task-tool-link-calendar')).toHaveAttribute('href', '/workspaces/ws_1/calendar')
     expect((within(card).getByTestId('task-tool-link-calendar').textContent ?? '').trim()).toBe('Open calendar')
@@ -584,8 +557,8 @@ describe('Round 6 / R3-3 — a full stop closes every schedule line, saved (repl
     },
   ]
 
-  it.each(SCHEDULE_ROWS)('$label: the replayed card line ends with one full stop', ({ trigger, line }) => {
-    render(<ToolCallBadge toolCall={makeTaskCall({ params: { ...BASE_ARGS, trigger }, result: { text: RESULT_CREATE } })} />)
+  it.each(SCHEDULE_ROWS)('$label: the replayed card line ends with one full stop', async ({ trigger, line }) => {
+    await renderWithTaskRouter(<ToolCallBadge toolCall={makeTaskCall({ params: { ...BASE_ARGS, trigger }, result: { text: RESULT_CREATE } })} />)
     const schedule = (within(screen.getByTestId('task-tool-card')).getByTestId('task-tool-schedule').textContent ?? '').trim()
     // Generic invariant first (a single closing full stop, never none and never two), then the exact line.
     expect(schedule, 'R3-3: one full stop closes the schedule line').toMatch(/[^.]\.$/)

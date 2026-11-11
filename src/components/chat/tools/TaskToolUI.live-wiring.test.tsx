@@ -108,6 +108,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import type { ReactElement, ReactNode } from 'react'
+import { renderWithTaskRouter } from '../../../../tests/task-tool-card/router'
 
 type TaskRenderFn = (props: {
   args: unknown
@@ -133,40 +134,10 @@ vi.mock('@assistant-ui/react', async (importOriginal) => {
   }
 })
 
-// TanStack Router shim: renders Link as a plain <a> whose href is the route
-// pattern with $params interpolated and `search` folded in, so the tests can
-// assert the navigation TARGET (case (g): "assert the href / navigation
-// target from the routes in src/routes") without mounting a full router.
-// Real-router navigation behaviour stays e2e/UAT territory, not a unit test.
-vi.mock('@tanstack/react-router', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@tanstack/react-router')>()
-  return {
-    ...original,
-    Link: ({ to, params, search, children, ...rest }: {
-      to?: unknown
-      params?: Record<string, unknown>
-      search?: Record<string, unknown>
-      children?: ReactNode
-    } & Record<string, unknown>) => {
-      let href = typeof to === 'string' ? to : ''
-      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(search ?? {}).map(
-        ([k, v]) => [k, String(v)] as [string, string],
-      )
-      const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      return (
-        <a href={href + qs} {...rest}>
-          {children}
-        </a>
-      )
-    },
-  }
-})
-
 // Static import — vi.mock intercepts makeAssistantToolUI before this runs, and
 // importing the module executes its body, registering the four task tool UIs.
 // RED TODAY: this import does not resolve — TaskToolUI.tsx does not exist yet.
-import './TaskToolUI'
+import { TaskToolCardBlock } from './TaskToolUI'
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 // 2026-11-09 is a Monday; Berlin is UTC+1 in November, so 09:00 Berlin is
@@ -256,7 +227,7 @@ function renderTaskTool(
 ) {
   const renderFn = captured[tool]
   if (!renderFn) throw new Error(`no live registration captured for "${tool}"`)
-  return render(
+  return renderWithTaskRouter(
     renderFn({ args, result, status: opts?.status ?? COMPLETE, isError: opts?.isError }) as ReactElement,
   )
 }
@@ -273,8 +244,8 @@ describe('task tool live registrations', () => {
 
 // ── (a) recurring trigger: plain language, never raw rule ───────────────────
 describe('case (a) — create_task with a recurring trigger', () => {
-  it('renders the plain-language schedule (weekday, clock time, zone) and never the raw rule text', () => {
-    renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
+  it('renders the plain-language schedule (weekday, clock time, zone) and never the raw rule text', async () => {
+    await renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     const schedule = within(card).getByTestId('task-tool-schedule')
     // Meaning-level assertions: the schedule names the weekday and the
@@ -299,11 +270,11 @@ describe('case (a) — create_task with a recurring trigger', () => {
 
 // ── (b) once trigger: explicit date + VIEWER-local time (C1 B) ─────────────
 describe('case (b) — create_task with a once trigger (C1 B: viewer-local time)', () => {
-  it('shows an explicit date and the VIEWER-local clock time for the instant — never the trigger-zone time, raw epoch ms, or rule text', () => {
+  it('shows an explicit date and the VIEWER-local clock time for the instant — never the trigger-zone time, raw epoch ms, or rule text', async () => {
     // Use the process-start TZ pin, not a runtime TZ override: see
     // src/lib/calendar/eventMapping.test.ts:289–297 and vite.config.ts:264.
     expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
-    renderTaskTool('create_task', ARGS_ONCE, RESULT_CREATE)
+    await renderTaskTool('create_task', ARGS_ONCE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     const schedule = within(card).getByTestId('task-tool-schedule')
     const cardText = card.textContent ?? ''
@@ -338,8 +309,8 @@ describe('case (c) — manual or missing trigger', () => {
   it.each([
     ['manual trigger', { ...BASE_ARGS, trigger: { type: 'manual', config: {} } }],
     ['no trigger key', { ...BASE_ARGS }],
-  ])('renders the card with no schedule line and no invented schedule (%s)', (_name, args) => {
-    renderTaskTool('create_task', args, RESULT_CREATE)
+  ])('renders the card with no schedule line and no invented schedule (%s)', async (_name, args) => {
+    await renderTaskTool('create_task', args, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     expect(within(card).queryByTestId('task-tool-schedule')).toBeNull()
     const cardText = card.textContent ?? ''
@@ -359,8 +330,8 @@ describe('case (c) — manual or missing trigger', () => {
 
 // ── (d) schedule_sync_warning: saved but not active ─────────────────────────
 describe('case (d) — result carrying schedule_sync_warning', () => {
-  it('shows the saved-but-not-active warning and stays a success card', () => {
-    renderTaskTool('update_task', ARGS_UPDATE, RESULT_UPDATE_WARN)
+  it('shows the saved-but-not-active warning and stays a success card', async () => {
+    await renderTaskTool('update_task', ARGS_UPDATE, RESULT_UPDATE_WARN)
     const card = screen.getByTestId('task-tool-card')
     // Round 4 / D4: the warning text is pinned EXACTLY, live and replay, so
     // an opposite-meaning text ("everything is active — no action needed",
@@ -387,19 +358,19 @@ describe('case (e) — malformed trigger falls back to the generic tool chip', (
     ['trigger is a string, not an object', { ...BASE_ARGS, trigger: 'every monday' }],
     ['trigger type outside the wire enum', { ...BASE_ARGS, trigger: { type: 'weekly', config: {} } }],
     ['recurring rrule is a number', { ...BASE_ARGS, trigger: { type: 'recurring', config: { rrule: 42 } } }],
-  ])('renders the generic chip, no card, no invented schedule (%s)', (_name, args) => {
-    renderTaskTool('create_task', args, RESULT_CREATE)
+  ])('renders the generic chip, no card, no invented schedule (%s)', async (_name, args) => {
+    await renderTaskTool('create_task', args, RESULT_CREATE)
     // The generic chip is the fallback surface (no crash = render returned).
     expect(screen.getByTestId('tool-call-badge')).toBeTruthy()
     expect(screen.queryByTestId('task-tool-card')).toBeNull()
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
   })
 
-  it('a type-valid but schedule-less recurring trigger invents no concrete schedule', () => {
+  it('a type-valid but schedule-less recurring trigger invents no concrete schedule', async () => {
     // Degenerate but schema-valid ({type:'recurring'} with no rule fields
     // passes the partial config schema): whatever surface renders, it must
     // not claim a concrete time or weekday it cannot know.
-    renderTaskTool('create_task', { ...BASE_ARGS, trigger: { type: 'recurring', config: {} } }, RESULT_CREATE)
+    await renderTaskTool('create_task', { ...BASE_ARGS, trigger: { type: 'recurring', config: {} } }, RESULT_CREATE)
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
     const bodyText = document.body.textContent ?? ''
     expect(bodyText).not.toMatch(/0?[0-9]{1,2}[:.][0-9]{2}/)
@@ -409,8 +380,21 @@ describe('case (e) — malformed trigger falls back to the generic tool chip', (
 
 // ── (g) links: route-truth targets, named, keyboard-reachable ───────────────
 describe('case (g) — card links to the task and the workspace calendar', () => {
-  it('the open-task link targets the tasks-panel route', () => {
-    renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
+  it('without a router, renders the heading and title without throwing or rendering task links', () => {
+    // R2: the same named-workspace input gets both links in the router-present cases below.
+    expect(() => render(
+      <TaskToolCardBlock toolName="create_task" args={ARGS_CREATE} result={RESULT_CREATE} status={COMPLETE} />,
+    )).not.toThrow()
+    const card = screen.getByTestId('task-tool-card')
+    expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe('I scheduled the task')
+    expect(within(card).getByText('Weekly report', { exact: true })).toBeVisible()
+    expect(within(card).queryByTestId('task-tool-link-open')).toBeNull()
+    expect(within(card).queryByTestId('task-tool-link-calendar')).toBeNull()
+    expect(within(card).queryAllByRole('link')).toHaveLength(0)
+  })
+
+  it('the open-task link targets the tasks-panel route', async () => {
+    await renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     const open = within(card).getByTestId('task-tool-link-open')
     // Route truth: /workspaces/$workspaceId/chat?panel=tasks is the tasks
@@ -418,8 +402,8 @@ describe('case (g) — card links to the task and the workspace calendar', () =>
     expect(open).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
   })
 
-  it('the calendar link targets the workspace calendar route', () => {
-    renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
+  it('the calendar link targets the workspace calendar route', async () => {
+    await renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     const cal = within(card).getByTestId('task-tool-link-calendar')
     // Route truth: workspaces.$workspaceId.calendar.tsx; precedent link in
@@ -427,8 +411,8 @@ describe('case (g) — card links to the task and the workspace calendar', () =>
     expect(cal).toHaveAttribute('href', '/workspaces/ws_1/calendar')
   })
 
-  it('both links have accessible names and stay keyboard-reachable', () => {
-    renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
+  it('both links have accessible names and stay keyboard-reachable', async () => {
+    await renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     for (const id of ['task-tool-link-open', 'task-tool-link-calendar']) {
       const link = within(card).getByTestId(id)
@@ -452,10 +436,10 @@ describe('case (g) — card links to the task and the workspace calendar', () =>
 
 // ── (h) failure and refusal: never a success card ───────────────────────────
 describe('case (h) — failed or refused call', () => {
-  it('a refused create shows the refusal text and no success-card content', () => {
+  it('a refused create shows the refusal text and no success-card content', async () => {
     // r17 §7.10 foreign-trigger refusal — the tool's refusal sentence is the
     // call's outcome; isError marks it as a failure on the live path.
-    renderTaskTool('create_task', ARGS_CREATE, FOREIGN_REFUSAL, { isError: true })
+    await renderTaskTool('create_task', ARGS_CREATE, FOREIGN_REFUSAL, { isError: true })
     // The refusal itself is visible (its distinctive spec tail).
     expect(screen.getByText(/Nothing was created/)).toBeTruthy()
     // Round 4 / D7: the failure carries the catalogued error semantics —
@@ -494,8 +478,8 @@ describe('case (h) — failed or refused call', () => {
     ['update_task', ARGS_UPDATE, "I couldn't update the task, and no reason was given. Try again.", WORKSPACE_TASKS_HREF],
     ['run_task', ARGS_RUN, "I couldn't start the task, and no reason was given. Try again.", TASKS_INDEX_HREF],
     ['delete_task', ARGS_DELETE, "I couldn't delete the task, and no reason was given. Try again.", TASKS_INDEX_HREF],
-  ])('a bare %s error names the action and the missing reason, with one way forward', (tool, args, expected, href) => {
-    renderTaskTool(tool, args, undefined, {
+  ])('a bare %s error names the action and the missing reason, with one way forward', async (tool, args, expected, href) => {
+    await renderTaskTool(tool, args, undefined, {
       isError: true,
       status: { type: 'incomplete', reason: 'error' },
     })
@@ -577,28 +561,28 @@ describe('Round 5 / D8 — a failed call with a known reason', () => {
 
   it.each(KNOWN_REASON_ROWS)(
     '$tool: a string result that is a reason is shown after "I couldn\'t $verb the task."',
-    ({ tool, verb, args, reason, href }) => {
-      renderTaskTool(tool, args, reason, { isError: true })
+    async ({ tool, verb, args, reason, href }) => {
+      await renderTaskTool(tool, args, reason, { isError: true })
       expectKnownReasonFailure(verb, reason, href)
     },
   )
 
   it.each(KNOWN_REASON_ROWS)(
     '5a, $tool: a reason carried only in a {text} result gets the same D8 framing',
-    ({ tool, verb, args, reason, href }) => {
-      renderTaskTool(tool, args, { text: reason }, { isError: true })
+    async ({ tool, verb, args, reason, href }) => {
+      await renderTaskTool(tool, args, { text: reason }, { isError: true })
       expectKnownReasonFailure(verb, reason, href)
     },
   )
 
-  it('5a: a {text}-only reason also frames when the part is merely incomplete (status error, no isError)', () => {
-    renderTaskTool('run_task', ARGS_RUN, { text: 'task "task_99" not found' }, {
+  it('5a: a {text}-only reason also frames when the part is merely incomplete (status error, no isError)', async () => {
+    await renderTaskTool('run_task', ARGS_RUN, { text: 'task "task_99" not found' }, {
       status: { type: 'incomplete', reason: 'error' },
     })
     expectKnownReasonFailure('start', 'task "task_99" not found', TASKS_INDEX_HREF)
   })
 
-  it('D5: the reason field of a structured delegation_denied failure counts as a reason', () => {
+  it('D5: the reason field of a structured delegation_denied failure counts as a reason', async () => {
     // Shaped by the generated DelegationFailure contract (asyncapi.yaml) and
     // pkg/tools/result.go::DelegationDeniedResult — not by the card's code.
     const denial = {
@@ -608,22 +592,22 @@ describe('Round 5 / D8 — a failed call with a known reason', () => {
       tool: 'run_task',
       target_agent_id: 'scout',
     }
-    renderTaskTool('run_task', { ...ARGS_RUN, workspace_id: 'ws_1' }, denial, { isError: true })
+    await renderTaskTool('run_task', { ...ARGS_RUN, workspace_id: 'ws_1' }, denial, { isError: true })
     expectKnownReasonFailure('start', denial.reason, WORKSPACE_TASKS_HREF)
   })
 
   // Round 5b / Q1 A: the two D5 controls below ALSO assert the "Open tasks" link
   // (added in place; the sentence assertions are unchanged).
-  it('D5 control: with no reason anywhere the no-reason sentence is still shown (the checks above can tell the two apart)', () => {
-    renderTaskTool('update_task', ARGS_UPDATE, undefined, { isError: true })
+  it('D5 control: with no reason anywhere the no-reason sentence is still shown (the checks above can tell the two apart)', async () => {
+    await renderTaskTool('update_task', ARGS_UPDATE, undefined, { isError: true })
     const alert = screen.getByRole('alert')
     expect((alert.textContent ?? '').trim()).toBe("I couldn't update the task, and no reason was given. Try again.")
     expect(screen.queryByText(/^I couldn't update the task\. /)).toBeNull()
     expect(screen.getByTestId('task-tool-link-open')).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
   })
 
-  it('D5 control: a {text} result that is only whitespace is not a reason — the no-reason sentence is still shown', () => {
-    renderTaskTool('update_task', ARGS_UPDATE, { text: '   ' }, { isError: true })
+  it('D5 control: a {text} result that is only whitespace is not a reason — the no-reason sentence is still shown', async () => {
+    await renderTaskTool('update_task', ARGS_UPDATE, { text: '   ' }, { isError: true })
     const alert = screen.getByRole('alert')
     expect((alert.textContent ?? '').trim()).toBe("I couldn't update the task, and no reason was given. Try again.")
     expect(screen.queryByText(/^I couldn't update the task\. /)).toBeNull()
@@ -688,8 +672,8 @@ describe('Round 5b / Q2 C — a call that names no workspace', () => {
 
   it.each(NO_WORKSPACE_ROWS)(
     '$tool: a failed call with a reason and no workspace_id links "Open tasks" to /tasks and has no calendar link',
-    ({ tool, args, reason }) => {
-      renderTaskTool(tool, args, reason, { isError: true })
+    async ({ tool, args, reason }) => {
+      await renderTaskTool(tool, args, reason, { isError: true })
       expect(screen.getByRole('alert').textContent ?? '').toContain(reason)
       expectTasksIndexLinkAndNoCalendar()
     },
@@ -697,8 +681,8 @@ describe('Round 5b / Q2 C — a call that names no workspace', () => {
 
   it.each(NO_WORKSPACE_ROWS)(
     '$tool: a failed call with no reason and no workspace_id keeps the D5 sentence, links "Open tasks" to /tasks and has no calendar link',
-    ({ tool, args, noReason }) => {
-      renderTaskTool(tool, args, undefined, { isError: true })
+    async ({ tool, args, noReason }) => {
+      await renderTaskTool(tool, args, undefined, { isError: true })
       expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(noReason)
       expectTasksIndexLinkAndNoCalendar()
     },
@@ -712,8 +696,8 @@ describe('Round 5b / Q2 C — a call that names no workspace', () => {
     ['update_task', ARGS_UPDATE_NO_WS, RESULT_UPDATE],
     ['run_task', ARGS_RUN, RESULT_RUN],
     ['delete_task', ARGS_DELETE, RESULT_DELETE],
-  ])('%s: a successful call with no workspace_id links "Open tasks" to /tasks and has no calendar link', (tool, args, result) => {
-    renderTaskTool(tool, args, result)
+  ])('%s: a successful call with no workspace_id links "Open tasks" to /tasks and has no calendar link', async (tool, args, result) => {
+    await renderTaskTool(tool, args, result)
     const card = screen.getByTestId('task-tool-card')
     const open = within(card).getByTestId('task-tool-link-open')
     expect((open.textContent ?? '').trim()).toBe('Open tasks')
@@ -730,8 +714,8 @@ describe('Round 5b / Q2 C — a call that names no workspace', () => {
     { label: 'null', workspaceId: null },
     { label: 'an empty string', workspaceId: '' },
     { label: 'only blanks', workspaceId: '   ' },
-  ])('a failed call whose workspace_id is $label names no workspace: /tasks link, no calendar link', ({ workspaceId }) => {
-    renderTaskTool('create_task', { ...ARGS_CREATE_NO_WS, workspace_id: workspaceId }, undefined, { isError: true })
+  ])('a failed call whose workspace_id is $label names no workspace: /tasks link, no calendar link', async ({ workspaceId }) => {
+    await renderTaskTool('create_task', { ...ARGS_CREATE_NO_WS, workspace_id: workspaceId }, undefined, { isError: true })
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(
       "I couldn't create the task, and no reason was given. Try again.",
     )
@@ -750,35 +734,35 @@ describe('readable verb per task tool', () => {
     ['update_task', ARGS_UPDATE, RESULT_UPDATE, 'I updated the task'],
     ['run_task', ARGS_RUN, RESULT_RUN, 'I started the task'],
     ['delete_task', ARGS_DELETE, RESULT_DELETE, 'I deleted the task'],
-  ])('%s renders exactly its own heading', (tool, args, result, expected) => {
-    renderTaskTool(tool, args, result)
+  ])('%s renders exactly its own heading', async (tool, args, result, expected) => {
+    await renderTaskTool(tool, args, result)
     const card = screen.getByTestId('task-tool-card')
     const verb = within(card).getByTestId('task-tool-verb')
     expect((verb.textContent ?? '').trim()).toBe(expected)
   })
 
-  it("create_task's verb announces scheduling for a SCHEDULED create (founder example; D3 exact form above)", () => {
-    renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
+  it("create_task's verb announces scheduling for a SCHEDULED create (founder example; D3 exact form above)", async () => {
+    await renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     const verb = within(card).getByTestId('task-tool-verb')
     expect((verb.textContent ?? '')).toMatch(/schedul/i)
   })
 
-  it('run_task whose result says "already running" does not claim a new run was started (D3)', () => {
+  it('run_task whose result says "already running" does not claim a new run was started (D3)', async () => {
     // The wire distinguishes the cases TODAY: pkg/tools/run_task.go::
     // TaskRunTool.Execute returns {"task_id","status","session_id",
     // "note":"already running"} for an in-progress task (its idempotent
     // re-dispatch), and a plain payload for a new run. The card must not
     // imply a new run in that case (CHECK voice inventory, run_task row).
     // RED today: the heading is "Task run started" for both results.
-    renderTaskTool('run_task', ARGS_RUN, RESULT_RUN_ALREADY)
+    await renderTaskTool('run_task', ARGS_RUN, RESULT_RUN_ALREADY)
     const card = screen.getByTestId('task-tool-card')
     expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe(
       'The task is already running',
     )
   })
 
-  it('each of the four tools renders its OWN verb — the four differ', () => {
+  it('each of the four tools renders its OWN verb — the four differ', async () => {
     const verbs: string[] = []
     const calls: Array<[string, unknown, unknown]> = [
       ['create_task', ARGS_CREATE, RESULT_CREATE],
@@ -787,7 +771,7 @@ describe('readable verb per task tool', () => {
       ['delete_task', ARGS_DELETE, RESULT_DELETE],
     ]
     for (const [tool, args, result] of calls) {
-      const { unmount } = renderTaskTool(tool, args, result)
+      const { unmount } = await renderTaskTool(tool, args, result)
       const card = screen.getByTestId('task-tool-card')
       verbs.push((within(card).getByTestId('task-tool-verb').textContent ?? '').trim())
       unmount()
@@ -823,25 +807,25 @@ describe('Round 6 / R3-2 — a failed call that names a workspace offers "Open t
     { tool: 'update_task', verb: 'update', args: ARGS_UPDATE, reason: 'task not found: task_99' },
   ]
 
-  it.each(NAMED_WORKSPACE_ROWS)('$tool with a reason: the D8 sentence, then "Open tasks" alone', ({ tool, verb, args, reason }) => {
-    renderTaskTool(tool, args, reason, { isError: true })
+  it.each(NAMED_WORKSPACE_ROWS)('$tool with a reason: the D8 sentence, then "Open tasks" alone', async ({ tool, verb, args, reason }) => {
+    await renderTaskTool(tool, args, reason, { isError: true })
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(`I couldn't ${verb} the task. ${reason}`)
     expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
   })
 
-  it.each(NAMED_WORKSPACE_ROWS)('$tool with no reason: the D5 sentence, then "Open tasks" alone', ({ tool, verb, args }) => {
-    renderTaskTool(tool, args, undefined, { isError: true })
+  it.each(NAMED_WORKSPACE_ROWS)('$tool with no reason: the D5 sentence, then "Open tasks" alone', async ({ tool, verb, args }) => {
+    await renderTaskTool(tool, args, undefined, { isError: true })
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(`I couldn't ${verb} the task, and no reason was given. Try again.`)
     expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
   })
 
-  it('a failure only the part status reports (incomplete, reason error) offers "Open tasks" alone too', () => {
-    renderTaskTool('update_task', ARGS_UPDATE, 'task not found: task_99', { status: { type: 'incomplete', reason: 'error' } })
+  it('a failure only the part status reports (incomplete, reason error) offers "Open tasks" alone too', async () => {
+    await renderTaskTool('update_task', ARGS_UPDATE, 'task not found: task_99', { status: { type: 'incomplete', reason: 'error' } })
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe("I couldn't update the task. task not found: task_99")
     expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
   })
 
-  it('a structured delegation_denied failure that names a workspace offers "Open tasks" alone', () => {
+  it('a structured delegation_denied failure that names a workspace offers "Open tasks" alone', async () => {
     // Shaped by the generated DelegationFailure contract (asyncapi.yaml), as in the D5 row above.
     const denial = {
       error: 'delegation_denied',
@@ -850,13 +834,13 @@ describe('Round 6 / R3-2 — a failed call that names a workspace offers "Open t
       tool: 'run_task',
       target_agent_id: 'scout',
     }
-    renderTaskTool('run_task', { ...ARGS_RUN, workspace_id: 'ws_1' }, denial, { isError: true })
+    await renderTaskTool('run_task', { ...ARGS_RUN, workspace_id: 'ws_1' }, denial, { isError: true })
     expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(`I couldn't start the task. ${denial.reason}`)
     expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
   })
 
-  it('control: the SAME create call, once it succeeded, does offer "Open calendar" — the rows above can see the link', () => {
-    renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
+  it('control: the SAME create call, once it succeeded, does offer "Open calendar" — the rows above can see the link', async () => {
+    await renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     expect(within(card).getByTestId('task-tool-link-calendar')).toHaveAttribute('href', '/workspaces/ws_1/calendar')
     expect((within(card).getByTestId('task-tool-link-calendar').textContent ?? '').trim()).toBe('Open calendar')
@@ -902,16 +886,16 @@ describe('Round 6 / R3-3 — a full stop closes every schedule line, live', () =
     },
   ]
 
-  it.each(SCHEDULE_ROWS)('$label: the live card line ends with one full stop', ({ trigger, line }) => {
-    renderTaskTool('create_task', { ...BASE_ARGS, trigger }, RESULT_CREATE)
+  it.each(SCHEDULE_ROWS)('$label: the live card line ends with one full stop', async ({ trigger, line }) => {
+    await renderTaskTool('create_task', { ...BASE_ARGS, trigger }, RESULT_CREATE)
     const schedule = (within(screen.getByTestId('task-tool-card')).getByTestId('task-tool-schedule').textContent ?? '').trim()
     // Generic invariant first (a single closing full stop, never none and never two), then the exact line.
     expect(schedule, 'R3-3: one full stop closes the schedule line').toMatch(/[^.]\.$/)
     expect(schedule).toBe(line)
   })
 
-  it('the same holds for an update that carries the schedule (update_task renders the same line)', () => {
-    renderTaskTool('update_task', { ...ARGS_UPDATE, trigger: LA_NO_END_TRIGGER }, RESULT_UPDATE)
+  it('the same holds for an update that carries the schedule (update_task renders the same line)', async () => {
+    await renderTaskTool('update_task', { ...ARGS_UPDATE, trigger: LA_NO_END_TRIGGER }, RESULT_UPDATE)
     const schedule = (within(screen.getByTestId('task-tool-card')).getByTestId('task-tool-schedule').textContent ?? '').trim()
     expect(schedule, 'R3-3: one full stop closes the schedule line').toMatch(/[^.]\.$/)
     expect(schedule).toBe(LA_NO_END_LINE)
@@ -921,8 +905,8 @@ describe('Round 6 / R3-3 — a full stop closes every schedule line, live', () =
   // to confirm or strike): a once trigger whose time is not set yet still gets a schedule line — the
   // detail panel's "Runs once (time not yet set)" (taskFormFields.ts::scheduledTriggerSummary) — and it
   // is a schedule line, so the full stop closes it as well.
-  it('boundary: a once schedule with no time yet reads "Runs once (time not yet set)." — the full stop closes it too', () => {
-    renderTaskTool('create_task', { ...BASE_ARGS, trigger: { type: 'once', config: {} } }, RESULT_CREATE)
+  it('boundary: a once schedule with no time yet reads "Runs once (time not yet set)." — the full stop closes it too', async () => {
+    await renderTaskTool('create_task', { ...BASE_ARGS, trigger: { type: 'once', config: {} } }, RESULT_CREATE)
     const schedule = (within(screen.getByTestId('task-tool-card')).getByTestId('task-tool-schedule').textContent ?? '').trim()
     expect(schedule, 'R3-3 (boundary): one full stop closes the schedule line').toMatch(/[^.]\.$/)
     expect(schedule).toBe('Runs once (time not yet set).')

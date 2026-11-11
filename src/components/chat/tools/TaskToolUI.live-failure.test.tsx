@@ -46,8 +46,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ThreadPrimitive, MessagePrimitive } from '@assistant-ui/react'
 import type { ToolCallMessagePartComponent } from '@assistant-ui/react'
-import { render, act, screen, within } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { act, screen, within } from '@testing-library/react'
+import { renderWithTaskRouter } from '../../../../tests/task-tool-card/router'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
@@ -71,30 +71,6 @@ vi.mock('@/lib/memory-observer', () => ({
   addMemoryObserver: () => () => {},
   getCurrentSnapshot: () => ({ usedJSHeapSizeBytes: null, level: 'ok', supported: false }),
 }))
-
-// The "Open tasks" link needs a router the unit mount does not have.
-vi.mock('@tanstack/react-router', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@tanstack/react-router')>()
-  return {
-    ...original,
-    Link: ({ to, params, search, children, ...rest }: {
-      to?: unknown
-      params?: Record<string, unknown>
-      search?: Record<string, unknown>
-      children?: ReactNode
-    } & Record<string, unknown>) => {
-      let href = typeof to === 'string' ? to : ''
-      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
-      const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      return (
-        <a href={href + qs} {...rest}>
-          {children}
-        </a>
-      )
-    },
-  }
-})
 
 const SID = 'sess_live_task_failure'
 const CALL_ID = 'call_live_task_1'
@@ -178,27 +154,25 @@ function sendFrames(frames: Array<ToolCallStartFrame | ToolCallResultFrame>): vo
 // Fallback is GenericToolCall, so an unregistered tool would render the
 // generic chip while a registered one pre-empts it.
 async function renderLiveThread(): Promise<void> {
-  await act(async () => {
-    render(
-      <OmnipusRuntimeProvider>
-        <ThreadPrimitive.Root>
-          <ThreadPrimitive.Viewport>
-            <ThreadPrimitive.Messages>
-              {({ message }: { message: { role: string } }) =>
-                message.role === 'assistant' ? (
-                  <MessagePrimitive.Root>
-                    <MessagePrimitive.Parts
-                      components={{ tools: { Fallback: GenericToolCall as unknown as ToolCallMessagePartComponent } }}
-                    />
-                  </MessagePrimitive.Root>
-                ) : null
-              }
-            </ThreadPrimitive.Messages>
-          </ThreadPrimitive.Viewport>
-        </ThreadPrimitive.Root>
-      </OmnipusRuntimeProvider>,
-    )
-  })
+  await renderWithTaskRouter(
+    <OmnipusRuntimeProvider>
+      <ThreadPrimitive.Root>
+        <ThreadPrimitive.Viewport>
+          <ThreadPrimitive.Messages>
+            {({ message }: { message: { role: string } }) =>
+              message.role === 'assistant' ? (
+                <MessagePrimitive.Root>
+                  <MessagePrimitive.Parts
+                    components={{ tools: { Fallback: GenericToolCall as unknown as ToolCallMessagePartComponent } }}
+                  />
+                </MessagePrimitive.Root>
+              ) : null
+            }
+          </ThreadPrimitive.Messages>
+        </ThreadPrimitive.Viewport>
+      </ThreadPrimitive.Root>
+    </OmnipusRuntimeProvider>,
+  )
 }
 
 const NO_REASON_RE = /no reason was given/i
