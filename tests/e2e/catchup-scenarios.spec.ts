@@ -50,15 +50,25 @@
  * stream itself and holds the mid-turn window open by construction, so the
  * mid-turn gates no longer depend on any model's emission profile (on the
  * CI primary model the whole answer used to arrive only at completion).
+ *
+ * STATUS (#1766): a/d/e/f now use that same isolated held-stream harness,
+ * with exact scripted-answer checks in addition to the original prefix,
+ * reload and two-tab equality assertions. e also checks the user message and
+ * both clients' resume cursors; f proves both turns are concurrently held and
+ * verifies A's incremental recovery as well as B's complete answer on switch.
+ * g alone still uses the shared live-model gateway and its real 31-minute wait.
  */
 
 import { expect, type Page } from '@playwright/test'
+import type { AttachSessionFrame, CatchUpCompleteFrame, ClientFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
+import type { SessionDetail } from '@/lib/api/generated/openapi-types'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, assistantMessages, userMessages } from './fixtures/selectors'
 import { freshChat, openSessionByDeepLink, originOf } from './fixtures/session-setup'
 import { installFreezeProxy } from './helpers/freezeProxy'
 import { GatewayProcess } from './fixtures/gateway-process'
 import { E2E_FALLBACK } from './fixtures/e2e-model'
+import { normalizedAssistantText } from './fixtures/assistant-text'
 import {
   attachHeldStreamEvidence,
   expectTurnHeldMidStream,
@@ -259,7 +269,7 @@ async function assertNoDuplicateOrGapText(page: Page, before: string, after: str
   expect(norm(reloaded)).toBe(norm(after))
 }
 
-/** b/c need a real turn that remains in flight while the UI is moved away —
+/** Catch-up scenarios need a real turn that remains in flight while the UI is moved away —
  * for as long as the test wants, independent of any model's emission profile
  * (#1661): their gateway is pointed at the held-stream provider, which keeps
  * the scripted stream open until the test calls release(). Turn engine,
@@ -278,89 +288,224 @@ async function openHeldCatchupChat(page: Page, provider: HeldStreamProvider): Pr
   }
 }
 
+const normalizeText = (text: string) => text.replace(/\s+/g, ' ').trim()
+
+// Observe real wire traffic without replacing the socket, frames or store.
+function observeCatchup(page: Page) {
+  const received: ServerFrame[] = []
+  const sent: ClientFrame[] = []
+  page.on('websocket', (socket) => {
+    socket.on('framereceived', ({ payload }) => received.push(JSON.parse(payload.toString()) as ServerFrame))
+    socket.on('framesent', ({ payload }) => sent.push(JSON.parse(payload.toString()) as ClientFrame))
+  })
+  return { received, sent }
+}
+
+function latestCatchup(frames: ServerFrame[], sessionId: string) {
+  return frames.filter((frame): frame is CatchUpCompleteFrame => frame.type === 'catch_up_complete' && frame.session_id === sessionId).at(-1)
+}
+
+// #1766: no live-essay length wait. The fixture proves one open, unreleased
+// provider call with at least two deltas; the DOM must independently be running.
+async function startHeldTurn(page: Page, provider: HeldStreamProvider, label: string, prompt = LONG_PROMPT, script?: string) {
+  await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
+  await waitForConnected(page)
+  const chat = await freshChat(page)
+  await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+  await chatInput(page).fill(prompt)
+  await chatInput(page).press('Enter', { timeout: 15_000 })
+  await expectTurnHeldMidStream(provider, label, script)
+  const row = page.locator('[data-message-id]:not(.flex-row-reverse)').first()
+  await expect(row).toHaveAttribute('data-status', 'running')
+  await expect(row.locator('.prose-sm')).toContainText(/\S/)
+  await expect(stopButton(page)).toBeVisible()
+  return { sessionId: chat.sessionId, before: (await bubbleText(row)).trim() }
+}
+
+async function assertScriptedAnswer(page: Page, provider: HeldStreamProvider, before: string, sessionId: string, label: string, script?: string) {
+  await expect(assistantMessages(page), `${label}: exactly one complete answer`).toHaveCount(1, { timeout: 30_000 })
+  await expect(assistantMessages(page)).toHaveAttribute('data-status', 'complete')
+  const after = (await bubbleText(assistantMessages(page).first())).trim()
+  expect(await normalizedAssistantText(assistantMessages(page).first()), `${label}: exact scripted answer, no missing or duplicate deltas`).toBe(provider.expectedHeldAnswer(script))
+  // Retain both original checks: pre-cut prefix and full hard-reload identity.
+  await assertNoDuplicateOrGapText(page, before, after, sessionId)
+  return normalizeText(after)
+}
+
+async function expectPersistedAnswer(gw: GatewayProcess, sessionId: string, provider: HeldStreamProvider, script?: string) {
+  await expect.poll(async () => {
+    const result = await gw.apiFetch<SessionDetail>('GET', `/api/v1/sessions/${sessionId}`)
+    expect(result.ok, 'completion receipt: session detail is readable').toBe(true)
+    return result.body.messages?.filter((message) => message.role === 'assistant').map((message) => normalizeText(message.content ?? ''))
+  }, { timeout: 30_000, message: 'the released turn is durably complete even with no tab attached' }).toEqual([provider.expectedHeldAnswer(script)])
+}
+
+function expectReleased(provider: HeldStreamProvider, label: string, count = 1) {
+  expect(provider.evidence.streamRequests, `${label}: exactly the scripted calls`).toBe(count)
+  expect(provider.evidence.released, `${label}: only release finished the turns`).toBe(count)
+  expect(provider.evidence.streamsClosed, `${label}: every released stream closed`).toBe(count)
+  expect(provider.evidence.errors, `${label}: no unexpected provider traffic`).toEqual([])
+}
+
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
-  // Shared-page scenarios only. The #1661 deterministic describe below
-  // deliberately has NO such hook: its tests point the page at their own
-  // isolated gateways, and a file-level goto('/') needs a shared baseURL
-  // the keyless private runner does not have.
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/')
+  // #1766: same own-gateway, scripted-provider, zero-retry scope as b/c.
+  // Only the paid model edge is fake; no catch-up frame or product state is.
+  test.describe.configure({ retries: 0 })
+
+  test('a: clean network cut mid-turn, 30s, then back — incremental catch-up', async ({ page, context }, info) => {
+    test.setTimeout(420_000)
+    const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+    const wire = observeCatchup(page)
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const { before, sessionId } = await startHeldTurn(page, provider, 'catchup a')
+      wire.received.length = 0
+      await context.setOffline(true)
+      await page.waitForTimeout(30_000)
+      provider.release()
+      await expectPersistedAnswer(gw, sessionId, provider)
+      await context.setOffline(false)
+      await page.evaluate(() => window.dispatchEvent(new Event('online')))
+      await expect.poll(() => latestCatchup(wire.received, sessionId)?.mode, {
+        timeout: 30_000, message: 'catchup a: reconnect resumes incrementally without a reload',
+      }).toBe('incremental')
+      await waitTurnDone(page)
+      await assertScriptedAnswer(page, provider, before, sessionId, 'catchup a')
+      expectReleased(provider, 'catchup a')
+    } finally {
+      try { await attachHeldStreamEvidence(info, 'catchup-a', provider) }
+      finally { await gw.stop(); await provider.close() }
+    }
   })
 
-  test('a: clean network cut mid-turn, 30s, then back — incremental catch-up', async ({ page, context }) => {
+  test('d: no tab at all while the turn finishes (laptop sleep) — reopen shows the complete answer', async ({ page, context }, info) => {
     test.setTimeout(420_000)
-    const before = await startLongTurn(page)
-    await context.setOffline(true)
-    await page.waitForTimeout(30_000)
-    await context.setOffline(false)
-    await waitTurnDone(page)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await bubbleText(assistantMessages(page).first())).trim()
-    await assertNoDuplicateOrGapText(page, before, after)
-    // Server log/diagnostic surfaced client-side would confirm
-    // "catch_up mode=incremental" — the design leaves the exact
-    // surfacing mechanism to Lane A/C's own diagnostics; this scenario
-    // asserts the user-visible outcome, which is the contract.
+    const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const { before, sessionId } = await startHeldTurn(page, provider, 'catchup d')
+      await page.close()
+      expect(context.pages(), 'catchup d: no tab exists when the turn finishes').toHaveLength(0)
+      await expectTurnHeldMidStream(provider, 'catchup d without tabs')
+      provider.release()
+      await expectPersistedAnswer(gw, sessionId, provider)
+      const page2 = await context.newPage()
+      await page2.goto(`${gw.baseURL}/#/sessions/${sessionId}`)
+      await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
+      await waitForConnected(page2)
+      await waitTurnDoneAfterReload(page2)
+      await assertScriptedAnswer(page2, provider, before, sessionId, 'catchup d')
+      expectReleased(provider, 'catchup d')
+    } finally {
+      try { await attachHeldStreamEvidence(info, 'catchup-d', provider) }
+      finally { await gw.stop(); await provider.close() }
+    }
   })
 
-  test('d: no tab at all while the turn finishes (laptop sleep) — reopen shows the complete answer', async ({ page, context }) => {
+  test('e: two tabs on one chat — second tab shows the user message and the identical answer, cursors equal', async ({ page, context }, info) => {
     test.setTimeout(420_000)
-    const before = await startLongTurn(page)
-    await page.close()
-    const page2 = await context.newPage()
-    await page2.goto('/')
-    await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
-    await waitForConnected(page2)
-    // page2 has never shown its own stop button (it is a brand-new page,
-    // never having rendered chat A live) — the same reload-baseline issue
-    // as scenario b's fix above (waitTurnDone's "hidden" check would be
-    // trivially, immediately true here regardless of whether the turn had
-    // actually finished server-side during the tab close).
-    await waitTurnDoneAfterReload(page2)
-    await expect(assistantMessages(page2)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await bubbleText(assistantMessages(page2).first())).trim()
-    await assertNoDuplicateOrGapText(page2, before, after)
+    const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+    const wire1 = observeCatchup(page)
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const { before, sessionId } = await startHeldTurn(page, provider, 'catchup e')
+      const page2 = await context.newPage()
+      const wire2 = observeCatchup(page2)
+      await page2.goto(`${gw.baseURL}/#/sessions/${sessionId}`)
+      await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
+      await waitForConnected(page2)
+      await expect(stopButton(page2), 'second tab attaches to the same still-running turn').toBeVisible()
+      await expectTurnHeldMidStream(provider, 'catchup e with both tabs')
+      for (const tab of [page, page2]) {
+        await expect(userMessages(tab), 'the user message is present exactly once in each tab').toHaveCount(1)
+        await expect(userMessages(tab)).toContainText(LONG_PROMPT)
+      }
+      provider.release()
+      await waitTurnDone(page)
+      await waitTurnDone(page2)
+      const t1 = await assertScriptedAnswer(page, provider, before, sessionId, 'catchup e first tab')
+      const t2 = await assertScriptedAnswer(page2, provider, before, sessionId, 'catchup e second tab')
+      expect(t2, 'both tabs show the identical complete answer').toBe(t1)
+      // Hard reload above commits a catch-up cursor in each real client.
+      await expect.poll(() => latestCatchup(wire1.received, sessionId)?.seq).toBeGreaterThan(0)
+      await expect.poll(() => latestCatchup(wire2.received, sessionId)?.seq).toBe(latestCatchup(wire1.received, sessionId)?.seq)
+      const cursor = latestCatchup(wire1.received, sessionId)!
+      expect(latestCatchup(wire2.received, sessionId)?.boot_id, 'same gateway boot for both cursors').toBe(cursor.boot_id)
+      wire1.sent.length = 0
+      wire2.sent.length = 0
+      // Verify the cursor each CLIENT actually sends, not just a server receipt.
+      for (const tab of [page, page2]) await tab.evaluate(() => {
+        for (const ws of (window as unknown as { __ws_instances?: WebSocket[] }).__ws_instances ?? []) ws.close()
+      })
+      for (const wire of [wire1, wire2]) {
+        await expect.poll(() => wire.sent.filter((frame): frame is AttachSessionFrame => frame.type === 'attach_session' && frame.session_id === sessionId).at(-1)?.since_seq, {
+          timeout: 30_000, message: 'both tabs resume from their equal committed cursor',
+        }).toBe(cursor.seq)
+      }
+      expectReleased(provider, 'catchup e')
+      await page2.close()
+    } finally {
+      try { await attachHeldStreamEvidence(info, 'catchup-e', provider) }
+      finally { await gw.stop(); await provider.close() }
+    }
+  })
+})
+
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  test.describe.configure({ retries: 0 })
+
+  test('f: two chats active during an outage — A incremental, B complete on switch', async ({ page, context }, info) => {
+    test.setTimeout(420_000)
+    const promptA = `${LONG_PROMPT} Catchup-f-chat-A.`
+    const promptB = `${LONG_PROMPT} Catchup-f-chat-B.`
+    const provider = await startHeldStreamProvider({
+      promptIncludes: promptA,
+      scripts: [{ promptIncludes: promptA, behavior: 'hold' }, { promptIncludes: promptB, behavior: 'hold' }],
+    })
+    const wire = observeCatchup(page)
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const a = await startHeldTurn(page, provider, 'catchup f A', promptA, promptA)
+      const b = await startHeldTurn(page, provider, 'catchup f B', promptB, promptB)
+      expect(a.sessionId, 'two distinct chats, not two views of the same turn').not.toBe(b.sessionId)
+      await switchToSession(page, a.sessionId)
+      await expect(stopButton(page)).toBeVisible()
+      await expectTurnHeldMidStream(provider, 'catchup f A still open', promptA)
+      await expectTurnHeldMidStream(provider, 'catchup f B still open', promptB)
+      await page.evaluate(() => { (window as { navCatchupMark?: string }).navCatchupMark = 'scenario-f' })
+      wire.received.length = 0
+      await context.setOffline(true)
+      await page.waitForTimeout(45_000)
+      // Both real turns finish during the outage, while only A has a view.
+      provider.release()
+      await expectPersistedAnswer(gw, a.sessionId, provider, promptA)
+      await expectPersistedAnswer(gw, b.sessionId, provider, promptB)
+      await context.setOffline(false)
+      await page.evaluate(() => window.dispatchEvent(new Event('online')))
+      await expect.poll(() => latestCatchup(wire.received, a.sessionId)?.mode, {
+        timeout: 30_000, message: 'catchup f A resumes incrementally after the outage',
+      }).toBe('incremental')
+      await waitTurnDone(page)
+      // Verify A before switching; its convergence is no longer left unchecked.
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      expect(await normalizedAssistantText(assistantMessages(page).first()), 'catchup f A: complete incremental answer').toBe(provider.expectedHeldAnswer(promptA))
+      await switchToSession(page, b.sessionId)
+      expect(await page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark), 'switch to B keeps the same document').toBe('scenario-f')
+      await expect(stopButton(page), 'B is already complete on switch').toBeHidden()
+      await assertScriptedAnswer(page, provider, b.before, b.sessionId, 'catchup f B', promptB)
+      await switchToSession(page, a.sessionId)
+      await assertScriptedAnswer(page, provider, a.before, a.sessionId, 'catchup f A', promptA)
+      expectReleased(provider, 'catchup f', 2)
+    } finally {
+      try { await attachHeldStreamEvidence(info, 'catchup-f', provider) }
+      finally { await gw.stop(); await provider.close() }
+    }
   })
 })
 
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
-  })
-
-  test('e: two tabs on one chat — second tab shows the user message and the identical answer, cursors equal', async ({ page, context }) => {
-    test.setTimeout(420_000)
-    await startLongTurn(page)
-    const page2 = await context.newPage()
-    await page2.goto('/')
-    await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
-    await waitForConnected(page2)
-    await waitTurnDone(page)
-    await waitTurnDone(page2)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    await expect(assistantMessages(page2)).toHaveCount(1, { timeout: 30_000 })
-    const t1 = (await bubbleText(assistantMessages(page).first())).replace(/\s+/g, ' ').trim()
-    const t2 = (await bubbleText(assistantMessages(page2).first())).replace(/\s+/g, ' ').trim()
-    expect(t2).toBe(t1)
-    await page2.close()
-  })
-
-  test('f: two chats active during an outage — A incremental, B complete on switch', async ({ page, context }) => {
-    test.setTimeout(420_000)
-    const beforeA = await startLongTurn(page)
-    // startLongTurn opens its OWN fresh chat (it calls freshChat itself), so a
-    // standalone freshChat here only created a second session and abandoned it
-    // (S5-09/F11). Chat B is the one startLongTurn opens below.
-    const beforeB = await startLongTurn(page)
-    await context.setOffline(true)
-    await page.waitForTimeout(45_000)
-    await context.setOffline(false)
-    await waitTurnDone(page) // chat B, currently foreground
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const afterB = (await bubbleText(assistantMessages(page).first())).trim()
-    await assertNoDuplicateOrGapText(page, beforeB, afterB)
-    void beforeA // chat A's own convergence is scenario c's concern; this
-    // scenario's unique assertion is B's incremental catch-up under outage.
   })
 
   test('g: idle 31+ minutes, then send — the answer is shown (attempt 1 dropped it)', async ({ page }) => {
