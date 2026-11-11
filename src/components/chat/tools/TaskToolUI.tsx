@@ -22,10 +22,12 @@
 // error or warning ends with one thing the person can do.
 
 import type { ReactNode } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useRouter } from '@tanstack/react-router'
 import { CalendarBlank, Warning } from '@phosphor-icons/react'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { makeAssistantToolUI, resolvedToolPartError } from '@/lib/assistant-tool-status'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { Card } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/error-state'
 import type { TaskTrigger } from '@/lib/api'
@@ -365,7 +367,7 @@ const LINK_CLASS =
 function OpenTasksLink({ workspaceId }: { workspaceId: string }) {
   if (workspaceId === '') {
     return (
-      <Link to="/tasks" data-testid="task-tool-link-open" className={LINK_CLASS}>
+      <Link to="/tasks" data-testid="task-tool-link-open" className={LINK_CLASS} tabIndex={0}>
         Open tasks
       </Link>
     )
@@ -377,14 +379,22 @@ function OpenTasksLink({ workspaceId }: { workspaceId: string }) {
       search={{ panel: 'tasks' }}
       data-testid="task-tool-link-open"
       className={LINK_CLASS}
+      tabIndex={0}
     >
       Open tasks
     </Link>
   )
 }
 
-/** "Open calendar" exists only for a call that names its workspace (Q2 C). */
+/**
+ * "Open calendar" exists only for a call that names its workspace (Q2 C).
+ * The links need the app router; a mount with no router (a component render
+ * outside the app shell) shows the card or the alert without them, the same
+ * router-optional pattern as ToolApprovalModal and AgentProfile.
+ */
 function TaskToolLinks({ workspaceId, calendar }: { workspaceId: string; calendar: boolean }) {
+  const router = useRouter({ warn: false })
+  if (!router) return null
   return (
     <div className="flex flex-wrap gap-[var(--space-3)]">
       <OpenTasksLink workspaceId={workspaceId} />
@@ -394,6 +404,7 @@ function TaskToolLinks({ workspaceId, calendar }: { workspaceId: string; calenda
           params={{ workspaceId }}
           data-testid="task-tool-link-calendar"
           className={LINK_CLASS}
+          tabIndex={0}
         >
           <CalendarBlank size={12} aria-hidden="true" />
           Open calendar
@@ -484,6 +495,17 @@ export function TaskToolCardBlock({
   )
 }
 
+/**
+ * The live registration's body: the chat thread's one visibility filter
+ * (toolVisibility.ts::shouldRenderToolCall, #494) decides first, as in every
+ * other registered tool UI, then the card renders.
+ */
+function TaskToolLive(props: TaskToolCardBlockProps & { args: Record<string, unknown> }) {
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  if (!shouldRenderToolCall(props.toolName, props.args, verboseChatEnabled, !!props.isError)) return null
+  return <TaskToolCardBlock {...props} />
+}
+
 function makeTaskToolUI(toolName: TaskToolName) {
   return makeAssistantToolUI<Record<string, unknown>, unknown>({
     toolName,
@@ -491,7 +513,7 @@ function makeTaskToolUI(toolName: TaskToolName) {
     // (omnipus-runtime.ts::buildContentParts), so a live failure shows the
     // same reason the saved row does.
     render: ({ args, result, status, isError, artifact }) => (
-      <TaskToolCardBlock
+      <TaskToolLive
         toolName={toolName}
         args={args}
         result={result}
