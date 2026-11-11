@@ -77,6 +77,11 @@ import {
 } from './fixtures/held-stream-provider'
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
+// An assistant reply row in ANY status, including the running one (the shared
+// assistantMessages skips running rows, which mid-turn checks need). System
+// rows (provider-fallback note, restart notice, clear-context divider) also
+// carry data-message-id and are excluded, as in assistantMessages (#1783).
+const ANY_STATUS_ASSISTANT_ROW = '[data-message-id]:not(.flex-row-reverse):not([data-message-role="system"])'
 const assistantConnectionStatus = (page: Page) => page.getByTestId('assistant-connection-status')
 
 const LONG_PROMPT =
@@ -153,7 +158,7 @@ async function startLongTurn(
   // establish the mid-turn precondition b/c require. Other cases retain their
   // existing completed-content baseline until their own coverage is audited.
   const row = options.requireRunning
-    ? page.locator('[data-message-id]:not(.flex-row-reverse)').first()
+    ? page.locator(ANY_STATUS_ASSISTANT_ROW).first()
     : assistantMessages(page).first()
   await expect.poll(async () => (await bubbleText(row).catch(() => '')).trim().length, { timeout: 60_000 }).toBeGreaterThan(80)
   if (options.requireRunning) {
@@ -315,7 +320,7 @@ async function startHeldTurn(page: Page, provider: HeldStreamProvider, label: st
   await chatInput(page).fill(prompt)
   await chatInput(page).press('Enter', { timeout: 15_000 })
   await expectTurnHeldMidStream(provider, label, script)
-  const row = page.locator('[data-message-id]:not(.flex-row-reverse)').first()
+  const row = page.locator(ANY_STATUS_ASSISTANT_ROW).first()
   await expect(row).toHaveAttribute('data-status', 'running')
   await expect(row.locator('.prose-sm')).toContainText(/\S/)
   await expect(stopButton(page)).toBeVisible()
@@ -794,7 +799,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         await input.fill(LONG_PROMPT)
         await input.press('Enter', { timeout: 15_000 })
         await expect(stopButton(page)).toBeVisible({ timeout: 15_000 })
-        const liveAnswer = page.locator('[data-message-id]:not(.flex-row-reverse)')
+        const liveAnswer = page.locator(ANY_STATUS_ASSISTANT_ROW)
         await expect(liveAnswer).toHaveCount(1, { timeout: 15_000 })
         // Entire bubble text includes the agent name and Thinking… before any
         // token. Only rendered markdown proves real answer content arrived.
@@ -852,7 +857,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         }).toBe(true)
         expect(retryErrors, 'Generate again must start without a provider/turn error').toEqual([])
         expect(retryHasContent, 'Generate again must not finish without real answer content').toBe(true)
-        const retryAnswer = page.locator('[data-message-id]:not(.flex-row-reverse)[data-status="running"]')
+        const retryAnswer = page.locator(`${ANY_STATUS_ASSISTANT_ROW}[data-status="running"]`)
         await expect(retryAnswer.locator('.prose-sm')).toContainText(/\S/)
         await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
         await waitTurnDone(page)
