@@ -590,6 +590,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
         return produce(b, (draft) => {
           const m = draft.messagesById[lastMsgId!]
           if (m) { m.isStreaming = false; m.status = 'interrupted'; m.pendingTextBoundary = false }
+          // #1787: keep the stopped turn's agent on the row before endTurnState clears it,
+          // so a stop notice made from an empty row still names its owner.
+          if (m && !m.agentId && draft.activeTurnAgentId) m.agentId = draft.activeTurnAgentId
           // T24b fix: bucket-level isStreaming must ALSO clear immediately
           // here, exactly like the no-message placeholder branch above does —
           // clearing only the message's own isStreaming left the BUCKET (and

@@ -1955,6 +1955,44 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     msg.isStreaming = false
                     msg.status = resolvedStatus
                     msg.pendingTextBoundary = false
+                    // #1787: a stop before the first token leaves an EMPTY bubble, and
+                    // the saved history has only the stop notice. Make the empty bubble
+                    // the notice, so live reads like a reload instead of showing a blank
+                    // "(interrupted)" row with no notice. A redirect stop (steer) and a
+                    // bubble that holds text or tool calls are left as they are.
+                    // The notice needs a known owner agent so a later saved copy can be matched
+                    // to it (#1789): the row's own, the turn's, or the open chat's when this is
+                    // the foreground session. A background chat with none keeps today's row.
+                    const session = useSessionStore.getState()
+                    const owner = msg.agentId
+                      ?? draft.activeTurnAgentId
+                      ?? (targetSid === session.activeSessionId ? session.activeAgentId : null)
+                      ?? undefined
+                    if (
+                      resolvedStatus === 'interrupted'
+                      && !!owner
+                      && !redirectStoppedTurn
+                      && !isCancelAck
+                      && llmError?.code === 'turn_canceled'
+                      && translatedMessage
+                      && !(msg.content ?? '').trim()
+                      && !msg.tool_calls?.length
+                      && !msg.spans?.length
+                      && !msg.media?.length
+                      // Live tool calls stay in the bucket until `done` attaches them.
+                      && draft.toolCallOrder.length === 0
+                      // Only the newest row can be this turn's empty bubble: an earlier
+                      // empty one (a cancel ack, a blank reply) must not take the notice.
+                      && id === draft.messageOrder[draft.messageOrder.length - 1]
+                    ) {
+                      msg.content = translatedMessage
+                      msg.status = 'error'
+                      msg.errorCode = llmError.code
+                      // The bubble was made when the user pressed Send. The notice is the
+                      // time of the stop, so a slow first token does not age it.
+                      msg.timestamp = new Date().toISOString()
+                      if (!msg.agentId) msg.agentId = owner
+                    }
                     // ADR-051 — stamp typed fields on the closed bubble so
                     // the "Technical details" disclosure renders even when
                     // we coalesced into a streaming bubble instead of
