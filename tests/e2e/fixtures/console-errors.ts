@@ -1,4 +1,5 @@
 import { test as base, expect } from "@playwright/test";
+import { cancelActiveSessionOnTeardown } from './cancel-active-session';
 
 const CONSOLE_ERROR_ALLOWLIST: RegExp[] = [
   /WebSocket.*reconnect/i,
@@ -93,43 +94,13 @@ export const test = base.extend<{
   // playwright.config.ts (subagent×5, handoff b, T24, T26 each takes >40s
   // under suite load even though they pass in 5-25s standalone). The fix is
   // for each test to act like a user: when it's done, click Stop. This
-  // fixture is that action, applied uniformly.
+  // fixture is that action, applied uniformly. #1769 also cancels a parked
+  // AskUserQuestion through its real Cancel control; unlike best-effort Stop,
+  // an attempted question cancellation must succeed and unlock the composer.
   cancelOnTeardown: [
     async ({ page }, use) => {
       await use();
-      try {
-        // The Stop button only renders while isStreaming is true on the active
-        // session. isVisible has a 0ms default — no extra wait if no turn is
-        // running. The locator wait below honors a small budget so a turn that
-        // just started has a chance to land in the DOM.
-        const stopBtn = page.locator('[data-testid="stop-btn"]');
-        if (await stopBtn.isVisible().catch(() => false)) {
-          // Issue #1661: a failed Stop click used to be swallowed silently
-          // (`.catch(() => undefined)`), which is how a teardown cancel could
-          // silently NOT happen — the same silent-failure shape that hid the
-          // Bug-3-a teardown cancel from the run's artifacts. Still best
-          // effort (the click failure never fails the test), but now visible.
-          await stopBtn
-            .click({ timeout: 2_000 })
-            .catch((err: unknown) => {
-              console.warn(
-                `[cancelOnTeardown] Stop click failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            });
-          // Brief settling window so the cancel frame is actually sent over the
-          // WebSocket before Playwright tears the context down.
-          await page.waitForTimeout(250).catch(() => undefined);
-        }
-      } catch (err) {
-        // Best effort: any failure here (page closing, navigation in flight,
-        // store not initialised) is harmless — we only want to cancel when
-        // there is a clear streaming turn to cancel. Logged (issue #1661)
-        // instead of swallowed silently, so a teardown cancel that never ran
-        // leaves a trace in the report.
-        console.warn(
-          `[cancelOnTeardown] teardown cancel did not run: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+      await cancelActiveSessionOnTeardown(page);
     },
     { auto: true },
   ],

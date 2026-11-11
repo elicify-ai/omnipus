@@ -1,8 +1,9 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
+import { chatInput, assistantMessages, userMessages, tokenCounter, waitForConnected } from './fixtures/selectors';
 import { freshChat, originOf } from './fixtures/session-setup';
+import { freshAgentChat } from './fixtures/fresh-agent-chat';
 import { sessionMessages } from './fixtures/session-history';
 import { installPaintAttachInput, replayPaintFrames } from './fixtures/attach-replay-paint';
 import type { ClientFrame, ServerFrame } from '../../src/lib/api/generated/asyncapi-types';
@@ -91,6 +92,7 @@ test.beforeEach(async ({ page }) => {
 test(
   '(a) send a message and receive an LLM response with token/cost update',
   async ({ page }) => {
+    await freshAgentChat(page, 'mia');
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
     await input.fill('Say exactly: "hello world"');
@@ -153,24 +155,12 @@ test(
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
-    // Start a fresh session to avoid stale messages from prior tests.
-    // After goto('/') the app may restore the last active session with messages.
-    // freshChat creates the session via the public REST API and deep-links it
-    // (the agent row's "New chat with <Agent>" button this used to click is
-    // removed — founder decision D7; FR-029/FR-031 still govern, and "/new"
-    // stays deleted), resetting to an empty thread so assistantMessages count
-    // starts at 0.
-    await freshChat(page);
+    // #1769: create Jim's chat directly. Creating a Mia chat and then clicking
+    // Jim's row abandons that fresh chat and opens Jim's SHARED main session.
+    // Jim does inline generation without Mia's router handoffs. The helper
+    // checks stored ownership/empty history and opens the exact new deep link.
+    await freshAgentChat(page, 'jim');
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
-
-    // Switch to Jim: Mia has "no long enumerations" guardrails and may handoff to
-    // Jim for certain questions, causing spurious stop-button transitions that
-    // confuse turn-completion detection. Jim does inline generation without handoffs,
-    // making the strict assistantMessages count (excludes running) reliable.
-    // This test probes agent-loop context retention — the agent identity doesn't matter.
-    // (Sidebar row click is the only agent switch since the composer AgentPicker
-    // was removed — nav commit e84ac0532; FR-029 "no in-chat handover".)
-    await selectAgent(page, /Jim/i);
 
     // Phrasing note: we avoid the word "remember" — Jim may treat "remember …" as an
     // instruction to call the remember() tool rather than just retain context in the
@@ -215,16 +205,15 @@ test(
 // retired surface — removed outright by nav commit e84ac0532 "remove the
 // composer agent picker" (src/components/chat/ChatScreen.pickerRemoval
 // .test.tsx pins its absence) and forbidden by session-core-spec FR-029
-// ("No in-chat handover"). The behaviour that still exists — row-click agent
-// switch navigating to the eligible main chat — is exercised by tests (b) and
-// (e) below through selectAgent, which asserts the row's aria-current.
+// ("No in-chat handover"). Tests (b) and (e) now deliberately avoid row clicks:
+// those navigate the shared main chat rather than an isolated test session.
 
 test(
   '(d) fresh chat clears the message list and picks a fresh session_id',
   async ({ page }) => {
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
-    const firstChat = await freshChat(page);
+    const firstChat = await freshAgentChat(page, 'mia');
     await input.fill('First message in session');
     await input.press('Enter');
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 60_000 });
@@ -232,7 +221,7 @@ test(
     // The agent row's "New chat with <Agent>" button this test was named for
     // is REMOVED (founder decision D7 — capability stays, UI access point
     // gone); freshChat is the replacement seam.
-    const second = await freshChat(page);
+    const second = await freshAgentChat(page, 'mia');
 
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
@@ -261,14 +250,9 @@ test(
   async ({ page }) => {
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
-    // Mia has strong "no long enumerations in chat" / "hand off creative work
-    // to Jim" guardrails that finish almost instantly — the Stop button never
-    // appears under her. Switch to Jim explicitly and ask for a long in-agent
-    // explanation; Jim does in-line generation with a multi-second stream
-    // window that reliably exposes the Stop button.
-    // (Sidebar row click is the only agent switch since the composer AgentPicker
-    // was removed — nav commit e84ac0532; FR-029 "no in-chat handover".)
-    await selectAgent(page, /Jim/i);
+    // Jim generates inline instead of Mia's router handoff. Create HIS fresh
+    // chat; a sidebar click would re-open the polluted shared main (#1769).
+    await freshAgentChat(page, 'jim');
 
     await input.fill(
       'Explain in deep technical detail how the Internet routes packets, ' +
@@ -332,6 +316,7 @@ test(
     // Rounded up with real headroom for CI scheduling/LLM jitter.
     test.setTimeout(900_000);
 
+    await freshAgentChat(page, 'mia');
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
     await expect(input).toBeEnabled({ timeout: 15_000 });
@@ -345,8 +330,7 @@ test(
     // reconnecting/queueing, and must not be changed.
     await waitForConnected(page, { timeout: 15_000 });
 
-    // Fresh session so assistantMessages/userMessages counts start at zero.
-    await freshChat(page);
+    // The explicit Mia session above is empty on both the server and the UI.
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     // Go offline — the browser drops the WS (same mechanism verified in

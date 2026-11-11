@@ -45,8 +45,9 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors'
+import { chatInput, waitForConnected } from './fixtures/selectors'
 import { apiFetch } from './fixtures/conformance-helpers'
+import { freshAgentChat } from './fixtures/fresh-agent-chat'
 
 interface AgentSummary {
   id: string
@@ -179,13 +180,12 @@ test(
     const originalModelParams = forceResult
 
     try {
+      // Create before waiting for a usable composer: the old main may be
+      // genuinely locked. Ownership and empty history are checked by the helper.
+      await freshAgentChat(page, jim.id)
       const input = chatInput(page)
       await expect(input).toBeEnabled({ timeout: 20_000 })
       await waitForConnected(page, { timeout: 20_000 })
-
-      // Sidebar row click is the only agent switch since the composer
-      // AgentPicker was removed (nav commit e84ac0532; FR-029 no in-chat handover).
-      await selectAgent(page, /Jim/i)
 
       await input.fill(LONG_PROSE_PROMPT)
       await input.press('Enter')
