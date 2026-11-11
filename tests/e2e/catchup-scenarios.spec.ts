@@ -306,7 +306,7 @@ function latestCatchup(frames: ServerFrame[], sessionId: string) {
 }
 
 // #1766: no live-essay length wait. The fixture proves one open, unreleased
-// provider call with at least two deltas; the DOM must independently be running.
+// provider call with at least two deltas; the running DOM must show its sent prefix.
 async function startHeldTurn(page: Page, provider: HeldStreamProvider, label: string, prompt = LONG_PROMPT, script?: string) {
   await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
@@ -319,6 +319,12 @@ async function startHeldTurn(page: Page, provider: HeldStreamProvider, label: st
   await expect(row).toHaveAttribute('data-status', 'running')
   await expect(row.locator('.prose-sm')).toContainText(/\S/)
   await expect(stopButton(page)).toBeVisible()
+  // Read the visible markdown body, not the adjacent live Thinking status.
+  // DOM first, then fixture: the UI may lag, never lead.
+  const visible = normalizeText(await row.locator('.prose-sm').innerText())
+  expect(visible, `${label}: the running answer has visible text`).not.toBe('')
+  const alreadySent = provider.expectedHeldAnswer(script)
+  expect(visible, `${label}: visible text is a prefix of the provider's already-sent deltas`).toBe(alreadySent.slice(0, visible.length))
   return { sessionId: chat.sessionId, before: (await bubbleText(row)).trim() }
 }
 
@@ -365,7 +371,6 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       provider.release()
       await expectPersistedAnswer(gw, sessionId, provider)
       await context.setOffline(false)
-      await page.evaluate(() => window.dispatchEvent(new Event('online')))
       await expect.poll(() => latestCatchup(wire.received, sessionId)?.mode, {
         timeout: 30_000, message: 'catchup a: reconnect resumes incrementally without a reload',
       }).toBe('incremental')
@@ -384,13 +389,26 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     const gw = await openHeldCatchupChat(page, provider)
     try {
       const { before, sessionId } = await startHeldTurn(page, provider, 'catchup d')
+      const chunksAtClose = provider.evidence.chunksSent
+      const streamsClosedAtClose = provider.evidence.streamsClosed
       await page.close()
       expect(context.pages(), 'catchup d: no tab exists when the turn finishes').toHaveLength(0)
+      // F1 / ADR-082: a real zero-tab window must not abort the turn. Count 20
+      // further provider deltas (about 3s at its 150ms cadence), not a sleep.
+      await expect.poll(() => provider.evidence.chunksSent, {
+        timeout: 15_000, message: 'catchup d: at least 20 more deltas flow with no tab attached',
+      }).toBeGreaterThanOrEqual(chunksAtClose + 20)
       await expectTurnHeldMidStream(provider, 'catchup d without tabs')
+      expect(provider.evidence.streamsClosed, 'catchup d: no stream closed during the zero-tab window').toBe(streamsClosedAtClose)
+      expect(provider.evidence.released, 'catchup d: zero-tab survival precedes any scripted release').toBe(0)
+      await info.attach('catchup-d-zero-tab-window', {
+        body: JSON.stringify({ chunksAtClose, chunksBeforeRelease: provider.evidence.chunksSent, streamsClosedAtClose, streamsClosedBeforeRelease: provider.evidence.streamsClosed, released: provider.evidence.released }),
+        contentType: 'application/json',
+      })
       provider.release()
       await expectPersistedAnswer(gw, sessionId, provider)
       const page2 = await context.newPage()
-      await page2.goto(`${gw.baseURL}/#/sessions/${sessionId}`)
+      await page2.goto(gw.baseURL)
       await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
       await waitForConnected(page2)
       await waitTurnDoneAfterReload(page2)
@@ -411,7 +429,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       const { before, sessionId } = await startHeldTurn(page, provider, 'catchup e')
       const page2 = await context.newPage()
       const wire2 = observeCatchup(page2)
-      await page2.goto(`${gw.baseURL}/#/sessions/${sessionId}`)
+      await page2.goto(gw.baseURL)
       await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
       await waitForConnected(page2)
       await expect(stopButton(page2), 'second tab attaches to the same still-running turn').toBeVisible()
@@ -481,7 +499,6 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       await expectPersistedAnswer(gw, a.sessionId, provider, promptA)
       await expectPersistedAnswer(gw, b.sessionId, provider, promptB)
       await context.setOffline(false)
-      await page.evaluate(() => window.dispatchEvent(new Event('online')))
       await expect.poll(() => latestCatchup(wire.received, a.sessionId)?.mode, {
         timeout: 30_000, message: 'catchup f A resumes incrementally after the outage',
       }).toBe('incremental')
