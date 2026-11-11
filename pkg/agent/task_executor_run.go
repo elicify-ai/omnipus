@@ -688,6 +688,11 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 		// D-08/FR-057: mirrors processTaskDirect's identical field — see its
 		// doc comment (task_executor.go) for the full contract.
 		AutoDenyAsk: tools.ToolAutoDenyAsk(ctx),
+		// #1765: this dispatch serves task runs, plan wakes and the external-CLI
+		// Judge, all unattended. Declaring the origin lets a session minted
+		// without a lifecycle record (plan owner/supervision, Judge) resolve by
+		// it; a damaged chain without that exception still logs and refuses.
+		OriginKind: session.OriginKindTask,
 		// The run's execution owner (task_execution_disposition.go): this
 		// turn is registered below under the run's identity so a Stop finds
 		// its barrier and interrupts the external process.
