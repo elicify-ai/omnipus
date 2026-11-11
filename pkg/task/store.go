@@ -711,6 +711,10 @@ func ValidateTrigger(tr *Trigger) error {
 	return nil
 }
 
+// dtstartMsFloor is 2000-01-01T00:00:00Z in Unix milliseconds. A recurring
+// trigger's config.dtstart_ms below it is refused as probably seconds (#1771).
+const dtstartMsFloor int64 = 946684800000
+
 // rruleMaxLen is the maximum allowed length, in characters, of an RRULE body
 // (Calendar Recurrence Redesign spec, Validation §2 input bounds).
 const rruleMaxLen = 512
@@ -744,6 +748,12 @@ func validateRRULE(cfg TriggerConfig) error {
 	}
 	if cfg.Tz == nil || *cfg.Tz == "" {
 		return verr("trigger config.rrule requires config.tz")
+	}
+	// #1771: a value before 2000-01-01 is almost certainly Unix seconds, which
+	// would silently anchor the schedule in January 1970 (wrong run time).
+	if *cfg.DtstartMs < dtstartMsFloor {
+		return verr("trigger config.dtstart_ms must be a Unix time in milliseconds; %d looks like seconds "+
+			"(multiply by 1000) or is not a real start time", *cfg.DtstartMs)
 	}
 
 	// §2: length bound, checked before parsing (cheap defense-in-depth against
