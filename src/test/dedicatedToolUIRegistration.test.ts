@@ -59,6 +59,7 @@ import '@/components/chat/tools/WebServeUI'
 import '@/components/chat/tools/ServeWorkspaceUI'
 import '@/components/chat/tools/RunInWorkspaceUI'
 import '@/components/chat/tools/SetGoalToolUI'
+import '@/components/chat/tools/TaskToolUI'
 
 // ── Backend extraction ──────────────────────────────────────────────────────
 // Package-scoped consts:  const X = "name"

@@ -14,6 +14,17 @@ export function resolvedToolPartStatus<T extends { type: string }>(status: T, ar
   return status
 }
 
+/** The call's recorded error text, carried in the same UI-only artifact as its
+ * status (omnipus-runtime.ts::buildContentParts). Undefined when none was recorded.
+ */
+export function resolvedToolPartError(artifact: unknown): string | undefined {
+  if (artifact && typeof artifact === 'object' && 'omnipusToolError' in artifact) {
+    const error = artifact.omnipusToolError
+    if (typeof error === 'string') return error
+  }
+  return undefined
+}
+
 /** Keep native registrations on one outcome adapter, including legacy aliases. */
 export function makeAssistantToolUI<TArgs, TResult>(tool: AssistantToolUIProps<TArgs, TResult>) {
   const Render = tool.render

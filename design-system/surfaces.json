@@ -6907,6 +6907,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/tools/TaskToolUI.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/tools/WebFetchPreview.tsx",
       "lane": 4
     },

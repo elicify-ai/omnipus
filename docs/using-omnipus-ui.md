@@ -354,7 +354,13 @@ After a first **Stop**, **Escape**, or `/stop`, the same Stop button stays avail
 
 `/stop-redirect` without an instruction (or with only spaces) replies with usage and changes nothing. The instruction is required and sent as typed after the command, with surrounding spaces removed. If no active session is attached to the current chat, a visible message asks you to reopen it; no redirect is sent. If the connection is down, the redirect cannot be sent: a visible error says so, this chat's turn keeps running, and you can run the command again once you are reconnected.
 
-A reply you stop with Stop, Escape, `/stop` or `/cancel` keeps the text that was on screen when you pressed Stop, also after you reload the page, with the same (interrupted) label; text the agent was still sending after the Stop is not saved, except that a few words already on their way at the moment you pressed it can still appear after a reload.
+When you stop an answer that is still being written with **Stop**, **Escape**, `/stop` or `/cancel`, this page freezes the text it has already added to the reply and marks it **(interrupted)**. The typing animation may briefly finish revealing that text. More tokens from the stopped turn are ignored while the page waits for the server to finish stopping it.
+
+For Omnipus's own agents, the page also tells the server how much text it had added. Once the Stop has been processed and the answer saved, reloading keeps that stopping point for text that had not already been saved. Text saved before a tool call stays whole, so after reloading you may see more of that earlier text than this page had shown. If the page cannot provide a stopping point the server can use—for example, an older page that has not been reloaded after an update—the server keeps the text it had when it accepted the Stop instead. If the server accepted another Stop for the same turn first, that first Stop decides the saved stopping point.
+
+**Stop all** also stops the helper chats, but their saved replies are not shortened to match the parent chat's screen. Saved replies from external command-line helpers are not shortened to this page's stopping point.
+
+If a connection error says the Stop could not be sent, the agent may still be running; reconnect and press **Stop** again.
 
 A turn stopped by `/stop-redirect` keeps its partial reply but is not labelled (interrupted), because it was redirected, not abandoned; a turn stopped with Stop, Escape, `/stop` or `/cancel` still shows (interrupted). After you reload the page this holds for a redirected main chat and a redirected helper chat. A tab that did not send the redirect may show (interrupted) until it is reloaded. One case cannot be told apart from the saved history, so after a reload it can differ from what you saw live: a turn you stopped with Stop and then redirected later, with no message of yours in between, loses its (interrupted) label.
 

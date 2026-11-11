@@ -61,6 +61,7 @@ import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, 
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
+import { buildTerminalMessageStatus } from '@/lib/omnipus-runtime'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
@@ -1193,7 +1194,10 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
       data-message-role="assistant"
       data-message-id={message.id}
       {...assistantRowCorrelationAttributes(message)}
-      data-status="complete"
+      // #1671: the turn's outcome, not a fixed "complete" — a stopped turn
+      // showing "(interrupted)" is incomplete/cancelled here exactly as on
+      // the live AssistantUI row (one rule: buildTerminalMessageStatus).
+      data-status={buildTerminalMessageStatus(message).type}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
@@ -1830,6 +1834,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 sentAt={providerStatusEvent.sentAt}
                 receivedAt={providerStatusEvent.receivedAt}
                 stallAt={providerStatusEvent.stallAt}
+                attempt={providerStatusEvent.attempt}
+                maxAttempts={providerStatusEvent.maxAttempts}
               />
             </div>
           )}

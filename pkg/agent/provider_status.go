@@ -13,7 +13,10 @@ package agent
 //     line replaces the notice), and from the call returning;
 //   - after providerSilenceNoticeAfter without activity it publishes ONE
 //     provider_status "waiting" event (silent_since, and stall_at when the
-//     stream's silence limit is known);
+//     attempt's end is known: before the first response byte the attempt
+//     start plus the provider's request timeout — issue #1664 B1 — and once
+//     the stream has started the last activity plus the stream's silence
+//     limit), with the loop's attempt count (issue #1664 B3);
 //   - the next activity, or the end of the round, publishes "responding",
 //     which clears the notice.
 //
@@ -25,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
@@ -44,14 +48,24 @@ var (
 )
 
 // ProviderStatusPayload is the EventKindProviderStatus payload. The hub
-// builds the provider_status frame from these named fields only.
-type ProviderStatusPayload struct {
-	State       string    // ProviderStatusWaiting / Responding / Recovered
-	SessionID   string    // the session whose turn is waiting
-	SentAt      time.Time // server wall clock at emission
-	SilentSince time.Time // waiting: last provider activity (or the round start)
-	StallAt     time.Time // waiting: when the silence limit ends the call; zero = unknown
-	Retries     int       // recovered: automatic retries the call needed
+// builds the provider_status frame (generated.ProviderStatusFrame) from these
+// named fields only; the payload itself is never marshaled onto the wire.
+// Every field carries a json tag (musttag): the original fields keep their
+// Go names (the in-process JSON shape event consumers already decode), and
+// Attempt/MaxAttempts use the frame's keys, so a payload decoded from the
+// frame's wire shape (the gateway's #1664 tests) fills them.
+type ProviderStatusPayload struct { // not-wire-format: in-process event payload; the hub maps it onto generated.ProviderStatusFrame
+	State       string    `json:"State"`       // ProviderStatusWaiting / Responding / Recovered
+	SessionID   string    `json:"SessionID"`   // the session whose turn is waiting
+	SentAt      time.Time `json:"SentAt"`      // server wall clock at emission
+	SilentSince time.Time `json:"SilentSince"` // waiting: last provider activity (or the round start)
+	StallAt     time.Time `json:"StallAt"`     // waiting: when this attempt ends; zero = unknown
+	Retries     int       `json:"Retries"`     // recovered: automatic retries the call needed
+	// Attempt / MaxAttempts (issue #1664 B3): waiting only — the 1-based
+	// number of the loop's provider call and the total calls it makes;
+	// zero = not counted.
+	Attempt     int `json:"attempt"`
+	MaxAttempts int `json:"max_attempts"`
 }
 
 // providerSilenceWatch tracks one provider round's silence.
@@ -61,7 +75,14 @@ type providerSilenceWatch struct {
 	mu           sync.Mutex
 	lastActivity time.Time
 	stallLimit   time.Duration // the current stream's silence limit; 0 = not streaming
+	streaming    bool          // the stream's silence monitor has started (the response has begun)
 	waiting      bool          // a waiting notice is showing
+
+	// guard is the attempt's limit before the first response byte (issue
+	// #1664 B1): the provider's request timeout; 0 = unknown.
+	guard time.Duration
+	// attempt / maxAttempts number the loop's provider call (#1664 B3).
+	attempt, maxAttempts int
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -75,6 +96,9 @@ func (rt *agentLoopRunTurn) startProviderSilenceWatch(ctx context.Context) (cont
 	w := &providerSilenceWatch{
 		rt:           rt,
 		lastActivity: time.Now(),
+		guard:        providerRequestGuard(rt.activeProvider),
+		attempt:      rt.providerAttempt,
+		maxAttempts:  rt.providerMaxAttempts,
 		stopCh:       make(chan struct{}),
 		doneCh:       make(chan struct{}),
 	}
@@ -100,6 +124,11 @@ func (w *providerSilenceWatch) run() {
 			w.mu.Lock()
 			due := !w.waiting && now.Sub(w.lastActivity) >= providerSilenceNoticeAfter
 			since, limit := w.lastActivity, w.stallLimit
+			if !w.streaming {
+				// Before the first response byte the request timeout ends
+				// the attempt (issue #1664 B1).
+				limit = w.guard
+			}
 			if due {
 				w.waiting = true
 			}
@@ -109,7 +138,10 @@ func (w *providerSilenceWatch) run() {
 				if limit > 0 {
 					stallAt = since.Add(limit)
 				}
-				w.rt.emitProviderStatus(ProviderStatusPayload{State: ProviderStatusWaiting, SilentSince: since, StallAt: stallAt})
+				w.rt.emitProviderStatus(ProviderStatusPayload{
+					State: ProviderStatusWaiting, SilentSince: since, StallAt: stallAt,
+					Attempt: w.attempt, MaxAttempts: w.maxAttempts,
+				})
 			}
 		}
 	}
@@ -121,6 +153,7 @@ func (w *providerSilenceWatch) activity(stallLimit time.Duration) {
 	w.mu.Lock()
 	w.lastActivity = time.Now()
 	w.stallLimit = stallLimit
+	w.streaming = true
 	cleared := w.waiting
 	w.waiting = false
 	w.mu.Unlock()
@@ -136,6 +169,7 @@ func (w *providerSilenceWatch) retryScheduled(retryAt time.Time) {
 	w.mu.Lock()
 	w.lastActivity = retryAt
 	w.stallLimit = 0
+	w.streaming = false // the next call starts with no response byte yet
 	cleared := w.waiting
 	w.waiting = false
 	w.mu.Unlock()
@@ -175,4 +209,21 @@ func (rt *agentLoopRunTurn) emitProviderStatus(p ProviderStatusPayload) {
 	p.SessionID = string(rt.ts.routingSessionID)
 	p.SentAt = time.Now()
 	rt.al.emitEvent(EventKindProviderStatus, rt.ts.eventMeta("runTurn", "turn.llm.provider_status"), p)
+}
+
+// providerRequestGuard is the limit of a provider attempt before its first
+// response byte (issue #1664 B1): the operator's configured request_timeout
+// when the provider reports one, else the shipped default
+// (common.DefaultRequestTimeout) for a provider that reports its request
+// timeout at all. A provider that does not report one has no known limit
+// (zero: the notice carries no end time).
+func providerRequestGuard(p providers.LLMProvider) time.Duration {
+	reporter, ok := p.(providers.RequestTimeoutReporter)
+	if !ok {
+		return 0
+	}
+	if explicit := reporter.ExplicitRequestTimeout(); explicit > 0 {
+		return explicit
+	}
+	return common.DefaultRequestTimeout
 }

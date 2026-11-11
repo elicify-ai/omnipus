@@ -71,10 +71,12 @@ func retryPlanWait(attemptNo, retryAfterSeconds int) time.Duration {
 
 // RetryCauseOf reports the #1280 retry cause of a provider failure, or ""
 // when the failure is not part of the retry plan (access problems, rejected
-// requests, deadlines, silence stalls, a user Stop, unknown errors).
+// requests, deadlines, silence stalls, an empty stream (issue #1664: the
+// agent loop's silent-call attempt rule owns it), a user Stop, unknown errors).
 func RetryCauseOf(err error) string {
 	if err == nil || errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, common.ErrStreamStalled) {
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, common.ErrStreamStalled) ||
+		errors.Is(err, common.ErrEmptyStream) {
 		return ""
 	}
 	// A provider that failed after its 200 was committed: its own code

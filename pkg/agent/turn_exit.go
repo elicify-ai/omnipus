@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -87,7 +88,71 @@ func (ts *turnState) requestGracefulInterrupt(hint string) bool {
 	}
 	ts.gracefulInterrupt = true
 	ts.gracefulInterruptHint = hint
+	// Issue #1664 B7: a claimed Stop/cancel wakes a retry backoff at once
+	// (cancelFired is set by claimCancel before the graceful cascade runs).
+	if ts.cancelFired.Load() {
+		ts.closeCancelWakeLocked()
+	}
 	return true
+}
+
+// cancelWake returns a channel that is closed once a claimed Stop/cancel has
+// requested this turn's graceful interrupt (issue #1664 B7). A steering-only
+// graceful interrupt, with no claimed cancel, never closes it: that keeps its
+// one wrap-up call. The channel is created lazily so every way of building a
+// turnState gets one.
+func (ts *turnState) cancelWake() <-chan struct{} {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.cancelWakeCh == nil {
+		ts.cancelWakeCh = make(chan struct{})
+		if ts.gracefulInterrupt && ts.cancelFired.Load() {
+			close(ts.cancelWakeCh)
+			ts.cancelWakeClosed = true
+		}
+	}
+	return ts.cancelWakeCh
+}
+
+// closeCancelWakeLocked closes the cancel wake channel exactly once. ts.mu
+// must be held.
+func (ts *turnState) closeCancelWakeLocked() {
+	if ts.cancelWakeClosed {
+		return
+	}
+	if ts.cancelWakeCh == nil {
+		ts.cancelWakeCh = make(chan struct{})
+	}
+	close(ts.cancelWakeCh)
+	ts.cancelWakeClosed = true
+}
+
+// cancelRequestedBeforeRetry reports whether a claimed Stop/cancel has
+// already reached this turn, so an announced retry must not start (issue
+// #1664 B7). The claim alone decides: once an administrative cancel's
+// wrap-up request is built, gracefulInterruptRequested reports false, yet a
+// timed-out wrap-up call must still not be retried (#1664 R3-7). Hard abort
+// is checked separately by its callers.
+func (ts *turnState) cancelRequestedBeforeRetry() bool {
+	return ts.cancelFired.Load()
+}
+
+// waitRetryBackoff waits out a provider-retry backoff. It returns ctx's error
+// when the turn context ends (hard abort), context.Canceled when a claimed
+// Stop/cancel arrives during the wait (issue #1664 B7: no further provider
+// call and no further retry frame after Stop), and nil when the backoff
+// elapsed.
+func (ts *turnState) waitRetryBackoff(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ts.cancelWake():
+		return context.Canceled
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (ts *turnState) gracefulInterruptRequested() (bool, string) {

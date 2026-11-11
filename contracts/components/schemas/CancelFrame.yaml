@@ -29,3 +29,34 @@ properties:
       named session's reachable non-terminal descendant subtree (each
       live turn cancelled with its own stamped generation). Both scopes
       end turns, never goals.
+  shown:
+    type: object
+    additionalProperties: false
+    required:
+      - code_points
+    description: >
+      #1534 (founder 2026-10-31, Q3 = A). What this client's screen showed of the
+      answer being stopped when Stop was pressed. The server saves the stopped
+      answer only up to this point. Sent only by a first Stop that froze a
+      streaming answer. Absent: the server cuts at the moment it receives Stop.
+    properties:
+      turn_id:
+        type: string
+        minLength: 1
+        maxLength: 1024
+        description: turn_id of the stopped answer's tokens, when the client knows it.
+      message_id:
+        type: string
+        minLength: 1
+        maxLength: 1024
+        description: >
+          Wire message_id of the last token frame the client applied to the
+          stopped answer. Absent when no token had been applied (nothing shown).
+      code_points:
+        type: integer
+        format: int64
+        minimum: 0
+        description: >
+          Unicode code points of token content applied for message_id (a
+          replace token resets the count). Client-inserted separators are not
+          counted. 0 with no message_id means nothing of this turn was shown.

@@ -533,6 +533,8 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 		if shown := ts.takeStopShown(); shown != "" {
 			accumulated = ts.appendToAccumulator(shown)
 		}
+		// W4: keep only what the client's screen showed of this message.
+		accumulated = ts.cutStopAnswer(ts.getCurrentMessageID(), accumulated)
 	}
 	ts.SetFinalContent(accumulated)
 	ts.setTruncationReason(truncationReasonMaxOutputTokens)
@@ -552,5 +554,11 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 	// This replaces the former append-then-the former post-hoc truncation rewrite two-step,
 	// which reopened and rewrote the whole transcript.jsonl just to stamp
 	// two fields on the entry constructed one call earlier.
-	ts.appendAssistantTranscriptTruncated(accumulated, truncationReasonMaxOutputTokens)
+	// #1534: a stopped answer is saved under its live message id, like the
+	// streamed path (wsStreamerFinalize.persistTranscript).
+	entryID := ""
+	if ts.stopRequested.Load() {
+		entryID = ts.getCurrentMessageID()
+	}
+	ts.appendAssistantTranscriptTruncatedAs(entryID, accumulated, truncationReasonMaxOutputTokens)
 }

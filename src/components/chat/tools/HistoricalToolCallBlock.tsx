@@ -7,6 +7,7 @@ import { GenericToolCall } from './GenericToolCall'
 import { ConnectChannelReplay } from './ConnectChannelToolUI'
 import { WebServeBlock } from './WebServeUI'
 import { SetGoalCardBlock } from './SetGoalToolUI'
+import { isTaskToolName, TaskToolCardBlock } from './TaskToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './BrowserTool'
 import { BashOutputBlock, isBashToolName } from './BashOutput'
 import { FileReadBlock } from './FileReadPreview'
@@ -192,6 +193,29 @@ function renderSavedToolCall({
         error={tc.error}
         durationMs={tc.duration_ms}
         sessionId={activeSessionId ?? ''}
+      />
+    ))
+  }
+  // #1683 (CHECK F1, decision D1): create/update/run/delete_task render the
+  // SAME readable card the live registrations do (TaskToolUI.tsx, mounted in
+  // OmnipusRuntimeProvider), so the card does not collapse into the generic
+  // badge when a live message becomes a saved row. `tc.result` is passed
+  // UNCHANGED — on replay it is the persisted `{ text: "<payload json>" }`
+  // envelope, which the card unwraps itself — and the store's resolved outcome
+  // is passed explicitly, as in the set_goal branch above. A result the history
+  // page shortened never gets here (renderHistoricalToolCall sends it to the
+  // preview display first), and the delegation event line still slots in.
+  if (isTaskToolName(tc.tool)) {
+    return delegationSlotted(callId, inlineEvents, (
+      <TaskToolCardBlock
+        key={callId}
+        toolName={tc.tool}
+        args={tc.params}
+        result={tc.result}
+        status={replayPartStatus(tc.status, running)}
+        isRunning={tc.status === 'running'}
+        isError={tc.status === 'error'}
+        error={tc.error}
       />
     ))
   }

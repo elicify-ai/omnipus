@@ -1668,6 +1668,14 @@ type wsStreamer struct {
 	// by statsMu.
 	stopCut           bool
 	publishedAfterCut int
+	// stopLimit/stopLimitSet carry the web client's screen checkpoint
+	// (#1534, SetStopLimit): the saved stopped answer keeps only the first
+	// stopLimit code points of this message's whole text. Guarded by statsMu.
+	stopLimit    int
+	stopLimitSet bool
+	// beforeDone runs once in Finalize after the answer is saved and before
+	// done is published (#1524, SetBeforeDone). Guarded by statsMu.
+	beforeDone func()
 
 	// producedModel is the model string that produced this streamed response.
 	// Set by the agent loop via SetProducedModel before Finalize so the
