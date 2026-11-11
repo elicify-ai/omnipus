@@ -1612,7 +1612,7 @@ jobs:
           # running against an older stdlib than the release ships (a false green
           # on a security gate). This literal is the one place to keep in sync
           # with the `go` directive in go.mod.
-          go-version-input: '1.27.3'
+          go-version-input: '1.27.4'
           # The job's own "Setup Go" step above already restored the Go module
           # cache into $GOMODCACHE. The action bundles its OWN setup-go, which
           # by default restores a SECOND module cache into that same, already
