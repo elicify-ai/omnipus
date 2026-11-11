@@ -114,6 +114,7 @@ Only the agent that created a task may change what it asks for — its instructi
 | `{"type": "once", "config": {"at_ms": …}}` | One run at that time (milliseconds since 1970, UTC) |
 | `{"type": "recurring", "config": {"rrule": …, "dtstart_ms": …, "tz": …}}` | A repeating series, managed like any series on the [Calendar](calendar.md) |
 
+- `dtstart_ms` is the first occurrence in **milliseconds** since 1970 (13 digits, for example `1794816000000`). A value before 2000-01-01 is almost certainly seconds and is refused with a message that names the field and the unit, so the task cannot silently run at the wrong time.
 - A task created with a schedule begins in **Inbox** and waits there for its occurrence.
 - Adding a future schedule to a task in **Next** moves it to **Inbox** in the same save, so it cannot start early. Blocked, running and finished tasks keep their status.
 - An agent cannot schedule a task in another workspace: creating one with a schedule there, or adding a schedule to one, is refused and nothing is saved. Only the assignee there or a person can schedule it.
