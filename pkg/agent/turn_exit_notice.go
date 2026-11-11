@@ -28,11 +28,7 @@ func (al *AgentLoop) emitTurnExitFrame(ts *turnState, meta EventMeta, payloadSta
 // flushExitNotice. A second queue in the same turn keeps the first (the exit
 // that ended the turn wins), so the notice is never written twice.
 func (ts *turnState) queueExitNotice(kind, stage string, llm LLMError) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	if ts.exitNotice == nil {
-		ts.exitNotice = &queuedExitNotice{kind: kind, stage: stage, llm: llm}
-	}
+	ts.exitNotice.CompareAndSwap(nil, &queuedExitNotice{kind: kind, stage: stage, llm: llm})
 }
 
 // persistExitNoticeThenCancel is the streamer's before-done callback (#1524,
@@ -55,10 +51,7 @@ func (ts *turnState) finishAfterExitNotice() {
 // flushExitNotice writes the queued notice, if any. It writes even when no answer exists: the notice is
 // never lost.
 func (ts *turnState) flushExitNotice() {
-	ts.mu.Lock()
-	notice := ts.exitNotice
-	ts.exitNotice = nil
-	ts.mu.Unlock()
+	notice := ts.exitNotice.Swap(nil)
 	if notice == nil {
 		return
 	}

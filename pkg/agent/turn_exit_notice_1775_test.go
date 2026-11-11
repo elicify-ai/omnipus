@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -146,6 +147,27 @@ func TestStoppedTurn_NoticeSavedOnceWithoutPartial(t *testing.T) {
 	ts.flushExitNotice() // a second flush must not write a duplicate
 
 	require.Equal(t, []string{"notice", "turn_canceled"}, savedKinds(t, store, sessionID))
+}
+
+// A reader holding the turn lock until the forced stop (3 s later) must not
+// delay the Stop: queueing the notice never waits for ts.mu. Seen on a pod as
+// the notice and marker saved 3 s after the partial answer.
+func TestStoppedTurn_QueueingNoticeDoesNotWaitForTurnLock(t *testing.T) {
+	t.Parallel()
+	_, ts, _, _ := stoppedTurnFixture(t)
+
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	done := make(chan struct{})
+	go func() {
+		ts.queueExitNotice("error", "runTurn", LLMError{})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queueExitNotice blocked on ts.mu held by a reader")
+	}
 }
 
 // Positive control for the instrument: the old direct write puts the notice

@@ -501,9 +501,10 @@ type turnState struct {
 	// exitNotice is the classified error of a typed exit (user Stop, timeout)
 	// whose transcript entry is held back until the turn's interrupted answer
 	// has been written (#1775): typedTurnExit queues it, flushExitNotice (a
-	// defer in runTurn, between Finish and finalizeStreamer) writes it. Guarded
-	// by mu; nil when nothing is queued.
-	exitNotice *queuedExitNotice
+	// defer in runTurn, between Finish and finalizeStreamer) writes it. Atomic,
+	// not under mu: a reader may hold mu until the forced stop, and queueing
+	// must never wait for it.
+	exitNotice atomic.Pointer[queuedExitNotice]
 
 	// turnWaitBudget is the D14 per-turn wait budget (10 min total), shared
 	// by every fallback-chain call of this turn — a per-iteration budget
