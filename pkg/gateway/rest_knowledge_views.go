@@ -114,7 +114,9 @@ func (a *restAPI) handleKnowledgeViews(w http.ResponseWriter, r *http.Request, w
 	// loss base-views refuses. Count the FILES and name each rejection, the
 	// D-70 rule: a count alone says nothing a reader can act on.
 	unloadable := []gen.KnowledgeBaseUnloadableView{}
+	names := newCollectionFileNames(col.Root)
 	for _, rej := range report.Rejections {
+		rej = names.viewRejection(rej)
 		out.UnloadableCount += len(rej.Paths)
 		entry := gen.KnowledgeBaseUnloadableView{
 			Paths:  append([]string(nil), rej.Paths...),

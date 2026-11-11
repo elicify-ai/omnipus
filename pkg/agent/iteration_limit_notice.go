@@ -41,7 +41,7 @@ func (ts *turnState) recordIterationLimitNotice(content string, messageBus *bus.
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		if terminalStreamer, ok := messageBus.GetStreamer(ctx, ts.opts.Channel, ts.opts.ChatID, ts.transcriptSessionID); ok {
+		if terminalStreamer, ok := messageBus.GetStreamer(ctx, ts.streamerChannel(), ts.opts.ChatID, ts.transcriptSessionID); ok {
 			streamer = terminalStreamer
 			ts.setLastStreamer(streamer)
 			ts.stampStreamerTurnID(streamer)

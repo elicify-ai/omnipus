@@ -1543,6 +1543,10 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 //     "agent:<owner>:session:<id>" form, collision-free across isolated runs.
 //   - It sets AutoDenyAsk so any `ask`-policy tool call is denied without
 //     blocking for approval (FR-009) — no operator is present.
+//   - It publishes the persisted prompt and marks the turn WebchatLiveStream
+//     so viewers bound to the session see the prompt and the streamed answer
+//     live (#1442, scheduled_live_view.go); Channel/ChatID stay as passed,
+//     so channel-keyed behavior is unchanged.
 //
 // The caller (the gateway's scheduled-job runner) resolves the owner + picks
 // the session per session_mode and supplies a concrete sessionID; it imposes
@@ -1611,6 +1615,8 @@ func (al *AgentLoop) ProcessScheduled(
 			map[string]any{"session_id": sessionID, "owner": ownerAgentID, "error": err.Error()})
 		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
+	// #1442: the prompt is persisted; publish it live to the session's viewers.
+	al.publishScheduledPrompt(ownerAgentID, sessionKey, sessionID, userEntry)
 
 	// FIX 1 (re-review): WorkspaceID was never threaded here, so any tool
 	// media a scheduled/heartbeat-fired run produces silently degraded to the
@@ -1658,6 +1664,7 @@ func (al *AgentLoop) ProcessScheduled(
 		TranscriptStore:     transcriptStore,
 		WorkspaceID:         workspaceID,
 		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
+		WebchatLiveStream:   true, // #1442: answer streams live to the session's viewers
 	})
 	if err == nil && ctx.Err() == context.DeadlineExceeded {
 		// A deadline-forced hard abort (pkg/gateway/schedules.go's
