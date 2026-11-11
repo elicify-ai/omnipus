@@ -16,6 +16,7 @@
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/canonical-history'
 import { seedAndOpenSession, openSessionByDeepLink } from './fixtures/session-setup'
+import { assistantMessages } from './fixtures/selectors'
 
 // ── Helper: get data-message-id from the ancestor message bubble ──────────────
 
@@ -111,7 +112,7 @@ test(
 
     // Step 1: Verify initial render has 2 assistant messages and 2 badges
     // Exclude data-status="running" — only count completed messages, not placeholders.
-    const assistants = page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])')
+    const assistants = assistantMessages(page)
     await expect(assistants).toHaveCount(2, { timeout: 15_000 })
 
     const badges = page.locator('[data-testid="tool-call-badge"]')

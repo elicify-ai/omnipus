@@ -322,7 +322,7 @@ test(
     await expect(userMsgs).toHaveCount(1, { timeout: 15_000 })
 
     // Exclude data-status="running" — only count completed messages, not in-progress placeholders.
-    const asstMsgs = page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])')
+    const asstMsgs = assistantMessages(page)
     await expect(asstMsgs).toHaveCount(1, { timeout: 15_000 })
 
     // SC-I-004(i): badge count — two tool calls must produce two tool-call-badge elements.
@@ -926,7 +926,7 @@ test(
     // The fixture seeds exactly 1 assistant message — fidelity tests assert fidelity, not tolerance.
     // Traces to: temporal-puzzling-melody.md W2-9
     // Exclude data-status="running" to only count completed messages, not in-progress placeholders.
-    const asstMsgs = page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])')
+    const asstMsgs = assistantMessages(page)
     await expect(asstMsgs).toHaveCount(1, { timeout: 15_000 })
     const countAfterReplay = 1
 
