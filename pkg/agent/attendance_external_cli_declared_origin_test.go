@@ -55,9 +55,10 @@ func TestExternalCLIDispatch_PlanLikeSessionWithoutRecord_NoUnresolvedError(t *t
 		"the external-CLI turn declares an unattended origin, so a session minted without a record is not damage")
 }
 
-func TestExternalCLIDispatch_RealTaskRunSession_NoUnresolvedError(t *testing.T) {
+func TestExternalCLIDispatch_TaskSessionIdentifiedByMetaTaskID_NoUnresolvedError(t *testing.T) {
 	text, _ := externalCLIAttendanceLog(t, "task-run")
-	require.NotContains(t, text, ancestryUnresolvedLog, "a real task run resolves through its lifecycle record")
+	require.NotContains(t, text, ancestryUnresolvedLog,
+		"a session carrying meta TaskID resolves as a task root before any lifecycle read (a metadata control, not a lifecycle-record control)")
 }
 
 func TestExternalCLIDispatch_MissingAncestor_StillLogsUnresolved(t *testing.T) {

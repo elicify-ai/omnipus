@@ -66,9 +66,11 @@ func unattendedOrigin(kind session.OriginKind) bool {
 //
 // declared is the turn's own declared origin (processOptions.OriginKind).
 // Plan owner/supervision sessions and the external-CLI Judge session are
-// minted without a lifecycle record, and every wake turn on them declares an
-// unattended origin (#1765): when the turn's OWN session has no record and the
-// declared origin is unattended, that declared origin decides, with no
+// minted without a lifecycle record. The direct dispatch (processTaskDirect,
+// native and external-CLI) declares an unattended origin for them (#1765);
+// other entries (notifier, async results, completions) declare none and are
+// covered by the plan-record witness below. When the turn's OWN session has no
+// record and the declared origin is unattended, that declared origin decides, with no
 // unresolved-ancestry error. It never covers an ancestor, an unreadable
 // record, or a declared origin that is not unattended: those stay unresolved
 // and refuse.
