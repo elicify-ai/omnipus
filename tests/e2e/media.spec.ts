@@ -3,67 +3,15 @@ import * as path from 'path';
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors';
+import { chatInput, assistantMessages, userMessages, selectAgent, DEFAULT_WORKSPACE_NAME } from './fixtures/selectors';
+import { Agent, Session, SessionDetail, Workspace } from '../../src/lib/api/generated/schemas';
+import type { SessionCreateRequest } from '../../src/lib/api/generated/openapi-types';
+import { GatewayProcess } from './fixtures/gateway-process';
+import { openSessionByDeepLink } from './fixtures/session-setup';
+import { MEDIA_DOWNLOAD_CALL_ID, startMediaDownloadProvider } from './fixtures/media-download-provider';
 
-// Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
-
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
-
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test');
-
-/**
- * Resolve the active workspace ID so a fixture file can be placed inside its
- * work/ directory (the ADR-046 P1 per-turn filesystem re-root every CoreTeam
- * agent's tools are confined to — pkg/workspace/instructions.go WorkDir() =
- * `<OMNIPUS_HOME>/workspaces/<id>/work`). Mirrors
- * memory-remember-recall.spec.ts's resolveWorkspaceId — duplicated locally
- * per this suite's established "shared harness pattern, not extracted to a
- * fixture" convention (see waitForTurnFullyDone's doc comment above for the
- * same rationale applied to a different helper).
- *
- * Strategy: GET /api/v1/workspaces first (dev_mode_bypass admin session rides
- * along via cookies), falling back to a disk scan of
- * $OMNIPUS_HOME/workspaces/ if the API is unreachable.
- */
-async function resolveWorkspaceId(page: Page): Promise<string> {
-  try {
-    const resp = await page.request.get(`${BASE_URL}/api/v1/workspaces`, {
-      failOnStatusCode: false,
-    });
-    if (resp.ok()) {
-      const workspaces = (await resp.json()) as Array<{
-        id: string;
-        is_default?: boolean;
-        status?: string;
-      }>;
-      if (Array.isArray(workspaces) && workspaces.length > 0) {
-        const def = workspaces.find((w) => w.is_default === true);
-        if (def?.id) return def.id;
-        const first = workspaces.find((w) => !w.status || w.status === 'active') ?? workspaces[0];
-        if (first?.id) return first.id;
-      }
-    }
-  } catch {
-    // Network error — fall through to disk scan.
-  }
-
-  const workspacesDir = path.join(OMNIPUS_HOME, 'workspaces');
-  if (fs.existsSync(workspacesDir)) {
-    const wsDirs = fs
-      .readdirSync(workspacesDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-    if (wsDirs.length > 0) return wsDirs[0];
-  }
-
-  throw new Error(
-    'BLOCKED: could not resolve an active workspace ID via GET /api/v1/workspaces or a disk ' +
-      `scan of ${workspacesDir}. send_file needs a workspace-scoped work/ directory to deliver ` +
-      'its fixture from — see resolveWorkspaceId in this file.',
-  );
-}
+// Global storageState provides test (a)'s shared-gateway session. Test (b)
+// uses its own GatewayProcess, cookies, workspace and fresh Jim chat instead.
 
 /**
  * Wait for any follow-up LLM call after the current assistant message settles.
@@ -86,13 +34,9 @@ async function resolveWorkspaceId(page: Page): Promise<string> {
  * `followUpCeilingMs` is how long a follow-up LLM call (stop button visible
  * again) may run before this guard gives up waiting. Default 180s — the same
  * ceiling as test (a)'s own count assertion, kept for the two-browser-tool-call
- * flow. Test (b) passes 60s explicitly as a POLICY ALLOWANCE, not a measured
- * latency: its follow-up call is expected to be a single short reply after ONE
- * forced send_file call, and 60s matches the count assertion that precedes the
- * guard. No successful run of test (b) exists in the CI evidence (see the
- * budget comment in test (b)), so no successful follow-up latency has been
- * observed for it. The guard remains advisory (its catch below); the delivery
- * assertions after it are what actually fail on missing content.
+ * flow. Test (b) does not use this advisory helper: its scripted provider
+ * proves the send_file tool result returned through the loop, and its final
+ * SENT reply and download assertions establish delivery directly.
  */
 async function waitForTurnFullyDone(page: Page, gapMs = 8_000, followUpCeilingMs = 180_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
@@ -110,6 +54,9 @@ async function waitForTurnFullyDone(page: Page, gapMs = 8_000, followUpCeilingMs
   }
 }
 
+// Scope the original shared-gateway navigation to (a), like the shared/live
+// scopes in catchup-scenarios. The anonymous scope preserves its full title.
+test.describe(() => {
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
@@ -192,148 +139,127 @@ test(
   },
 );
 
-test(
-  '(b) file-download fallback: send_file delivers a non-image file that renders a working download button',
-  // T0.1 (re-investigated): the #107 blocker no longer holds. It was written
-  // when no tool could reliably produce a non-image media frame without a
-  // mock. This branch (sendfile-fix) now ships a real `send_file` tool
-  // (pkg/tools/send_file.go, allowed for Jim/Mia/Ray — pkg/coreagent/core.go)
-  // that registers ANY local file through the exact same MediaStore pipeline
-  // browser_screenshot already uses in test (a) above. Pre-seeding a plain
-  // fixture file on disk and instructing the agent to call send_file with
-  // its exact relative path is exactly as deterministic as the
-  // "call read_file with path=/etc/hostname" pattern subagent.spec.ts
-  // already relies on elsewhere in this suite — no LLM judgment call, no
-  // mock gateway tool needed.
-  //
-  // Why this exercises the NON-image branch deterministically: a non-image
-  // file is a file card with a download button (docs/using-omnipus-ui.md),
-  // never an <img>. `type` comes from inferMediaType(filename, contentType)
-  // (pkg/agent/loop.go),
-  // which classifies a `.txt` file as "file" (it's in none of the
-  // image/audio/video extension lists) regardless of what content-type
-  // detection returns for a plain-text file — so this is robust even if
-  // magic-byte detection is inconclusive for text.
-  async ({ page }) => {
-    // Outer budget for this test. See the evidence and allowance table below.
-    //
-    // WHAT THE CI EVIDENCE DOES AND DOES NOT SHOW (shard llm-light,
-    // pw-results.json of release/v0.1.1 runs 42252059326, 42334402301 and
-    // 42366141699, three runs, 12 attempts of THIS test): attempt durations
-    // 22.3/25.5/62.8/63.2s, 21.5/21.1/62.5/62.4s and 27.1/21.1/62.4/20.6s.
-    // ALL 12 FAILED, inside inner budgets (the 15s download-link assertion or
-    // the 60s count assertion); none reached the old 120s outer budget, and no
-    // attempt PASSED. A failed wait is a lower bound on how long we waited
-    // without success, not an upper bound on successful latency, so these
-    // numbers establish NO latency ceiling for this test: the successful
-    // latency of (b) is UNKNOWN. (Test (a), a different flow, passed in 27-35s
-    // in the same runs; it is not evidence for (b).)
-    //
-    // So the 240s below is NOT empirically justified and is not claimed to fix
-    // the failures. It is a policy budget that exists for one reason: the
-    // waitForTurnFullyDone leg added below lengthens the sum of this test's own
-    // inner timeouts, and test.setTimeout is a hard governor that must not cut
-    // an inner wait short. The sum uses allowances, not measurements:
-    //   Sidebar agent selection + input visibility ..................... ~35s (allowance)
-    //   assistantMessages toHaveCount ceiling ........................... 60s (enforced)
-    //   waitForTurnFullyDone: gapMs(8s) + follow-up ceiling(60s) ........ 68s (enforced)
-    //   downloadLink toBeVisible ceiling ................................ 15s (enforced)
-    //   download event + path + read-back ............................... ~20s (allowance, no explicit timeout)
-    //   a11y scan ......................................................... 10s (allowance, no explicit timeout)
-    // Sum of those allowances: 35 + 60 + 68 + 15 + 20 + 10 = 208s, plus ~15%
-    // scheduling margin = 240s (2.0x the old 120s). The 5267bd455 raise to 360s
-    // only mirrored the guard's inherited 180s follow-up ceiling, which is why
-    // the guard's ceiling is now passed explicitly. Why the link never appeared
-    // is SUSPECTED (the mid-turn blip race the guard addresses), not
-    // established: the gateway log has no send_file error, which does not
-    // distinguish "never called" from "called without an error being logged".
-    // That 12 of 12 attempts failed, including attempts that failed at the
-    // 60s count assertion before this guard runs, argues AGAINST a pure
-    // latency explanation and is not resolved by this change.
-    test.setTimeout(240_000);
+});
 
-    // Seed a real fixture file directly on disk inside the workspace's work/
-    // directory (the ADR-046 P1 filesystem re-root every CoreTeam agent's
-    // tools are confined to), so the agent needs only ONE forced tool call
-    // (send_file) — no write_file round-trip, no room for the LLM to
-    // improvise content.
-    const workspaceId = await resolveWorkspaceId(page);
-    const relDir = 'e2e-media-download';
-    const fileName = `report-${Date.now()}.txt`;
-    const nonce = `OMNIPUS-E2E-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const fixtureContent = `Omnipus E2E download fixture\nnonce: ${nonce}\n`;
-    const workDir = path.join(OMNIPUS_HOME, 'workspaces', workspaceId, 'work', relDir);
-    fs.mkdirSync(workDir, { recursive: true });
-    fs.writeFileSync(path.join(workDir, fileName), fixtureContent, 'utf-8');
-    const relPath = `${relDir}/${fileName}`;
+// A file is the shard unit: keep this scripted case in llm-light with live (a),
+// as catchup-scenarios keeps scripted b/c beside its live cases in llm-agents.
+test.describe(() => {
+  // A deterministic download regression cannot be established by retrying.
+  test.describe.configure({ retries: 0 });
+  test.use({ storageState: { cookies: [], origins: [] } });
 
-    // Jim has send_file:allow (pkg/coreagent/core.go IDJim case) and is the
-    // established "does real work now" agent elsewhere in this suite
-    // (subagent.spec.ts's startFreshChat / selectAgent default).
-    await selectAgent(page, /Jim/i);
+  test(
+    '(b) file-download fallback: send_file delivers a non-image file that renders a working download button',
+    async ({ page }, info) => {
+      // Only the external model is scripted. Whether a live model obeys the
+      // send_file instruction is deliberately NOT tested here: that is the
+      // model's behaviour, not the product's download path. Agent execution,
+      // MediaStore, media HTTP serving, SPA and browser download remain real.
+      // History: the old live-model case failed 12 of 12 CI attempts (#1764);
+      // shared-session interference and model refusal motivated this isolation.
+      // 120s allows boot/onboarding, fresh-chat UI, local tool round-trip,
+      // download and accessibility scan; no paid-model latency is budgeted.
+      test.setTimeout(120_000);
 
-    const input = chatInput(page);
-    await expect(input).toBeVisible({ timeout: 10_000 });
-
-    const countBefore = await assistantMessages(page).count();
-    await input.fill(
-      [
+      const relDir = 'e2e-media-download';
+      const fileName = `report-${Date.now()}.txt`;
+      const nonce = `OMNIPUS-E2E-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const fixtureContent = `Omnipus E2E download fixture\nnonce: ${nonce}\n`;
+      const relPath = `${relDir}/${fileName}`;
+      const prompt = [
         `Call the send_file tool exactly once with path "${relPath}".`,
         'Do not pass a filename argument. Do not call any other tool.',
         'After the tool result, reply with exactly: SENT',
-      ].join(' '),
-    );
-    await input.press('Enter');
+      ].join(' ');
+      const provider = await startMediaDownloadProvider({ prompt, relativePath: relPath });
+      let gw: GatewayProcess | undefined;
+      try {
+        gw = await GatewayProcess.start({ apiBase: provider.url });
+        // Same public-API + exact deep-link setup as agent-parity-approval:
+        // no cold landing-page/sidebar detour and no reuse of Jim's main chat.
+        const agentsResult = await gw.apiFetch('GET', '/api/v1/agents');
+        expect(agentsResult.status, 'the isolated gateway must expose its real roster').toBe(200);
+        const jim = Agent.array().parse(agentsResult.body).find((agent) => agent.name === 'Jim');
+        expect(jim, 'the isolated roster must contain Jim').toBeDefined();
+        if (!jim) throw new Error('BLOCKED: Jim is required by media (b)');
+        const workspacesResult = await gw.apiFetch('GET', '/api/v1/workspaces');
+        expect(workspacesResult.status, 'the isolated workspace must be readable').toBe(200);
+        const workspace = Workspace.array().parse(workspacesResult.body).find((ws) => ws.name === DEFAULT_WORKSPACE_NAME);
+        expect(workspace, 'the isolated gateway must seed its default workspace').toBeDefined();
+        if (!workspace) throw new Error('BLOCKED: a workspace is required by media (b)');
+        const created = await gw.apiFetch('POST', '/api/v1/sessions', {
+          type: 'chat', agent_id: jim.id, workspace_id: workspace.id,
+        } satisfies SessionCreateRequest);
+        expect(created.status, 'create a new Jim chat, not the shared main session').toBe(201);
+        const session = Session.parse(created.body);
+        expect(session.agent_id, 'the fresh chat must belong to Jim').toBe(jim.id);
+        expect(session.type, 'the download must run in a chat session').toBe('chat');
+        expect(session.workspace_id, 'seed the file in this chat’s workspace, never a shared home').toBe(workspace.id);
+        const detail = await gw.apiFetch('GET', `/api/v1/sessions/${session.id}`);
+        expect(detail.status, 'the fresh session history must be readable').toBe(200);
+        const history = SessionDetail.parse(detail.body);
+        expect(history.history_state.status, 'freshness must not be inferred from unavailable history').toBe('available');
+        expect(history.messages, 'the new Jim chat must have no prior messages').toEqual([]);
+        const workDir = path.join(gw.homeDir, 'workspaces', workspace.id, 'work', relDir);
+        fs.mkdirSync(workDir, { recursive: true });
+        fs.writeFileSync(path.join(workDir, fileName), fixtureContent, 'utf-8');
+        await page.context().addCookies((await gw.browserStorageState()).cookies);
+        await openSessionByDeepLink(page, session.id, gw.baseURL);
+        await expect(userMessages(page), 'a fresh Jim chat has no prior user messages').toHaveCount(0);
 
-    await expect(assistantMessages(page)).toHaveCount(countBefore + 1, { timeout: 60_000 });
+        const input = chatInput(page);
+        // 10s is SPA readiness slack; the provider is local and answers at once.
+        await expect(input).toBeVisible({ timeout: 10_000 });
+        await expect(assistantMessages(page), 'a fresh chat cannot inherit (a)’s reply').toHaveCount(0);
+        const countBefore = await assistantMessages(page).count();
+        await input.fill(prompt);
+        await input.press('Enter');
 
-    // Guard against the premature-"complete" race described at the top of
-    // waitForTurnFullyDone above — the SAME instrument gap test (a) already
-    // fixed. The count assertion reads data-status, and the first LLM
-    // completion segment of this turn CAN end (done:true) before send_file
-    // has run, so `toHaveCount(countBefore + 1)` can resolve on that blip
-    // while the tool call is still ahead of the model. SUSPECTED, not
-    // established for the incident below: without this wait, the
-    // download-link assertion's 15s budget would start from such a blip and
-    // expire before send_file lands — a failure that looks like a missing
-    // media frame but would really be a mid-turn snapshot. If the model never
-    // calls send_file, this wait ends with no follow-up call observed and the
-    // link assertion still fails below — the guard cannot turn a real
-    // non-compliance into a pass, it only stops measuring from the wrong
-    // moment. (CI run 42252059326, shard llm-light — measured: attempts 1-2
-    // failed at 22.3s/25.5s, at that 15s link budget, with no send_file error
-    // in the gateway log; missing logs do not distinguish "never called" from
-    // "called cleanly", so the blip mechanism remains a hypothesis.) The
-    // explicit 60s follow-up ceiling is a policy allowance, not a measured
-    // latency (no successful run of this test exists in the evidence) — see
-    // the budget comment above; the heavier two-tool-call test (a) keeps the
-    // function default.
-    await waitForTurnFullyDone(page, 8_000, 60_000);
+        // 15s covers local send_file plus its follow-up; a final SENT paragraph
+        // is completion evidence, unlike the old advisory mid-turn gap wait.
+        await expect(assistantMessages(page)).toHaveCount(countBefore + 1, { timeout: 15_000 });
+        await expect(assistantMessages(page).getByText('SENT', { exact: true })).toHaveText('SENT', { timeout: 15_000 });
+        expect(provider.evidence.streamRequests, 'exactly the tool call and its follow-up reached the provider').toBe(2);
+        expect(provider.evidence.issuedCalls, 'exactly one send_file call was issued').toBe(1);
+        expect(provider.evidence.toolResults, 'send_file returned through the real agent loop on request two').toEqual([
+          { request: 2, callId: MEDIA_DOWNLOAD_CALL_ID, name: 'send_file', content: expect.stringMatching(/\S/) },
+        ]);
+        expect(provider.evidence.errors, 'no unexpected scripted-provider traffic').toEqual([]);
 
-    // Structural assertion: a non-image file renders a button named
-    // "Download <filename>" (docs/using-omnipus-ui.md), never an <img>.
-    // The button has no href. The click still fetches /api/v1/media/.
-    const downloadButton = page.getByRole('button', { name: `Download ${fileName}`, exact: true });
-    await expect(downloadButton).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator(`img[src*="${fileName}"]`)).toHaveCount(0);
+        // Structural oracle: a non-image is a file download button, never an img.
+        const downloadButton = page.getByRole('button', { name: `Download ${fileName}`, exact: true });
+        // 10s is render slack after the local tool result, not a model budget.
+        await expect(downloadButton, 'the sent file must render its Download button').toBeVisible({ timeout: 10_000 });
+        await expect(page.locator(`img[src*="${fileName}"]`)).toHaveCount(0);
+        await expect(page.locator('img[src*="/api/v1/media/"]'), 'non-image media must not render as an image').toHaveCount(0);
 
-    // Differentiation + persistence test: actually download the file through
-    // the real HTTP endpoint and assert the exact nonce-bearing bytes round-
-    // tripped (local disk -> send_file -> MediaStore -> HTTP -> browser).
-    // A hardcoded/stub send_file, or one that registers a ref without really
-    // persisting the file, cannot reproduce this nonce.
-    const [download, mediaRequest] = await Promise.all([
-      page.waitForEvent('download'),
-      page.waitForRequest((req) => /\/api\/v1\/media\//.test(req.url())),
-      downloadButton.click(),
-    ]);
-    expect(mediaRequest.url()).toMatch(/\/api\/v1\/media\//);
-    expect(download.suggestedFilename()).toBe(fileName);
-    const downloadPath = await download.path();
-    expect(downloadPath).toBeTruthy();
-    const downloadedContent = fs.readFileSync(downloadPath as string, 'utf-8');
-    expect(downloadedContent).toBe(fixtureContent);
-
-    await expectA11yClean(page);
-  },
-);
+        // Real disk -> send_file -> MediaStore -> HTTP -> browser, with exact
+        // nonce-bearing bytes. The provider never knows the fixture contents.
+        // 10s per event/click is slack for a tiny local file, with no network model.
+        const [download, mediaRequest] = await Promise.all([
+          page.waitForEvent('download', { timeout: 10_000 }),
+          page.waitForRequest((req) => /\/api\/v1\/media\//.test(req.url()), { timeout: 10_000 }),
+          downloadButton.click({ timeout: 10_000 }),
+        ]);
+        expect(mediaRequest.url()).toMatch(/\/api\/v1\/media\//);
+        expect(download.suggestedFilename(), 'the browser download must retain the original filename').toBe(fileName);
+        const downloadPath = await download.path();
+        expect(downloadPath).toBeTruthy();
+        const downloadedContent = fs.readFileSync(downloadPath as string, 'utf-8');
+        expect(downloadedContent, 'downloaded bytes must exactly match the nonce-bearing disk fixture').toBe(fixtureContent);
+        expect(fs.readFileSync(downloadPath as string), 'download must preserve every fixture byte').toEqual(Buffer.from(fixtureContent, 'utf-8'));
+        await expectA11yClean(page);
+      } finally {
+        try {
+          await info.attach('media-download-provider-evidence', {
+            body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json',
+          });
+          if (gw) await info.attach('media-download-gateway', { body: gw.outputTail(), contentType: 'text/plain' });
+        } finally {
+          try { await gw?.stop(); }
+          finally { await provider.close(); }
+        }
+      }
+    },
+  );
+});
