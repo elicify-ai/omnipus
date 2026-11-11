@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -71,6 +72,12 @@ func unattendedOrigin(kind session.OriginKind) bool {
 // unresolved-ancestry error. It never covers an ancestor, an unreadable
 // record, or a declared origin that is not unattended: those stay unresolved
 // and refuse.
+//
+// The same missing-own-record case is also resolved for a session the plan
+// engine itself minted and persisted on a plan (owner or supervision session),
+// whichever entry wakes it: the notifier route (processSystemMessage), an
+// async tool result or a child's completion declare no origin at all. The plan
+// record is the durable witness; a session that is on no plan stays unresolved.
 func (al *AgentLoop) classifySessionChain(sessionID string, declared session.OriginKind) turnAttendance {
 	sessions := al.GetSessionStore()
 	lifecycle := al.GetSessionLifecycleStore()
@@ -109,6 +116,9 @@ func (al *AgentLoop) classifySessionChain(sessionID string, declared session.Ori
 		rec, err := lifecycle.Load(sid)
 		if hop == 0 && errors.Is(err, session.ErrLifecycleNotFound) && unattendedOrigin(declared) {
 			return turnAttendance{Unattended: true, RootKind: declared}
+		}
+		if hop == 0 && errors.Is(err, session.ErrLifecycleNotFound) && al.planEngineOwnsSession(sid) {
+			return turnAttendance{Unattended: true, RootKind: session.OriginKindPlan}
 		}
 		if err != nil || rec == nil {
 			return unresolved(sid, "lifecycle record unreadable or missing", err)
@@ -176,4 +186,29 @@ func attendanceSessionID(opts *processOptions) string {
 		return opts.TranscriptSessionID
 	}
 	return sessionIDFromScopeKey(opts.SessionKey)
+}
+
+// planEngineOwnsSession reports whether sessionID is the owner or supervision
+// session of a persisted plan: the two kinds PlanEngine.mintPlanSession creates
+// without a lifecycle record (#1765). It reads the plan store and is reached
+// only when a turn's own lifecycle record is already missing.
+func (al *AgentLoop) planEngineOwnsSession(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	pe := GetPlanEngine(al)
+	if pe == nil || pe.planStore == nil {
+		return false
+	}
+	plans, err := pe.planStore.List(plan.Filter{})
+	if err != nil {
+		return false
+	}
+	for i := range plans {
+		p := &plans[i]
+		if p.OwnerSessionID == sessionID || (p.Supervision != nil && p.Supervision.SessionID == sessionID) {
+			return true
+		}
+	}
+	return false
 }
