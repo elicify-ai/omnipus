@@ -970,6 +970,25 @@ function handleReplayMessageFrame({
     }) as Partial<SessionChatState>
   })
 }
+/**
+ * #1789: the agent a live error bubble belongs to. The live frame carries none, so read it
+ * from the nearest earlier message in the same session that has one. The foreground agent
+ * is never used: this session may be a background one.
+ */
+function ownerAgentOf(msgs: ChatMessage[], m: ChatMessage): string | undefined {
+  if (m.agentId) return m.agentId
+  const at = msgs.indexOf(m)
+  for (let i = at - 1; i >= 0; i--) if (msgs[i].agentId) return msgs[i].agentId
+  return undefined
+}
+/** #1789: a live bubble and a saved entry describe one event only if their times are close. */
+const SAME_EVENT_WINDOW_MS = 15_000
+function isSameMoment(a: string | undefined, b: string | undefined): boolean {
+  const ta = a ? Date.parse(a) : NaN
+  const tb = b ? Date.parse(b) : NaN
+  return Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(ta - tb) <= SAME_EVENT_WINDOW_MS
+}
+
 export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear }: ReplayAndStatusFrameContext): boolean {
   switch (frame.type) {
         case 'replay_error': {
@@ -1003,6 +1022,26 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
                 (m) => m.errorEntryId === replayEntryId,
               )
               if (alreadyRendered) return {}
+              // #1789: the live error frame carries no entry id, so the bubble
+              // it made cannot match above. Adopt it instead of adding a second
+              // copy: same code and text, in the current turn (after the last
+              // user message), same agent, within a few seconds of the saved
+              // entry, and not yet stamped with an id. An older replayed error
+              // with identical text stays a separate row.
+              const msgs = getMessages(b)
+              let lastUser = -1
+              for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'user') { lastUser = i; break }
+              const live = msgs.slice(lastUser + 1).find((m) =>
+                m.status === 'error' && !m.errorEntryId && !!replayLlmError
+                && m.errorCode === replayLlmError.code && m.content === replayDisplay
+                && (!frame.agent_id || ownerAgentOf(msgs, m) === frame.agent_id)
+                && isSameMoment(m.timestamp, frame.timestamp))
+              if (live) {
+                return produce(b, (draft) => {
+                  const m = draft.messagesById[live.id]
+                  if (m) m.errorEntryId = replayEntryId
+                }) as Partial<SessionChatState>
+              }
             }
             // Coalesce into the trailing streaming assistant bubble when
             // one exists. The live path closes the bubble via the C8 union
