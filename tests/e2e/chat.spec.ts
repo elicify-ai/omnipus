@@ -117,15 +117,15 @@ test(
 test(
   '(b) multi-turn retention: turn 3 references content from turn 1',
   async ({ page }) => {
-    // Budget (WORST-CASE ceiling, not a "typical" duration — test.setTimeout is a
-    // hard governor: if it's smaller than the sum of every step's own declared
-    // timeout, the outer timeout kills the test mid-flight before an inner
-    // assertion ever gets to legitimately time out or succeed, which is exactly
-    // what produced a 21.8-min real hang under the old budget below).
+    // Retain the existing 30-minute budget: test.setTimeout is a hard governor,
+    // and the earlier budget killed a legitimate multi-turn test mid-flight.
+    // The setup portion below is an inherited allowance, not a newly measured
+    // worst-case total for the fresh-session HTTP requests.
     //
-    // Fixed overhead (sum of each step's own timeout, chatInput/newChat
-    // visibility + count=0 + selectAgent's sidebar row checks):
-    //   15_000 + 10_000 + 15_000 + 15_000 + 15_000 + 5_000 = 75s
+    // Setup allowance retained from the pre-isolation budget: 75s.
+    // freshAgentChat now creates/reads Jim's session through the public API and
+    // opens its exact deep link, checking empty history and composer readiness.
+    // It no longer uses newChat or selectAgent's sidebar row checks.
     //
     // Per turn (×3 — fill/press/toHaveCount/waitForTurnFullyDone):
     //   toHaveCount ceiling ................................ 300s
@@ -136,7 +136,7 @@ test(
     //   => per-turn ceiling: 300 + 188 = 488s
     // 3 turns: 3 * 488 = 1464s
     //
-    // Worst-case total: 75 + 1464 = 1539s (~25.7 min).
+    // Retained setup allowance + turn ceilings: 75 + 1464 = 1539s (~25.7 min).
     //
     // The PREVIOUS budget ("940s expected + 260s margin" -> 1200s) undercounted
     // this badly in two ways: (1) it modeled each waitForTurnFullyDone call as a
@@ -147,9 +147,9 @@ test(
     // follow-up-call ceiling alone sums to 564s — already more than double the
     // old 260s margin, before even counting the toHaveCount ceilings.
     //
-    // New budget: 1539s worst-case ceiling + ~261s margin (~17%) for CI
-    // scheduling/runner jitter beyond each step's own declared timeout = 1800s
-    // (30 min), a round number with real headroom over the computed ceiling.
+    // Unchanged budget: the retained 1539s allowance + ~261s margin (~17%) for
+    // CI scheduling/runner jitter = 1800s (30 min). Session isolation changes
+    // the setup path, not this timeout or the per-turn behavioural assertions.
     test.setTimeout(1_800_000);
 
     const input = chatInput(page);

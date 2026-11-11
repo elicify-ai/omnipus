@@ -8,7 +8,7 @@ export const FRESH_CHAT_REPLY = 'Fresh chat accepted.';
 
 /** Script only the external OpenAI-compatible HTTP edge. Discovery, tool
  * execution, the question registry, WebSocket delivery and Cancel stay real. */
-export async function startAskUserProvider() {
+export async function startAskUserProvider(options: { reaskAfterCancel?: boolean } = {}) {
   const evidence = { streamRequests: 0, questionCalls: 0, searches: 0, replies: 0, errors: [] as string[] };
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -40,15 +40,16 @@ export async function startAskUserProvider() {
       }
       evidence.streamRequests++;
       const messages = (Array.isArray(body.messages) ? body.messages : []) as Array<{ role?: string; content?: unknown }>;
-      // Like t8-agent-approval-provider, script the first tool round, not a
-      // guessed last-message layout: the real loop may append user-role context
-      // after the person's prompt. Later turns cannot create a second card.
-      const freshPrompt = JSON.stringify(messages).includes(FRESH_CHAT_PROMPT);
+      // Script actual tool rounds rather than a guessed last user-role message:
+      // the real loop appends additional context after the person's prompt.
+      const text = JSON.stringify(messages);
+      const freshPrompt = text.includes(FRESH_CHAT_PROMPT);
+      const reask = options.reaskAfterCancel === true && evidence.questionCalls === 1 && text.includes('cancelled');
       const offered = new Set((Array.isArray(body.tools) ? body.tools : []).map(tool =>
         (tool as { function?: { name?: string } }).function?.name));
       let delta: Record<string, unknown>;
       let finish: string;
-      if (!freshPrompt && evidence.questionCalls === 0) {
+      if (!freshPrompt && (evidence.questionCalls === 0 || reask)) {
         if (offered.has('AskUserQuestion')) {
           evidence.questionCalls++;
           delta = call('AskUserQuestion', { questions: [{ header: 'Colour', question: ASK_USER_QUESTION,

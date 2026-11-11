@@ -9,9 +9,10 @@ import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors';
 import { ASK_USER_PROMPT, ASK_USER_QUESTION, FRESH_CHAT_PROMPT, FRESH_CHAT_REPLY, startAskUserProvider } from './fixtures/ask-user-provider';
 
 type QuestionGateway = { gateway: GatewayProcess; provider: Awaited<ReturnType<typeof startAskUserProvider>> };
-const test = base.extend<{ questionGateway: QuestionGateway }>({
-  questionGateway: async ({ browserName }, use, info) => {
-    const provider = await startAskUserProvider();
+const test = base.extend<{ questionGateway: QuestionGateway; reaskAfterCancel: boolean }>({
+  reaskAfterCancel: [false, { option: true }],
+  questionGateway: async ({ browserName, reaskAfterCancel }, use, info) => {
+    const provider = await startAskUserProvider({ reaskAfterCancel });
     let gateway: GatewayProcess | undefined;
     try {
       gateway = await GatewayProcess.start({ apiBase: provider.url, adminUsername: 'askuser-isolation' });
@@ -140,4 +141,39 @@ test('a second test fresh Jim session stays usable while the first main session 
   } finally { await context.close(); }
   // Leave the original pending on purpose: inherited automatic teardown owns
   // its Cancel, and the private gateway is disposed only after that fixture.
+});
+
+test.describe('when the model re-asks after Cancel', () => {
+  test.use({ reaskAfterCancel: true });
+
+  test('teardown clears two distinct question cards after a re-ask and unlocks the composer', async ({ page, questionGateway }, info) => {
+    const { provider } = questionGateway;
+    const { sessionId, cardId, traffic } = await openMainAndAsk(page, questionGateway);
+    await info.attach('reask-first-question-locked', { body: await page.screenshot(), contentType: 'image/png' });
+    await cancelActiveSessionOnTeardown(page);
+    expect(provider.evidence.questionCalls, 'F1: the model really asked again, not just a duplicate DOM control').toBe(2);
+    await expect(page.getByTestId('ask-user-question-card'), 'F1: both the original and replacement cards were cleared').toHaveCount(0);
+    await expect(chatInput(page), 'F1: two Cancels unlocked the owning composer').toBeEnabled();
+    const questionIds = traffic.received.flatMap(frame => frame.type === 'ask_user_question' &&
+      frame.card.session_id === sessionId && frame.card.status === 'pending' ? [frame.card.card_id] : []);
+    expect(questionIds, 'F1: exactly two real pending-card receipts').toHaveLength(2);
+    expect(questionIds[0], 'F1: the original question was not replaced in the evidence').toBe(cardId);
+    expect(questionIds[1], 'F1: the successor has a distinct identity despite identical text').not.toBe(cardId);
+    expect(traffic.sent.filter(frame => frame.type === 'ask_user_answer'), 'F1: one actual Cancel per distinct card').toEqual(
+      questionIds.map(id => ({ type: 'ask_user_answer', card_id: id, session_id: sessionId, cancel: true })),
+    );
+    expect(traffic.received.flatMap(frame => frame.type === 'ask_user_question' && frame.card.session_id === sessionId ?
+      [{ card_id: frame.card.card_id, status: frame.card.status }] : []), 'F1: server acknowledgement precedes each successor').toEqual([
+      { card_id: cardId, status: 'pending' }, { card_id: cardId, status: 'cancelled' },
+      { card_id: questionIds[1], status: 'pending' }, { card_id: questionIds[1], status: 'cancelled' },
+    ]);
+    await expect(page.getByText('Question cancelled.', { exact: true }), 'F1: the second Cancel resumed the real turn').toBeVisible();
+    await chatInput(page).fill(FRESH_CHAT_PROMPT);
+    await chatInput(page).press('Enter');
+    await expect(page.getByText(FRESH_CHAT_REPLY, { exact: true }), 'F1: the unlocked composer can send and receive').toBeVisible();
+    expect(provider.evidence.questionCalls).toBe(2);
+    expect(provider.evidence.replies).toBe(2);
+    expect(provider.evidence.errors).toEqual([]);
+    await info.attach('reask-both-cleared-and-usable', { body: await page.screenshot(), contentType: 'image/png' });
+  });
 });

@@ -65,6 +65,43 @@ describe('#1769 scripted question provider', () => {
       expect(provider.evidence).toEqual({ streamRequests: 2, questionCalls: 1, searches: 0, replies: 1, errors: [] });
     } finally { await provider.close(); }
   });
+  it('re-asks the identical question exactly once after Cancel, then finishes after the second Cancel', async () => {
+    const provider = await startAskUserProvider({ reaskAfterCancel: true });
+    try {
+      const first = await post(provider.url, streamBody(ASK_USER_PROMPT, ['AskUserQuestion']));
+      expect(first.status).toBe(200);
+      const firstChunks = await deltas(first);
+      const questionArgs = JSON.stringify({ questions: [{ header: 'Colour', question: ASK_USER_QUESTION,
+        options: [{ label: 'Blue' }, { label: 'Green' }] }] });
+      expect(firstChunks[0].choices[0].delta).toEqual({ tool_calls: [{ index: 0, id: 'ask-1769-1', type: 'function',
+        function: { name: 'AskUserQuestion', arguments: questionArgs } }] });
+      const cancelled = streamBody('{"status":"cancelled"}', ['AskUserQuestion']);
+      const second = await post(provider.url, cancelled);
+      expect(second.status).toBe(200);
+      const secondChunks = await deltas(second);
+      expect(secondChunks[0].choices[0].delta).toEqual({ tool_calls: [{ index: 0, id: 'ask-1769-2', type: 'function',
+        function: { name: 'AskUserQuestion', arguments: questionArgs } }] });
+      expect(secondChunks[1].choices[0].finish_reason).toBe('tool_calls');
+      const finish = await post(provider.url, cancelled);
+      expect(finish.status).toBe(200);
+      const finalChunks = await deltas(finish);
+      expect(finalChunks[0].choices[0].delta).toEqual({ role: 'assistant', content: 'Question cancelled.' });
+      expect(finalChunks[1].choices[0].finish_reason).toBe('stop');
+      expect(provider.evidence).toEqual({ streamRequests: 3, questionCalls: 2, searches: 0, replies: 1, errors: [] });
+    } finally { await provider.close(); }
+  });
+  it('does not re-ask on an unrelated fresh-chat request when the re-ask script is enabled', async () => {
+    const provider = await startAskUserProvider({ reaskAfterCancel: true });
+    try {
+      const question = await post(provider.url, streamBody(ASK_USER_PROMPT, ['AskUserQuestion']));
+      expect(question.status).toBe(200);
+      await question.text();
+      const fresh = await post(provider.url, streamBody(FRESH_CHAT_PROMPT, ['AskUserQuestion']));
+      expect(fresh.status).toBe(200);
+      expect((await deltas(fresh))[0].choices[0].delta).toEqual({ role: 'assistant', content: FRESH_CHAT_REPLY });
+      expect(provider.evidence).toEqual({ streamRequests: 2, questionCalls: 1, searches: 0, replies: 1, errors: [] });
+    } finally { await provider.close(); }
+  });
   it('rejects a malformed request with a specific error instead of inventing a question', async () => {
     const provider = await startAskUserProvider();
     try {
