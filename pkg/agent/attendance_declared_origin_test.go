@@ -13,9 +13,10 @@ import (
 )
 
 // #1765: plan owner/supervision sessions (PlanEngine.mintPlanSession) and the
-// external-CLI Judge session never get a lifecycle record, yet every wake turn
-// on them runs through processTaskDirect, which declares the turn's origin
-// (processOptions.OriginKind). A turn that DECLARES an unattended origin and
+// external-CLI Judge session never get a lifecycle record, and the direct
+// dispatch (processTaskDirect) declares the turn's origin
+// (processOptions.OriginKind); wakes through other entries are covered by the
+// plan-record witness (attendance_plan_session_test.go). A turn that DECLARES an unattended origin and
 // whose own session has no record is classified by that declared origin: no
 // "approval ancestry unresolved" ERROR, same refusal. A genuinely damaged
 // chain (no declared origin, or a missing ANCESTOR) still logs and refuses.

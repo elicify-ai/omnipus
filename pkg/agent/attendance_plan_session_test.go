@@ -93,9 +93,10 @@ func TestClassify_EnginePlanSessions_NoDeclaredOrigin_NotDamage(t *testing.T) {
 	}
 }
 
-// Real damage next to a plan engine: a session the engine does not own, an
-// engine-session that lost its record AND is not on any plan, and a damaged
-// ancestor still log and refuse.
+// Real damage next to a plan engine: a chat session the engine does not own,
+// and a plan-like session that is on no plan, still log and refuse (own record
+// missing; the missing-ancestor case is covered in
+// attendance_declared_origin_test.go).
 func TestClassify_NotAnEngineSession_StillLogsUnresolved(t *testing.T) {
 	h := newPlanWakeHarness(t)
 	withLifecycleStore(t, h)
