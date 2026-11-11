@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -61,7 +62,16 @@ func unattendedOrigin(kind session.OriginKind) bool {
 // Persisted task evidence (meta TaskID) on any session of the chain makes it
 // a task root even when its lifecycle record is gone. Every read failure,
 // cycle or hop-bound overrun is unattended (R1 last row).
-func (al *AgentLoop) classifySessionChain(sessionID string) turnAttendance {
+//
+// declared is the turn's own declared origin (processOptions.OriginKind).
+// Plan owner/supervision sessions and the external-CLI Judge session are
+// minted without a lifecycle record, and every wake turn on them declares an
+// unattended origin (#1765): when the turn's OWN session has no record and the
+// declared origin is unattended, that declared origin decides, with no
+// unresolved-ancestry error. It never covers an ancestor, an unreadable
+// record, or a declared origin that is not unattended: those stay unresolved
+// and refuse.
+func (al *AgentLoop) classifySessionChain(sessionID string, declared session.OriginKind) turnAttendance {
 	sessions := al.GetSessionStore()
 	lifecycle := al.GetSessionLifecycleStore()
 	if sessionID == "" || sessions == nil || lifecycle == nil {
@@ -97,6 +107,9 @@ func (al *AgentLoop) classifySessionChain(sessionID string) turnAttendance {
 			return turnAttendance{Unattended: true, RootKind: session.OriginKindTask}
 		}
 		rec, err := lifecycle.Load(sid)
+		if hop == 0 && errors.Is(err, session.ErrLifecycleNotFound) && unattendedOrigin(declared) {
+			return turnAttendance{Unattended: true, RootKind: declared}
+		}
 		if err != nil || rec == nil {
 			return unresolved(sid, "lifecycle record unreadable or missing", err)
 		}
@@ -133,7 +146,7 @@ func (al *AgentLoop) applyTurnAttendance(opts *processOptions) {
 	if opts == nil {
 		return
 	}
-	att := al.classifySessionChain(attendanceSessionID(opts))
+	att := al.classifySessionChain(attendanceSessionID(opts), opts.OriginKind)
 	if att.Unattended {
 		opts.AutoDenyAsk = true
 	}
