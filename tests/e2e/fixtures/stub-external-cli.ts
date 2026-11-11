@@ -27,7 +27,9 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { fileURLToPath } from 'url'
 import type { Page } from '@playwright/test'
+import { postReloadWithBearer, readReloadBearer } from './reload-bearer'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -164,18 +166,30 @@ async function setDevModeBypass(configPath: string, value: boolean): Promise<voi
   await fs.promises.rename(tmp, configPath)
 }
 
+/** The storageState file the shared gateway's global-setup.ts wrote (playwright.config.ts storageState). */
+function sharedAuthFile(): string {
+  return process.env.OMNIPUS_AUTH_FILE
+    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+    : path.join(path.dirname(fileURLToPath(import.meta.url)), '.auth/admin.json')
+}
+
 /**
- * POST /reload — the health server's unauthenticated reload hook
- * (pkg/health/server.go reloadHandler). It runs the gateway's reload
- * function synchronously: 200 means the on-disk config was re-read and the
- * in-memory config swapped; a non-2xx carries the reload error in the body.
- * The same endpoint retention.spec.ts uses for its bypass flip.
+ * POST /reload — the health server's reload hook (pkg/health/server.go
+ * reloadHandler). It accepts ONLY a Gateway.Users/CLIToken bearer (issues
+ * #276/#640), so this sends the non-rotating admin bearer global-setup.ts
+ * stored for this shard's auth file — never a fresh login, which would
+ * rotate the shared session cookie (scripts/check-e2e-login-crosstalk.sh).
+ * It goes through Node fetch, not the page's traced request client, so the
+ * bearer never reaches a retained trace (fixtures/reload-bearer.ts). It runs
+ * the gateway's reload function synchronously: 200 means the on-disk config
+ * was re-read and the in-memory config swapped; a non-2xx carries the reload
+ * error in the body. The same endpoint retention.spec.ts uses for its bypass
+ * flip.
  */
-async function postReload(page: Page): Promise<void> {
-  const res = await page.request.post(`${BASE_URL}/reload`, { failOnStatusCode: false })
-  const raw = await res.text()
-  if (!res.ok()) {
-    throw new Error(`saveStubCliProgram: POST /reload failed ${res.status()}: ${raw}`)
+async function postReload(): Promise<void> {
+  const res = await postReloadWithBearer(BASE_URL, readReloadBearer(sharedAuthFile()))
+  if (!res.ok) {
+    throw new Error(`saveStubCliProgram: POST /reload failed ${res.status}: ${res.text}`)
   }
 }
 
@@ -279,7 +293,7 @@ async function runWithBypassOffForPersonSession(page: Page, body: () => Promise<
     return
   }
   await setDevModeBypass(configPath, false)
-  await postReload(page)
+  await postReload()
   await pollDevModeBypass(page, false)
   let bodyErr: Error | null = null
   try {
@@ -289,7 +303,7 @@ async function runWithBypassOffForPersonSession(page: Page, body: () => Promise<
   }
   try {
     await setDevModeBypass(configPath, true)
-    await postReload(page)
+    await postReload()
     await pollDevModeBypass(page, true)
   } catch (restoreErr) {
     if (bodyErr) {
