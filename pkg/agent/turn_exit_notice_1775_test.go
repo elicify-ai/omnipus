@@ -1,0 +1,120 @@
+// turn_exit_notice_1775_test.go: #1775 — a stopped turn is saved in the order
+// the user saw it live: the interrupted partial answer, then the stop notice,
+// then the turn_canceled marker. Before the fix typedTurnExit wrote the notice
+// first, so a reload showed notice, partial.
+package agent
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
+)
+
+// stoppedTurnFixture builds a loop, a real session and an in-flight root turn
+// with a user Stop already fired through the real RequestCancel path.
+func stoppedTurnFixture(t *testing.T) (*AgentLoop, *turnState, *session.UnifiedStore, string) {
+	t.Helper()
+	workspaceDir := t.TempDir() + "/workspace"
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              workspaceDir,
+				DefaultModel:      config.DefaultModel{Model: "stop-order-model"},
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(func() { msgBus.Close() })
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	t.Cleanup(al.Close)
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+	ts := &turnState{
+		agent:               &AgentInstance{ID: "mia"},
+		turnID:              "turn-1775",
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		finishedChan:        make(chan struct{}),
+		transcriptStore:     store,
+	}
+	al.activeTurnStates.Store(meta.ID, ts)
+	t.Cleanup(func() { al.activeTurnStates.Delete(meta.ID) })
+	outcome, err := al.RequestCancel(context.Background(), CancelScope{SessionID: meta.ID},
+		CancelCanceller{UserID: "u", Channel: "web"}, CancelHooks{})
+	require.NoError(t, err)
+	require.True(t, outcome.Fired)
+	return al, ts, store, meta.ID
+}
+
+// savedKinds reads the transcript back as a short, ordered list of kinds.
+func savedKinds(t *testing.T, store *session.UnifiedStore, sessionID string) []string {
+	t.Helper()
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	kinds := make([]string, 0, len(entries))
+	for _, e := range entries {
+		switch {
+		case e.Type == session.EntryTypeSystem:
+			kinds = append(kinds, "notice")
+		case e.Type == session.EntryTypeTurnCancelled:
+			kinds = append(kinds, "turn_canceled")
+		case e.Role == "assistant":
+			kinds = append(kinds, "assistant")
+		default:
+			kinds = append(kinds, string(e.Type))
+		}
+	}
+	return kinds
+}
+
+// The partial is written by the answer-preserving defer (the non-streamed
+// path writes it directly), the marker by Finish. The notice must land between.
+func TestStoppedTurn_SavedOrderIsPartialNoticeMarker(t *testing.T) {
+	t.Parallel()
+	al, ts, store, sessionID := stoppedTurnFixture(t)
+
+	_, _, err := al.typedTurnExit(ts, 1, "stop-order-model", context.Canceled)
+	require.Error(t, err)
+	// runTurn's deferred chain: the interrupted answer, then Finish.
+	ts.appendAssistantTranscriptTruncatedAs("", "The three sentences are above, and", "cancelled")
+	ts.finishAfterExitNotice()
+
+	require.Equal(t, []string{"assistant", "notice", "turn_canceled"}, savedKinds(t, store, sessionID))
+}
+
+// No partial (Stop before the first token): the notice is still saved, once.
+func TestStoppedTurn_NoticeSavedOnceWithoutPartial(t *testing.T) {
+	t.Parallel()
+	al, ts, store, sessionID := stoppedTurnFixture(t)
+
+	_, _, err := al.typedTurnExit(ts, 1, "stop-order-model", context.Canceled)
+	require.Error(t, err)
+	ts.finishAfterExitNotice()
+	ts.flushExitNotice() // a second flush must not write a duplicate
+
+	require.Equal(t, []string{"notice", "turn_canceled"}, savedKinds(t, store, sessionID))
+}
+
+// Positive control for the instrument: the old direct write puts the notice
+// first, and this reader sees it. If this ever stops holding, the two tests
+// above could no longer tell the old order from the new one.
+func TestStoppedTurn_ControlOldDirectWriteIsNoticeFirst(t *testing.T) {
+	t.Parallel()
+	al, ts, store, sessionID := stoppedTurnFixture(t)
+
+	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", TranslateTurnError(context.Canceled))
+	ts.appendAssistantTranscriptTruncatedAs("", "partial", "cancelled")
+	ts.finishAfterExitNotice()
+
+	require.Equal(t, []string{"notice", "assistant", "turn_canceled"}, savedKinds(t, store, sessionID))
+}

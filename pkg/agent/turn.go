@@ -498,6 +498,13 @@ type turnState struct {
 	// before finalizeStreamer's so LIFO runs it after the streamer's write.
 	pendingFallbackNotes []session.TranscriptEntry
 
+	// exitNotice is the classified error of a typed exit (user Stop, timeout)
+	// whose transcript entry is held back until the turn's interrupted answer
+	// has been written (#1775): typedTurnExit queues it, flushExitNotice (a
+	// defer in runTurn, between Finish and finalizeStreamer) writes it. Guarded
+	// by mu; nil when nothing is queued.
+	exitNotice *queuedExitNotice
+
 	// turnWaitBudget is the D14 per-turn wait budget (10 min total), shared
 	// by every fallback-chain call of this turn — a per-iteration budget
 	// would multiply the cap by the iteration count. Lazily created by
