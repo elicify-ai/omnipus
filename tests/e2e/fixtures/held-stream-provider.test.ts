@@ -184,6 +184,65 @@ describe('held-stream provider scripts branch (per-prompt branch)', () => {
     return record!;
   }
 
+  it('holds two prompts concurrently and releases each without losing or mixing its numbered deltas (#1766)', async () => {
+    const secondPrompt = 'scripts-second-held-chat';
+    const provider = await startHeldStreamProvider({
+      promptIncludes: HOLD_PROMPT,
+      chunkIntervalMs: 20,
+      chunkText: 'Catch-up fixture delta',
+      releaseText: ' Finished.',
+      scripts: [
+        { promptIncludes: HOLD_PROMPT, behavior: 'hold' },
+        { promptIncludes: secondPrompt, behavior: 'hold' },
+      ],
+    });
+    try {
+      const open = (prompt: string) => fetch(`${provider.url}/v1/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: scriptRequestBody(prompt),
+      });
+      const first = await open(HOLD_PROMPT);
+      const second = await open(secondPrompt);
+      const a = recordsOf(provider, HOLD_PROMPT);
+      const b = recordsOf(provider, secondPrompt);
+      await expect.poll(() => Math.min(a.chunksSent, b.chunksSent)).toBeGreaterThanOrEqual(2);
+      for (const record of [a, b]) {
+        expect(record.requests).toBe(1);
+        expect(record.held).toBe(true);
+        expect(record.streamsClosed).toBe(0);
+        expect(record.released).toBe(0);
+      }
+      expect(provider.evidence.streamRequests).toBe(2);
+      expect(provider.evidence.errors).toEqual([]);
+      expect(() => provider.expectedHeldAnswer()).toThrow('expectedHeldAnswer needs a prompt');
+
+      provider.release(HOLD_PROMPT);
+      expect(a.held).toBe(false);
+      expect(a.released).toBe(1);
+      expect(a.streamsClosed).toBe(1);
+      expect(b.held, 'releasing A must not release B').toBe(true);
+      expect(b.released).toBe(0);
+      expect(b.streamsClosed).toBe(0);
+      const expected = (count: number) => Array.from({ length: count }, (_, i) =>
+        `Catch-up fixture delta (part ${i + 1})`).join('') + ' Finished.';
+      expect(streamedContent(await first.text())).toBe(expected(a.chunksSent));
+      expect(provider.expectedHeldAnswer(HOLD_PROMPT)).toBe(expected(a.chunksSent));
+
+      provider.release();
+      expect(streamedContent(await second.text())).toBe(expected(b.chunksSent));
+      expect(provider.expectedHeldAnswer(secondPrompt)).toBe(expected(b.chunksSent));
+      expect(b.held).toBe(false);
+      expect(b.released).toBe(1);
+      expect(b.streamsClosed).toBe(1);
+      provider.release();
+      expect(provider.evidence.released, 'release stays idempotent across both prompts').toBe(2);
+      expect(provider.evidence.streamsClosed).toBe(2);
+      expect(provider.evidence.errors).toEqual([]);
+    } finally {
+      await provider.close();
+    }
+  });
+
   it('holds one script while answering another with the EXACT scripted text', async () => {
     const provider = await startHeldStreamProvider({
       promptIncludes: HOLD_PROMPT,

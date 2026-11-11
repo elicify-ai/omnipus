@@ -19,7 +19,7 @@ func TestIssue1664_R5_CancelledBeforeWrapUpAnnouncesNoRetry(t *testing.T) {
 	require.True(t, h.ts.claimCancel(false), "SETUP: administrative cancel claimed the turn")
 	require.True(t, h.ts.requestGracefulInterrupt(""), "SETUP: graceful interruption accepted")
 	rr.callLLMWithRetries()
-	require.Error(t, rr.rq.ri.rf.err)
+	require.ErrorIs(t, rr.rq.ri.rf.err, context.Canceled, "#1776: cancellation before wrap-up ends canceled, not timed out")
 	require.Equal(t, 1, issue1664CallCount(provider), "no second call after the claimed cancellation")
 	require.Empty(t, issue1664RetryEvents(h), "P6c control: no retry before the wrap-up request is built")
 }
@@ -32,7 +32,7 @@ func TestIssue1664_R5_RED_CancelledBuiltWrapUpAnnouncesNoRetry(t *testing.T) {
 	require.True(t, h.ts.requestGracefulInterrupt(""), "SETUP: graceful interruption accepted")
 	h.ts.markGracefulTerminalUsed() // the real wrap-up request-build transition
 	rr.callLLMWithRetries()
-	require.Error(t, rr.rq.ri.rf.err, "the canceled wrap-up round must not return success")
+	require.ErrorIs(t, rr.rq.ri.rf.err, context.Canceled, "#1776: a canceled built wrap-up ends canceled, not timed out")
 	require.Equal(t, 1, issue1664CallCount(provider), "no second provider call after administrative cancel")
 	require.Empty(t, issue1664RetryEvents(h), "R3-7: a timed-out built wrap-up must not announce a retry that will not happen")
 }

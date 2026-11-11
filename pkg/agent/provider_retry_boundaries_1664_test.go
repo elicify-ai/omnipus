@@ -35,7 +35,8 @@ func TestIssue1664_R5_UserStopDuringCallAnnouncesNoRetry(t *testing.T) {
 	rr.callLLMWithRetries()
 	require.True(t, claimed.Load(), "SETUP: the user Stop claimed the turn")
 	require.True(t, interrupted.Load(), "SETUP: the graceful interrupt was accepted")
-	require.Error(t, rr.rq.ri.rf.err, "the stopped round must not return success")
+	require.ErrorIs(t, rr.rq.ri.rf.err, context.Canceled, "#1776: the early Stop guard ends the round canceled, not timed out")
+	require.NotErrorIs(t, rr.rq.ri.rf.err, context.DeadlineExceeded, "a stopped round must not also carry a timeout")
 	require.Equal(t, 1, issue1664CallCount(provider), "no second provider call after a Stop")
 	require.Empty(t, issue1664RetryEvents(h), "R3-1: no retry frame after a Stop")
 	require.Zero(t, issue1664R5EventCount(h, EventKindTurnTimeout), "no turn-timeout event after a Stop")
@@ -205,7 +206,8 @@ func TestIssue1664_R5_UserStopDuringChainAnnouncesNoResetRetry(t *testing.T) {
 	rr.callLLMWithRetries()
 	require.True(t, claimed.Load(), "SETUP: user Stop claimed the turn")
 	require.True(t, interrupted.Load(), "SETUP: the graceful interruption was accepted")
-	require.Error(t, rr.rq.ri.rf.err)
+	require.ErrorIs(t, rr.rq.ri.rf.err, context.Canceled, "#1776: the streaming-reset Stop guard ends canceled, not with the chain failure")
+	require.NotErrorIs(t, rr.rq.ri.rf.err, context.DeadlineExceeded, "a stopped chain must not also carry a timeout")
 	require.Empty(t, issue1664RetryEvents(h), "R3-6: no retry event of any kind follows a user Stop during the chain")
 }
 
