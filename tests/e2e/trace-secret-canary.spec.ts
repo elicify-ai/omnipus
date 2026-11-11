@@ -6,18 +6,22 @@
  * context sends, JSON bodies included, into the test's trace, and CI uploads
  * retained traces as artifacts, which GitHub does not secret-mask. The
  * onboarding helper (fixtures/onboard-via-api.ts) carries the primary and the
- * fallback key, so it must send them with Node's own fetch instead.
+ * fallback key, so it must send them with Node's own fetch instead. The same
+ * holds for the admin bearer POST /reload needs (issues #276/#640), sent by
+ * fixtures/reload-bearer.ts::postReloadWithBearer.
  *
  * How this proves it, with fake canary keys and a local fake gateway (no
  * network, no real key):
  *   1. The first test runs with trace: 'on' and onboards through the helper
- *      with the canary keys in the key env vars. It also sends one CONTROL
- *      marker through a Playwright request context — the instrument check that
- *      the trace really records request bodies (a canary absent from a trace
- *      that records nothing would prove nothing).
+ *      with the canary keys in the key env vars. It also stores a canary
+ *      reload bearer and sends it through the reload helper. It sends one
+ *      CONTROL marker in a body and one in an Authorization header through a
+ *      Playwright request context — the instrument check that the trace really
+ *      records request bodies and headers (a canary absent from a trace that
+ *      records nothing would prove nothing).
  *   2. The second test (same worker, serial) unzips the first test's
- *      retained trace and requires: the CONTROL marker present, both canaries
- *      absent.
+ *      retained trace and requires: both CONTROL markers present, every
+ *      canary absent.
  *
  * No gateway binary, browser or LLM is used, and no external unzip tool: the
  * trace ZIP is read with Node's zlib (readZipText below).
@@ -26,12 +30,14 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { expect, request, test } from '@playwright/test'
 import { E2E_FALLBACK } from './fixtures/e2e-model'
 import { keyEnvNamesFor } from './fixtures/e2e-model-keys'
 import { onboardViaAPI } from './fixtures/onboard-via-api'
+import { postReloadWithBearer, readReloadBearer, writeReloadBearer } from './fixtures/reload-bearer'
 
 test.describe.configure({ mode: 'serial', retries: 0 })
 // trace: 'on' is file-wide (Playwright forbids it per describe group): every
@@ -45,6 +51,8 @@ const RUN = randomUUID().replace(/-/g, '')
 const PRIMARY_CANARY = ['trace', 'canary', 'primary', RUN].join('-')
 const FALLBACK_CANARY = ['trace', 'canary', 'fallback', RUN].join('-')
 const CONTROL_MARKER = ['trace', 'canary', 'control', RUN].join('-')
+const RELOAD_CANARY = ['trace', 'canary', 'reload', RUN].join('-')
+const CONTROL_HEADER_MARKER = ['trace', 'canary', 'control', 'header', RUN].join('-')
 // A fake provider and model for the primary side (see the traced test).
 const CANARY_PROVIDER = 'trace-canary-provider'
 const CANARY_MODEL = 'trace-canary-model'
@@ -80,13 +88,15 @@ function readZipText(file: string): string {
   return parts.join('\n')
 }
 
-function startFakeGateway(): Promise<{ url: string; bodies: string[]; close: () => Promise<void> }> {
+function startFakeGateway(): Promise<{ url: string; bodies: string[]; authHeaders: string[]; close: () => Promise<void> }> {
   const bodies: string[] = []
+  const authHeaders: string[] = []
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (c) => chunks.push(c as Buffer))
     req.on('end', () => {
       bodies.push(Buffer.concat(chunks).toString('utf8'))
+      authHeaders.push(req.headers.authorization ?? '')
       res.setHeader('content-type', 'application/json')
       if (req.method === 'GET' && req.url === '/api/v1/agents') {
         res.end(JSON.stringify([{ id: 'mia', revision: 'rev-mia' }]))
@@ -101,6 +111,7 @@ function startFakeGateway(): Promise<{ url: string; bodies: string[]; close: () 
       resolve({
         url: `http://127.0.0.1:${addr.port}`,
         bodies,
+        authHeaders,
         close: () => new Promise((done) => server.close(() => done())),
       })
     })
@@ -120,6 +131,8 @@ test.describe('credential-bearing requests stay out of traces', () => {
     const names = [...keyEnvNamesFor(CANARY_PROVIDER), ...keyEnvNamesFor(E2E_FALLBACK.provider)]
     const saved = new Map(names.map((n) => [n, process.env[n]]))
     const gw = await startFakeGateway()
+    // The reload bearer lives outside the test output folder, which CI uploads.
+    const bearerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-canary-reload-'))
     try {
       for (const n of names) delete process.env[n]
       process.env[keyEnvNamesFor(CANARY_PROVIDER)[0]] = PRIMARY_CANARY
@@ -134,16 +147,28 @@ test.describe('credential-bearing requests stay out of traces', () => {
       expect(received.includes(PRIMARY_CANARY), 'the fake gateway got the primary key').toBe(true)
       expect(received.includes(FALLBACK_CANARY), 'the fake gateway got the fallback key').toBe(true)
 
+      // The reload bearer: stored and read back the way global-setup.ts and
+      // the reload callers do, then sent through the reload helper.
+      const authFile = path.join(bearerDir, 'canary-auth.json')
+      writeReloadBearer(authFile, RELOAD_CANARY)
+      const reload = await postReloadWithBearer(gw.url, readReloadBearer(authFile))
+      expect(reload.ok, 'the fake gateway accepted the reload').toBe(true)
+      expect(gw.authHeaders.includes(`Bearer ${RELOAD_CANARY}`), 'the fake gateway got the reload bearer').toBe(true)
+
       // Instrument check: a Playwright request context IS recorded.
       const ctx = await request.newContext()
       try {
-        const res = await ctx.post(`${gw.url}/control`, { data: { marker: CONTROL_MARKER } })
+        const res = await ctx.post(`${gw.url}/control`, {
+          data: { marker: CONTROL_MARKER },
+          headers: { Authorization: `Bearer ${CONTROL_HEADER_MARKER}` },
+        })
         expect(res.ok()).toBe(true)
       } finally {
         await ctx.dispose()
       }
     } finally {
       await gw.close()
+      fs.rmSync(bearerDir, { recursive: true, force: true })
       for (const [n, v] of saved) {
         if (v === undefined) delete process.env[n]
         else process.env[n] = v
@@ -157,7 +182,9 @@ test.describe('credential-bearing requests stay out of traces', () => {
     expect(fs.existsSync(zip), `no retained trace at ${zip}`).toBe(true)
     const contents = readZipText(zip)
     expect(contents, 'instrument check: the trace must record request bodies').toContain(CONTROL_MARKER)
+    expect(contents, 'instrument check: the trace must record request headers').toContain(CONTROL_HEADER_MARKER)
     expect(contents.includes(PRIMARY_CANARY), 'the primary key reached the trace').toBe(false)
     expect(contents.includes(FALLBACK_CANARY), 'the fallback key reached the trace').toBe(false)
+    expect(contents.includes(RELOAD_CANARY), 'the reload bearer reached the trace').toBe(false)
   })
 })

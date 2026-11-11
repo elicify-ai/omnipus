@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
@@ -522,6 +524,21 @@ func (sg *startTestGateway) prepare() {
 		sg.t.Setenv("OMNIPUS_BEARER_TOKEN", testBearerToken)
 	}
 
+	// WithSeededAdmin: pre-hash the admin account's bearer so buildConfig can
+	// seed a real Gateway.Users entry into the boot config. The hash is over
+	// TokenSecret (the same function VerifyTokenAgainst applies at verification
+	// time), and MinCost keeps it fast for tests. Done here — where sg.t is in
+	// scope — so a hashing failure Fatals with the test's name on it instead of
+	// surfacing as a mysterious boot failure.
+	if sg.hc.seededAdmin {
+		hash, err := bcrypt.GenerateFromPassword(
+			[]byte(config.TokenSecret(testBearerToken)), bcrypt.MinCost)
+		if err != nil {
+			sg.t.Fatalf("testutil.StartTestGateway: hash test admin bearer: %v", err)
+		}
+		sg.hc.adminTokenHash = config.BcryptHash(hash)
+	}
+
 	sg.homeDir = sg.t.TempDir()
 	sg.configPath = filepath.Join(sg.homeDir, "config.json")
 
@@ -981,6 +998,13 @@ func (g *TestGateway) Do(req *http.Request) (*http.Response, error) {
 // SeedCLIToken writes tok to gateway.cli_token in config.json on disk, then
 // POSTs /reload and polls until the gateway recognizes the new token.
 //
+// The POST /reload call is authenticated with the gateway's own bearer
+// (Token()) — issues #276/#640 require a Gateway.Users or Gateway.CLIToken
+// credential for it, and the token being seeded cannot authorize its own
+// installation reload. Boot the gateway with WithSeededAdmin so Token()'s
+// bearer is backed by a real gateway.users account; without it (and without
+// any other account credential) the reload is refused 401.
+//
 // Uses the same raw JSON read-modify-write cycle as the gateway's
 // safeUpdateConfigJSON (preserves SecureString
 // values) but targets the dedicated Gateway.CLIToken slot instead of the
@@ -1039,6 +1063,17 @@ func (g *TestGateway) SeedCLIToken(ctx context.Context, tok config.TokenEntry) e
 			return fmt.Errorf("SeedCLIToken: build reload request: %w", err)
 		}
 		reloadReq.Header.Set("Origin", g.URL)
+		// Issues #276/#640: /reload requires a bearer the reload authorizer
+		// accepts (a Gateway.Users or Gateway.CLIToken credential — not the
+		// env fallback, not a session cookie). The CLI token being seeded
+		// cannot authenticate its own installation reload (it is not in the
+		// in-memory config until this very reload applies), so authenticate
+		// with the harness's own bearer, which WithSeededAdmin has backed
+		// with a real gateway.users account. Mirrors gw.NewRequest's header
+		// behavior for every other authenticated harness request.
+		if g.bearerToken != "" {
+			reloadReq.Header.Set("Authorization", "Bearer "+g.bearerToken)
+		}
 		reloadResp, err := g.HTTPClient.Do(reloadReq)
 		if err != nil {
 			return fmt.Errorf("SeedCLIToken: POST /reload: %w", err)
@@ -1176,6 +1211,21 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 		// Authorization: Bearer header. Dev mode bypass is left false so that
 		// auth is actually enforced.
 		cfg.Gateway.Token = testBearerToken
+
+		// WithSeededAdmin: write the real gateway.users admin account into the
+		// boot config. This is the credential shape the /reload authorizer
+		// (issues #276/#640) accepts — a Gateway.Users bearer — so tests that
+		// must drive /reload (SeedCLIToken) authenticate that call with it.
+		// No password hash: bearer-only account, login is impossible by
+		// construction.
+		if hc.seededAdmin {
+			cfg.Gateway.Users = []config.UserConfig{{
+				Username: "admin",
+				Tokens: []config.TokenEntry{{
+					Hash: hc.adminTokenHash,
+				}},
+			}}
+		}
 	} else {
 		// Allow unauthenticated access for tests that do not need auth.
 		cfg.Gateway.DevModeBypass = true

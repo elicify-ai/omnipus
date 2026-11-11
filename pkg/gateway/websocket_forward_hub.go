@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -80,6 +81,8 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 		h.hubProviderStatus(evt)
 	case agent.EventKindProviderFallback:
 		h.hubProviderFallback(evt)
+	case agent.EventKindUserMessagePersisted:
+		h.hubUserMessagePersisted(evt)
 	case agent.EventKindWhatsAppPairing:
 		h.hubWhatsAppPairing(evt)
 	}
@@ -514,6 +517,35 @@ func (h *WSHandler) hubProviderFallback(evt agent.Event) {
 		key:    "provider_fallback:" + turnID,
 		turnID: turnID,
 	}, data, nil)
+}
+
+// hubUserMessagePersisted forwards a scheduled/heartbeat run's persisted
+// prompt (#1442) as one user_message frame: the same frame shape, id and
+// echo semantics as the interactive publishUserMessage (both build through
+// buildUserMessageFrame), published after the transcript append (the emit
+// site's rule) and delivered only to the viewers bound to the payload's
+// session. There is no alsoTo connection: a scheduled run has no
+// originating tab. It deliberately skips rememberAcceptedMessage, which is
+// interactive client_message_id retry/dedupe state a scheduled prompt has
+// no part in.
+func (h *WSHandler) hubUserMessagePersisted(evt agent.Event) {
+	p, ok := evt.Payload.(agent.UserMessagePersistedPayload)
+	if !ok {
+		logsafeError("ws: user_message_persisted event with unexpected payload; prompt not shown live",
+			"session_key", evt.Meta.SessionKey, "payload_type", fmt.Sprintf("%T", evt.Payload))
+		return
+	}
+	if p.SessionID == "" {
+		logsafeError("ws: user_message_persisted event without a session id; prompt not shown live",
+			"session_key", evt.Meta.SessionKey, "entry_id", p.Entry.ID)
+		return
+	}
+	data, err := json.Marshal(buildUserMessageFrame(p.SessionID, p.Entry))
+	if err != nil {
+		logsafeError("ws: marshal user_message for hub failed", "session_id", p.SessionID, "error", err)
+		return
+	}
+	h.hubPublishAndDeliver(p.SessionID, string(generated.WsFrameTypeUserMessage), data)
 }
 
 // ---------------------------------------------------------------------

@@ -795,14 +795,15 @@ func TestPatchMCPServer_EnabledTruePatchFlipsGlobalKillSwitch(t *testing.T) {
 }
 
 // TestAddMCPServer_PersistsHeaders verifies that POST /api/v1/mcp-servers
-// persists headers and env_file into config (G9).
+// persists non-secret header metadata and env_file, and that an Authorization
+// bearer is not written into config.json (issue #638).
 //
 // BDD:
 //
 //	Given a new sse server with headers={"Authorization": "Bearer tok"},
 //	       env_file="/etc/mcp.env",
 //	When POST /api/v1/mcp-servers is called,
-//	Then the persisted config entry contains both fields.
+//	Then env_file is persisted and the bearer value is absent from config.json.
 func TestAddMCPServer_PersistsHeaders(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
@@ -843,10 +844,9 @@ func TestAddMCPServer_PersistsHeaders(t *testing.T) {
 	entry, ok := servers["headed-srv"].(map[string]any)
 	require.True(t, ok, "headed-srv must be present in persisted config")
 
-	// headers
-	persistedHeaders, ok := entry["headers"].(map[string]any)
-	require.True(t, ok, "headers must be persisted")
-	assert.Equal(t, "Bearer tok", persistedHeaders["Authorization"])
+	// Issue #638: the bearer is a secret and must not sit in config.json.
+	assert.NotContains(t, string(data), "Bearer tok",
+		"issue #638: an MCP Authorization bearer must never be stored in config.json")
 
 	// env_file
 	assert.Equal(t, "/etc/mcp.env", entry["env_file"], "env_file must be persisted")
