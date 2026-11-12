@@ -13,6 +13,7 @@ import { assertRestoredControl, assertSessionStopped, controlProvider, floodReal
 import { terminalLogRows } from './fixtures/terminal-outcome-acceptance';
 import { CONTROL_RUNNING } from './fixtures/chat-history-paging/control-provider';
 import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness';
+import { armFocusDiagnostic, readFocusDiagnostic } from './fixtures/chat-history-paging/focus-diagnostic';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
@@ -282,6 +283,7 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
     await browseBack(history, 300);
     const saved = await anchor(page);
     await historyScroller(page).focus();
+    await armFocusDiagnostic(page); // #1801: records what holds focus if the final assertion fails
     const heldOrdinals = expectedReaderOrdinals(history);
     expect(heldOrdinals, 'D9 real backward traversal reached its500-group window').toHaveLength(500);
     expect(heldOrdinals.every((n) => n < 1000), 'the whole retained reader is in genuine rolled fixture partitions').toBe(true);
@@ -329,7 +331,13 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
         await expect(historyRow(page, saved.id)).toHaveCount(0);
       }
     }
-    await expect(page.getByLabel('Conversation history', { exact: true })).toBeFocused();
+    try {
+      await expect(page.getByLabel('Conversation history', { exact: true })).toBeFocused();
+    } catch (error) {
+      // #1801: three CI sightings said "inactive" for 15 s and nothing said why. Attach what held focus, then fail as before.
+      await history.info.attach(`focus-diagnostic-${survival}`, { contentType: 'application/json', body: JSON.stringify(await readFocusDiagnostic(page), null, 2) });
+      throw error;
+    }
     expect(history.traffic.sends).toEqual([]);
     await history.record(`range-expiry-${survival}`, { receipts });
   });
