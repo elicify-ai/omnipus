@@ -335,7 +335,12 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
       await expect(page.getByLabel('Conversation history', { exact: true })).toBeFocused();
     } catch (error) {
       // #1801: three CI sightings said "inactive" for 15 s and nothing said why. Attach what held focus, then fail as before.
-      await history.info.attach(`focus-diagnostic-${survival}`, { contentType: 'application/json', body: JSON.stringify(await readFocusDiagnostic(page), null, 2) });
+      // The attachment is best-effort: if reading or attaching fails, the original assertion error is still the one thrown.
+      await Promise.resolve()
+        .then(async () =>
+          history.info.attach(`focus-diagnostic-${survival}`, { contentType: 'application/json', body: JSON.stringify(await readFocusDiagnostic(page), null, 2) }),
+        )
+        .catch(() => undefined);
       throw error;
     }
     expect(history.traffic.sends).toEqual([]);
