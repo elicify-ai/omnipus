@@ -169,6 +169,14 @@ if (mode === 'silent-ignore-term') {
   }
   if (mode === 'listen-503-ignore-term') { ignoreTerm(); serve(503) }
   else if (['login-fails', 'login-echo-secret', 'onboard-echo', 'onboard-refuse-bare', 'onboard-huge', 'fallback-refuse-bare', 'restart-leak', 'restart-chain'].includes(mode)) serve(200)
+  else if (mode === 'slow-listen') {
+    // A slow start (#1785): prints its port line at once, listens and prints the
+    // health line only after FAKE_LISTEN_DELAY_MS.
+    setTimeout(() => {
+      serve(200)
+      process.stdout.write('✓ Health endpoints available at http://127.0.0.1:' + port + '/health\\n')
+    }, Number(env.FAKE_LISTEN_DELAY_MS))
+  }
   else setInterval(() => {}, 1000) // alive, never listening
   if (mode !== 'listen-503-ignore-term') process.on('SIGTERM', () => process.exit(0))
 }
@@ -354,6 +362,27 @@ describe('GatewayProcess boot failure: fails the test with the proven cause', ()
       await gw.stop()
     }
   }, 60_000)
+
+  it('a slow start of 25 s still boots with the default wait (#1785)', async () => {
+    // CI sightings 7 and 8: the gateway was still printing at about 15 s, so the
+    // old 15 s default wait failed a gateway that was only slow. No
+    // healthTimeoutMs here: the default is what is under test.
+    const gw = await GatewayProcess.start({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      env: {
+        FAKE_MARKER: `SLOW-LISTEN-${process.pid}`,
+        FAKE_MODE: 'slow-listen',
+        FAKE_LISTEN_DELAY_MS: '25000',
+        FAKE_STATE: newState('slow-listen'),
+      },
+    })
+    try {
+      expect((await fetch(`${gw.baseURL}/health`)).status).toBe(200)
+    } finally {
+      await gw.stop()
+    }
+  }, 90_000)
 
   it('exits during boot: the failure names the exit code and carries the output tail', async () => {
     const marker = `EXITS-${process.pid}`
