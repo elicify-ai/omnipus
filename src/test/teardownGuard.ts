@@ -22,6 +22,8 @@ export interface PendingTimer {
   delay: number
   /** `path:line:col` of the first stack frame outside this module. */
   site: string
+  /** Date.now() when armed (reset by refresh()); used to tell how long is left. */
+  armedAt?: number
 }
 
 export interface TimerTarget {
@@ -98,7 +100,7 @@ export function trackTimers(target: TimerTarget): TimerTracker {
       }
       const handle = (original[kind] as (...a: unknown[]) => unknown)(run, delay, ...args)
       ref.handle = handle
-      const entry: PendingTimer = { kind, delay: delay ?? 0, site }
+      const entry: PendingTimer = { kind, delay: delay ?? 0, site, armedAt: Date.now() }
       live.set(handleKey(handle), entry)
       owner.set(handleKey(handle), handle)
       // Timeout.refresh() re-arms a timer that already fired: it is pending again.
@@ -109,6 +111,7 @@ export function trackTimers(target: TimerTarget): TimerTracker {
           // refresh() can give the timer a new numeric id: drop the old key first.
           live.delete(handleKey(handle))
           const result = refresh.call(this)
+          entry.armedAt = Date.now()
           if (!cancelled.has(timer)) { live.set(handleKey(handle), entry); owner.set(handleKey(handle), handle) }
           return result
         }
@@ -165,12 +168,26 @@ export function formatPending(file: string, pending: PendingTimer[]): string {
 }
 
 /**
- * A timer longer than this cannot fire before a test file ends (a shard runs
- * for minutes, a file for seconds), so it is left out of the report: the report
- * lists the timers that can fire after teardown (#1697). Query-cache garbage
- * collection timers (5 min) were 95% of the first hosted report.
+ * A timer with more than this left cannot fire before a test file ends (a shard
+ * runs for minutes, a file for seconds), so it is left out of the report: the
+ * report lists the timers that can fire after teardown (#1697). Query-cache
+ * garbage collection timers (5 min) were 95% of the first hosted report.
  */
 export const REPORT_MAX_DELAY_MS = 60_000
+
+const NODE_MAX_DELAY_MS = 2 ** 31 - 1
+
+/** The delay the runtime really uses: Node runs a missing, NaN, < 1 or > 2^31-1 (Infinity) delay at 1 ms. */
+export function effectiveDelayMs(delay: number): number {
+  return delay >= 1 && delay <= NODE_MAX_DELAY_MS ? delay : 1
+}
+
+/** Time until the timer next fires, from when it was armed (an interval: until its next tick). */
+export function remainingMs(p: PendingTimer, now: number): number {
+  const delay = effectiveDelayMs(p.delay)
+  const elapsed = Math.max(0, now - (p.armedAt ?? now))
+  return p.kind === 'setInterval' ? delay - (elapsed % delay) : delay - elapsed
+}
 
 type GuardMode = 'off' | 'report' | 'fail'
 
@@ -195,7 +212,8 @@ export function installTeardownGuard(
   if (mode === 'off') return
   const tracker = trackTimers(target)
   hooks.afterAll(() => {
-    const pending = tracker.pending().filter((p) => !(p.delay > REPORT_MAX_DELAY_MS)) // a missing or non-numeric delay (Node runs it at 1 ms) stays reported
+    const now = Date.now()
+    const pending = tracker.pending().filter((p) => remainingMs(p, now) <= REPORT_MAX_DELAY_MS)
     const report = formatPending(fileName(), pending)
     if (report) process.stderr.write(report)
     tracker.restore()

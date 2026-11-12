@@ -359,12 +359,62 @@ describe('installTeardownGuard', () => {
     expect(text).toContain('2 timer(s) still pending')
   })
 
-  it('a long timer is still cancelled normally (tracking is unchanged, only the report filters)', () => {
-    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
-    const g = install()
-    const handle = g.target.setTimeout(() => undefined, 300_000)
-    g.target.clearTimeout(handle)
-    expect(() => g.run()).not.toThrow()
+  it('a long timer is tracked and cancelled for real: the filter only hides it from the report', () => {
+    const { target, live } = fakeTarget()
+    const tracker = trackTimers(target)
+    const handle = target.setTimeout(() => undefined, 300_000)
+    expect(tracker.pending().map((p) => p.delay), 'tracked although the report hides it').toEqual([300_000])
+    target.clearTimeout(handle)
+    expect(tracker.pending()).toEqual([])
+    expect(live.size, 'the underlying timer is really cancelled').toBe(0)
+    tracker.restore()
+  })
+
+  describe('the 60 s cutoff follows what is left, not what was requested', () => {
+    afterEach(() => vi.useRealTimers())
+
+    function reportAfter(setup: (g: ReturnType<typeof install>) => void, elapsedMs: number): string {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+      const g = install()
+      setup(g)
+      vi.setSystemTime(Date.now() + elapsedMs)
+      g.run()
+      return write.mock.calls.map((c) => String(c[0])).join('')
+    }
+
+    it('a 61 s timer with 1 ms left is reported', () => {
+      expect(reportAfter((g) => g.target.setTimeout(() => undefined, 61_000), 60_000)).toContain('1 timer(s) still pending')
+    })
+
+    it('a 61 s timer with 61 s left is not', () => {
+      expect(reportAfter((g) => g.target.setTimeout(() => undefined, 61_000), 0)).toBe('')
+    })
+
+    it('Node runs a delay above 2^31-1 or Infinity at 1 ms, so those are reported', () => {
+      const text = reportAfter((g) => {
+        g.target.setTimeout(() => undefined, 2_147_483_648)
+        g.target.setTimeout(() => undefined, Number.POSITIVE_INFINITY)
+      }, 0)
+      expect(text).toContain('2 timer(s) still pending')
+    })
+
+    it('an interval is reported when its next tick is near, however long the period', () => {
+      expect(reportAfter((g) => g.target.setInterval(() => undefined, 300_000), 299_999)).toContain('1 timer(s) still pending')
+    })
+
+    it('an interval whose next tick is far away is not', () => {
+      expect(reportAfter((g) => g.target.setInterval(() => undefined, 300_000), 1_000)).toBe('')
+    })
+
+    it('fail mode throws for an imminently due long timer', () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+      const fail = install('fail')
+      fail.target.setTimeout(() => undefined, 61_000)
+      vi.setSystemTime(Date.now() + 60_000)
+      expect(() => fail.run()).toThrow(/some\.test\.ts/)
+    })
   })
 
   it('adds no process error listener: Vitest keeps reporting unhandled errors itself', () => {
