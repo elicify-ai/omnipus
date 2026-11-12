@@ -1,10 +1,11 @@
 import '@testing-library/jest-dom'
-import { afterEach } from 'vitest'
+import { afterAll, afterEach, expect } from 'vitest'
 import { cleanup, configure } from '@testing-library/react'
 import {
   installTestIntersectionObserver,
   resetTestIntersectionObservers,
 } from './intersectionObserver'
+import { installTeardownGuard } from './teardownGuard'
 
 // Async-settlement budget for @testing-library's async utils (findBy*/waitFor).
 // nav-load2 dispatch (2026-10-11): the default 1000ms was never configured
@@ -130,3 +131,6 @@ globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   }
   return nativeFetch(input, init)
 }) as typeof fetch
+
+// #1697: name the test file whose timers outlive it (report-only; see teardownGuard.ts).
+installTeardownGuard({ afterAll }, () => expect.getState().testPath ?? 'unknown test file')
