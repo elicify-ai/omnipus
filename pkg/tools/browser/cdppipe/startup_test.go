@@ -33,6 +33,10 @@ func TestStartupProcessHelper(t *testing.T) {
 	case "stall":
 		time.Sleep(time.Minute)
 		os.Exit(0)
+	case "stall-stderr":
+		fmt.Fprint(os.Stderr, "marker-startup-line private-profile-path\n")
+		time.Sleep(time.Minute)
+		os.Exit(0)
 	case "cdp":
 		in := bufio.NewReader(os.NewFile(3, "cdp-in"))
 		out := os.NewFile(4, "cdp-out")
@@ -183,5 +187,113 @@ func TestStartupCancellationPreservesCallerProfile(t *testing.T) {
 	data, err := os.ReadFile(marker)
 	if err != nil || string(data) != "preserve" {
 		t.Fatalf("caller profile changed: data=%q error=%v", data, err)
+	}
+}
+
+// #1132 — a probe timeout used to leave no trace of how long the launch took,
+// how loaded the machine was, or what Chrome had said. The log (never the
+// returned error: Chrome stderr can carry private paths) must now carry them.
+func TestStartupProbeFailureLogsDiagnostics(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	opts := startupHelperOptions(t, "stall-stderr")
+	opts.DialTimeout = 500 * time.Millisecond
+	opts.Errf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	_, _, err := NewPipeAllocator(context.Background(), os.Args[0], opts)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want deadline exceeded, got %v", err)
+	}
+	if strings.Contains(err.Error(), "marker-startup-line") || strings.Contains(err.Error(), "private-profile-path") {
+		t.Fatalf("Chrome stderr leaked into the returned error: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var diag string
+	for _, l := range lines {
+		if strings.Contains(l, "startup diagnostics") {
+			diag = l
+		}
+	}
+	if diag == "" {
+		t.Fatalf("no startup diagnostics line logged; got %q", lines)
+	}
+	for _, want := range []string{"stage=cdp-liveness-probe", "probe_timeout=500ms", "launch_elapsed=", "probe_elapsed=", "load_avg=", "cpus=", "chrome_exited=false"} {
+		if !strings.Contains(diag, want) {
+			t.Errorf("diagnostics line missing %q: %s", want, diag)
+		}
+	}
+	if strings.Count(diag, "\n") != 0 {
+		t.Errorf("diagnostics must be one log line: %q", diag)
+	}
+}
+
+func TestStartupDiagnosticsAbsentOnSuccess(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	opts := startupHelperOptions(t, "cdp")
+	opts.Errf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	_, cancel, err := NewPipeAllocator(context.Background(), os.Args[0], opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	mu.Lock()
+	defer mu.Unlock()
+	for _, l := range lines {
+		if strings.Contains(l, "startup diagnostics") {
+			t.Fatalf("diagnostics logged on a successful start: %s", l)
+		}
+	}
+}
+
+// The stderr tail itself is tested without a child process: a real child's write
+// and the probe deadline have no ordering guarantee on a loaded runner.
+func TestLogProbeFailureCarriesStderrTailAndConsistentByteCount(t *testing.T) {
+	var got []string
+	l := &launch{opts: PipeOptions{Errf: func(format string, args ...any) { got = append(got, fmt.Sprintf(format, args...)) }}, waitDone: make(chan struct{})}
+	l.stderr.append([]byte("marker-startup-line\nsecond line"))
+	l.logProbeFailure(time.Now().Add(-2*time.Second), time.Now().Add(-time.Second), 20*time.Second)
+	if len(got) != 1 {
+		t.Fatalf("want exactly one line, got %q", got)
+	}
+	line := got[0]
+	for _, want := range []string{"probe_timeout=20s", "chrome_exited=false", "stderr_bytes=31", `stderr_tail="marker-startup-line\nsecond line"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("line missing %q: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "\n") {
+		t.Errorf("line must be a single line: %q", line)
+	}
+	close(l.waitDone)
+	got = nil
+	l.logProbeFailure(time.Now(), time.Now(), time.Second)
+	if !strings.Contains(got[0], "chrome_exited=true") {
+		t.Errorf("exit not reported: %s", got[0])
+	}
+}
+
+// A slow log sink must not change the error the caller receives (CHECK round 1).
+func TestStartupProbeErrorIsFixedBeforeLogging(t *testing.T) {
+	opts := startupHelperOptions(t, "stall")
+	opts.DialTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opts.Errf = func(format string, args ...any) {
+		if strings.Contains(format, "startup diagnostics") {
+			cancel() // the caller gives up while the diagnostics are being written
+		}
+	}
+	_, _, err := NewPipeAllocator(ctx, os.Args[0], opts)
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		t.Fatalf("probe timeout must be reported, not the later cancellation: %v", err)
 	}
 }
