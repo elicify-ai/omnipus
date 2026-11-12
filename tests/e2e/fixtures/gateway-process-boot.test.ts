@@ -25,7 +25,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { inspect } from 'node:util'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GatewayProcess, REPORT_TAIL_BYTES } from './gateway-process.js'
+import { GatewayProcess, REPORT_TAIL_BYTES, pickFreshPort } from './gateway-process.js'
 
 const FAKE_SOURCE = `#!/usr/bin/env node
 const fs = require('node:fs')
@@ -37,6 +37,7 @@ const port = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8'))
 const pidsFile = path.join(state, 'pids')
 const boot = (fs.existsSync(pidsFile) ? fs.readFileSync(pidsFile, 'utf8').split('\\n').filter(Boolean).length : 0) + 1
 fs.appendFileSync(pidsFile, process.pid + '\\n')
+fs.appendFileSync(path.join(state, 'homes'), home + '\\n')
 const mode = process.env.FAKE_MODE
 const env = process.env
 const announce = () => process.stdout.write('fake gateway boot ' + boot + ' announcing localhost:' + port + '\\n')
@@ -157,6 +158,54 @@ if (mode === 'silent-ignore-term') {
   announce()
   process.stderr.write(line + ' restart value ' + env.FAKE_RESTART_TOKEN + '\\n')
   process.exit(4)
+} else if (mode === 'bind-line-alive') {
+  // Prints a line that matches the final bind error, but keeps running and
+  // never listens: only stop() ends it, so it did not lose its port.
+  announce()
+  process.stderr.write('Error: error starting channels: channels: bind shared HTTP server at 127.0.0.1:' + port + ': listen tcp 127.0.0.1:' + port + ': bind: address already in use\\n')
+  process.on('SIGTERM', () => process.exit(1))
+  setInterval(() => {}, 1000)
+} else if (mode === 'bind-in-use' || mode === 'other-bind-error') {
+  // The first FAKE_BIND_FAILS boots lose their port to another socket (#1758) and
+  // exit; later boots are healthy. 'other-bind-error' fails the same way with a
+  // different reason, which must NOT be retried.
+  process.stderr.write(line + '\\n')
+  if (boot <= Number(env.FAKE_BIND_FAILS)) {
+    const reason = mode === 'bind-in-use' ? 'address already in use' : 'permission denied'
+    if (mode === 'bind-in-use') {
+      // Like the real gateway, which redirects its stderr into its panic log once
+      // logging starts, the final error goes there unless FAKE_FINAL_TO says stderr.
+      const finalError = 'Error: error starting channels: channels: bind shared HTTP server at 127.0.0.1:' + port + ': listen tcp 127.0.0.1:' + port + ': bind: ' + reason + '\\n'
+      if (env.FAKE_STUCK) {
+        // A home that cannot be removed: an entry the owner may not delete from.
+        fs.mkdirSync(path.join(home, 'stuck'))
+        fs.writeFileSync(path.join(home, 'stuck', 'file'), 'x')
+        fs.chmodSync(path.join(home, 'stuck'), 0o500)
+      }
+      if (env.FAKE_FINAL_TO === 'stderr') process.stderr.write(finalError)
+      else panicLog(finalError)
+    } else if (env.FAKE_DECOY === 'echo') {
+      // A different failure whose output merely contains the words.
+      process.stderr.write('note: bind: address already in use was seen in an unrelated place\\n')
+      process.stderr.write('fatal: ' + reason + '\\n')
+    } else if (env.FAKE_DECOY === 'quoted') {
+      // The complete bind error quoted earlier, then a different terminal failure.
+      const quoted = 'note: copied error: bind shared HTTP server at 127.0.0.1:' + port + ': listen tcp 127.0.0.1:' + port + ': bind: address already in use\\n'
+      const terminal = 'Error: configuration invalid\\n'
+      if (env.FAKE_FINAL_TO === 'stderr') process.stderr.write(quoted + terminal)
+      else panicLog(quoted + terminal)
+    } else if (env.FAKE_DECOY === 'recovered') {
+      // The gateway's own retry line for a bind that later worked, then another failure.
+      process.stderr.write('Shared HTTP server bind retry - port may be in transient use error: listen tcp 127.0.0.1:' + port + ': bind: address already in use\\n')
+      process.stderr.write('fatal: ' + reason + '\\n')
+    } else {
+      process.stderr.write('error starting channels: channels: bind shared HTTP server at 127.0.0.1:' + port + ': listen tcp 127.0.0.1:' + port + ': bind: ' + reason + '\\n')
+    }
+    process.exit(1)
+  }
+  announce()
+  process.on('SIGTERM', () => process.exit(0))
+  serve(200)
 } else {
   announce()
   process.stderr.write(line + '\\n')
@@ -816,4 +865,161 @@ describe('GatewayProcess boot failure: no secret in anything it emits: malformed
     expect(pids(state)).toHaveLength(1)
     expect(isAlive(pids(state)[0]), 'the child exited').toBe(false)
   }, 60_000)
+})
+
+// #1758 — the port is probed free and bound later, so another socket can take it
+// in between ("bind: address already in use"). That one failure is retried with a
+// fresh port, at most twice, and every retry is printed. Nothing else is retried.
+describe('GatewayProcess boot: a lost port is retried with a fresh port (#1758)', () => {
+  const baseEnv = (state: string, mode: string, fails: number): Record<string, string> => ({
+    FAKE_MARKER: `PORT-${mode}-${fails}-${process.pid}`,
+    FAKE_MODE: mode,
+    FAKE_BIND_FAILS: String(fails),
+    FAKE_FINAL_TO: 'panic',
+    FAKE_STATE: state,
+  })
+
+  const homes = (state: string): string[] => fs.readFileSync(path.join(state, 'homes'), 'utf8').split('\n').filter(Boolean)
+
+  it('one lost bind: the second boot gets another port and the retry is reported', async () => {
+    const state = newState('bind-once')
+    const gw = await GatewayProcess.start({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env: baseEnv(state, 'bind-in-use', 1) })
+    try {
+      expect(pids(state), 'one failed boot plus one good boot').toHaveLength(2)
+      expect(isAlive(pids(state)[0]), 'the failed boot is gone').toBe(false)
+      expect(gw.bootRetries).toHaveLength(1)
+      const m = /port (\d+) -> (\d+)/.exec(gw.bootRetries[0])
+      expect(m, gw.bootRetries[0]).not.toBeNull()
+      expect(m![1]).not.toBe(m![2])
+      const [first] = homes(state)
+      expect(fs.existsSync(first), 'the discarded attempt home is removed').toBe(false)
+      expect(first, 'the first boot used the retried-from port').toContain(`-${m![1]}-`)
+      expect(Number(m![2]), 'the report names the port that is now in use').toBe(gw.port)
+      expect(errors.join('\n'), 'a retry is never silent').toContain(gw.bootRetries[0])
+      expect((await fetch(`${gw.baseURL}/health`)).status).toBe(200)
+    } finally {
+      await gw.stop()
+    }
+  }, 60_000)
+
+  it('a clean boot reports no retries', async () => {
+    const state = newState('bind-none')
+    const gw = await GatewayProcess.start({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env: baseEnv(state, 'bind-in-use', 0) })
+    try {
+      expect(gw.bootRetries).toEqual([])
+      expect(pids(state)).toHaveLength(1)
+    } finally {
+      await gw.stop()
+    }
+  }, 60_000)
+
+  it('two lost binds still boot on the third try', async () => {
+    const state = newState('bind-twice')
+    const gw = await GatewayProcess.start({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env: baseEnv(state, 'bind-in-use', 2) })
+    try {
+      expect(pids(state)).toHaveLength(3)
+      expect(gw.bootRetries).toHaveLength(2)
+    } finally {
+      await gw.stop()
+    }
+  }, 60_000)
+
+  it('three lost binds fail after two retries, and the failure lists both retries', async () => {
+    const state = newState('bind-always')
+    const env = baseEnv(state, 'bind-in-use', 99)
+    const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env })
+    expect(pids(state), 'first boot plus two retries, no more').toHaveLength(3)
+    for (const pid of pids(state)) expect(isAlive(pid), `boot ${pid} is gone`).toBe(false)
+    expect(err.message).toContain('address already in use')
+    expect(err.message.match(/port \d+ -> \d+/g) ?? []).toHaveLength(2)
+    expect(homes(state), 'one home per boot, all recorded by the boots themselves').toHaveLength(3)
+    expect(new Set(homes(state)).size).toBe(3)
+    for (const home of homes(state)) expect(fs.existsSync(home), `the OMNIPUS_HOME ${home} is removed`).toBe(false)
+  }, 60_000)
+
+  it('any other bind failure is not retried', async () => {
+    const state = newState('bind-other')
+    const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env: baseEnv(state, 'other-bind-error', 1) })
+    expect(pids(state), 'a different failure is never retried').toHaveLength(1)
+    expect(err.message).not.toMatch(/port \d+ -> \d+/)
+  }, 60_000)
+
+  it('a failure that only echoes the words is not retried', async () => {
+    const state = newState('bind-decoy-echo')
+    const env = { ...baseEnv(state, 'other-bind-error', 1), FAKE_DECOY: 'echo' }
+    const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env })
+    expect(pids(state)).toHaveLength(1)
+    expect(err.message).not.toMatch(/port \d+ -> \d+/)
+  }, 60_000)
+
+  for (const dest of ['panic', 'stderr']) {
+    it(`a quoted bind error followed by another terminal failure is not retried (${dest})`, async () => {
+      const state = newState(`bind-quoted-${dest}`)
+      const env = { ...baseEnv(state, 'other-bind-error', 1), FAKE_DECOY: 'quoted', FAKE_FINAL_TO: dest }
+      const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env })
+      expect(pids(state)).toHaveLength(1)
+      expect(err.message).not.toMatch(/port \d+ -> \d+/)
+    }, 60_000)
+  }
+
+  it('a recovered bind followed by another failure is not retried', async () => {
+    const state = newState('bind-decoy-recovered')
+    const env = { ...baseEnv(state, 'other-bind-error', 1), FAKE_DECOY: 'recovered' }
+    const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env })
+    expect(pids(state)).toHaveLength(1)
+    expect(err.message).not.toMatch(/port \d+ -> \d+/)
+  }, 60_000)
+
+  it('the final error on the pipe (not the panic log) is retried too', async () => {
+    const state = newState('bind-pipe')
+    const env = { ...baseEnv(state, 'bind-in-use', 1), FAKE_FINAL_TO: 'stderr' }
+    const gw = await GatewayProcess.start({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env })
+    try {
+      expect(gw.bootRetries).toHaveLength(1)
+    } finally {
+      await gw.stop()
+    }
+  }, 60_000)
+
+  it('a gateway that prints the bind error but is still running is not retried: stop() ended it', async () => {
+    const state = newState('bind-alive')
+    const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 600, env: { FAKE_MARKER: `ALIVE-${process.pid}`, FAKE_MODE: 'bind-line-alive', FAKE_STATE: state } })
+    expect(pids(state), 'a boot that did not exit by itself is never retried').toHaveLength(1)
+    expect(err.message).not.toMatch(/port \d+ -> \d+/)
+  }, 60_000)
+
+  // POSIX directory permissions are the failure injected here: not root (root ignores them), not Windows (chmod does not restrict deletion).
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a home that cannot be removed blocks the retry and is reported', async () => {
+    const state = newState('bind-stuck')
+    const env = { ...baseEnv(state, 'bind-in-use', 1), FAKE_STUCK: '1' }
+    let err: Error | undefined
+    try {
+      err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 5_000, env })
+      expect(pids(state), 'no retry while a discarded home is left behind').toHaveLength(1)
+      expect(err.message).toContain('could not be removed')
+      expect(err.message).not.toMatch(/port \d+ -> \d+/)
+    } finally {
+      // Tolerant: with the guard removed the second boot succeeds and startError()
+      // has already removed its home, and the original failure must stay visible.
+      for (const home of homes(state)) {
+        try { fs.chmodSync(path.join(home, 'stuck'), 0o700) } catch { /* already gone */ }
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    }
+  }, 60_000)
+})
+
+describe('pickFreshPort (#1758)', () => {
+  it('skips ports that were already tried, even when the probe repeats them', async () => {
+    const seq = [5, 5, 6, 7]
+    expect(await pickFreshPort(new Set([5, 6]), async () => seq.shift() as number)).toBe(7)
+  })
+
+  it('takes the first port when nothing was tried', async () => {
+    expect(await pickFreshPort(new Set(), async () => 9)).toBe(9)
+  })
+
+  it('gives up with a clear error when the probe keeps repeating a tried port', async () => {
+    await expect(pickFreshPort(new Set([5]), async () => 5)).rejects.toThrow(/no fresh port found.*5/)
+  })
 })

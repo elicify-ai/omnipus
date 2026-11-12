@@ -103,6 +103,25 @@ export interface GatewayProcessOptions {
   startupTimeoutMs?: number;
 }
 
+/** The one boot failure that is retried with a fresh port (#1758): the port was
+ * probed free, then another socket took it before the gateway bound it. */
+const PORT_IN_USE_MARKER = 'bind: address already in use';
+/**
+ * A port from `probe` that is not in `avoid`. getFreePort() gives an unused port
+ * but may give back one it handed out before, so a retry could land on the port
+ * that was just lost. Probing again is enough: no port range is imposed.
+ */
+export async function pickFreshPort(avoid: ReadonlySet<number>, probe: () => Promise<number> = getFreePort): Promise<number> {
+  for (let i = 0; i < 20; i++) {
+    const port = await probe();
+    if (!avoid.has(port)) return port;
+  }
+  throw new Error(`GatewayProcess: no fresh port found in 20 probes (already tried: ${[...avoid].join(', ')})`);
+}
+
+/** Retries after the first boot (so at most 3 boots). */
+export const MAX_PORT_RETRIES = 2;
+
 /** Gateway output kept in memory per process (the tail is what is reported). */
 const OUTPUT_KEEP_BYTES = 256 * 1024;
 /** The gateway prints this (pkg/gateway/gateway_boot.go) once its listener is
@@ -390,6 +409,49 @@ export class GatewayProcess {
     }
   }
 
+  /** One line per boot retried because its port was taken by another socket
+   * (#1758): "boot retry 1/2: port A -> B (...)". Empty when the first boot
+   * worked. Printed when it happens, and listed in a final boot failure. */
+  bootRetries: string[] = [];
+
+  /** The unscrubbed end of gateway_panic.log, for matching only (never emitted). */
+  private rawPanicLogTail(): string {
+    const file = path.join(this.homeDir, 'logs', 'gateway_panic.log');
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(file, 'r');
+      const size = fs.fstatSync(fd).size;
+      const len = Math.min(size, REPORT_TAIL_BYTES);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      return buf.toString('utf8');
+    } catch {
+      return '';
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  }
+
+  /** True only for a boot that ended BECAUSE its bind lost this gateway's port
+   * (#1758): the process exited by itself with a failure code, and the LAST line
+   * the gateway wrote (in the pipe or in its panic log) is its terminal error
+   * for this exact port: "Error: error starting channels: channels: bind shared
+   * HTTP server at <addr>:<port>: ...: bind: address already in use" (printed
+   * by pkg/app/app.go::runMain after the command returned). Not the marker
+   * anywhere in the output: the gateway also logs a bind retry that later
+   * succeeds, and a failure can quote an earlier error and then end otherwise. */
+  private lostItsPort(exitedByItself: boolean): boolean {
+    if (!exitedByItself) return false;
+    // The real gateway redirects its stderr into gateway_panic.log once logging
+    // starts, so its final error is there, not in the pipe (checked in the
+    // source: pkg/logger/panic_unix.go::initPanicFile, pkg/app/app.go::runMain).
+    // Both places are read; the text is only matched, never emitted.
+    const lastLine = (text: string): string => text.split('\n').map((l) => l.trim()).filter((l) => l !== '').pop() ?? '';
+    const last = [lastLine(this.output), lastLine(this.rawPanicLogTail())];
+    const final = new RegExp(`^Error: error starting channels: channels: bind shared HTTP server at \\S*:${this.port}: .*${PORT_IN_USE_MARKER}$`);
+    return last.some((l) => final.test(l));
+  }
+
   /**
    * stop() after a failure, keeping that failure if cleanup fails too: the
    * returned text is `failure` plus the (scrubbed) cleanup error, or
@@ -440,30 +502,61 @@ export class GatewayProcess {
     const healthTimeoutMs = opts.healthTimeoutMs ?? BOOT_HEALTH_TIMEOUT_MS;
     const startupTimeoutMs = opts.startupTimeoutMs ?? 30_000;
 
-    // A boot (spawn + /health) that fails FAILS: it is never retried, so an
-    // unexplained crash cannot turn into a pass. Its proof goes to the job
+    // A boot (spawn + /health) that fails FAILS: it is not retried (the one
+    // exception is below), so an unexplained crash cannot turn into a pass. Its proof goes to the job
     // output and the thrown error: the gateway's own stdout/stderr and
     // panic-log tails, scrubbed (CI 2026-11-10: "/health never returned 200"
     // with no gateway output anywhere). The error is built from that
     // scrubbed text only, never with the raw error as its cause, because a
     // startup error carries the gateway's raw output. Onboarding and login
     // are not retried either.
-    const gw = await GatewayProcess.create(binary, opts);
-    let bootFailure: string | undefined;
-    try {
-      await gw.spawnProcess({}, startupTimeoutMs);
-      await waitForHealth(gw.baseURL, healthTimeoutMs, gw.proc ?? undefined);
-    } catch (err) {
-      // The report reads the panic log, so it is built before stop()
-      // deletes the home.
-      bootFailure = gw.safeFailureReport(err, 'boot');
-    }
-    if (bootFailure !== undefined) {
+    // The one exception to "never retried" (#1758): a boot whose own output
+    // says "bind: address already in use" lost its probed port to another
+    // socket. It is retried, at most MAX_PORT_RETRIES times, with a fresh port,
+    // and each retry is printed and kept in bootRetries so none is silent.
+    // Every other failure ends the start at once.
+    const retries: string[] = [];
+    const triedPorts = new Set<number>();
+    let gw = await GatewayProcess.create(binary, opts, triedPorts);
+    triedPorts.add(gw.port);
+    for (let attempt = 0; ; attempt++) {
+      let bootFailure: string | undefined;
+      try {
+        await gw.spawnProcess({}, startupTimeoutMs);
+        await waitForHealth(gw.baseURL, healthTimeoutMs, gw.proc ?? undefined);
+      } catch (err) {
+        // The report reads the panic log, so it is built before stop()
+        // deletes the home.
+        bootFailure = gw.safeFailureReport(err, 'boot');
+      }
+      if (bootFailure === undefined) break;
       console.error(bootFailure);
+      // Read BEFORE stop(): a gateway that stop() has to kill did not exit by
+      // itself, so it did not lose its port.
+      const exitedByItself = gw.proc !== null && gw.proc.exitCode !== null && gw.proc.exitCode !== 0;
+      // ... and classified BEFORE stop() removes the home that holds the panic log.
+      const lostItsPort = gw.lostItsPort(exitedByItself);
       // The failed boot is really gone (exit observed, port released, home
-      // removed) before the failure is thrown.
-      throw new Error((await gw.stopAfterFailure(bootFailure)) ?? bootFailure);
+      // removed) before the failure is thrown or retried.
+      let withCleanup = await gw.stopAfterFailure(bootFailure);
+      // stop() ignores a failed home removal; a retry must not leave that home behind.
+      if (withCleanup === undefined && fs.existsSync(gw.homeDir)) {
+        withCleanup = `${bootFailure}\n--- cleanup after that failure also failed ---\nthe OMNIPUS_HOME ${gw.homeDir} could not be removed`;
+      }
+      const retriable = withCleanup === undefined && attempt < MAX_PORT_RETRIES && lostItsPort;
+      if (!retriable) {
+        const retried = retries.length ? `\n--- port retries before this failure ---\n${retries.join('\n')}` : '';
+        throw new Error((withCleanup ?? bootFailure) + retried);
+      }
+      const oldPort = gw.port;
+      gw = await GatewayProcess.create(binary, opts, triedPorts);
+      triedPorts.add(gw.port);
+      const line = `boot retry ${attempt + 1}/${MAX_PORT_RETRIES}: port ${oldPort} -> ${gw.port} (${PORT_IN_USE_MARKER})`;
+      retries.push(line);
+      console.error(line);
     }
+    gw.bootRetries = retries;
+    let bootFailure: string | undefined;
     // A failed onboarding (a missing key, a refused probe) must not leave
     // the process running or its temp OMNIPUS_HOME behind either. If that
     // cleanup fails too, the error keeps both (scrubbed, no raw cause).
@@ -490,8 +583,8 @@ export class GatewayProcess {
 
   /** One fresh gateway instance: own free port, own OMNIPUS_HOME with its
    * config.json. Not yet spawned. */
-  private static async create(binary: string, opts: GatewayProcessOptions): Promise<GatewayProcess> {
-    const port = await getFreePort();
+  private static async create(binary: string, opts: GatewayProcessOptions, avoidPorts: ReadonlySet<number> = new Set()): Promise<GatewayProcess> {
+    const port = await pickFreshPort(avoidPorts);
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-gwproc-${port}-`));
     // A mock-provider gateway onboards a catalog provider with its endpoint
     // pointed at the loopback mock. A hosted-stamped binary accepts that
