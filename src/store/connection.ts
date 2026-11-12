@@ -12,6 +12,12 @@ import { queryClient } from '@/lib/queryClient'
 // ticking.
 const RECONNECTED_AT_CLEAR_MS = 2_000
 
+// The one pending timer that returns reconnectedAt to rest, and the timestamp
+// it belongs to. It is cleared as soon as reconnectedAt is no longer that
+// timestamp (a later cycle, a reset), so it never fires after its state is
+// gone (#1697).
+let reconnectedClearTimer: { handle: number; forTimestamp: number } | null = null
+
 interface ConnectionStore {
   connection: WsConnection | null
   isConnected: boolean
@@ -97,11 +103,14 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       // rather than clearing unconditionally, so a LATER disconnect/
       // reconnect cycle's own fresh timestamp is never stomped by this
       // stale timer firing after the fact.
-      window.setTimeout(() => {
+      if (reconnectedClearTimer !== null) clearTimeout(reconnectedClearTimer.handle)
+      const handle = window.setTimeout(() => {
+        if (reconnectedClearTimer?.handle === handle) reconnectedClearTimer = null
         if (get().reconnectedAt === now) {
           set({ reconnectedAt: null })
         }
       }, RECONNECTED_AT_CLEAR_MS)
+      reconnectedClearTimer = { handle, forTimestamp: now }
     }
   },
   recordDisconnect: (assistantMessageId) => {
@@ -127,3 +136,9 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     connection.connect()
   },
 }))
+
+useConnectionStore.subscribe((state) => {
+  if (reconnectedClearTimer === null || state.reconnectedAt === reconnectedClearTimer.forTimestamp) return
+  clearTimeout(reconnectedClearTimer.handle)
+  reconnectedClearTimer = null
+})
