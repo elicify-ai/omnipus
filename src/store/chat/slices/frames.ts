@@ -908,6 +908,64 @@ function resolveClosedBubbleStatus(
   return alreadyInterrupted || errorCode === 'turn_canceled' ? 'interrupted' : 'error'
 }
 
+interface EmptyStopFacts {
+  resolvedStatus: 'done' | 'interrupted' | 'error'
+  redirectStoppedTurn: boolean
+  isCancelAck: boolean
+  llmError: { code?: string } | null | undefined
+  translatedMessage: string | null | undefined
+}
+
+/**
+ * #1787: a stop before the first token leaves an EMPTY bubble, and the saved
+ * history has only the stop notice. Make the empty bubble the notice, so live
+ * reads like a reload instead of a blank "(interrupted)" row with no notice. A
+ * redirect stop (steer) and a bubble that holds text or tool calls stay as they
+ * are. The notice needs a known owner agent so a later saved copy can be matched
+ * to it (#1789): the row's own, the turn's, or the open chat's when this is the
+ * foreground session. A background chat with none keeps today's row. Kept at
+ * module scope so it adds nothing to handleFrame's grandfathered function budget.
+ */
+function closeEmptyStoppedBubble(
+  msg: ChatMessage,
+  draft: SessionChatState,
+  id: string,
+  targetSid: string | null,
+  facts: EmptyStopFacts,
+): void {
+  const { resolvedStatus, redirectStoppedTurn, isCancelAck, llmError, translatedMessage } = facts
+  const session = useSessionStore.getState()
+  const owner = msg.agentId
+    ?? draft.activeTurnAgentId
+    ?? (targetSid === session.activeSessionId ? session.activeAgentId : null)
+    ?? undefined
+  if (
+    resolvedStatus === 'interrupted'
+    && !!owner
+    && !redirectStoppedTurn
+    && !isCancelAck
+    && llmError?.code === 'turn_canceled'
+    && translatedMessage
+    && !(msg.content ?? '').trim()
+    && !msg.tool_calls?.length
+    && !msg.spans?.length
+    && !msg.media?.length
+    // Live tool calls stay in the bucket until `done` attaches them.
+    && draft.toolCallOrder.length === 0
+    // Only the newest row can be this turn's empty bubble: an earlier empty one
+    // (a cancel ack, a blank reply) must not take the notice.
+    && id === draft.messageOrder[draft.messageOrder.length - 1]
+  ) {
+    msg.content = translatedMessage
+    msg.status = 'error'
+    msg.errorCode = llmError.code
+    // The bubble was made when the user pressed Send. The notice is the time of
+    // the stop, so a slow first token does not age it.
+    msg.timestamp = new Date().toISOString()
+    if (!msg.agentId) msg.agentId = owner
+  }
+}
+
 interface FrameContext {
   set: StoreApi<ChatStore>['setState']
   get: StoreApi<ChatStore>['getState']
@@ -1946,15 +2004,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     // or sanitized frame.message (legacy fallback, D5 Site 3).
                     // This overturns ADR-051's partial-content preservation
                     // for 'error' only; FR-21 still preserves 'interrupted'.
-                    const fallbackContent = llmError
-                      ? translatedMessage
-                      : safeMessage
+                    const fallbackContent = llmError ? translatedMessage : safeMessage
                     msg.content = (resolvedStatus === 'interrupted' || resolvedStatus === 'done')
                       ? msg.content
                       : (fallbackContent ?? '')
                     msg.isStreaming = false
                     msg.status = resolvedStatus
                     msg.pendingTextBoundary = false
+                    closeEmptyStoppedBubble(msg, draft, id, targetSid, { resolvedStatus, redirectStoppedTurn, isCancelAck, llmError, translatedMessage })
                     // ADR-051 — stamp typed fields on the closed bubble so
                     // the "Technical details" disclosure renders even when
                     // we coalesced into a streaming bubble instead of
