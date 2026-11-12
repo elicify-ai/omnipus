@@ -13,6 +13,8 @@
 // exists, so any such listener would hide the very failure this guard helps to
 // find (CHECK round 1, finding 1).
 
+import { promisify } from 'node:util'
+
 type TimerKind = 'setTimeout' | 'setInterval'
 
 export interface PendingTimer {
@@ -83,6 +85,9 @@ export function trackTimers(target: TimerTarget): TimerTracker {
 
   const wrapSet = (kind: TimerKind) =>
     ((fn: (...a: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      // An invalid callback must fail exactly as natively, synchronously, from
+      // the caller's own call: hand it straight to the original.
+      if (typeof fn !== 'function') return (original[kind] as (...a: unknown[]) => unknown)(fn, delay, ...args)
       const site = creationSite()
       const ref: { handle?: unknown } = {}
       // A plain function, not an arrow: Node calls a timer callback with the
@@ -119,9 +124,16 @@ export function trackTimers(target: TimerTarget): TimerTracker {
       return (original[kind] as (h?: unknown) => void)(handle)
     })
 
+  // Node's setTimeout/setInterval carry util.promisify.custom; keep it so
+  // promisify(setTimeout) still resolves (the native promise version is used).
+  const keepPromisify = <F extends object>(wrapper: F, native: unknown): F => {
+    const custom = (native as Record<symbol, unknown> | undefined)?.[promisify.custom]
+    if (custom !== undefined) Object.defineProperty(wrapper, promisify.custom, { value: custom, configurable: true })
+    return wrapper
+  }
   const wrapped = {
-    setTimeout: wrapSet('setTimeout') as unknown as typeof setTimeout,
-    setInterval: wrapSet('setInterval') as unknown as typeof setInterval,
+    setTimeout: keepPromisify(wrapSet('setTimeout') as unknown as typeof setTimeout, original.setTimeout),
+    setInterval: keepPromisify(wrapSet('setInterval') as unknown as typeof setInterval, original.setInterval),
     clearTimeout: wrapClear('clearTimeout') as unknown as typeof clearTimeout,
     clearInterval: wrapClear('clearInterval') as unknown as typeof clearInterval,
   }

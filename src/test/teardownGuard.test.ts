@@ -1,5 +1,6 @@
 // #1697 — the teardown guard names the test file whose timers outlive it.
 import { readFileSync } from 'node:fs'
+import { promisify } from 'node:util'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { formatPending, installTeardownGuard, trackTimers, type TimerTarget } from './teardownGuard'
@@ -256,6 +257,25 @@ describe('trackTimers: CHECK round 4', () => {
     expect(target.setTimeout, 'the fake is untouched').toBe(fake)
     expect(target.clearTimeout, 'a still-wrapped slot is restored').toBe(globalThis.clearTimeout)
     target.setTimeout = nativeSet
+  })
+})
+
+describe('trackTimers: CHECK round 5 (native API compatibility)', () => {
+  it('util.promisify(setTimeout) still resolves with the value', async () => {
+    const target = nativeTarget()
+    const tracker = trackTimers(target)
+    const sleep = promisify(target.setTimeout) as unknown as (ms: number, value: string) => Promise<string>
+    await expect(sleep(1, 'value')).resolves.toBe('value')
+    tracker.restore()
+  })
+
+  it('an invalid callback throws synchronously like native, and schedules nothing', () => {
+    const target = nativeTarget()
+    const tracker = trackTimers(target)
+    expect(() => (target.setTimeout as unknown as (f: unknown, d: number) => void)(null, 60_000)).toThrow(TypeError)
+    expect(() => (target.setInterval as unknown as (f: unknown, d: number) => void)(null, 60_000)).toThrow(TypeError)
+    expect(tracker.pending()).toHaveLength(0)
+    tracker.restore()
   })
 })
 
