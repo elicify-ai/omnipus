@@ -120,6 +120,19 @@ if (mode === 'silent-ignore-term') {
   while (rest > 0) { const n = Math.min(1000, rest); tail += 'f'.repeat(n - 1) + '\\n'; rest -= n }
   panicLog('head ' + 'h'.repeat(5000) + ' edge ' + secret + '\\n' + tail)
   process.exit(5)
+} else if (mode === 'late-noise') {
+  // Announces at once, then prints another line with the port much later.
+  announce()
+  setTimeout(() => process.stdout.write('late noise localhost:' + port + '\\n'), 2000)
+  setInterval(() => {}, 1000)
+} else if (mode === 'late-old' && boot === 1) {
+  // Healthy first boot whose helper inherits the pipes and speaks LATER,
+  // after boot 2 has started (a child that outlives its parent's exit).
+  announce()
+  serve(200)
+  require('node:child_process').spawn(process.execPath, ['-e',
+    "setTimeout(() => process.stdout.write('Health endpoints available localhost:' + process.argv[1] + '\\\\n'), 2500)", String(port)],
+    { stdio: ['ignore', 'inherit', 'inherit'], detached: true }).unref()
 } else if (mode === 'bare-print') {
   // Values printed bare (no key=value shape), then a crash.
   for (const name of (env.FAKE_PRINT_VARS || '').split(',').filter(Boolean)) {
@@ -147,6 +160,7 @@ if (mode === 'silent-ignore-term') {
 } else {
   announce()
   process.stderr.write(line + '\\n')
+  if (mode === 'health-line-never-listen') process.stdout.write('\u2713 Health endpoints available at http://127.0.0.1:' + port + '/health\\n')
   if (mode === 'exit') process.exit(3)
   if (mode === 'panic') {
     panicLog('PANIC OCCURRED: ' + env.FAKE_MARKER + ' boot=' + boot + ' key=' + env.FAKE_PROVIDER_API_KEY + '\\n')
@@ -283,6 +297,62 @@ describe('GatewayProcess boot failure: fails the test with the proven cause', ()
     expect(bootLines(err.message, marker), 'the error carries the boot\'s own stderr line').toHaveLength(1)
     expect(bootLines(errors.join('\n'), marker), 'the job output carries it too').toHaveLength(1)
     await expectOneBootGone(state, err.message, marker)
+  }, 60_000)
+
+  it('never listens: the report says the health line was not observed (#1785)', async () => {
+    const marker = `TIMING-SLOW-${process.pid}`
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'never-listen', FAKE_STATE: newState('timing-slow') },
+    })
+    expect(err.message).toContain('--- boot timing')
+    expect(err.message).toMatch(/"Health endpoints available" not observed in the captured output \(start-up state unknown\)/)
+    expect(err.message).not.toContain('had not finished')
+    expect(err.message).toMatch(/spawned: \d+ ms ago; last output: \d+ ms ago; port line seen after \d+ ms/)
+  }, 60_000)
+
+  it('never listens after printing the health line: the report says the listener was announced (#1785)', async () => {
+    const marker = `TIMING-LISTENER-${process.pid}`
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'health-line-never-listen', FAKE_STATE: newState('timing-listener') },
+    })
+    expect(err.message).toMatch(/"Health endpoints available" SEEN \(listener announced; \/health still failed\)/)
+  }, 60_000)
+
+  it('port line seen after the FIRST announcement, not the last line that mentions the port (#1785)', async () => {
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 3_500,
+      env: { FAKE_MARKER: `TIMING-LATE-${process.pid}`, FAKE_MODE: 'late-noise', FAKE_STATE: newState('timing-late') },
+    })
+    expect(err.message, 'the late line was printed before the report').toContain('late noise')
+    const ms = Number(/port line seen after (\d+) ms/.exec(err.message)?.[1])
+    expect(ms).toBeLessThan(1_500)
+  }, 60_000)
+
+  it('late output of an earlier child does not change the next boot\'s timing (#1785)', async () => {
+    const gw = await GatewayProcess.start({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 4_000,
+      env: { FAKE_MARKER: `TIMING-OLD-${process.pid}`, FAKE_MODE: 'late-old', FAKE_STATE: newState('timing-old') },
+    })
+    try {
+      await gw.kill9()
+      const err = await gw.restart({ relogin: false }).then(() => undefined, (e: unknown) => e as Error)
+      expect(err, 'boot 2 never listens, so the restart must fail').toBeInstanceOf(Error)
+      expect(err!.message).toContain('--- boot timing')
+      expect(err!.message, 'the helper of boot 1 spoke before the report').toContain('Health endpoints available localhost:')
+      expect(err!.message).toContain('not observed in the captured output')
+    } finally {
+      await gw.stop()
+    }
   }, 60_000)
 
   it('exits during boot: the failure names the exit code and carries the output tail', async () => {

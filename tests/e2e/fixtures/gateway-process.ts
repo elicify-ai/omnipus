@@ -105,6 +105,9 @@ export interface GatewayProcessOptions {
 
 /** Gateway output kept in memory per process (the tail is what is reported). */
 const OUTPUT_KEEP_BYTES = 256 * 1024;
+/** The gateway prints this (pkg/gateway/gateway_boot.go) once its listener is
+ * up, just before it serves /health. */
+const HEALTH_READY_MARKER = 'Health endpoints available';
 /** Lines of gateway output put into a boot-failure report. */
 const OUTPUT_TAIL_LINES = 80;
 /** Bytes read (and scrubbed as a whole) from the end of the gateway's panic
@@ -273,6 +276,14 @@ export class GatewayProcess {
   private output = '';
   /** Whether `output` lost its beginning to the OUTPUT_KEEP_BYTES bound. */
   private outputCut = false;
+  /** #1785 boot timing (this fixture's clock), reported when a boot fails:
+   * when the current process was spawned, when it last wrote output, and the
+   * port announcement time. */
+  private spawnedAt = 0;
+  private lastOutputAt = 0;
+  private announceAt = 0;
+  private spawnCount = 0;
+  private healthLineSeen = false;
   /** Every environment a process of this gateway was spawned with: `output`
    * keeps the output of all of them, so all their secrets are scrubbed. */
   private readonly spawnEnvs: Record<string, string | undefined>[] = [];
@@ -316,6 +327,26 @@ export class GatewayProcess {
     }
   }
 
+  /**
+   * #1785: what the output alone does not say. How long the process had run,
+   * how long it had been silent, when the port was announced
+   * and whether it got as far as the line that precedes /health
+   * being served. This reports observations only: "seen" with a failing
+   * /health means the line was printed; "not observed" proves nothing about
+   * why /health failed (the listener can serve before the line is printed).
+   * No output text is copied here: the output tail carries the lines.
+   */
+  private bootTimingBlock(): string {
+    const now = Date.now();
+    const since = (t: number) => (t > 0 ? `${now - t} ms` : 'n/a');
+    return (
+      `--- boot timing (this fixture's clock; the gateway's own timestamps are in the output) ---\n` +
+      `spawned: ${since(this.spawnedAt)} ago; last output: ${since(this.lastOutputAt)} ago; ` +
+      `port line seen after ${this.announceAt > 0 ? `${this.announceAt - this.spawnedAt} ms` : 'never'}\n` +
+      `"${HEALTH_READY_MARKER}" ${this.healthLineSeen ? 'SEEN (listener announced; /health still failed)' : 'not observed in the captured output (start-up state unknown)'}`
+    );
+  }
+
   /** A boot failure plus this gateway's own output and panic-log tails,
    * secrets scrubbed: the cause, not a guess. */
   private bootFailureReport(err: unknown, what: string): string {
@@ -326,6 +357,7 @@ export class GatewayProcess {
     const output = reportTail(this.scrub(this.output), OUTPUT_TAIL_LINES, this.outputCut);
     return (
       `GatewayProcess ${what} failed (port ${this.port}, OMNIPUS_HOME ${this.homeDir}, binary ${this.binary}): ${message}\n` +
+      `${this.bootTimingBlock()}\n` +
       `--- gateway output (last ${OUTPUT_TAIL_LINES} lines, stdout+stderr) ---\n` +
       `${output || '(the gateway wrote no output)'}\n` +
       `--- gateway_panic.log (last ${OUTPUT_TAIL_LINES} lines; the gateway redirects its stderr here once logging starts) ---\n` +
@@ -509,6 +541,11 @@ export class GatewayProcess {
     };
     // Kept so a report scrubs the secrets of every spawn (restart overrides too).
     this.spawnEnvs.push(env);
+    const spawnId = ++this.spawnCount;
+    this.spawnedAt = Date.now();
+    this.lastOutputAt = 0;
+    this.announceAt = 0;
+    this.healthLineSeen = false;
     this.proc = await new Promise<ChildProcess>((resolve, reject) => {
       const child = spawn(this.binary, args, {
         env,
@@ -526,7 +563,11 @@ export class GatewayProcess {
       let output = '';
       const onData = (chunk: Buffer) => {
         const text = chunk.toString();
+        // Late output of an earlier child must not touch this spawn's timing.
+        const current = spawnId === this.spawnCount;
+        if (current) this.lastOutputAt = Date.now();
         output += text;
+        if (current && output.includes(HEALTH_READY_MARKER)) this.healthLineSeen = true;
         // Kept for the life of the process (bounded), for boot-failure reports.
         const kept = this.output + text;
         if (kept.length > OUTPUT_KEEP_BYTES) this.outputCut = true;
@@ -537,6 +578,7 @@ export class GatewayProcess {
           output.includes(`:${this.port}`)
         ) {
           clearTimeout(timeout);
+          if (current && this.announceAt === 0) this.announceAt = Date.now();
           resolve(child);
         }
       };
