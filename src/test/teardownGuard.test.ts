@@ -145,6 +145,39 @@ describe('trackTimers against native timers (CHECK round 1, findings 3 and 4)', 
   })
 })
 
+describe('trackTimers: aliases and re-arming (CHECK round 2)', () => {
+  it('clearing through the numeric string id cancels the timer and leaves nothing pending', async () => {
+    const target = nativeTarget()
+    const tracker = trackTimers(target)
+    let ran = false
+    const handle = target.setTimeout(() => { ran = true }, 5)
+    target.clearTimeout(String(Number(handle)) as unknown as ReturnType<typeof setTimeout>)
+    expect(tracker.pending()).toHaveLength(0)
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    expect(ran).toBe(false)
+    tracker.restore()
+  })
+
+  it('a timeout re-armed with refresh() inside its callback is pending again', async () => {
+    const target = nativeTarget()
+    const tracker = trackTimers(target)
+    let runs = 0
+    let seen = -1
+    await new Promise<void>((resolve) => {
+      target.setTimeout(function (this: { refresh: () => void }) {
+        runs++
+        if (runs === 1) { this.refresh(); seen = tracker.pending().length; resolve() }
+      } as () => void, 1)
+    })
+    expect(runs).toBe(1)
+    expect(seen, 'pending while re-armed').toBe(1)
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    expect(runs, 'native timer fired again').toBe(2)
+    expect(tracker.pending(), 'fired again, so no longer pending').toHaveLength(0)
+    tracker.restore()
+  })
+})
+
 describe('installTeardownGuard', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks() })
 

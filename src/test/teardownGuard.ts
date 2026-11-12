@@ -59,6 +59,8 @@ function handleKey(handle: unknown): unknown {
     const id = Number(handle)
     return Number.isFinite(id) ? id : handle
   }
+  // Node also accepts the id as a numeric string.
+  if (typeof handle === 'string' && handle.trim() !== '' && Number.isFinite(Number(handle))) return Number(handle)
   return handle
 }
 
@@ -84,7 +86,17 @@ export function trackTimers(target: TimerTarget): TimerTracker {
       }
       const handle = (original[kind] as (...a: unknown[]) => unknown)(run, delay, ...args)
       ref.handle = handle
-      live.set(handleKey(handle), { kind, delay: delay ?? 0, site })
+      const entry: PendingTimer = { kind, delay: delay ?? 0, site }
+      live.set(handleKey(handle), entry)
+      // Timeout.refresh() re-arms a timer that already fired: it is pending again.
+      const timer = handle as { refresh?: () => unknown } | null
+      if (kind === 'setTimeout' && timer && typeof timer.refresh === 'function') {
+        const refresh = timer.refresh
+        timer.refresh = function (this: unknown) {
+          live.set(handleKey(handle), entry)
+          return refresh.call(this)
+        }
+      }
       return handle
     })
 
