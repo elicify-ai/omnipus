@@ -1,4 +1,5 @@
 import { test as base, expect } from "@playwright/test";
+import { cancelAndReportAskUserQuestions } from "./ask-user-cleanup";
 
 const CONSOLE_ERROR_ALLOWLIST: RegExp[] = [
   /WebSocket.*reconnect/i,
@@ -95,8 +96,11 @@ export const test = base.extend<{
   // for each test to act like a user: when it's done, click Stop. This
   // fixture is that action, applied uniformly.
   cancelOnTeardown: [
-    async ({ page }, use) => {
+    async ({ page }, use, testInfo) => {
       await use();
+      // #1769: an AskUserQuestion left open locks the composer of its session;
+      // on a shared session (Jim's main chat) every later test would inherit it.
+      await cancelAndReportAskUserQuestions(page, testInfo);
       try {
         // The Stop button only renders while isStreaming is true on the active
         // session. isVisible has a 0ms default — no extra wait if no turn is

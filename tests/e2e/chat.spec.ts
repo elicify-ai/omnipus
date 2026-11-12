@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
+import { chatInput, assistantMessages, userMessages, tokenCounter, waitForConnected } from './fixtures/selectors';
 import { freshChat, originOf } from './fixtures/session-setup';
 import { sessionMessages } from './fixtures/session-history';
 import { installPaintAttachInput, replayPaintFrames } from './fixtures/attach-replay-paint';
@@ -160,17 +160,19 @@ test(
     // removed — founder decision D7; FR-029/FR-031 still govern, and "/new"
     // stays deleted), resetting to an empty thread so assistantMessages count
     // starts at 0.
-    await freshChat(page);
+    // #1769: the chat is created WITH Jim (freshChat(page, /Jim/i)), not by
+    // selecting Jim's row afterwards — that row opens Jim's shared, persistent
+    // main session, where one open AskUserQuestion locked the composer for
+    // every later test and retry.
+    await freshChat(page, /Jim/i);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
-    // Switch to Jim: Mia has "no long enumerations" guardrails and may handoff to
+    // Jim, not Mia: Mia has "no long enumerations" guardrails and may handoff to
     // Jim for certain questions, causing spurious stop-button transitions that
     // confuse turn-completion detection. Jim does inline generation without handoffs,
     // making the strict assistantMessages count (excludes running) reliable.
     // This test probes agent-loop context retention — the agent identity doesn't matter.
-    // (Sidebar row click is the only agent switch since the composer AgentPicker
-    // was removed — nav commit e84ac0532; FR-029 "no in-chat handover".)
-    await selectAgent(page, /Jim/i);
+    // (No selectAgent here — see the #1769 note above.)
 
     // Phrasing note: we avoid the word "remember" — Jim may treat "remember …" as an
     // instruction to call the remember() tool rather than just retain context in the
@@ -266,9 +268,9 @@ test(
     // appears under her. Switch to Jim explicitly and ask for a long in-agent
     // explanation; Jim does in-line generation with a multi-second stream
     // window that reliably exposes the Stop button.
-    // (Sidebar row click is the only agent switch since the composer AgentPicker
-    // was removed — nav commit e84ac0532; FR-029 "no in-chat handover".)
-    await selectAgent(page, /Jim/i);
+    // #1769: a fresh Jim chat, not Jim's shared main session (selectAgent),
+    // so a question left open there by an earlier test cannot lock this one.
+    await freshChat(page, /Jim/i);
 
     await input.fill(
       'Explain in deep technical detail how the Internet routes packets, ' +
