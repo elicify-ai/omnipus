@@ -164,6 +164,14 @@ export function formatPending(file: string, pending: PendingTimer[]): string {
   return `[teardown-guard] ${file}: ${pending.length} timer(s) still pending when the file ended:\n${lines.join('\n')}\n`
 }
 
+/**
+ * A timer longer than this cannot fire before a test file ends (a shard runs
+ * for minutes, a file for seconds), so it is left out of the report: the report
+ * lists the timers that can fire after teardown (#1697). Query-cache garbage
+ * collection timers (5 min) were 95% of the first hosted report.
+ */
+export const REPORT_MAX_DELAY_MS = 60_000
+
 type GuardMode = 'off' | 'report' | 'fail'
 
 function guardMode(): GuardMode {
@@ -187,7 +195,7 @@ export function installTeardownGuard(
   if (mode === 'off') return
   const tracker = trackTimers(target)
   hooks.afterAll(() => {
-    const pending = tracker.pending()
+    const pending = tracker.pending().filter((p) => !(p.delay > REPORT_MAX_DELAY_MS)) // a missing or non-numeric delay (Node runs it at 1 ms) stays reported
     const report = formatPending(fileName(), pending)
     if (report) process.stderr.write(report)
     tracker.restore()

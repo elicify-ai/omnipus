@@ -321,6 +321,52 @@ describe('installTeardownGuard', () => {
     expect(off.target.setTimeout).toBe(off.original)
   })
 
+  it('ignores a timer longer than 60 s: it cannot fire before the file ends (#1697)', () => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const g = install()
+    g.target.setTimeout(() => undefined, 300_000)
+    g.target.setTimeout(() => undefined, 60_001)
+    g.run()
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('reports a timer of exactly 60 s and leaves the long ones out of the count and the list', () => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const g = install()
+    g.target.setTimeout(() => undefined, 60_000)
+    g.target.setTimeout(() => undefined, 300_000)
+    g.run()
+    const text = write.mock.calls.map((c) => String(c[0])).join('')
+    expect(text).toContain('1 timer(s) still pending')
+    expect(text).toContain('setTimeout 60000ms')
+    expect(text).not.toContain('300000ms')
+  })
+
+  it('fail mode does not fail a file whose only pending timer is longer than 60 s', () => {
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const fail = install('fail')
+    fail.target.setTimeout(() => undefined, 300_000)
+    expect(() => fail.run()).not.toThrow()
+  })
+
+  it('a timer with no delay or a non-numeric delay is still reported (Node runs it at about 1 ms)', () => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const g = install()
+    g.target.setTimeout(() => undefined)
+    g.target.setTimeout(() => undefined, Number.NaN)
+    g.run()
+    const text = write.mock.calls.map((c) => String(c[0])).join('')
+    expect(text).toContain('2 timer(s) still pending')
+  })
+
+  it('a long timer is still cancelled normally (tracking is unchanged, only the report filters)', () => {
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const g = install()
+    const handle = g.target.setTimeout(() => undefined, 300_000)
+    g.target.clearTimeout(handle)
+    expect(() => g.run()).not.toThrow()
+  })
+
   it('adds no process error listener: Vitest keeps reporting unhandled errors itself', () => {
     const before = [process.listenerCount('uncaughtException'), process.listenerCount('unhandledRejection')]
     install()

@@ -275,3 +275,16 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setGuardPending: (pending) => set({ guardPending: pending }),
   setHistoryPushed: (pushed) => set({ historyPushed: pushed }),
 }))
+
+// A toast's timer lives only as long as the toast: when `toasts` is replaced
+// (a store reset, a test's cleanup), the timers of the toasts that are gone
+// are cleared, so none fires after the page that armed it is gone (#1697).
+useUiStore.subscribe((state) => {
+  if (toastTimers.size === 0) return
+  const live = new Set(state.toasts.map((t) => t.id))
+  for (const [id, timer] of toastTimers) {
+    if (live.has(id)) continue
+    clearTimeout(timer)
+    toastTimers.delete(id)
+  }
+})
