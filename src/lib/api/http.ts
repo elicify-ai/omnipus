@@ -416,6 +416,15 @@ async function performRequest<T>(
   try {
     body = await res.json() as unknown
   } catch (cause) {
+    // A request the caller cancelled (React Query unmount, navigation) while
+    // its body was being read is not a malformed response (#1791): rethrow the
+    // abort and record no schema error. Every other read failure falls through.
+    if (
+      (typeof cause === 'object' && cause !== null && (cause as { name?: unknown }).name === 'AbortError') ||
+      init?.signal?.aborted
+    ) {
+      throw cause
+    }
     // A JSON-parse failure on a body with no Content-Length header is the
     // common shape of an empty 2xx (some gateways omit Content-Length on a
     // bodyless 200/202 instead of using 204). For a caller that passed NO
