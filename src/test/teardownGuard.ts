@@ -7,6 +7,11 @@
 // created each. Report-only by default: it never fails a test and never
 // suppresses an error. The fix belongs at each source (clear the timer on
 // unmount), found from this report.
+//
+// It registers NO process-level error listener: Vitest skips its own unhandled
+// error report when another uncaughtException/unhandledRejection listener
+// exists, so any such listener would hide the very failure this guard helps to
+// find (CHECK round 1, finding 1).
 
 type TimerKind = 'setTimeout' | 'setInterval'
 
@@ -48,6 +53,15 @@ function creationSite(): string {
   return chosen.startsWith(cwd) ? chosen.slice(cwd.length) : chosen
 }
 
+/** Node timers are objects that also accept their numeric id in clearTimeout; key both forms the same. */
+function handleKey(handle: unknown): unknown {
+  if (typeof handle === 'object' && handle !== null) {
+    const id = Number(handle)
+    return Number.isFinite(id) ? id : handle
+  }
+  return handle
+}
+
 /** Wraps the timer functions on `target` and tracks what is still pending. */
 export function trackTimers(target: TimerTarget): TimerTracker {
   const original = {
@@ -62,19 +76,21 @@ export function trackTimers(target: TimerTarget): TimerTracker {
     ((fn: (...a: unknown[]) => void, delay?: number, ...args: unknown[]) => {
       const site = creationSite()
       const ref: { handle?: unknown } = {}
-      const run = (...a: unknown[]) => {
-        if (kind === 'setTimeout') live.delete(ref.handle)
-        return fn(...a)
+      // A plain function, not an arrow: Node calls a timer callback with the
+      // timer as `this`, and callers may rely on it (`this.refresh()`).
+      const run = function (this: unknown, ...a: unknown[]) {
+        if (kind === 'setTimeout') live.delete(handleKey(ref.handle))
+        return fn.apply(this, a)
       }
       const handle = (original[kind] as (...a: unknown[]) => unknown)(run, delay, ...args)
       ref.handle = handle
-      live.set(handle, { kind, delay: delay ?? 0, site })
+      live.set(handleKey(handle), { kind, delay: delay ?? 0, site })
       return handle
     })
 
   const wrapClear = (kind: 'clearTimeout' | 'clearInterval') =>
     ((handle?: unknown) => {
-      live.delete(handle)
+      live.delete(handleKey(handle))
       return (original[kind] as (h?: unknown) => void)(handle)
     })
 
@@ -111,27 +127,19 @@ function guardMode(): GuardMode {
 /**
  * Per-file install, called from the shared setup file. Tracks timers for the
  * whole file; when the file ends, writes the pending ones (naming the file) to
- * stderr, and from then on attributes any uncaught error to that file, which
- * Vitest itself reports without a file name. `TEARDOWN_GUARD=fail` makes a
- * pending timer fail the file; `off` disables it. Never swallows an error.
+ * stderr. The late error itself stays Vitest's to report. `TEARDOWN_GUARD=fail`
+ * makes a pending timer fail the file; `off` disables it. Never swallows an
+ * error and never adds a process error listener.
  */
 export function installTeardownGuard(
   hooks: { afterAll: (fn: () => void) => void },
   fileName: () => string,
+  target: TimerTarget = globalThis as unknown as TimerTarget,
 ): void {
   const mode = guardMode()
   if (mode === 'off') return
-  const tracker = trackTimers(globalThis as unknown as TimerTarget)
-  let finished = false
-  const late = (kind: string) => (err: unknown) => {
-    if (!finished) return
-    const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-    process.stderr.write(`[teardown-guard] ${fileName()}: ${kind} after the file ended: ${text}\n`)
-  }
-  process.on('uncaughtException', late('uncaught exception'))
-  process.on('unhandledRejection', late('unhandled rejection'))
+  const tracker = trackTimers(target)
   hooks.afterAll(() => {
-    finished = true
     const pending = tracker.pending()
     const report = formatPending(fileName(), pending)
     if (report) process.stderr.write(report)
