@@ -150,6 +150,7 @@
       "key_slot": "b",
       "port": 6064,
       "specs": [
+        "tests/e2e/ask-user-teardown-fixture.spec.ts",
         "tests/e2e/about.spec.ts",
         "tests/e2e/api-errors.spec.ts",
         "tests/e2e/fresh-install.spec.ts",
