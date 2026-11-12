@@ -78,6 +78,8 @@ export function trackTimers(target: TimerTarget): TimerTracker {
   // Handles cleared through the object: Node's refresh() does not re-arm those.
   // (A clear through the numeric id AFTER the timer fired is not seen here.)
   const cancelled = new WeakSet<object>()
+  // key -> the handle object, so a clear through the numeric id can mark it cancelled too.
+  const owner = new Map<unknown, unknown>()
 
   const wrapSet = (kind: TimerKind) =>
     ((fn: (...a: unknown[]) => void, delay?: number, ...args: unknown[]) => {
@@ -93,6 +95,7 @@ export function trackTimers(target: TimerTarget): TimerTracker {
       ref.handle = handle
       const entry: PendingTimer = { kind, delay: delay ?? 0, site }
       live.set(handleKey(handle), entry)
+      owner.set(handleKey(handle), handle)
       // Timeout.refresh() re-arms a timer that already fired: it is pending again.
       const timer = handle as { refresh?: () => unknown } | null
       if (kind === 'setTimeout' && timer && typeof timer.refresh === 'function') {
@@ -101,7 +104,7 @@ export function trackTimers(target: TimerTarget): TimerTracker {
           // refresh() can give the timer a new numeric id: drop the old key first.
           live.delete(handleKey(handle))
           const result = refresh.call(this)
-          if (!cancelled.has(timer)) live.set(handleKey(handle), entry)
+          if (!cancelled.has(timer)) { live.set(handleKey(handle), entry); owner.set(handleKey(handle), handle) }
           return result
         }
       }
@@ -110,23 +113,34 @@ export function trackTimers(target: TimerTarget): TimerTracker {
 
   const wrapClear = (kind: 'clearTimeout' | 'clearInterval') =>
     ((handle?: unknown) => {
-      if (typeof handle === 'object' && handle !== null) cancelled.add(handle)
+      const target = typeof handle === 'object' && handle !== null ? handle : owner.get(handleKey(handle))
+      if (typeof target === 'object' && target !== null) cancelled.add(target)
       live.delete(handleKey(handle))
       return (original[kind] as (h?: unknown) => void)(handle)
     })
 
-  target.setTimeout = wrapSet('setTimeout') as unknown as typeof setTimeout
-  target.setInterval = wrapSet('setInterval') as unknown as typeof setInterval
-  target.clearTimeout = wrapClear('clearTimeout') as unknown as typeof clearTimeout
-  target.clearInterval = wrapClear('clearInterval') as unknown as typeof clearInterval
+  const wrapped = {
+    setTimeout: wrapSet('setTimeout') as unknown as typeof setTimeout,
+    setInterval: wrapSet('setInterval') as unknown as typeof setInterval,
+    clearTimeout: wrapClear('clearTimeout') as unknown as typeof clearTimeout,
+    clearInterval: wrapClear('clearInterval') as unknown as typeof clearInterval,
+  }
+  target.setTimeout = wrapped.setTimeout
+  target.setInterval = wrapped.setInterval
+  target.clearTimeout = wrapped.clearTimeout
+  target.clearInterval = wrapped.clearInterval
 
   return {
     pending: () => [...live.values()],
     restore: () => {
-      target.setTimeout = original.setTimeout
-      target.setInterval = original.setInterval
-      target.clearTimeout = original.clearTimeout
-      target.clearInterval = original.clearInterval
+      // Put an original back only if the slot still holds OUR wrapper. If a
+      // test installed fake timers over it (vi.useFakeTimers), the fake owns
+      // the slot and its own cleanup (possibly running after this hook) must
+      // find it untouched.
+      if (target.setTimeout === wrapped.setTimeout) target.setTimeout = original.setTimeout
+      if (target.setInterval === wrapped.setInterval) target.setInterval = original.setInterval
+      if (target.clearTimeout === wrapped.clearTimeout) target.clearTimeout = original.clearTimeout
+      if (target.clearInterval === wrapped.clearInterval) target.clearInterval = original.clearInterval
     },
   }
 }

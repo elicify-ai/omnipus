@@ -228,6 +228,37 @@ describe('trackTimers: CHECK round 3 edges', () => {
   })
 })
 
+describe('trackTimers: CHECK round 4', () => {
+  it('cancelling a pending timeout through its numeric id, then refresh(), invents nothing', async () => {
+    const target = nativeTarget()
+    const tracker = trackTimers(target)
+    let ran = 0
+    const handle = target.setTimeout(() => { ran++ }, 5) as unknown as { refresh: () => void }
+    target.clearTimeout(Number(handle) as unknown as ReturnType<typeof setTimeout>)
+    handle.refresh()
+    expect(tracker.pending()).toHaveLength(0)
+    const h2 = target.setTimeout(() => { ran++ }, 5) as unknown as { refresh: () => void }
+    target.clearTimeout(String(Number(h2)) as unknown as ReturnType<typeof setTimeout>)
+    h2.refresh()
+    expect(tracker.pending()).toHaveLength(0)
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    expect(ran).toBe(0)
+    tracker.restore()
+  })
+
+  it('restore leaves a slot alone when fake timers replaced our wrapper, so their cleanup still works', () => {
+    const target = nativeTarget()
+    const nativeSet = target.setTimeout
+    const tracker = trackTimers(target)
+    const fake = (() => 0) as unknown as typeof setTimeout
+    target.setTimeout = fake // what vi.useFakeTimers() does after the guard installed
+    tracker.restore()
+    expect(target.setTimeout, 'the fake is untouched').toBe(fake)
+    expect(target.clearTimeout, 'a still-wrapped slot is restored').toBe(globalThis.clearTimeout)
+    target.setTimeout = nativeSet
+  })
+})
+
 describe('installTeardownGuard', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks() })
 
