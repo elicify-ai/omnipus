@@ -815,7 +815,7 @@ export class GatewayProcess {
    * genuinely needs both an external page's session AND its own apiFetch
    * access after a restart).
    */
-  async restart(opts: { relogin?: boolean; env?: Record<string, string> } = {}): Promise<void> {
+  async restart(opts: { relogin?: boolean; env?: Record<string, string>; healthTimeoutMs?: number } = {}): Promise<void> {
     // Test-only process knobs can be phase-scoped without changing the saved
     // home, port, binary or credentials. Overrides apply to this boot only;
     // omitted keys retain the fixture's original environment.
@@ -825,7 +825,7 @@ export class GatewayProcess {
     let failure: string | undefined;
     try {
       await this.spawnProcess(opts.env);
-      await waitForHealth(this.baseURL, BOOT_HEALTH_TIMEOUT_MS, this.proc ?? undefined);
+      await waitForHealth(this.baseURL, opts.healthTimeoutMs ?? BOOT_HEALTH_TIMEOUT_MS, this.proc ?? undefined);
     } catch (err) {
       failure = this.safeFailureReport(err, 'restart');
     }

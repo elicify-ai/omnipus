@@ -353,7 +353,7 @@ describe('GatewayProcess boot failure: fails the test with the proven cause', ()
     })
     try {
       await gw.kill9()
-      const err = await gw.restart({ relogin: false }).then(() => undefined, (e: unknown) => e as Error)
+      const err = await gw.restart({ relogin: false, healthTimeoutMs: 4_000 }).then(() => undefined, (e: unknown) => e as Error)
       expect(err, 'boot 2 never listens, so the restart must fail').toBeInstanceOf(Error)
       expect(err!.message).toContain('--- boot timing')
       expect(err!.message, 'the helper of boot 1 spoke before the report').toContain('Health endpoints available localhost:')
