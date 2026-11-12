@@ -1,5 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { defaultRangeExtractor, elementScroll, useVirtualizer, type Range } from '@tanstack/react-virtual'
+import { observeElementOffsetCancellable } from '@/lib/observeElementOffsetCancellable'
 import { ThreadPrimitive } from '@assistant-ui/react'
 import type { ChatMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
@@ -295,6 +296,8 @@ function VirtualizedMessageListInner({
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
     getScrollElement: () => scrollContainerRef.current,
+    // The library's own observer leaves its 150 ms scroll-stop timer pending after teardown (#1697).
+    observeElementOffset: observeElementOffsetCancellable,
     // A positively silent saved record draws nothing (rowForMessage returns
     // null), so before it is ever measured it reserves no canvas either:
     // a full-row guess would be blank space the reader can land on (D8).
