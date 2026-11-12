@@ -38,7 +38,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { request, type APIRequestContext } from '@playwright/test';
-import { getFreePort, waitForHealth, DEFAULT_OMNIPUS_BINARY } from '../setup.js';
+import { getFreePort, waitForHealth, BOOT_HEALTH_TIMEOUT_MS, DEFAULT_OMNIPUS_BINARY } from '../setup.js';
 import { E2E_FALLBACK, E2E_PRIMARY } from './e2e-model.js';
 import { onboardViaAPI } from './onboard-via-api.js';
 
@@ -95,7 +95,7 @@ export interface GatewayProcessOptions {
    * Mode 1 isolated address (ADR-094 FR-001/FR-011).
    */
   loopbackPublicURL?: boolean;
-  /** The /health budget for each boot attempt (default 15 s, passed to
+  /** The /health budget for each boot attempt (default 45 s, BOOT_HEALTH_TIMEOUT_MS, passed to
    * setup.ts::waitForHealth). Tests of this fixture lower it. */
   healthTimeoutMs?: number;
   /** How long a boot may take to announce its port (default 30 s). Tests of
@@ -437,7 +437,7 @@ export class GatewayProcess {
           `  CGO_ENABLED=0 go build -tags goolm,stdjson -o ${binary} ./cmd/omnipus/`,
       );
     }
-    const healthTimeoutMs = opts.healthTimeoutMs ?? 15_000;
+    const healthTimeoutMs = opts.healthTimeoutMs ?? BOOT_HEALTH_TIMEOUT_MS;
     const startupTimeoutMs = opts.startupTimeoutMs ?? 30_000;
 
     // A boot (spawn + /health) that fails FAILS: it is never retried, so an
@@ -815,7 +815,7 @@ export class GatewayProcess {
    * genuinely needs both an external page's session AND its own apiFetch
    * access after a restart).
    */
-  async restart(opts: { relogin?: boolean; env?: Record<string, string> } = {}): Promise<void> {
+  async restart(opts: { relogin?: boolean; env?: Record<string, string>; healthTimeoutMs?: number } = {}): Promise<void> {
     // Test-only process knobs can be phase-scoped without changing the saved
     // home, port, binary or credentials. Overrides apply to this boot only;
     // omitted keys retain the fixture's original environment.
@@ -825,7 +825,7 @@ export class GatewayProcess {
     let failure: string | undefined;
     try {
       await this.spawnProcess(opts.env);
-      await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
+      await waitForHealth(this.baseURL, opts.healthTimeoutMs ?? BOOT_HEALTH_TIMEOUT_MS, this.proc ?? undefined);
     } catch (err) {
       failure = this.safeFailureReport(err, 'restart');
     }
