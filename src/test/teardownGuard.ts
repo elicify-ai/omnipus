@@ -59,8 +59,10 @@ function handleKey(handle: unknown): unknown {
     const id = Number(handle)
     return Number.isFinite(id) ? id : handle
   }
-  // Node also accepts the id as a numeric string.
-  if (typeof handle === 'string' && handle.trim() !== '' && Number.isFinite(Number(handle))) return Number(handle)
+  // Node also accepts the id as a CANONICAL decimal string ("57"). Padded or
+  // hex strings ("57 ", "0x39") are looked up literally by Node, so they are
+  // not aliases and must not be normalized.
+  if (typeof handle === 'string' && /^(0|[1-9]\d*)$/.test(handle)) return Number(handle)
   return handle
 }
 
@@ -73,6 +75,9 @@ export function trackTimers(target: TimerTarget): TimerTracker {
     clearInterval: target.clearInterval,
   }
   const live = new Map<unknown, PendingTimer>()
+  // Handles cleared through the object: Node's refresh() does not re-arm those.
+  // (A clear through the numeric id AFTER the timer fired is not seen here.)
+  const cancelled = new WeakSet<object>()
 
   const wrapSet = (kind: TimerKind) =>
     ((fn: (...a: unknown[]) => void, delay?: number, ...args: unknown[]) => {
@@ -93,8 +98,11 @@ export function trackTimers(target: TimerTarget): TimerTracker {
       if (kind === 'setTimeout' && timer && typeof timer.refresh === 'function') {
         const refresh = timer.refresh
         timer.refresh = function (this: unknown) {
-          live.set(handleKey(handle), entry)
-          return refresh.call(this)
+          // refresh() can give the timer a new numeric id: drop the old key first.
+          live.delete(handleKey(handle))
+          const result = refresh.call(this)
+          if (!cancelled.has(timer)) live.set(handleKey(handle), entry)
+          return result
         }
       }
       return handle
@@ -102,6 +110,7 @@ export function trackTimers(target: TimerTarget): TimerTracker {
 
   const wrapClear = (kind: 'clearTimeout' | 'clearInterval') =>
     ((handle?: unknown) => {
+      if (typeof handle === 'object' && handle !== null) cancelled.add(handle)
       live.delete(handleKey(handle))
       return (original[kind] as (h?: unknown) => void)(handle)
     })

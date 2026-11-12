@@ -1,4 +1,6 @@
 // #1697 — the teardown guard names the test file whose timers outlive it.
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { formatPending, installTeardownGuard, trackTimers, type TimerTarget } from './teardownGuard'
 
@@ -175,6 +177,54 @@ describe('trackTimers: aliases and re-arming (CHECK round 2)', () => {
     expect(runs, 'native timer fired again').toBe(2)
     expect(tracker.pending(), 'fired again, so no longer pending').toHaveLength(0)
     tracker.restore()
+  })
+})
+
+describe('trackTimers: CHECK round 3 edges', () => {
+  it('padded and hex strings are not aliases: the timer stays pending because Node ignores them', async () => {
+    const target = nativeTarget()
+    const tracker = trackTimers(target)
+    let ran = 0
+    const handle = target.setTimeout(() => { ran++ }, 5)
+    target.clearTimeout(` ${Number(handle)} ` as unknown as ReturnType<typeof setTimeout>)
+    target.clearTimeout(`0x${Number(handle).toString(16)}` as unknown as ReturnType<typeof setTimeout>)
+    expect(tracker.pending()).toHaveLength(1)
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    expect(ran, 'native timer still fired').toBe(1)
+    tracker.restore()
+  })
+
+  it('refresh() from outside after the timer fired: one entry, under the new id, gone after it fires', async () => {
+    const target = nativeTarget()
+    const tracker = trackTimers(target)
+    let ran = 0
+    const handle = target.setTimeout(() => { ran++ }, 3) as unknown as { refresh: () => void }
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    expect(ran).toBe(1)
+    handle.refresh(); handle.refresh()
+    expect(tracker.pending(), 'one live timer, one entry').toHaveLength(1)
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    expect(ran).toBe(2)
+    expect(tracker.pending(), 'fired, nothing stale').toHaveLength(0)
+    tracker.restore()
+  })
+
+  it('refresh() of a cleared timer does not invent a pending timer', async () => {
+    const target = nativeTarget()
+    const tracker = trackTimers(target)
+    let ran = 0
+    const handle = target.setTimeout(() => { ran++ }, 5) as unknown as { refresh: () => void }
+    target.clearTimeout(handle as unknown as ReturnType<typeof setTimeout>)
+    handle.refresh()
+    expect(tracker.pending()).toHaveLength(0)
+    await new Promise<void>((resolve) => setTimeout(resolve, 30))
+    expect(ran).toBe(0)
+    tracker.restore()
+  })
+
+  it('the shared setup file really installs the guard (wiring is not covered by a fake hook)', () => {
+    const setup = readFileSync(resolve(__dirname, 'setup.ts'), 'utf8')
+    expect(setup).toMatch(/^installTeardownGuard\(\{ afterAll \}, /m)
   })
 })
 
