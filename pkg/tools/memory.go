@@ -381,8 +381,13 @@ func (t *RecallMemoryTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"query": map[string]any{
-				"type":        "string",
-				"description": "Literal substring to search for (case-insensitive). No regex.",
+				"type": "string",
+				"description": "Words to look for (case-insensitive). No regex. Normally matches saved notes that contain " +
+					"any of the words (similar word forms such as plurals count), best match first; one shared word " +
+					"is enough, so it is not an exact phrase or substring search. Past retrospectives match whole " +
+					"words only (no plural matching) and are listed after the notes. If the search index is " +
+					"unavailable, it falls back to an exact substring match of the whole query. " +
+					"No result does not mean nothing relevant was saved; try other words before concluding so.",
 			},
 			"limit": map[string]any{
 				"type":        "number",
