@@ -123,6 +123,30 @@ describe('T34 retained range refresh and expiry — B26/B47/B48', () => {
     expect(screen.queryByRole('heading', WELCOME_HEADING)).not.toBeInTheDocument()
     expect(sentMessages(current.socket)).toStrictEqual([])
   })
+
+  // #1801: a keyboard or screen-reader user whose focus is on the history region
+  // itself must not lose it when the held range expires. CI saw the region
+  // element replaced (focus dropped to nothing, then the composer took it).
+  it.each([
+    { label: 'anchor survives', ranks: [2999, 3001, 3002], notice: 'Some loaded messages have expired.' },
+    { label: 'entire interval expired', ranks: [], notice: 'These loaded messages have expired.' },
+  ])('$label keeps the same focused history region element', async ({ ranks, notice }) => {
+    const current = await oldReader()
+    const region = screen.getByLabelText('Conversation history', { exact: true })
+    region.focus()
+    expect(region).toHaveFocus()
+    const barrier = rangeBarrier(current)
+    await freshTail(current)
+    expectHeldRange(await barrier.request.promise)
+    const response = wirePage(ranks.map(heldEntry), false, 'window_refresh')
+    response.page_info.stop_reason = 'range_end'
+    response.page_info.retention_generation = 'fixture-retained-2'
+    expectValidPage(response, ranks.map(pos), ranks.length)
+    await act(async () => barrier.response.resolve(json(response)))
+    await screen.findByText(notice, { exact: true })
+    expect(screen.getByLabelText('Conversation history', { exact: true }), 'the region element is not replaced').toBe(region)
+    expect(region, 'focus stays on the history region').toHaveFocus()
+  })
 })
 
 // Alternate advertised positive budgets are explicitly supported (D-B5/D10).

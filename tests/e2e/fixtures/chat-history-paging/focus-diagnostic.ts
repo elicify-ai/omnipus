@@ -43,7 +43,12 @@ export async function armFocusDiagnostic(page: Page): Promise<void> {
         for (const removed of Array.from(record.removedNodes)) {
           if (!(removed instanceof Element)) continue;
           if (removed.matches('[data-focus-diag-id="armed"]') || removed.querySelector('[data-focus-diag-id="armed"]')) {
-            note(`armed region removed from ${describe(record.target)}`);
+            // #1801: say what replaced it. The first sighting showed the region removed
+            // directly from <main>, i.e. a screen- or route-level swap, not the list
+            // itself; the replacement and the path tell which one.
+            const added = Array.from(record.addedNodes).map((n) => describe(n)).join(',') || 'nothing yet';
+            const mainKids = Array.from(document.querySelectorAll('main > *')).map((n) => describe(n)).join(',');
+            note(`armed region removed from ${describe(record.target)}; added=[${added}] main>*=[${mainKids}] path=${location.pathname}${location.hash} online=${navigator.onLine}`);
           }
         }
       }
