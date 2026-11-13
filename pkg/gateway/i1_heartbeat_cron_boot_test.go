@@ -95,7 +95,10 @@ func TestI1HeartbeatPhysicalBootRealCron(t *testing.T) {
 	require.False(t, stop)
 	services := stg.runningServices
 	require.NotNil(t, services)
-	t.Cleanup(func() { stopAndCleanupServices(services, 5*time.Second, true) })
+	t.Cleanup(func() {
+		stopAndCleanupServices(services, 5*time.Second, true)
+		stopSchedulersKeptByReload(services)
+	})
 	require.NoError(t, stg.mintBootEpoch())
 	stg.wireSteerDeps()
 	require.NoError(t, services.SteerDeps.BootHook(context.Background()))

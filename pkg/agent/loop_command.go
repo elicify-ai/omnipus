@@ -55,10 +55,10 @@ func (al *AgentLoop) loopScheduler() *LoopScheduler {
 }
 
 // LoopScheduler is the exported read side of SetLoopScheduler, under the same
-// al.mu. Callers outside this package that must see the scheduler a config
-// reload swaps in (the gateway's "loop" active counter, which runs on the
+// al.mu. Callers outside this package that read the scheduler (a config
+// reload keeps it, #1760; the gateway's "loop" active counter, which runs on the
 // live plan engine's goroutines during a reload, #1725) read it here once,
-// never from a gateway field the reload reassigns without a lock.
+// never from a gateway field cached outside the AgentLoop.
 func (al *AgentLoop) LoopScheduler() *LoopScheduler {
 	return al.loopScheduler()
 }

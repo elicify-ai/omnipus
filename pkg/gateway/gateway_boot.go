@@ -1282,9 +1282,8 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error
 		})
 		// Read the scheduler ONCE through the AgentLoop's locked accessor, not
 		// stg.runningServices.LoopScheduler: a config reload keeps this engine
-		// running (#1725) while restartSchedulersAndDrains reassigns that
-		// field without a lock, and SetLoopScheduler is the swap's
-		// synchronised publication point.
+		// running (#1725) and the loop scheduler (#1760); the AgentLoop accessor is
+		// the synchronised publication point for it.
 		planEngine.RegisterActiveCounter("loop", func() (int, error) {
 			ls := stg.agentLoop.LoopScheduler()
 			if ls == nil {
