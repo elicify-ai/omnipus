@@ -37,6 +37,17 @@ export function resetApiSchemaErrorCount(): void {
   _apiSchemaErrorCount = 0
 }
 
+// True when a failed response-body read is the caller's cancellation (an error
+// named AbortError, or the caller's signal already aborted) rather than a
+// malformed response. Body-read catches rethrow it and record no schema error
+// (#1791, #1794).
+export function isAbortedBodyRead(cause: unknown, signal?: AbortSignal | null): boolean {
+  return (
+    (typeof cause === 'object' && cause !== null && (cause as { name?: unknown }).name === 'AbortError') ||
+    signal?.aborted === true
+  )
+}
+
 // Increment the API-schema-error counter AND emit a production telemetry
 // event. Rate-limited inside logError so a contract-drift flood doesn't
 // spam the log collector. Dev builds skip telemetry (they already get the
@@ -419,10 +430,7 @@ async function performRequest<T>(
     // A request the caller cancelled (React Query unmount, navigation) while
     // its body was being read is not a malformed response (#1791): rethrow the
     // abort and record no schema error. Every other read failure falls through.
-    if (
-      (typeof cause === 'object' && cause !== null && (cause as { name?: unknown }).name === 'AbortError') ||
-      init?.signal?.aborted
-    ) {
+    if (isAbortedBodyRead(cause, init?.signal)) {
       throw cause
     }
     // A JSON-parse failure on a body with no Content-Length header is the

@@ -69,7 +69,7 @@ import type {
   ExecutorSmokeTestResponse,
 } from '@/lib/api/generated/openapi-types'
 import { REAUTH_HEADER } from './auth'
-import { ApiSchemaError, BASE_URL, _recordApiSchemaError, buildHeaders, request } from './http'
+import { ApiSchemaError, BASE_URL, _recordApiSchemaError, buildHeaders, isAbortedBodyRead, request } from './http'
 
 // ── Providers ─────────────────────────────────────────────────────────────────
 
@@ -151,7 +151,9 @@ async function fetchProvidersCatalogOnce(mayRetryWithoutETag: boolean): Promise<
   let body: unknown
   try {
     body = (await res.json()) as unknown
-  } catch {
+  } catch (cause) {
+    // A cancelled read is not a malformed response (#1794).
+    if (isAbortedBodyRead(cause)) throw cause
     _recordApiSchemaError(`GET /api/v1${path}`, 1)
     const schemaErr = new ApiSchemaError(
       `GET /api/v1${path}`,
