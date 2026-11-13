@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
@@ -27,12 +28,21 @@ type namedNilWrappedGitHub struct{ *skills.GitHubRegistry }
 
 func (*namedNilWrappedGitHub) Name() string { return "my-gh" }
 
+// newGitHubRegistryNamed builds a github registry the way production does:
+// from a configured marketplace through the config bridge, which injects the
+// install directory. (Not from skills.GitHubRegistryConfig directly: that type's
+// install-directory field is named like a retired agent-config identifier and
+// pkg/config TestNoAgentConfigWorkspaceIdentifier flags new uses of it.)
 func newGitHubRegistryNamed(t *testing.T, name string) *skills.GitHubRegistry {
 	t.Helper()
-	reg, err := skills.NewGitHubRegistry(skills.GitHubRegistryConfig{
-		Enabled: true, Name: name, Workspace: t.TempDir(),
-	})
-	require.NoError(t, err)
+	cfg := &config.Config{}
+	cfg.Tools.Skills.Marketplaces = []config.MarketplaceConfig{
+		{Name: name, Type: config.MarketplaceTypeGitHub, Enabled: true},
+	}
+	entries := skills.MarketplacesFromConfig(cfg, func(string) string { return "" }, nil, t.TempDir())
+	rm := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{Marketplaces: entries})
+	reg, ok := rm.GetRegistry(name).(*skills.GitHubRegistry)
+	require.True(t, ok, "the config factory must build a *skills.GitHubRegistry for type github")
 	return reg
 }
 
