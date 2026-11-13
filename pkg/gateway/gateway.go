@@ -2023,7 +2023,15 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 		runningServices.ChannelManager.StopAll(shutdownCtx)
 	}
 	stopPollersReporting(runningServices, isReload)
-	if runningServices.CronService != nil {
+	// RELOAD MUST NOT STOP IT (#1760; same rule as the task-trigger scheduler
+	// and the plan engine below): CronService.Stop cancels the lane context,
+	// which ends every running heartbeat, scheduled-task and /loop turn and
+	// drops the jobs queued behind a full lane - a settings save must never end
+	// a running turn (ADR-082 D1). The service captures only the two
+	// schedules.* settings (which restartCron applies to the live instance with
+	// ApplySchedulesConfig) and its store path (agents.defaults.home, restart-only). Shutdown, boot abort and test teardown
+	// (isReload=false) still stop it with its bounded drain.
+	if !isReload && runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
 	// ADR-067 W3: stop every knowledge drift schedule and close every open
@@ -2074,7 +2082,10 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if !isReload && runningServices.TaskTrigger != nil {
 		runningServices.TaskTrigger.Stop()
 	}
-	if runningServices.LoopScheduler != nil {
+	// RELOAD MUST NOT STOP IT (#1760): the /loop scheduler is a dedicated
+	// CronService over the same live AgentLoop; stopping it cancelled every
+	// running /loop turn. It reads no config of its own.
+	if !isReload && runningServices.LoopScheduler != nil {
 		runningServices.LoopScheduler.Stop()
 	}
 	if runningServices.MediaStore != nil {

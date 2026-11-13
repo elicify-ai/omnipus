@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -321,6 +320,7 @@ func wireIntegrationSecurityReload(t *testing.T, api *restAPI) (*services, <-cha
 			t.Fatal("instrument: real reload consumer did not stop before fixture cleanup")
 		}
 		stopAndCleanupServices(rs, 5*time.Second, true)
+		stopSchedulersKeptByReload(rs)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		assert.NoError(t, cm.StopAll(ctx))
@@ -421,25 +421,35 @@ func TestIntegrationSecurity_RemovalWithFailedAsyncReloadReportsPartialFailure(t
 	persisted, err := config.LoadConfig(api.configPath())
 	require.NoError(t, err)
 	require.Equal(t, cfg.AgentHomeBasePath(), persisted.AgentHomeBasePath(),
-		"instrument: reload must read the same isolated workspace where the filesystem fault is installed")
+		"instrument: reload must read the same isolated workspace where the faulty saved config is written")
 	before := readRolesWebConfig(t, api)
 	rs, cycles := wireIntegrationSecurityReload(t, api)
 	consent := integrationSecurityConsent(t, handler)
 
-	// Real filesystem fault: CronService.Start must read a file here after
-	// config publication AND the registry swap. A directory is unreadable as
-	// JSON even for root, unlike a permission-bit fault. No reload function
-	// or returned error is stubbed.
-	jobsPath := filepath.Join(cfg.AgentHomeBasePath(), "cron", "jobs.json")
-	require.NoError(t, os.MkdirAll(jobsPath, 0o700))
+	// Real fault at a stage that still exists on a live-service reload (#1760):
+	// a reload no longer stops, rebuilds or restarts the cron service, so the old
+	// fault (an unreadable cron jobs store read by CronService.Start) has no stage
+	// left to fire in. restartCron now applies the saved schedules.* settings to
+	// the LIVE service, and the service rejects a negative retry backoff entry.
+	// The saved file carries one, after config publication AND the registry
+	// swap. No reload function or returned error is stubbed. The fixture has no
+	// cron service of its own, so it gets a real, running one, as boot does.
+	liveCron, cronErr := setupCronTool(api.agentLoop, bus.NewMessageBus(), cfg.AgentHomeBasePath(), cfg, nil)
+	require.NoError(t, cronErr)
+	require.NoError(t, liveCron.Start())
+	t.Cleanup(liveCron.Stop)
+	rs.CronService = liveCron
+	faulty, loadErr := config.LoadConfig(api.configPath())
+	require.NoError(t, loadErr)
+	faulty.Schedules.RetryBackoffMs = []int64{60000, -1}
+	require.NoError(t, config.SaveConfig(api.configPath(), faulty))
+
 	w := integrationSecurityRequest(t.Context(), handler, http.MethodPut,
 		"/api/v1/integrations/providers/tavily", removeSearchKeyJSON, diagnosticBearer, consent)
 	cycle := receiveIntegrationSecurityReload(t, cycles)
-	require.ErrorContains(t, cycle.err, "error restarting cron service: failed to load store:",
-		"instrument: CronService.Start must fail reading the jobs store in the later service-restart stage")
-	var filesystemErr *os.PathError
-	require.ErrorAs(t, cycle.err, &filesystemErr, "instrument: reload must expose the real filesystem error")
-	require.Equal(t, jobsPath, filesystemErr.Path, "instrument: the failing read must target the installed filesystem fault")
+	require.ErrorContains(t, cycle.err, "error applying schedules config: cron: retry backoff entry 1 is negative",
+		"instrument: ApplySchedulesConfig must reject the saved backoff in the later service-restart stage")
+	require.Same(t, liveCron, rs.CronService, "instrument: the failing reload must not have replaced the live cron service")
 	require.Equal(t, true, cycle.keyRemovalPublished, "instrument: disabled config was published before the failing cycle")
 	require.Equal(t, true, cycle.pendingDuringExecution, "instrument: the real trigger accepted and queued this cycle")
 	require.Equal(t, true, rs.reloadOutcome.lastFailed(), "instrument: the completed cycle recorded execution failure")

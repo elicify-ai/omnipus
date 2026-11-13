@@ -78,6 +78,22 @@ func (g *gate1760) ctxErr(id string) (error, bool) {
 	return e, ok
 }
 
+// stopSchedulersKeptByReload finishes a fixture whose final cleanup used the
+// reload mode of stopAndCleanupServices: reload mode deliberately leaves the
+// cron service and the loop scheduler running (#1760), so a test that ends with
+// it must stop them itself or they outlive the test.
+func stopSchedulersKeptByReload(rs *services) {
+	if rs == nil {
+		return
+	}
+	if rs.CronService != nil {
+		rs.CronService.Stop()
+	}
+	if rs.LoopScheduler != nil {
+		rs.LoopScheduler.Stop()
+	}
+}
+
 func wait1760(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -199,6 +215,36 @@ func TestReload_KeepsLoopScheduler_1760(t *testing.T) {
 
 	assert.Same(t, original, f.rs.LoopScheduler, "#1760: reload must keep the one live loop scheduler")
 	assert.Same(t, original, al.LoopScheduler(), "the agent loop must still hold the live loop scheduler")
+
+	// Identity is not liveness (CHECK round 1, finding 1): a stopped scheduler
+	// keeps its pointers. Drive a REAL dispatch through the kept instance. The
+	// job names a session that does not exist, so a running scheduler fires it,
+	// finds no session and removes the job; a stopped one ignores RunDueJobs and
+	// the job stays.
+	_, addErr := original.AddInterval("u6-test-owner", "ghost-session-1760", int64(time.Hour/time.Millisecond))
+	require.NoError(t, addErr)
+	require.Len(t, original.ListEnabledJobs(), 1, "instrument: the probe job is registered")
+	original.RunDueJobs(time.Now().Add(2 * time.Hour))
+	original.WaitForLane()
+	assert.Empty(t, original.ListEnabledJobs(),
+		"#1760: the loop scheduler kept across a reload must still be running and dispatch due jobs")
+}
+
+// The kept loop scheduler's own background run loop (not only a manual
+// RunDueJobs) keeps firing due jobs after a reload: a due one-shot for a session
+// that does not exist is picked up by the scheduler's timer and removed.
+func TestReload_LoopSchedulerTimerKeepsFiring_1760(t *testing.T) {
+	f := boot1760(t, 8, 0)
+	ls := f.rs.LoopScheduler
+	require.NotNil(t, ls)
+	provider := providers.LLMProvider(&restMockProvider{})
+	require.NoError(t, handleConfigReload(context.Background(), f.al, f.cfg, &provider, f.rs, f.msgBus, true))
+	assert.Same(t, ls, f.al.LoopScheduler())
+	_, err := ls.AddOneShot("u6-test-owner", "ghost-session-1760b", 300)
+	require.NoError(t, err)
+	wait1760(t, "the live loop scheduler to fire the due one-shot by itself", func() bool {
+		return len(ls.ListEnabledJobs()) == 0
+	})
 }
 
 // Guard (green before and after the fix): a real shutdown still cancels a
