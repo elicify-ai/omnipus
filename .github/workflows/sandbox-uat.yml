@@ -226,6 +226,9 @@ jobs:
           OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
 
       - name: Install chromium for the outside pass
+        # timeout-minutes: 6 (#1786): a hung download must fail fast, not hold the
+        # runner to the 6 h job default.
+        timeout-minutes: 6
         run: ./node_modules/.bin/playwright install chromium chromium-headless-shell
 
       - name: G/T/X/E — wave 2 probes, run in parallel
