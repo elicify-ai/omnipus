@@ -291,7 +291,7 @@ func (a *restAPI) videoEmbedHosts() []string {
 // for this request — there is no separate session lookup to run.
 func identityFromRequest(r *http.Request) (mode, edition string, signedIn bool, label, emailMasked string) {
 	mode = string(config.EditionAuthMode())
-	edition = config.Edition
+	edition = config.CurrentEdition()
 	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
 	if ok && user != nil {
 		signedIn = true

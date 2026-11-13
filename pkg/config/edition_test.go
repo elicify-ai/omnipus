@@ -4,9 +4,7 @@ import "testing"
 
 func withEdition(t *testing.T, e string) {
 	t.Helper()
-	prev := Edition
-	Edition = e
-	t.Cleanup(func() { Edition = prev })
+	t.Cleanup(SetEdition(e))
 }
 
 func TestEditionAuthMode_DerivesFromTheStamp(t *testing.T) {
@@ -44,7 +42,7 @@ func TestEditionMisbuild_RefusesTheTwoDangerousShapes(t *testing.T) {
 }
 
 func TestEdition_DefaultIsCore(t *testing.T) {
-	if Edition != EditionCore {
-		t.Fatalf("source default must be core so an unstamped open-source build behaves as upstream, got %q", Edition)
+	if CurrentEdition() != EditionCore {
+		t.Fatalf("source default must be core so an unstamped open-source build behaves as upstream, got %q", CurrentEdition())
 	}
 }

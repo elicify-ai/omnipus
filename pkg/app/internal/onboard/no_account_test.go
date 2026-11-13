@@ -27,9 +27,7 @@ import (
 // pkg/gateway/rest_backup_test.go.
 func withEdition(t *testing.T, e string) {
 	t.Helper()
-	prev := config.Edition
-	config.Edition = e
-	t.Cleanup(func() { config.Edition = prev })
+	t.Cleanup(config.SetEdition(e))
 }
 
 // assertNoAccountWritten is the single oracle for ADR-0008 ruling 2 as it
