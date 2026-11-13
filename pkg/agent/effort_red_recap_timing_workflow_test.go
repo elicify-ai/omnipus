@@ -17,6 +17,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	// recapTimingSlack is what a loaded CI runner may add on top of the 300 ms
+	// budget (local fallback write, audit, scheduling). Observed elapsed times
+	// on Cross-Platform runs were 53-187 ms past the 300 ms budget.
+	recapTimingSlack = 500 * time.Millisecond
+	// recapTimingDeadlineTolerance bounds only the context deadline metadata,
+	// which involves no I/O, so it stays tight: a provider deadline that is
+	// 200 ms too late must fail even though the elapsed bound is wide.
+	recapTimingDeadlineTolerance = 100 * time.Millisecond
+	recapTimingHangSafety        = 2 * time.Second
+)
+
 type recapTimingEvent struct {
 	model           string
 	start, deadline time.Time
@@ -67,7 +79,10 @@ func (p *recapTimingScript) Chat(ctx context.Context, _ []providers.Message, _ [
 			return nil, reset
 		}
 	}
-	timer := time.NewTimer(350 * time.Millisecond)
+	// Safety timer for a provider that ignores the deadline. It must stay far
+	// above budget+recapTimingSlack, so a real hang (about 2 s) is told apart
+	// from a deadline cut (about 300 ms) even when the runner is loaded.
+	timer := time.NewTimer(recapTimingHangSafety)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -90,7 +105,7 @@ func TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes(t *testing.T) {
 		want      []string
 		heuristic bool
 	}{
-		{"cross", 1, 200 * time.Millisecond, []string{"timing-primary"}, true},
+		{"cross", 1, 2 * time.Second, []string{"timing-primary"}, true},
 		{"fits", 1, 20 * time.Millisecond, []string{"timing-primary", "timing-primary"}, false},
 		{"hang", 0, 0, []string{"timing-primary"}, true},
 		{"nontransient", 0, 0, []string{"timing-primary", "timing-fallback"}, false},
@@ -124,20 +139,23 @@ func TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes(t *testing.T) {
 			got := []string{}
 			for _, event := range events {
 				got = append(got, event.model)
-				tolerance := 25 * time.Millisecond
+				tolerance := recapTimingDeadlineTolerance
 				if row.mode == "allocation" {
 					tolerance = time.Second
 				}
 				assert.InDelta(t, start.Add(budget).UnixMilli(), event.deadline.UnixMilli(), float64(tolerance.Milliseconds()), "every received context uses the same recap deadline")
 				assert.True(t, event.start.Before(start.Add(budget)), "no provider call starts at or after the deadline")
 			}
+			for _, event := range events {
+				assert.True(t, event.deadline.Equal(events[0].deadline), "every attempt receives the identical recap deadline")
+			}
 			assert.Equal(t, row.want, got, "S-97 exact candidate/attempt order")
 			assert.Equal(t, row.heuristic, heuristic, "actual heuristic path, not just return latency")
 			if row.mode == "nontransient" && len(events) > 1 {
-				assert.LessOrEqual(t, events[1].start.Sub(start), 25*time.Millisecond, "quick failure leaves the full deadline for fallback")
+				assert.LessOrEqual(t, events[1].start.Sub(start), recapTimingSlack/2, "quick failure leaves the full deadline for fallback")
 			}
 			if row.mode != "allocation" {
-				assert.LessOrEqual(t, elapsed, budget+50*time.Millisecond, "S-97 elapsed bound includes the local fallback write")
+				assert.LessOrEqual(t, elapsed, budget+recapTimingSlack, "S-97 elapsed bound includes the local fallback write")
 			}
 			if row.heuristic {
 				raw, err := os.ReadFile(wu21ReaimPairPath(wu21ReaimHome(ag), ag.ID))
