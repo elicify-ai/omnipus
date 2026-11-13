@@ -152,7 +152,8 @@ func TestMemoryStore_AppendLongTerm_StripsNull_RejectsCommentInjection(t *testin
 
 // ---------------------------------------------------------------------------
 // TestMemoryStore_SearchEntries_LiteralSubstring
-// Verifies literal substring search (no regex expansion).
+// Verifies that regex metacharacters are not expanded and that a plain query
+// finds its entries (the name predates the ranked word index; see #1799).
 // Traces to: FR-7.3 (recall returns matching entries)
 // ---------------------------------------------------------------------------
 
