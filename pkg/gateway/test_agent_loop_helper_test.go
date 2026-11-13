@@ -142,7 +142,7 @@ func mustAgentLoop(
 	// edge for a launched root whose steering session has an identified owner.
 	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
 	installTestSessionLauncher(t, al)
-	t.Cleanup(al.Close)
+	closeLoopAtTestEnd(t, al)
 	return al
 }
 
@@ -196,7 +196,7 @@ func mustAgentLoopNoWorkspaceSeed(
 	if err != nil {
 		t.Fatalf("agent.NewAgentLoop: %v", err)
 	}
-	t.Cleanup(al.Close)
+	closeLoopAtTestEnd(t, al)
 	return al
 }
 
