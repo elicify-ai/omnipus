@@ -50,7 +50,7 @@ var (
 // endpoint guard: the hosted edition, decided by the stamped edition and
 // never by a config key.
 func EndpointGuardActive() bool {
-	return config.Edition == config.EditionHosted
+	return config.CurrentEdition() == config.EditionHosted
 }
 
 // SetEndpointAllowlist installs the operator's SSRF allow list (exact IPs,

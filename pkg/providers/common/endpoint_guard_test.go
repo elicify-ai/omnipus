@@ -19,10 +19,9 @@ import (
 
 func withGuardEdition(t *testing.T, e string) {
 	t.Helper()
-	prev := config.Edition
-	config.Edition = e
+	restore := config.SetEdition(e)
 	t.Cleanup(func() {
-		config.Edition = prev
+		restore()
 		SetEndpointAllowlist(nil)
 	})
 }

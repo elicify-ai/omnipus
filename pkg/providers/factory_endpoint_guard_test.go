@@ -29,9 +29,7 @@ import (
 
 func withEditionForGuardTest(t *testing.T, e string) {
 	t.Helper()
-	prev := config.Edition
-	config.Edition = e
-	t.Cleanup(func() { config.Edition = prev })
+	t.Cleanup(config.SetEdition(e))
 }
 
 func startGuardCanary(t *testing.T) (*httptest.Server, *atomic.Int64) {

@@ -32,7 +32,7 @@ func FormatVersion() string {
 	if GitCommit != "" {
 		v += fmt.Sprintf(" (git: %s)", GitCommit)
 	}
-	v += fmt.Sprintf(" edition: %s", Edition)
+	v += fmt.Sprintf(" edition: %s", CurrentEdition())
 	return v
 }
 

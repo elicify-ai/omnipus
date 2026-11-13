@@ -28,9 +28,7 @@ import (
 // whatever the previous test left behind.
 func withEdition(t *testing.T, e string) {
 	t.Helper()
-	prev := config.Edition
-	config.Edition = e
-	t.Cleanup(func() { config.Edition = prev })
+	t.Cleanup(config.SetEdition(e))
 }
 
 // nextHandler is a trivial handler that records a success-marker in the
