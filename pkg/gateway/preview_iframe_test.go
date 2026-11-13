@@ -533,7 +533,7 @@ func TestCanonicalGatewayOrigin_PublicURLOverride(t *testing.T) {
 			publicURL: "",
 			host:      "::1",
 			port:      5000,
-			want:      "http://::1:5000",
+			want:      "http://[::1]:5000",
 		},
 	}
 

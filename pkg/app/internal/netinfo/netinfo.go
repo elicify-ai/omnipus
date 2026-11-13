@@ -21,6 +21,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // AccessURLs holds the set of access URLs computed for a given gateway binding.
@@ -74,7 +76,7 @@ func BuildAccessURLs(host string, port int, publicURL string, ipv4s []string) Ac
 	default:
 		// Rule 4: explicit host (IP or hostname).
 		return AccessURLs{
-			Primary: "http://" + net.JoinHostPort(host, strconv.Itoa(port)),
+			Primary: "http://" + config.JoinHostPort(host, port),
 		}
 	}
 }

@@ -1701,7 +1701,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 
 // announceStartup announces startup and creates the agent-loop cancellation context.
 func (rc *runContextWithOptions) announceStartup() {
-	fmt.Printf("✓ Gateway started on %s:%d\n", rc.cfg.Gateway.Host, rc.cfg.Gateway.Port)
+	fmt.Printf("✓ Gateway started on %s\n", rc.cfg.Gateway.ListenAddr())
 	fmt.Println("Press Ctrl+C to stop")
 
 	// agentLoopCtx is canceled if the agent loop exits unexpectedly (e.g. panic

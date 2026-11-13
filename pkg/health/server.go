@@ -3,7 +3,6 @@ package health
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"net/http"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 type Server struct {
@@ -89,7 +89,7 @@ func NewServer(host string, port int) *Server {
 	mux.HandleFunc("/ready", s.readyHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := config.JoinHostPort(host, port)
 	s.server = &http.Server{
 		Addr:         addr,
 		Handler:      mux,

@@ -671,7 +671,7 @@ func (stg *setupAndStartServicesState) setupMediaAndChannels() (*services, bool,
 	// Apply warmup timeout default (FR-013 / CR-04).
 	stg.cfg.Tools.ApplyWarmupTimeoutDefault()
 
-	addr := fmt.Sprintf("%s:%d", stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
+	addr := stg.cfg.Gateway.ListenAddr()
 	stg.runningServices.HealthServer = health.NewServer(stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
 	stg.runningServices.ChannelManager.SetupHTTPServer(addr, stg.runningServices.HealthServer)
 
@@ -1687,7 +1687,7 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error
 	// Boot logging: main listener (ADR-044: /preview/ shares this same listener,
 	// no separate preview port/address to log). preview_enabled is read live
 	// (not restart-gated), so this line only reflects the value at boot time.
-	mainAddr := fmt.Sprintf("%s:%d", stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
+	mainAddr := stg.cfg.Gateway.ListenAddr()
 	slog.Info("gateway listening on " + mainAddr)
 
 	// ADR-067 FR-008: the catalog refresh loop starts HERE — after StartAll
@@ -1751,9 +1751,8 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error
 	}
 
 	fmt.Printf(
-		"✓ Health endpoints available at http://%s:%d/health, /ready and /reload (POST)\n",
-		stg.cfg.Gateway.Host,
-		stg.cfg.Gateway.Port,
+		"✓ Health endpoints available at http://%s/health, /ready and /reload (POST)\n",
+		stg.cfg.Gateway.ListenAddr(),
 	)
 
 	return nil, false, nil
