@@ -158,7 +158,7 @@ func resolveMainOrigin(cfg *config.Config) string {
 		scheme = "https"
 	}
 	if port > 0 && port != 80 && port != 443 {
-		return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+		return fmt.Sprintf("%s://%s:%d", scheme, config.URLHost(host), port)
 	}
-	return fmt.Sprintf("%s://%s", scheme, host)
+	return fmt.Sprintf("%s://%s", scheme, config.URLHost(host))
 }

@@ -70,3 +70,15 @@ func TestAccessURLsFromConfig_MalformedEnvPortIsIgnored(t *testing.T) {
 		}
 	}
 }
+
+// #1823 review: a bracketed gateway.host must not be bracketed twice.
+func TestBuildAccessURLs_BracketedIPv6Host_1823(t *testing.T) {
+	for host, want := range map[string]string{
+		"[::1]": "http://[::1]:5000",
+		"::1":   "http://[::1]:5000",
+	} {
+		if got := BuildAccessURLs(host, 5000, "", nil).Primary; got != want {
+			t.Errorf("host %q: %q, want %q", host, got, want)
+		}
+	}
+}

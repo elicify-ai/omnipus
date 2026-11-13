@@ -81,7 +81,7 @@ func (a *restAPI) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 		checks := map[string]any{
 			"gateway": map[string]any{
 				"status":  "ok",
-				"address": fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port),
+				"address": cfg.Gateway.ListenAddr(),
 			},
 			"agent_loop": map[string]any{
 				"status": "ok",

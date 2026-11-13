@@ -8,14 +8,18 @@ A symptom-first fix list for startup failures, unreachable gateways, login and A
 
 ## How to start diagnosing
 
-1. Open `$OMNIPUS_HOME/logs/gateway_panic.log` (default: `~/.omnipus/logs/`). A startup crash always writes there, even when nothing appears on screen.
+1. Open `$OMNIPUS_HOME/logs/gateway_panic.log` (default: `~/.omnipus/logs/`). Most startup failures write their full `Error: ...` line there, even when nothing appears on screen. On the terminal you see only a short line: for a port that is already in use or an address that cannot be bound, the address and the system's reason; for any other failure, a pointer to this file. The full text stays in the file because an error message can contain a password or token. Two cases do not use the file: a failure before logging is set up (for example `$OMNIPUS_HOME/logs` is a file, not a folder) prints the full error on the terminal and writes no panic log, and a launch whose terminal output is discarded (a service or a background start) shows neither line, so for a failure before logging is set up, retry in a foreground terminal or capture the service's own stderr; failures after logging starts are still written to the file. The file also holds the structured `BOOT_ABORT_REASON` line for some boot aborts, never for every failure. The panic log can contain secrets: do not share it.
 2. Open `$OMNIPUS_HOME/logs/gateway.log` — the running gateway's log stream, and the reason behind most failed requests. If you set `OMNIPUS_LOG_FILE`, read that file instead; see [choosing the diagnostic log file](operations/debug.md#choosing-the-diagnostic-log-file).
 3. Run `omnipus doctor`, which checks your configuration for known unsafe settings.
 4. Still unexplained? Restart with `omnipus start --debug` — see [debugging](operations/debug.md).
 
 ## The gateway exits during startup
 
-If it exits with no output at all, read `gateway_panic.log`, as above.
+If it exits with no output at all (an unexpected crash, or a launch with no terminal), read `gateway_panic.log`, as above.
+
+### It exits with an error after you set `gateway.host` to an IPv6 address
+
+`gateway.host` accepts an IPv6 address with or without square brackets: `::` (all IPv6 addresses), `::1` (this machine) or `[::1]`. Older builds exited at startup for `::` because they built the listen address as `:::5000`; the error was only in `gateway_panic.log`.
 
 ### Exit code 78: the sandbox failed on a capable kernel
 
