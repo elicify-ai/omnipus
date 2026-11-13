@@ -831,6 +831,9 @@ jobs:
         # This one group also runs the four local Playwright harness cases.
         # They need a browser, but not the gateway/auth/LLM E2E job setup.
         if: matrix.group == 'lib-store'
+        # timeout-minutes: 6 (#1786): the slowest install seen on a green run took
+        # 115 s; a hung apt install held four PRs for 75+ min on 11 Nov.
+        timeout-minutes: 6
         run: npx playwright install --with-deps chromium
 
       - name: Run local input fixture in Playwright
@@ -872,7 +875,11 @@ jobs:
         with:
           name: node-modules-${{ github.run_id }}
       - run: tar -xf node_modules.tar
+      # #1786: timeout-minutes only. Do NOT add a `name:` here: .github/ci-quarantine.json
+      # matches the auto-generated step name "Run npx playwright install --with-deps ...".
+      # 6 min: slowest install seen on a green run took 115 s; a hang held four PRs 75+ min on 11 Nov.
       - run: npx playwright install --with-deps chromium firefox webkit
+        timeout-minutes: 6
       - run: npm run tokens:check
       - run: npm run test:design-system:unit
       # Stage B lock fixture suite (design-system/enforcement/contract.json):
@@ -951,7 +958,11 @@ jobs:
         with:
           name: node-modules-${{ github.run_id }}
       - run: tar -xf node_modules.tar
+      # #1786: timeout-minutes only. Do NOT add a `name:` here: .github/ci-quarantine.json
+      # matches the auto-generated step name "Run npx playwright install --with-deps ...".
+      # 6 min: slowest install seen on a green run took 115 s; a hang held four PRs 75+ min on 11 Nov.
       - run: npx playwright install --with-deps ${{ matrix.project == 'chromium-coarse-pointer' && 'chromium' || matrix.project }}
+        timeout-minutes: 6
       - run: npm run build:storybook
       - name: Run browser checks for ${{ matrix.project }}
         run: npx playwright test --config=playwright.design-system.config.ts tests/design-system/browser.spec.ts --project=${{ matrix.project }}
@@ -988,7 +999,11 @@ jobs:
         with:
           name: node-modules-${{ github.run_id }}
       - run: tar -xf node_modules.tar
+      # #1786: timeout-minutes only. Do NOT add a `name:` here: .github/ci-quarantine.json
+      # matches the auto-generated step name "Run npx playwright install --with-deps ...".
+      # 6 min: slowest install seen on a green run took 115 s; a hang held four PRs 75+ min on 11 Nov.
       - run: npx playwright install --with-deps chromium
+        timeout-minutes: 6
       - run: npm run build:storybook
       - name: Run appearance gate (screenshot comparisons)
         run: npm run test:design-system:screenshot
@@ -3553,6 +3568,12 @@ jobs:
           done
 
       - name: Install Playwright browsers
+        # timeout-minutes: 6 (#1786) bounds the WHOLE step: both attempts of
+        # scripts/ci-retry-once.sh plus its 15 s pause. A hung attempt 1 is ended
+        # at 6 min and not retried; the retry only covers a fast failure (a short
+        # network or apt-mirror blip). Slowest install seen on a green run: 49 s
+        # here, 115 s elsewhere; a hang held four PRs for 75+ min on 11 Nov.
+        timeout-minutes: 6
         # Install the engines the shard's playwright.config.ts projects
         # actually launch: the preview-isolation shard matches the
         # isolation-firefox / isolation-webkit projects; every other shard
@@ -3562,7 +3583,7 @@ jobs:
           if [ "${{ matrix.group }}" = "preview-isolation" ]; then
             # firefox and webkit DO need system libraries the runner image
             # does not ship, so this branch keeps --with-deps.
-            npx playwright install --with-deps chromium firefox webkit
+            bash scripts/ci-retry-once.sh npx playwright install --with-deps chromium firefox webkit
           else
             # NO --with-deps: chromium's shared libraries are already present
             # on ubuntu-24.04 runners. --with-deps runs `apt-get update` as
@@ -3574,7 +3595,7 @@ jobs:
             # identical InRelease file fine, one 2.44s earlier. The job then
             # failed a second time downstream on a missing Playwright report,
             # which reads like a test failure and is not one.
-            npx playwright install chromium
+            bash scripts/ci-retry-once.sh npx playwright install chromium
           fi
 
       - name: Verify Playwright browser binaries exist (preview-isolation shard)
