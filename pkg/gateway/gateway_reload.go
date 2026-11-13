@@ -1163,12 +1163,22 @@ func setupConfigWatcherPolling(
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
+	// The baseline is taken before the goroutine starts, so a write made right
+	// after this function returns is always seen as a change (#1743 test).
+	lastModTime := getFileModTime(configPath)
+	lastSize := getFileSize(configPath)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		lastModTime := getFileModTime(configPath)
-		lastSize := getFileSize(configPath)
+		// offerOutstanding is true after a refused hand-off (#1743): the file on
+		// disk holds an external edit that no reload has been offered yet. The
+		// next detected change must then be offered even when its bytes match a
+		// self-write hash, because the poller's own load can rewrite the file
+		// (config.loadConfigInternal's CLI-token migration) and register THAT
+		// write; suppressing it would swallow the outstanding external edit.
+		offerOutstanding := false
 
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -1189,6 +1199,9 @@ func setupConfigWatcherPolling(
 					time.Sleep(500 * time.Millisecond)
 
 					// Re-stat after the debounce; the file may have changed again.
+					// prevModTime/prevSize are what to go back to if the hand-off
+					// below is refused (#1743).
+					prevModTime, prevSize := lastModTime, lastSize
 					lastModTime = getFileModTime(configPath)
 					lastSize = getFileSize(configPath)
 
@@ -1200,8 +1213,13 @@ func setupConfigWatcherPolling(
 					}
 					currentHash := sha256.Sum256(fileBytes)
 
-					// Suppress reload when the change was made by the app itself.
-					if selfWriteReg != nil && selfWriteReg.consume(currentHash) {
+					// Suppress reload when the change was made by the app itself,
+					// unless an external edit is still outstanding (#1743): the
+					// registry is then still consumed (a stale hash must not
+					// suppress a later edit) but the content is offered anyway.
+					outstanding := offerOutstanding
+					offerOutstanding = false
+					if selfWriteReg != nil && selfWriteReg.consume(currentHash) && !outstanding {
 						if debug {
 							logger.Debugf("Config file change is app-initiated — skipping reload")
 						}
@@ -1269,7 +1287,19 @@ func setupConfigWatcherPolling(
 					select {
 					case configChan <- change:
 					default:
-						logger.Warn("⚠ Previous config reload still in progress, skipping")
+						// The buffer already holds an earlier edit that no reload has
+						// taken yet. Do NOT mark this edit as seen: forget the stat
+						// recorded above, so the next tick finds the file changed
+						// again, re-reads it and offers its CURRENT content once the
+						// buffer is free (#1743). A file that failed to load or
+						// validate (the `continue`s above) stays marked as seen, so a
+						// broken file is reported once and does not loop.
+						lastModTime, lastSize = prevModTime, prevSize
+						offerOutstanding = true
+						if hook := configWatcherHandoffRefusedHook; hook != nil {
+							hook()
+						}
+						logger.Warn("⚠ Previous config reload still in progress; this edit will be offered again")
 					}
 				}
 			case <-stop:
@@ -1285,6 +1315,11 @@ func setupConfigWatcherPolling(
 
 	return configChan, stopFunc
 }
+
+// configWatcherHandoffRefusedHook is a test seam: called once each time the
+// poller's non-blocking hand-off is refused because the one-slot buffer is
+// full (#1743). Nil in production.
+var configWatcherHandoffRefusedHook func()
 
 func getFileModTime(path string) time.Time {
 	info, err := os.Stat(path)
