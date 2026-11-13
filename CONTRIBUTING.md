@@ -105,6 +105,20 @@ go test -bench=. -benchmem -run='^$' ./...  # Run benchmarks
 
 The test suite requires the SPA to be built first (see Build section above) because the gateway package embeds it.
 
+#### Tests skipped on Windows only because the fix was deferred
+
+A test that is skipped on Windows only because its fix was put off (not because the test can only ever run on POSIX) starts its skip message with `windows-deferred #<issue>:`, so one search lists them all:
+
+```bash
+git grep -n "windows-deferred" -- '*_test.go'
+```
+
+Every such skip needs a row in this register, in the same change that adds the skip. A skip without a row is a review finding. No date is set for the Windows fixes; when Windows is scheduled, fix each row, confirm it on a Windows CI run, remove the skip and close its issue.
+
+| Test | Skip in | Issue | Why it is deferred |
+|---|---|---|---|
+| `TestChatHistoryIndex_PrefixIndependentCoreAllocations` | `pkg/session/chat_history_allocation_test.go` | [#1465](https://github.com/elicify-ai/omnipus/issues/1465) | Builds a 100,000-row fixture that times out on the hosted Windows runner; red plus skip accepted on 2026-10-30. A candidate fix exists but needs a founder decision on a fixture exception. |
+
 ### Code Style
 
 ```bash
