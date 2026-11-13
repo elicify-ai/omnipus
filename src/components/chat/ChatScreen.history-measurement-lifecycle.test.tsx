@@ -18,7 +18,7 @@ import { VirtualizedMessageList } from './ChatMessageList'
 import { useHistoryViewport } from './useHistoryViewport'
 import { MAIN_ID, json } from '../../../tests/l1-room-ui/harness'
 import { resetStage1App, Stage1Network, stopStage1App } from '../../../tests/l1-room-ui/stage1-harness'
-import { deferred, entry, expectValidPage, page, pos } from '../../../tests/chat-history-paging/fixtures'
+import { deferred, drainVirtualScrollTimer, entry, expectValidPage, page, pos } from '../../../tests/chat-history-paging/fixtures'
 import { installHistoryLayout } from '../../../tests/chat-history-paging/measurement-layout'
 
 let network: Stage1Network
@@ -34,6 +34,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   await stopStage1App()
+  await drainVirtualScrollTimer()
   layout.restore()
   expect(network.unexpected, 'all network edges are declared').toStrictEqual([])
 })
