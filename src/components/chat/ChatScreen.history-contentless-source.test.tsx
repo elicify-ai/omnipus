@@ -16,7 +16,7 @@ import { resetStage1App, Stage1Network, stopStage1App } from '../../../tests/l1-
 import type { Message } from '@/lib/api/generated/openapi-types'
 import { useChatStore } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { entry, page, pos } from '../../../tests/chat-history-paging/fixtures'
+import { drainVirtualScrollTimer, entry, page, pos } from '../../../tests/chat-history-paging/fixtures'
 import { openHistory, stopHistory } from '../../../tests/chat-history-paging/application'
 import { installHistoryLayout } from '../../../tests/chat-history-paging/measurement-layout'
 import { MAIN_ID } from '../../../tests/l1-room-ui/harness'
@@ -27,6 +27,7 @@ afterEach(async () => {
   await stopHistory(app); app = undefined
   layout?.restore(); layout = undefined
   act(() => useChatPreferencesStore.setState({ verboseChatEnabled: false }))
+  await drainVirtualScrollTimer()
 })
 
 async function open(middle: Message, list: 'plain' | 'virtual') {
