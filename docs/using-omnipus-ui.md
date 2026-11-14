@@ -396,6 +396,7 @@ Your first message is kept in the open tab while Omnipus checks delivery. If loa
 |---|---|
 | **Sending…** | Waiting for confirmation that the first message was saved. |
 | **Delivery not confirmed · Retry** | Omnipus cannot confirm whether the message was saved. This can follow a connection failure or a server-reported uncertain save. A chat-start acknowledgement without the original delivery ID does not confirm delivery and, by itself, does not change **Sending…** to this status. Select **Retry** while connected; reconnect first if needed. |
+| **This message belongs to another chat, send it again.** | Shown when you select **Retry** on an unconfirmed first message after a different chat's start acknowledgement arrived and took over the view. Omnipus never sends the message to the chat now open; nothing is sent. Type or paste the message again in the chat where you want it. |
 | **Checking delivery…** | Your explicit Retry is in progress. Another Retry is not available at the same time. |
 | **Saved** | The server confirmed that this message was saved using its delivery ID, directly or through the saved chat's history. A chat-created acknowledgement alone does not confirm a save. The answer may still be starting or running. |
 | **Checking chat…** | Omnipus knows the chat ID and is loading its history to check whether the first message was saved and whether an answer exists or is still running. |
