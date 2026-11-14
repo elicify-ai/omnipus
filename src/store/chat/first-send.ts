@@ -184,7 +184,14 @@ export function startOrdinaryFirstSend(
     status: 'streaming',
     isStreaming: true,
   }
-  context.set({ pendingFirstSend: pending, firstSendGeneration: attemptGeneration })
+  // A different, still-pending first send is replaced here: its follow-ups can never be bound now, so hold them (#1833).
+  context.set((state) => ({
+    pendingFirstSend: pending,
+    firstSendGeneration: attemptGeneration,
+    ...(state.pendingFirstSend && state.pendingFirstSend.clientMessageId !== pending.clientMessageId
+      ? markAbandonedQueueItems(state, state.pendingFirstSend.clientMessageId)
+      : {}),
+  }))
   context.withBucket('__pending', (bucket) => ({
     ...applyMessageArray([user, assistant], bucket),
     isStreaming: true,

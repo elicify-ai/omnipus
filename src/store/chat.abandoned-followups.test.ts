@@ -145,4 +145,27 @@ describe('#1833 follow-ups of an abandoned unconfirmed chat', () => {
     expect(flagged, 'only A\'s own follow-up is marked').toHaveLength(1)
     expect(([...useChatStore.getState().pendingDrainQueue, ...useChatStore.getState().outboundQueue] as unknown[]).includes('legacy plain string'), 'legacy string untouched').toBe(true)
   })
+
+  it('holds them when a later first send replaced their orphaned owner before New chat (CHECK r2)', async () => {
+    const sender = connect()
+    act(() => { useChatStore.getState().sendMessage('A first') })
+    const aId = allFrames(sender)[0].client_message_id as string
+    act(() => {
+      useChatStore.getState().sendMessage('A follow 1')
+      useChatStore.getState().sendMessage('A follow 2')
+    })
+    frame({ type: 'session_started', session_id: 'chat-x', agent_id: 'mia', client_message_id: 'someone-elses-first-send' })
+    await flush()
+    // The foreign chat goes away (deleted elsewhere): no active chat, A's pending record is still orphaned.
+    act(() => { useSessionStore.getState().setActiveSession(null, 'mia') })
+    act(() => { useChatStore.getState().sendMessage('B first') })
+    const bId = allFrames(sender).find((entry) => entry.content === 'B first')?.client_message_id as string
+    expect(bId, 'fixture: B first was sent as its own first message').toBeTruthy()
+    act(() => { runStartNewSession({ choice: 'confirm', clientMessageId: bId }) })
+
+    const mine = held().filter((entry) => entry.content.startsWith('A follow'))
+    expect(mine.map((entry) => entry.abandoned), 'A follow-ups held: their owner was retired by B').toStrictEqual([true, true])
+    expect(allFrames(sender).filter((entry) => entry.content?.startsWith('A follow')), 'sent nowhere').toStrictEqual([])
+    expect(aId).not.toBe(bId)
+  })
 })
