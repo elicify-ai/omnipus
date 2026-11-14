@@ -347,6 +347,30 @@ describe('#1428 step 1 (CHECK round 1): follow-ups, full queue, order, shown row
     expect(rows.map((row) => row.id)).toStrictEqual(['free', 'a1', 'a2'])
   })
 
+  it('T2: follow-ups owned by an unconfirmed new chat are shown there once, hidden elsewhere, and never sendable', async () => {
+    const { selectQueuedRows, queuedItemBelongsHere } = await import('./chat/queue-target')
+    const owned = [
+      { ...qi('o1', 1), firstSendOwner: 'first-1' } as QueuedOutboundMessage,
+      { ...qi('o2', 2), firstSendOwner: 'first-1' } as QueuedOutboundMessage,
+    ]
+    for (const view of [null, '__pending']) {
+      expect(selectQueuedRows([owned[0]], [owned[1]], new Set(), view).map((row) => row.id), `shown once in ${String(view)}`)
+        .toStrictEqual(['o1', 'o2'])
+    }
+    expect(selectQueuedRows([owned[0]], [owned[1]], new Set(['o1']), '__pending').map((row) => row.id), 'not duplicated').toStrictEqual(['o2'])
+    expect(selectQueuedRows([], owned, new Set(), 'chat-b'), 'hidden in an established chat').toStrictEqual([])
+    for (const view of [null, '__pending', 'chat-b']) {
+      for (const item of owned) expect(queuedItemBelongsHere(item, view), 'shown is not sendable').toBe(false)
+    }
+  })
+
+  it('T3: equal acceptance numbers fall back to the queued time, then to position', async () => {
+    const { mergeDrainBatch } = await import('./chat/queue-target')
+    const newer = { id: 'n', content: 'n', timestamp: '2026-11-14T10:00:02.000Z', seq: 0, targetSessionId: 'chat-a' } as QueuedOutboundMessage
+    const older = { id: 'o', content: 'o', timestamp: '2026-11-14T10:00:01.000Z', seq: 0, targetSessionId: 'chat-a' } as QueuedOutboundMessage
+    expect(mergeDrainBatch([newer], [older]).map((entry) => (entry as QueuedOutboundMessage).id)).toStrictEqual(['o', 'n'])
+  })
+
   it('bindUnboundQueueItems binds only unbound objects', async () => {
     const { bindUnboundQueueItems } = await import('./chat/queue-target')
     expect(bindUnboundQueueItems({ outboundQueue: [qi('t', 1, 'chat-x')], pendingDrainQueue: ['s'] }, 'chat-a')).toStrictEqual({})

@@ -194,8 +194,7 @@ beforeEach(() => {
   })
   // jsdom: force the PlainMessageList path so the thread renders every row.
   vi.unstubAllGlobals()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(globalThis as any).ResizeObserver = undefined
+  vi.stubGlobal('ResizeObserver', undefined)
 })
 
 afterEach(() => {
@@ -221,11 +220,13 @@ describe('ChatScreen - queued rows belong to the open chat (#1428 step 1)', () =
         outboundQueue: [
           { id: 'q-other', content: 'queued for another chat', timestamp: '2026-11-14T10:00:01.000Z', targetSessionId: 'sess-other' },
           { id: 'q-here', content: 'queued for this chat', timestamp: '2026-11-14T10:00:02.000Z', targetSessionId: SID },
+          { id: 'q-owned', content: 'owned by an unconfirmed new chat', timestamp: '2026-11-14T10:00:03.000Z', firstSendOwner: 'first-1' },
         ],
       })
     })
     await vi.waitFor(() => { expect(container.textContent).toContain('queued for this chat') })
     expect(container.textContent, 'the other chat\'s message is not shown here').not.toContain('queued for another chat')
+    expect(container.textContent, 'a follow-up owned by an unconfirmed new chat is not shown in an established chat').not.toContain('owned by an unconfirmed new chat')
     expect(container.textContent?.split('queued for this chat').length, 'shown exactly once').toBe(2)
   })
 })
