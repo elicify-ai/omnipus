@@ -26,7 +26,7 @@ import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
 import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent, retryAgentsRoster } from '../recipientSend'
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
-import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
+import type { ChatMessage, ChatStore, MediaAttachment, OutboundQueueItem, PositionedToolCall, SessionChatState } from '../types'
 import { mergeDrainBatch, stampQueuedMessage } from '../queue-target'
 import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
@@ -361,6 +361,7 @@ function performResendMessage(
 type OutboundLifecycleSlice = Pick<ChatStore,
   | 'enqueueOutboundMessage'
   | 'drainOutboundQueue'
+  | 'discardQueuedMessage'
   | '_validateOutboundFrame'
   | 'sendMessage'
   | 'resendMessage'
@@ -452,6 +453,14 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       }
       set({ outboundQueue: [...current, queuedMessage ?? content] })
       return true
+    },
+
+    discardQueuedMessage: (id) => {
+      const keep = (item: OutboundQueueItem) => typeof item === 'string' || item.id !== id
+      set((state) => ({
+        outboundQueue: state.outboundQueue.filter(keep),
+        pendingDrainQueue: state.pendingDrainQueue.filter(keep),
+      }))
     },
 
     drainOutboundQueue: () => {

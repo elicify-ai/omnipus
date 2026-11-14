@@ -409,6 +409,8 @@ export interface QueuedOutboundMessage {
   seq?: number
   /** #1428: client id of the unconfirmed first send this follow-up was typed under; only that send's chat may adopt it. */
   firstSendOwner?: string
+  /** #1833: the unconfirmed chat this follow-up was typed under was abandoned. It is held, never sent, until the user discards it. */
+  abandoned?: boolean
 }
 
 /** Strings remain readable for persisted/test state created before #823. */
@@ -1211,6 +1213,8 @@ export interface ChatStore extends HistorySlice {
   enqueueOutboundMessage: (content: string, queuedMessage?: QueuedOutboundMessage, alreadyAccepted?: boolean) => boolean
   /** Send all queued messages now that the WS is connected. */
   drainOutboundQueue: () => void
+  /** #1833: remove one queued message (by id) from both queue lists, e.g. a follow-up held because its chat was not saved. */
+  discardQueuedMessage: (id: string) => void
   /**
    * BUG FIX (2026-07): messages handed off from `outboundQueue` by
    * `drainOutboundQueue()`, sent ONE AT A TIME. `sendMessage` only allows one

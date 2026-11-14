@@ -7,6 +7,7 @@ import { generateId } from '@/lib/constants'
 import type { MessageFrame } from '@/lib/api/generated/asyncapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { applyMessageArray } from './session'
+import { markAbandonedQueueItems } from './queue-target'
 import type { ChatMessage, ChatStore, FirstSendStatus, MediaAttachment, PendingFirstSend, SessionChatState } from './types'
 
 // Internal store wiring, not a gateway wire format.
@@ -250,6 +251,7 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
         delete sessionsById.__pending
         return {
           sessionsById,
+          ...(pending ? markAbandonedQueueItems(state, pending.clientMessageId) : {}),
           pendingFirstSend: null,
           abandonedFirstSendIds: pending
             ? [...state.abandonedFirstSendIds, pending.clientMessageId]

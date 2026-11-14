@@ -7,7 +7,7 @@
 // Boundary: no server effect is observable here.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, act } from '@testing-library/react'
+import { render, act, fireEvent } from '@testing-library/react'
 import * as React from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
@@ -228,5 +228,33 @@ describe('ChatScreen - queued rows belong to the open chat (#1428 step 1)', () =
     expect(container.textContent, 'the other chat\'s message is not shown here').not.toContain('queued for another chat')
     expect(container.textContent, 'a follow-up owned by an unconfirmed new chat is not shown in an established chat').not.toContain('owned by an unconfirmed new chat')
     expect(container.textContent?.split('queued for this chat').length, 'shown exactly once').toBe(2)
+  })
+
+  it('#1833: a follow-up of an abandoned chat is shown as held with a Discard button that removes it', async () => {
+    act(() => publishConnectedOpening())
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(
+        <QueryClientProvider client={queryClient}>
+          <ChatScreen />
+        </QueryClientProvider>,
+      )
+      container = result.container
+    })
+    await vi.waitFor(() => { expect(container.textContent).toContain('earlier question') })
+    act(() => {
+      useChatStore.setState({
+        outboundQueue: [
+          { id: 'q-held', content: 'typed under an abandoned chat', timestamp: '2026-11-14T10:00:03.000Z', firstSendOwner: 'first-1', abandoned: true },
+          { id: 'q-here', content: 'queued for this chat', timestamp: '2026-11-14T10:00:04.000Z', targetSessionId: SID },
+        ],
+      })
+    })
+    await vi.waitFor(() => { expect(container.textContent).toContain('typed under an abandoned chat') })
+    expect(container.textContent).toContain('Not sent: its chat was not saved')
+    expect(container.querySelectorAll('[data-testid="user-message-discard"]'), 'one Discard, only on the held row').toHaveLength(1)
+    fireEvent.click(container.querySelector('[data-testid="user-message-discard"]') as HTMLElement)
+    await vi.waitFor(() => { expect(container.textContent).not.toContain('typed under an abandoned chat') })
+    expect(useChatStore.getState().outboundQueue.map((item) => (typeof item === 'string' ? item : item.id))).toStrictEqual(['q-here'])
   })
 })
