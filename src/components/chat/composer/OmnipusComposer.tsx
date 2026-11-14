@@ -42,6 +42,7 @@ import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { isGoalRunning } from '@/lib/goalActivity'
+import { hasOpenStoreWork } from '@/hooks/useRunningActivity'
 import { fetchAgents } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from '../AttachmentCard'
 import { ComposerMediaLibraryButton, LibraryAttachmentChips } from '../ComposerMediaLibrary'
@@ -292,6 +293,17 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
       pendingRedirectSids.add(frame.session_id)
     }
   }, [])
+  // `/cancel`: the tree cancel frame is always sent (helpers may run while this chat is idle);
+  // the notice only says so when nothing at all is running here (#1428 item 5). The Stop
+  // button and a confirmed second Stop do not come through here.
+  const { cancelAllTreeScoped } = cancelState
+  const cancelAllWithFeedback = useCallback(() => {
+    const chat = useChatStore.getState()
+    if (!chat.isStreaming && !isGoalRunning(chat.goalStatus) && !hasOpenStoreWork(chat, chat.sessionsById, useSessionStore.getState().activeSessionId)) {
+      useUiStore.getState().addToast({ message: 'Nothing to cancel: nothing is running in this chat.', variant: 'default' })
+    }
+    cancelAllTreeScoped()
+  }, [cancelAllTreeScoped])
   const slashMenu = useSlashMenu({
     isStreaming,
     isReplaying,
@@ -300,7 +312,7 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
     appendMessage,
     // /stop is one Stop-button activation; /cancel stays immediate tree.
     activateStop: cancelState.cancelUnconditional,
-    cancelIfStreaming: cancelState.cancelAllTreeScoped,
+    cancelIfStreaming: cancelAllWithFeedback,
     sendRedirectFrame,
   })
 

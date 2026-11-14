@@ -42,10 +42,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
+import type { SessionChatState } from '@/store/chat/types'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgentActivityRuns, fetchAgents } from '@/lib/api'
+import { isGoalRunning } from '@/lib/goalActivity'
 import type { Agent, ToolCall } from '@/lib/api'
 import type { AgentActivityRun } from '@/lib/api/generated/openapi-types'
 
@@ -610,6 +612,52 @@ function activityStatusForSpan(span: SubagentSpan): ActivityStatus {
     case 'failed': return 'error'
     default: return 'parked'
   }
+}
+
+/** Lifecycle values of a helper that can still be stopped (a resumed helper keeps an ended span bracket). */
+const OPEN_LIFECYCLE = new Set<string>(['queued', 'running', 'needs_input', 'paused'])
+
+type OpenWorkBucket = {
+  messages: { spans?: SubagentSpan[]; tool_calls?: ToolCall[] }[]
+  toolCalls: Record<string, ToolCall>
+  isStreaming?: boolean
+}
+
+function bucketHasOpenWork(bucket: OpenWorkBucket): boolean {
+  const spans = bucket.messages.flatMap((m) => m.spans ?? [])
+  if (spans.some((span) => span.status === 'running' || OPEN_LIFECYCLE.has(span.lifecycleState ?? ''))) return true
+  const calls = [...bucket.messages.flatMap((m) => m.tool_calls ?? []), ...Object.values(bucket.toolCalls)]
+  return [...groupBashSessions(calls).values()].some((session) => session.latestStatus === 'running')
+}
+
+/**
+ * Can the chat store alone show that nothing is open (so `/cancel` may say "Nothing to
+ * cancel", #1428 item 5)? Returns true when something is open OR when that cannot be told.
+ * Open means, in the active chat or in ANY loaded chat (including messages hidden while the
+ * reader looks at older history): a streaming session, a running goal, a helper that has not
+ * ended (span bracket or current lifecycle) or a background command whose latest status is
+ * running. It does not follow the helper tree: the parent-to-child link lives in displayed
+ * messages that trimming, history release and reload can drop (CHECK rounds 2 to 4). For the
+ * same reason the active chat's own evidence counts as incomplete, and the answer is "cannot
+ * tell", when older messages are trimmed or not loaded or a history snapshot is pending: a
+ * background command may have been dispatched in a message that is gone. Every such case errs
+ * towards staying silent, which is harmless; a false "nothing to cancel" is not. A pure read;
+ * it does not poll. Task and scheduler runs come from a polled query and are NOT counted.
+ */
+export function hasOpenStoreWork(
+  active: OpenWorkBucket,
+  sessionsById: Record<string, SessionChatState>,
+  activeSid: string | null,
+): boolean {
+  if (bucketHasOpenWork(active)) return true
+  const own = activeSid ? sessionsById[activeSid] : undefined
+  if (own && (own.trimmedCount > 0 || own.hasEarlierMessages === true || own.historyNeedsSnapshot === true)) return true
+  return Object.values(sessionsById).some(
+    (bucket) =>
+      bucket.isStreaming ||
+      isGoalRunning(bucket.goalStatus) ||
+      bucketHasOpenWork({ messages: Object.values(bucket.messagesById), toolCalls: bucket.toolCalls }),
+  )
 }
 
 export function useRunningActivity(): RunningActivity {
