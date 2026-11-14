@@ -7,6 +7,7 @@ import { generateId } from '@/lib/constants'
 import type { MessageFrame } from '@/lib/api/generated/asyncapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { applyMessageArray } from './session'
+import { markAbandonedQueueItems, withoutQueuedMessage } from './queue-target'
 import type { ChatMessage, ChatStore, FirstSendStatus, MediaAttachment, PendingFirstSend, SessionChatState } from './types'
 
 // Internal store wiring, not a gateway wire format.
@@ -183,7 +184,14 @@ export function startOrdinaryFirstSend(
     status: 'streaming',
     isStreaming: true,
   }
-  context.set({ pendingFirstSend: pending, firstSendGeneration: attemptGeneration })
+  // A different, still-pending first send is replaced here: its follow-ups can never be bound now, so hold them (#1833).
+  context.set((state) => ({
+    pendingFirstSend: pending,
+    firstSendGeneration: attemptGeneration,
+    ...(state.pendingFirstSend && state.pendingFirstSend.clientMessageId !== pending.clientMessageId
+      ? markAbandonedQueueItems(state, state.pendingFirstSend.clientMessageId)
+      : {}),
+  }))
   context.withBucket('__pending', (bucket) => ({
     ...applyMessageArray([user, assistant], bucket),
     isStreaming: true,
@@ -198,7 +206,7 @@ export function startOrdinaryFirstSend(
 }
 
 export function createFirstSendActions(context: FirstSendContext): Pick<ChatStore,
-  'retryFirstSend' | 'reattachFirstSend' | 'markFirstSendDisconnected' | 'abandonPendingFirstSend' | 'generateFirstSendAgain'
+  'retryFirstSend' | 'reattachFirstSend' | 'markFirstSendDisconnected' | 'abandonPendingFirstSend' | 'discardQueuedMessage' | 'generateFirstSendAgain'
 > {
   const { set, get, withBucket } = context
   return {
@@ -234,6 +242,8 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
       const message = findFirstSendMessage(get().sessionsById[pending.sessionId ?? '__pending'], pending.clientMessageId)
       setFirstSendStatus(context, pending, hasFirstSendReceipt(message) ? 'check_failed' : pending.status === 'not_saved' ? 'not_saved' : 'unconfirmed')
     },
+    // #1833: remove one message held because its chat was never saved.
+    discardQueuedMessage: (id) => set((state) => withoutQueuedMessage(state, id)),
     abandonPendingFirstSend: () => {
       const pending = getPendingFirstSend(get())
       if (pending?.sessionId) {
@@ -250,6 +260,9 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
         delete sessionsById.__pending
         return {
           sessionsById,
+          // The raw record, not `pending`: after a foreign acknowledgement moved the message the filtered
+          // record is null, but its follow-ups are still owned by it and must be held (#1833).
+          ...(state.pendingFirstSend ? markAbandonedQueueItems(state, state.pendingFirstSend.clientMessageId) : {}),
           pendingFirstSend: null,
           abandonedFirstSendIds: pending
             ? [...state.abandonedFirstSendIds, pending.clientMessageId]

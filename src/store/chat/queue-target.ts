@@ -12,6 +12,15 @@ export function queueTargetFor(activeSessionId: string | null): string | undefin
   return activeSessionId && activeSessionId !== '__pending' ? activeSessionId : undefined
 }
 
+/** The queues without the one message with this id (#1833 Discard); string items and other ids stay. */
+export function withoutQueuedMessage(
+  state: { outboundQueue: OutboundQueueItem[]; pendingDrainQueue: OutboundQueueItem[] },
+  id: string,
+): { outboundQueue: OutboundQueueItem[]; pendingDrainQueue: OutboundQueueItem[] } {
+  const keep = (item: OutboundQueueItem) => typeof item === 'string' || item.id !== id
+  return { outboundQueue: state.outboundQueue.filter(keep), pendingDrainQueue: state.pendingDrainQueue.filter(keep) }
+}
+
 /**
  * Stamp a newly accepted queued message with its acceptance number and the chat it was typed in.
  * With no chat yet, a pending unconfirmed first send becomes its owner instead.
@@ -48,6 +57,9 @@ export function queuedItemBelongsHere(item: OutboundQueueItem, activeSessionId: 
 
 /** True when the item is shown as a queued row in the chat that is open now. */
 export function queuedItemShownHere(item: OutboundQueueItem, activeSessionId: string | null): boolean {
+  // #1833: a follow-up whose chat was abandoned is shown in every chat until
+  // the user discards it: it is never sent, and must not be lost silently.
+  if (typeof item !== 'string' && item.abandoned) return true
   // The unconfirmed new chat itself still shows its own waiting follow-ups.
   if (isOwnedAndUnbound(item)) return activeSessionId === null || activeSessionId === '__pending'
   return queuedItemBelongsHere(item, activeSessionId)
@@ -83,6 +95,19 @@ export function bindUnboundQueueItems(
   const bind = (item: OutboundQueueItem): OutboundQueueItem =>
     unbound(item) ? { ...(item as QueuedOutboundMessage), targetSessionId: sessionId } : item
   return { outboundQueue: state.outboundQueue.map(bind), pendingDrainQueue: state.pendingDrainQueue.map(bind) }
+}
+
+/**
+ * #1833: the unconfirmed new chat was abandoned. Its follow-ups can never
+ * get a chat: mark them held. They stay in the queue (visible, discardable),
+ * and, still owned and unbound, are never sent.
+ */
+export function markAbandonedQueueItems(state: QueueLists, firstSendOwner: string): QueueLists {
+  const mine = (item: OutboundQueueItem) =>
+    typeof item !== 'string' && !item.targetSessionId && item.firstSendOwner === firstSendOwner
+  const mark = (item: OutboundQueueItem): OutboundQueueItem =>
+    mine(item) ? { ...(item as QueuedOutboundMessage), abandoned: true } : item
+  return { outboundQueue: state.outboundQueue.map(mark), pendingDrainQueue: state.pendingDrainQueue.map(mark) }
 }
 
 /**

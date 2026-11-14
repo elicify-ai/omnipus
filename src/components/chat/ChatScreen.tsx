@@ -259,6 +259,7 @@ export function UserMessage() {
             latest
             isClearCommand={isClearCommandText(storeMessage.content)}
             onRetry={() => useChatStore.getState().resendMessage(storeMessage.id)}
+            onDiscard={() => useChatStore.getState().discardQueuedMessage(storeMessage.id)}
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(storeMessage.id)}
           />
         )}
@@ -939,6 +940,7 @@ export function VirtualUserMessageRow({
             latest={latest}
             isClearCommand={isClearCommandText(message.content)}
             onRetry={() => useChatStore.getState().resendMessage(message.id)}
+            onDiscard={() => useChatStore.getState().discardQueuedMessage(message.id)}
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(message.id)}
           />
         )}
@@ -1687,7 +1689,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         content: item.content,
         timestamp: item.timestamp,
         status: 'done',
-        deliveryStatus: 'queued',
+        deliveryStatus: item.abandoned ? 'unsaved' : 'queued',
       }))
   }, [activeSessionId, messages, outboundQueue, pendingDrainQueue])
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
