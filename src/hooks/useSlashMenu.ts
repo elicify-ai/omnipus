@@ -371,6 +371,24 @@ function withoutRetiredCommands(commands: SlashCommand[]): SlashCommand[] {
   return commands.filter((cmd) => !RETIRED_COMMAND_NAMES.has(cmd.name.toLowerCase()))
 }
 
+/**
+ * Send the composer unless the workspace-entry gate refuses. The runtime empties
+ * the composer before the store's own guard runs, so the refusal must come first
+ * and leave the draft in place (#1428 item 3).
+ */
+function sendComposerUnlessBlocked(composerRuntime: ComposerRuntime): void {
+  if (blockSendForWorkspaceEntry('send')) return
+  composerRuntime.send()
+}
+
+/** The server-run command ("/clear"): same refusal, before the draft is replaced by the label. */
+function sendServerRunCommand(composerRuntime: ComposerRuntime, label: string, setInputValue: (value: string) => void): void {
+  if (blockSendForWorkspaceEntry('send')) return
+  composerRuntime.setText(label)
+  setInputValue(label)
+  composerRuntime.send()
+}
+
 function refuseRetiredCommand(appendMessage: (message: ChatMessage) => void): void {
   appendMessage({
     id: generateId(),
@@ -1022,11 +1040,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // /clear belongs to the server table. Selecting it sends that label; it
     // does not run locally and does not start a chat.
     if (isServerRunCommand(def)) {
-      // Refuse before the runtime empties the composer (#1428 item 3).
-      if (blockSendForWorkspaceEntry('send')) return
-      composerRuntime.setText(def.label)
-      setInputValue(def.label)
-      composerRuntime.send()
+      sendServerRunCommand(composerRuntime, def.label, setInputValue)
       return
     }
 
@@ -1286,10 +1300,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // every submit path converges on: ComposerPrimitive.Root's onSubmit and
     // ComposerPrimitive.Send's onClick both end in `composer.send()`, and
     // ChatScreen's own mid-stream path calls this method directly.
-    // The gate may have closed while the list was in flight: refuse here,
-    // keeping the draft (#1428 item 3).
-    if (blockSendForWorkspaceEntry('send')) return
-    composerRuntime.send()
+    // The gate may have closed while the list was in flight: the draft stays.
+    sendComposerUnlessBlocked(composerRuntime)
      
   }, [commandsFirstLoadPending])
 
