@@ -192,13 +192,68 @@ describe('#1428 step 1 (CHECK round 1): follow-ups, full queue, order, shown row
     })
     const all = [...useChatStore.getState().pendingDrainQueue, ...useChatStore.getState().outboundQueue]
     const item = all.find((entry) => typeof entry !== 'string' && entry.content === 'A follow-up') as QueuedOutboundMessage | undefined
-    // Waiting: it belongs to A. Already released: it went to A. Never to the foreign chat.
-    if (item) expect(item.targetSessionId, 'owned by A, not by the foreign chat').toBe('chat-a')
+    // A foreign ack orphans the pending first send, so the follow-up stays owned and unbound:
+    // it is held (stuck, #1833), never bound to or sent into the foreign chat.
+    expect(item, 'still held').toBeDefined()
+    expect(item?.targetSessionId, 'not taken over by the foreign chat').toBeUndefined()
     openChat('foreign')
     act(() => { useChatStore.getState().drainOutboundQueue() })
     await flush()
     expect(sentFrames(sender).filter((frame) => frame.content === 'A follow-up' && frame.session_id === 'foreign'),
       'A\'s follow-up is never sent to the foreign chat').toStrictEqual([])
+  })
+
+  it('R3-F1: after a foreign acknowledgement, opening another chat does not send A\'s follow-up there; they stay held (stuck, #1833)', async () => {
+    const sender = connect()
+    act(() => { useChatStore.getState().sendMessage('first message') })
+    act(() => {
+      useChatStore.getState().sendMessage('A follow 1')
+      useChatStore.getState().sendMessage('A follow 2')
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'session_started', session_id: 'foreign', agent_id: 'mia', client_message_id: 'not-ours',
+      } as never)
+    })
+    openChat('chat-b')
+    await flush()
+    expect(sentFrames(sender).filter((frame) => frame.session_id === 'chat-b'), 'nothing of A goes to B').toStrictEqual([])
+    const held = [...useChatStore.getState().pendingDrainQueue, ...useChatStore.getState().outboundQueue] as QueuedOutboundMessage[]
+    expect(held.map((entry) => entry.content).sort(), 'both follow-ups are still held').toStrictEqual(['A follow 1', 'A follow 2'])
+    expect(held.map((entry) => entry.targetSessionId), 'bound to no chat').toStrictEqual([undefined, undefined])
+    openChat('chat-a')
+    await flush()
+    expect(sentFrames(sender).filter((frame) => frame.content?.startsWith('A follow')), 'sent nowhere').toStrictEqual([])
+  })
+
+  it('F2 (legacy object): an accepted object without a number keeps its place when it bounces', async () => {
+    openChat('chat-a')
+    const legacy = { id: 'a1', content: 'legacy A1', timestamp: '2026-11-14T10:00:00.000Z', targetSessionId: 'chat-a' } as QueuedOutboundMessage
+    const modern = { id: 'a2', content: 'modern A2', timestamp: '2026-11-14T10:00:00.001Z', targetSessionId: 'chat-a', seq: 5 } as QueuedOutboundMessage
+    useChatStore.setState({ outboundQueue: [legacy], pendingDrainQueue: [modern] })
+    // Offline: the drain re-sends the legacy object, which bounces back into the queue.
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    const sender = connect()
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    await flush()
+    expect(sentFrames(sender)[0]?.content, 'the older legacy object is still sent first').toBe('legacy A1')
+  })
+
+  it('T1: a bounce keeps the acceptance order of two same-time messages', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime('2026-11-14T10:00:00.000Z')
+    try {
+      queueInChatA()
+      act(() => { useChatStore.getState().sendMessage('A2 later') })
+      // Offline drain moves both to the held list and bounces A1 straight back.
+      act(() => { useChatStore.getState().drainOutboundQueue() })
+      const sender = connect()
+      act(() => { useChatStore.getState().drainOutboundQueue() })
+      await act(async () => { await Promise.resolve() })
+      expect(sentFrames(sender)[0]?.content, 'A1 is sent before A2').toBe('written in chat A')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('M4b: items nobody owns are bound to the chat of a legacy acknowledgement', async () => {

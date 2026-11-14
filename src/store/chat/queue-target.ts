@@ -12,10 +12,25 @@ export function queueTargetFor(activeSessionId: string | null): string | undefin
   return activeSessionId && activeSessionId !== '__pending' ? activeSessionId : undefined
 }
 
-/** True when the item may be shown or sent in the chat that is open now. */
+/** A follow-up typed under a first send that has not been confirmed yet: it has no chat, and only that send may give it one. */
+function isOwnedAndUnbound(item: OutboundQueueItem): boolean {
+  return typeof item !== 'string' && !item.targetSessionId && !!item.firstSendOwner
+}
+
+/** True when the item may be sent in the chat that is open now. */
 export function queuedItemBelongsHere(item: OutboundQueueItem, activeSessionId: string | null): boolean {
+  // Owned follow-ups wait for their own first send to be confirmed (it binds
+  // them) and are never sent into whatever chat happens to be open.
+  if (isOwnedAndUnbound(item)) return false
   if (typeof item === 'string' || !item.targetSessionId) return true
   return item.targetSessionId === activeSessionId
+}
+
+/** True when the item is shown as a queued row in the chat that is open now. */
+export function queuedItemShownHere(item: OutboundQueueItem, activeSessionId: string | null): boolean {
+  // The unconfirmed new chat itself still shows its own waiting follow-ups.
+  if (isOwnedAndUnbound(item)) return activeSessionId === null || activeSessionId === '__pending'
+  return queuedItemBelongsHere(item, activeSessionId)
 }
 
 /**
@@ -71,7 +86,8 @@ export function mergeDrainBatch(
   return items
     .map((item, index) => ({ item, index }))
     .sort((a, b) =>
-      (bySeq ? (a.item.seq as number) - (b.item.seq as number) : a.item.timestamp.localeCompare(b.item.timestamp))
+      (bySeq ? (a.item.seq as number) - (b.item.seq as number) : 0)
+      || a.item.timestamp.localeCompare(b.item.timestamp)
       || a.index - b.index)
     .map(({ item }) => item)
 }
@@ -92,6 +108,6 @@ export function selectQueuedRows(
 ): QueuedOutboundMessage[] {
   return [...held, ...outbound]
     .filter((item): item is QueuedOutboundMessage =>
-      typeof item !== 'string' && !shownIds.has(item.id) && queuedItemBelongsHere(item, activeSessionId))
+      typeof item !== 'string' && !shownIds.has(item.id) && queuedItemShownHere(item, activeSessionId))
     .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
 }

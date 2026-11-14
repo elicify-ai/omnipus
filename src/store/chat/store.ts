@@ -61,7 +61,7 @@ function drainQueuedMessage(get: () => ChatStore, next: OutboundQueueItem): void
   if (typeof next === 'string') {
     get().sendMessage(next)
   } else {
-    get().sendMessage(next.content, { clientMessageId: next.id, queuedAt: next.timestamp, queueSeq: next.seq })
+    get().sendMessage(next.content, { clientMessageId: next.id, queuedAt: next.timestamp, queueSeq: next.seq ?? 0 })
   }
 }
 
