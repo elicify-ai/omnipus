@@ -175,6 +175,90 @@ describe('#1428 step 1 (CHECK round 1): follow-ups, full queue, order, shown row
     expect(waiting()).toContain('written in chat A')
   })
 
+  it('R1: a foreign acknowledgement does not take over A\'s follow-up', async () => {
+    const sender = connect()
+    act(() => { useChatStore.getState().sendMessage('first message') })
+    const first = sentFrames(sender)[0] as { client_message_id?: string }
+    act(() => { useChatStore.getState().sendMessage('A follow-up') })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'session_started', session_id: 'foreign', agent_id: 'mia', client_message_id: 'not-ours',
+      } as never)
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'session_started', session_id: 'chat-a', agent_id: 'mia', client_message_id: first.client_message_id,
+      } as never)
+    })
+    const all = [...useChatStore.getState().pendingDrainQueue, ...useChatStore.getState().outboundQueue]
+    const item = all.find((entry) => typeof entry !== 'string' && entry.content === 'A follow-up') as QueuedOutboundMessage | undefined
+    // Waiting: it belongs to A. Already released: it went to A. Never to the foreign chat.
+    if (item) expect(item.targetSessionId, 'owned by A, not by the foreign chat').toBe('chat-a')
+    openChat('foreign')
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    await flush()
+    expect(sentFrames(sender).filter((frame) => frame.content === 'A follow-up' && frame.session_id === 'foreign'),
+      'A\'s follow-up is never sent to the foreign chat').toStrictEqual([])
+  })
+
+  it('M4b: items nobody owns are bound to the chat of a legacy acknowledgement', async () => {
+    act(() => { useSessionStore.setState({ activeSessionId: null }) })
+    act(() => {
+      useChatStore.getState().sendMessage('one')
+      useChatStore.getState().sendMessage('two')
+    })
+    const sender = connect()
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'chat-a', agent_id: 'mia' } as never)
+    })
+    openChat('chat-b')
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    await flush()
+    expect(sentFrames(sender).filter((frame) => frame.session_id === 'chat-b'), 'nothing is sent to B').toStrictEqual([])
+  })
+
+  it('M5b: a real offline cleanup into a full queue keeps the accepted held message', async () => {
+    queueInChatA()
+    const heldItem = useChatStore.getState().outboundQueue[0] as QueuedOutboundMessage
+    act(() => {
+      useChatStore.setState({
+        pendingDrainQueue: [heldItem],
+        outboundQueue: [1, 2, 3, 4, 5].map((n) => qi(`full${n}`, n, 'chat-a')),
+      })
+    })
+    act(() => { useChatStore.getState().clearStreamingState() })
+    await flush()
+    expect(waiting(), 'the accepted message survives').toContain('written in chat A')
+  })
+
+  it('F3 (equal and backward times): acceptance order decides, not the clock', async () => {
+    const { mergeDrainBatch } = await import('./chat/queue-target')
+    const s = (id: string, seq: number, timestamp: string): QueuedOutboundMessage => ({ id, content: id, timestamp, targetSessionId: 'chat-a', seq })
+    expect(mergeDrainBatch([s('a2', 2, at(1))], [s('a1', 1, at(1))]).map(idOf), 'equal times').toStrictEqual(['a1', 'a2'])
+    expect(mergeDrainBatch([s('a2', 2, at(0))], [s('a1', 1, at(5))]).map(idOf), 'clock went backwards').toStrictEqual(['a1', 'a2'])
+    expect(mergeDrainBatch([s('a1', 1, at(1))], [s('a2', 2, at(1))]).map(idOf), 'earlier bounce stays first').toStrictEqual(['a1', 'a2'])
+  })
+
+  it('F3 (store): a fresh A2 typed after a held A1 is sent after it, with equal times', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime('2026-11-14T10:00:00.000Z')
+    try {
+      queueInChatA()
+      openChat('chat-b')
+      const sender = connect()
+      act(() => { useChatStore.getState().drainOutboundQueue() })
+      act(() => { useConnectionStore.getState().setConnected(false) })
+      openChat('chat-a')
+      act(() => { useChatStore.getState().sendMessage('A2 fresh') })
+      act(() => { useConnectionStore.getState().setConnected(true) })
+      act(() => { useChatStore.getState().drainOutboundQueue() })
+      await act(async () => { await Promise.resolve() })
+      expect(sentFrames(sender)[0]?.content).toBe('written in chat A')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('F3: a newer message never overtakes an older held one of the same chat', async () => {
     const { mergeDrainBatch } = await import('./chat/queue-target')
     expect(mergeDrainBatch([qi('new', 3, 'chat-a')], [qi('old', 1, 'chat-a'), qi('mid', 2, 'chat-a')]).map(idOf))

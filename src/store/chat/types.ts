@@ -405,6 +405,10 @@ export interface QueuedOutboundMessage {
   timestamp: string
   /** #1428: the chat this message was written in. Absent for the first message of a new chat, which has no chat id yet. */
   targetSessionId?: string
+  /** #1428: order in which the app accepted the message; survives a bounce back into the queue, independent of the clock. */
+  seq?: number
+  /** #1428: client id of the unconfirmed first send this follow-up was typed under; only that send's chat may adopt it. */
+  firstSendOwner?: string
 }
 
 /** Strings remain readable for persisted/test state created before #823. */
@@ -1252,7 +1256,7 @@ export interface ChatStore extends HistorySlice {
    * button attaches to its message into Omnipus's main (W1 create an agent,
    * W18 set up a team, for a named workspace). Never an instruction.
    */
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; queueSeq?: number; workflowStart?: WorkflowStart }) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED

@@ -43,9 +43,12 @@ const ORIGINAL_FRAME: MessageFrame = {
 const ATTACH_A: AttachSessionFrame = { type: 'attach_session', session_id: SESSION_A }
 const QUEUED_ID = '1090-foreign-ids-follow-up'
 const QUEUED_TEXT = 'Do not send this follow-up until session A is checked.'
-const QUEUED = { id: QUEUED_ID, content: QUEUED_TEXT, timestamp: NOW }
+// #1428: the queue also records an acceptance number (seq) and the first send the follow-up was typed under.
+const QUEUED = expect.objectContaining({ id: QUEUED_ID, content: QUEUED_TEXT, timestamp: NOW, firstSendOwner: CLIENT_A })
 // #1428: once A's chat id is known, the held follow-up is bound to A (it must never drain into another chat).
-const QUEUED_BOUND_TO_A = { ...QUEUED, targetSessionId: SESSION_A }
+const QUEUED_BOUND_TO_A = expect.objectContaining({
+  id: QUEUED_ID, content: QUEUED_TEXT, timestamp: NOW, firstSendOwner: CLIENT_A, targetSessionId: SESSION_A,
+})
 const FOREIGN_BOOT_ID = '1090-foreign-ids-boot-b'
 // Arbitrary positive input position, not a timing/length threshold or boundary.
 const FOREIGN_SEQ = 9

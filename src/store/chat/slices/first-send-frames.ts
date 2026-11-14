@@ -64,7 +64,7 @@ function confirmFirstSend(context: FirstSendFrameContext, pending: PendingFirstS
     if (sourceSid !== sid) delete sessionsById[sourceSid]
     return {
       sessionsById,
-      ...bindUnboundQueueItems(state, sid),
+      ...bindUnboundQueueItems(state, sid, pending.clientMessageId),
       pendingFirstSend: recovered ? { ...pending, sessionId: sid, status: 'checking_chat' } : null,
       ...(foreground ? { pendingAutoApproveChoice: null } : {}),
     }

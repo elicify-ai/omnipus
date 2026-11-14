@@ -27,7 +27,7 @@ import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddre
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
-import { mergeDrainBatch, queueTargetFor } from '../queue-target'
+import { mergeDrainBatch, nextQueueSeq, queueTargetFor } from '../queue-target'
 import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
 import { settleAllCancelAcks } from '../stop-checkpoint'
@@ -544,7 +544,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
       // #1428: a queued message remembers the chat it was typed in.
       const queueTarget = queueTargetFor(rawActiveSessionId)
-      const queuedMessage = queueTarget ? { ...untargetedMessage, targetSessionId: queueTarget } : untargetedMessage
+      const firstSendOwner = queueTarget ? undefined : getPendingFirstSend(get())?.clientMessageId
+      const queuedMessage = {
+        ...untargetedMessage,
+        seq: opts?.queueSeq ?? nextQueueSeq(),
+        ...(queueTarget ? { targetSessionId: queueTarget } : {}),
+        ...(firstSendOwner ? { firstSendOwner } : {}),
+      }
       // Ordinary sends, mid-turn steering and new-answer requests share the
       // attached session's canonical binding; only a first send uses context.
       const workspaceId = outboundWorkspaceId(rawActiveSessionId)
