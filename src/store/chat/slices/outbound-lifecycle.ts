@@ -27,6 +27,7 @@ import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddre
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
+import { queueTargetFor } from '../queue-target'
 import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
 import { settleAllCancelAcks } from '../stop-checkpoint'
@@ -531,7 +532,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       if (blockSendForWorkspaceEntry('send')) return
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
-      const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
+      const { clientMessageId, queuedAt, queuedMessage: untargetedMessage } = beginSend(content, opts)
       // Phase 1 / FR-010: per-turn model override. Trim and strip empty
       // strings so absent and "" are equivalent (the WS frame is omitted
       // entirely when no model was picked this session, per spec §18 Q3).
@@ -539,6 +540,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
+      // #1428: a queued message remembers the chat it was typed in.
+      const queueTarget = queueTargetFor(rawActiveSessionId)
+      const queuedMessage = queueTarget ? { ...untargetedMessage, targetSessionId: queueTarget } : untargetedMessage
       // Ordinary sends, mid-turn steering and new-answer requests share the
       // attached session's canonical binding; only a first send uses context.
       const workspaceId = outboundWorkspaceId(rawActiveSessionId)

@@ -403,6 +403,8 @@ export interface QueuedOutboundMessage {
   id: string
   content: string
   timestamp: string
+  /** #1428: the chat this message was written in. Absent for the first message of a new chat, which has no chat id yet. */
+  targetSessionId?: string
 }
 
 /** Strings remain readable for persisted/test state created before #823. */

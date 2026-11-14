@@ -5,6 +5,7 @@ import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { firstDrainableIndex } from './queue-target'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { recipientAddressHoldsQueue, setRosterReleaseDrain } from './recipientSend'
 import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
@@ -262,9 +263,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // send (recipient is valid only together with session_id, and dropping
     // the addressing silently is forbidden). The hold releases as soon as a
     // session exists, and the message then drains WITH its recipient.
-    if (recipientAddressHoldsQueue(typeof pendingDrainQueue[0] === 'string' ? pendingDrainQueue[0] : pendingDrainQueue[0]?.content)) return
-    const [next, ...rest] = pendingDrainQueue
-    set({ pendingDrainQueue: rest })
+    const head = pendingDrainQueue[firstDrainableIndex(pendingDrainQueue, useSessionStore.getState().activeSessionId)]
+    if (head === undefined) return
+    if (recipientAddressHoldsQueue(typeof head === 'string' ? head : head.content)) return
+    // #1428: only a message written in the open chat (or a first message with
+    // no chat yet) may go now; the others wait until their chat is opened.
+    const index = firstDrainableIndex(pendingDrainQueue, useSessionStore.getState().activeSessionId)
+    if (index < 0) return
+    const next = pendingDrainQueue[index]
+    set({ pendingDrainQueue: pendingDrainQueue.filter((_, i) => i !== index) })
     drainQueuedMessage(get, next)
   }
 

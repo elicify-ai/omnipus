@@ -43,6 +43,7 @@ import { assistantRowCorrelationAttributes } from './assistantRowAttributes'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { stampToolCallOffset } from '@/store/chat/session'
+import { queuedItemBelongsHere } from '@/store/chat/queue-target'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import { HistoryShowRest, historyCallPosition, useHistoryPartGroups, useHistoryUserText, type DisplayPart } from './historyTextOverlay'
@@ -1679,7 +1680,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const queuedMessages = useMemo(() => {
     const existingIds = new Set(messages.map((message) => message.id))
     return [...pendingDrainQueue, ...outboundQueue]
-      .filter((item): item is QueuedOutboundMessage => typeof item !== 'string' && !existingIds.has(item.id))
+      .filter((item): item is QueuedOutboundMessage => typeof item !== 'string' && !existingIds.has(item.id) && queuedItemBelongsHere(item, activeSessionId))
       .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
       .map((item): ChatMessage => ({
         id: item.id,
