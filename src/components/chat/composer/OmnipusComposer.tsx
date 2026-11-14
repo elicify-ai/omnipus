@@ -38,6 +38,7 @@ import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { isGoalRunning } from '@/lib/goalActivity'
@@ -304,6 +305,10 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
   })
 
   const sendBlocked = useCallback(() => {
+    // Workspace-entry gate, read live (#1428 item 3): the runtime empties the
+    // composer before sendMessage's own guard runs, so a refusal there would
+    // lose the text. Refuse here instead (toast + Retry come from the gate).
+    if (blockSendForWorkspaceEntry('send')) return true
     // @-recipient no-session block (founder decision 2026-10-11 Q1 B): see
     // ComposerBody's submit paths. Read the live composer text, falling back
     // to the slash-menu mirror.
