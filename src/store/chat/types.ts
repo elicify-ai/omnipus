@@ -1204,7 +1204,7 @@ export interface ChatStore extends HistorySlice {
   /** Pending outbound messages queued while WS was disconnected. Max 5. */
   outboundQueue: OutboundQueueItem[]
   /** Queue a message for when the WS reconnects. Returns false if queue is full. */
-  enqueueOutboundMessage: (content: string, queuedMessage?: QueuedOutboundMessage) => boolean
+  enqueueOutboundMessage: (content: string, queuedMessage?: QueuedOutboundMessage, alreadyAccepted?: boolean) => boolean
   /** Send all queued messages now that the WS is connected. */
   drainOutboundQueue: () => void
   /**

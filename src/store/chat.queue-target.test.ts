@@ -115,3 +115,104 @@ describe('#1428 step 1: which queued items a chat shows and may send', () => {
     expect(firstDrainableIndex([item('chat-a')], 'chat-b')).toBe(-1)
   })
 })
+
+describe('#1428 step 1 (CHECK round 1): follow-ups, full queue, order, shown rows', () => {
+  const at = (n: number) => `2026-11-14T10:00:0${n}.000Z`
+  const qi = (id: string, n: number, targetSessionId?: string): QueuedOutboundMessage =>
+    ({ id, content: id, timestamp: at(n), ...(targetSessionId ? { targetSessionId } : {}) })
+  const idOf = (entry: unknown) => typeof entry === 'string' ? entry : (entry as QueuedOutboundMessage).id
+
+  it('F1: a follow-up typed under a pending first message stays with that chat after the ack', async () => {
+    const sender = connect()
+    act(() => { useChatStore.getState().sendMessage('first message') })
+    const first = sentFrames(sender)[0] as { client_message_id?: string }
+    act(() => { useChatStore.getState().sendMessage('follow-up while pending') })
+    expect(sentFrames(sender), 'fixture: follow-up is held, only the first went out').toHaveLength(1)
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'session_started', session_id: 'chat-a', agent_id: 'mia', client_message_id: first.client_message_id,
+      } as never)
+    })
+    const all = [...useChatStore.getState().pendingDrainQueue, ...useChatStore.getState().outboundQueue]
+    const item = all.find((entry) => typeof entry !== 'string' && entry.content === 'follow-up while pending') as QueuedOutboundMessage
+    expect(item, 'fixture: follow-up still waiting').toBeDefined()
+    expect(item.targetSessionId, 'bound to the new chat').toBe('chat-a')
+    openChat('chat-b')
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    await flush()
+    expect(sentFrames(sender).filter((frame) => frame.content === 'follow-up while pending')).toStrictEqual([])
+  })
+
+  it('F2: an accepted message bouncing back is kept at the cap; a brand-new one is still refused', () => {
+    act(() => {
+      for (let i = 0; i < 5; i += 1) useChatStore.getState().enqueueOutboundMessage(`n${i}`, qi(`n${i}`, i, 'chat-a'))
+    })
+    expect(useChatStore.getState().outboundQueue).toHaveLength(5)
+    let kept = false
+    let refused = true
+    act(() => {
+      kept = useChatStore.getState().enqueueOutboundMessage('held', qi('held', 0, 'chat-a'), true)
+      refused = useChatStore.getState().enqueueOutboundMessage('brand new', qi('b', 9, 'chat-a'))
+    })
+    expect(kept).toBe(true)
+    expect(useChatStore.getState().outboundQueue.map(idOf)).toContain('held')
+    expect(refused).toBe(false)
+  })
+
+  it('F2 (offline drain): the held message survives a failed drain into a full queue', async () => {
+    queueInChatA()
+    act(() => {
+      for (let i = 0; i < 4; i += 1) useChatStore.getState().sendMessage(`fill ${i}`)
+    })
+    expect(useChatStore.getState().outboundQueue).toHaveLength(5)
+    // Move the batch to the held list, fill the queue again, then try to drain while offline.
+    act(() => {
+      useChatStore.setState({ pendingDrainQueue: useChatStore.getState().outboundQueue, outboundQueue: [] })
+      for (let i = 0; i < 5; i += 1) useChatStore.getState().enqueueOutboundMessage(`new ${i}`, qi(`new${i}`, 5, 'chat-a'))
+    })
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    await flush()
+    expect(waiting()).toContain('written in chat A')
+  })
+
+  it('F3: a newer message never overtakes an older held one of the same chat', async () => {
+    const { mergeDrainBatch } = await import('./chat/queue-target')
+    expect(mergeDrainBatch([qi('new', 3, 'chat-a')], [qi('old', 1, 'chat-a'), qi('mid', 2, 'chat-a')]).map(idOf))
+      .toStrictEqual(['old', 'mid', 'new'])
+    expect(mergeDrainBatch([qi('b', 2, 'chat-a')], [qi('c', 2, 'chat-a')]).map(idOf), 'equal times: bounced first')
+      .toStrictEqual(['b', 'c'])
+    expect(mergeDrainBatch([qi('x', 5)], ['legacy text', qi('y', 1)]).map(idOf))
+      .toStrictEqual(['x', 'legacy text', 'y'])
+  })
+
+  it('F3 (store): the older held message is sent before a newer one', async () => {
+    act(() => {
+      useSessionStore.getState().setActiveSession('chat-b', 'mia')
+      useChatStore.setState({ pendingDrainQueue: [qi('old', 1, 'chat-a')], outboundQueue: [qi('new', 2, 'chat-a')] })
+    })
+    const sender = connect()
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    openChat('chat-a')
+    await flush()
+    expect(sentFrames(sender)[0]?.content).toBe('old')
+  })
+
+  it('T1: queued rows shown are only the open chat, unseen, oldest first', async () => {
+    const { selectQueuedRows } = await import('./chat/queue-target')
+    const rows = selectQueuedRows(
+      [qi('a1', 2, 'chat-a')],
+      [qi('b1', 1, 'chat-b'), qi('a2', 3, 'chat-a'), qi('seen', 4, 'chat-a'), qi('free', 0)],
+      new Set(['seen']),
+      'chat-a',
+    )
+    expect(rows.map((row) => row.id)).toStrictEqual(['free', 'a1', 'a2'])
+  })
+
+  it('bindUnboundQueueItems binds only unbound objects', async () => {
+    const { bindUnboundQueueItems } = await import('./chat/queue-target')
+    expect(bindUnboundQueueItems({ outboundQueue: [qi('t', 1, 'chat-x')], pendingDrainQueue: ['s'] }, 'chat-a')).toStrictEqual({})
+    const out = bindUnboundQueueItems({ outboundQueue: [qi('u', 1), qi('t', 2, 'chat-x')], pendingDrainQueue: [qi('v', 3)] }, 'chat-a')
+    expect((out.outboundQueue as QueuedOutboundMessage[]).map((entry) => entry.targetSessionId)).toStrictEqual(['chat-a', 'chat-x'])
+    expect((out.pendingDrainQueue as QueuedOutboundMessage[])[0].targetSessionId).toBe('chat-a')
+  })
+})

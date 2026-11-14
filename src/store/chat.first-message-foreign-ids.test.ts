@@ -44,6 +44,8 @@ const ATTACH_A: AttachSessionFrame = { type: 'attach_session', session_id: SESSI
 const QUEUED_ID = '1090-foreign-ids-follow-up'
 const QUEUED_TEXT = 'Do not send this follow-up until session A is checked.'
 const QUEUED = { id: QUEUED_ID, content: QUEUED_TEXT, timestamp: NOW }
+// #1428: once A's chat id is known, the held follow-up is bound to A (it must never drain into another chat).
+const QUEUED_BOUND_TO_A = { ...QUEUED, targetSessionId: SESSION_A }
 const FOREIGN_BOOT_ID = '1090-foreign-ids-boot-b'
 // Arbitrary positive input position, not a timing/length threshold or boundary.
 const FOREIGN_SEQ = 9
@@ -165,7 +167,7 @@ function beginSessionACheck() {
     .toBe('received')
   expect(useChatStore.getState().outboundQueue, 'fixture: the follow-up is waiting in the drain queue, not discarded')
     .toStrictEqual([])
-  expect(useChatStore.getState().pendingDrainQueue, 'fixture: A still owns the undrained follow-up').toStrictEqual([QUEUED])
+  expect(useChatStore.getState().pendingDrainQueue, 'fixture: A still owns the undrained follow-up').toStrictEqual([QUEUED_BOUND_TO_A])
   return sender
 }
 
@@ -252,7 +254,7 @@ describe('#1090 SF-2/D7 — different nonempty IDs cannot settle the owned first
       .toBe(SESSION_A)
     expect(after.outboundQueue, 'D7/F2: the visible queue remains unchanged').toStrictEqual([])
     expect(after.pendingDrainQueue, 'D7/F2: the owned follow-up stays queued after an explicit drain attempt')
-      .toStrictEqual([QUEUED])
+      .toStrictEqual([QUEUED_BOUND_TO_A])
     expect(within(screen.getByTestId('user-message')).getByRole('status').textContent,
       'D7/F2: the exact Checking chat… label remains, not Could not check this chat · Retry').toBe('Checking chat…')
     expect(screen.queryByRole('button', { name: /^Retry$/ }), 'D7/F2: B\'s error must not expose Retry for A')
