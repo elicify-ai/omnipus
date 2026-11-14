@@ -14,7 +14,7 @@ import { useChatStore } from '@/store/chat'
 import { VirtualizedMessageList } from './ChatMessageList'
 import { MAIN_ID, json } from '../../../tests/l1-room-ui/harness'
 import { resetStage1App, Stage1Network, stopStage1App } from '../../../tests/l1-room-ui/stage1-harness'
-import { deferred, entry, expectValidPage, page, pos } from '../../../tests/chat-history-paging/fixtures'
+import { deferred, drainVirtualScrollTimer, entry, expectValidPage, page, pos } from '../../../tests/chat-history-paging/fixtures'
 import { installProtectedEdgeLayout } from '../../../tests/chat-history-paging/protected-edge-layout'
 
 type Direction = 'older' | 'newer' // not-wire-format: test traversal input
@@ -140,6 +140,7 @@ async function expectCommitted(region: HTMLElement, direction: Direction, heldAn
 
 afterEach(async () => {
   await stopStage1App()
+  await drainVirtualScrollTimer()
   layout.restore()
   vi.restoreAllMocks()
   expect(network.unexpected, 'all network edges remain declared').toStrictEqual([])

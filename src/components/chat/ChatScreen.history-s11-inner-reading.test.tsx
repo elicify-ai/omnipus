@@ -14,7 +14,7 @@ import { useChatStore } from '@/store/chat'
 import { VirtualizedMessageList } from './ChatMessageList'
 import { MAIN_ID, json } from '../../../tests/l1-room-ui/harness'
 import { resetStage1App, Stage1Network, stopStage1App } from '../../../tests/l1-room-ui/stage1-harness'
-import { deferred, entry, page, pos } from '../../../tests/chat-history-paging/fixtures'
+import { deferred, drainVirtualScrollTimer, entry, page, pos } from '../../../tests/chat-history-paging/fixtures'
 import { installHistoryLayout } from '../../../tests/chat-history-paging/measurement-layout'
 
 const A = 's11-reader-A', B = 's11-reader-B', T = 's11-reader-T', TURN = 's11-reader-turn'
@@ -123,6 +123,7 @@ afterEach(async () => {
       releases.splice(0).forEach(release => release())
       traceT83Phase('cleanup: stopStage1App')
       await stopStage1App()
+      await drainVirtualScrollTimer()
       traceT83Phase('cleanup: network assertions')
       expect(network.unexpected, 'network edges are declared').toEqual([])
     }, lifecycleLabel, 5000)
