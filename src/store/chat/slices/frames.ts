@@ -39,6 +39,7 @@ import { rememberLiveSpanFact } from '../history-merge'
 import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
+import { bindUnboundQueueItems } from '../queue-target'
 import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
 import { recordCombinedPart, singlePart } from '../history-parts'
 import { isTokenAfterStop, recordAppliedToken, settleCancelAck } from '../stop-checkpoint'
@@ -1246,6 +1247,9 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           // next-turn message once THIS turn's own done/error frame calls
           // maybeDrainNext() again. A no-op (queue empty) the vast majority
           // of the time, so unconditional here is cheap and safe.
+          // #1428: items queued under '__pending' have no chat id; they belong
+          // to this new chat, so bind them before anything can drain them.
+          set((state) => bindUnboundQueueItems(state, newSid))
           get().drainOutboundQueue()
           break
         }

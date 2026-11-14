@@ -27,6 +27,7 @@ import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddre
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
+import { mergeDrainBatch, stampQueuedMessage } from '../queue-target'
 import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
 import { settleAllCancelAcks } from '../stop-checkpoint'
@@ -441,10 +442,12 @@ function outboundWorkspaceId(sessionId: string | null): string {
 
 export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
   return {
-    enqueueOutboundMessage: (content, queuedMessage) => {
+    enqueueOutboundMessage: (content, queuedMessage, alreadyAccepted) => {
       const MAX_QUEUE = 5
       const current = get().outboundQueue
-      if (current.length >= MAX_QUEUE) {
+      // A message accepted earlier that only bounces back from a failed drain
+      // must never be dropped for lack of room (#1428).
+      if (current.length >= MAX_QUEUE && !alreadyAccepted) {
         return false
       }
       set({ outboundQueue: [...current, queuedMessage ?? content] })
@@ -491,7 +494,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // ...queue]`) produced [C,B] — C (typed later) sent before B (typed
       // earlier). Prepending the bounced queue instead restores the correct
       // chronological order: [B,C].
-      set((state) => ({ outboundQueue: [], pendingDrainQueue: [...queue, ...state.pendingDrainQueue] }))
+      set((state) => ({ outboundQueue: [], pendingDrainQueue: mergeDrainBatch(queue, state.pendingDrainQueue) }))
       maybeDrainNext()
     },
 
@@ -531,7 +534,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       if (blockSendForWorkspaceEntry('send')) return
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
-      const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
+      const { clientMessageId, queuedAt, queuedMessage: untargetedMessage } = beginSend(content, opts)
       // Phase 1 / FR-010: per-turn model override. Trim and strip empty
       // strings so absent and "" are equivalent (the WS frame is omitted
       // entirely when no model was picked this session, per spec §18 Q3).
@@ -539,6 +542,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
+      // #1428: a queued message remembers the chat it was typed in.
+      const queuedMessage = stampQueuedMessage(untargetedMessage, rawActiveSessionId, getPendingFirstSend(get())?.clientMessageId, opts?.queueSeq)
       // Ordinary sends, mid-turn steering and new-answer requests share the
       // attached session's canonical binding; only a first send uses context.
       const workspaceId = outboundWorkspaceId(rawActiveSessionId)
@@ -585,7 +590,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       if (!connection || !isConnected) {
         // WS is disconnected — buffer the message for when the connection
         // recovers rather than losing it silently or showing a hard error.
-        const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
+        const enqueued = get().enqueueOutboundMessage(content, queuedMessage, opts?.queuedAt !== undefined)
         if (!enqueued) {
           useConnectionStore.getState().setConnectionError(
             'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'

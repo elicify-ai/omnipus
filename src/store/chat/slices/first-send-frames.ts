@@ -16,6 +16,7 @@ import {
   setFirstSendStatus,
   type FirstSendContext,
 } from '../first-send'
+import { bindUnboundQueueItems } from '../queue-target'
 import type { ChatStore, PendingFirstSend } from '../types'
 
 type Frame = Parameters<ChatStore['handleFrame']>[0]
@@ -63,6 +64,7 @@ function confirmFirstSend(context: FirstSendFrameContext, pending: PendingFirstS
     if (sourceSid !== sid) delete sessionsById[sourceSid]
     return {
       sessionsById,
+      ...bindUnboundQueueItems(state, sid, pending.clientMessageId),
       pendingFirstSend: recovered ? { ...pending, sessionId: sid, status: 'checking_chat' } : null,
       ...(foreground ? { pendingAutoApproveChoice: null } : {}),
     }
