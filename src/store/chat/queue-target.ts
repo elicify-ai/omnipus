@@ -12,6 +12,26 @@ export function queueTargetFor(activeSessionId: string | null): string | undefin
   return activeSessionId && activeSessionId !== '__pending' ? activeSessionId : undefined
 }
 
+/**
+ * Stamp a newly accepted queued message with its acceptance number and the chat it was typed in.
+ * With no chat yet, a pending unconfirmed first send becomes its owner instead.
+ */
+export function stampQueuedMessage(
+  message: QueuedOutboundMessage,
+  activeSessionId: string | null,
+  pendingFirstSendId: string | undefined,
+  seq?: number,
+): QueuedOutboundMessage {
+  const target = queueTargetFor(activeSessionId)
+  const firstSendOwner = target ? undefined : pendingFirstSendId
+  return {
+    ...message,
+    seq: seq ?? nextQueueSeq(),
+    ...(target ? { targetSessionId: target } : {}),
+    ...(firstSendOwner ? { firstSendOwner } : {}),
+  }
+}
+
 /** A follow-up typed under a first send that has not been confirmed yet: it has no chat, and only that send may give it one. */
 function isOwnedAndUnbound(item: OutboundQueueItem): boolean {
   return typeof item !== 'string' && !item.targetSessionId && !!item.firstSendOwner
