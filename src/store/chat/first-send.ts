@@ -251,7 +251,9 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
         delete sessionsById.__pending
         return {
           sessionsById,
-          ...(pending ? markAbandonedQueueItems(state, pending.clientMessageId) : {}),
+          // The raw record, not `pending`: after a foreign acknowledgement moved the message the filtered
+          // record is null, but its follow-ups are still owned by it and must be held (#1833).
+          ...(state.pendingFirstSend ? markAbandonedQueueItems(state, state.pendingFirstSend.clientMessageId) : {}),
           pendingFirstSend: null,
           abandonedFirstSendIds: pending
             ? [...state.abandonedFirstSendIds, pending.clientMessageId]

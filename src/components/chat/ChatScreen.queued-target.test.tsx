@@ -253,6 +253,8 @@ describe('ChatScreen - queued rows belong to the open chat (#1428 step 1)', () =
     await vi.waitFor(() => { expect(container.textContent).toContain('typed under an abandoned chat') })
     expect(container.textContent).toContain('Not sent: its chat was not saved')
     expect(container.querySelectorAll('[data-testid="user-message-discard"]'), 'one Discard, only on the held row').toHaveLength(1)
+    expect(container.querySelectorAll('[aria-label*="will be sent automatically"]'), 'only the ordinary queued row promises a send, never the held one').toHaveLength(1)
+    expect(container.querySelector('[data-testid="user-message-discard"]')?.getAttribute('aria-label') ?? '', 'the held row names its state').toContain('Not sent: its chat was not saved')
     fireEvent.click(container.querySelector('[data-testid="user-message-discard"]') as HTMLElement)
     await vi.waitFor(() => { expect(container.textContent).not.toContain('typed under an abandoned chat') })
     expect(useChatStore.getState().outboundQueue.map((item) => (typeof item === 'string' ? item : item.id))).toStrictEqual(['q-here'])

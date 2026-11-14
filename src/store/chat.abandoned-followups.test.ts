@@ -98,4 +98,51 @@ describe('#1833 follow-ups of an abandoned unconfirmed chat', () => {
     await flush()
     expect(held().find((entry) => entry.content === 'B follow')?.targetSessionId, 'B follow-up bound to B').toBe('chat-b')
   })
+
+  it('also holds them when a foreign acknowledgement had already moved the unsaved first message (CHECK r1 F1)', async () => {
+    const sender = connect()
+    act(() => { useChatStore.getState().sendMessage('A first') })
+    const aId = allFrames(sender)[0].client_message_id as string
+    act(() => {
+      useChatStore.getState().sendMessage('A follow 1')
+      useChatStore.getState().sendMessage('A follow 2')
+    })
+    frame({ type: 'error', message: 'not saved', client_message_id: aId, first_message_error: 'not_saved' })
+    // A different message's chat is acknowledged: the pending bucket moves and A's pending record is orphaned.
+    frame({ type: 'session_started', session_id: 'chat-x', agent_id: 'mia', client_message_id: 'someone-elses-first-send' })
+    await flush()
+    act(() => { runStartNewSession({ choice: 'confirm', clientMessageId: aId }) })
+
+    const mine = held().filter((entry) => entry.content.startsWith('A follow'))
+    expect(mine.map((entry) => entry.abandoned), 'marked held even though the pending record was orphaned').toStrictEqual([true, true])
+    expect(allFrames(sender).filter((entry) => entry.content?.startsWith('A follow')), 'sent nowhere').toStrictEqual([])
+    const rows = selectQueuedRows(useChatStore.getState().pendingDrainQueue, useChatStore.getState().outboundQueue, new Set(), 'chat-b')
+    expect(rows.map((row) => row.content), 'visible in another chat so it can be discarded').toStrictEqual(['A follow 1', 'A follow 2'])
+  })
+
+  it('marks only the abandoned chat\'s own unbound follow-ups, never another owner, ownerless, bound or legacy items (CHECK r1 F2)', async () => {
+    const sender = connect()
+    act(() => { useChatStore.getState().sendMessage('A first') })
+    const aId = allFrames(sender)[0].client_message_id as string
+    act(() => { useChatStore.getState().sendMessage('A follow') })
+    const stamp = '2026-11-14T10:00:00.000Z'
+    act(() => {
+      useChatStore.setState((state) => ({
+        outboundQueue: [
+          ...state.outboundQueue,
+          { id: 'other-owner', content: 'owned by another first send', timestamp: stamp, firstSendOwner: 'another-first-send' },
+          { id: 'ownerless', content: 'no owner, no chat', timestamp: stamp },
+          { id: 'bound', content: 'bound to a chat', timestamp: stamp, firstSendOwner: aId, targetSessionId: 'chat-z' },
+          'legacy plain string',
+        ],
+      }))
+    })
+    frame({ type: 'error', message: 'not saved', client_message_id: aId, first_message_error: 'not_saved' })
+    act(() => { runStartNewSession({ choice: 'confirm', clientMessageId: aId }) })
+
+    const flagged = held().filter((entry) => typeof entry !== 'string' && entry.abandoned).map((entry) => entry.id)
+    expect(held().filter((entry) => entry.content === 'A follow').map((entry) => entry.abandoned)).toStrictEqual([true])
+    expect(flagged, 'only A\'s own follow-up is marked').toHaveLength(1)
+    expect(([...useChatStore.getState().pendingDrainQueue, ...useChatStore.getState().outboundQueue] as unknown[]).includes('legacy plain string'), 'legacy string untouched').toBe(true)
+  })
 })
