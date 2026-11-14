@@ -27,7 +27,7 @@ import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddre
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
-import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
+import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
 import { settleAllCancelAcks } from '../stop-checkpoint'
 
@@ -227,8 +227,17 @@ function performResendMessage(
   if (!sid || !existing || existing.role !== 'user') return
   if (blockSendForWorkspaceEntry('resend')) return
 
+  // #1140: an unconfirmed first message that a foreign acknowledgement moved
+  // into another chat has lost its retry request. Never resend it to that chat.
+  // The rule belongs to the message, not to the shared pending slot: a later
+  // first send or an abandon may replace the slot while the bubble stays.
+  if (isOrphanedFirstSendMessage(state, existing, sid)) {
+    refuseOrphanedFirstSendRetry()
+    return
+  }
+
   const ordinary = getPendingFirstSend(state)
-  if (ordinary && (existing.clientMessageId ?? existing.id) === ordinary.clientMessageId) {
+  if (ordinary &&(existing.clientMessageId ?? existing.id) === ordinary.clientMessageId) {
     state.retryFirstSend()
     return
   }
