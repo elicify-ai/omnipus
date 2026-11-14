@@ -7,7 +7,7 @@ import { generateId } from '@/lib/constants'
 import type { MessageFrame } from '@/lib/api/generated/asyncapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { applyMessageArray } from './session'
-import { markAbandonedQueueItems } from './queue-target'
+import { markAbandonedQueueItems, withoutQueuedMessage } from './queue-target'
 import type { ChatMessage, ChatStore, FirstSendStatus, MediaAttachment, PendingFirstSend, SessionChatState } from './types'
 
 // Internal store wiring, not a gateway wire format.
@@ -199,7 +199,7 @@ export function startOrdinaryFirstSend(
 }
 
 export function createFirstSendActions(context: FirstSendContext): Pick<ChatStore,
-  'retryFirstSend' | 'reattachFirstSend' | 'markFirstSendDisconnected' | 'abandonPendingFirstSend' | 'generateFirstSendAgain'
+  'retryFirstSend' | 'reattachFirstSend' | 'markFirstSendDisconnected' | 'abandonPendingFirstSend' | 'discardQueuedMessage' | 'generateFirstSendAgain'
 > {
   const { set, get, withBucket } = context
   return {
@@ -235,6 +235,8 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
       const message = findFirstSendMessage(get().sessionsById[pending.sessionId ?? '__pending'], pending.clientMessageId)
       setFirstSendStatus(context, pending, hasFirstSendReceipt(message) ? 'check_failed' : pending.status === 'not_saved' ? 'not_saved' : 'unconfirmed')
     },
+    // #1833: remove one message held because its chat was never saved.
+    discardQueuedMessage: (id) => set((state) => withoutQueuedMessage(state, id)),
     abandonPendingFirstSend: () => {
       const pending = getPendingFirstSend(get())
       if (pending?.sessionId) {

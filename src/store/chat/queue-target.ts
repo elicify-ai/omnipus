@@ -12,6 +12,15 @@ export function queueTargetFor(activeSessionId: string | null): string | undefin
   return activeSessionId && activeSessionId !== '__pending' ? activeSessionId : undefined
 }
 
+/** The queues without the one message with this id (#1833 Discard); string items and other ids stay. */
+export function withoutQueuedMessage(
+  state: { outboundQueue: OutboundQueueItem[]; pendingDrainQueue: OutboundQueueItem[] },
+  id: string,
+): { outboundQueue: OutboundQueueItem[]; pendingDrainQueue: OutboundQueueItem[] } {
+  const keep = (item: OutboundQueueItem) => typeof item === 'string' || item.id !== id
+  return { outboundQueue: state.outboundQueue.filter(keep), pendingDrainQueue: state.pendingDrainQueue.filter(keep) }
+}
+
 /**
  * Stamp a newly accepted queued message with its acceptance number and the chat it was typed in.
  * With no chat yet, a pending unconfirmed first send becomes its owner instead.
