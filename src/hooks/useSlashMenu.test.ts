@@ -14,6 +14,7 @@ import type { Agent } from '@/lib/api'
 import { useSlashMenu } from './useSlashMenu'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { makeAgent } from '@/test/factories'
 
 const mockCommands = [
@@ -1770,5 +1771,47 @@ describe('useSlashMenu — "@" agent-mention menu (restored, founder decision 20
 
     act(() => result.current.onInputChange('@'))
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mars', 'mia'])
+  })
+})
+
+// #1428 item 3 (CHECK round 1, F1/F2): a runtime send is refused by the
+// workspace-entry gate BEFORE the composer is emptied, on the slash paths too.
+describe('useSlashMenu — a send refused by the workspace-entry gate keeps the draft (#1428)', () => {
+  function blockWorkspaceEntry() {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws_slash_refused' })
+      useSessionStore.setState({ resolvingSessionForWorkspace: { ws_slash_refused: true } })
+    })
+  }
+  afterEach(() => {
+    act(() => {
+      useSessionStore.setState({ resolvingSessionForWorkspace: {} })
+      useUiStore.setState({ toasts: [] })
+    })
+  })
+
+  it('selecting /clear from the palette while the entry blocks sends nothing and keeps the text', () => {
+    const composerRuntime = makeComposerRuntime('draft')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((i) => i.key === '/clear')!
+    blockWorkspaceEntry()
+    act(() => item.onSelect())
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+    expect(composerRuntime.setText).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.some((t) => t.message === 'Restoring your conversation…')).toBe(true)
+  })
+
+  it('a held /clear released after the entry started blocking is not sent', () => {
+    commandsQueryIsLoading = true
+    const composerRuntime = makeComposerRuntime('/clear')
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => { result.current.interceptClientCommand() })
+    blockWorkspaceEntry()
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+    expect(composerRuntime.setText).not.toHaveBeenCalledWith('')
+    expect(useUiStore.getState().toasts.some((t) => t.message === 'Restoring your conversation…')).toBe(true)
   })
 })

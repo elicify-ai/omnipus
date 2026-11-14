@@ -51,6 +51,7 @@ import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { useChatAgents } from '@/hooks/useChatAgents'
 import { logDiagnostic } from '@/lib/telemetry'
 import { runWebEffortCommand } from '@/lib/effort/chatEffortChoice'
@@ -1021,6 +1022,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // /clear belongs to the server table. Selecting it sends that label; it
     // does not run locally and does not start a chat.
     if (isServerRunCommand(def)) {
+      // Refuse before the runtime empties the composer (#1428 item 3).
+      if (blockSendForWorkspaceEntry('send')) return
       composerRuntime.setText(def.label)
       setInputValue(def.label)
       composerRuntime.send()
@@ -1283,6 +1286,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // every submit path converges on: ComposerPrimitive.Root's onSubmit and
     // ComposerPrimitive.Send's onClick both end in `composer.send()`, and
     // ChatScreen's own mid-stream path calls this method directly.
+    // The gate may have closed while the list was in flight: refuse here,
+    // keeping the draft (#1428 item 3).
+    if (blockSendForWorkspaceEntry('send')) return
     composerRuntime.send()
      
   }, [commandsFirstLoadPending])
