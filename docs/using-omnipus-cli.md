@@ -28,7 +28,7 @@ Other platforms: see the [project README](../README.md#install).
 
 ## How to set up without the web wizard
 
-The first run needs an AI provider, an API key, a default model, and an admin account. The wizard collects all four:
+The first run needs an AI provider, an API key, and a default model. When you run Omnipus yourself, it also needs an admin account. The command collects those:
 
 1. Start it:
 
@@ -54,9 +54,9 @@ The first run needs an AI provider, an API key, a default model, and an admin ac
 
 4. Enter a model, or press Enter to accept the provider's default: the first model in its catalog that can use tools.
 
-5. Enter an admin username and a password of at least 8 characters. When the wizard prints `Onboarding complete.`, you are done.
+5. When you run Omnipus yourself, enter an admin username and a password of at least 8 characters. A hosted or desktop install does not ask — you sign in with your Omnipus account in the app instead. When the command prints `Onboarding complete.`, you are done.
 
-On an already-configured system it prints `Onboarding is already complete; nothing to do.` A fresh install can also be set up from the browser, which runs the same wizard.
+On an already-configured system it prints `Onboarding is already complete; nothing to do.` A fresh install can also be finished in the browser. That wizard collects the same provider and, when you run Omnipus yourself, the same admin account. It also asks for your name, tone, and level of detail, which this command does not.
 
 ### Headless setup — no prompts
 
