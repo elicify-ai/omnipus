@@ -52,7 +52,8 @@ func triggerParameter(purpose string) map[string]any {
 		"description": purpose + " Same shape as the Calendar: {type, config}. " +
 			"type \"manual\" (config {}) means no schedule; \"once\" needs config.at_ms (Unix epoch " +
 			"milliseconds); \"recurring\" needs config.rrule (RFC 5545 body without the RRULE: prefix), " +
-			"config.dtstart_ms (first occurrence, epoch ms) and config.tz (IANA zone). The rule subset the " +
+			"config.dtstart_ms (first occurrence, Unix epoch MILLISECONDS, not seconds: 13 digits, for example 1794816000000; " +
+			"a smaller value is refused) and config.tz (IANA zone). The rule subset the " +
 			"Calendar editor writes: FREQ DAILY/WEEKLY/MONTHLY/YEARLY, INTERVAL, BYDAY, BYMONTHDAY, COUNT, " +
 			"UNTIL. A scheduled task waits in inbox until its occurrence; it never runs early.",
 		"properties": map[string]any{

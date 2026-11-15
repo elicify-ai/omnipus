@@ -127,14 +127,22 @@ func (ac *agentCreateToolExecute) addExecutorResult(result map[string]any) {
 // executorProgramWarning is the exact text a run of an external worker on
 // cli would be refused with right now, read from the live Settings section
 // (r17 §3.8), or "" when a run would start. An unreadable live config
-// reports the no-path text: no run can start without a Settings path.
+// reports the no-path text: no run can start without a Settings path. A
+// blank Deps.Home resolves like every other agent tool (resolveOmnipusHome);
+// when it cannot be resolved, the folder list is incomplete and a saved
+// path reports the location_unverifiable refusal.
 func executorProgramWarning(d *Deps, cli string) string {
 	if !liveConfigAvailable(d) {
-		return thirdpartycli.ProgramWarning(cli, "")
+		return thirdpartycli.ProgramWarning(cli, "", nil, nil)
 	}
 	cfg := d.GetCfg()
 	row := cfg.Sandbox.ThirdPartyCLI(cli)
-	return thirdpartycli.ProgramWarning(cli, row.Path, thirdpartycli.AgentWritableRoots(d.Home, cfg)...)
+	home, rootsErr := resolveOmnipusHome(d.Home)
+	var writable []string
+	if rootsErr == nil {
+		writable, rootsErr = thirdpartycli.AgentWritableRoots(home, cfg)
+	}
+	return thirdpartycli.ProgramWarning(cli, row.Path, writable, rootsErr)
 }
 
 // sortedEnvNames returns the names of env in sorted order (never a value).

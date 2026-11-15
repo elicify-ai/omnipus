@@ -45,3 +45,11 @@ properties:
       1-based page number of the source document this part shows. Present on
       parts of a MediaFrame whose presentation is "page_thumbnails"; absent
       otherwise.
+  library_ref:
+    $ref: './LibraryRef.yaml'
+    description: >
+      Library address of the sent file (chat-links spec, R5 and FR-021).
+      Present for a file in a workspace Library or one of its mounted
+      folders, for every media type; the web chat shows "Open in Library"
+      on non-image file cards only. Omitted for a file outside every Library
+      and when the session's workspace is unknown.

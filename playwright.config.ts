@@ -54,6 +54,11 @@ export const ISOLATION_SPEC_FILES = [
   // `test.describe.configure({ retries: 0 })`, so the zero survives even if this
   // list is edited.
   'tests/e2e/preview-svg.spec.ts',
+  // ADR-094 preview-isolation (web_serve dual-URL / #798): orders 24, 30-32.
+  // Runs on all three engines like the ADR-067 files above (Mode 1 rows skip
+  // on webkit citing holdout H-2 inside the spec). Wired under BOTH lists by
+  // tests/e2e/preview-isolation-wiring.test.ts (order 29).
+  'tests/e2e/preview-isolation-webserve.spec.ts',
 ] as const;
 
 /**

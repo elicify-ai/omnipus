@@ -4,6 +4,7 @@ package session
 // only locations and projection references. A checkpoint names one root and a
 // durable byte end; appending a new path never changes a reader's old root.
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -120,6 +121,87 @@ func (t *chatHistoryIndexTree) readFrame(off, end int64) (historyFrame, int64, e
 		return v, off, errors.New("invalid history index frame variant")
 	}
 	return v, off + historyFrameHeader + size, nil
+}
+
+// proveTornFrame decides whether the incomplete frame at off (readFrame
+// returned io.ErrUnexpectedEOF) is refused as framed damage or left to the
+// caller to redo as a cut-off write (#1523). It refuses only what these checks
+// prove cannot be a cut-off writer prefix: a magic that is not a prefix of
+// "CHI1"; a size field that is 0, over historyFrameBound, or already over it
+// whatever its missing bytes are; a body that does not start with '{', is not
+// valid JSON so far, already holds a complete value, or whose shortest JSON
+// completion (historyJSONMinCompletion) is longer than the declared size.
+// It is not a proof that an accepted tail was written by the writer: damage
+// that still leaves a possible writer prefix cannot be told apart from an
+// interrupted write and is redone.
+func (t *chatHistoryIndexTree) proveTornFrame(off, end int64) error {
+	avail := end - off
+	header := make([]byte, min(avail, historyFrameHeader))
+	read, err := t.file.ReadAt(header, off)
+	historyIndexBytes(t.ctx, int64(read))
+	if err != nil {
+		return err
+	}
+	if err = historyTornHeader(header); err != nil {
+		return err
+	}
+	if avail < historyFrameHeader {
+		return nil
+	}
+	// readFrame already checked the magic and the frame bound, so the declared
+	// size exceeds avail-historyFrameHeader and the read below stays bounded.
+	size := int64(binary.BigEndian.Uint32(header[4:8]))
+	body := make([]byte, avail-historyFrameHeader)
+	read, err = t.file.ReadAt(body, off+historyFrameHeader)
+	historyIndexBytes(t.ctx, int64(read))
+	if err != nil {
+		return err
+	}
+	return historyTornBody(body, size)
+}
+
+// historyTornHeader refuses header bytes no writer header starts with: a
+// damaged magic, a complete size of 0 or over the bound, or a partial size
+// whose smallest completion (missing bytes zero) is already over the bound.
+func historyTornHeader(h []byte) error {
+	n := min(len(h), 4)
+	if string(h[:n]) != "CHI1"[:n] {
+		return errors.New("damaged history index frame magic")
+	}
+	if len(h) <= 4 {
+		return nil
+	}
+	var size [4]byte
+	present := copy(size[:], h[4:min(len(h), 8)])
+	least := int64(binary.BigEndian.Uint32(size[:]))
+	if least > historyFrameBound || (present == 4 && least == 0) {
+		return errors.New("invalid history index frame length in incomplete frame")
+	}
+	return nil
+}
+
+// historyTornBody refuses an incomplete body that provably cannot be a prefix
+// of a size-byte compact JSON object (see proveTornFrame). An empty body (the
+// cut right after a complete header) is accepted.
+func historyTornBody(body []byte, size int64) error {
+	if len(body) == 0 {
+		return nil
+	}
+	if body[0] != '{' {
+		return errors.New("history index frame body is not a JSON object")
+	}
+	var v json.RawMessage
+	err := json.NewDecoder(bytes.NewReader(body)).Decode(&v)
+	switch {
+	case err == nil:
+		return errors.New("history index frame length exceeds its encoded body")
+	case !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF):
+		return fmt.Errorf("damaged history index frame body: %w", err)
+	}
+	if int64(len(body))+historyJSONMinCompletion(body) > size {
+		return errors.New("history index frame body cannot complete within its length")
+	}
+	return nil
 }
 
 func (t *chatHistoryIndexTree) node(ref int64) (historyNode, error) {

@@ -5,13 +5,11 @@
 // explains prompt_delivery, and fails soft with a retryable degraded state —
 // same resilience contract as the AutoAppliedFlags block it replaces.
 //
-// Fake timers drive the 400ms debounce (`advanceAndFlush`, mirroring
-// `useCliPathValidation.test.ts`). Deliberately does NOT mix `waitFor` with
-// fake timers — `waitFor`'s internal polling relies on real timer
-// progression, so combining the two hangs until the test's own timeout
-// (`useCliPathValidation.test.ts`'s "fake timers + waitFor don't mix well"
-// note). `advanceAndFlush` already drains the state update inside `act`, so
-// assertions run synchronously right after it.
+// Fake timers drive the 400ms debounce through `advanceAndFlush`.
+// Deliberately does NOT mix `waitFor` with fake timers — `waitFor`'s internal
+// polling relies on real timer progression, so combining the two hangs until
+// the test's own timeout. `advanceAndFlush` drains the state update inside
+// `act`, so assertions run synchronously right after it.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
@@ -259,7 +257,7 @@ describe('CommandPreview — smoke test button', () => {
     })
 
     expect(fetchExecutorSmokeTest).toHaveBeenCalledWith(
-      { cli: 'claude-code', model: undefined, cli_path: undefined, cli_args: undefined },
+      { cli: 'claude-code', model: undefined, cli_args: undefined },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
     const button = screen.getByTestId('cp-smoke-test-button')
@@ -326,11 +324,11 @@ describe('CommandPreview — smoke test button', () => {
     expect(fetchExecutorSmokeTest).toHaveBeenCalledTimes(2)
   })
 
-  it('sends only cli/model/cli_path/cli_args — no max_tool_iterations field on the wire', async () => {
+  it('C-B1: sends only cli/model/cli_args — no cli_path or max_tool_iterations field on the wire', async () => {
     vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okSmokeTestResult())
     render(
       <CommandPreview
-        req={{ cli: 'codex', model: 'gpt-5', cli_path: '/usr/local/bin/codex', cli_args: '--foo', max_tool_iterations: 30 }}
+        req={{ cli: 'codex', model: 'gpt-5', cli_args: '--foo', max_tool_iterations: 30 }}
         testId="cp"
       />,
     )
@@ -341,7 +339,8 @@ describe('CommandPreview — smoke test button', () => {
     })
 
     const call = vi.mocked(fetchExecutorSmokeTest).mock.calls[0][0]
-    expect(call).toEqual({ cli: 'codex', model: 'gpt-5', cli_path: '/usr/local/bin/codex', cli_args: '--foo' })
+    expect(call).toEqual({ cli: 'codex', model: 'gpt-5', cli_args: '--foo' })
+    expect(call).not.toHaveProperty('cli_path')
     expect(call).not.toHaveProperty('max_tool_iterations')
   })
 
@@ -435,7 +434,7 @@ describe('CommandPreview — smoke test button', () => {
   })
 })
 
-// ── agent_id threading (AgentProfile edit view vs. create wizard) ──────────
+// ── agent_id threading (with and without an existing agent context) ──────
 
 describe('CommandPreview — agentId prop threading into the smoke-test request', () => {
   it('includes agent_id in the smoke-test request when the agentId prop is provided (AgentProfile edit view)', async () => {
@@ -448,12 +447,12 @@ describe('CommandPreview — agentId prop threading into the smoke-test request'
     })
 
     expect(fetchExecutorSmokeTest).toHaveBeenCalledWith(
-      { cli: 'claude-code', model: undefined, cli_path: undefined, cli_args: undefined, agent_id: 'agent-123' },
+      { cli: 'claude-code', model: undefined, cli_args: undefined, agent_id: 'agent-123' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
   })
 
-  it('omits agent_id from the smoke-test request when no agentId prop is provided (create wizard)', async () => {
+  it('omits agent_id from the smoke-test request when no agentId prop is provided (no agent context)', async () => {
     vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okSmokeTestResult())
     render(<CommandPreview req={req()} testId="cp" />)
 

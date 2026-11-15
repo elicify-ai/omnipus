@@ -229,6 +229,7 @@ export function UserMessageDeliveryStatus({
   agentName,
   latest = false,
   onRetry,
+  onDiscard,
   firstSendStatus,
   onGenerateAgain,
   isClearCommand = false,
@@ -237,6 +238,8 @@ export function UserMessageDeliveryStatus({
   agentName: string
   latest?: boolean
   onRetry?: () => void
+  /** #1833: remove a message held because its chat was not saved ('unsaved'). */
+  onDiscard?: () => void
   firstSendStatus?: FirstSendStatus
   onGenerateAgain?: () => void
   /** The message is a /clear command — only the 'discarded' copy changes for
@@ -266,6 +269,30 @@ export function UserMessageDeliveryStatus({
             <span>{copy.action}</span>
           </StatusActionButton>
         ) : <span>{copy.label}</span>}
+      </div>
+    )
+  }
+  if (state === 'unsaved') {
+    // #1833: the chat this follow-up was typed in was abandoned before it was
+    // saved. Nothing is sent; the user decides. Actionable, so never faded.
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="user-message-delivery-status"
+        className="flex min-h-8 items-center justify-end text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+      >
+        <StatusActionButton
+          onClick={onDiscard}
+          testId="user-message-discard"
+          label="Not sent: its chat was not saved. Discard"
+          tooltip="You started a new chat before the chat this message was written in was saved, so this message was not sent anywhere. Discard it to remove it."
+        >
+          <Clock size={14} aria-hidden="true" />
+          <span>Not sent: its chat was not saved</span>
+          <span aria-hidden="true">{' · '}</span>
+          <span>Discard</span>
+        </StatusActionButton>
       </div>
     )
   }

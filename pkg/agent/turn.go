@@ -172,6 +172,11 @@ type turnState struct {
 	gracefulInterruptHint string
 	gracefulTerminalUsed  bool
 	hardAbort             bool
+	// cancelWakeCh is closed once a claimed Stop/cancel requests the
+	// graceful interrupt, waking a retry backoff (issue #1664 B7). Guarded
+	// by mu; created lazily by cancelWake.
+	cancelWakeCh     chan struct{}
+	cancelWakeClosed bool
 	// providerCancel is fired by the graceful cascade (Interrupt — ADR-057
 	// FR-041 collapsed the retired InterruptSession into it) to abort the
 	// in-flight LLM/provider call immediately; turnCancel is fired by the
@@ -193,7 +198,10 @@ type turnState struct {
 
 	// Cancel dedup / callback fields (FR-10, FR-11, FR-15).
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
-	cancelMu        sync.Mutex
+	cancelMu sync.Mutex
+	// stopCheckpoint is the client's screen checkpoint stored by the winning
+	// user Stop claim (#1534, stop_checkpoint.go). Guarded by cancelMu.
+	stopCheckpoint  *stopCheckpoint
 	cancelFired     atomic.Bool               // true once handleCancel has claimed this turn
 	stopRequested   atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
 	abandoned       atomic.Bool               // true once a controller detaches a stuck turn goroutine
@@ -369,6 +377,10 @@ type turnState struct {
 	// call round UNLESS continueSameMessageID says this round continues the
 	// PREVIOUS round's message. Guarded by mu like every other field here.
 	currentMessageID string
+	// mintedMessageIDs lists every id nextRoundMessageID minted for this
+	// turn, in order (#1534): a Stop checkpoint keeps nothing of a message
+	// minted after the one the client showed. Guarded by mu.
+	mintedMessageIDs []string
 
 	// continueSameMessageID is a ONE-SHOT flag consumed by
 	// nextRoundMessageID (turn_stream.go): true only for the single round
@@ -485,6 +497,14 @@ type turnState struct {
 	// writePendingFallbackNotes, whose defer registration in runTurn sits
 	// before finalizeStreamer's so LIFO runs it after the streamer's write.
 	pendingFallbackNotes []session.TranscriptEntry
+
+	// exitNotice is the classified error of a typed exit (user Stop, timeout)
+	// whose transcript entry is held back until the turn's interrupted answer
+	// has been written (#1775): typedTurnExit queues it, flushExitNotice (a
+	// defer in runTurn, between Finish and finalizeStreamer) writes it. Atomic,
+	// not under mu: a reader may hold mu until the forced stop, and queueing
+	// must never wait for it.
+	exitNotice atomic.Pointer[queuedExitNotice]
 
 	// turnWaitBudget is the D14 per-turn wait budget (10 min total), shared
 	// by every fallback-chain call of this turn — a per-iteration budget

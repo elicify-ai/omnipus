@@ -1543,6 +1543,10 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 //     "agent:<owner>:session:<id>" form, collision-free across isolated runs.
 //   - It sets AutoDenyAsk so any `ask`-policy tool call is denied without
 //     blocking for approval (FR-009) — no operator is present.
+//   - It publishes the persisted prompt and marks the turn WebchatLiveStream
+//     so viewers bound to the session see the prompt and the streamed answer
+//     live (#1442, scheduled_live_view.go); Channel/ChatID stay as passed,
+//     so channel-keyed behavior is unchanged.
 //
 // The caller (the gateway's scheduled-job runner) resolves the owner + picks
 // the session per session_mode and supplies a concrete sessionID; it imposes
@@ -1611,6 +1615,8 @@ func (al *AgentLoop) ProcessScheduled(
 			map[string]any{"session_id": sessionID, "owner": ownerAgentID, "error": err.Error()})
 		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
+	// #1442: the prompt is persisted; publish it live to the session's viewers.
+	al.publishScheduledPrompt(ownerAgentID, sessionKey, sessionID, userEntry)
 
 	// FIX 1 (re-review): WorkspaceID was never threaded here, so any tool
 	// media a scheduled/heartbeat-fired run produces silently degraded to the
@@ -1658,6 +1664,7 @@ func (al *AgentLoop) ProcessScheduled(
 		TranscriptStore:     transcriptStore,
 		WorkspaceID:         workspaceID,
 		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
+		WebchatLiveStream:   true, // #1442: answer streams live to the session's viewers
 	})
 	if err == nil && ctx.Err() == context.DeadlineExceeded {
 		// A deadline-forced hard abort (pkg/gateway/schedules.go's
@@ -1955,7 +1962,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// the assistant answer entry, on the streaming path (finalizeStreamer
 	// writes the answer) and the non-streaming path alike.
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.writePendingFallbackNotes()
-	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.Finish(rz.rc.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested()) }()
+	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.finishAfterExitNotice() }() // #1775: notice after the answer, before the marker
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx)
 	// ADR-087 D6.8, the ONE choke point (see preserveTruncatedAccumulator's
 	// doc comment). REGISTRATION ORDER IS LOAD-BEARING, the same way the
@@ -2166,7 +2173,7 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
+	al.emitTurnExitFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm) // #1775: transcript write deferred
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,

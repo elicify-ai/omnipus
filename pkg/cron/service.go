@@ -344,6 +344,43 @@ func (cs *CronService) SetMaxConcurrentRuns(n int) {
 	cs.laneSem = make(chan struct{}, n)
 }
 
+// ApplySchedulesConfig applies the two schedules.* settings this service reads
+// (max concurrent runs, retry backoff) to a LIVE, possibly running service. A
+// configuration reload uses it instead of Stop + rebuild + Start, because Stop
+// cancels the lane context and so ends every running heartbeat, scheduled and
+// /loop turn and drops the jobs queued behind a full lane (#1760).
+//
+// Unlike SetMaxConcurrentRuns / SetRetryBackoff it is safe after Start: the
+// values are validated first and applied together under mu, so a rejected call
+// changes nothing. maxConcurrentRuns <= 0 means the default, as on config load.
+// A negative backoff entry is an error (the same values would corrupt NextRunAt
+// maths). Runs already dispatched keep the semaphore of the window they were
+// collected in, so a lowered cap bounds runs collected AFTER the call; runs in
+// flight are never cancelled and queued ones are never dropped.
+func (cs *CronService) ApplySchedulesConfig(maxConcurrentRuns int, retryBackoffMs []int64) error {
+	for i, ms := range retryBackoffMs {
+		if ms < 0 {
+			return fmt.Errorf("cron: retry backoff entry %d is negative (%d ms)", i, ms)
+		}
+	}
+	if maxConcurrentRuns <= 0 {
+		maxConcurrentRuns = defaultMaxConcurrentRuns
+	}
+	backoff := append([]int64(nil), defaultRetryBackoffMs...)
+	if len(retryBackoffMs) > 0 {
+		backoff = append([]int64(nil), retryBackoffMs...)
+	}
+
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if maxConcurrentRuns != cs.maxConcurrentRuns {
+		cs.maxConcurrentRuns = maxConcurrentRuns
+		cs.laneSem = make(chan struct{}, maxConcurrentRuns)
+	}
+	cs.retryBackoffMs = backoff
+	return nil
+}
+
 // SetRetryBackoff configures the FR-010 transient-error backoff schedule (ms
 // offsets keyed by RetryAttempt). A nil/empty slice falls back to the default.
 // Must be called before Start.

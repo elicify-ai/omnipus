@@ -38,8 +38,12 @@
 
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { assistantMessages, waitForConnected } from './fixtures/selectors'
+import { assistantMessages, userMessages, waitForConnected, DEFAULT_WORKSPACE_NAME } from './fixtures/selectors'
 import { openSessionByDeepLink } from './fixtures/session-setup'
+import { Agent, Session, Workspace } from '../../src/lib/api/generated/schemas'
+import type { SessionCreateRequest } from '../../src/lib/api/generated/openapi-types'
+import { GatewayProcess } from './fixtures/gateway-process'
+import { SEND_RETRY_FIRST_REPLY, SEND_RETRY_RESEND_REPLY, startSendRetryProvider } from './fixtures/send-retry-provider'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -179,100 +183,130 @@ test(
 
 // ── (b) Failed send → error bubble + Retry ────────────────────────────────────
 
-test(
-  '(b) one-shot send failure marks the message status:error and Retry resends it on the live socket',
-  async ({ page }) => {
-    // Two real-LLM round-trips (the first establishes the session, the retried
-    // second one recovers), so allow a generous budget under suite load.
-    test.setTimeout(150_000)
+// Own gateway, own cookies, a FRESH Jim chat and a scripted model edge (#1792).
+// The old version drove the shared gateway's persistent Mia main session with a
+// live model: the resent text sometimes started a long tool-using turn that had
+// not finished in 90 s, and every retry attempt then saw the earlier attempts'
+// transcript, so an exact reply count could never match. The product path under
+// test (the failed-send recovery of #253 and Retry's resend on the live socket)
+// is unchanged and real; only the paid model is scripted. Whether a live model
+// answers a resent message is NOT covered here (a known limit, see #1792).
+test.describe(() => {
+  test.describe.configure({ retries: 0 })
+  test.use({ storageState: { cookies: [], origins: [] } })
 
-    // Distinctive marker carried in the 2nd message so the wrapper can fail
-    // EXACTLY that one send() and nothing else (auth, ping, msg #1, the retry).
-    const FAIL_MARKER = 'ONESHOT_SEND_FAILURE_TRIGGER'
+  test(
+    '(b) one-shot send failure marks the message status:error and Retry resends it on the live socket',
+    async ({ page }, info) => {
+      test.setTimeout(120_000)
 
-    // Realistic #253 model: WRAP the real WebSocket rather than replacing it. The
-    // socket genuinely connects to the gateway and a real session is created — we
-    // only make ONE later send() throw (a transient hiccup on an OPEN socket).
-    // This exercises WsConnection.send()'s try/catch → failed-send recovery
-    // (kept bubble, status:'error', Retry) without the artificial "first send with
-    // no session → reconnect → empty replay" state that a fully-faked socket
-    // produced. The one-shot is armed via window.__failOnceMatch right before the
-    // 2nd send and consumes itself on the throw, so Retry resends successfully on
-    // the same healthy socket.
-    await page.addInitScript((marker: string) => {
-      const RealWebSocket = window.WebSocket
-      // Disarmed until the test arms it right before the 2nd message.
-      ;(window as unknown as Record<string, unknown>).__failOnceMatch = null
-      void marker
-      class OneShotFailWebSocket extends RealWebSocket {
-        // Parameter type is taken straight from the base method rather than
-        // hand-listed. The hand-written union said `ArrayBufferLike`, which
-        // includes SharedArrayBuffer — a type WebSocket.send does NOT accept —
-        // so `super.send(data)` did not type-check. Deriving it keeps the
-        // override in lockstep with lib.dom.
-        send(data: Parameters<WebSocket['send']>[0]): void {
-          const w = window as unknown as { __failOnceMatch?: string | null }
-          if (w.__failOnceMatch && typeof data === 'string' && data.includes(w.__failOnceMatch)) {
-            w.__failOnceMatch = null // one-shot — consume so the Retry resend passes
-            throw new Error('stubbed one-shot OPEN-socket send failure (#253)')
+      // Distinctive marker carried in the 2nd message so the wrapper can fail
+      // EXACTLY that one send() and nothing else (auth, ping, msg #1, the retry).
+      const FAIL_MARKER = 'ONESHOT_SEND_FAILURE_TRIGGER'
+      const FIRST = 'Reply with just the single word: ready.'
+      const SECOND = `second message ${FAIL_MARKER}`
+
+      // Realistic #253 model: WRAP the real WebSocket rather than replacing it. The
+      // socket genuinely connects to the gateway and a real session is created — we
+      // only make ONE later send() throw (a transient hiccup on an OPEN socket).
+      // The one-shot is armed via window.__failOnceMatch right before the 2nd send
+      // and consumes itself on the throw, so Retry resends successfully on the
+      // same healthy socket.
+      await page.addInitScript(() => {
+        const RealWebSocket = window.WebSocket
+        // Disarmed until the test arms it right before the 2nd message.
+        ;(window as unknown as Record<string, unknown>).__failOnceMatch = null
+        class OneShotFailWebSocket extends RealWebSocket {
+          // Parameter type is taken straight from the base method rather than
+          // hand-listed (the hand-written union included SharedArrayBuffer, which
+          // WebSocket.send does NOT accept).
+          send(data: Parameters<WebSocket['send']>[0]): void {
+            const w = window as unknown as { __failOnceMatch?: string | null }
+            if (w.__failOnceMatch && typeof data === 'string' && data.includes(w.__failOnceMatch)) {
+              w.__failOnceMatch = null // one-shot — consume so the Retry resend passes
+              throw new Error('stubbed one-shot OPEN-socket send failure (#253)')
+            }
+            super.send(data)
           }
-          super.send(data)
+        }
+        window.WebSocket = OneShotFailWebSocket as unknown as typeof WebSocket
+      })
+
+      const provider = await startSendRetryProvider({ first: FIRST, second: SECOND })
+      let gw: GatewayProcess | undefined
+      try {
+        gw = await GatewayProcess.start({ apiBase: provider.url })
+        const agentsResult = await gw.apiFetch('GET', '/api/v1/agents')
+        expect(agentsResult.status, 'the isolated gateway must expose its real roster').toBe(200)
+        const jim = Agent.array().parse(agentsResult.body).find((agent) => agent.name === 'Jim')
+        expect(jim, 'the isolated roster must contain Jim').toBeDefined()
+        if (!jim) throw new Error('BLOCKED: Jim is required by open-in-chat (b)')
+        const workspacesResult = await gw.apiFetch('GET', '/api/v1/workspaces')
+        expect(workspacesResult.status, 'the isolated workspace must be readable').toBe(200)
+        const workspace = Workspace.array().parse(workspacesResult.body).find((ws) => ws.name === DEFAULT_WORKSPACE_NAME)
+        expect(workspace, 'the isolated gateway must seed its default workspace').toBeDefined()
+        if (!workspace) throw new Error('BLOCKED: a workspace is required by open-in-chat (b)')
+        const created = await gw.apiFetch('POST', '/api/v1/sessions', {
+          type: 'chat', agent_id: jim.id, workspace_id: workspace.id,
+        } satisfies SessionCreateRequest)
+        expect(created.status, 'create a new Jim chat, not a shared main session').toBe(201)
+        const session = Session.parse(created.body)
+        await page.context().addCookies((await gw.browserStorageState()).cookies)
+        await openSessionByDeepLink(page, session.id, gw.baseURL)
+        await waitForConnected(page, { timeout: 15_000 })
+
+        // A fresh chat: nothing inherited from any earlier attempt or test.
+        await expect(userMessages(page)).toHaveCount(0)
+        await expect(assistantMessages(page)).toHaveCount(0)
+
+        const chatInput = page.locator('[data-testid="chat-input"]').first()
+        await expect(chatInput).toBeEnabled({ timeout: 15_000 })
+
+        // Step 1: a normal first message; the scripted reply must complete.
+        await chatInput.fill(FIRST)
+        await chatInput.press('Enter')
+        await expect(assistantMessages(page)).toHaveCount(1, { timeout: 15_000 })
+        await expect(assistantMessages(page).getByText(SEND_RETRY_FIRST_REPLY, { exact: true })).toBeVisible({ timeout: 15_000 })
+        await expect(chatInput).toBeEnabled({ timeout: 15_000 })
+        await waitForConnected(page, { timeout: 15_000 })
+
+        // Step 2: arm the one-shot, then send the second message. Its send()
+        // throws exactly once, so the message never reaches the gateway.
+        await page.evaluate((marker: string) => {
+          ;(window as unknown as Record<string, unknown>).__failOnceMatch = marker
+        }, FAIL_MARKER)
+        await chatInput.fill(SECOND)
+        await chatInput.press('Enter')
+
+        // Step 3: the failed message MUST surface as an error bubble with a Retry.
+        const erroredMsg = page.locator('[data-message-role="user"][data-status="error"]')
+        await expect(erroredMsg).toBeVisible({ timeout: 15_000 })
+        const retryBtn = page.locator('[data-testid="user-message-retry"]').first()
+        await expect(retryBtn).toBeVisible({ timeout: 5_000 })
+        expect(provider.evidence.streamRequests, 'the failed send must not have reached the model').toBe(1)
+
+        // Step 4: Retry resends the same text on the SAME open socket (the old
+        // errored bubble intentionally stays). Recovery is proven by the second
+        // scripted reply: exactly two completed assistant messages, the last one
+        // the resend's.
+        await retryBtn.click()
+        await expect(assistantMessages(page)).toHaveCount(2, { timeout: 15_000 })
+        await expect(assistantMessages(page).getByText(SEND_RETRY_RESEND_REPLY, { exact: true })).toBeVisible({ timeout: 15_000 })
+        await expect(chatInput).toBeEnabled({ timeout: 15_000 })
+        expect(provider.evidence.streamRequests, 'one request for msg #1, one for the single resend').toBe(2)
+        expect(provider.evidence.lastUserTexts[1]).toContain(FAIL_MARKER)
+        expect(provider.evidence.errors, 'no unexpected scripted-provider traffic').toEqual([])
+      } finally {
+        try {
+          await info.attach('send-retry-provider-evidence', {
+            body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json',
+          })
+          if (gw) await info.attach('send-retry-gateway', { body: gw.outputTail(), contentType: 'text/plain' })
+        } finally {
+          try { await gw?.stop() }
+          finally { await provider.close() }
         }
       }
-      window.WebSocket = OneShotFailWebSocket as unknown as typeof WebSocket
-    }, FAIL_MARKER)
-
-    await page.goto(`${BASE_URL}/`)
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
-
-    const chatInput = page.locator('[data-testid="chat-input"]').first()
-    await expect(chatInput).toBeEnabled({ timeout: 15_000 })
-    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
-    // see waitForConnected's doc comment in fixtures/selectors.ts).
-    await waitForConnected(page, { timeout: 15_000 })
-
-    // Step 1: Send a normal first message so a REAL session is established (the
-    // gateway mints a session_id, history exists, the socket is live). Wait for
-    // the turn to finish — assistant reply rendered AND the composer re-enabled —
-    // before inducing the failure on the second send.
-    await chatInput.fill('Reply with just the single word: ready.')
-    await chatInput.press('Enter')
-    await expect(page.locator('[data-message-role="assistant"]').first()).toBeVisible({
-      timeout: 90_000,
-    })
-    await expect(chatInput).toBeEnabled({ timeout: 90_000 })
-    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
-    // see waitForConnected's doc comment in fixtures/selectors.ts). This
-    // gate matters here specifically: the 2nd message below relies on the
-    // socket being the SAME still-open one the test's WebSocket wrapper is
-    // watching for its one-shot failure marker.
-    await waitForConnected(page, { timeout: 15_000 })
-
-    // Step 2: Arm the one-shot, then send the second message. Its send() throws
-    // exactly once → WsConnection.send() catches the throw and reports the send as
-    // failed → the store keeps the user bubble and marks it status:'error'.
-    await page.evaluate((marker: string) => {
-      ;(window as unknown as Record<string, unknown>).__failOnceMatch = marker
-    }, FAIL_MARKER)
-    await chatInput.fill(`second message ${FAIL_MARKER}`)
-    await chatInput.press('Enter')
-
-    // Step 3: The failed message MUST surface as an error bubble with a Retry.
-    // If this fails, the #253 OPEN-socket send-failure handling is broken.
-    const erroredMsg = page.locator('[data-message-role="user"][data-status="error"]')
-    await expect(erroredMsg).toBeVisible({ timeout: 15_000 })
-    const retryBtn = page.locator('[data-testid="user-message-retry"]').first()
-    await expect(retryBtn).toBeVisible({ timeout: 5_000 })
-
-    // Step 4: Click Retry. handleRetry() (#253(c)) RESENDS the original content as
-    // a new message — it intentionally leaves the old errored bubble in place, so
-    // recovery is NOT proven by the error bubble vanishing. The one-shot is already
-    // consumed, so the resend goes out on the SAME healthy, still-OPEN socket within
-    // the existing session and SUCCEEDS — proven by a second COMPLETED assistant
-    // reply arriving (msg #1 → 1 reply, resent #2 → 2). No reconnect, no
-    // missing-session replay hang. The composer also stays usable throughout.
-    await retryBtn.click()
-    await expect(assistantMessages(page)).toHaveCount(2, { timeout: 90_000 })
-    await expect(chatInput).toBeEnabled({ timeout: 90_000 })
-  },
-)
+    },
+  )
+})

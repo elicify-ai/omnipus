@@ -80,6 +80,13 @@ export function useRoomComposerMenu({
   const picks = useRef<Pick[]>([])
   const mirror = useRef('')
   mirror.current = inputValue
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const clearBlurTimer = useCallback(() => {
+    if (blurTimer.current !== undefined) clearTimeout(blurTimer.current)
+    blurTimer.current = undefined
+  }, [])
+  // #1697: a pending blur timer must not outlive the composer.
+  useEffect(() => clearBlurTimer, [clearBlurTimer])
 
   // The runtime clears its own text on send without a change event: keep the
   // mirror in step with it (the session menu's Fix A, same reason).
@@ -188,13 +195,17 @@ export function useRoomComposerMenu({
     showGhostText: false,
     ghostText: '',
     onInputChange: (value: string) => {
+      clearBlurTimer()
       setInputValue(value)
       setCaret(caretOf(value.length))
       setDismissed(false)
       setHighlight(0)
     },
     // Delayed so a mouse-down on a menu row selects before the menu closes.
-    onInputBlur: () => { setTimeout(() => setDismissed(true), 150) },
+    onInputBlur: () => {
+      clearBlurTimer()
+      blurTimer.current = setTimeout(() => { blurTimer.current = undefined; setDismissed(true) }, 150)
+    },
     onHoverItem: setHighlight,
     handleKeyDown,
     // Every group command is room text; nothing runs locally.

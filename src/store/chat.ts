@@ -1,6 +1,7 @@
 
 
 import { syncChatForeground, useChatStore } from './chat/store'
+import { useConnectionStore } from '@/store/connection'
 
 import {
   useSessionStore,
@@ -30,6 +31,11 @@ registerSyncChatForeground(() => {
   if (previousHistorySession && previousHistorySession !== '__pending' && previousHistorySession !== current) useChatStore.getState().releaseSessionHistory(previousHistorySession)
   previousHistorySession = current
   syncChatForeground()
+  // #1428: a message queued for this chat waits until the chat is open; open
+  // now, so release it (nothing happens when nothing waits or while offline).
+  if (current && current !== '__pending' && useConnectionStore.getState().isConnected) {
+    useChatStore.getState().drainOutboundQueue()
+  }
 })
 
 // omnipus-system-agent K8: the Omnipus entry's workflow-start message goes

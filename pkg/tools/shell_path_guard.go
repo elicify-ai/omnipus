@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -116,10 +118,18 @@ var (
 	// Defence-in-depth rather than the primary control — the kernel sandbox is
 	// that — but a guard that misses the combined form misses the form people
 	// actually type.
+	//
+	// T11 (#882, spec §3.1/FR-2): a `/` immediately followed by `{` is also a
+	// candidate (`/{`). The body above excludes `{`, so a root-anchored
+	// template or brace expansion — Python's `'/{}'.format('tmp')`, the shell's
+	// `/{tmp,etc}/x` — used to yield no candidate at all and passed the scan
+	// unexamined. `/{` resolves outside every working folder, so it is refused
+	// like any other unproven outside reference. A path with a brace later on
+	// (`/usr/{a,b}`) is unchanged: the first alternative still matches `/usr/`.
 	absolutePathPattern = regexp.MustCompile(
 		`(?:^|[\s"'=:;,{}\[\]!*` + "`" + `$~\\|&()<>]|(?:^|\s)-[A-Za-z]+|(?:^|\s)\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)` +
 			`([A-Za-z]:\\[^\\\s"';,{}\[\]!*` + "`" + `$~|&()<>]+` +
-			`|/[^\s"';,{}\[\]!*` + "`" + `$~\\|&()<>]+)`,
+			`|/(?:[^\s"';,{}\[\]!*` + "`" + `$~\\|&()<>]+|\{))`,
 	)
 
 	// colonPathListPattern recognizes a colon-joined list of two or more
@@ -421,20 +431,12 @@ func (t *ExecTool) guardCommandClassified(ctx context.Context, command, cwd stri
 			continue
 		}
 
-		if strings.HasPrefix(raw, "//") && start > 0 {
-			before := cmd[:start]
-			isWebURL := false
-			for _, scheme := range webSchemes {
-				if strings.HasSuffix(before, scheme) {
-					isWebURL = true
-					break
-				}
-			}
-			if isWebURL {
-				continue
-			}
+		if strings.HasPrefix(raw, "//") && start > 0 &&
+			slices.ContainsFunc(webSchemes, func(scheme string) bool { return strings.HasSuffix(cmd[:start], scheme) }) {
+			continue
 		}
 
+		use.quotedStandAlone = !expansionDerived && standAloneQuotedLiteral(cmd, start, end) // T11 #882, conditions 1-3 and 6
 		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, use, expansionDerived); msg != "" {
 			return msg, false
 		}
@@ -559,6 +561,12 @@ type pathUseVerdict struct {
 	// reason explains, for a human or an agent, why the read proof failed.
 	// Empty when readOnly is true.
 	reason string
+	// quotedStandAlone is true when the candidate passes the TEXT conditions
+	// of the T11 stand-alone quoted-literal rule (spec §3.1 conditions 1, 2, 3
+	// and 6; see standAloneQuotedLiteral). checkPathSegment adds the two
+	// filesystem conditions (4 and 5) only at the point it would otherwise
+	// refuse an outside reference.
+	quotedStandAlone bool
 }
 
 // checkPathSegment evaluates a single absolute-path candidate — either a
@@ -671,6 +679,29 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 		// behaviour unchanged.
 		if readOnly && readPolicyOK && !t.inTurnSecretSet(p, turnPolicy) {
 			return ""
+		}
+
+		// T11 (#882, spec §3.1): a stand-alone quoted literal such as
+		// '/api/v1/users' in script text is not refused when its top folder
+		// does not exist and cannot be created (the gateway's effective user
+		// cannot write the filesystem root). Nothing can then be read or written
+		// under it, so it is text, not a reachable path. Command position (an
+		// exec) and the fail-closed withheld-read case keep their refusals; the
+		// protected-file leg, the "../" veto and the expansion refusal ran
+		// earlier and are unaffected.
+		if use.quotedStandAlone && !use.exec && (!readOnly || readPolicyOK) {
+			absent, probeErr := literalTopCannotExist(p)
+			if absent {
+				return ""
+			}
+			if probeErr != nil {
+				logger.WarnCF("tools", "bash guard: quoted-literal check could not complete; the reference stays refused",
+					map[string]any{"error": probeErr.Error()})
+				return "Command blocked by safety guard: the safety check could not complete (" + probeErr.Error() +
+					"), so this command was refused and stays blocked. It could not confirm that the quoted value " +
+					strconv.Quote(p) + " names no real folder. Retry the command, or write the script with write_file " +
+					"and run the saved file. " + outsideWorkDirRefusal(p, cwdPath, use, false)
+			}
 		}
 
 		// ADR-068 §6: an unexplained denial is what drives operators to switch

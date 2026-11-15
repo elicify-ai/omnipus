@@ -58,6 +58,10 @@ func (cn *agentLoopRunTurnConductorRunIterations) endTurnAtStop() agentLoopRunTu
 		answer = ts.appendToAccumulator(answer)
 		ts.resolveContinuation()
 	}
+	// #1534 W3: keep only what the client's screen showed of this message
+	// (the whole message, continuation prefix included), so the model's
+	// next-turn memory and the no-streamer transcript match the screen.
+	answer = ts.cutStopAnswer(ts.getCurrentMessageID(), answer)
 	cn.rc.rx.finalContent = answer
 	cn.rc.rx.finalIsModelAnswer = answer != ""
 	return agentLoopRunTurnConductorRunIterationsBreakL1

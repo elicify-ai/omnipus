@@ -28,14 +28,21 @@
 //     vars' doc comments for the justification (this endpoint is materially
 //     more expensive per call: real tokens + a real subprocess held for up to
 //     smokeTestTimeoutSeconds, vs. a ~15s zero-token --version probe).
-//   - Pre-spawn guard: the resolved target (cli_path override, else the
-//     driver's own default binary name) MUST be a regular, executable file on
-//     $PATH — reuses isRegularExecutableFile (rest_clivalidate.go) — before
-//     any subprocess is started.
+//   - No free path (T11 C-B1): a request carrying cli_path is refused with
+//     400 before any runner is created, in both inbound-validation modes.
+//   - Pre-spawn guard: the program is the one a person saved in Settings ->
+//     Third-party agents, checked by the same thirdpartycli.RunProgram real
+//     dispatch uses, before any subprocess is started. With no saved path or
+//     a path that fails the checks the run is refused with the text a real
+//     run gets; there is no fallback to a program on $PATH.
 //   - Bounded run: a fixed, hardcoded trivial prompt (not operator-
 //     configurable in this pass), a small MaxTurns cap, and a short
 //     TimeoutSeconds — see the consts below for the exact values and
 //     rationale.
+//   - The person's saved preset is applied after the filtered cli_args, as on
+//     a real run, and the audit entry records it like a run's (T11, founder
+//     Q14): the audit copy obeys tools.filter_sensitive_data and carries the
+//     preset-use note.
 //   - Dangerous cli_args are filtered via the SAME denylist executor-preview
 //     already surfaces (runner.FilterDangerousCLIArgsDetailed) before ever
 //     reaching RunOptions — defense in depth on top of each driver's own
@@ -72,8 +79,8 @@
 //     test representative of real behavior (project files,
 //     AGENTS.md/CLAUDE.md/opencode.json context) — that directory is
 //     NEVER removed by this handler. Otherwise (agent_id omitted, blank, or
-//     naming an agent that doesn't resolve — e.g. the create wizard before
-//     the agent has been saved) falls back to a fresh, dedicated ephemeral
+//     naming an agent that doesn't resolve, such as a stale or deleted id)
+//     falls back to a fresh, dedicated ephemeral
 //     scratch directory under $OMNIPUS_HOME/executor-smoke-test-runs,
 //     removed (defer os.RemoveAll) once the run ends, success or failure. See
 //     runExecutorSmokeTest's isEphemeralWorkspace local for how the two paths
@@ -84,9 +91,9 @@
 //     carry operator-sensitive content; a boolean outcome + the CLI identity
 //     is enough for an audit trail's purpose here.
 //
-// Note: this endpoint is reachable before an agent exists (create wizard) or
-// is saved, and for opencode specifically this means one click grants the
-// CLI's fully-bypassed permission mode (opencode's own always-on
+// Note: this endpoint accepts a request with no saved agent id, and for
+// opencode specifically this means one click grants the CLI's
+// fully-bypassed permission mode (opencode's own always-on
 // --dangerously-skip-permissions, ADR-032 fix D — see driver_opencode.go) on
 // a real, credentialed subprocess — bounded by the rate limiter, the
 // smokeTestTimeoutSeconds timeout, and the smokeTestMaxTurns cap, but a
@@ -102,7 +109,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -114,6 +120,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -190,7 +197,7 @@ var smokeTestLimiter = newAPIRateLimiter(5, 1*time.Minute)
 // newExternalDriver package var, added for the identical reason. Production
 // always uses runner.NewDriver. Tests that need to prove the REAL dispatch
 // path (argv construction, env scrubbing, NDJSON parsing) leave this at its
-// default and drive a real stub-script binary via cli_path instead — see
+// default and drive a real stub-script binary as the CLI's program — see
 // rest_executor_smoketest_test.go's happy-path/error/timeout tests.
 var smokeTestNewDriver = runner.NewDriver
 
@@ -237,7 +244,7 @@ func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Req
 
 	var req gen.ExecutorSmokeTestRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "ExecutorSmokeTestRequest", &req, validateEnabled) {
+	if !decodeExecutorRequestRefusingFreePath(w, r, "ExecutorSmokeTestRequest", &req, validateEnabled) {
 		return
 	}
 
@@ -258,12 +265,11 @@ func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Req
 	defer smokeTestInflight.release(key)
 
 	model := derefTrimStr(req.Model)
-	cliPath := derefTrimStr(req.CliPath)
 	cliArgsRaw := derefStr(req.CliArgs)
 	agentID := derefTrimStr(req.AgentId)
 
-	resp, resolvedBinary := a.runExecutorSmokeTest(r.Context(), cli, model, cliPath, cliArgsRaw, agentID)
-	a.auditExecutorSmokeTest(r, cli, resolvedBinary, resp)
+	resp, resolvedBinary, presetApplied := a.runExecutorSmokeTest(r.Context(), cli, model, cliArgsRaw, agentID)
+	a.auditExecutorSmokeTest(r, cli, resolvedBinary, presetApplied, resp)
 	jsonOK(w, resp)
 }
 
@@ -309,6 +315,7 @@ type restAPIRunExecutorSmokeTest struct {
 	cliArgsRaw         string
 	durationMs         func() int
 	resolvedBinary     string
+	presetApplied      string
 	usedAgentWorkspace bool
 	runID              string
 	safeArgs           []string
@@ -319,38 +326,28 @@ type restAPIRunExecutorSmokeTest struct {
 
 // runExecutorSmokeTest performs the actual dispatch without any HTTP
 // concern, so it is directly unit-testable. It returns the wire response
-// plus the resolved binary path/name (for the caller's audit record — the
-// wire response schema deliberately does not carry this).
+// plus the resolved binary path/name and the preset text the started run
+// applied, "" for none (for the caller's audit record — the wire response
+// schema deliberately does not carry these).
 func (a *restAPI) runExecutorSmokeTest(
 	ctx context.Context,
-	cli, model, cliPath, cliArgsRaw, agentID string,
-) (gen.ExecutorSmokeTestResponse, string) {
+	cli, model, cliArgsRaw, agentID string,
+) (gen.ExecutorSmokeTestResponse, string, string) {
 	ra := &restAPIRunExecutorSmokeTest{cli: cli, cliArgsRaw: cliArgsRaw}
 
 	start := time.Now()
 	ra.durationMs = func() int { return int(time.Since(start).Milliseconds()) }
 
-	// Pre-spawn guard (mirrors validateCLI's fail-closed pre-spawn check in
-	// rest_clivalidate.go): resolve the spawn target the SAME way the runtime
-	// spawn does, before guarding it, so the guard is authoritative over what
-	// would actually be exec'd. Unlike cli-validate (which treats an empty
-	// cli_path as missing-binary WITHOUT a spawn — it validates a
-	// caller-typed override specifically), an empty cli_path here is the
-	// NORMAL "use the configured default" case, matching executor-preview and
-	// real dispatch — so it resolves to the driver's own default binary name
-	// via $PATH instead of short-circuiting.
-	target := cliPath
-	if target == "" {
-		target = runner.DefaultCLIBinary(ra.cli)
+	// Pre-spawn guard: the same decision and the same refusal text as a real
+	// run (T11 C-B1, FR-9), so the guard is authoritative over what is
+	// exec'd. The request carries no path, and the resolved file is the one
+	// passed to the driver. A refused smoke test is the body's ok:false like
+	// every other failed run, and the audit record names the saved path.
+	row, resolved, refusal := a.executorProgram(ra.cli)
+	if refusal != "" {
+		return smokeTestFail(refusal, ra.durationMs(), false), row.Path, ""
 	}
-	resolvedTarget, lpErr := exec.LookPath(target)
-	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
-		return smokeTestFail(
-			fmt.Sprintf("%q CLI binary not found or not executable (%s)", ra.cli, target),
-			ra.durationMs(), false,
-		), target
-	}
-	ra.resolvedBinary = absResolvePath(target)
+	ra.resolvedBinary = resolved
 
 	// Working-directory resolution: when agentID names a real, saved agent,
 	// run in THAT agent's own dedicated directory — the same place a genuine
@@ -363,9 +360,8 @@ func (a *restAPI) runExecutorSmokeTest(
 	// override real dispatch applies (pkg/agent/loop.go's runTurn,
 	// pkg/agent/external_dispatch.go's runExternalCLISubTurn), so the smoke
 	// test stays representative of where a genuine turn would actually run.
-	// Otherwise (agentID empty, or naming an agent that no longer resolves —
-	// e.g. the create wizard before the agent has been saved, or a
-	// stale/deleted id) fall back to a disposable ephemeral scratch
+	// Otherwise (agentID empty, or naming an agent that no longer resolves,
+	// such as a stale or deleted id) fall back to a disposable ephemeral scratch
 	// directory, exactly as before this feature existed.
 	//
 	// isEphemeralWorkspace is set EXACTLY ONCE, right here, at the point
@@ -426,7 +422,7 @@ func (a *restAPI) runExecutorSmokeTest(
 			return smokeTestFail(
 				smokeTestPrepText("could not prepare agent directory", mkErr),
 				ra.durationMs(), false,
-			), ra.resolvedBinary
+			), ra.resolvedBinary, ra.presetApplied
 		}
 		workDir = resolved
 		isEphemeralWorkspace = false
@@ -436,7 +432,7 @@ func (a *restAPI) runExecutorSmokeTest(
 			return smokeTestFail(
 				smokeTestPrepText("could not prepare scratch workspace", mkRootErr),
 				ra.durationMs(), false,
-			), ra.resolvedBinary
+			), ra.resolvedBinary, ra.presetApplied
 		}
 		dir, mkErr := os.MkdirTemp(root, "run-")
 		if mkErr != nil {
@@ -444,7 +440,7 @@ func (a *restAPI) runExecutorSmokeTest(
 				smokeTestPrepText("could not create scratch workspace", mkErr),
 				ra.durationMs(),
 				false,
-			), ra.resolvedBinary
+			), ra.resolvedBinary, ra.presetApplied
 		}
 		workDir = dir
 		isEphemeralWorkspace = true
@@ -491,7 +487,7 @@ func (a *restAPI) runExecutorSmokeTest(
 			smokeTestPrepText("could not construct driver", err),
 			ra.durationMs(),
 			ra.usedAgentWorkspace,
-		), ra.resolvedBinary
+		), ra.resolvedBinary, ra.presetApplied
 	}
 
 	evCh, runErr := driver.Run(runCtx, runner.RunOptions{
@@ -501,8 +497,9 @@ func (a *restAPI) runExecutorSmokeTest(
 		Env:            sandbox.ScrubGatewayEnvForRunner(),
 		TimeoutSeconds: smokeTestTimeoutSeconds,
 		MaxTurns:       smokeTestMaxTurns,
-		CLIPath:        cliPath,
+		CLIPath:        ra.resolvedBinary,
 		CLIArgs:        ra.safeArgs,
+		PresetArgs:     runner.ParseCLIArgs(row.PresetArgs, ra.runID),
 		Model:          model,
 	})
 	if runErr != nil {
@@ -510,8 +507,10 @@ func (a *restAPI) runExecutorSmokeTest(
 			smokeTestPrepText("failed to start "+ra.cli, runErr),
 			ra.durationMs(),
 			ra.usedAgentWorkspace,
-		), ra.resolvedBinary
+		), ra.resolvedBinary, ra.presetApplied
 	}
+
+	ra.presetApplied = row.PresetArgs
 
 	slog.Info("executor-smoke-test: run started",
 		"run_id", ra.runID, "cli", ra.cli, "timeout_s", smokeTestTimeoutSeconds, "max_turns", smokeTestMaxTurns)
@@ -580,7 +579,7 @@ func (ra *restAPIRunExecutorSmokeTest) prepareArguments() {
 }
 
 // buildResponse builds and logs the final smoke-test response.
-func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestResponse, string) {
+func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestResponse, string, string) {
 	var resp gen.ExecutorSmokeTestResponse
 	if ra.ok {
 		resp = smokeTestOK(ra.responseText, ra.durationMs(), ra.usedAgentWorkspace)
@@ -602,7 +601,7 @@ func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestRes
 	}
 	slog.Info("executor-smoke-test: run finished", finishArgs...)
 
-	return resp, ra.resolvedBinary
+	return resp, ra.resolvedBinary, ra.presetApplied
 }
 
 // smokeTestPermissionDeniedErr is the specific, non-generic error surfaced
@@ -820,7 +819,7 @@ func sweepSmokeTestOrphans() (removed int, errs []error) {
 // diagnostic.
 func (a *restAPI) auditExecutorSmokeTest(
 	r *http.Request,
-	cli, resolvedBinary string,
+	cli, resolvedBinary, presetApplied string,
 	resp gen.ExecutorSmokeTestResponse,
 ) {
 	if a.auditor == nil {
@@ -830,15 +829,20 @@ func (a *restAPI) auditExecutorSmokeTest(
 	if resp.Ok {
 		decision = audit.DecisionAllow
 	}
+	details := map[string]any{
+		"cli":    cli,
+		"binary": resolvedBinary,
+		"ok":     resp.Ok,
+	}
+	if presetApplied != "" {
+		details["preset_args"] = thirdpartycli.PresetAuditFilter(a.agentLoop.GetConfig())(presetApplied)
+		details["note"] = thirdpartycli.PresetUseNote
+	}
 	if err := a.auditor.Log(&audit.Entry{
 		Event:    audit.EventExecutorSmokeTest,
 		Decision: decision,
 		User:     cliValidateAuditUser(r),
-		Details: map[string]any{
-			"cli":    cli,
-			"binary": resolvedBinary,
-			"ok":     resp.Ok,
-		},
+		Details:  details,
 	}); err != nil {
 		slog.Warn("audit write failed", "event", audit.EventExecutorSmokeTest, "error", err)
 	}

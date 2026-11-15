@@ -21,9 +21,7 @@ import (
 // it on cleanup — same save/restore pattern as pkg/config/edition_test.go.
 func withEdition(t *testing.T, e string) {
 	t.Helper()
-	prev := config.Edition
-	config.Edition = e
-	t.Cleanup(func() { config.Edition = prev })
+	t.Cleanup(config.SetEdition(e))
 }
 
 // TestDirectoryInitialization verifies first-run creates the complete directory tree.

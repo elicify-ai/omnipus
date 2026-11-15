@@ -285,6 +285,15 @@ func (a *restAPI) handleLibraryEntriesList(w http.ResponseWriter, r *http.Reques
 		}
 		includeHidden = parsed
 	}
+	includeViews := false
+	if raw := r.URL.Query().Get("include_views"); raw != "" {
+		parsed, perr := strconv.ParseBool(raw)
+		if perr != nil {
+			jsonErr(w, http.StatusBadRequest, "include_views must be a boolean")
+			return
+		}
+		includeViews = parsed
+	}
 
 	root, ok := a.openLibraryRoot(w, workspaceID, "root")
 	if !ok {
@@ -299,6 +308,9 @@ func (a *restAPI) handleLibraryEntriesList(w http.ResponseWriter, r *http.Reques
 	}
 	if entries == nil {
 		entries = []gen.LibraryEntry{}
+	}
+	if includeViews {
+		entries = a.addLibraryViewRows(r.Context(), root, workspaceID, rel, includeHidden, entries)
 	}
 	annotateKnowledgeBaseEntries(root, entries)
 	a.annotateMailDerivedEntries(workspaceID, entries)

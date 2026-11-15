@@ -207,11 +207,13 @@ func TestSpawn_ResolveCheckExec_NoFallback_UnsafeRetarget_9_10(t *testing.T) {
 	require.NoError(t, os.WriteFile(unsafe, []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	t8Symlink(t, link, unsafe)
 
+	logs := t11Q48CaptureRefusalLogs(t)
 	refusal := t8NoRunReachedDriver(t, f, id)
 	assert.Contains(t, refusal, thirdpartycli.CheckAgentWritableLocation, "names the failed check")
 	resolvedUnsafe, err := filepath.EvalSymlinks(unsafe)
 	require.NoError(t, err)
-	assert.Contains(t, refusal, resolvedUnsafe, "names the path that failed the check (the resolved target)")
+	assert.NotContains(t, refusal, resolvedUnsafe, "Q48: the resolved target belongs only in server diagnostics")
+	t11Q48AssertServerOnlyPath(t, logs, refusal, thirdpartycli.CheckAgentWritableLocation, link, resolvedUnsafe)
 }
 
 // 9.12: an empty Settings path refuses even with a stored legacy cli_path to a

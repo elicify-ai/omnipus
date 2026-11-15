@@ -42,16 +42,17 @@ func isProtectedEnvKey(key string) bool {
 	return false
 }
 
-// resolveCLIBinary returns the binary the driver should exec. When cliPath is a
-// non-empty (trimmed) value it is used verbatim — an absolute path is honored,
-// a bare name is resolved via $PATH by exec. When empty, the driver's default
-// binary name is used (resolved via $PATH). This implements the
-// ExecutorConfig.cli_path "fall back to $PATH when empty" rule.
+// resolveCLIBinary returns the binary the driver should exec. A cliPath that
+// is not blank is used exactly as given, never trimmed: it is the file the
+// shared program check accepted, and a changed spelling could name a
+// different file. An absolute path is honored as is; a bare name is
+// resolved via $PATH by exec. A blank or whitespace-only cliPath selects the
+// driver's default binary name (resolved via $PATH).
 func resolveCLIBinary(cliPath, defaultBin string) string {
-	if p := strings.TrimSpace(cliPath); p != "" {
-		return p
+	if strings.TrimSpace(cliPath) == "" {
+		return defaultBin
 	}
-	return defaultBin
+	return cliPath
 }
 
 // shellInjectionChars are genuine shell-control characters (command separators,

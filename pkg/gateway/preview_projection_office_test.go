@@ -95,7 +95,7 @@ func TestOfficePreview_ReplayProjection_GroupAndPreviewRecord(t *testing.T) {
 	tc := previewToolCall("call-prev-1", "report.docx", "a1b2c3d4e5f6", 12, 1, 4, "complete", "",
 		[]map[string]any{thumbPart("media://page1", 1), thumbPart("media://page2", 2), thumbPart("media://page3", 3), thumbPart("media://page4", 4)})
 
-	frame, ok := buildMediaFrame("session-1", tc, nil, nil)
+	frame, ok := buildMediaFrame("session-1", tc, nil, nil, "", "")
 	if !ok {
 		t.Fatalf("BLOCKED: replay dropped a preview_document media record entirely (T-62, B-11)")
 	}
@@ -142,7 +142,7 @@ func TestOfficePreview_ReplayProjection_UnavailableFrame(t *testing.T) {
 	for _, reason := range []string{"renderer_missing", "renderer_damaged", "renderer_failed", "storage_failed"} {
 		t.Run(reason, func(t *testing.T) {
 			tc := previewToolCall("call-prev-2", "report.docx", "a1b2c3d4e5f6", 12, 1, 4, "unavailable", reason, nil)
-			frame, ok := buildMediaFrame("session-1", tc, nil, nil)
+			frame, ok := buildMediaFrame("session-1", tc, nil, nil, "", "")
 			if !ok {
 				t.Fatalf("BLOCKED: replay dropped the unavailable preview frame — the person must still see the unavailable card after reload (T-62, B-12, B-34)")
 			}
@@ -207,7 +207,7 @@ func TestOfficePreview_ReplayProjection_TwoIdenticalPreviewsStaySeparate(t *test
 
 	frames := 0
 	for _, tc := range []session.ToolCall{tc1, shot, tc2} {
-		if frame, ok := buildMediaFrame("session-1", tc, store, seen); ok {
+		if frame, ok := buildMediaFrame("session-1", tc, store, seen, "", ""); ok {
 			frames++
 			if tc.Tool == "preview_document" && len(frame.Parts) == 0 && (frame.Preview == nil || frame.Preview.Outcome != "unavailable") {
 				t.Fatalf("preview group %q collapsed to zero parts by path dedup — B-40 requires two separate groups (§5.2 dedup key = tool_call_id)", tc.ID)

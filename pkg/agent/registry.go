@@ -324,7 +324,7 @@ var upsertAgentFastTestHook func(attempt int)
 // side — AgentRegistry, which actually serves GetAgent/ResolveRoute,
 // was still rebuilt from scratch (NewAgentRegistry) for a
 // one-agent change, which is what forced a full handleConfigReload
-// (channels/cron/schedulers/the plan engine all restart, up to ~60s under
+// (channels/cron/schedulers all restart, up to ~60s under
 // load — 30s service drain + 30s provider rebuild, worst case).
 //
 // cfg must already reflect the agent identified by agentID in

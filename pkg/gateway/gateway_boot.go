@@ -678,7 +678,7 @@ func (stg *setupAndStartServicesState) setupMediaAndChannels() (*services, bool,
 	// Apply warmup timeout default (FR-013 / CR-04).
 	stg.cfg.Tools.ApplyWarmupTimeoutDefault()
 
-	addr := fmt.Sprintf("%s:%d", stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
+	addr := stg.cfg.Gateway.ListenAddr()
 	stg.runningServices.HealthServer = health.NewServer(stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
 	stg.runningServices.ChannelManager.SetupHTTPServer(addr, stg.runningServices.HealthServer)
 
@@ -1287,11 +1287,16 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error
 			}
 			return len(active), nil
 		})
+		// Read the scheduler ONCE through the AgentLoop's locked accessor, not
+		// stg.runningServices.LoopScheduler: a config reload keeps this engine
+		// running (#1725) and the loop scheduler (#1760); the AgentLoop accessor is
+		// the synchronised publication point for it.
 		planEngine.RegisterActiveCounter("loop", func() (int, error) {
-			if stg.runningServices.LoopScheduler == nil {
+			ls := stg.agentLoop.LoopScheduler()
+			if ls == nil {
 				return 0, nil
 			}
-			return len(stg.runningServices.LoopScheduler.ListEnabledJobs()), nil
+			return len(ls.ListEnabledJobs()), nil
 		})
 		if startErr := planEngine.Start(context.Background()); startErr != nil {
 			return nil, true, fmt.Errorf("error starting plan engine: %w", startErr)
@@ -1374,21 +1379,22 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		planStore:              stg.planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
 		credStore:              stg.credStore,
 		mediaStore:             stg.runningServices.MediaStore,
-		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop), // SEC-24: nil when SSRF disabled
-		sandboxResult:          stg.sandboxResult,                   // immutable post-boot snapshot
-		reloadOutcome:          stg.runningServices.reloadOutcome,   // #904: shared reload outcome record
-		appliedConfig:          mustDeepCopyConfig(stg.cfg),         // boot-time snapshot for pending-restart diff
-		servedSubdirs:          stg.runningServices.servedSubdirs,   // web_serve static-mode token registry
-		devServers:             stg.runningServices.devServers,      // web_serve dev-mode process registry
-		approvalReg:            stg.approvalReg,                     // in-process tool-approval registry (FR-016)
-		builtinRegistry:        stg.builtinReg,                      // M16: central builtin registry (FR-001)
-		mcpRegistry:            stg.mcpReg,                          // M16: central MCP registry (FR-001)
-		skillRegistry:          skillRegistry,                       // ClawHub marketplace (search + install-by-slug)
-		allowGodMode:           stg.allowGodMode,                    // god-mode latch (2)
-		notifStore:             stg.runningServices.notifStore,      // #264: notification center
-		auditor:                stg.agentLoop.AuditLogger(),         // shared audit logger for REST mutations
-		selfWriteReg:           selfWriteReg,                        // suppress watcher reload on app-initiated writes
-		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
+		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop),                                 // SEC-24: nil when SSRF disabled
+		sandboxResult:          stg.sandboxResult,                                                   // immutable post-boot snapshot
+		reloadOutcome:          stg.runningServices.reloadOutcome,                                   // #904: shared reload outcome record
+		appliedConfig:          mustDeepCopyConfig(stg.cfg),                                         // boot-time snapshot for pending-restart diff
+		servedSubdirs:          stg.runningServices.servedSubdirs,                                   // web_serve static-mode token registry
+		devServers:             stg.runningServices.devServers,                                      // web_serve dev-mode process registry
+		labelLimiters:          &previewLabelLimiter{buckets: make(map[string]*previewLabelBucket)}, // fix4: this gateway's own preview limiter (FR-027)
+		approvalReg:            stg.approvalReg,                                                     // in-process tool-approval registry (FR-016)
+		builtinRegistry:        stg.builtinReg,                                                      // M16: central builtin registry (FR-001)
+		mcpRegistry:            stg.mcpReg,                                                          // M16: central MCP registry (FR-001)
+		skillRegistry:          skillRegistry,                                                       // ClawHub marketplace (search + install-by-slug)
+		allowGodMode:           stg.allowGodMode,                                                    // god-mode latch (2)
+		notifStore:             stg.runningServices.notifStore,                                      // #264: notification center
+		auditor:                stg.agentLoop.AuditLogger(),                                         // shared audit logger for REST mutations
+		selfWriteReg:           selfWriteReg,                                                        // suppress watcher reload on app-initiated writes
+		taskLock:               task.TaskFileLock,                                                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
 	stg.api.rooms.Store(stg.wsHandler.rooms)                   // group chats (rest_rooms.go)
@@ -1413,6 +1419,11 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// agent_created_broadcast.go's doc comment.
 	agentCreatedFn := func(f gen.AgentCreatedFrame) { stg.wsHandler.broadcastAgentCreated(f) }
 	stg.api.agentCreatedBroadcast.Store(&agentCreatedFn)
+	// #1329: the setup-offer line is a saved transcript entry, not a turn
+	// frame. The same hub that journals every other chat frame delivers it
+	// live and on incremental re-attach. wsHandler exists by here
+	// (wireInteractiveServices); a nil hubs is the poster's logged miss.
+	stg.api.sessionHubs = stg.wsHandler.hubs
 	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
 	// entitlement cache — the intersection behind every cached answer was
 	// computed against a document that is no longer the served one.
@@ -1567,6 +1578,12 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(stg.api.configSnapshotMiddleware); stg.err != nil {
 		return nil, true, fmt.Errorf("wrapping HTTP handler: %w", stg.err)
 	}
+	// Runs after CSRF (wrapped below, so outermost) and before the snapshot, so
+	// only requests that passed CSRF get the longer write deadline a reload
+	// wait needs.
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(reloadWaitWriteDeadlineMiddleware); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler: %w", stg.err)
+	}
 	// F-13 / ADR-044: /preview/ is registered on this SAME main mux (see
 	// registerPreviewEndpoints above), so the WrapHTTPHandler(configSnapshotMiddleware)
 	// call above already covers it — HandlePreview's configFromContext(r.Context())
@@ -1577,7 +1594,7 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 	//
 	// WrapHTTPHandler semantics: "wrap N times" stacks outermost-last, so the
 	// execution order on a request is:
-	//   CSRF check → configSnapshot injection → mux dispatch → auth check in handler
+	//   CSRF check → reload write deadline → configSnapshot injection → mux dispatch → auth check in handler
 	//
 	// The sprint plan (temporal-puzzling-melody.md §1) calls for
 	// "auth → RBAC → CSRF → handler". We place CSRF BEFORE the per-handler
@@ -1632,6 +1649,27 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 		return nil, true, fmt.Errorf("wrapping HTTP handler with CSRF: %w", stg.err)
 	}
 
+	// ADR-094 preview isolation — the outer three wraps, in execution order
+	// dispatcher → navigation guard → planted-cookie guard (outermost-LAST:
+	// each later wrap sits outside the previous one). The dispatcher claims
+	// <label>.localhost:<canonical-port> Hosts for the preview-host mux,
+	// structurally bypassing everything wrapped below it (FR-028/MIN-007:
+	// the exemption is scoped by dispatch, not by path); the guards below it
+	// run only on the main branch. PlantedCookieGuard sits OUTSIDE the CSRF
+	// gate so a planted-cookie hit writes its own typed 403 envelope instead
+	// of CSRF's generic one (DS-5), and its context marker makes
+	// ResolveUserFromCookie fail closed on the GET branch (401, not a
+	// half-authenticated request).
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(stg.api.plantedCookieGuard()); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with planted-cookie guard: %w", stg.err)
+	}
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(middleware.NavigationGuard()); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with navigation guard: %w", stg.err)
+	}
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(stg.api.previewHostDispatchMW); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with preview host dispatch: %w", stg.err)
+	}
+
 	// Wire the /reload trigger BEFORE StartAll launches the HTTP listener.
 	// Otherwise there is a boot-ordering window where /health already answers
 	// 200 (listener live) but HealthServer.reloadFunc is still nil, so a
@@ -1656,7 +1694,7 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error
 	// Boot logging: main listener (ADR-044: /preview/ shares this same listener,
 	// no separate preview port/address to log). preview_enabled is read live
 	// (not restart-gated), so this line only reflects the value at boot time.
-	mainAddr := fmt.Sprintf("%s:%d", stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
+	mainAddr := stg.cfg.Gateway.ListenAddr()
 	slog.Info("gateway listening on " + mainAddr)
 
 	// ADR-067 FR-008: the catalog refresh loop starts HERE — after StartAll
@@ -1720,9 +1758,8 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error
 	}
 
 	fmt.Printf(
-		"✓ Health endpoints available at http://%s:%d/health, /ready and /reload (POST)\n",
-		stg.cfg.Gateway.Host,
-		stg.cfg.Gateway.Port,
+		"✓ Health endpoints available at http://%s/health, /ready and /reload (POST)\n",
+		stg.cfg.Gateway.ListenAddr(),
 	)
 
 	return nil, false, nil

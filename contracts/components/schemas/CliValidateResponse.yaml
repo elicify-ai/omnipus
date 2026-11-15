@@ -4,11 +4,15 @@ description: >
   cli_path is a runnable, version-reporting instance of the selected CLI.
   The handshake only requires that the binary runs and returns a
   valid version-shaped response — no per-CLI identity/name match is
-  performed. Blocking is keyed off `reason` alone (never the raw `ok`
-  boolean): the SPA blocks Create/Save on "missing-binary" or
-  "handshake-failed", warns-but-allows on "unauthenticated", and allows on
-  "ok". `detail` is always one of a fixed set of classified messages — never
-  raw stderr from the spawned process.
+  performed. Clients classify the result by `reason`, never by the raw `ok`
+  boolean, because "unauthenticated" also reports ok=true. Check CLI in
+  Settings -> Third-party agents shows the result as a notice and saves
+  nothing; the result does not gate saving settings or an agent. `detail` is never raw stderr from
+  the spawned process: it is a fixed classified message per reason, except
+  for "path-not-allowed", where it is "not allowed: <cli>: check <name>
+  failed", naming the program and the failed check. It never carries a path,
+  an operating-system error or file contents; the path goes to the server
+  log only.
 type: object
 required:
   - ok
@@ -20,7 +24,7 @@ properties:
     description: >
       True when the binary is present, runs, and returns a valid
       version-shaped response (reason "ok" or "unauthenticated"). Retained
-      for convenience only — clients MUST gate blocking on `reason`, not on
+      for convenience only — clients MUST classify on `reason`, not on
       this field, because "unauthenticated" also reports ok=true but must not
       be conflated with "ok".
     example: true
@@ -32,16 +36,27 @@ properties:
       - handshake-failed
       - unauthenticated
       - unknown-cli
+      - path-not-allowed
     description: >
       Classification of the validation result. "ok": binary runs and reports
-      a version, believed authenticated. "missing-binary": cli_path is empty,
-      absent, or not a regular executable file — blocks Create/Save.
-      "handshake-failed": the target ran but did not return a valid
-      version-shaped response within the timeout — blocks Create/Save.
-      "unauthenticated": the binary runs and reports a version but has no
-      usable credentials — non-blocking warning, Create/Save allowed.
+      a version, believed authenticated. "missing-binary": cli_path is empty or
+      whitespace-only; nothing is started. A non-empty cli_path that is missing, not a regular
+      file, or not executable is refused by the program-file check as
+      "path-not-allowed" instead and is never started.
+      "handshake-failed": the checked program could not be started, or ran but
+      did not return a valid version-shaped response within the timeout.
+      "unauthenticated": the binary runs and reports a version, but the local
+      credential check found no usable credentials.
       "unknown-cli": the `cli` value is not one of the supported executors;
-      no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
+      no subprocess is spawned. "path-not-allowed": the shared program-file
+      check refused cli_path (not absolute, missing, not a regular file, not
+      executable for the gateway user on Linux/macOS, inside or linked
+      through the Omnipus home, an agent home, a workspace, a mount, an
+      extra folder the sandbox lets agents write or the per-user temporary
+      folder (unless it is the shared /tmp), or the list of those
+      folders could not be read in full); nothing is spawned. Ownership and writability of the program are the
+      operator's responsibility and are not checked. Maps
+      runner.ReasonOK (empty string) to "ok".
     example: "ok"
   resolved_path:
     type: string
@@ -49,7 +64,8 @@ properties:
     description: >
       Absolute path actually spawned. Populated for "ok" and
       "unauthenticated", and for "handshake-failed" when a target was found
-      to spawn. Null for "missing-binary" and "unknown-cli".
+      to spawn. Null for "missing-binary", "unknown-cli" and
+      "path-not-allowed".
     example: "/usr/local/bin/claude"
   version:
     type: string
@@ -61,8 +77,12 @@ properties:
   detail:
     type: string
     description: >
-      Fixed, classified human-readable message for the reason — never raw
-      stderr from the spawned process. One of a small allowlisted set per
-      reason (e.g. "OK", "installed; not logged in", "not found", "did not
-      run or returned no version", "unsupported cli").
+      Human-readable message for the reason — never raw stderr from the
+      spawned process. One of a small allowlisted set per reason (e.g. "OK",
+      "installed; not logged in", "not found", "did not run or returned no
+      version", "unsupported cli"); for "path-not-allowed" it is "not
+      allowed: <cli>: check <name> failed", where <name> is one of the
+      cli_path_invalid check names (for example agent_writable_location or
+      location_unverifiable). A path is never included; it goes to the
+      server log only.
     example: "OK"

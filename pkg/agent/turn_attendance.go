@@ -5,9 +5,11 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -61,7 +63,24 @@ func unattendedOrigin(kind session.OriginKind) bool {
 // Persisted task evidence (meta TaskID) on any session of the chain makes it
 // a task root even when its lifecycle record is gone. Every read failure,
 // cycle or hop-bound overrun is unattended (R1 last row).
-func (al *AgentLoop) classifySessionChain(sessionID string) turnAttendance {
+//
+// declared is the turn's own declared origin (processOptions.OriginKind).
+// Plan owner/supervision sessions and the external-CLI Judge session are
+// minted without a lifecycle record. The direct dispatch (processTaskDirect,
+// native and external-CLI) declares an unattended origin for them (#1765);
+// other entries (notifier, async results, completions) declare none and are
+// covered by the plan-record witness below. When the turn's OWN session has no
+// record and the declared origin is unattended, that declared origin decides, with no
+// unresolved-ancestry error. It never covers an ancestor, an unreadable
+// record, or a declared origin that is not unattended: those stay unresolved
+// and refuse.
+//
+// The same missing-own-record case is also resolved for a session the plan
+// engine itself minted and persisted on a plan (owner or supervision session),
+// whichever entry wakes it: the notifier route (processSystemMessage), an
+// async tool result or a child's completion declare no origin at all. The plan
+// record is the durable witness; a session that is on no plan stays unresolved.
+func (al *AgentLoop) classifySessionChain(sessionID string, declared session.OriginKind) turnAttendance {
 	sessions := al.GetSessionStore()
 	lifecycle := al.GetSessionLifecycleStore()
 	if sessionID == "" || sessions == nil || lifecycle == nil {
@@ -97,6 +116,12 @@ func (al *AgentLoop) classifySessionChain(sessionID string) turnAttendance {
 			return turnAttendance{Unattended: true, RootKind: session.OriginKindTask}
 		}
 		rec, err := lifecycle.Load(sid)
+		if hop == 0 && errors.Is(err, session.ErrLifecycleNotFound) && unattendedOrigin(declared) {
+			return turnAttendance{Unattended: true, RootKind: declared}
+		}
+		if hop == 0 && errors.Is(err, session.ErrLifecycleNotFound) && al.planEngineOwnsSession(sid) {
+			return turnAttendance{Unattended: true, RootKind: session.OriginKindPlan}
+		}
 		if err != nil || rec == nil {
 			return unresolved(sid, "lifecycle record unreadable or missing", err)
 		}
@@ -133,7 +158,7 @@ func (al *AgentLoop) applyTurnAttendance(opts *processOptions) {
 	if opts == nil {
 		return
 	}
-	att := al.classifySessionChain(attendanceSessionID(opts))
+	att := al.classifySessionChain(attendanceSessionID(opts), opts.OriginKind)
 	if att.Unattended {
 		opts.AutoDenyAsk = true
 	}
@@ -163,4 +188,29 @@ func attendanceSessionID(opts *processOptions) string {
 		return opts.TranscriptSessionID
 	}
 	return sessionIDFromScopeKey(opts.SessionKey)
+}
+
+// planEngineOwnsSession reports whether sessionID is the owner or supervision
+// session of a persisted plan: the two kinds PlanEngine.mintPlanSession creates
+// without a lifecycle record (#1765). It reads the plan store and is reached
+// only when a turn's own lifecycle record is already missing.
+func (al *AgentLoop) planEngineOwnsSession(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	pe := GetPlanEngine(al)
+	if pe == nil || pe.planStore == nil {
+		return false
+	}
+	plans, err := pe.planStore.List(plan.Filter{})
+	if err != nil {
+		return false
+	}
+	for i := range plans {
+		p := &plans[i]
+		if p.OwnerSessionID == sessionID || (p.Supervision != nil && p.Supervision.SessionID == sessionID) {
+			return true
+		}
+	}
+	return false
 }

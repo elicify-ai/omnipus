@@ -25,9 +25,7 @@ import (
 
 // Q17 A: a sent file stays available after the store's MaxAge, and a chat
 // whose transcript names a ref the store no longer knows still opens.
-// BS-5.4: the reloaded card's media frame is present. Ported to landing/fix-1685
-// without the chat-links library_ref assertion: MediaPart has no library_ref
-// on the release line.
+// BS-5.4: the reloaded card's media frame carries library_ref for notes/plan.md.
 // A store error other than media.ErrNotFound stays the visible storage failure.
 const sentFileGoneRef = "media://018f6e5a-7c3e-7a3e-8e3a-0a1b2c3d4e5f"
 
@@ -99,11 +97,12 @@ func TestSentFile_StaysServedAndOnTheHistoryCardAfterMaxAge(t *testing.T) {
 		}
 		t.Errorf("history attach mode = %q, want snapshot so the card can reload (BS-5.4)", mode)
 	}
-	part, _, ok := sentFileMedia(frames, "plan.md")
+	part, raw, ok := sentFileMedia(frames, "plan.md")
 	if !ok {
 		t.Error("BS-5.4: history snapshot has no plan.md media frame after MaxAge")
 		return
 	}
+	chatLinksRequireRef(t, part, raw)
 	// The card must carry the saved facts AND a working download: the URL the
 	// card actually names is requested here, not one rebuilt from the ref
 	// (docs/using-omnipus-ui.md: a sent file's card and download keep working).
@@ -300,8 +299,11 @@ func TestHistory_UnknownRefDoesNotDropTheGoodCard(t *testing.T) {
 	conn := fixture.newConn("neighbour-viewer")
 	fixture.h.handleAttachSession(context.Background(), "neighbour-viewer", fixture.sid, nil, conn)
 	frames := pagingDrain(t, conn)
-	if _, _, ok := sentFileMedia(frames, "plan.md"); !ok {
+	part, raw, ok := sentFileMedia(frames, "plan.md")
+	if !ok {
 		t.Error("the good card was dropped with the unknown ref")
+	} else {
+		chatLinksRequireRef(t, part, raw)
 	}
 	if _, _, gone := sentFileMedia(frames, "gone.md"); gone {
 		t.Error("unknown ref still produced a gone.md card")
@@ -483,45 +485,6 @@ func sentFileSawText(frames []wireFrame, text string) bool {
 		}
 	}
 	return false
-}
-
-// Helpers ported verbatim from the chat-links test pack
-// (chat_links_library_ref_red_test.go), which the release line does not carry.
-const chatLinksWorkspaceID = "W"
-
-func chatLinksHome(t *testing.T, h *WSHandler) string {
-	t.Helper()
-	home := h.agentLoop.GetConfig().Agents.Defaults.Home
-	require.NotEmpty(t, home, "instrument: agent home")
-	h.home = home
-	return home
-}
-
-func chatLinksStore(t *testing.T, store *media.FileMediaStore, path, filename, contentType, scope string) string {
-	t.Helper()
-	ref, err := store.Store(path, media.MediaMeta{
-		Filename: filename, ContentType: contentType, CleanupPolicy: media.CleanupPolicyForgetOnly,
-	}, scope)
-	require.NoError(t, err)
-	resolved, resolveErr := store.Resolve(ref)
-	require.NoError(t, resolveErr)
-	require.Equal(t, path, resolved, "instrument: the ref must resolve to the placed file")
-	return ref
-}
-
-func chatLinksSendFileEntry(t *testing.T, store *session.UnifiedStore, sid, id, callID, ref, filename, contentType, mediaType string) {
-	t.Helper()
-	require.NoError(t, store.AppendTranscriptStrict(sid, session.TranscriptEntry{
-		ID: id, Type: session.EntryTypeToolCall, Role: "assistant", AgentID: "mia",
-		Timestamp: time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC), ViewMembership: session.ViewMembershipChat,
-		ToolCalls: []session.ToolCall{{
-			ID: session.ToolCallID(callID), Tool: "send_file", Status: "success",
-			Parameters: map[string]any{},
-			Result: map[string]any{"media": []any{map[string]any{
-				"ref": ref, "filename": filename, "content_type": contentType, "type": mediaType,
-			}}},
-		}},
-	}))
 }
 
 func TestSentFile_ReusedUnpinnedUploadStaysAfterMaxAge(t *testing.T) {
@@ -930,6 +893,11 @@ func TestHistory_RegistryPermissionErrorIsNotAMissingFile(t *testing.T) {
 		t.Errorf("successor save/reload under denial: healthy row = %q %v, want its file", got, resolveErr)
 	}
 	require.NoError(t, os.Chmod(parent, 0o755))
+	// Keep the earlier chat-links check after permission repair as well: the
+	// failed store retains its permission cause until the registry is reloaded.
+	if _, resolveErr := loaded.Resolve(ref); resolveErr == nil || errors.Is(resolveErr, media.ErrNotFound) || !errors.Is(resolveErr, fs.ErrPermission) {
+		t.Errorf("Resolve after a permission failure = %v, want the permission cause, not ErrNotFound", resolveErr)
+	}
 	// docs/troubleshooting.md: the failed row survives the next registry save,
 	// and once the cause is fixed, a restart brings the card and download back.
 	// A healthy row saved alongside it keeps loading too.

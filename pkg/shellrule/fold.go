@@ -1,0 +1,52 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package shellrule
+
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// FoldedName returns the entry of names that word spells when letter case is
+// ignored, or "" when it spells none of them. It is the one program-name
+// matcher shared by this package's interpreter classification, wrapper
+// lookup and sh recognition (IsShHead), and by pkg/tools' shell-name
+// recognition. Case is compared under the same simple
+// Unicode case folding as strings.EqualFold, not ASCII only: a
+// case-insensitive filesystem, such as the macOS default, runs the same
+// program for spellings that differ in letter case, including non-ASCII case
+// folds of an ASCII letter.
+//
+// Recognising a name this way is meant only to widen a check (an interpreter
+// is inspected, a wrapper is looked through, a shell's script is scanned).
+// Looking through a wrapper keeps the wrapper's own deny and ask rules
+// (matchWrapperOwnRules), so it does not drop a restriction. Recognition does
+// not decide whether an allow rule applies: that stays with the resolved
+// path and the normalised-head restriction (matchRules, classifySegment).
+func FoldedName(word string, names []string) string {
+	for _, name := range names {
+		if strings.EqualFold(word, name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// hasFoldedPrefix reports whether word starts with prefix under FoldedName's
+// case folding. Simple folding maps one rune to one rune, so the comparison
+// takes exactly as many runes from word as prefix has.
+func hasFoldedPrefix(word, prefix string) bool {
+	n := utf8.RuneCountInString(prefix)
+	end := 0
+	for n > 0 {
+		if end >= len(word) {
+			return false
+		}
+		_, size := utf8.DecodeRuneInString(word[end:])
+		end += size
+		n--
+	}
+	return FoldedName(word[:end], []string{prefix}) != ""
+}

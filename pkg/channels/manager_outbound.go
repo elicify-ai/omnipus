@@ -13,8 +13,9 @@ import (
 
 // Availability reports whether instance id is running, from the manager's
 // existing records only (T-7, FR-051): running = registered (GetChannel) and
-// IsRunning; not_running = registered but not running, reason
-// LastStartError's text or "not started"; not_loaded = not registered,
+// IsRunning; not_running = registered but not running, reason the channel's
+// own NotRunningReason when it has one (#1687: a WhatsApp connection being
+// re-established), else LastStartError's text or "not started"; not_loaded = not registered,
 // reason the FailedChannels entry for id or "not loaded".
 //
 // It takes m.mu.RLock (through those accessors), so it is for the
@@ -24,6 +25,11 @@ func (m *Manager) Availability(id string) Availability {
 	if ch, registered := m.GetChannel(id); registered {
 		if ch.IsRunning() {
 			return Availability{State: AvailabilityRunning}
+		}
+		if r, ok := ch.(NotRunningReasoner); ok {
+			if reason := r.NotRunningReason(); reason != "" {
+				return Availability{State: AvailabilityNotRunning, Reason: reason}
+			}
 		}
 		if err := m.LastStartError(id); err != nil {
 			return Availability{State: AvailabilityNotRunning, Reason: err.Error()}

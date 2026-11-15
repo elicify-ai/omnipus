@@ -399,6 +399,73 @@ exact, unqualified allow-listed name, and the path is not in the turn's secret
 set**. Everything else — including anything the classifier cannot prove — is a
 write and needs a mount.
 
+> **Correction (2026-11-08, T11 #882).** "Everything else … needs a mount" now
+> has one exception. A stand-alone quoted literal whose top folder cannot exist
+> and cannot be created is not refused, because no file is reachable through
+> it. See §9.6 for the rule, its conditions and what stays refused, including
+> `../`.
+
+### 9.6 T11 (#882): stand-alone quoted literals, and the `../` limitation (dated 2026-11-08)
+
+**Decided by:** founder, 2026-10-29: R1-FQ3 "A: Narrow fix only". Keep refusing
+`../` and record the limitation. Later founder rulings narrowed the rule:
+2026-10-30 "simplify the guard", 2026-11-01 "S5c A", and Q11 "A" for
+here-documents. These are recorded in `pkg/tools/shell_brace_expansion.go`'s
+file comment. Spec: `docs/internal/specs/t11-documents-and-3p-agents-spec.md`
+§3.1.
+
+**The defect.** Ordinary script text such as `python3 -c "print('/api/v1/users')"`
+was refused as "a path outside the working directory". The quoted route looked
+like an absolute path, and no exemption applied to it.
+
+**The rule** (read at `e138f4db7`). It sits in the outside-working-directory
+branch of `pkg/tools/shell_path_guard.go::checkPathSegment`, after the mount
+match and the §9.5 read exemption, and before the refusal. A candidate is not
+refused when all of the following hold:
+
+| # | Condition | Code |
+|---|---|---|
+| 1 | It is the entire content of one matching pair of quotes | `pkg/tools/shell_standalone_literal.go::standAloneQuotedLiteral` |
+| 2 | It holds none of `*` `?` `[` `]` `{` `}` `%` `$` `~` `\` or a backtick, and no `..` segment | same; `standAloneLiteralForbiddenChars` |
+| 3 | It is not expansion-derived (§9.3) | `shell_path_guard.go::guardCommandClassified` sets `use.quotedStandAlone` only when `!expansionDerived` |
+| 4 | Its first component below `/` does not exist | `shell_standalone_literal.go::literalTopCannotExist` |
+| 5 | The gateway's effective user cannot write `/`. On Unix this uses `unix.Faccessat(AT_FDCWD, "/", W_OK, AT_EACCESS)`, and `EACCES` or `EROFS` mean not writable. On Windows `/` always counts as writable, so the rule is off there. | `shell_standalone_literal_unix.go::rootWritability`, `shell_standalone_literal_windows.go::rootWritability` |
+| 6 | It stands alone. Skipping whitespace including newlines, the nearest character before the opening quote is one of `( , = [ { :` or the start of the shell word. The nearest after the closing quote is one of `) , ] } ;` or the end of the shell word. | `standsAloneBefore`, `standsAloneAfter` |
+| 7 | No text the shell parses holds an unquoted brace, an unquoted backslash-newline, or any `<<`, except the single form `PROGRAM <<'MARKER'`. Text the shell parses includes the command, a nested `sh -c` script and `eval` arguments. A nested script the scan cannot locate also withholds the rule. | `pkg/tools/shell_brace_expansion.go::commandMayBraceExpand`, `isPlainHereDocument` |
+| — | The literal is not in command position, and it is not a read whose turn policy could not be resolved | `checkPathSegment` (`!use.exec && (!readOnly \|\| readPolicyOK)`) |
+
+If the root probe or the `Lstat` of the top folder fails with an unexpected
+error, the reference stays refused. The refusal names the cause.
+
+**Why this keeps §9.3's principle.** §9.3 says the guard must judge the path the
+shell will actually open, and refuse when it cannot know it. Conditions 4 and 5
+together mean nothing can be read or written through the literal: its top
+folder neither exists nor can be created by this process. Conditions 3, 6 and 7
+withhold the rule for every construct that could turn the literal into a
+different path. That covers expansion, adjacent or concatenated fragments
+(`'/tm' 'p/x'`, `'/tm' + 'p/x'`), prefixed literals (`f'…'`, `r'…'`),
+brace expansion and line joining.
+
+**Unchanged, and run first.** These checks are unaffected:
+`substitutionGuard`, the protected-internal-file leg
+(`shell_path_guard.go::guardProtectedOperands`), the `../` veto and the
+expansion refusal.
+
+**The `../` limitation (recorded, not planned to change).** When
+`RestrictToWorkspace` is on, `guardCommandClassified` refuses any command whose
+text contains `../` or `..\` anywhere, as "path traversal detected". This runs
+before any path is scanned. So a harmless `'../shared/x'` inside script text is
+refused, and the stand-alone rule cannot help (condition 2). The founder chose
+not to resolve traversal (R1-FQ3; spec §12).
+
+**What stays refused (recorded limitation):** f-strings, templates,
+concatenations, globs, `../`, every outside literal on Windows, and every outside
+literal when the gateway runs as root. The workaround is to write the script with
+`write_file` and run the saved file. The guard still reads command text only. It
+does not follow a non-shell program that hands its data to a shell. It also knows
+shells by name only, so a renamed shell is not recognised
+(`shell_brace_expansion.go`, "Residual, stated").
+
 ## 11. Implementation order
 
 1. Delete the dead `<<\s*EOF` pattern; add a test asserting heredocs are

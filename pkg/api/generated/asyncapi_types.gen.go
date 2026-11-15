@@ -432,7 +432,13 @@ type BrowserWebRTCStateFrame struct {
 type CancelFrame struct {
 	Scope     *string `json:"scope,omitempty"`
 	SessionId string  `json:"session_id"`
-	Type      string  `json:"type"`
+	// #1534 (founder 2026-10-31, Q3 = A). What this client's screen showed of the answer being stopped when Stop was pressed. The server saves the stopped answer only up to this point. Sent only by a first Stop that froze a streaming answer. Absent: the server cuts at the moment it receives Stop.
+	Shown *struct {
+		CodePoints int64   `json:"code_points"`
+		MessageId  *string `json:"message_id,omitempty"`
+		TurnId     *string `json:"turn_id,omitempty"`
+	} `json:"shown,omitempty"`
+	Type string `json:"type"`
 }
 
 // CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
@@ -481,6 +487,15 @@ type ChatParticipant struct {
 	Kind        string `json:"kind"`
 	// Present iff kind=human; absent when kind=agent.
 	Source *string `json:"source,omitempty"`
+}
+
+// ChatPresenceFrame — Client → server (chat-links spec, "Watching"). Reports whether this tab is watching the chat of session_id: the tab is visible and that chat's screen is mounted. Sent with watching true when the tab starts watching and again periodically while it stays watching, and with watching false when the tab is hidden, the chat changes or the chat screen unmounts. The server keeps the claim in memory only, bound to this connection, and accepts it only for a session this connection may attach to; an unrefreshed claim expires and a closed connection drops its claims. Not journaled, not replayed, not persisted. Keep in sync by hand with contracts/components/schemas/ChatPresenceFrame.yaml.
+type ChatPresenceFrame struct {
+	// Chat session this tab is (or stopped) watching.
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+	// True while this tab is watching that chat; false when it stops.
+	Watching bool `json:"watching"`
 }
 
 // CommandSegmentInfo — ADR-092 D3/D4. One segment of the bash command awaiting approval, split with the same splitter and program resolution the bash tool itself uses (splitShellSegments / shellCommandHeadDetailed, through the tool's own D3 evaluator), listed inside ToolApprovalRequiredFrame.segments. Every segment of the command is listed, in order, because one decision approves or denies the whole call; the server records no per-segment grant for a chained command. On Windows the whole command is one segment (FR-041).
@@ -865,6 +880,14 @@ type LibraryChangedFrame struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
+// LibraryRef — Address of a file in a workspace Library (chat-links spec, Contract section). Navigation data only: it never grants access; opening the file still goes through the viewer's own Library access. Mirrors contracts/components/schemas/LibraryRef.yaml — keep both copies in sync by hand. Declared before MediaPart because the generated Zod consts are emitted in declaration order.
+type LibraryRef struct {
+	// Library path of the file, relative to the workspace Library root. For a file in a mounted folder the mount name comes first. Never empty: the Library root is not a valid target.
+	Path string `json:"path"`
+	// Workspace whose Library holds the file.
+	WorkspaceId string `json:"workspace_id"`
+}
+
 // LoopStatusFrame — Server → client. Status push for a session's active /loop (ADR-049 D6/D7/US-9). Emitted on run completion, state change, and stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class not yet assigned by the ADR-057 W5 audit (FR-089).
 type LoopStatusFrame struct {
 	MaxRuns int    `json:"max_runs"`
@@ -942,6 +965,8 @@ type MediaPart struct {
 	Caption     *string `json:"caption,omitempty"`
 	ContentType string  `json:"content_type"`
 	Filename    string  `json:"filename"`
+	// Library address of the sent file (chat-links spec, R5 and FR-021). Present for a file in a workspace Library or one of its mounted folders, for every media type; the web chat shows "Open in Library" on non-image file cards only. Omitted for a file outside every Library and when the session's workspace is unknown. Keep in sync by hand with contracts/components/schemas/MediaPart.yaml.
+	LibraryRef *LibraryRef `json:"library_ref,omitempty"`
 	// 1-based source page shown by this part. Present on parts of a page_thumbnails MediaFrame; absent otherwise.
 	PageNumber *int   `json:"page_number,omitempty"`
 	Type       string `json:"type"`
@@ -1014,6 +1039,21 @@ type NotificationFrame struct {
 	Type             string  `json:"type"`
 }
 
+// OpenInLibraryFrame — Server → client, live only (chat-links spec, "Replay guarantee" and "Tool-to-hub seam"). Sent after a successful show_to_user call to every connection bound to the chat session at that moment, asking the tab to open the workspace Library at a file. Delivered unsequenced: never numbered, journaled, persisted or replayed, so it has no seq property and a reload or reconnect never receives it. Each tab decides once, on arrival, whether to open the Library or to show an "Open in Library" notice instead. Keep in sync by hand with contracts/components/schemas/OpenInLibraryFrame.yaml.
+type OpenInLibraryFrame struct {
+	// Tool call id of the show_to_user call. Correlates the frame with its tool card only; it is not unique and is never a de-duplication key.
+	CallId string `json:"call_id"`
+	// Library path of the file, relative to the workspace Library root. For a file in a mounted folder the mount name comes first. Never empty: the Library root is not a valid target.
+	Path string `json:"path"`
+	// Server-minted identity of this open request: 16 random bytes as 32 lowercase hex characters. The client de-duplicates on session_id plus request_id.
+	RequestId string `json:"request_id"`
+	// Chat session the show_to_user call ran in.
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+	// Workspace whose Library should open.
+	WorkspaceId string `json:"workspace_id"`
+}
+
 // PermissionDenied — Structured tool-result payload emitted when a tool call is refused for permission reasons. TWO producers share this one shape and one discriminator (issue #618): pkg/agent's tool-policy denial path (approval outcomes — user/timeout/saturated/policy_denied/no_approver_configured/... — and the headless ask-policy auto-deny) and pkg/tools' filesystem-scope denial path (ResolvePath rejecting a path outside the effective scope, or on a protected carve-out). Before this schema existed, both producers hand-built this JSON with fmt.Sprintf's %q verb, which is Go-string quoting, not JSON quoting, and silently produced invalid JSON for a path or approval-tool name containing invalid UTF-8 or a C0/C1 control byte outside \n\t\r. The two producers do NOT reach the SPA the same way. pkg/tools' filesystem-scope producer (PermissionDeniedResult) writes this payload as the tool's ForLLM verbatim, which flows through the normal tool_call_result frame (live) and the persisted ToolCall.Error field (replay) — parseStructuredToolFailure lifts `reason` into the frame's top-level `error` field there, and the SPA can render it. pkg/agent's tool-policy producer (denialPayloadJSON) embeds the SAME JSON shape as plain message content (providers.Message{Role:"tool"/"system"}) on a EventKindToolExecSkipped event, never inside a tool_call_result frame's `result`; the persisted transcript entry for that denial (settleAskToolCallTranscript) records status "denied" with a boolean `Result["error"]=true`, not this typed payload, and leaves ToolCall.Error empty. parseStructuredToolFailure is therefore never invoked on the tool-policy producer's bytes — that path is LLM-facing only today; no SPA rendering claim should be made for it without a corresponding code change.
 type PermissionDenied struct {
 	// Optional machine-readable marker, added by #1284 fix round 1. Present with exactly this value when the refusal is Omnipus's protected-internal-file denial: the path is inside the Omnipus data directory's protected set (sessions, transcripts, tasks, memory, agent definitions, credentials, the master key, audit and gateway state) and is never grantable in any permission mode — God Mode included — so the consumer can distinguish it from an ordinary workspace-scope denial without parsing the reason text. Absent for every other permission denial. Set by the filesystem-scope producer (ResolvePath's carve-out refusal) and by bash's protected-operand command check.
@@ -1075,9 +1115,10 @@ type ProviderFallbackNote struct {
 	UnavailableModel *string             `json:"unavailable_model,omitempty"`
 }
 
-// ProviderRetryFrame — Server → client (provider-messages spec §7.1 item 3). Announces an automatic provider rate-limit retry inside the turn's fallback-chain execution — the candidate about to be re-called, when it will be called (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the #711 closure constraint) — built from NAMED FIELDS ONLY, never an `error` field or raw provider text; the countdown is computed from retry_at and sent_at client-side (C-11). Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
+// ProviderRetryFrame — Server → client (provider-messages spec §7.1 item 3). Announces an automatic provider retry inside the turn's fallback-chain execution, or (issue #1664) the agent loop's own retry of a call that sent no response — the candidate about to be re-called, when it will be called (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the #711 closure constraint) — built from NAMED FIELDS ONLY, never an `error` field or raw provider text; the countdown is computed from retry_at and sent_at client-side (C-11). Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
 type ProviderRetryFrame struct {
-	Attempt           int    `json:"attempt"`
+	Attempt int `json:"attempt"`
+	// The classified provider condition that triggered the retry: the fallback chain's retry causes (rate_limited and the #1280 causes), `no_response` or `empty_reply` (issue #1664, the agent loop's own retry). Plain string, not an enum.
 	ErrorCode         string `json:"error_code"`
 	MaxAttempts       int    `json:"max_attempts"`
 	Model             string `json:"model"`
@@ -1092,10 +1133,14 @@ type ProviderRetryFrame struct {
 	Type      string `json:"type"`
 }
 
-// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; the silence limit ends the call at stall_at when known), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; this attempt ends at stall_at when known — the request timeout before the first response byte, the silence limit after it — and attempt/max_attempts count the agent loop's calls, issue #1664), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
 type ProviderStatusFrame struct {
-	Retries *int   `json:"retries,omitempty"`
-	SentAt  string `json:"sent_at"`
+	// State `waiting` only, when known — the 1-based number of the agent loop's provider call (issue #1664). Sent together with max_attempts.
+	Attempt *int `json:"attempt,omitempty"`
+	// State `waiting` only, when known — the total provider calls the agent loop makes before the turn ends with an error (today 3).
+	MaxAttempts *int   `json:"max_attempts,omitempty"`
+	Retries     *int   `json:"retries,omitempty"`
+	SentAt      string `json:"sent_at"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
 	Seq         *int64  `json:"seq,omitempty"`
 	SessionId   string  `json:"session_id"`
@@ -2008,4 +2053,6 @@ const (
 	WsFrameTypeRoomEntry                WsFrameType = "room_entry"
 	WsFrameTypeRoomMemberState          WsFrameType = "room_member_state"
 	WsFrameTypeRoomMeta                 WsFrameType = "room_meta"
+	WsFrameTypeOpenInLibrary            WsFrameType = "open_in_library"
+	WsFrameTypeChatPresence             WsFrameType = "chat_presence"
 )

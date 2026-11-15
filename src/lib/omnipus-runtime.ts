@@ -11,6 +11,7 @@ import { useUiStore } from "@/store/ui";
 import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
 import { takeLibraryAttachments, mediaRefURL } from "@/lib/library-attachment";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
+import { isCancelledTurn, type StatusSuffixInput } from "@/lib/truncation";
 
 type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
 
@@ -104,7 +105,7 @@ function pushHistoryParts(
       // Cancellation is a per-call fact, independent of the enclosing answer.
       // The native UI adapter reads it from AssistantUI's UI-only artifact.
       isError: resolved.status === "error",
-      artifact: { omnipusToolStatus: resolved.status },
+      artifact: { omnipusToolStatus: resolved.status, omnipusToolError: resolved.error },
     });
   }
   if (prevTextEnd < text.length) {
@@ -186,7 +187,7 @@ function buildContentParts(
         result: tc.result,
         // Issue #617 — same derivation as pushHistoryParts above.
         isError: tc.status === "error",
-        artifact: { omnipusToolStatus: tc.status },
+        artifact: { omnipusToolStatus: tc.status, omnipusToolError: tc.error },
       });
     }
 
@@ -210,8 +211,19 @@ function buildContentParts(
 // site and removes the dead user/system arms that were typed but never reachable.
 function buildMessageStatus(msg: AssistantMessage & { isStreaming?: boolean }): ThreadMessageLike["status"] {
   if (msg.isStreaming) return { type: "running" };
+  return buildTerminalMessageStatus(msg);
+}
+
+// The outcome of an assistant turn that is no longer running. Shared by the
+// live AssistantUI rows (via buildMessageStatus) and the settled/historical
+// row (ChatScreen.tsx::VirtualAssistantMessageRow), so both report the same
+// data-status. A cancelled turn is the one rule in truncation.ts::isCancelledTurn
+// — the same rule that renders the "(interrupted)" suffix (#1671).
+export function buildTerminalMessageStatus(
+  msg: Pick<StatusSuffixInput, "status" | "truncationReason">,
+): NonNullable<ThreadMessageLike["status"]> {
   if (msg.status === "error") return { type: "incomplete", reason: "error" };
-  if (msg.status === "interrupted") return { type: "incomplete", reason: "cancelled" };
+  if (isCancelledTurn(msg)) return { type: "incomplete", reason: "cancelled" };
   return { type: "complete", reason: "stop" };
 }
 

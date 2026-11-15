@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,6 +171,13 @@ func compileInboundSchema(name string) (*jsonschema.Schema, error) {
 // Returns (msg, false) for client-side validation failures (caller responds 400).
 // Returns (msg, true) for server-side schema compile failures (caller responds 500).
 func validateBodyAgainstSchema(schemaName string, rawJSON []byte) (string, bool) {
+	return validateAgainstSchema(schemaName, rawJSON, formatSchemaError)
+}
+
+// validateAgainstSchema is validateBodyAgainstSchema with the rejection text
+// built by format, so a caller that must name the rejected field can do so
+// without changing any REST rejection message.
+func validateAgainstSchema(schemaName string, rawJSON []byte, format func(error) string) (string, bool) {
 	s, err := compileInboundSchema(schemaName)
 	if err != nil {
 		// Schema compile failure is a server-side misconfiguration — fail closed.
@@ -190,7 +198,7 @@ func validateBodyAgainstSchema(schemaName string, rawJSON []byte) (string, bool)
 	if err := s.Validate(doc); err != nil {
 		// Extract a concise first-error message. The error from jsonschema/v6
 		// is a *jsonschema.ValidationError with a tree of failures.
-		return formatSchemaError(err), false
+		return format(err), false
 	}
 	return "", false
 }
@@ -210,6 +218,34 @@ func formatSchemaError(err error) string {
 		msg = msg[idx+2:]
 	}
 	return msg
+}
+
+// formatSchemaErrorWithLocation is formatSchemaError prefixed with the
+// instance location of the first failure when it is nested (#1534: a cancel
+// frame's /shown/message_id), so the message names the field it rejects. A
+// failure at the document root keeps its bare reason. Used only for the inbound
+// frames listed in inboundFramesNamingLocation; REST rejection text stays
+// formatSchemaError's.
+func formatSchemaErrorWithLocation(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := formatSchemaError(err)
+	if m := schemaErrorLocation.FindStringSubmatch(err.Error()); m != nil && m[1] != "" {
+		msg = m[1] + ": " + msg
+	}
+	return msg
+}
+
+// schemaErrorLocation matches the instance location of the first failure in
+// a jsonschema/v6 ValidationError message ("at '/shown/code_points': ...").
+var schemaErrorLocation = regexp.MustCompile(`at '([^']*)': `)
+
+// inboundFramesNamingLocation lists the WS frame schemas whose rejection text
+// names the nested field location (#1534: CancelFrame.shown). Every other
+// frame keeps the plain formatSchemaError text.
+var inboundFramesNamingLocation = map[string]bool{
+	"CancelFrame": true,
 }
 
 // decodeAndValidate reads and validates r.Body against schemaName, then decodes
@@ -307,6 +343,9 @@ func decodeAndValidateStrict(w http.ResponseWriter, r *http.Request, schemaName 
 //
 // Callers decide whether to emit an error frame back to the client.
 func ValidateInboundFrameJSON(schemaName string, rawJSON []byte) (msg string, serverErr bool) {
+	if inboundFramesNamingLocation[schemaName] {
+		return validateAgainstSchema(schemaName, rawJSON, formatSchemaErrorWithLocation)
+	}
 	return validateBodyAgainstSchema(schemaName, rawJSON)
 }
 

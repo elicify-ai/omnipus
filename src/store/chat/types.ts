@@ -14,9 +14,11 @@ import type {
   CancelFrame,
   ServerFrame,
   LLMError as GeneratedLLMError,
+  LibraryRef,
   WorkflowStart,
   MediaFrame,
   MediaPreview,
+  ProviderStatusFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
@@ -62,6 +64,8 @@ export interface MediaAttachment {
    * `outcome: unavailable` without a reason.
    */
   unavailableReason?: MediaPreview['unavailable_reason'] | null
+  /** chat-links FR-021: the sent file's Library location (generated wire type), when it has one. */
+  libraryRef?: LibraryRef
 }
 
 // FR-H-008/FR-H-009: a subagent span brackets one sub-turn.
@@ -422,6 +426,14 @@ export interface QueuedOutboundMessage {
   id: string
   content: string
   timestamp: string
+  /** #1428: the chat this message was written in. Absent for the first message of a new chat, which has no chat id yet. */
+  targetSessionId?: string
+  /** #1428: order in which the app accepted the message; survives a bounce back into the queue, independent of the clock. */
+  seq?: number
+  /** #1428: client id of the unconfirmed first send this follow-up was typed under; only that send's chat may adopt it. */
+  firstSendOwner?: string
+  /** #1833: the unconfirmed chat this follow-up was typed under was abandoned. It is held, never sent, until the user discards it. */
+  abandoned?: boolean
 }
 
 /** Strings remain readable for persisted/test state created before #823. */
@@ -492,13 +504,27 @@ export interface ProviderStatusEventData {
   turnId: string
   /** Server clock — the last provider activity (or the round's start). */
   silentSince: string
-  /** Server clock — when the silence limit would end the call; absent when unknown. */
+  /** Server clock — when the silence limit would end this attempt; absent when unknown. */
   stallAt?: string
+  /** Issue #1664 B3 — frame `attempt` (1-based); absent when the frame does not count the call. */
+  attempt?: ProviderStatusFrame['attempt']
+  /** Issue #1664 B3 — frame `max_attempts`; absent when the frame does not count the call. */
+  maxAttempts?: ProviderStatusFrame['max_attempts']
   sentAt: string
   receivedAt: string
 }
 
 /** All per-session chat state for one concurrent session. */
+/** #1534: see SessionChatState.appliedTokenPoints. */
+export interface AppliedTokenPoints { // not-wire-format: client-side counter of applied token text, never sent as-is
+  /** Last wire message_id whose token was applied to this bubble. */
+  messageId: string
+  /** turn_id carried by that token, when it had one. */
+  turnId?: string
+  /** Applied code points per wire message_id of this bubble. */
+  codePoints: Record<string, number>
+}
+
 export interface SessionChatState {
   history: SessionHistoryState
   historyNotice?: string
@@ -765,6 +791,15 @@ export interface SessionChatState {
    * `{}` / `false` and every write site initializes it first.
    */
   mergedReplayMessageIds?: Record<string, true>
+  /**
+   * #1534: per assistant bubble id, the token text this client APPLIED to
+   * it, counted in Unicode code points per wire message_id, plus the last
+   * applied message_id and its turn. Read by markLastMessageInterrupted for
+   * the Stop checkpoint (stop-checkpoint.ts). Kept on the bucket so it shares
+   * the bucket's lifetime: a reset or replaced bucket never inherits counts.
+   * Optional: absent until a keyed token is applied.
+   */
+  appliedTokenPoints?: Record<string, AppliedTokenPoints>
   /**
    * ADR-049 D6/US-12: latest `goal_status` frame for this session, or
    * null/undefined when no goal is active. Session-scoped — the frame
@@ -1166,8 +1201,11 @@ export interface ChatStore extends HistorySlice {
    * session — e.g. the browser panel's "Take over" pausing its own pinned
    * session. Omitted (the default) targets the active session, matching
    * every pre-existing call site (Stop button, Escape, `/cancel`).
+   * Returns the #1534 checkpoint of the bubble it froze (what the screen
+   * showed), or undefined when there is nothing to report
+   * (stop-checkpoint.ts::shownCheckpointFor).
    */
-  markLastMessageInterrupted: (sessionId?: string) => void
+  markLastMessageInterrupted: (sessionId?: string) => NonNullable<CancelFrame['shown']> | undefined
 
   startToolCall: (callId: string, tool: string, params: Record<string, unknown>) => void
   resolveToolCall: (callId: string, result: unknown, status: 'success' | 'error', durationMs?: number, error?: string) => void
@@ -1195,9 +1233,11 @@ export interface ChatStore extends HistorySlice {
   /** Pending outbound messages queued while WS was disconnected. Max 5. */
   outboundQueue: OutboundQueueItem[]
   /** Queue a message for when the WS reconnects. Returns false if queue is full. */
-  enqueueOutboundMessage: (content: string, queuedMessage?: QueuedOutboundMessage) => boolean
+  enqueueOutboundMessage: (content: string, queuedMessage?: QueuedOutboundMessage, alreadyAccepted?: boolean) => boolean
   /** Send all queued messages now that the WS is connected. */
   drainOutboundQueue: () => void
+  /** #1833: remove one queued message (by id) from both queue lists, e.g. a follow-up held because its chat was not saved. */
+  discardQueuedMessage: (id: string) => void
   /**
    * BUG FIX (2026-07): messages handed off from `outboundQueue` by
    * `drainOutboundQueue()`, sent ONE AT A TIME. `sendMessage` only allows one
@@ -1243,7 +1283,7 @@ export interface ChatStore extends HistorySlice {
    * button attaches to its message into Omnipus's main (W1 create an agent,
    * W18 set up a team, for a named workspace). Never an instruction.
    */
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; queueSeq?: number; workflowStart?: WorkflowStart }) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED

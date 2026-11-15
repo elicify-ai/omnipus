@@ -40,6 +40,7 @@
         "tests/e2e/open-in-chat.spec.ts",
         "tests/e2e/settings.spec.ts",
         "tests/e2e/memory-remember-recall.spec.ts",
+        "tests/e2e/memory-scripted-round-trip.spec.ts",
         "tests/e2e/agent-grep.spec.ts"
       ]
     },
@@ -149,6 +150,7 @@
       "key_slot": "b",
       "port": 6064,
       "specs": [
+        "tests/e2e/ask-user-teardown-fixture.spec.ts",
         "tests/e2e/about.spec.ts",
         "tests/e2e/api-errors.spec.ts",
         "tests/e2e/fresh-install.spec.ts",
@@ -203,14 +205,15 @@
       ]
     },
     {
-      "_comment": "ADR-067 \u00a713.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. Nothing here calls an LLM, so the key_slot is irrelevant.",
+      "_comment": "ADR-067 \u00a713.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. No test here calls an LLM, so the key_slot is irrelevant (the suite's global setup still preflights the live keys and onboards this shard's gateway): preview-isolation-webserve.spec.ts boots a private gateway per test whose model edge is a local scripted provider (tests/e2e/fixtures/preview-isolation/mint-provider.ts), so its minting turns make no live-model call.",
       "group": "preview-isolation",
       "key_slot": "c",
       "port": 6083,
       "specs": [
         "tests/e2e/preview-isolation.spec.ts",
         "tests/e2e/preview-bundle.spec.ts",
-        "tests/e2e/preview-svg.spec.ts"
+        "tests/e2e/preview-svg.spec.ts",
+        "tests/e2e/preview-isolation-webserve.spec.ts"
       ]
     },
     {
@@ -221,6 +224,15 @@
       "specs": [
         "tests/e2e/preview-pdf-toplevel.spec.ts",
         "tests/e2e/preview-pdf-viewer-control.spec.ts"
+      ]
+    },
+    {
+      "_comment": "Chat links (chat-links spec TDD row 22). One render spec; kept off the solo list and off the ~6-spec render shards.",
+      "group": "ui-chat-links",
+      "key_slot": "a",
+      "port": 6084,
+      "specs": [
+        "tests/e2e/chat-links.spec.ts"
       ]
     },
     {
@@ -269,7 +281,7 @@
       ]
     },
     {
-      "_comment": "SOLO. Five measured timing-sensitive specs. The timing-sensitive set measured to flake under ANY co-tenant CPU contention (commit 4b4948e2b, 2026-07-16: at 2-wide, idle-no-reconnect saw 9 WS reconnects in 90 s with pings unanswered, and multi-turn-render/replay-fidelity/settings-memory saw the chat input disabled >30 s while a CPU-heavy co-tenant shard starved the gateway). They need the whole worker. The eight specs that later joined the old ui-heavy shard were placed there for surface affinity, not timing sensitivity -- the 2026-09-16 rebalance moved them to the concurrent ui-browser/ui-render shards so only the measured-sensitive five pay the serial solo cost. Note: retention.spec.ts re-logins without refreshing storageState (sanctioned in scripts/check-e2e-login-crosstalk.sh); settings-memory runs after it here exactly as before the split and tolerates the stale cookie via MemorySection's free-text fallback.",
+      "_comment": "SOLO. Five measured timing-sensitive specs. The timing-sensitive set measured to flake under ANY co-tenant CPU contention (commit 4b4948e2b, 2026-07-16: at 2-wide, idle-no-reconnect saw 9 WS reconnects in 90 s with pings unanswered, and multi-turn-render/replay-fidelity/settings-memory saw the chat input disabled >30 s while a CPU-heavy co-tenant shard starved the gateway). They need the whole worker. The eight specs that later joined the old ui-heavy shard were placed there for surface affinity, not timing sensitivity -- the 2026-09-16 rebalance moved them to the concurrent ui-browser/ui-render shards so only the measured-sensitive five pay the serial solo cost. Note: retention.spec.ts mints no extra login — its /reload calls authenticate with the bearer of its private canonical gateway's own login (GatewayProcess.reloadBearer, sent via tests/e2e/fixtures/reload-bearer.ts), so no session cookie is rotated; settings-memory runs after it here exactly as before the split.",
       "group": "ui-heavy",
       "key_slot": "c",
       "port": 6065,

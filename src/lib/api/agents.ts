@@ -62,7 +62,7 @@ export function isWorker(a: { type?: string | null }): boolean {
 // Forcing callers to name their intent (`scoped` vs `unscoped`) makes that
 // mistake a type error instead of a silent behavior change. Mirrors the
 // `{ kind: '...' }` discriminated-union idiom already used for hook state in
-// this codebase (see `CliValidationState` in useCliPathValidation.ts).
+// this codebase (see `CommandPreviewState` in useCommandPreview.ts).
 // not-wire-format: UI-only helper type consumed by buildTaskAssigneeItems; never serialized across the gateway/SPA boundary
 export type AssigneeTeamScope =
   | { kind: 'scoped'; ids: Set<string> }

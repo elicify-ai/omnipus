@@ -88,6 +88,9 @@ const EXPLICIT_LABELS: Record<string, string> = {
   update_task: 'Update task',
   list_tasks: 'List tasks',
   delete_task: 'Delete task',
+  // Pinned (#1683). The generic splitter already yields "Run task"; the
+  // explicit entry keeps the chip label stable if that splitter changes.
+  run_task: 'Run task',
   create_task_in_workspace: 'Create task in workspace',
   update_task_in_workspace: 'Update task in workspace',
   list_tasks_in_workspace: 'List tasks in workspace',

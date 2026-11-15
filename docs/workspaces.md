@@ -78,6 +78,8 @@ Deleting a non-default workspace through Settings or the workspace API disables 
 
 For a workspace created through the app or workspace API with an empty team, the server attempts to post a setup offer in Omnipus's existing main chat. After a successful post, another claim does not post the offer again. Omnipus-created workspaces do not trigger this automatic offer.
 
+When Omnipus's main chat is open, the saved offer line (and a failure note, if one is added) now appears there right away, and it is shown again if the chat reconnects. The line only shows that the offer was saved. It does not prove that a setup question card has started. If an older question is still waiting in that chat, the new question may not appear until that one is resolved; Omnipus does not queue questions durably yet, so if no question appears, use **Team** → **Set up a team**.
+
 If the offer entry was saved but its turn could not start, the chat attempts to add a failure note pointing to **Team**. Earlier failures — preparing the main chat, claiming pending state or saving the offer — can appear only in the gateway log. If no offer appears, open the workspace's **Team** panel and use **Set up a team**; do not wait for a chat error that may not have been saved.
 
 ## How to set who may delegate to whom

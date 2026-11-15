@@ -51,7 +51,26 @@ properties:
   stall_at:
     type: string
     format: date-time
-    description: State `waiting` only, when known — RFC 3339 server time at which the silence limit will end the call.
+    description: >-
+      State `waiting` only, when known — RFC 3339 server time at which this
+      attempt ends. Before the first response byte it is the attempt start plus
+      the provider's request timeout (the configured request_timeout, default
+      120 s; issue #1664); once the stream has started it is the last activity
+      plus the stream's silence limit (issue #1478).
+  attempt:
+    type: integer
+    minimum: 1
+    description: >-
+      State `waiting` only, when known — the 1-based number of the provider call
+      this notice belongs to (issue #1664: "attempt N of max_attempts"). Absent
+      when the call is not counted by the agent loop's timeout recovery.
+  max_attempts:
+    type: integer
+    minimum: 1
+    description: >-
+      State `waiting` only, when known — how many calls the agent loop makes in
+      total before the turn ends with an error (today 3; issue #1664). Sent
+      together with attempt.
   retries:
     type: integer
     minimum: 1

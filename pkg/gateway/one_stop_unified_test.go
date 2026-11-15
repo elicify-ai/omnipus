@@ -188,6 +188,34 @@ func newOneStopGatewayFixture(t *testing.T) *oneStopGatewayFixture {
 	return &oneStopGatewayFixture{al: al, lifecycle: lifecycle, probe: probe, rootID: meta.ID, childID: launched.SessionID}
 }
 
+// stopRootTree stops the fixture's root chat and its parked helper with the one
+// Stop, then waits until the helper's probe tool was cancelled, so no steered
+// turn is left running when the test's agent loop is closed.
+func (f *oneStopGatewayFixture) stopRootTree(t *testing.T) {
+	t.Helper()
+	res, err := f.al.StopSession(context.Background(), agent.StopRequest{
+		SessionID: f.rootID, Channel: "webchat", Tree: true,
+		By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "one-stop-human"},
+	})
+	if err != nil {
+		t.Errorf("stop the fixture's root chat during cleanup: %v", err)
+		return
+	}
+	// StopSession reports per-session failures in the result, not in err; keep
+	// going to the wait below so the helper is still joined, but do not hide them.
+	if res.RootErr != nil {
+		t.Errorf("cleanup stop of the fixture's root chat failed: %v", res.RootErr)
+	}
+	for _, item := range res.Report.Unreachable {
+		t.Errorf("cleanup stop could not reach session %s: %s", item.ID, item.Reason)
+	}
+	select {
+	case <-f.probe.cancelled:
+	case <-time.After(10 * time.Second):
+		t.Errorf("the fixture's helper turn was not cancelled within 10s of the cleanup stop")
+	}
+}
+
 func probeNotCancelled(p *oneStopProbeTool) error {
 	select {
 	case <-p.cancelled:
@@ -315,6 +343,10 @@ func TestOneStop_RestDeletePlainChatWithLiveTurn_SameStopThenDeleteOrVisibleErro
 		t.Fatal("SETUP: the plain chat's turn never entered the probe tool")
 	}
 	require.NoError(t, probeNotCancelled(probe), "SETUP: nothing may be cancelled before the DELETE")
+	// The DELETE below stops only the plain chat. The fixture's helper stays
+	// parked in f.probe under the root chat, so stop it before the loop closes:
+	// a steered turn left running outlives Close (#1821).
+	t.Cleanup(func() { f.stopRootTree(t) })
 
 	api := &restAPI{agentLoop: f.al, allowedOrigin: "http://localhost:3000", homePath: config.OmnipusHomeDir()}
 	w := httptest.NewRecorder()

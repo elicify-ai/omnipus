@@ -14,6 +14,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -141,6 +142,11 @@ agentLoopRunTurnResponseCallLLMWithRetriesLoop1:
 
 // handleAttemptFailure handles repair, media downgrade, and exhausted fallback errors for one attempt.
 func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry int) agentLoopRunTurnResponseCallLLMWithRetriesFlow {
+	// Issue #1664 B3: the waiting notice of this call shows "attempt N of
+	// max" — the loop makes at most maxRetries+1 calls.
+	rt := cr.rr.rq.ri.rf.rt
+	rt.providerAttempt, rt.providerMaxAttempts = retry+1, cr.maxRetries+1
+	defer func() { rt.providerAttempt, rt.providerMaxAttempts = 0, 0 }()
 	cr.rr.rq.ri.rf.response, cr.rr.rq.ri.rf.err = cr.rr.rq.ri.rf.callLLM(cr.rr.rq.ri.rf.callMessages, cr.rr.rq.ri.rf.providerToolDefs)
 	if cr.rr.rq.ri.rf.err == nil {
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
@@ -306,6 +312,11 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 			if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 				return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 			}
+			// Issue #1664 B7: same Stop rule as the timeout retry below.
+			if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+				cr.rr.rq.ri.rf.err = context.Canceled
+				return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+			}
 			// Apply the same "don't retry if partial content was already
 			// streamed" guard as the isTimeoutError path to avoid duplicating
 			// text in an in-progress SPA bubble.
@@ -343,7 +354,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 					Backoff:    backoff,
 				},
 			)
-			if sleepErr := sleepWithContext(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
+			if sleepErr := cr.rr.rq.ri.rf.rt.ts.waitRetryBackoff(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
 				if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 					cr.rr.rq.ri.turnStatus = TurnEndStatusAborted
 					cr.rr.ret0, cr.rr.ret1 = cr.rr.rq.ri.rf.rt.al.abortTurn(cr.rr.rq.ri.rf.rt.ts, "llm_retry_backoff", hardInterruptAbortReason)
@@ -420,6 +431,12 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		// events before the canceled turnCtx collapses the backoff. Breaking
 		// here lets the canceled turn finalize quietly.
 		if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
+			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+		}
+		// Issue #1664 B7: a Stop that already reached the turn ends it
+		// canceled — no retry frame, no further provider call.
+		if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+			cr.rr.rq.ri.rf.err = context.Canceled
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
 		// FIX 1: only inline-retry a transport-drop when NO partial content
@@ -568,16 +585,17 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		if backoff < 500*time.Millisecond {
 			backoff = 500 * time.Millisecond
 		}
+		// Issue #1664 R3-8: a Stop can land after the checks above (during
+		// the turn-timeout event or the window trim). Re-check right before
+		// announcing the retry so no retry frame follows a Stop.
+		if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+			cr.rr.rq.ri.rf.err = context.Canceled
+			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+		}
 		cr.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindLLMRetry,
 			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-			LLMRetryPayload{
-				Attempt:    retry + 1,
-				MaxRetries: cr.maxRetries,
-				Reason:     "timeout",
-				Error:      cr.rr.rq.ri.rf.err.Error(),
-				Backoff:    backoff,
-			},
+			cr.timeoutRetryPayload(retry, backoff),
 		)
 		// ADR-091 boundary 5 (FR-B-001): a steered
 		// session's retry notice is never the user's audience.
@@ -591,7 +609,10 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 			"retry":   retry,
 			"backoff": backoff.String(),
 		})
-		if sleepErr := sleepWithContext(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
+		// Issue #1664 B7: a Stop during the announced backoff wakes the wait
+		// (context.Canceled) and the turn ends canceled below, before any
+		// further provider call or retry frame.
+		if sleepErr := cr.rr.rq.ri.rf.rt.ts.waitRetryBackoff(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
 			if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 				cr.rr.rq.ri.turnStatus = TurnEndStatusAborted
 				cr.rr.ret0, cr.rr.ret1 = cr.rr.rq.ri.rf.rt.al.abortTurn(cr.rr.rq.ri.rf.rt.ts, "llm_timeout_backoff", hardInterruptAbortReason)
@@ -964,4 +985,39 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 
 	rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseTools)
 	return nil
+}
+
+// timeoutRetryPayload is the loop's timeout-retry event (issue #1664 B5): it
+// carries what the provider_retry frame renders — the call ABOUT to be made
+// (the providers.RetryInfo convention, 2..max), the total calls, when the
+// backoff ends (RetryAt = SentAt + Backoff) and the frame's session (the
+// transcript session, u9ToolExecSessionIDs — routingSessionID is never a
+// frame destination, ADR-057 consumer set). Reason
+// "empty_reply" marks an empty stream (common.ErrEmptyStream), "timeout"
+// every other timeout-class failure; the hub maps them to the frame's
+// error_code. Error stays log-only.
+func (cr *agentLoopRunTurnResponseCallLLMWithRetries) timeoutRetryPayload(retry int, backoff time.Duration) LLMRetryPayload {
+	rt := cr.rr.rq.ri.rf.rt
+	reason := "timeout"
+	if errors.Is(cr.rr.rq.ri.rf.err, common.ErrEmptyStream) {
+		reason = "empty_reply"
+	}
+	provider := ""
+	if len(rt.activeCandidates) > 0 {
+		provider = rt.activeCandidates[0].Provider
+	}
+	sentAt := time.Now()
+	return LLMRetryPayload{
+		Attempt:     retry + 2,
+		MaxRetries:  cr.maxRetries,
+		Reason:      reason,
+		Error:       cr.rr.rq.ri.rf.err.Error(),
+		Backoff:     backoff,
+		Provider:    provider,
+		Model:       rt.llmModel,
+		SentAt:      sentAt,
+		RetryAt:     sentAt.Add(backoff),
+		MaxAttempts: cr.maxRetries + 1,
+		SessionID:   u9ToolExecSessionIDs(rt.ts),
+	}
 }

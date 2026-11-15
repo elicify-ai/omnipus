@@ -4,7 +4,8 @@ package gateway
 // #1644/#1695, CHECK 1 finding F5). The trim goroutine's exit after its
 // cancel is near-instant, so the only observable of a MISSING join is the
 // sweep still WALKING profiles when the drain has already returned: the
-// sweep is ctx-unaware (TrimAllEligible runs to completion), and per
+// sweep is not cancelled until the drain starts (it checks its context only
+// between profiles since #1730, and no cancel arrives before then), and per
 // profile it CREATES a sibling .chrome.lock file and REMOVES the allow-listed
 // cache directories. This test plants enough real profiles that the sweep
 // outlasts the drain, waits for the first profile to be touched (the sweep
@@ -44,7 +45,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// trimKillProfiles is the planted-profile count: enough that the ctx-unaware
+// trimKillProfiles is the planted-profile count: enough that the uncancelled
 // boot sweep is still mid-walk when the drain starts, whatever the machine.
 const trimKillProfiles = 1200
 
@@ -112,7 +113,7 @@ func TestTrimSweep_JoinedBeforeHomeRemoval(t *testing.T) {
 	t.Cleanup(gate.release)
 
 	// The sweep is provably mid-flight here: at least one profile has been
-	// locked or already trimmed, and the sweep never re-checks its context
+	// locked or already trimmed, and nothing cancels the sweep's context
 	// until the whole walk is done.
 	firstProfileTouch(t, profileRoot, plantedDirs)
 

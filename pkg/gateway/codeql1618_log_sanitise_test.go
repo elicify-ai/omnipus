@@ -38,7 +38,21 @@ func codeQL1618ControlCases(includeNUL bool) []codeQL1618ControlCase {
 			name: fmt.Sprintf("control_%02x", control), value: string(control),
 		})
 	}
-	return append(cases, codeQL1618ControlCase{name: "control_7f", value: "\x7f"})
+	cases = append(cases, codeQL1618ControlCase{name: "control_7f", value: "\x7f"})
+	// #1666 F1: the non-ASCII record-boundary characters. U+0085 (NEL) is the
+	// C1 line-break analogue; U+2028/U+2029 are the Unicode line/paragraph
+	// separators, which a request path such as %E2%80%A8 delivers through
+	// validateEntityID (it rejects only /, \, .. and NUL). Invalid UTF-8 is
+	// the transport-replacement class: every JSON/zerolog sink rewrites it to
+	// U+FFFD, so the record-level oracle observes it only where the raw bytes
+	// reach the logger. All four are drifted against safeLogValue, not merely
+	// enumerated: a future ASCII-only rewrite of the sanitiser must fail these.
+	return append(cases,
+		codeQL1618ControlCase{name: "control_85", value: "\u0085"},
+		codeQL1618ControlCase{name: "line_separator_2028", value: "\u2028"},
+		codeQL1618ControlCase{name: "paragraph_separator_2029", value: "\u2029"},
+		codeQL1618ControlCase{name: "invalid_utf8", value: "\xff\xfe"},
+	)
 }
 
 func codeQL1618SingleRecord(t *testing.T, logs *redactionLogCapture, message string) redactionLogRecord {

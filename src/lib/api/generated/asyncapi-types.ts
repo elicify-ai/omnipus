@@ -93,7 +93,9 @@ export type WsFrameType =
   | "room_snapshot"
   | "room_entry"
   | "room_member_state"
-  | "room_meta";
+  | "room_meta"
+  | "open_in_library"
+  | "chat_presence";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -198,6 +200,11 @@ export interface RoomDeliveryState {
   reason?: string;
 }
 
+export interface LibraryRef {
+  workspace_id: string;
+  path: string;
+}
+
 export interface MediaPart {
   type: "image" | "audio" | "video" | "file";
   url: string;
@@ -205,6 +212,7 @@ export interface MediaPart {
   content_type: string;
   caption?: string;
   page_number?: number;
+  library_ref?: LibraryRef;
 }
 
 export interface MediaPreview {
@@ -324,6 +332,11 @@ export interface CancelFrame {
   type: "cancel";
   session_id: string;
   scope?: "session" | "tree";
+  shown?: {
+    turn_id?: string;
+    message_id?: string;
+    code_points: number;
+  };
 }
 
 export interface RedirectFrame {
@@ -338,6 +351,12 @@ export interface PingFrame {
 
 export interface PongFrame {
   type: "pong";
+}
+
+export interface ChatPresenceFrame {
+  type: "chat_presence";
+  session_id: string;
+  watching: boolean;
 }
 
 export interface AttachSessionFrame {
@@ -421,7 +440,7 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
+  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "provider_empty_reply" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
@@ -434,7 +453,7 @@ export interface LLMError {
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
+  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "provider_empty_reply" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   provider_message?: boolean;
@@ -727,6 +746,8 @@ export interface ProviderStatusFrame {
   sent_at: string;
   silent_since?: string;
   stall_at?: string;
+  attempt?: number;
+  max_attempts?: number;
   retries?: number;
   seq?: number;
 }
@@ -786,6 +807,15 @@ export interface MediaFrame {
   presentation?: "inline" | "page_thumbnails";
   preview?: MediaPreview;
   seq?: number;
+}
+
+export interface OpenInLibraryFrame {
+  type: "open_in_library";
+  session_id: string;
+  call_id: string;
+  request_id: string;
+  workspace_id: string;
+  path: string;
 }
 
 export interface CommandSegmentInfo {
@@ -1529,6 +1559,7 @@ export type WsFrame =
   | RedirectFrame
   | PingFrame
   | PongFrame
+  | ChatPresenceFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | SessionStartedFrame
@@ -1555,6 +1586,7 @@ export type WsFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
+  | OpenInLibraryFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
@@ -1614,6 +1646,7 @@ export type ClientFrame =
   | CancelFrame
   | RedirectFrame
   | PingFrame
+  | ChatPresenceFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | AskUserAnswerFrame
@@ -1632,7 +1665,7 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["attach_room", "auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
+export const ClientFrameTypes = ["attach_room", "auth", "message", "cancel", "redirect", "ping", "chat_presence", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -1668,6 +1701,7 @@ export type ServerFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
+  | OpenInLibraryFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame

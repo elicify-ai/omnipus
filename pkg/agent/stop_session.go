@@ -62,6 +62,20 @@ type StopRequest struct {
 	// stop - so a live client learns of it before the turn's end can report the
 	// message as working.
 	OnInputDiscarded func(DiscardedInput)
+	// Shown is the stopping web client's screen checkpoint (#1534). It
+	// reaches only the requested session's own turn; helpers reached by Stop
+	// all and a Continue of an accepted control get none.
+	Shown *StopShown
+}
+
+// rootShown is the screen checkpoint for the requested session's own turn.
+// Continuing an already-accepted control carries none: that control was
+// accepted earlier (possibly before a restart) without this client's screen.
+func (req StopRequest) rootShown() *StopShown {
+	if req.Continue != nil {
+		return nil
+	}
+	return req.Shown
 }
 
 // StopResult reports what one Stop reached.
@@ -148,7 +162,7 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		// own turn is the whole tree.
 		res.Discarded, res.DiscardErr = al.discardUndeliveredHumanInput(req.SessionID)
 		notifyDiscarded(req.OnInputDiscarded, res.Discarded)
-		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true}, canceller, hooksFor(req.SessionID))
+		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true, Shown: req.rootShown()}, canceller, hooksFor(req.SessionID))
 		return al.finishPlainStop(res), nil
 	}
 	var mu sync.Mutex
@@ -165,8 +179,11 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		// discarded by this Stop, and labelled.
 		discarded, discardErr := al.discardUndeliveredHumanInput(id)
 		notifyDiscarded(req.OnInputDiscarded, discarded)
-		outcome, err := al.RequestCancel(effectCtx,
-			CancelScope{SessionID: id, TurnOnly: true, Generation: generation}, canceller, hooksFor(id))
+		scope := CancelScope{SessionID: id, TurnOnly: true, Generation: generation}
+		if id == req.SessionID {
+			scope.Shown = req.rootShown()
+		}
+		outcome, err := al.RequestCancel(effectCtx, scope, canceller, hooksFor(id))
 		mu.Lock()
 		res.Discarded = append(res.Discarded, discarded...)
 		res.DiscardErr = errors.Join(res.DiscardErr, discardErr)
@@ -216,7 +233,7 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		}
 		res.Discarded, res.DiscardErr = al.discardUndeliveredHumanInput(req.SessionID)
 		notifyDiscarded(req.OnInputDiscarded, res.Discarded)
-		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true}, canceller, hooksFor(req.SessionID))
+		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true, Shown: req.rootShown()}, canceller, hooksFor(req.SessionID))
 		res = al.finishPlainStop(res)
 		for _, child := range children {
 			report, stopErr := stopper.StopTurnsWithCause(ctx, child.SessionID, req.By, true, session.StopCauseCascade, stopTurn)

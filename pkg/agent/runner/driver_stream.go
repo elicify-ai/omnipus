@@ -217,9 +217,9 @@ func deliverFatal(ctx context.Context, out chan<- RunEvent, ev RunEvent) bool {
 }
 
 // detectCLIVersion runs `<binary> --version` and returns the parsed version
-// string (a clean version token, not the raw output line). On failure it
-// returns ("", err). The caller SHOULD log a warning on unknown versions and
-// degrade gracefully (FR-5.6).
+// string (a clean version token, never the raw output line; "" when the output
+// has none). On failure it returns ("", err). The caller SHOULD log a warning
+// on unknown versions and degrade gracefully (FR-5.6).
 //
 // Both stdout and stderr are considered: some CLIs print their version to
 // stderr, so CombinedOutput is used (mirroring conntest.probeVersion).
@@ -246,11 +246,10 @@ func detectCLIVersion(ctx context.Context, binary string) (string, error) {
 	text := strings.TrimSpace(string(out))
 	v := extractVersion(text)
 	if v == "" {
-		// The binary ran (no error) but emitted nothing version-looking. Return
-		// the trimmed first line as a best-effort handshake signal so the caller
-		// can still log a degraded-version warning rather than treating it as a
-		// hard detection failure.
-		return firstLine(text), nil
+		// The binary ran (no error) but emitted nothing version-looking. This
+		// is not a hard detection failure: the caller degrades gracefully on
+		// the empty version. The output line stays in the server log.
+		slog.Warn("version check: the output has no version", "binary", binary, "first_line", firstLine(text))
 	}
 	return v, nil
 }

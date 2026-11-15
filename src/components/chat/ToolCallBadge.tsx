@@ -9,6 +9,7 @@ import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { SetGoalCardBlock, partStatusFromToolCallStatus } from './tools/SetGoalToolUI'
+import { isTaskToolName, TaskToolCardBlock } from './tools/TaskToolUI'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
@@ -73,6 +74,22 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
         isError={toolCall.status === 'error' || marshalErr || sentinels.any}
         error={toolCall.error}
         durationMs={toolCall.duration_ms}
+      />
+    )
+  }
+  // #1683: task tools get the same readable card on replay that the live
+  // registration renders. A malformed trigger falls back to the generic chip
+  // inside the card block; a refusal shows the error, never a success card.
+  if (isTaskToolName(toolCall.tool)) {
+    return (
+      <TaskToolCardBlock
+        toolName={toolCall.tool}
+        args={toolCall.params}
+        result={toolCall.result}
+        status={partStatusFromToolCallStatus(toolCall.status)}
+        isRunning={toolCall.status === 'running'}
+        isError={toolCall.status === 'error' || marshalErr || sentinels.any}
+        error={toolCall.error}
       />
     )
   }

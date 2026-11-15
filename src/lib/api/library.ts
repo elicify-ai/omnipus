@@ -100,7 +100,7 @@ import type {
   RelationWriteResponse,
   KnowledgeConflictError,
 } from '@/lib/api/generated/openapi-types'
-import { ApiSchemaError, BASE_URL, CSRF_HEADER_NAME, _recordApiSchemaError, buildHeaders, readCSRFCookie, request, withCsrfRetry } from './http'
+import { ApiSchemaError, BASE_URL, CSRF_HEADER_NAME, _recordApiSchemaError, buildHeaders, isAbortedBodyRead, readCSRFCookie, request, withCsrfRetry } from './http'
 
 // ── Library (library-spec.md) ────────────────────────────────────────────────
 //
@@ -771,7 +771,9 @@ async function attemptPutLibraryVersionedWrite<TRes>(
   let raw: unknown
   try {
     raw = (await res.json()) as unknown
-  } catch {
+  } catch (cause) {
+    // A cancelled read is not a malformed response (#1794).
+    if (isAbortedBodyRead(cause, signal)) throw cause
     _recordApiSchemaError(`PUT /api/v1${apiPath}`, 1)
     const schemaErr = new ApiSchemaError(
       `PUT /api/v1${apiPath}`,
@@ -814,7 +816,9 @@ export async function fetchLibraryContentVersioned(
   let raw: unknown
   try {
     raw = (await res.json()) as unknown
-  } catch {
+  } catch (cause) {
+    // A cancelled read is not a malformed response (#1794).
+    if (isAbortedBodyRead(cause)) throw cause
     _recordApiSchemaError(`GET /api/v1${apiPath}`, 1)
     const schemaErr = new ApiSchemaError(
       `GET /api/v1${apiPath}`,

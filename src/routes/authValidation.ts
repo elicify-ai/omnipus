@@ -1,4 +1,4 @@
-import { isApiError } from '@/lib/api-error'
+import { isApiError, isPlantedCookieClearedError } from '@/lib/api-error'
 
 // #359: validateToken() used to run as a raw, uncached fetch on EVERY route
 // transition, and the route guard cleared auth on ANY error. With hot_reload now
@@ -39,6 +39,18 @@ export async function checkTokenValidity(
     // failure (network status 0, 5xx) must NOT log the user out — keep the
     // session and let the next check decide. A 401 also clears the cache so the
     // next attempt re-validates rather than riding a stale "ok" window.
+    //
+    // ADR-094 FR-015 (#950 F5): a 401 carrying planted_cookie_cleared is NOT a
+    // confirmed-invalid session. The gateway refused THIS request because a
+    // preview planted a duplicate cookie, and the same response deletes only
+    // the planted copies — never the genuine session cookie. Validity is
+    // unknown until the next, clean request; treat it as inconclusive so a
+    // page reload or a re-check never force-logs the user out over a plant.
+    // A genuinely dead session still answers the next request with a plain
+    // 401, which logs out as before.
+    if (isPlantedCookieClearedError(err)) {
+      return 'transient'
+    }
     if (isApiError(err) && err.status === 401) {
       lastValidatedAt = 0
       return 'unauthorized'

@@ -27,9 +27,7 @@ import (
 
 func withSysagentEdition(t *testing.T, e string) {
 	t.Helper()
-	prev := config.Edition
-	config.Edition = e
-	t.Cleanup(func() { config.Edition = prev })
+	t.Cleanup(config.SetEdition(e))
 }
 
 func startSysagentCanary(t *testing.T) (*httptest.Server, *atomic.Int64) {

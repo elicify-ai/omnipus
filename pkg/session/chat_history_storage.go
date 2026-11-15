@@ -442,6 +442,14 @@ func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint, dis
 	for off < info.Size() {
 		frame, next, readErr := t.readFrame(off, info.Size())
 		if errors.Is(readErr, io.ErrUnexpectedEOF) {
+			// An incomplete tail is discarded only when proveTornFrame finds no
+			// proof that it cannot be a cut-off write. Its checks use plain JSON
+			// rules, not the writer's exact record shape, so some damage that
+			// still looks like a valid start is discarded and redone; damage
+			// the checks do rule out refuses (#1523).
+			if tornErr := t.proveTornFrame(off, info.Size()); tornErr != nil {
+				return historyCheckpoint{}, false, tornErr
+			}
 			if !discard {
 				return historyCheckpoint{}, false, nil
 			}

@@ -26,3 +26,19 @@ func (ts *turnState) persistCancelOutcome(method string) {
 		persist.once.Do(func() { persist.write(method) })
 	}
 }
+
+// persistCancelBeforeDone writes a claimed cancel's turn_canceled record now,
+// with the method Finish would report, so it is readable before the turn's
+// done frame is published (#1524). The write is once-only: Finish's own
+// callback later joins it instead of appending a second record. A turn no
+// cancel claimed writes nothing.
+func (ts *turnState) persistCancelBeforeDone() {
+	if !ts.cancelFired.Load() {
+		return
+	}
+	method := "graceful"
+	if ts.hardAbortRequested() {
+		method = "hard"
+	}
+	ts.persistCancelOutcome(method)
+}

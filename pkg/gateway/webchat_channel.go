@@ -231,6 +231,13 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 
 	sid, origin := c.resolveOutbound(msg.ChatID, msg.SessionID)
 
+	// chat-links FR-021 (live half): a sent file in this turn's workspace
+	// Library carries library_ref, so the card can offer "Open in Library".
+	var mediaStore media.MediaStore
+	if c.wsHandler != nil && c.wsHandler.agentLoop != nil {
+		mediaStore = c.wsHandler.agentLoop.GetMediaStore()
+	}
+
 	parts := make([]generated.MediaPart, 0, len(msg.Parts))
 	for _, p := range msg.Parts {
 		if !strings.HasPrefix(p.Ref, "media://") {
@@ -252,6 +259,7 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 			page := p.PageNumber
 			part.PageNumber = &page
 		}
+		part.LibraryRef = libraryRefForMedia(mediaStore, c.wsHandler.home, p.Ref, msg.WorkspaceID)
 		parts = append(parts, part)
 	}
 	if group {

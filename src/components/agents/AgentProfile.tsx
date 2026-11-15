@@ -52,7 +52,6 @@ import {
   fetchConfig,
   fetchActivity,
   fetchSkills,
-  testAgentRunner,
   workspacesQueryKeys,
   getCsrfCookie,
   CSRF_HEADER_NAME,
@@ -147,23 +146,31 @@ function useSmAndUp(): boolean {
   return matches
 }
 
-// r17 17.6: "Change in Settings" beside the read-only Program line. The
-// profile is hosted inside the app router; where no router is mounted (an
-// isolated component render) a plain link to the same address is used, since
-// a router Link cannot render without one.
-function ProgramSettingsLink() {
+// r17 17.6: "Change in Settings" beside the read-only Program line, opening
+// Settings on the Third-party agents tab (T11 FR-8). The profile is hosted
+// inside the app router; where no router is mounted (an isolated component
+// render) a plain link to the same address is used, since a router Link cannot
+// render without one. onNavigate closes the agent sheet the link sits in.
+function ProgramSettingsLink({ onNavigate }: { onNavigate: () => void }) {
   const router = useRouter({ warn: false })
   const className =
     'shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline-offset-2 hover:underline'
   if (!router) {
     return (
-      <a href="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
+      <a href="/settings?tab=third-party-agents" tabIndex={0} data-testid="profile-program-settings-link" onClick={onNavigate} className={className}>
         Change in Settings
       </a>
     )
   }
   return (
-    <Link to="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
+    <Link
+      to="/settings"
+      search={{ tab: 'third-party-agents' }}
+      tabIndex={0}
+      data-testid="profile-program-settings-link"
+      onClick={onNavigate}
+      className={className}
+    >
       Change in Settings
     </Link>
   )
@@ -305,15 +312,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // agent inherits "ready" a render too early and reproduces the same bug
   // on every subsequent agent open.
   const [formHydrated, setFormHydrated] = useState(false)
-
-  // I12: cache the executor kind+cli we've already passed the runner-test
-  // for, so the auto-save debounce (500 ms) doesn't re-fire the test on
-  // every unrelated keystroke while the user has external-cli selected. We
-  // re-test when the kind or cli changes (or the agent id changes). T8: the
-  // agent has no program path of its own any more — the program per CLI is
-  // set by a person in Settings → Third-party agents.
-  type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; agentId: string | null }
-  const testedExecutorSig = useRef<ExecutorSig | null>(null)
 
   // §6.3: the last save's outcome is unknown (transport failure), not refused.
   const [saveUncertain, setSaveUncertain] = useState(false)
@@ -668,7 +666,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // and /api/v1/performance is an admin-only read (503 under dev-mode bypass).
   const globalToolIterationLimit = useGlobalToolIterationLimit({ enabled: isOpen })
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
-    ? buildExecutorPreviewRequest(executor.cli, model, executor.effective_cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)
+    ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_args, ownToolIterationLimit ?? undefined)
     : undefined
 
   // ── Effort of the primary model (effort-levels-spec-r10.md FR-019, FR-029,
@@ -867,53 +865,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // the form is re-hydrated from the server's current state — otherwise
       // the stale form would just 409 again on every debounce tick.
       if (conflictRef.current) return
-      // I12: when the agent's executor is external-cli, run the runner-test
-      // BEFORE allowing the save to commit. We re-test when the kind or cli
-      // actually changes (or the agent id changes) so the auto-save
-      // debounce doesn't re-fire on every unrelated keystroke. On a
-      // failure, throw — useAutoSave catches and surfaces the error inline,
-      // the save is blocked, and the form stays dirty so the user can fix
-      // and retry.
-      if (data.executor?.kind === 'external-cli' && agentId) {
-        const sig: ExecutorSig = {
-          kind: data.executor.kind,
-          cli: data.executor.cli,
-          agentId,
-        }
-        const last = testedExecutorSig.current
-        const needsTest = !last
-          || last.agentId !== sig.agentId
-          || last.kind !== sig.kind
-          || last.cli !== sig.cli
-        if (needsTest) {
-          let result
-          try {
-            result = await testAgentRunner(agentId)
-          } catch (err) {
-            // Network / 5xx failure — surface the message inline. The user
-            // can retry the save (the next save re-runs this check).
-            const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err)
-            addToast({
-              message: `Runner test failed before save: ${msg}`,
-              variant: 'error',
-            })
-            throw new Error(`Runner test failed: ${msg}`, { cause: err })
-          }
-          if (!result.ok) {
-            // Backend returned a structured failure (missing-binary,
-            // unauthenticated, handshake-failed, unknown-cli, not-external-cli).
-            // Block the save — operator needs to fix the runner first.
-            addToast({
-              message: `Runner test failed: ${result.message}. Fix the runner before saving.`,
-              variant: 'error',
-            })
-            throw new Error(`Runner test failed (${result.reason || 'unknown'}): ${result.message}`)
-          }
-          // Cache the signature only on success — a failed test keeps us
-          // ready to retry on the next change.
-          testedExecutorSig.current = sig
-        }
-      }
       // #904: a refused own limit is dropped from this and later saves so the
       // other fields still save (useToolIterationLimitRefusal).
       await limitRefusal.save(data, async (draft) => {
@@ -1858,6 +1809,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
+  // The program, standard parameters and program warning are read-only values
+  // the server derives from Settings → Third-party agents (T11 §4, FR-8). A
+  // Settings change does not move the agent's updated_at, so the editable
+  // `executor` state (held behind the hydration timestamp guard) can keep an
+  // old copy; render these from the latest server response instead.
+  const serverExecutor = agent?.executor
   // runtime panel
   const runtimePanel = (
     <div className="space-y-[var(--space-3)]">
@@ -1878,27 +1835,39 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 </span>
                 <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">(locked)</span>
               </div>
-              {/* T8 contract-first: the program is set by a person in
-                  Settings → Third-party agents, never on the agent. One
-                  read-only line; T11 slice B owns the rest of this screen. */}
+              {/* The program and its standard parameters are set by a person
+                  in Settings → Third-party agents, never on the agent; this
+                  block shows them read-only and links there (T11 §4, FR-8). */}
               <div data-testid="profile-cli-path" className="space-y-[var(--space-1)]">
                 <div className="flex items-center gap-[var(--space-2-5)]">
                   <span className="text-[var(--color-muted)] w-44 shrink-0">Program</span>
                   <span
                     data-testid="profile-program-path"
                     className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] break-all"
-                    aria-describedby={executor?.program_warning ? 'profile-program-warning' : undefined}
+                    aria-describedby={serverExecutor?.program_warning ? 'profile-program-warning' : undefined}
                   >
-                    {executor?.effective_cli_path ?? 'Not set'}
+                    {serverExecutor?.effective_cli_path ?? 'Not set'}
                   </span>
                   {/* r17 17.6: a link to where the program is set, not a disabled input. */}
-                  <ProgramSettingsLink />
+                  <ProgramSettingsLink onNavigate={handleCloseAgentSheet} />
                 </div>
-                {executor?.program_warning && (
+                <div className="flex items-center gap-[var(--space-2-5)]">
+                  <span className="text-[var(--color-muted)] w-44 shrink-0">Standard parameters</span>
+                  <span
+                    data-testid="profile-preset-args"
+                    className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] break-all"
+                  >
+                    {serverExecutor?.effective_preset_args ? serverExecutor.effective_preset_args : 'None'}
+                  </span>
+                </div>
+                {serverExecutor?.program_warning && (
                   <p id="profile-program-warning" data-testid="profile-program-warning" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
-                    {executor.program_warning}
+                    {serverExecutor.program_warning}
                   </p>
                 )}
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
+                  Set by a person for every agent on this CLI, in Settings → Third-party agents.
+                </p>
               </div>
               <div data-testid="profile-env-overrides" className="space-y-[var(--space-2)]">
                 <Label>Environment overrides</Label>
@@ -1914,7 +1883,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       env_overrides: next,
                     }))
                   }}
-                  disabled={!isFieldEditable('executor')}
+                  canSet={isFieldEditable('executor.env_overrides')}
+                  canRemove={isFieldEditable('executor.env_overrides_remove')}
                 />
               </div>
               <div data-testid="profile-cli-args" className="space-y-[var(--space-1)]">
@@ -1929,7 +1899,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     }}
                     placeholder="e.g. --add-dir /extra/path"
                     className="text-[length:var(--type-utility-xs-size)] h-8 font-mono"
-                    disabled={!isFieldEditable('executor')}
+                    disabled={!isFieldEditable('executor.cli_args')}
                   />
                 </div>
                 <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
@@ -2090,7 +2060,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <ExecutorSelector
                 value={executor}
                 agentId={resolvedAgentId}
-                disabled={!isFieldEditable('executor')}
+                // The selector changes executor.kind / executor.cli; the
+                // contract's descriptors (Agent.yaml editable_fields) never
+                // make either editable (T11 spec, E17), so it follows
+                // executor.kind.
+                disabled={!isFieldEditable('executor.kind')}
                 onChange={(next) => { markDirty(); setExecutor(next) }}
               />
             </section>
@@ -2758,14 +2732,20 @@ function findEnvDuplicateKeys(rows: EnvRow[]): Set<string> {
 // Each row is two inputs (key, value) plus a remove button. New rows are
 // appended; empty rows are dropped on save. Locked agents get a read-only
 // static list. Renders inline within the Runtime tab.
+// Editability follows the contract's per-field descriptors (Agent.yaml
+// editable_fields): adding, naming and changing a row follow
+// executor.env_overrides (`canSet`); removing a row follows
+// executor.env_overrides_remove (`canRemove`).
 function EnvironmentOverridesEditor({
   value,
   onChange,
-  disabled,
+  canSet,
+  canRemove,
 }: {
   value: Record<string, string>
   onChange: (next: Record<string, string>) => void
-  disabled?: boolean
+  canSet: boolean
+  canRemove: boolean
 }) {
   const [rows, setRows] = useState<EnvRow[]>(() => envRecordToRows(value))
   const rowIdCounter = useRef(rows.length)
@@ -2845,7 +2825,7 @@ function EnvironmentOverridesEditor({
                   className="text-[length:var(--type-utility-xs-size)] h-8 font-mono flex-1"
                   aria-label="Environment variable name"
                   aria-invalid={isDuplicate || undefined}
-                  disabled={disabled}
+                  disabled={!canSet}
                 />
                 <span className="text-[var(--color-muted)]">=</span>
                 <Input
@@ -2854,7 +2834,7 @@ function EnvironmentOverridesEditor({
                   placeholder="value"
                   className="text-[length:var(--type-utility-xs-size)] h-8 font-mono flex-1"
                   aria-label="Environment variable value"
-                  disabled={disabled}
+                  disabled={!canSet}
                 />
                 <IconButton
                   variant="ghost"
@@ -2862,7 +2842,7 @@ function EnvironmentOverridesEditor({
                   onClick={() => removeRow(row.id)}
                   className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] disabled:opacity-50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                   aria-label={`Remove env override ${row.key || 'entry'}`}
-                  disabled={disabled}
+                  disabled={!canRemove}
                 >
                   <X size={12} />
                 </IconButton>
@@ -2879,7 +2859,7 @@ function EnvironmentOverridesEditor({
           )
         })
       )}
-      {!disabled && (
+      {canSet && (
         <Button
           variant="link"
           data-testid="profile-env-add"

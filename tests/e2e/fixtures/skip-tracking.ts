@@ -172,44 +172,69 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
   {
     test: 'W7 — a manually opened Library tab is not duplicated; the switch affordance shows',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1180',
-    until: '2026-11-14',
-    note: 'Temporary quarantine: current CI attempt failed before passing on retry. W4 and W5 remain enabled; this is not restored coverage. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
+    until: '2026-12-05',
+    note: 'Temporary quarantine: current CI attempt failed before passing on retry. W4 and W5 remain enabled; this is not restored coverage. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution. Extended on 2026-11-15 by founder decision A. Underlying issues #1142, #1180, #1181 are still open. New target 2026-12-05. Do not extend again without a founder decision.',
   },
   {
     test: 'UAT-13 — video is smooth, and it is really video',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
-    until: '2026-11-14',
-    note: 'Temporary quarantine: current CI live-browser video failure; all other browser-panel tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
+    until: '2026-12-05',
+    note: 'Temporary quarantine: current CI live-browser video failure; all other browser-panel tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution. Extended on 2026-11-15 by founder decision A. Underlying issues #1142, #1180, #1181 are still open. New target 2026-12-05. Do not extend again without a founder decision.',
   },
   {
     test: 'UAT-14 — a click lands where you clicked, and the page responds',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
-    until: '2026-11-14',
-    note: 'Temporary quarantine: current CI live-browser click failure; all other browser-panel tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
+    until: '2026-12-05',
+    note: 'Temporary quarantine: current CI live-browser click failure; all other browser-panel tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution. Extended on 2026-11-15 by founder decision A. Underlying issues #1142, #1180, #1181 are still open. New target 2026-12-05. Do not extend again without a founder decision.',
   },
   {
     test: 'UAT-15 (human half) — taking the wheel and handing it back is visible and matches reality',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
-    until: '2026-11-14',
-    note: 'Temporary quarantine: current CI live-browser human-control handover failure; ownership tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
+    until: '2026-12-05',
+    note: 'Temporary quarantine: current CI live-browser human-control handover failure; ownership tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution. Extended on 2026-11-15 by founder decision A. Underlying issues #1142, #1180, #1181 are still open. New target 2026-12-05. Do not extend again without a founder decision.',
   },
   {
     test: 'UAT-15 (agent half) — after you release, the agent acts with no take-over step and no prompt',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
-    until: '2026-11-14',
-    note: 'Temporary quarantine: current CI live-browser agent handback failure; ownership tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
+    until: '2026-12-05',
+    note: 'Temporary quarantine: current CI live-browser agent handback failure; ownership tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution. Extended on 2026-11-15 by founder decision A. Underlying issues #1142, #1180, #1181 are still open. New target 2026-12-05. Do not extend again without a founder decision.',
   },
   {
     test: 'D-106 — the same token URL opened as its own tab is refused, carries the isolation policy, and never renders the page',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1181',
-    until: '2026-11-14',
-    note: 'Temporary isolation-webkit-only quarantine: current CI D-106 top-level refusal failure. Chromium and Firefox remain enabled; security verification gap accepted, not evidence isolation works. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
+    until: '2026-12-05',
+    note: 'Temporary isolation-webkit-only quarantine: current CI D-106 top-level refusal failure. Chromium and Firefox remain enabled; security verification gap accepted, not evidence isolation works. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution. Extended on 2026-11-15 by founder decision A. Underlying issues #1142, #1180, #1181 are still open. New target 2026-12-05. Do not extend again without a founder decision.',
+  },
+  {
+    test: 'S-2.1: Mode 1 (Chromium/Firefox) — the label URL opens the agent-built app with working storage',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1719',
+    until: '2026-12-14',
+    note: 'Per-engine split by design, skipped on WebKit only: holdout H-2 (Linux WebKit resolves *.localhost through the system resolver, so a pass would say nothing about Safari). Chromium and Firefox run this row. Not a defect: the row runs on the other engine(s); the entry keeps the split visible and is a forced re-look date, not a resolution.',
+  },
+  {
+    test: 'S-2.2: Mode 1 (Chromium/Firefox) — the three real controls hold in a real browser',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1719',
+    until: '2026-12-14',
+    note: 'Per-engine split by design, skipped on WebKit only: holdout H-2 (see the S-2.1 entry). Chromium and Firefox run this row. Not a defect: the row runs on the other engine(s); the entry keeps the split visible and is a forced re-look date, not a resolution.',
+  },
+  {
+    test: 'S-8.1 (Chromium/Firefox): a saved serve_web result carrying isolated_url renders the Mode 1 link',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1719',
+    until: '2026-12-14',
+    note: 'Per-engine split by design, skipped on WebKit only: FR-024 gives WebKit the Mode 2 fallback link, which the next row pins. Chromium and Firefox run this row. Not a defect: the row runs on the other engine(s); the entry keeps the split visible and is a forced re-look date, not a resolution.',
+  },
+  {
+    test: 'S-8.1 (WebKit pin): the same saved serve_web result renders the Mode 2 fallback link',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/1719',
+    until: '2026-12-14',
+    note: 'Per-engine split by design, skipped on Chromium and Firefox: the Mode 2 fallback link is the WebKit-specific expectation (FR-024). WebKit runs this row. Not a defect: the row runs on the other engine(s); the entry keeps the split visible and is a forced re-look date, not a resolution.',
   },
 ];
 
 
 // Extended 2026-10-17 by founder ruling (land-now batch): the six expiries lapsed at 2026-10-17T00:00Z and reddened all CI; renewal continues the existing quarantines unchanged under their issues.
 // Extended 2026-10-24 -> 2026-11-14 by founder ruling (Q80, 'extend 3 weeks'): the same six entries reached their 2026-10-24 re-look date and reddened every CI run (seen on #1266 CI run 40066452208); #1142, #1180 and #1181 remain open and are the tracked issues. This is a forced re-look, not a resolution.
+// Extended 2026-11-14 -> 2026-12-05 by founder decision A (2026-11-15): the same six entries reached their 2026-11-14 re-look date and reddened every E2E shard that runs those specs (#1828 run 43529667058); #1142, #1180 and #1181 remain open and are the tracked issues. This is a forced re-look, not a resolution.
 // ── Validation ──────────────────────────────────────────────────────────────────
 //
 // Runs at module load time. Any malformed SKIP_ALLOWLIST entry causes an

@@ -1,0 +1,745 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+// RED pack for T11 slice A, shell-guard narrow fix (#882).
+//
+// Plan (elicify-test-writing step 1). Oracles are the slim spec
+// docs/internal/specs/t11-documents-and-3p-agents-spec.md §3.1 and §8 FR-1…FR-3.
+// The full spec's BDD-10 / SEC-10 / SEC-11 / SEC-12 / SEC-13 datasets are reused
+// where they are the same rule. Expectations were not taken from a guard run.
+//
+// Behaviour: in the outside-working-folder branch, a candidate is not refused
+// only when all six §3.1 conditions hold. Everything else, including "../",
+// stays refused. The rule is off when the root is writable (always on Windows).
+//
+// REAL: ExecTool.guardCommand (the production text guard).
+// MOCK: none. Root writability is measured with the spec's unix check, not stubbed.
+//
+// TESTABILITY: the full spec's "root-writable probe injected" seam is not in
+// this tree. Forcing "root writable" on a non-root Unix process needs a
+// same-package function variable the test can set. This pack does not add
+// production code. Windows always takes the off branch (condition 5). A
+// non-root Unix host takes the on branch, which is the failing case today.
+package tools
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// t11Literal is one quoted absolute literal and the command text that holds it.
+// first is the filesystem object directly under the root ("/api" for
+// "/api/v1/users"): spec §3.1 condition 4.
+type t11Literal struct {
+	name  string
+	cmd   string
+	first string
+}
+
+// t11StandAloneLiterals are the commands the spec says are not refused when
+// the other conditions hold (slim §3.1, §8 FR-1, full spec BDD-10 and AD-7).
+// The guaranteed-absent top folder is filled in by the caller so condition 4
+// does not depend on whether /api happens to exist on the host.
+func t11StandAloneLiterals(absent string) []t11Literal {
+	heredoc := "python3 <<'PY'\n" +
+		"d = {\"api\": \"" + absent + "/v1\"}\n" +
+		"PY\n"
+	// Condition 6 skips whitespace, including newlines, before applying the
+	// allowed-neighbour set. "(" then a newline then the quote is still "(".
+	parenNewline := "python3 -c \"(\n'" + absent + "/a'\n)\""
+	return []t11Literal{
+		{
+			name:  "print quoted api route",
+			cmd:   `python3 -c "print('/api/v1/users')"`,
+			first: "/api",
+		},
+		{
+			name:  "assignment quoted healthz",
+			cmd:   `python3 -c "x = '/healthz'"`,
+			first: "/healthz",
+		},
+		{
+			name:  "heredoc dict value",
+			cmd:   heredoc,
+			first: absent,
+		},
+		{
+			name:  "guaranteed absent top folder",
+			cmd:   fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent),
+			first: absent,
+		},
+		{
+			name:  "newline between paren and quote",
+			cmd:   parenNewline,
+			first: absent,
+		},
+	}
+}
+
+func t11FirstExists(first string) bool {
+	_, err := os.Lstat(first)
+	return err == nil
+}
+
+// t11WantStandAloneRefused is the six-condition rule as a boolean.
+// Refused unless EVERY condition that this case can vary holds:
+// condition 5 (root not writable) and condition 4 (first component absent).
+// The commands in t11StandAloneLiterals are built so conditions 1, 2, 3 and 6 hold.
+func t11WantStandAloneRefused(t *testing.T, first string) bool {
+	t.Helper()
+	if t11RootIsWritable(t) {
+		return true
+	}
+	return t11FirstExists(first)
+}
+
+func t11AbsentTop(t *testing.T) string {
+	t.Helper()
+	first := fmt.Sprintf("/t11-absent-%d", os.Getpid())
+	if t11FirstExists(first) {
+		t.Fatalf("fixture: %s exists, so condition 4 would not hold for the guaranteed-absent case", first)
+	}
+	return first
+}
+
+func t11AssertStandAlone(t *testing.T, tool *ExecTool, cwd string, c t11Literal) {
+	t.Helper()
+	got := tool.guardCommand(context.Background(), c.cmd, cwd)
+	if t11WantStandAloneRefused(t, c.first) {
+		require.Contains(t, got, "path outside working dir",
+			"spec §3.1 / FR-3: root writable or first component %s exists, so %s stays refused\ncommand: %s",
+			c.first, c.name, c.cmd)
+		return
+	}
+	require.Empty(t, got,
+		"spec §3.1 / FR-1: stand-alone quoted literal whose top folder cannot exist must not be refused\ncommand: %s\nrefusal: %s",
+		c.cmd, got)
+}
+
+// TestGuard_StandAloneQuotedLiteralsNotRefused is FR-1 (and the on-branch of
+// FR-3 when this host's root is writable).
+func TestGuard_StandAloneQuotedLiteralsNotRefused(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	for _, c := range t11StandAloneLiterals(t11AbsentTop(t)) {
+		t.Run(c.name, func(t *testing.T) {
+			t11AssertStandAlone(t, tool, cwd, c)
+		})
+	}
+}
+
+// TestGuard_RootWritableProbeBothWays is FR-3 with the probe forced both
+// ways, so the result does not depend on this host. CHECK M03 (the veto
+// compiled out) must fail the writable-root case on a normal non-root Mac.
+func TestGuard_RootWritableProbeBothWays(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	absent := t11AbsentTop(t)
+	cmd := fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent)
+	concat := `python3 -c "open('/tm' 'p/x','w')"`
+
+	t.Run("writable root refuses the stand-alone literal", func(t *testing.T) {
+		restore := t11ForceRootWritable(t, true)
+		defer restore()
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Contains(t, got, "path outside working dir",
+			"spec §3.1 condition 5: when the root is writable the stand-alone rule is off")
+	})
+	t.Run("unwritable root allows the stand-alone literal and still refuses concatenation", func(t *testing.T) {
+		restore := t11ForceRootWritable(t, false)
+		defer restore()
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Empty(t, got,
+			"spec §3.1 / FR-1: with the root not writable, a stand-alone absent literal is not refused\nrefusal: %s", got)
+		t11RequireRefused(t, tool, cwd, concat, "path outside working dir", "adjacent literals stay refused when the exemption is on")
+	})
+}
+
+// t11ForceRootWritable sets the production probe for one test and returns
+// the restore func. Tests that use it must not run in parallel.
+func t11ForceRootWritable(t *testing.T, writable bool) func() {
+	t.Helper()
+	old := rootWritableProbe
+	rootWritableProbe = func() bool { return writable }
+	return func() { rootWritableProbe = old }
+}
+
+// TestGuard_ProbeErrorNamesItsCause is SF-5. The slim spec does not word this
+// refusal. The requirement is the silent-failure finding: an unexpected root
+// probe stays refused, the refusal names that probe's cause, and it says the
+// safety check could not complete, the command remains blocked, and to retry,
+// with the write_file workaround. A nil error is a genuinely writable root and
+// stays the ordinary refusal. Those words come from the finding, not from the
+// current refusal text.
+func TestGuard_ProbeErrorNamesItsCause(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	absent := t11AbsentTop(t)
+	cmd := fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent)
+	const cause = "t11-sf5-probe-cause"
+
+	oldProbe := rootWritableProbe
+	oldFn := rootWritabilityFn
+	t.Cleanup(func() {
+		rootWritableProbe = oldProbe
+		rootWritabilityFn = oldFn
+	})
+	rootWritableProbe = func() bool { return true }
+
+	t.Run("a genuine writable root stays a quiet ordinary refusal", func(t *testing.T) {
+		rootWritabilityFn = func() (bool, error) { return true, nil }
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Contains(t, got, "path outside working dir",
+			"SF-5: a nil probe error means the root is writable, so the stand-alone rule stays off")
+		require.NotContains(t, got, "could not complete",
+			"SF-5: an expected writable-root decision must not be reported as a failed check")
+		require.NotContains(t, got, cause)
+	})
+
+	t.Run("a failed probe names its cause and says the check could not complete", func(t *testing.T) {
+		rootWritabilityFn = func() (bool, error) { return true, errors.New(cause) }
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.NotEmpty(t, got, "SF-5: uncertainty stays refused, never an exemption")
+		require.Contains(t, got, cause, "SF-5: the refusal must name the probe cause\ngot: %s", got)
+		require.Contains(t, got, "write_file", "SF-5: offer the documented script workaround\ngot: %s", got)
+		require.Contains(t, strings.ToLower(got), "retry", "SF-5: the finding says to offer retry\ngot: %s", got)
+		require.Contains(t, strings.ToLower(got), "could not complete",
+			"SF-5 finding: the refusal must say the safety check could not complete\ngot: %s", got)
+		require.Contains(t, strings.ToLower(got), "blocked",
+			"SF-5 finding: the refusal must say the command remains blocked\ngot: %s", got)
+	})
+}
+
+// TestGuard_BraceConcatenationStillRefused is S5. A quoted fragment inside a
+// shell word that brace-expands into a real outside path stays refused,
+// including when that word is nested under bash -c or sh -c. The commands are
+// the ones from the gate receipt. The probe is forced off so a writable root
+// cannot hide a broken text check, and a plain stand-alone literal stays allowed.
+func TestGuard_BraceConcatenationStillRefused(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	absent := t11AbsentTop(t)
+	plain := fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent)
+	got := tool.guardCommand(context.Background(), plain, cwd)
+	require.Empty(t, got, "spec §3.1: a plain stand-alone literal stays allowed\nrefusal: %s", got)
+
+	refused := []string{
+		`touch {'/tm',}p/t11-proof`,
+		`bash -c "touch {'/tm',}p/t11-proof"`,
+		`sh -c "touch {'/tm',}p/t11-proof"`,
+		`touch '/tmp/t11-proof'`,
+	}
+	for _, cmd := range refused {
+		t.Run(cmd, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, cmd, "path outside working dir", "shell concatenation or a real outside path")
+		})
+	}
+}
+
+// TestGuard_UnquotedBraceWithholdsExemption is the simplified S5 rule.
+// The stand-alone exemption holds only when no text the shell reads has an
+// unquoted brace. Quoted and escaped braces retain their no-document behaviour.
+// Under Q11 A the positive Python document below matches the approved whole
+// command, not a general non-shell-document exception. Nested shells, eval and
+// shell-fed documents still refuse. Unparsable text withholds the exemption.
+func TestGuard_UnquotedBraceWithholdsExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	absent := t11AbsentTop(t)
+	allowed := fmt.Sprintf(`python3 -c "print('%s/v1'); s='{a}'"`, absent)
+	got := tool.guardCommand(context.Background(), allowed, cwd)
+	require.Empty(t, got, "braces inside quotes do not withhold the exemption\nrefusal: %s", got)
+
+	escaped := fmt.Sprintf(`python3 -c "print('%s/v1')" \{`, absent)
+	got = tool.guardCommand(context.Background(), escaped, cwd)
+	require.Empty(t, got, "an escaped brace does not withhold the exemption\nrefusal: %s", got)
+
+	pyHere := "python3 <<'PY'\nprint('" + absent + "/v1')\nprint('{a}')\nPY\n"
+	got = tool.guardCommand(context.Background(), pyHere, cwd)
+	require.Empty(t, got, "a here-document fed to python is not shell text\nrefusal: %s", got)
+
+	refused := []string{
+		fmt.Sprintf(`echo {a,b}; python3 -c "print('%s/v1')"`, absent),
+		`zsh -c "touch {'/tm',}p/t11-proof"`,
+		`find . -exec sh -c "touch {'/tm',}p/t11-proof" \;`,
+		`xargs sh -c "touch {'/tm',}p/t11-proof"`,
+		`env bash -c "touch {'/tm',}p/t11-proof"`,
+		`eval "touch {'/tm',}p/t11-proof"`,
+		"sh <<'EOF'\ntouch {'/tm',}p/t11-proof\nEOF\n",
+		fmt.Sprintf(`python3 -c "print('%s/v1')`, absent),
+	}
+	for _, cmd := range refused {
+		t.Run(cmd, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, cmd, "path outside working dir", "an unquoted brace withholds the exemption, or the text cannot be parsed")
+		})
+	}
+}
+
+// TestGuard_RuleOffWhenRootWritable is FR-3. On a non-root Unix host the
+// spec's "root is writable" input is not this process, so the assertion is
+// the complementary one the same sentence requires: the rule stays on.
+func TestGuard_RuleOffWhenRootWritable(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	c := t11StandAloneLiterals(t11AbsentTop(t))[3] // guaranteed-absent top
+	t11AssertStandAlone(t, tool, cwd, c)
+	if runtime.GOOS == "windows" && !t11RootIsWritable(t) {
+		t.Fatal("spec §3.1 condition 5: on Windows the root always counts as writable")
+	}
+}
+
+// TestRootWritableProbe_PerPlatform is the per-platform probe the spec names.
+// The probe function is not given a Go name; the observable is the guard
+// decision against the spec's effective-access check (Unix) or the constant
+// "writable" (Windows).
+func TestRootWritableProbe_PerPlatform(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		require.True(t, t11RootIsWritable(t),
+			"spec §3.1 condition 5: on Windows the root always counts as writable, so the rule is off")
+	}
+	tool, cwd := guardFixture(t)
+	c := t11StandAloneLiterals(t11AbsentTop(t))[3]
+	t11AssertStandAlone(t, tool, cwd, c)
+}
+
+func t11RequireRefused(t *testing.T, tool *ExecTool, cwd, cmd, needle, why string) {
+	t.Helper()
+	got := tool.guardCommand(context.Background(), cmd, cwd)
+	require.NotEmpty(t, got, "spec FR-2: %s must stay refused\ncommand: %s", why, cmd)
+	require.Contains(t, got, needle,
+		"spec FR-2: refusal must stay the existing one (%s)\ncommand: %s\ngot: %s", needle, cmd, got)
+}
+
+// TestGuard_RealOutsideWritesStillRefused is FR-2 / SEC-10 / SEC-12.
+// These commands are refused today; the new rule must not start allowing them.
+func TestGuard_RealOutsideWritesStillRefused(t *testing.T) {
+	tool, cwd := guardFixture(t)
+
+	outside := "path outside working dir"
+	writes := []struct {
+		name, cmd, why string
+	}{
+		{"open etc", `python3 -c "open('/etc/x','w')"`, "a real write under /etc"},
+		{"redirect home", `echo x > ~/x`, "a write through ~/"},
+		{"cp tmp", `cp a /tmp/x`, "a copy onto /tmp"},
+	}
+	if runtime.GOOS == "windows" {
+		writes[0] = struct{ name, cmd, why string }{
+			"open windows dir",
+			`python3 -c "open('C:\\Windows\\t11probe','w')"`,
+			"a real write under C:\\Windows",
+		}
+	}
+	for _, c := range writes {
+		t.Run(c.name, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, c.cmd, outside, c.why)
+		})
+	}
+
+	t.Run("sibling of working folder", func(t *testing.T) {
+		sibling := filepath.Join(filepath.Dir(cwd), "t11-sibling", "x")
+		cmd := fmt.Sprintf(`python3 -c "open('%s','w')"`, sibling)
+		t11RequireRefused(t, tool, cwd, cmd, outside, "a write to a sibling of the working folder")
+	})
+
+	t.Run("command position stays refused", func(t *testing.T) {
+		// Spec §3.1: command-position handling runs unchanged and first.
+		// /bin/ls is an absolute program path; executing it is not a read.
+		cmd := "/bin/ls"
+		if runtime.GOOS == "windows" {
+			cmd = `C:\Windows\System32\cmd.exe`
+		}
+		t11RequireRefused(t, tool, cwd, cmd, "RUNNING a program", "command position")
+	})
+
+	t.Run("unresolvable expansion stays refused", func(t *testing.T) {
+		// SEC-12. $FOO is not ~ / $HOME / $OMNIPUS_HOME, so the guard cannot
+		// know the real path. Spec: the unresolvable-path refusal stays.
+		t11RequireRefused(t, tool, cwd, `cat $FOO/api/v1`, "unresolvable path", "expansion the guard cannot resolve")
+	})
+
+	t.Run("protected internal file stays refused", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("OMNIPUS_HOME", home)
+		cred := filepath.Join(home, "credentials.json")
+		require.NoError(t, os.WriteFile(cred, []byte(`{"k":"v"}`), 0o600))
+		cmd := "cat '" + cred + "'"
+		t11RequireRefused(t, tool, cwd, cmd, "protected internal files", "credentials.json inside OMNIPUS_HOME")
+	})
+}
+
+// TestGuard_FragmentsConcatenationTraversalRefused is FR-2 / SEC-13 / AD-7
+// condition 6. Each command fails at least one of the six conditions, so the
+// outside-folder refusal (or the "../" veto) stays.
+func TestGuard_FragmentsConcatenationTraversalRefused(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	outside := "path outside working dir"
+	cases := []struct {
+		name, cmd, needle, why string
+	}{
+		{"adjacent literals", `python3 -c "open('/tm' 'p/x','w')"`, outside, "adjacent literals are not stand-alone"},
+		{"adjacent across newline", "python3 -c \"open('/tm'\n 'p/x','w')\"", outside, "adjacent literals across a newline"},
+		{"plus concatenation", `python3 -c "open('/tm' + 'p/x','w')"`, outside, "+ is not an allowed neighbour"},
+		{"f-string", `python3 -c "print(f'{base}/api/items')"`, outside, "not the entire quoted content"},
+		{"percent template", `python3 -c "print('/%s/%d' % ('a',1))"`, outside, "template character %"},
+		{"glob", `python3 -c "import glob; open(glob.glob('/Us*/x')[0],'w')"`, outside, "glob character"},
+		{"brackets", `python3 -c "print('/api/[a]')"`, outside, "bracket"},
+		{"backslash escape", `python3 -c "print('/api\x2fv1')"`, outside, "backslash"},
+		{"prose around a path", `python3 -c "print('see /api/v1 docs')"`, outside, "not the entire quoted content"},
+		{"format call", `python3 -c "open('/{}'.format('tmp'),'w')"`, outside, "brace and method call"},
+		// Spec §3.1: "{" is forbidden in a stand-alone literal, and a "/"
+		// immediately followed by "{" is an outside path (shell brace form).
+		{"root brace expansion", `cp x /{tmp,etc}/y`, outside, "a slash immediately followed by { is an outside path"},
+		{"raw prefix", `python3 -c "open(r'/tmpx','w')"`, outside, "letter before the quote"},
+		{"line continuation", "python3 -c \"open('/tm' \\\n'p/x','w')\"", outside, "backslash continuation"},
+		{"parent traversal", `python3 -c "print('../shared/x')"`, "path traversal detected", "../ stays refused"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, c.cmd, c.needle, c.why)
+		})
+	}
+}
+
+// TestGuard_NestedShellFormsStillWithholdExemption is spec §3.1: an unquoted
+// brace in any text the shell will parse withholds the stand-alone exemption.
+// A long option before -c, a nested shell glued to ; && || or |, and a
+// here-document fed to a shell behind env, command or nice are still shell
+// text. Fixtures are print-only (echo); nothing is written. /tm must be absent
+// so the quoted fragment would be exempt if the brace scan missed it.
+func TestGuard_NestedShellFormsStillWithholdExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the quoted fragment is not an absent literal")
+	absent := t11AbsentTop(t)
+	glue := `echo {'/tm',}p/x`
+
+	allowed := []string{
+		fmt.Sprintf(`python3 -c "print('%s/v1'); s='{a}'"`, absent),
+		fmt.Sprintf(`python3 -c "print('%s/v1')" \{`, absent),
+		"python3 <<'PY'\nprint('" + absent + "/v1')\nprint('{a}')\nPY\n",
+		fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent),
+		fmt.Sprintf(`bash --norc -c "python3 -c \"print('%s/v1/users')\""`, absent),
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed "+cmd, func(t *testing.T) {
+			got := tool.guardCommand(context.Background(), cmd, cwd)
+			require.Empty(t, got, "spec §3.1: quoted, escaped, or non-shell braces stay allowed\nrefusal: %s", got)
+		})
+	}
+
+	refused := []string{
+		`bash -c "` + glue + `"`,
+		`bash --norc -c "` + glue + `"`,
+		`sh --login -c "` + glue + `"`,
+		`true; bash -c "` + glue + `"`,
+		`true;bash -c "` + glue + `"`,
+		`true&&bash -c "` + glue + `"`,
+		`true||bash -c "` + glue + `"`,
+		`true|bash -c "` + glue + `"`,
+		"bash <<'EOF'\n" + glue + "\nEOF\n",
+		"env bash <<'EOF'\n" + glue + "\nEOF\n",
+		"command bash <<'EOF'\n" + glue + "\nEOF\n",
+		"nice sh <<'EOF'\n" + glue + "\nEOF\n",
+	}
+	for _, cmd := range refused {
+		t.Run(cmd, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, cmd, "path outside working dir", "an unquoted brace in shell text withholds the exemption")
+		})
+	}
+}
+
+// TestGuard_ProbeErrorOneShot is SF-5. One unexpected probe error must be kept.
+// The first call fails and every later call succeeds. The check must call the
+// probe once and refuse with that cause, saying the safety check could not
+// complete. A second call would see success and hide the failure.
+func TestGuard_ProbeErrorOneShot(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	absent := t11AbsentTop(t)
+	cmd := fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent)
+	const cause = "t11-sf5-oneshot"
+	var calls int
+	oldProbe := rootWritableProbe
+	oldFn := rootWritabilityFn
+	t.Cleanup(func() {
+		rootWritableProbe = oldProbe
+		rootWritabilityFn = oldFn
+	})
+	rootWritabilityFn = func() (bool, error) {
+		calls++
+		if calls == 1 {
+			return true, errors.New(cause)
+		}
+		return false, nil
+	}
+	// The bool probe and the error-bearing probe are the same check. Pointing
+	// the bool probe at it makes a discarded first error visible: production
+	// currently asks both.
+	rootWritableProbe = func() bool {
+		writable, _ := rootWritabilityFn()
+		return writable
+	}
+	got := tool.guardCommand(context.Background(), cmd, cwd)
+	require.Equal(t, 1, calls, "SF-5: the probe runs once; a later success must not replace the first error\ngot: %s", got)
+	require.Contains(t, got, cause, "SF-5: the refusal names the first probe's cause\ngot: %s", got)
+	require.Contains(t, strings.ToLower(got), "could not complete",
+		"SF-5: the refusal says the safety check could not complete\ngot: %s", got)
+}
+
+// TestGuard_ScriptFromStdinStillWithholdsExemption is round 6, S5
+// (security round 5). A nested shell that reads its script from standard
+// input — a bare pipe-fed shell, explicit `bash -s` with a positional
+// argument, or any words belonging to a LATER command after a `;`, `&&` or
+// `|` boundary — has script text the guard cannot see, so that unseen text
+// may hold unquoted braces and the stand-alone exemption stays withheld
+// (spec §3.1: the allowance holds only when no text the shell will parse has
+// an unquoted brace). A shell given a genuine script FILE is different: the
+// file leg stays, and the exemption machinery is unchanged for it. Fixtures
+// are print-only (echo, cat); nothing is written or launched. /tm must be
+// absent so the glue literal's condition 4 holds.
+func TestGuard_ScriptFromStdinStillWithholdsExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the glue literal's condition 4 would not hold")
+	absent := t11AbsentTop(t)
+	glue := `echo {'/tm',}p/x`
+
+	t.Run("pipe into a bare bash is refused", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash`, "path outside working dir",
+			"bash with no argument reads its script from stdin, which the guard cannot see (control: refused at a2062d926 too)")
+	})
+	t.Run("words after a semicolon boundary are not the script file", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash; echo done`, "path outside working dir",
+			"a later command's words after ; must not be taken as the nested shell's script file")
+	})
+	t.Run("words after an and-and boundary are not the script file", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash && echo done`, "path outside working dir",
+			"a later command's words after && must not be taken as the nested shell's script file")
+	})
+	t.Run("words after a pipe boundary are not the script file", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash | cat`, "path outside working dir",
+			"a later command's words after | must not be taken as the nested shell's script file")
+	})
+	t.Run("bash -s positional is not a script file", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `echo "`+glue+`" | bash -s t11-positional`, "path outside working dir",
+			"-s is standard-input mode, so the positional argument is $0, not a script file")
+	})
+	t.Run("repo inert literal stays allowed", func(t *testing.T) {
+		got := tool.guardCommand(context.Background(),
+			fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent), cwd)
+		require.Empty(t, got, "the stand-alone exemption itself must stay operative\nrefusal: %s", got)
+	})
+	t.Run("genuine script file keeps the file leg", func(t *testing.T) {
+		// The file word is relative on purpose: an outside path would give an
+		// independent refusal leg (bash is not on the read-only allowlist) and
+		// the assertion would no longer isolate the stdin/script-file rule.
+		cmd := `echo "python3 -c \"print('` + absent + `/v1/users')\"" | bash t11-script-file; echo done`
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Empty(t, got, "a shell given a script file reads that file, not stdin, so no stdin withholding applies\ncommand: %s\nrefusal: %s", cmd, got)
+	})
+}
+
+// TestGuard_LongOptionScriptPositionKeptCertain kills CHECK round 5's
+// surviving mutant (R5-CHECK-1): replacing the knownNoArgLongShellOptions
+// lookup with strings.HasPrefix(opt, "--") treats every long option as
+// argument-less. An argument-taking option (--rcfile, --init-file) or an
+// unknown one would then swallow the FILE word as the script and stop
+// following the real -c script, so glue text there would silently regain the
+// stand-alone exemption. The refusals below must come from the brace scan
+// only, so the FILE words are relative (no outside path that could give an
+// independent refusal leg). The admitted argument-less --norc with a real
+// Python inner script stays allowed (allowed in the round-4 red run).
+func TestGuard_LongOptionScriptPositionKeptCertain(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the glue literal's condition 4 would not hold")
+	glue := `echo {'/tm',}p/x`
+
+	t.Run("argument-taking long option keeps following the -c script", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `bash --rcfile t11-rcfile -c "`+glue+`"`, "path outside working dir",
+			"--rcfile consumes the next word, so the script position is only certain when the exemption is withheld")
+	})
+	t.Run("second argument-taking long option keeps following the -c script", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `bash --init-file t11-rcfile -c "`+glue+`"`, "path outside working dir",
+			"--init-file consumes the next word, so the script position is only certain when the exemption is withheld")
+	})
+	t.Run("unknown long option keeps following the -c script", func(t *testing.T) {
+		t11RequireRefused(t, tool, cwd, `bash --t11-unknown-opt t11-file -c "`+glue+`"`, "path outside working dir",
+			"an unknown long option makes the script position uncertain, so the exemption is withheld")
+	})
+	t.Run("admitted argument-less option stays allowed", func(t *testing.T) {
+		absent := t11AbsentTop(t)
+		cmd := `bash --norc -c "python3 -c \"print('` + absent + `/v1/users')\""`
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Empty(t, got, "a known argument-less option must not withhold on its own\ncommand: %s\nrefusal: %s", cmd, got)
+	})
+}
+
+// TestGuard_RedirectionGluedToShellStillWithholdsExemption is the round-6
+// redirection continuation (security re-check + team-lead proof on
+// 544e9856f). A redirection operator written NEXT TO the shell name leaves
+// the interpreter inside one whitespace-delimited word (`bash>out.txt`), so
+// the nested-shell scan never sees it and the pipe-fed script's unseen text
+// escapes the brace withholding. Every glued operator form must withhold
+// like its separated form. Fixtures are print-only (echo); nothing is
+// written or launched; /tm must be absent so the glue literal's condition 4
+// holds.
+//
+// Grammar context (not a test of the scanner's all-digit fd rule):
+//   - `bash2>x` is NOT a shell invocation: under POSIX 2.3 Token Recognition
+//     and 2.7 Redirection an IO_NUMBER is recognized only when the token
+//     immediately before the operator is all digits; `bash2` is an ordinary
+//     command word, so the simple command is "run bash2 with stdout
+//     redirected" and no interpreter reads the pipe. It must stay allowed —
+//     including after the fix. This guard-level control pins that allowance,
+//     not the all-digit refinement: an ends-in-a-digit classifier can produce
+//     the same guard verdict. That refinement is unpinned here (CHECK W1).
+//   - `bash&>out.txt`: bash lexes `&>` as its combined stdout+stderr
+//     redirection operator; POSIX sh has no `&>` and reads `&` as the async
+//     separator (an asynchronous bash still reading the pipe, then an empty
+//     `>out.txt` command). Under BOTH readings a stdin-reading shell is
+//     present, so the shape stays refused.
+func TestGuard_RedirectionGluedToShellStillWithholdsExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the glue literal's condition 4 would not hold")
+	glue := `echo {'/tm',}p/x`
+
+	// Refused: glued operators (allowed at 544e9856f — the bypass), plus the
+	// separated contrast forms (refused there) and the two-reading &> shape.
+	refused := []struct{ cmd, why string }{
+		{`echo "` + glue + `" | bash>out.txt`, "an operator glued to the name must not hide the interpreter (proof: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | bash> out.txt`, "an operator glued to the name must not hide the interpreter (proof: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | bash>>out.txt`, "an append operator glued to the name must not hide the interpreter (proof: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | sh>out.txt`, "the same glued shape must refuse for sh (proof: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | zsh>out.txt`, "the same glued shape must refuse for zsh (the guard lists it)"},
+		{`echo "` + glue + `" | dash>out.txt`, "the same glued shape must refuse for dash (the guard lists it)"},
+		{`echo "` + glue + `" | bash<in.txt`, "input redirection glued to the name still reads the script from standard input (proof family: allowed at 544e9856f)"},
+		{`echo "` + glue + `" | bash&>out.txt`, "bash reads &> as one redirection operator and POSIX sh reads & as async: a stdin-reading shell is present under both"},
+		{`echo "` + glue + `" | bash > out.txt`, "separated contrast: refused at 544e9856f and must stay so"},
+		{`echo "` + glue + `" | bash >out.txt`, "separated contrast: refused at 544e9856f and must stay so"},
+		{`echo "` + glue + `" | bash 2>err.txt`, "separated fd-redirect contrast: refused at 544e9856f and must stay so"},
+		{`echo "` + glue + `" | bash 2>&1`, "separated fd-duplicate contrast: refused at 544e9856f and must stay so"},
+		{`echo "` + glue + `" | bash < in.txt`, "separated input redirection contrast: the script is read from standard input redirected from a file"},
+	}
+	for _, c := range refused {
+		t.Run(c.cmd, func(t *testing.T) {
+			t11RequireRefused(t, tool, cwd, c.cmd, "path outside working dir", c.why)
+		})
+	}
+
+	t.Run("bash2>x is a different command word and stays allowed", func(t *testing.T) {
+		// POSIX 2.3/2.7: the fd number is recognized only when the token
+		// before the operator is all digits, so `bash2` is an ordinary
+		// command word and no interpreter reads the pipe. Refusing this
+		// would break everyday `tool2>err.log` shapes, so it must stay
+		// allowed before and after the fix.
+		cmd := `echo "` + glue + `" | bash2>x`
+		got := tool.guardCommand(context.Background(), cmd, cwd)
+		require.Empty(t, got, "a word that is not an interpreter name (bash2) must not withhold on its own\ncommand: %s\nrefusal: %s", cmd, got)
+	})
+}
+
+// TestGuard_LineContinuationStillWithholdsExemption covers S5c (round 7):
+// GNU Bash Reference Manual, Escape Character, removes an unquoted
+// backslash-newline pair before identifying words. A continued interpreter
+// name therefore still reads the pipe-fed script, so the stand-alone literal
+// exception must remain withheld (spec section 3.1, FR-2). Both proposed S5c
+// fixes must refuse these forms; the test chooses neither implementation.
+//
+// Single Quotes preserves every character, including this pair. Double Quotes
+// still gives backslash its special meaning before newline, so that pair IS
+// removed. The quoted allowance controls put it in a separate harmless string
+// within a direct Python script operand: the absent path stays stand-alone,
+// and neither quote form introduces a stdin-fed shell. No fixture is executed.
+func TestGuard_LineContinuationStillWithholdsExemption(t *testing.T) {
+	tool, cwd := guardFixture(t)
+	restore := t11ForceRootWritable(t, false)
+	defer restore()
+	require.False(t, t11FirstExists("/tm"), "fixture: /tm exists, so the glue literal's condition 4 would not hold")
+	absent := t11AbsentTop(t)
+	const feed = `echo "echo {'/tm',}p/x" | `
+	continuation := string([]byte{'\\', '\n'})
+	require.Equal(t, []byte{'\\', '\n'}, []byte(continuation), "fixture: an actual backslash byte followed by a newline byte, not the text backslash-n")
+
+	for _, shell := range []struct{ name, head, tail string }{
+		{"bash", "ba", "sh"},
+		{"sh", "s", "h"},
+		{"zsh", "z", "sh"},
+	} {
+		cases := []struct{ name, cmd string }{
+			{"continuation before glued redirection", feed + shell.name + continuation + ">out.txt"},
+			{"continuation before spaced redirection", feed + shell.name + continuation + " >out.txt"},
+			{"split name with redirection", feed + shell.head + continuation + shell.tail + ">out.txt"},
+			{"split name without redirection", feed + shell.head + continuation + shell.tail},
+			{"continuation after pipe with redirection", strings.TrimSuffix(feed, " ") + continuation + shell.name + ">out.txt"},
+			{"continuation after pipe without redirection", strings.TrimSuffix(feed, " ") + continuation + shell.name},
+		}
+		for _, c := range cases {
+			t.Run(shell.name+" "+c.name, func(t *testing.T) {
+				require.Equal(t, 1, strings.Count(c.cmd, continuation), "fixture: exactly one actual continuation pair in %q", c.cmd)
+				t.Logf("command bytes: %q", c.cmd)
+				t11RequireRefused(t, tool, cwd, c.cmd, "path outside working dir",
+					"S5c: removing the unquoted continuation leaves an interpreter reading hidden script text from stdin")
+			})
+		}
+	}
+
+	for _, c := range []struct{ name, suffix string }{
+		{"bare bash", "bash"},
+		{"glued bash redirection", "bash>out.txt"},
+		{"tab before bash redirection", "bash\t>out.txt"},
+		{"ordinary newline before redirection", "bash\n>out.txt"},
+	} {
+		t.Run("refusal control "+c.name, func(t *testing.T) {
+			cmd := feed + c.suffix
+			require.NotContains(t, cmd, continuation, "fixture: the ordinary separator control has no backslash-newline pair")
+			t11RequireRefused(t, tool, cwd, cmd, "path outside working dir",
+				"S5c control: an ordinary pipe-fed bash remains refused, with or without output redirection")
+		})
+	}
+
+	allowed := []struct {
+		name, cmd, why string
+		hasPair        bool
+	}{
+		{
+			"inert stand-alone literal", fmt.Sprintf(`python3 -c "print('%s/v1/users')"`, absent),
+			"FR-1: the original inert stand-alone literal allowance stays operative", false,
+		},
+		{
+			"escaped operator is part of the command name", feed + `bash\>x`,
+			"Bash Escape Character: the command is literally named bash>x, not a stdin-fed bash with redirection", false,
+		},
+		{
+			"single-quoted pair stays literal", `python3 -c 'print("` + absent + `/v1/users"); print("before` + continuation + `after")'`,
+			"Bash Single Quotes: the pair is literal in a separate harmless string; the absent path stays stand-alone", true,
+		},
+		{
+			"double-quoted pair joins only an inert string", `python3 -c "print('` + absent + `/v1/users'); print('before` + continuation + `after')"`,
+			"Bash Double Quotes: removing this pair only joins a harmless string within a direct Python operand; no stdin-fed interpreter or path concatenation appears", true,
+		},
+	}
+	for _, c := range allowed {
+		t.Run("allowance control "+c.name, func(t *testing.T) {
+			if c.hasPair {
+				require.Equal(t, 1, strings.Count(c.cmd, continuation), "fixture: the quoted control contains exactly one backslash-newline pair")
+			} else {
+				require.NotContains(t, c.cmd, continuation, "fixture: this contrast has no continuation pair")
+			}
+			got := tool.guardCommand(context.Background(), c.cmd, cwd)
+			require.Empty(t, got, "%s\ncommand: %q\nrefusal: %s", c.why, c.cmd, got)
+		})
+	}
+}

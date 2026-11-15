@@ -189,6 +189,13 @@ func TestTaskTrigger_ToolParityWithRest(t *testing.T) {
 				wantText: "config.every_ms is no longer supported",
 			},
 			{
+				name: "#1771: dtstart_ms in seconds is refused with a field-and-unit message",
+				trig: triggerArg("recurring", map[string]any{
+					"rrule": "FREQ=WEEKLY;BYDAY=MO", "dtstart_ms": 1794816000, "tz": "Europe/Berlin",
+				}),
+				wantText: "config.dtstart_ms must be a Unix time in milliseconds",
+			},
+			{
 				name: "D-9 row 5: recurring without tz is refused",
 				trig: triggerArg("recurring", map[string]any{
 					"rrule": "FREQ=DAILY;COUNT=3", "dtstart_ms": 1793596800000,

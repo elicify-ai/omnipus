@@ -261,8 +261,10 @@ properties:
       the one with no SchemaRejection behind it: there is no single file to
       blame, so `paths` is absent and `reason` names the collection.
 
-      `paths` names the offending file(s) for the seven file-level codes;
-      `reason` carries the loader's own explanation verbatim in all eight.
+      `paths` names the offending file(s) for the seven file-level codes.
+      File names in `paths` and `reason` are relative to the knowledge base
+      that owns the files. If the schema directory could not be read,
+      `paths` is absent and `reason` names the knowledge base instead.
     example: "type_mismatch"
   reason:
     type: string

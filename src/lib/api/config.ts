@@ -15,6 +15,8 @@ import {
   ErrorResponse as ErrorResponseSchema,
   MaxToolIterationAgentChange as MaxToolIterationAgentChangeSchema,
   PerformanceReloadFailedError as PerformanceReloadFailedErrorSchema,
+  // T8 / T11 slice B — Settings → Third-party agents:
+  ThirdPartyAgentSettingsView as ThirdPartyAgentSettingsViewSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   RetentionConfig,
@@ -34,6 +36,9 @@ import type {
   PerformanceReloadFailedDetails,
   PerformancePendingApply,
   PerformanceReloadFailedError as PerformanceReloadFailedBody,
+  // T8 / T11 slice B — Settings → Third-party agents:
+  ThirdPartyAgentSettings,
+  ThirdPartyAgentSettingsView,
 } from '@/lib/api/generated/openapi-types'
 import { ApiError, isApiError } from '../api-error'
 import { REAUTH_HEADER } from './auth'
@@ -634,5 +639,30 @@ export function putContextSettings(body: ContextSettingsUpdate): Promise<Context
     '/settings/context',
     { method: 'PUT', body: JSON.stringify(body) },
     ContextSettingsSchema as ZodType<ContextSettings>,
+  )
+}
+
+// T8 / T11 slice B — Settings → Third-party agents: the program path and
+// standard parameters a person saves per external CLI (claude-code, codex,
+// opencode). GET always returns all three rows plus a live, filesystem-only
+// detection result per row. PUT replaces the WHOLE section in one call and
+// validates every row before writing; a refused row comes back as 400 with
+// code cli_path_invalid / cli_preset_invalid and field clis.<cli>.<field>, and
+// nothing is saved. Signed-in person only (401 no session, 403 agent/tool
+// token). See contracts/components/schemas/ThirdPartyAgentSettings*.yaml.
+
+export function getThirdPartyAgentSettings(): Promise<ThirdPartyAgentSettingsView> {
+  return request<ThirdPartyAgentSettingsView>(
+    '/settings/third-party-agents',
+    undefined,
+    ThirdPartyAgentSettingsViewSchema as ZodType<ThirdPartyAgentSettingsView>,
+  )
+}
+
+export function updateThirdPartyAgentSettings(body: ThirdPartyAgentSettings): Promise<ThirdPartyAgentSettingsView> {
+  return request<ThirdPartyAgentSettingsView>(
+    '/settings/third-party-agents',
+    { method: 'PUT', body: JSON.stringify(body) },
+    ThirdPartyAgentSettingsViewSchema as ZodType<ThirdPartyAgentSettingsView>,
   )
 }

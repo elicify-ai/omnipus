@@ -1,6 +1,6 @@
 import type { SessionHistoryState } from './types'
 import type { SessionHistoryMetadata, SessionHistoryEntry, SessionHistoryPage } from '@/lib/api/history-types'
-import type { ChatMessage, SessionChatState } from './types'
+import type { ChatMessage, MediaAttachment, SessionChatState } from './types'
 import { isPendingTailMessage } from './cursor'
 
 export function emptyHistoryState(): SessionHistoryState {
@@ -17,6 +17,11 @@ export function historyMetadata(page: SessionHistoryPage): SessionHistoryMetadat
   return metadata
 }
 
+/** One card per file url, in first-seen order; a later copy of a url replaces the earlier one. */
+export function unionMedia(media: readonly MediaAttachment[]): MediaAttachment[] {
+  return [...new Map(media.map(item => [item.url, item])).values()]
+}
+
 /** Live objects changed since request start win; unchanged cached history can be refreshed. */
 export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessage | undefined, baseline: ChatMessage | undefined): ChatMessage {
   if (!current) return entry
@@ -25,6 +30,13 @@ export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessa
   // #1452 D2: the saved preview size describes the saved text only. When the
   // current text wins, the row keeps the current text's own size marker.
   if (liveWins) merged.contentOriginalSizeBytes = current.contentOriginalSizeBytes
+  // chat-links BS-5.4: a sent-file card arrives only with the snapshot's media
+  // frame. A record without media does not mean the card is gone: REST pages
+  // never carry one, and only one source of a combined row holds it.
+  const saved: ChatMessage = entry
+  if (saved.role === 'assistant' && current.role === 'assistant' && (saved.media?.length || current.media?.length)) {
+    merged.media = unionMedia([...(current.media ?? []), ...(saved.media ?? [])])
+  }
   if (entry.role === 'assistant' && current.role === 'assistant' && (entry.tool_calls || current.tool_calls)) {
     const calls = new Map((entry.tool_calls ?? []).map(call => [call.id, call]))
     for (const call of current.tool_calls ?? []) {

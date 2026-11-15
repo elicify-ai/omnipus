@@ -169,7 +169,7 @@ export async function startGateway(opts: StartGatewayOptions): Promise<GatewayHa
   // is reported immediately as the real exit, not after paying the full
   // polling budget — the TS-side equivalent of the Go harness checking
   // gw.bootErr every iteration (see pollUntilHealthy's checkFatalError).
-  await waitForHealth(baseURL, 15_000, proc);
+  await waitForHealth(baseURL, BOOT_HEALTH_TIMEOUT_MS, proc);
 
   // Onboard the first admin — unless the caller explicitly wants the raw,
   // un-onboarded instance (skipOnboarding: true).
@@ -307,6 +307,15 @@ export async function pollUntilHealthy(cfg: PollUntilHealthyConfig): Promise<Pol
     await sleep(cfg.intervalMs);
   }
 }
+
+/**
+ * How long a gateway boot may take before /health is declared failed (#1785:
+ * CI sightings 7 and 8 showed a gateway still starting at about 15 s). 45 s is
+ * 225 refused probes at the 200 ms interval. A gateway that truly hangs now
+ * fails after 45 s instead of 15 s (30 s more per failed boot); a crash is still
+ * reported at once, and the hard backstop is 2x this budget (90 s).
+ */
+export const BOOT_HEALTH_TIMEOUT_MS = 45_000;
 
 /**
  * Poll /health until it returns 200.

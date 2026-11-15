@@ -1576,7 +1576,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// — on the fast-path-success branch (UpsertAgentFastFunc updated the
 		// live registry inline, nothing queued) this returns immediately,
 		// where WaitForReloadFunc above would unconditionally kick off a
-		// fresh, unnecessary full reload cycle (channels/cron/plan-engine/
+		// fresh, unnecessary full reload cycle (channels/cron/
 		// scheduler restart cascade, the exact ~60s-under-load mechanism
 		// issue #571 exists to avoid). On the fallback-reload branch (the
 		// closure above fell back to rc.reloadTrigger()), beginReload has
@@ -1589,7 +1589,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// fastAgentUpsert so system.agent.create/update (an agent creating or
 		// updating another agent) gets the same fast-path publish REST
 		// already has, instead of triggering the full restartServices
-		// cascade (channels/cron/plan-engine/schedulers) on every call. Defers
+		// cascade (channels/cron/schedulers) on every call. Defers
 		// to an already in-flight full reload rather than racing it, exactly
 		// like fastAgentUpsert's own IsReloadPending check; any fast-path
 		// failure falls back to the full reload trigger so the caller here
@@ -1701,7 +1701,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 
 // announceStartup announces startup and creates the agent-loop cancellation context.
 func (rc *runContextWithOptions) announceStartup() {
-	fmt.Printf("✓ Gateway started on %s:%d\n", rc.cfg.Gateway.Host, rc.cfg.Gateway.Port)
+	fmt.Printf("✓ Gateway started on %s\n", rc.cfg.Gateway.ListenAddr())
 	fmt.Println("Press Ctrl+C to stop")
 
 	// agentLoopCtx is canceled if the agent loop exits unexpectedly (e.g. panic
@@ -2023,7 +2023,15 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 		runningServices.ChannelManager.StopAll(shutdownCtx)
 	}
 	stopPollersReporting(runningServices, isReload)
-	if runningServices.CronService != nil {
+	// RELOAD MUST NOT STOP IT (#1760; same rule as the task-trigger scheduler
+	// and the plan engine below): CronService.Stop cancels the lane context,
+	// which ends every running heartbeat, scheduled-task and /loop turn and
+	// drops the jobs queued behind a full lane - a settings save must never end
+	// a running turn (ADR-082 D1). The service captures only the two
+	// schedules.* settings (which restartCron applies to the live instance with
+	// ApplySchedulesConfig) and its store path (agents.defaults.home, restart-only). Shutdown, boot abort and test teardown
+	// (isReload=false) still stop it with its bounded drain.
+	if !isReload && runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
 	// ADR-067 W3: stop every knowledge drift schedule and close every open
@@ -2052,7 +2060,17 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if !isReload {
 		stopKnowledgeLifecycles()
 	}
-	if runningServices.PlanEngine != nil {
+	// RELOAD MUST NOT STOP IT (#1725; same rule as the task-trigger scheduler
+	// below, r17 §7.2 TK-30): the plan engine is not reconstructed on reload
+	// and captures no config — it reads planning config live through
+	// agentLoop.GetConfig on the same *AgentLoop that handleConfigReload
+	// swaps in place — so stopping and restarting it applied nothing. Its
+	// Stop drains in-flight wake turns and Judge rounds for up to 30 s, so a
+	// reload that stopped it stalled while a plan was running; and an
+	// in-flight plan turn is a running turn that only an explicit Stop may
+	// end (ADR-082 D1), never a settings save. Shutdown, boot abort and test
+	// teardown (isReload=false) still stop it with that bounded drain.
+	if !isReload && runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
 	}
 	// RELOAD MUST NOT STOP IT (tool-parity spec r17 §7.2 TK-30, 18.40): the
@@ -2064,7 +2082,10 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if !isReload && runningServices.TaskTrigger != nil {
 		runningServices.TaskTrigger.Stop()
 	}
-	if runningServices.LoopScheduler != nil {
+	// RELOAD MUST NOT STOP IT (#1760): the /loop scheduler is a dedicated
+	// CronService over the same live AgentLoop; stopping it cancelled every
+	// running /loop turn. It reads no config of its own.
+	if !isReload && runningServices.LoopScheduler != nil {
 		runningServices.LoopScheduler.Stop()
 	}
 	if runningServices.MediaStore != nil {
@@ -2201,8 +2222,13 @@ const minBrowserCacheTrimInterval = time.Second
 // scheduled cache trim needs. Declared so the schedule can be tested against a
 // fake whose interval an operator's config.json really drives, without a Chrome,
 // a pool, or a profile directory anywhere in the test.
+//
+// The sweep takes the schedule's ctx (#1730): the boot drain cancels it and
+// then waits, under a budget, for this goroutine; a sweep over many profiles
+// that ignored the cancel could outlast that budget and keep writing into a
+// home the caller was removing.
 type browserCacheTrimScheduler interface {
-	TrimAllEligible() []browser.TrimResult
+	TrimAllEligibleContext(ctx context.Context) []browser.TrimResult
 	CacheTrimInterval() time.Duration
 }
 
@@ -2223,7 +2249,7 @@ func runBrowserCacheTrimSchedule(ctx context.Context, pool browserCacheTrimSched
 			slog.Error("browser-trim: cache trim panicked; skipped", "panic", fmt.Sprintf("%v", r))
 		}
 	}()
-	if results := pool.TrimAllEligible(); len(results) > 0 {
+	if results := pool.TrimAllEligibleContext(ctx); len(results) > 0 {
 		slog.Info("browser-trim: trimmed closed workspace browser caches at boot",
 			"profiles", len(results))
 	}
@@ -2261,7 +2287,7 @@ func runBrowserCacheTrimSchedule(ctx context.Context, pool browserCacheTrimSched
 						"panic", fmt.Sprintf("%v", r))
 				}
 			}()
-			if results := pool.TrimAllEligible(); len(results) > 0 {
+			if results := pool.TrimAllEligibleContext(ctx); len(results) > 0 {
 				slog.Info("browser-trim: trimmed closed workspace browser caches",
 					"profiles", len(results))
 			}

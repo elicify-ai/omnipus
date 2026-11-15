@@ -11,6 +11,7 @@ const SETTINGS_TABS = [
   'providers',
   'models',
   'system-agents',
+  'third-party-agents',
   'integrations',
   'security',
   'gateway',

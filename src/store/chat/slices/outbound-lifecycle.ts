@@ -27,8 +27,10 @@ import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddre
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
-import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
+import { mergeDrainBatch, stampQueuedMessage } from '../queue-target'
+import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
+import { settleAllCancelAcks } from '../stop-checkpoint'
 
 /** Accepted sends request a fresh current window; failures never move a reader. */
 function followAcceptedHistorySend(get: () => ChatStore, sid: string): void {
@@ -226,8 +228,17 @@ function performResendMessage(
   if (!sid || !existing || existing.role !== 'user') return
   if (blockSendForWorkspaceEntry('resend')) return
 
+  // #1140: an unconfirmed first message that a foreign acknowledgement moved
+  // into another chat has lost its retry request. Never resend it to that chat.
+  // The rule belongs to the message, not to the shared pending slot: a later
+  // first send or an abandon may replace the slot while the bubble stays.
+  if (isOrphanedFirstSendMessage(state, existing, sid)) {
+    refuseOrphanedFirstSendRetry()
+    return
+  }
+
   const ordinary = getPendingFirstSend(state)
-  if (ordinary && (existing.clientMessageId ?? existing.id) === ordinary.clientMessageId) {
+  if (ordinary &&(existing.clientMessageId ?? existing.id) === ordinary.clientMessageId) {
     state.retryFirstSend()
     return
   }
@@ -431,10 +442,12 @@ function outboundWorkspaceId(sessionId: string | null): string {
 
 export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
   return {
-    enqueueOutboundMessage: (content, queuedMessage) => {
+    enqueueOutboundMessage: (content, queuedMessage, alreadyAccepted) => {
       const MAX_QUEUE = 5
       const current = get().outboundQueue
-      if (current.length >= MAX_QUEUE) {
+      // A message accepted earlier that only bounces back from a failed drain
+      // must never be dropped for lack of room (#1428).
+      if (current.length >= MAX_QUEUE && !alreadyAccepted) {
         return false
       }
       set({ outboundQueue: [...current, queuedMessage ?? content] })
@@ -481,7 +494,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // ...queue]`) produced [C,B] — C (typed later) sent before B (typed
       // earlier). Prepending the bounced queue instead restores the correct
       // chronological order: [B,C].
-      set((state) => ({ outboundQueue: [], pendingDrainQueue: [...queue, ...state.pendingDrainQueue] }))
+      set((state) => ({ outboundQueue: [], pendingDrainQueue: mergeDrainBatch(queue, state.pendingDrainQueue) }))
       maybeDrainNext()
     },
 
@@ -521,7 +534,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       if (blockSendForWorkspaceEntry('send')) return
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
-      const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
+      const { clientMessageId, queuedAt, queuedMessage: untargetedMessage } = beginSend(content, opts)
       // Phase 1 / FR-010: per-turn model override. Trim and strip empty
       // strings so absent and "" are equivalent (the WS frame is omitted
       // entirely when no model was picked this session, per spec §18 Q3).
@@ -529,6 +542,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
+      // #1428: a queued message remembers the chat it was typed in.
+      const queuedMessage = stampQueuedMessage(untargetedMessage, rawActiveSessionId, getPendingFirstSend(get())?.clientMessageId, opts?.queueSeq)
       // Ordinary sends, mid-turn steering and new-answer requests share the
       // attached session's canonical binding; only a first send uses context.
       const workspaceId = outboundWorkspaceId(rawActiveSessionId)
@@ -575,7 +590,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       if (!connection || !isConnected) {
         // WS is disconnected — buffer the message for when the connection
         // recovers rather than losing it silently or showing a hard error.
-        const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
+        const enqueued = get().enqueueOutboundMessage(content, queuedMessage, opts?.queuedAt !== undefined)
         if (!enqueued) {
           useConnectionStore.getState().setConnectionError(
             'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
@@ -901,7 +916,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // answer did finish. The one idle case that still shows "Stopping..." is `/stop`
       // (cancelUnconditional): by design, the founder's second-Stop tree rule needs
       // its first press to arm the confirmation window even on an idle parent chat.
-      if (targetIsStreaming) get().markLastMessageInterrupted(sessionId)
+      // #1534: the freeze returns what the screen showed of the frozen answer.
+      const shown = targetIsStreaming ? get().markLastMessageInterrupted(sessionId) : undefined
       // A plain Stop supersedes any pending redirect: its turn_canceled is a
       // stop, and must keep "(interrupted)".
       if (targetSid) pendingRedirectSids.delete(targetSid)
@@ -949,10 +965,15 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // server must never cascade — and keeps the frame byte-identical to
         // the pre-stop-all shape. Only the confirmed tree stop passes
         // 'tree' (server dispatches on scope before cancelSteeredSubtree;
-        // never up or sideways — ADR D7).
-        const cancelFrame: CancelFrame = scope
-          ? { type: 'cancel', session_id: targetSid, scope }
-          : { type: 'cancel', session_id: targetSid }
+        // never up or sideways — ADR D7). #1534: `shown` rides every Stop
+        // that froze a streaming answer, whatever the scope (a first Stop, a
+        // typed /cancel). A confirming second press freezes nothing (the
+        // answer is no longer streaming), so it carries none.
+        const cancelFrame: CancelFrame = {
+          type: 'cancel', session_id: targetSid,
+          ...(scope ? { scope } : {}),
+          ...(shown ? { shown } : {}),
+        }
         const sent = connection.send(cancelFrame)
         if (!sent) {
           delivered = false
@@ -997,7 +1018,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // F-S3: a socket drop means no more terminal frames are coming for any
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
-      pendingCancelAckSids.clear()
+      settleAllCancelAcks()
       pendingRedirectSids.clear()
       clearCatchUpSideChannelsOnDisconnect()
       // S6: a socket drop means no more frames — done, error, or otherwise —

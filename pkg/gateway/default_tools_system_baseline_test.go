@@ -13,9 +13,11 @@ import (
 )
 
 // SPEC.md Founder exclusion preserves the three system identities' c90310f1f
-// role policies, with the explicit preview_document: deny addition required
-// by office-preview AD-13/T-20. The fixture is literal spec data, never copied
-// from the running seed. Global ceiling changes are not frozen here.
+// role policies, with two explicit deny additions: preview_document
+// (office-preview AD-13/T-20) and show_to_user (chat-links D-F2 / BS-6.14:
+// Omnipus does not hold this tool, and Judge and Plan Supervisor stay deny).
+// The fixture is literal spec data, never copied from the running seed.
+// Global ceiling changes are intentionally NOT frozen by this assertion.
 func defaultToolsAssertSystemBaseline(t *testing.T) {
 	t.Helper()
 	path := filepath.Join("..", "..", "tests", "default-tools", "system-policy-baseline-c90310f1f.json")
@@ -41,7 +43,7 @@ func defaultToolsAssertSystemBaseline(t *testing.T) {
 			require.NotNil(t, actual.Tools)
 			want, ok := expected[id]
 			require.True(t, ok, "frozen baseline must cover every excluded identity")
-			assert.Equal(t, want, actual.Tools.Builtin.Policies, "SPEC.md Founder exclusion plus office-preview AD-13/T-20: %s policy must equal the literal baseline", id)
+			assert.Equal(t, want, actual.Tools.Builtin.Policies, "SPEC.md Founder exclusion plus office-preview AD-13/T-20 and chat-links D-F2: %s policy must equal the literal baseline (c90310f1f plus preview_document and show_to_user deny)", id)
 		})
 	}
 }

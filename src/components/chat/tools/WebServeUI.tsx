@@ -22,7 +22,8 @@
  *
  * The toolName passed to makeWebServeUI selects which tool name the component
  * registers under, allowing the same component factory to cover:
- *   web_serve        (canonical)
+ *   serve_web        (canonical — pkg/tools/web_serve.go::ToolNameWebServe)
+ *   web_serve        (legacy form, old transcripts only)
  *   serve_workspace  (back-compat replay alias)
  *   run_in_workspace (back-compat replay alias)
  */
@@ -67,6 +68,13 @@ export interface WebServeResult {
   port?: number
   /** Static-mode: the workspace path that was served. */
   path?: string
+  /**
+   * ADR-094 FR-023: the per-preview `*.localhost` URL (Mode 1) the gateway
+   * minted for this preview, when the serving mode produced one. Forwarded
+   * to IframePreview, which validates + engine-gates it before rendering.
+   * Absent on pre-ADR-094 transcripts and Mode-2-only serving.
+   */
+  isolated_url?: string
 }
 
 interface WebServeArgs {
@@ -85,6 +93,40 @@ function inferKind(result: WebServeResult): 'static' | 'dev' {
   // Legacy back-compat: run_in_workspace results have command + port
   if (typeof result.command === 'string' && typeof result.port === 'number') return 'dev'
   return 'static'
+}
+
+/**
+ * serve_web returns its payload as a JSON string, so a WebServeBlock receives
+ * one of two transport shapes, never the flat object:
+ *   - live path: the raw JSON STRING (the `tool_call_result` frame carries the
+ *     tool's model-visible text verbatim, pkg/gateway/websocket_forward_hub.go
+ *     ::hubToolExecEnd);
+ *   - reload path: the ENVELOPE `{ text: "<json>" }` the agent loop records
+ *     for every string-returning tool
+ *     (pkg/agent/tool_result_transcript.go::projectRecordedResult).
+ * Same approach as SetGoalToolUI.tsx::unwrapSetGoalResultEnvelope. A string
+ * is decoded only when it parses to an object; an envelope is unwrapped only
+ * when `text` is its sole key and parses to an object. Anything else is
+ * returned unchanged for the guard below to judge (and so still renders the
+ * malformed block).
+ */
+function decodeObjectJSON(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function unwrapServeWebResult(value: unknown): unknown {
+  if (typeof value === 'string') return decodeObjectJSON(value) ?? value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const text = (value as Record<string, unknown>).text
+  if (Object.keys(value).length !== 1 || typeof text !== 'string') return value
+  return decodeObjectJSON(text) ?? value
 }
 
 function isWebServeResult(value: unknown): value is WebServeResult {
@@ -140,7 +182,7 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
 
 export function WebServeBlock({
   args,
-  result,
+  result: rawResult,
   isRunning,
   isError,
   isCancelled,
@@ -189,6 +231,7 @@ export function WebServeBlock({
   // B1.3e: when the type guard rejects the result and the tool is no longer
   // running, render the malformed block instead of crashing or rendering nothing.
   // We allow null result while running (tool not done yet — normal state).
+  const result = unwrapServeWebResult(rawResult)
   if (result !== null && result !== undefined && !isRunning && !isWebServeResult(result)) {
     return <MalformedResultBlock raw={result} />
   }
@@ -220,6 +263,15 @@ export function WebServeBlock({
   const iframeKind =
     isDevMode ? 'run_in_workspace' : 'serve_workspace'
 
+  // ADR-094 FR-023: forward the minted `*.localhost` URL to IframePreview
+  // when present. CONDITIONAL SPREAD, never `isolated_url: undefined` — the
+  // key must be ABSENT (not present-with-undefined) when the field is
+  // absent, so downstream shape checks distinguish "field doesn't exist"
+  // (old transcripts) from "field present but empty" (order-26 control row).
+  const isolatedUrlSpread = typedResult?.isolated_url !== undefined
+    ? { isolated_url: typedResult.isolated_url }
+    : {}
+
   // Build the result shape expected by IframePreview — it uses path + url.
   // Pass path directly; IframePreview.extractPath falls back to url when
   // path is absent, so there is no need to duplicate the fallback logic here.
@@ -231,11 +283,13 @@ export function WebServeBlock({
           expires_at: typedResult.expires_at,
           command: typedResult.command ?? command,
           port: typedResult.port ?? port ?? 0,
+          ...isolatedUrlSpread,
         }
       : {
           path: typedResult.path,
           url: typedResult.url,
           expires_at: typedResult.expires_at,
+          ...isolatedUrlSpread,
         }
     : null
 
@@ -305,6 +359,10 @@ export function makeWebServeUI(toolName: string) {
   })
 }
 
-// ── Canonical registration ────────────────────────────────────────────────────
+// ── Registrations ─────────────────────────────────────────────────────────────
 
+/** Canonical backend name (pkg/tools/web_serve.go::ToolNameWebServe). */
+export const ServeWebUI = makeWebServeUI('serve_web')
+
+/** Legacy form — kept so pre-rename transcripts replay correctly. */
 export const WebServeUI = makeWebServeUI('web_serve')

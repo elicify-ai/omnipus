@@ -8,45 +8,45 @@ import (
 )
 
 func TestFormatVersion_NoGitCommit(t *testing.T) {
-	oldVersion, oldGit, oldEdition := Version, GitCommit, Edition
-	t.Cleanup(func() { Version, GitCommit, Edition = oldVersion, oldGit, oldEdition })
+	oldVersion, oldGit := Version, GitCommit
+	t.Cleanup(func() { Version, GitCommit = oldVersion, oldGit })
 
 	Version = "1.2.3"
 	GitCommit = ""
-	Edition = EditionCore
+	t.Cleanup(SetEdition(EditionCore))
 
 	assert.Equal(t, "1.2.3 edition: core", FormatVersion())
 }
 
 func TestFormatVersion_WithGitCommit(t *testing.T) {
-	oldVersion, oldGit, oldEdition := Version, GitCommit, Edition
-	t.Cleanup(func() { Version, GitCommit, Edition = oldVersion, oldGit, oldEdition })
+	oldVersion, oldGit := Version, GitCommit
+	t.Cleanup(func() { Version, GitCommit = oldVersion, oldGit })
 
 	Version = "1.2.3"
 	GitCommit = "abc123"
-	Edition = EditionCore
+	t.Cleanup(SetEdition(EditionCore))
 
 	assert.Equal(t, "1.2.3 (git: abc123) edition: core", FormatVersion())
 }
 
 func TestFormatVersion_HostedEdition(t *testing.T) {
-	oldVersion, oldGit, oldEdition := Version, GitCommit, Edition
-	t.Cleanup(func() { Version, GitCommit, Edition = oldVersion, oldGit, oldEdition })
+	oldVersion, oldGit := Version, GitCommit
+	t.Cleanup(func() { Version, GitCommit = oldVersion, oldGit })
 
 	Version = "1.2.3"
 	GitCommit = "abc123"
-	Edition = EditionHosted
+	t.Cleanup(SetEdition(EditionHosted))
 
 	assert.Equal(t, "1.2.3 (git: abc123) edition: hosted", FormatVersion())
 }
 
 func TestFormatVersion_DesktopEdition(t *testing.T) {
-	oldVersion, oldGit, oldEdition := Version, GitCommit, Edition
-	t.Cleanup(func() { Version, GitCommit, Edition = oldVersion, oldGit, oldEdition })
+	oldVersion, oldGit := Version, GitCommit
+	t.Cleanup(func() { Version, GitCommit = oldVersion, oldGit })
 
 	Version = "1.2.3"
 	GitCommit = ""
-	Edition = EditionDesktop
+	t.Cleanup(SetEdition(EditionDesktop))
 
 	assert.Equal(t, "1.2.3 edition: desktop", FormatVersion())
 }

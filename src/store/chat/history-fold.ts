@@ -6,6 +6,7 @@
 import type { ChatMessage, HistoryDisplayPart, PositionedToolCall, SessionChatState } from './types'
 import { isClearContextMarker } from '@/lib/clearMarker'
 import { deriveAnchor, locateAnchor, partTexts } from './history-parts'
+import { unionMedia } from './history-state'
 
 /** The result of folding one ordered reader interval. */
 export interface SegmentFold { // not-wire-format: in-memory fold result
@@ -183,11 +184,13 @@ function foldSegment(segment: readonly ChatMessage[], ctx: FoldContext): ChatMes
   const base = segment.find(row => row.id === key) ?? unit.row
   const aliases = [...new Set(units.filter(item => item.text !== '' && item.part.sourceId !== key && !ctx.others.has(item.part.sourceId)).map(item => item.part.sourceId))]
   const spans = [...new Map(segment.flatMap(row => row.spans ?? []).map(span => [span.spanId, span])).values()]
+  // Media has no part of its own, so a released part's media stays until reload.
+  const media = unionMedia(segment.flatMap(row => row.media ?? []))
   const stable = renderKey(segment, key, ctx)
   // A segment holds assistant rows only (segmentKind), so the base is one.
   const folded = {
     ...base, id: key, content, historyParts, tool_calls: calls, mergedReplayIds: aliases.length ? aliases : undefined,
-    contentOriginalSizeBytes: undefined, spans: spans.length ? spans : undefined,
+    contentOriginalSizeBytes: undefined, spans: spans.length ? spans : undefined, media: media.length ? media : undefined,
     agentId: base.agentId ?? segment.find(row => row.agentId)?.agentId,
     // S11b: a row still streaming stays a live, streaming row.
     ...(segment.some(row => row.isStreaming) ? { isStreaming: true, status: 'streaming' as const } : {}),

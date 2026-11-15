@@ -178,6 +178,10 @@ export function handleProviderFrame({ frame, targetSid, get, withBucket }: Provi
             ...(typeof statusFrame.stall_at === 'string' && statusFrame.stall_at.length > 0
               ? { stallAt: statusFrame.stall_at }
               : {}),
+            // Issue #1664 B3 — the attempt count, only when the frame carries both.
+            ...(typeof statusFrame.attempt === 'number' && typeof statusFrame.max_attempts === 'number'
+              ? { attempt: statusFrame.attempt, maxAttempts: statusFrame.max_attempts }
+              : {}),
             sentAt: statusFrame.sent_at,
             receivedAt,
           } satisfies ProviderStatusEventData,

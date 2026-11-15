@@ -15,8 +15,8 @@ import (
 
 // resolveRunProgram applies r17 §3.6 before anything is dispatched: the
 // program is only the Settings clis.<cli>.path, re-checked with
-// ValidateProgramPath; the run execs the returned resolved file. With no
-// saved path the run is refused with NoPath, with a failing path with
+// thirdpartycli.CheckProgramPath; the run execs the returned resolved file.
+// With no saved path the run is refused with NoPath, with a failing path with
 // CheckFailed. The old per-agent cli_path is never read and there is no PATH
 // fallback. The person's preset parameters (§3.7) are read from the same
 // Settings row. A refusal is the error the caller returns as written.
@@ -49,7 +49,8 @@ func (al *AgentLoop) runProgramFor(cli string) (runProgram, string) {
 		return runProgram{}, thirdpartycli.NoPathText(cli)
 	}
 	row := cfg.Sandbox.ThirdPartyCLI(cli)
-	resolved, refusal := thirdpartycli.RunProgram(cli, row.Path, thirdpartycli.AgentWritableRoots(omnipusHome(), cfg)...)
+	writable, rootsErr := thirdpartycli.AgentWritableRoots(omnipusHome(), cfg)
+	resolved, refusal := thirdpartycli.RunProgram(cli, row.Path, writable, rootsErr)
 	if refusal != "" {
 		return runProgram{}, refusal
 	}
@@ -86,9 +87,10 @@ func (ed *runExternalCLISubTurnState) reportProgramRefusal(text string) error {
 
 // auditRunSpawn writes the external_cli.run audit entry for one spawn
 // (r17 §3.10): agent, CLI, entered and resolved program, the agent flags the
-// filter drops, the preset as typed when set, and
-// filter_bypassed_by_person_preset with the filter's reasons whenever a
-// preset token is one the filter would drop from an agent. Write failures
+// filter drops, the preset through thirdpartycli.PresetAuditFilter and
+// thirdpartycli.PresetUseNote when set, and filter_bypassed_by_person_preset with the
+// filter's reasons, through the same filter, whenever
+// a preset token is one the filter would drop from an agent. Write failures
 // are logged by audit.Emit.
 func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli string) {
 	key := runner.FilterKey(cli)
@@ -105,11 +107,13 @@ func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli str
 		"agent_flags_dropped": agentFlags,
 	}
 	if ed.presetText != "" {
-		fields["preset_args"] = ed.presetText
+		filter := thirdpartycli.PresetAuditFilter(ed.al.GetConfig())
+		fields["preset_args"] = filter(ed.presetText)
+		fields["note"] = thirdpartycli.PresetUseNote
 		if _, bypassed := runner.FilterDangerousCLIArgsDetailed(key, ed.presetArgs); len(bypassed) > 0 {
 			reasons := make([]string, 0, len(bypassed))
 			for _, d := range bypassed {
-				reasons = append(reasons, d.Flag+": "+d.Reason)
+				reasons = append(reasons, filter(d.Flag+": "+d.Reason))
 			}
 			fields["filter_bypassed_by_person_preset"] = true
 			fields["filter_reason"] = reasons

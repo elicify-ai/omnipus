@@ -184,7 +184,7 @@ type Deps struct {
 	// production wiring's FIRST action is an unconditional TriggerReload, so on
 	// the fast-path-success branch — where UpsertAgentFastFunc already
 	// updated the live registry inline with NOTHING queued — calling this
-	// field kicks off a fresh, full reload cycle (channels/cron/plan-engine/
+	// field kicks off a fresh, full reload cycle (channels/cron/
 	// scheduler restart cascade, the exact ~60s-under-load mechanism issue
 	// #571 exists to avoid) just to wait for it. The create/update publish
 	// path uses WaitForPendingReloadFunc below instead, which only polls

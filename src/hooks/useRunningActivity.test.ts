@@ -1114,9 +1114,8 @@ describe('useRunningActivity — judge verdict recency merge (real hook)', () =>
 
 // ── Elapsed-time ticking ──────────────────────────────────────────────────
 //
-// Fake timers + waitFor don't mix well (see useCliPathValidation.test.ts's
-// advanceAndFlush comment) — this suite drains microtasks directly instead
-// of using waitFor after each timer advance.
+// With fake timers, this suite drains microtasks inside act() after each
+// timer advance instead of relying on waitFor's polling clock.
 
 describe('useRunningActivity — elapsed time ticking', () => {
   beforeEach(() => {

@@ -1543,7 +1543,13 @@ type UserConfig struct {
 	// removes a single entry; password reset clears all.
 	Tokens           []TokenEntry `json:"tokens,omitempty"`
 	SessionTokenHash BcryptHash   `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
-	Name             string       `json:"name,omitempty"`
+	// SessionIssuedAt is the RFC 3339 UTC time the current session cookie was
+	// issued, written together with SessionTokenHash. The cookie's expiry is
+	// this time plus SessionCookieMaxAge; the ADR-094 FR-015 planted-cookie
+	// guard re-sends the genuine cookie with exactly that expiry. Empty for a
+	// session issued before the field existed (that session is never re-sent).
+	SessionIssuedAt string `json:"session_issued_at,omitempty"`
+	Name            string `json:"name,omitempty"`
 }
 
 // MaxUserTokens caps the number of concurrent bearer tokens kept per user.
@@ -2444,8 +2450,23 @@ type MCPServerConfig struct {
 	Type string `json:"type,omitempty"`
 	// URL is used for SSE/HTTP transport
 	URL string `json:"url,omitempty"`
-	// Headers are HTTP headers to send with requests (sse/http only)
+	// Headers are HTTP headers to send with requests (sse/http only).
+	// Written directly here means the value is stored in config.json IN
+	// PLAINTEXT — legacy/back-compat path only (reading an install that
+	// predates issue #638 must keep working). Prefer HeaderRefs: since #638
+	// the gateway REST create/patch routes store every header value in the
+	// encrypted credential store and write only refs here, exactly like Env.
 	Headers map[string]string `json:"headers,omitempty"`
+	// HeaderRefs are credential-store references for sse/http request
+	// headers (issue #638): key = header name (e.g. "Authorization"),
+	// value = the credential-store key holding the real secret
+	// (mcpHeaderCredKey, "mcp_<name>_header_<header>"). At connect time,
+	// pkg/mcp.ResolveServerHeaderRefs resolves each ref to its real value
+	// and merges it into Headers IN MEMORY ONLY (never written back to
+	// config.json); a HeaderRefs entry overrides a same-named literal
+	// Headers entry. Greenfield ruling: old installs with literal headers
+	// are NOT migrated — they keep loading and connecting as before.
+	HeaderRefs map[string]string `json:"header_refs,omitempty"`
 }
 
 // MCPConfig defines configuration for all MCP servers

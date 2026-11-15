@@ -27,7 +27,9 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { fileURLToPath } from 'url'
 import type { Page } from '@playwright/test'
+import { postReloadWithBearer, readReloadBearer } from './reload-bearer'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -164,18 +166,30 @@ async function setDevModeBypass(configPath: string, value: boolean): Promise<voi
   await fs.promises.rename(tmp, configPath)
 }
 
+/** The storageState file the shared gateway's global-setup.ts wrote (playwright.config.ts storageState). */
+function sharedAuthFile(): string {
+  return process.env.OMNIPUS_AUTH_FILE
+    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+    : path.join(path.dirname(fileURLToPath(import.meta.url)), '.auth/admin.json')
+}
+
 /**
- * POST /reload — the health server's unauthenticated reload hook
- * (pkg/health/server.go reloadHandler). It runs the gateway's reload
- * function synchronously: 200 means the on-disk config was re-read and the
- * in-memory config swapped; a non-2xx carries the reload error in the body.
- * The same endpoint retention.spec.ts uses for its bypass flip.
+ * POST /reload — the health server's reload hook (pkg/health/server.go
+ * reloadHandler). It accepts ONLY a Gateway.Users/CLIToken bearer (issues
+ * #276/#640), so this sends the non-rotating admin bearer global-setup.ts
+ * stored for this shard's auth file — never a fresh login, which would
+ * rotate the shared session cookie (scripts/check-e2e-login-crosstalk.sh).
+ * It goes through Node fetch, not the page's traced request client, so the
+ * bearer never reaches a retained trace (fixtures/reload-bearer.ts). It runs
+ * the gateway's reload function synchronously: 200 means the on-disk config
+ * was re-read and the in-memory config swapped; a non-2xx carries the reload
+ * error in the body. The same endpoint retention.spec.ts uses for its bypass
+ * flip.
  */
-async function postReload(page: Page): Promise<void> {
-  const res = await page.request.post(`${BASE_URL}/reload`, { failOnStatusCode: false })
-  const raw = await res.text()
-  if (!res.ok()) {
-    throw new Error(`saveStubCliProgram: POST /reload failed ${res.status()}: ${raw}`)
+async function postReload(): Promise<void> {
+  const res = await postReloadWithBearer(BASE_URL, readReloadBearer(sharedAuthFile()))
+  if (!res.ok) {
+    throw new Error(`saveStubCliProgram: POST /reload failed ${res.status}: ${res.text}`)
   }
 }
 
@@ -190,11 +204,12 @@ async function postReload(page: Page): Promise<void> {
  *
  * `gateway.dev_mode_bypass` carries `omitempty` on the wire (config.go): the
  * key is ABSENT whenever the live value is false, so an absent key reads as
- * false. Budget is 20s, not 5: the reload cycle restarts live services and
- * can legitimately take seconds on a loaded CI host.
+ * false. Match the product's reloadWaitTimeout bound of 90 s (#1725): a
+ * background plan-turn drain can outlast the old 20-second fixture window.
  */
 async function pollDevModeBypass(page: Page, want: boolean): Promise<void> {
-  const deadline = Date.now() + 20_000
+  const reloadWaitBudgetMs = 90_000
+  const deadline = Date.now() + reloadWaitBudgetMs
   let lastSeen = '(no probe ran)'
   while (Date.now() < deadline) {
     try {
@@ -214,10 +229,8 @@ async function pollDevModeBypass(page: Page, want: boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
   throw new Error(
-    `saveStubCliProgram: the gateway's live config never reported ` +
-      `dev_mode_bypass=${want} within 20s (last observation: ${lastSeen}). ` +
-      'The POST /reload did not take effect; refusing to continue on a gateway ' +
-      'in an unknown auth mode.',
+    `saveStubCliProgram: dev_mode_bypass=${want} was not live within ${reloadWaitBudgetMs / 1_000} s ` +
+      `(last observation: ${lastSeen}); refusing to continue on a gateway in an unknown auth mode.`,
   )
 }
 
@@ -242,8 +255,8 @@ async function pollDevModeBypass(page: Page, want: boolean): Promise<void> {
  * precedent (retention.spec.ts flips bypass off for its
  * RequireNotBypass-gated sweep endpoint, then restores).
  *
- * The window is as small as possible and restored in a `finally`, because
- * bypass-off changes auth for every other request on this gateway: the rest
+ * The window is as small as possible, with setup and body failures covered by
+ * the restore path, because bypass-off changes auth for every other request: the rest
  * of the shard must keep running exactly as before. Serial execution
  * (workers: 1, one spec per shard gateway) means no concurrent test can
  * observe the intermediate state. A restore failure never masks the body's
@@ -278,18 +291,18 @@ async function runWithBypassOffForPersonSession(page: Page, body: () => Promise<
     await body()
     return
   }
-  await setDevModeBypass(configPath, false)
-  await postReload(page)
-  await pollDevModeBypass(page, false)
   let bodyErr: Error | null = null
   try {
+    await setDevModeBypass(configPath, false)
+    await postReload()
+    await pollDevModeBypass(page, false)
     await body()
   } catch (err) {
     bodyErr = err as Error
   }
   try {
     await setDevModeBypass(configPath, true)
-    await postReload(page)
+    await postReload()
     await pollDevModeBypass(page, true)
   } catch (restoreErr) {
     if (bodyErr) {

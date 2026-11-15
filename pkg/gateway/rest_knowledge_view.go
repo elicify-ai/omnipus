@@ -298,6 +298,7 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name, collecti
 		if env.ViewReport != nil {
 			for _, rej := range env.ViewReport.Rejections {
 				if rej.Name == name {
+					rej = newCollectionFileNames(collectionRoot).viewRejection(rej)
 					return viewResultRefused(out, string(rej.Code), rej.Reason,
 						"fix the view file and re-save; knowledge_configure re-validates on write")
 				}

@@ -2,9 +2,11 @@
 // media, plus office-preview page-thumbnail groups (office-preview spec §5.2).
 //
 // Split out of replay-and-status-frames.ts::handleReplayAndStatusFrame (its
-// grandfathered size budget may only shrink). Live frames and replayed frames
-// both arrive here, so a reload rebuilds the same groups without re-rendering
-// anything on the server (§5.3).
+// grandfathered size budget may only shrink; the same extraction was made by
+// chat-links U8, merged here). Live frames and replayed frames both arrive
+// here, so a reload rebuilds the same groups without re-rendering anything on
+// the server (§5.3). Each part's optional `library_ref` (chat-links
+// FR-021/FR-022) is carried onto its attachment.
 //
 // Grouping rules (§5.2): media is grouped by (message, tool_call_id) instead
 // of flattened; the dedup key is (tool_call_id, URL) — two previews of the
@@ -140,10 +142,15 @@ function toAttachment(frame: MediaFrame, part: MediaPart): MediaAttachment {
     ...(frame.presentation ? { presentation: frame.presentation } : {}),
     ...(part.page_number !== undefined ? { pageNumber: part.page_number } : {}),
     ...(frame.preview ? { preview: frame.preview } : {}),
+    // chat-links FR-021/FR-022: where the sent file lives in the Library.
+    // Kept on every media type; only the file card shows the action (A7).
+    ...(part.library_ref ? { libraryRef: part.library_ref } : {}),
   }
 }
 
-export function handleMediaFrame(frame: MediaFrame, targetSid: string, withBucket: WithBucket): void {
+/** Attach a `media` frame's parts to the session's open assistant bubble (or a new one, or its thumbnail group's message). */
+export function applyMediaFrame(frame: MediaFrame, targetSid: string | null, withBucket: WithBucket): void {
+  if (!targetSid) return
   const parts = Array.isArray(frame.parts) ? frame.parts : []
   const isThumbnails = frame.presentation === 'page_thumbnails'
   if (isThumbnails && !frame.tool_call_id) {

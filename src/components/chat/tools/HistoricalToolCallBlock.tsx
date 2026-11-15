@@ -7,12 +7,14 @@ import { GenericToolCall } from './GenericToolCall'
 import { ConnectChannelReplay } from './ConnectChannelToolUI'
 import { WebServeBlock } from './WebServeUI'
 import { SetGoalCardBlock } from './SetGoalToolUI'
+import { isTaskToolName, TaskToolCardBlock } from './TaskToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './BrowserTool'
 import { BashOutputBlock, isBashToolName } from './BashOutput'
 import { FileReadBlock } from './FileReadPreview'
 import { FileTreeBlock } from './FileTreeView'
 import { WebSearchBlock } from './WebSearchResult'
 import { WebFetchBlock } from './WebFetchPreview'
+import { FileOpReplayBlock, isFileOpToolName } from './FileWriteConfirm'
 import { GoalSetupFailureLine } from './GoalSetupFailureLine'
 import { delegationSlotted } from '../DelegationEventLine'
 import { isHistoryResultPreview } from '@/lib/historyPreview'
@@ -34,6 +36,33 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled',
   // 6c Done card: a live running call is not complete.
   if (running) return { type: 'running' }
   return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
+}
+
+/**
+ * write/edit/append on a finished or reloaded reply: the same FileOpBlock row
+ * the live registrations render (FileWriteConfirm.tsx), so the row keeps its
+ * status, failure reason and server link:-line Library link (code-reviewer
+ * C2). Kept outside renderHistoricalToolCall for its line budget.
+ */
+function renderFileOpReplay(
+  tc: ToolCall,
+  callId: string,
+  inlineEvents: readonly DelegationEvent[] | undefined,
+  verboseChatEnabled: boolean,
+  running: boolean,
+): ReactNode {
+  return delegationSlotted(callId, inlineEvents, (
+    <FileOpReplayBlock
+      key={callId}
+      toolName={tc.tool}
+      params={tc.params as Record<string, unknown> | undefined}
+      result={tc.result}
+      // 6c Done card: only a call the row decided is live shows as running.
+      status={tc.status === 'running' && !running ? 'success' : tc.status}
+      error={tc.error}
+      verboseChatEnabled={verboseChatEnabled}
+    />
+  ))
 }
 
 interface HistoricalToolCallArgs {
@@ -77,10 +106,16 @@ function renderSavedToolCall({
   running = false,
 }: HistoricalToolCallArgs): ReactNode {
   // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
-  // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
-  // here too, so replayed sessions render the preview link (or the malformed
-  // result block) instead of a collapsed generic badge.
-  if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
+  // serve_web (canonical, pkg/tools/web_serve.go::ToolNameWebServe) and the
+  // legacy aliases web_serve / serve_workspace / run_in_workspace go through
+  // WebServeBlock here too, so replayed sessions render the preview link (or
+  // the malformed result block) instead of a collapsed generic badge.
+  if (
+    tc.tool === 'serve_web' ||
+    tc.tool === 'serve_workspace' ||
+    tc.tool === 'run_in_workspace' ||
+    tc.tool === 'web_serve'
+  ) {
     return delegationSlotted(callId, inlineEvents, (
       <WebServeBlock
         key={callId}
@@ -161,6 +196,29 @@ function renderSavedToolCall({
       />
     ))
   }
+  // #1683 (CHECK F1, decision D1): create/update/run/delete_task render the
+  // SAME readable card the live registrations do (TaskToolUI.tsx, mounted in
+  // OmnipusRuntimeProvider), so the card does not collapse into the generic
+  // badge when a live message becomes a saved row. `tc.result` is passed
+  // UNCHANGED — on replay it is the persisted `{ text: "<payload json>" }`
+  // envelope, which the card unwraps itself — and the store's resolved outcome
+  // is passed explicitly, as in the set_goal branch above. A result the history
+  // page shortened never gets here (renderHistoricalToolCall sends it to the
+  // preview display first), and the delegation event line still slots in.
+  if (isTaskToolName(tc.tool)) {
+    return delegationSlotted(callId, inlineEvents, (
+      <TaskToolCardBlock
+        key={callId}
+        toolName={tc.tool}
+        args={tc.params}
+        result={tc.result}
+        status={replayPartStatus(tc.status, running)}
+        isRunning={tc.status === 'running'}
+        isError={tc.status === 'error'}
+        error={tc.error}
+      />
+    ))
+  }
   // toolui-analysis item 2 + item 4 (founder-approved 2026-09-26):
   // the dedicated tool rows route through the SAME components on
   // replay as live, so a reloaded session matches what was on
@@ -183,6 +241,8 @@ function renderSavedToolCall({
       />
     ))
   }
+  // write/edit/append: the live FileOpBlock row (code-reviewer C2).
+  if (isFileOpToolName(tc.tool)) return renderFileOpReplay(tc, callId, inlineEvents, verboseChatEnabled, running)
   if (tc.tool === 'read_file' || tc.tool === 'file.read') {
     return delegationSlotted(callId, inlineEvents, (
       <FileReadBlock

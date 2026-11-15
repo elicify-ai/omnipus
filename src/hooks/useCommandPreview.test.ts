@@ -1,5 +1,5 @@
 // useCommandPreview.test.ts — executor-command-preview UI. Covers: debounce
-// (>=400ms, mirrors useCliPathValidation's F-17), re-fetch on field-VALUE
+// (>=400ms), re-fetch on field-VALUE
 // change (not on every re-render/new-object-literal), cancel-in-flight on a
 // rapid subsequent change, idle when no `cli` is selected, success/error
 // states, and the retry() affordance.
@@ -32,7 +32,7 @@ function req(overrides: Partial<ExecutorCommandPreviewRequest> = {}): ExecutorCo
 
 // Advances fake timers past the debounce window, then drains microtasks so
 // the resulting fetchExecutorPreview().then()/.catch() has a chance to
-// settle — mirrors useCliPathValidation.test.ts's `advanceAndFlush`.
+// settle before assertions inspect the hook state.
 async function advanceAndFlush(ms: number) {
   await act(async () => {
     vi.advanceTimersByTime(ms)
@@ -241,21 +241,23 @@ describe('useCommandPreview — error state', () => {
 })
 
 describe('buildExecutorPreviewRequest — shared request-building helper', () => {
-  it('trims a non-empty model and passes cli_path/cli_args through as-is', () => {
-    expect(buildExecutorPreviewRequest('claude-code', '  claude-sonnet-4-6  ', '/usr/local/bin/claude', '--verbose')).toEqual({
+  it('C-B1: trims a non-empty model and passes cli_args without a program path', () => {
+    const request = buildExecutorPreviewRequest('claude-code', '  claude-sonnet-4-6  ', '--verbose')
+    expect(request).toStrictEqual({
       cli: 'claude-code',
       model: 'claude-sonnet-4-6',
-      cli_path: '/usr/local/bin/claude',
       cli_args: '--verbose',
     })
+    expect(request).not.toHaveProperty('cli_path')
   })
 
   it('collapses a blank/whitespace-only model to undefined', () => {
-    expect(buildExecutorPreviewRequest('codex', '   ', undefined, undefined)).toEqual({
+    const request = buildExecutorPreviewRequest('codex', '   ', undefined)
+    expect(request).toStrictEqual({
       cli: 'codex',
       model: undefined,
-      cli_path: undefined,
       cli_args: undefined,
     })
+    expect(request).not.toHaveProperty('cli_path')
   })
 })

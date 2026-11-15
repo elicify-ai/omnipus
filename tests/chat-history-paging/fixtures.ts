@@ -14,6 +14,20 @@ type SessionHistoryPageInfo = SessionHistoryResponse['page_info']
 
 export const SID = 'history-paging-session'
 export const STAMP = '2026-10-21T10:00:00Z'
+
+/**
+ * #1697: TanStack Virtual arms a 150 ms "scrolling ended" timer on every scroll
+ * and never clears it when the list unmounts. A file that ends inside that
+ * window leaves the timer to fire after Vitest tore jsdom down, and its state
+ * update dies with "window is not defined" as an unhandled error. Call this
+ * after the last unmount of a test that scrolled a virtual list: it waits out
+ * the library's own delay (virtual-core `isScrollingResetDelay`, 150 ms) so no
+ * timer outlives the file.
+ */
+export const VIRTUAL_SCROLL_END_DELAY_MS = 150
+export function drainVirtualScrollTimer(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, VIRTUAL_SCROLL_END_DELAY_MS + 50))
+}
 export const UNAVAILABLE = 'This conversation\'s history could not be loaded.'
 
 // Synthetic server-issued selectors: hash only fixture labels, NOT the product's

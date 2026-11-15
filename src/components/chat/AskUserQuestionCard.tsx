@@ -362,7 +362,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
             className="border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] mb-[var(--space-2-5)] text-[var(--color-secondary)]"
             data-testid="ask-user-context"
           >
-            <HistoricalMessageMarkdown content={q.context} />
+            <HistoricalMessageMarkdown content={q.context} chatLinks />
           </div>
         )}
 

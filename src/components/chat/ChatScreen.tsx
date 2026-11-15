@@ -43,7 +43,8 @@ import { assistantRowCorrelationAttributes } from './assistantRowAttributes'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { stampToolCallOffset } from '@/store/chat/session'
-import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
+import { selectQueuedRows } from '@/store/chat/queue-target'
+import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import { HistoryShowRest, historyCallPosition, useHistoryPartGroups, useHistoryUserText, type DisplayPart } from './historyTextOverlay'
 import { useConnectionStore } from '@/store/connection'
@@ -61,6 +62,7 @@ import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, 
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
+import { buildTerminalMessageStatus } from '@/lib/omnipus-runtime'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
@@ -258,6 +260,7 @@ export function UserMessage() {
             latest
             isClearCommand={isClearCommandText(storeMessage.content)}
             onRetry={() => useChatStore.getState().resendMessage(storeMessage.id)}
+            onDiscard={() => useChatStore.getState().discardQueuedMessage(storeMessage.id)}
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(storeMessage.id)}
           />
         )}
@@ -937,6 +940,7 @@ export function VirtualUserMessageRow({
             latest={latest}
             isClearCommand={isClearCommandText(message.content)}
             onRetry={() => useChatStore.getState().resendMessage(message.id)}
+            onDiscard={() => useChatStore.getState().discardQueuedMessage(message.id)}
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(message.id)}
           />
         )}
@@ -1193,7 +1197,10 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
       data-message-role="assistant"
       data-message-id={message.id}
       {...assistantRowCorrelationAttributes(message)}
-      data-status="complete"
+      // #1671: the turn's outcome, not a fixed "complete" — a stopped turn
+      // showing "(interrupted)" is incomplete/cancelled here exactly as on
+      // the live AssistantUI row (one rule: buildTerminalMessageStatus).
+      data-status={buildTerminalMessageStatus(message).type}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
@@ -1238,7 +1245,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               (incorrectly) rendering the paragraph as one unbroken block. */}
           {partGroups.map(group => <div key={group.key} data-history-part={group.position}>{group.parts.map((part: DisplayPart, idx) => {
             if (part.type === 'text') {
-              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
+              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} chatLinks />
             }
             if (part.type === 'more') return <HistoryShowRest key={`more-${part.position}`} sessionId={activeSessionId ?? ''} position={part.position} originalSizeBytes={part.originalSizeBytes} />
             const callId = part.call.id
@@ -1672,9 +1679,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const pendingDrainQueue = useChatStore((s) => s.pendingDrainQueue)
   const queuedMessages = useMemo(() => {
     const existingIds = new Set(messages.map((message) => message.id))
-    return [...pendingDrainQueue, ...outboundQueue]
-      .filter((item): item is QueuedOutboundMessage => typeof item !== 'string' && !existingIds.has(item.id))
-      .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+    return selectQueuedRows(pendingDrainQueue, outboundQueue, existingIds, activeSessionId)
       .map((item): ChatMessage => ({
         id: item.id,
         session_id: activeSessionId ?? undefined,
@@ -1682,7 +1687,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         content: item.content,
         timestamp: item.timestamp,
         status: 'done',
-        deliveryStatus: 'queued',
+        deliveryStatus: item.abandoned ? 'unsaved' : 'queued',
       }))
   }, [activeSessionId, messages, outboundQueue, pendingDrainQueue])
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
@@ -1830,6 +1835,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 sentAt={providerStatusEvent.sentAt}
                 receivedAt={providerStatusEvent.receivedAt}
                 stallAt={providerStatusEvent.stallAt}
+                attempt={providerStatusEvent.attempt}
+                maxAttempts={providerStatusEvent.maxAttempts}
               />
             </div>
           )}
