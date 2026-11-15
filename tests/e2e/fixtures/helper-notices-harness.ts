@@ -1,0 +1,186 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { expect, type Page, type TestInfo } from '@playwright/test';
+import { Agent, Session, SessionDetail, Workspace, WorkspaceDelegation } from '../../../src/lib/api/generated/schemas';
+import type { AgentCreateRequest, SessionCreateRequest } from '../../../src/lib/api/generated/openapi-types';
+import { GatewayProcess } from './gateway-process';
+import { E2E_FALLBACK } from './e2e-model';
+import { openSessionByDeepLink } from './session-setup';
+import { waitForConnected, chatInput } from './selectors';
+import { startHelperNoticesProvider, type NoticeScriptOptions } from './helper-notices-provider';
+import { installNoticeLink } from './helper-notices-link';
+import { removeSessionHistoryIndex } from './chat-history';
+
+// not-wire-format: private scenario/traffic instrumentation, not a gateway DTO.
+export type NoticeScene = Awaited<ReturnType<typeof createNoticeScene>>;
+export type NoticeTraffic = ReturnType<typeof observeNotices>;
+export function observeNotices(page: Page) {
+  const frames: Record<string, unknown>[] = [];
+  const sends: Record<string, unknown>[] = [];
+  page.on('websocket', socket => {
+    if (!socket.url().includes('/api/v1/chat/ws')) return;
+    socket.on('framereceived', ({ payload }) => { frames.push(JSON.parse(payload.toString()) as Record<string, unknown>); });
+    socket.on('framesent', ({ payload }) => { sends.push(JSON.parse(payload.toString()) as Record<string, unknown>); });
+  });
+  return { frames, sends };
+}
+
+export async function createNoticeScene(page: Page, info: TestInfo, options: NoticeScriptOptions & { duplicateNames?: boolean; unavailableHistory?: boolean; helperNames?: string[] }) {
+  if (process.env.HEAVY_SLOT && process.env.HEAVY_SLOT !== 'remote') throw new Error('REFUSED: helper-notice browser tests require a runner, never local heavy fallback');
+  const provider = await startHelperNoticesProvider(options);
+  let gateway: GatewayProcess | undefined;
+  const traffic = observeNotices(page);
+  const childrenPages: Page[] = [];
+  try {
+    gateway = await GatewayProcess.start({ apiBase: provider.url });
+    // Configure only the owned, STOPPED throwaway home. No production source,
+    // live instance, paid key or command-line model service is involved.
+    await gateway.kill9();
+    gateway.assertStoppedForFixture();
+    const file = path.join(gateway.homeDir, 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    const models = cfg.providers as Array<Record<string, unknown>>;
+    expect(models.length, 'instrument: onboarding installed the real provider row').toBeGreaterThan(0);
+    for (const m of models) { m.api_base = provider.url; m.request_timeout = options.script === 'timeout' ? 3 : 120; }
+    const sandbox = (cfg.sandbox ?? {}) as Record<string, unknown>;
+    sandbox.tool_policies = { ...(sandbox.tool_policies as object), bash: 'allow', delegate: 'allow' };
+    cfg.sandbox = sandbox;
+    fs.writeFileSync(file, JSON.stringify(cfg), { mode: 0o600 });
+    await gateway.restart();
+    // Duplicate-name dataset is two chats delegated to ONE agent, not two
+    // different agents with the same display name (spec row 9).
+    const delegationCount = options.nested ? 1 : options.count ?? 1;
+    const workerCount = options.nested || options.duplicateNames ? 1 : delegationCount;
+    const agents: Array<ReturnType<typeof Agent.parse>> = [];
+    for (let i = 0; i < workerCount; i++) {
+      const data = { type: 'Subagent', name: options.helperNames?.[i] ?? (options.duplicateNames ? 'Researcher' : i === 0 ? 'Researcher' : i === 1 ? 'Writer' : `Helper ${i}`),
+        description: 'Isolated model notice acceptance worker', soul: 'Only execute the exact HM_HELPER task. Never explore.',
+        provider: E2E_FALLBACK.provider, model: E2E_FALLBACK.model,
+        tool_policy_changes: { set: { bash: 'allow', delegate: 'allow' } },
+        fallback_models: options.script === 'fallback' ? [{ provider: E2E_FALLBACK.provider, model: 'hm-fallback' }] : [],
+      } satisfies AgentCreateRequest;
+      const result = await gateway.apiFetch('POST', '/api/v1/agents', data);
+      expect(result.status, result.raw).toBe(201); agents.push(Agent.parse(result.body));
+    }
+    const parentResult = await gateway.apiFetch('POST', '/api/v1/agents', {
+      type: 'Main', name: 'Notice Main', soul: 'Delegate the exact HM_ROOT task and do nothing else.',
+      provider: E2E_FALLBACK.provider, model: E2E_FALLBACK.model, fallback_models: [],
+      tool_policy_changes: { set: { delegate: 'allow' } },
+    } satisfies AgentCreateRequest);
+    expect(parentResult.status, parentResult.raw).toBe(201);
+    const parent = Agent.parse(parentResult.body);
+    provider.setAgents(Array.from({ length: delegationCount }, (_, i) => agents[options.duplicateNames ? 0 : i].id));
+    const createdWs = await gateway.apiFetch('POST', '/api/v1/workspaces', { name: 'Helper Notice Test', core_team: [parent.id, ...agents.map(a => a.id)] });
+    expect(createdWs.status, createdWs.raw).toBe(201);
+    const workspace = Workspace.parse(createdWs.body);
+    const graphResult = await gateway.apiFetch('GET', `/api/v1/workspaces/${workspace.id}/delegation`);
+    expect(graphResult.status).toBe(200);
+    const graph = WorkspaceDelegation.parse(graphResult.body);
+    const graphSaved = await gateway.apiFetch('PUT', `/api/v1/workspaces/${workspace.id}/delegation`, {
+      revision: graph.revision, edges: [...agents.map(a => ({ from_agent: parent.id, to_agent: a.id, modes: ['direct'] })),
+        ...(options.nested ? [{ from_agent: agents[0].id, to_agent: agents[0].id, modes: ['direct'] }] : [])],
+    });
+    expect(graphSaved.status, graphSaved.raw).toBe(200);
+    const created = await gateway.apiFetch('POST', '/api/v1/sessions', { type: 'chat', agent_id: parent.id, workspace_id: workspace.id } satisfies SessionCreateRequest);
+    expect(created.status, created.raw).toBe(201);
+    const root = Session.parse(created.body);
+    if (options.unavailableHistory) {
+      // Fault the derived index BEFORE any helper exists, with the owned
+      // gateway stopped. Later live_only catch-up must not restart a turn.
+      await gateway.kill9();
+      await removeSessionHistoryIndex(gateway, root.id);
+      await gateway.restart();
+      const unavailable = await gateway.apiFetch('GET', `/api/v1/sessions/${root.id}`);
+      expect(unavailable.status).toBe(200);
+      expect(SessionDetail.parse(unavailable.body).history_state).toMatchObject({ status: 'unavailable', reason: 'index_missing' });
+    }
+    const link = await installNoticeLink(page);
+    link.setRoot(root.id);
+    await page.context().addCookies((await gateway.browserStorageState()).cookies);
+    await openSessionByDeepLink(page, root.id, gateway.baseURL);
+    await waitForConnected(page, { timeout: 15_000 });
+    await chatInput(page).fill('HM_ROOT_TASK. Delegate the exact scripted helper tasks.');
+    await chatInput(page).press('Enter');
+    await expect.poll(() => provider.helpers.filter(h => h.calls > 0).length, { message: 'positive control: real helper requests reached the fake model', timeout: 20_000 }).toBe(options.count ?? 1);
+    await expect.poll(() => provider.evidence.delegateResults.length, { message: 'positive control: real delegate execution returned to the parent', timeout: 15_000 }).toBeGreaterThanOrEqual(delegationCount);
+    const childResult = await gateway.apiFetch('GET', `/api/v1/sessions?parent_session_id=${root.id}`);
+    expect(childResult.status).toBe(200);
+    let children = Session.array().parse((childResult.body as Record<string, unknown>).sessions);
+    if (options.nested) {
+      expect(children).toHaveLength(1);
+      const grand = await gateway.apiFetch('GET', `/api/v1/sessions?parent_session_id=${children[0].id}`);
+      expect(grand.status).toBe(200);
+      children = [...children, ...Session.array().parse((grand.body as Record<string, unknown>).sessions)];
+    }
+    if (!options.nested) children.sort((a, b) => Number(a.title.replace('helper ', '')) - Number(b.title.replace('helper ', '')));
+    if (options.duplicateNames) expect(children.map(c => c.agent_id), 'two distinct chats share the same agent identity').toEqual([agents[0].id, agents[0].id]);
+    expect(children).toHaveLength(options.count ?? 1);
+    const own = await page.context().newPage(); childrenPages.push(own);
+    const ownTraffic = observeNotices(own);
+    await openSessionByDeepLink(own, children.at(-1)!.id, gateway.baseURL);
+    await waitForConnected(own, { timeout: 15_000 });
+    const detail = await gateway.apiFetch('GET', `/api/v1/sessions/${root.id}`);
+    expect(detail.status).toBe(200);
+    const parsedDetail = SessionDetail.parse(detail.body);
+    if (options.unavailableHistory) {
+      expect(parsedDetail.history_state.status).toBe('unavailable');
+      // The real model's correlated tool result remains the positive control
+      // even when the damaged derived index correctly withholds REST history.
+      for (const child of children) expect(JSON.stringify(provider.evidence.delegateResults)).toContain(child.id);
+    } else {
+      const calls = parsedDetail.messages?.flatMap(m => m.tool_calls ?? []).filter(c => c.tool === 'delegate') ?? [];
+      expect(calls.map(c => c.status), 'real delegate successes, not just a scripted sentence').toEqual(Array.from({ length: delegationCount }, () => 'success'));
+    }
+    const gw = gateway;
+    return { gateway: gw, provider, page, own, traffic, ownTraffic, children, agents, parent, root, workspace, link,
+      async releaseFailures() {
+        if (!options.parentWriting && !options.parentRetry) { provider.parentFinish.resolve(); await expect.poll(() => provider.evidence.parentDone).toBe(true); }
+        for (let i = 0; i < provider.fail.length; i++) {
+          const before = traffic.frames.filter(f => f.type === 'provider_retry').length;
+          provider.fail[i].resolve();
+          // Order the external failures by receipt of an actual existing
+          // top retry frame, so first-notice order is deterministic even
+          // when helper model requests arrived concurrently. No new child
+          // fields are needed for this preimplementation instrument.
+          const script = options.helperScripts?.[i] ?? options.script;
+          if (['retry', 'repeat', 'fallback'].includes(script) && !(options.nested && i === 0)) {
+            await expect.poll(() => traffic.frames.filter(f => f.type === 'provider_retry').length,
+              { message: `real retry publication after releasing helper ${i}`, timeout: 15_000 }).toBeGreaterThan(before);
+          }
+        }
+      },
+      async close() {
+        try {
+          await info.attach('helper-model-provider-evidence', { body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json' });
+          await info.attach('helper-model-raw-notice-traffic', { body: JSON.stringify({ top: traffic, own: ownTraffic }, null, 2), contentType: 'application/json' });
+        } finally {
+          for (const p of childrenPages) await p.close();
+          // Tear down the owned PID before releasing scripted answers:
+          // cleanup must not accidentally start a new real 30 s tool.
+          try { await gw.kill9(); } finally {
+            try { await provider.close(); } finally { await gw.stop(); }
+          }
+        }
+      },
+    };
+  } catch (error) {
+    await info.attach('helper-model-setup-evidence', { body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json' });
+    try { await gateway?.stop(); } finally { await provider.close(); }
+    throw error;
+  }
+}
+
+export async function visibleNamed(page: Page, name: string, clause: string) {
+  // Hidden polite announcements do not count as product visibility evidence.
+  return page.locator('span, p, div').filter({ hasText: new RegExp(`^${name}: .*${clause}`) }).evaluateAll(nodes => {
+    const visible = nodes.filter(n => !(n as HTMLElement).closest('[aria-live], .sr-only, [aria-hidden="true"]') && (n as HTMLElement).checkVisibility());
+    return visible.filter(n => !visible.some(other => other !== n && n.contains(other))).map(n => n.textContent?.trim());
+  });
+}
+export async function expectNamed(scene: NoticeScene, name = 'Researcher', clause = 'Retrying automatically') {
+  await expect.poll(() => visibleNamed(scene.page, name, clause), { message: `FR-005: ${name} named row in the real main chat`, timeout: 2_000 }).toHaveLength(1);
+}
+export async function recordScene(scene: NoticeScene, info: TestInfo, label: string) {
+  await info.attach(`${label}-main-admin`, { body: await scene.page.screenshot({ fullPage: true }), contentType: 'image/png' });
+  await info.attach(`${label}-helper-admin`, { body: await scene.own.screenshot({ fullPage: true }), contentType: 'image/png' });
+}

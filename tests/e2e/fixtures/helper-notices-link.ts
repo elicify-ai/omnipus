@@ -1,0 +1,50 @@
+// Fault only delivery of REAL gateway frames. Never synthesize a provider frame.
+import { expect, type Page, type WebSocketRoute } from '@playwright/test';
+
+export async function installNoticeLink(page: Page) {
+  let offline = false;
+  let forceSnapshot = false;
+  let holdEnd = false;
+  let root = '';
+  const held: Array<{ raw: string | Buffer; socket: WebSocketRoute }> = [];
+  const sockets: Array<{ client: WebSocketRoute; server: WebSocketRoute }> = [];
+  const frames: Record<string, unknown>[] = [];
+  await page.routeWebSocket('**/api/v1/chat/ws*', socket => {
+    if (offline) { socket.close({ code: 1001, reason: 'scripted network outage' }); return; }
+    const server = socket.connectToServer();
+    sockets.push({ client: socket, server });
+    socket.onMessage(raw => {
+      const request = JSON.parse(raw.toString()) as Record<string, unknown>;
+      if (forceSnapshot && request.type === 'attach_session' && request.session_id === root) {
+        // Keep the client's real boot id; only age its requested cursor.
+        // The real hub must select retention_exceeded (or live_only if its
+        // actual history is unavailable), never a fabricated server reply.
+        server.send(JSON.stringify({ ...request, since_seq: 0 }));
+      } else server.send(raw);
+    });
+    server.onMessage(raw => {
+      const frame = JSON.parse(raw.toString()) as Record<string, unknown>;
+      frames.push(frame);
+      if (holdEnd && frame.type === 'provider_status' && frame.state === 'ended' && frame.session_id === root) {
+        held.push({ raw, socket }); return;
+      }
+      if (!offline) socket.send(raw);
+    });
+  });
+  return {
+    frames,
+    setRoot(id: string) { root = id; },
+    disconnect() {
+      expect(sockets.length, 'network instrument owns a real connected socket').toBeGreaterThan(0);
+      offline = true;
+      for (const link of sockets) { link.client.close({ code: 1001, reason: 'scripted network outage' }); link.server.close(); }
+    },
+    reconnect(snapshot = false) { forceSnapshot = snapshot; offline = false; },
+    holdEnded() { holdEnd = true; },
+    deliverHeldEnd() {
+      expect(held.length, 'positive instrument: a real ended frame was delayed').toBeGreaterThan(0);
+      holdEnd = false;
+      for (const item of held.splice(0)) item.socket.send(item.raw);
+    },
+  };
+}
