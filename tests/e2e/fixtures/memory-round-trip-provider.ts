@@ -12,6 +12,8 @@ interface ProviderMessage {
 // not-wire-format: test-only controls for the external model edge.
 interface MemoryScriptOptions {
   nonce: string;
+  // Reordered tokens exercise indexed matching rather than substring fallback.
+  recallQuery?: string;
   missingNonce: string;
   prompts: readonly [string, string, string];
 }
@@ -34,7 +36,7 @@ export async function startMemoryRoundTripProvider(options: MemoryScriptOptions)
   // Explicit shared room is required for remember, not an inferred default.
   const turns = [
     { id: 'memory-scripted-remember', name: 'remember', args: { content: options.nonce, category: 'reference', room: 'shared' } },
-    { id: 'memory-scripted-recall', name: 'recall_memory', args: { query: options.nonce, room: 'shared' } },
+    { id: 'memory-scripted-recall', name: 'recall_memory', args: { query: options.recallQuery ?? options.nonce, room: 'shared' } },
     { id: 'memory-scripted-missing', name: 'recall_memory', args: { query: options.missingNonce, room: 'shared' } },
   ];
   const server = http.createServer((req, res) => {
@@ -98,6 +100,10 @@ export async function startMemoryRoundTripProvider(options: MemoryScriptOptions)
           reject(400, `${turn.name} was not offered to the agent`);
           return;
         }
+        if (!['remember', 'recall_memory'].every((name) => body.tools?.some((tool) => tool.function?.name === name))) {
+          reject(400, 'remember and recall_memory must both be offered');
+          return;
+        }
         if (current.some((message) => message.role === 'tool' || message.tool_calls?.length)) {
           reject(400, `expected turn ${turnIndex + 1} before its tool call`);
           return;
@@ -118,6 +124,11 @@ export async function startMemoryRoundTripProvider(options: MemoryScriptOptions)
           !sameArgs(call.function?.arguments, turn.args) || results.length !== 1 ||
           result?.tool_call_id !== turn.id || current.indexOf(result) <= callIndex) {
         reject(400, `expected the correlated ${turn.name} call and result for turn ${turnIndex + 1}`);
+        return;
+      }
+      // #1800's exact positive shared-room success contract, not generic `ok`.
+      if (turnIndex === 0 && textOf(result.content).trim() !== "ok — saved to your workspace team's shared memory") {
+        reject(400, 'the remember tool result is not the shared-room success');
         return;
       }
       // Critical anti-false-green rule: only CURRENT correlated tool content

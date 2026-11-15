@@ -10,8 +10,14 @@ import { startMemoryRoundTripProvider } from './fixtures/memory-round-trip-provi
 import { assistantMessages, chatInput, DEFAULT_WORKSPACE_NAME, userMessages } from './fixtures/selectors';
 import { openSessionByDeepLink } from './fixtures/session-setup';
 
-// New standalone scripted file: stubs-3, not the paid live-memory shard. The
-// original memory-remember-recall.spec.ts continues to test live-model obedience.
+// One always-on scripted spec (stubs-3), replacing #1800's deleted twins:
+// tests/e2e/memory-scripted-round-trip.spec.ts,
+// tests/e2e/fixtures/memory-scripted-provider.ts and
+// tests/e2e/fixtures/memory-scripted-provider.test.ts. Their assertion trace is
+// /workspace/logs/memory-scripted/ta/twin-trace.md. Reordered recall distinguishes
+// token-index lookup from substring scan; exact shared success is required.
+// The original memory-remember-recall.spec.ts remains the live-model smoke.
+// Probe budget: one onboarding validation, no extra model calls for memory.
 test.describe.configure({ retries: 0 });
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -36,6 +42,7 @@ async function settled(page: Page, turn: number) {
     .toHaveAttribute('data-status', 'complete');
   await expect(page.locator('[data-message-id][data-status="running"]'), `(e) turn ${turn}: no running row remains`).toHaveCount(0);
   await expect(page.getByTestId('stop-btn'), `(e) turn ${turn}: generation has stopped`).toHaveCount(0);
+  await expect(chatInput(page), `(e) turn ${turn}: composer is enabled after settlement`).toBeEnabled();
 }
 
 // Only the external model HTTP edge is scripted. Tools, room routing, disk,
@@ -44,15 +51,18 @@ test('scripted memory round trip: remember writes, index recalls, SPA renders; a
   // Boot/onboard/deep-link plus three immediate local two-request turns. No
   // live-model latency or retries; individual assertions keep the normal 15s.
   test.setTimeout(120_000);
-  // Single-token independent nonces avoid shared analyzer terms in the control.
-  const nonce = `memoryroundtrip${randomUUID().replaceAll('-', '')}`;
+  // #1800's index-only oracle: reversed tokens cannot match a substring scan.
+  // The never-stored control has no shared analyzer terms with the stored note.
+  const stamp = randomUUID().replaceAll('-', '');
+  const nonce = `MEMSCRIPT-${stamp}`;
+  const recallQuery = `${stamp}-MEMSCRIPT`;
   const missingNonce = `unrecorded${randomUUID().replaceAll('-', '')}`;
   const prompts = [
     `Scripted memory turn 1: remember ${nonce} in shared memory as a reference.`,
-    `Scripted memory turn 2: recall ${nonce} from shared memory.`,
+    `Scripted memory turn 2: recall ${recallQuery} from shared memory.`,
     `Scripted memory turn 3: recall ${missingNonce} from shared memory.`,
   ] as const;
-  const provider = await startMemoryRoundTripProvider({ nonce, missingNonce, prompts });
+  const provider = await startMemoryRoundTripProvider({ nonce, recallQuery, missingNonce, prompts });
   let gw: GatewayProcess | undefined;
   try {
     gw = await GatewayProcess.start({ apiBase: provider.url });
@@ -83,18 +93,20 @@ test('scripted memory round trip: remember writes, index recalls, SPA renders; a
     await expect(assistantMessages(page), 'fresh chat has zero assistant replies').toHaveCount(0);
     await expect(userMessages(page), 'fresh chat has zero user messages').toHaveCount(0);
     const input = chatInput(page);
+    await expect(input, 'fresh chat composer is enabled').toBeEnabled();
 
     await test.step('(a/b/e) remember writes a nonce-bearing memory and reports success', async () => {
       await input.fill(prompts[0]);
       await input.press('Enter');
       await expect(assistantMessages(page).getByText('Memory stored.', { exact: true }), '(e) turn 1: final provider text arrived')
         .toHaveText('Memory stored.');
+      await expect(assistantMessages(page).getByText('Memory stored.', { exact: true }), '(e) turn 1: acknowledgement is visible').toBeVisible();
       await settled(page, 1);
       expect(provider.evidence.streamRequests, '(e) turn 1: tool call plus its follow-up, exactly two requests').toBe(2);
       expect(provider.evidence.issuedCalls, '(e) turn 1: exactly one tool call').toBe(1);
       const remembered = provider.evidence.toolResults.filter((item) => item.request === 2 && item.callId === 'memory-scripted-remember');
       expect(remembered, '(b) provider received exactly one correlated remember result').toEqual([
-        { request: 2, callId: 'memory-scripted-remember', name: 'remember', content: expect.stringMatching(/^ok(?:\s|$)/) },
+        { request: 2, callId: 'memory-scripted-remember', name: 'remember', content: "ok — saved to your workspace team's shared memory" },
       ]);
       const home = gw!.homeDir;
       await expect.poll(() => memoryFiles(home, workspace.id, mia.id, nonce), {
@@ -104,6 +116,8 @@ test('scripted memory round trip: remember writes, index recalls, SPA renders; a
       expect(path.dirname(file), '(a) explicit shared-room write lands in this workspace, not a private fallback')
         .toBe(path.join(home, 'workspaces', workspace.id, '.omnipus', 'memories'));
       expect(fs.readFileSync(file, 'utf8'), '(a) the actual memory file contains the per-test nonce').toContain(nonce);
+      expect(fs.readFileSync(file, 'utf8').toLowerCase(), '(c) reordered recall query is not a substring of the stored memory file')
+        .not.toContain(recallQuery.toLowerCase());
       await info.attach('memory-scripted-memory-file', { path: file, contentType: 'text/markdown' });
     });
 
@@ -120,7 +134,7 @@ test('scripted memory round trip: remember writes, index recalls, SPA renders; a
       await settled(page, 2);
       // The provider puts only its received result in a fenced text block.
       // Scope to that rendered answer, never the tool badge (its QUERY also
-      // contains the nonce and would let a missing-answer mutant survive).
+      // contains both nonce tokens and could let a missing-answer mutant survive).
       const answer = assistantMessages(page).nth(1).locator('pre:not([data-history-tool-row] pre):not([data-testid="tool-call-badge"] pre)');
       await expect(answer, '(d) turn-2 assistant answer renders exactly one echoed text block').toHaveCount(1);
       await expect(answer, '(d) the turn-2 echoed answer is visible, not a hidden transcript value').toBeVisible();
@@ -140,15 +154,24 @@ test('scripted memory round trip: remember writes, index recalls, SPA renders; a
       expect(missing[0].name, 'control: result is recall_memory, not remembered user text').toBe('recall_memory');
       expect(missing[0].content, 'control (c): tool result does not manufacture the never-stored nonce').not.toContain(missingNonce);
       expect(missing[0].content, 'control (c): a different query must not return the stored memory either').not.toContain(nonce);
+      expect(missing[0].content, 'control (c): the never-stored query has no matching entries').toBe('no matching entries');
       await settled(page, 3);
       const answer = assistantMessages(page).nth(2).locator('pre:not([data-history-tool-row] pre):not([data-testid="tool-call-badge"] pre)');
       await expect(answer, 'control (d): the absent lookup still renders its real result').toHaveCount(1);
+      await expect(answer, 'control (d): absent lookup answer is visible').toBeVisible();
       await expect(answer, 'control (d): answer echoes only the absent lookup result').toHaveText(missing[0].content);
       await expect(answer, 'control (d): answer does not manufacture the never-stored nonce').not.toContainText(missingNonce);
       await expect(answer, 'control (d): answer does not echo the old stored nonce').not.toContainText(nonce);
+      await expect(assistantMessages(page).filter({ hasText: missingNonce }), 'control (d): no assistant row contains the never-stored nonce').toHaveCount(0);
       await settled(page, 3);
       expect(provider.evidence.streamRequests, '(e) three two-request turns total exactly six provider requests').toBe(6);
+      expect(provider.evidence.probeRequests, '(e) one onboarding probe and no extra memory-loop model probes').toBe(1);
       expect(provider.evidence.issuedCalls, '(e) exactly one remember and two recall calls').toBe(3);
+      const currentResults = provider.evidence.toolResults.filter((item) =>
+        (item.request === 2 && item.callId === 'memory-scripted-remember') ||
+        (item.request === 4 && item.callId === 'memory-scripted-recall') ||
+        (item.request === 6 && item.callId === 'memory-scripted-missing'));
+      expect(currentResults, '(e) exactly three current correlated tool results').toHaveLength(3);
       expect(provider.evidence.errors, '(e) no unexpected scripted-provider traffic').toEqual([]);
       await expect(userMessages(page), '(e) exactly three user turns in this fresh chat').toHaveCount(3);
     });
