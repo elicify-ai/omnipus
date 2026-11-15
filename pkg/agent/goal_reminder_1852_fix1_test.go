@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -272,12 +274,24 @@ func TestGoalReminder1852ReadableHelperTranscriptReadFailureHoldsTheAssessment(t
 }
 
 // F3: separate clocks — goal start S, helper activity S+10m, watermark
-// S+20m. The helper is still in the window (WARN when unavailable), and a
-// readable helper's old output is not counted again.
+// S+20m, persisted goal activity S+30m. The helper is still in the window
+// (WARN when unavailable), and a readable helper's old output is not counted
+// again. Neither the watermark nor the latest goal activity is the start.
 func TestGoalReminder1852WindowUsesGoalStartNotTheWatermark(t *testing.T) {
 	h := grNewRecordedBrake(t)
 	start := gr1852GoalStart(t, h)
-	helperAt, since := start.Add(10*time.Minute), start.Add(20*time.Minute)
+	helperAt, since, goalActiveAt := start.Add(10*time.Minute), start.Add(20*time.Minute), start.Add(30*time.Minute)
+	_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error {
+		g.LastActivityAt = goalActiveAt
+		return nil
+	})
+	require.NoError(t, err)
+	persisted, err := goal.NewStore(config.OmnipusHomeDir()).Get(h.goalID)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.StartedAt)
+	require.True(t, persisted.StartedAt.Equal(start), "SETUP: the goal start stays S")
+	require.True(t, persisted.LastActivityAt.Equal(goalActiveAt), "SETUP: the persisted goal activity clock is S+30m")
+	require.True(t, effectiveGoalActivity(persisted).Equal(goalActiveAt), "SETUP: the latest goal activity differs from the start")
 	lost := gr1852AddHelper(t, h, gr1852Helper{createdAt: start.Add(-time.Hour), lastActivity: helperAt}, "session_1852CLOCKS")
 	readable := gr1852AddHelper(t, h, gr1852Helper{createdAt: start.Add(-time.Hour), lastActivity: helperAt, readable: true, outputAt: helperAt}, "")
 
