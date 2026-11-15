@@ -19,6 +19,9 @@ import (
 // Apply nor its process-wide backend state may escape into later tests.
 func primeKernelSandbox(t *testing.T) bool {
 	t.Helper()
+	// O2 / §3.6: variant C removes entries beneath /tmp. Pin all dependent
+	// tests' later homes/owner records outside it, including existing T-92.
+	functionalPinDataOutsideTmp(t)
 	const marker = "OMNIPUS_TEST_PREVIEW_LANDLOCK_CHILD"
 	if os.Getenv(marker) != t.Name() {
 		self, err := os.Executable()
