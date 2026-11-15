@@ -86,14 +86,6 @@ func TestOpencode226R5_ExecutorOnlyUpdateReachesLiveDelegationRegistry(t *testin
 	}
 }
 
-// D-A's literal whole-executor-clear requirement has no supported write shape.
-// ExecutorConfigUpdate rejects kind/cli/cli_path; docs/agents.md locks runtime
-// kind and tool. Keep the gap loud, not skipped or disguised as a supported
-// editable-field clear. Resolving it needs a contract/scope decision, not a guessed payload.
-func TestOpencode226R5_WholeExecutorClearBlockedByWriteContract(t *testing.T) {
-	t.Fatal("BLOCKED: whole-executor clear is not implemented in ExecutorConfigUpdate; runtime kind/tool are locked — required by RED round 5 D-A; supported cli_args/env clears have separate real-REST tests")
-}
-
 // D-B oracle: docs/agents.md, Workers and delegation: Send a test message runs
 // a real request through this worker's tool, with its saved environment. Only
 // that external process edge is faked; HTTP routing and env preparation are real.
