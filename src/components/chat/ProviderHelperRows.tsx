@@ -154,7 +154,12 @@ export function ProviderHelperRows({ rows, clock }: { rows: readonly ProviderHel
     }
   })
 
+  // The live region is a sibling of the rows, not inside their wrapper: the
+  // wrapper's text is then only what is visibly drawn, so no element whose
+  // text starts with a helper's name mixes the visible row with the frozen
+  // (hidden) announcement.
   return (
+    <>
     <div data-testid="provider-helper-rows">
       {shown.length > 0 && (
         <div className="px-[var(--space-3)] pb-[var(--space-2)]">
@@ -171,7 +176,8 @@ export function ProviderHelperRows({ rows, clock }: { rows: readonly ProviderHel
           )}
         </div>
       )}
-      <div aria-live="polite" className="sr-only">{announcement}</div>
     </div>
+    <div aria-live="polite" className="sr-only">{announcement}</div>
+    </>
   )
 }
