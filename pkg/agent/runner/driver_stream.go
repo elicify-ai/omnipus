@@ -118,11 +118,41 @@ const fatalDeliveryGrace = 2 * time.Second
 // It returns emittedFatal=true if it sent at least one fatal EventKindError
 // (either from a parseLine result or from a stream read error). Callers use
 // this to suppress a duplicate terminal error event after cmd.Wait().
+//
+// It is the single-event form of streamParserMulti: drivers whose one line can
+// yield only one event keep this signature.
 func streamParser(
 	ctx context.Context,
 	r io.Reader,
 	runID string,
 	parseLine func(raw []byte) (RunEvent, bool),
+	out chan<- RunEvent,
+) (emittedFatal bool) {
+	return streamParserMulti(ctx, r, runID, func(raw []byte) ([]RunEvent, bool) {
+		ev, ok := parseLine(raw)
+		if !ok {
+			return nil, false
+		}
+		return []RunEvent{ev}, true
+	}, out)
+}
+
+// streamParserMulti is streamParser's multi-event form, for CLI vocabularies
+// where one NDJSON line can carry MORE than one public event (opencode ≥ 2.x
+// emits a completed tool_use line carrying both the tool call and its result).
+// parseLine receives the raw JSON bytes for a single NDJSON line and returns
+// the events that line yields in stream order plus ok; when ok=false the line
+// is skipped entirely.
+//
+// Every event — primary or additional — passes through the same identity fill
+// (Timestamp/RunID) and fatal-delivery handling. It returns emittedFatal=true
+// if it sent at least one fatal EventKindError (either from a parseLine result
+// or from a stream read error).
+func streamParserMulti(
+	ctx context.Context,
+	r io.Reader,
+	runID string,
+	parseLine func(raw []byte) ([]RunEvent, bool),
 	out chan<- RunEvent,
 ) (emittedFatal bool) {
 	scanner := bufio.NewScanner(r)
@@ -141,32 +171,14 @@ func streamParser(
 		if line == "" {
 			continue
 		}
-		ev, ok := parseLine([]byte(line))
+		events, ok := parseLine([]byte(line))
 		if !ok {
 			continue
 		}
-		if ev.Timestamp.IsZero() {
-			ev.Timestamp = time.Now().UTC()
-		}
-		if ev.RunID == "" {
-			ev.RunID = runID
-		}
-		if ev.Kind == EventKindError && ev.Err != nil && ev.Err.Fatal {
-			// A fatal event is often produced right after the driver cancelled
-			// the run (every turn-cap branch calls Cancel() first), so ctx is
-			// already done here. It must not race ctx.Done() (#904 F1).
-			if deliverFatal(ctx, out, ev) {
-				emittedFatal = true
-			}
-			if ctx.Err() != nil {
+		for _, ev := range events {
+			if emitStreamEvent(ctx, runID, ev, out, &emittedFatal) {
 				return emittedFatal
 			}
-			continue
-		}
-		select {
-		case out <- ev:
-		case <-ctx.Done():
-			return emittedFatal
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
@@ -183,6 +195,33 @@ func streamParser(
 		}
 	}
 	return emittedFatal
+}
+
+// emitStreamEvent fills an event's identity fields and sends it to out. It
+// reports whether the parser must STOP (the run context ended), so a canceled
+// run never keeps scanning lines. Fatal events are delivered with priority
+// over cancellation (#904 F1): a fatal event is often produced right after
+// the driver cancelled the run (every turn-cap branch calls Cancel() first),
+// so ctx is already done here and a plain select would race ctx.Done().
+func emitStreamEvent(ctx context.Context, runID string, ev RunEvent, out chan<- RunEvent, emittedFatal *bool) bool {
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now().UTC()
+	}
+	if ev.RunID == "" {
+		ev.RunID = runID
+	}
+	if ev.Kind == EventKindError && ev.Err != nil && ev.Err.Fatal {
+		if deliverFatal(ctx, out, ev) {
+			*emittedFatal = true
+		}
+		return ctx.Err() != nil
+	}
+	select {
+	case out <- ev:
+	case <-ctx.Done():
+		return true
+	}
+	return false
 }
 
 // deliverFatal hands a fatal event to out with priority over cancellation

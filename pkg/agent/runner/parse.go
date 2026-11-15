@@ -87,15 +87,27 @@ func ParseOpencodeStreamJSON(data []byte, runID string, maxTurns int) []RunEvent
 
 	ctx := context.Background()
 	out := make(chan RunEvent, 256)
-	streamParser(ctx, bytes.NewReader(data), runID, func(raw []byte) (RunEvent, bool) {
+	emittedFatal := streamParserMulti(ctx, bytes.NewReader(data), runID, func(raw []byte) ([]RunEvent, bool) {
 		return d.parseLine(raw, runID, &turnCount, maxTurns)
 	}, out)
 	close(out)
+	sawEnd := false
 	for ev := range out {
 		if ev.Timestamp.IsZero() {
 			ev.Timestamp = time.Now().UTC()
 		}
+		if ev.Kind == EventKindEnd {
+			sawEnd = true
+		}
 		events = append(events, ev)
+	}
+	// The ≥ 2.x vocabulary has no session.complete: when the recorded stream
+	// drains cleanly with no inline End and no fatal error, synthesize the
+	// single terminal End here — the offline mirror of the live driver's
+	// run-end End (same pattern as the codex M4 synthesis). An inline End
+	// (≥ 0.1.0 session.complete) or a fatal error suppresses it.
+	if !emittedFatal && !sawEnd {
+		events = append(events, RunEvent{Kind: EventKindEnd, RunID: runID, Timestamp: time.Now().UTC()})
 	}
 	return events
 }
