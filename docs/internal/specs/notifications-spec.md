@@ -3502,3 +3502,20 @@ The independent checker read the round-2 fix (`f28360d034`) against release head
 | `agent_request_limit` with no matrix row | **Removed from the contract paragraph's matrix-code list**: it has wording (W11) but no matrix row, and its row is written only if OQ-1857-5 (founder) answers "include" — naming it as a matrix code promised an oracle that does not exist (checker issue 5, pre-existing) | Contract paragraph of §13.8.2; §30.4 OQ-1857-5 (unchanged, open) |
 
 Also applied from the checker's new-issue list: the direct-Save producer shape is stated where it matters (B21's row notes that keying the finalization variant on that path requires the producer to carry the stage/answer fact — WP-0 work, flagged for the RED author); `docs/tools.md::Background results` is cited **by analogy**, not as a code decision (B21's matrix note). The counts are consistent: 42 = 7 + 24 + 11; 28 = 23 always + 3 conditional + 2 partial; the matrix now has 25 rows (B10 and B7 counted twice each). No row the checker marked SUPPORTED was changed: B23's caller binding, B20, B22's terminality, the B16 order, the lifecycle-read NEW-3 rule, and both C11 rows stand as committed.
+
+## 37. #1857 amendment — known gaps for WP-6 (chief ruling, 2026-11-15 23:14Z)
+
+The spec is accepted at `69c02dd5ff`. The spec-review cap was reached, so these gaps are not fixed by another spec pass. The independent check after the narrow correction (team-lead's Sonnet checker against the release tree `5d20e539f`) found that the lines below still claim more than the server knows.
+
+**Rule.** Copy says only what the server knows. A claim about the answer state, or about earlier work, needs a caller citation (`file::symbol`) or is removed.
+
+**Binding.** The lines below MUST NOT go into RED tests or into the build as written. They are part of the wording the founder reviews with E4 (the wording pattern), after his form answers. RED tests for these rows assert the code and attribution only, never these sentences.
+
+| # | Line | Gap |
+|---|---|---|
+| G1 | B21 proposed copy ("…ended without a final reply") | The direct `Sessions.Save` failure (`pkg/agent/loop_run_turn.go` :92-107) also fires for answered turns, and the B11 fail-closed fallback routes here. So the copy asserts an answer state the server does not know. |
+| G2 | W16 "The work continues" | The shared reporter (`pkg/agent/turn_exit.go::reportSessionSaveFailure`) marks the turn failed, so the done frame reports failed. "Continues" is not established for the turn. |
+| G3 | B7 mid-turn steering copy ("what ran earlier … is unaffected") | The code does not decide this. `pkg/agent/wake_input.go:252` → `contextWindowTurnExit` establishes only that the save failed and the turn ended. |
+| G4 | B16 route via `reserveExternalConversation` | It is called from the revive path (`pkg/agent/steering.go:760`), not from `runExternalCLISubTurn`. The B16 row does not cite this route. |
+| G5 | B14 general line "no turn stops and no request is refused" (minor) | It is broader than the listed paths. A reminder-admission failure is a turn that never started. Scope the line to the listed paths. |
+| G6 | W9 stale "B19/W16 mid-run" note (minor) | The mid-run user-role producer is now B7 steering, not B19. |
