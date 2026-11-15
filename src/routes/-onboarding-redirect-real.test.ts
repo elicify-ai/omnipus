@@ -64,10 +64,24 @@ function buildState(input: {
       mode: input.mode ?? 'platform',
       edition: input.edition ?? 'hosted',
     }
-    if (!input.omitSignedIn) identity.signed_in = input.signedIn ?? false
+    // null must stay null. `?? false` collapses a deliberate null into false,
+    // so a row labelled "signed_in is null" would actually exercise false
+    // (issue #1858 review R3). Default false only when signedIn was omitted.
+    // omitSignedIn leaves the key off entirely ("missing").
+    if (!input.omitSignedIn) {
+      identity.signed_in = 'signedIn' in input ? input.signedIn : false
+    }
     state.identity = identity
   }
   return state as unknown as AppState
+}
+
+// What the loader will read off the fixture. present:false means the key is
+// absent — not a stored undefined, and not false.
+function deliveredSignedIn(state: AppState): { present: false } | { present: true; value: unknown } {
+  const identity = (state as { identity?: Record<string, unknown> }).identity
+  if (identity === undefined || !('signed_in' in identity)) return { present: false }
+  return { present: true, value: identity.signed_in }
 }
 
 function setStoredSession(): void {
@@ -304,22 +318,38 @@ describe('onboarding beforeLoad real redirect (issue #1858)', () => {
   })
 
   describe('platform mode accepts only strict boolean signed_in true', () => {
+    // These rows exercise the loader predicate with already-parsed state.
+    // The real fetcher would reject malformed values by schema, so they are
+    // NOT an end-to-end malformed-response test.
     const nonTrue = [
       { label: 'false', signedIn: false as boolean | null | string | number | undefined, omitSignedIn: false },
+      // 'missing' drops the key via omitSignedIn. An explicit signedIn: undefined
+      // would still be "in" the input object; that is not this row.
       { label: 'missing', signedIn: undefined, omitSignedIn: true },
       { label: 'null', signedIn: null, omitSignedIn: false },
       { label: "string 'true'", signedIn: 'true', omitSignedIn: false },
       { label: 'number 1', signedIn: 1, omitSignedIn: false },
     ]
 
+    function expectLabelledFixture(
+      state: AppState,
+      signedIn: boolean | null | string | number | undefined,
+      omitSignedIn: boolean,
+    ): void {
+      const delivered = deliveredSignedIn(state)
+      const expected = omitSignedIn ? { present: false as const } : { present: true as const, value: signedIn }
+      expect(delivered).toEqual(expected)
+    }
+
     it.each(nonTrue)(
       'redirects to /login when signed_in is $label and there is no stored session',
       async ({ signedIn, omitSignedIn }) => {
-        vi.mocked(fetchAppState).mockResolvedValue(
-          buildState({ mode: 'platform', edition: 'hosted', signedIn, omitSignedIn }),
-        )
+        const state = buildState({ mode: 'platform', edition: 'hosted', signedIn, omitSignedIn })
+        expectLabelledFixture(state, signedIn, omitSignedIn)
+        vi.mocked(fetchAppState).mockResolvedValue(state)
 
         await expect(observe()).resolves.toEqual(redirected(LOGIN_PATH))
+        await expect(vi.mocked(fetchAppState).mock.results[0]?.value).resolves.toBe(state)
       },
     )
 
@@ -327,11 +357,12 @@ describe('onboarding beforeLoad real redirect (issue #1858)', () => {
       'redirects to /login when signed_in is $label even if a stored session hint is present',
       async ({ signedIn, omitSignedIn }) => {
         setStoredSession()
-        vi.mocked(fetchAppState).mockResolvedValue(
-          buildState({ mode: 'platform', edition: 'hosted', signedIn, omitSignedIn }),
-        )
+        const state = buildState({ mode: 'platform', edition: 'hosted', signedIn, omitSignedIn })
+        expectLabelledFixture(state, signedIn, omitSignedIn)
+        vi.mocked(fetchAppState).mockResolvedValue(state)
 
         await expect(observe()).resolves.toEqual(redirected(LOGIN_PATH))
+        await expect(vi.mocked(fetchAppState).mock.results[0]?.value).resolves.toBe(state)
       },
     )
   })
