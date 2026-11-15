@@ -221,12 +221,16 @@ limit, so use may briefly exceed it.
 
 LibreOffice runs with macros off, links never updated and formulas recalculated
 when the file opens. On macOS and Linux, when the kernel sandbox is active, the
-programs can write at most their own temporary folder; LibreOffice can read
-only the folders listed in
+programs can write at most their own temporary folder, with one exception on
+Linux: while it converts a document, LibreOffice may also create its control
+connection point in the shared `/tmp` folder and delete files there. LibreOffice
+can read only the folders and files listed in
 [Sandbox limitations](operations/sandbox-limitations.md#document-preview-programs),
-never your files or other previews; on macOS they have no
-network; on Linux they cannot open or accept TCP connections where the kernel supports that rule (UDP is not
-blocked). When
+never your files or other previews; on macOS they have no network. On Linux a
+stricter setup for LibreOffice, with a private folder for each preview and a
+block on LibreOffice opening network connections itself, is not switched on
+yet (issue #1856). Keep the Omnipus data folder outside `/tmp` on Linux:
+LibreOffice could delete files in it there. When
 that sandbox cannot be set up, they still run with the limits above and the
 result says `converted without sandbox: <reason>`. On Windows there is no file
 isolation: only the time and memory limits apply.

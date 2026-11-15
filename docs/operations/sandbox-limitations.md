@@ -54,14 +54,39 @@ the limits only and the result says `converted without sandbox: <reason>`.
 
 When the kernel sandbox is active, LibreOffice can read only its own program
 files, the folder that holds the Omnipus program, the system libraries and
-fonts, and the temporary folder of the current preview. On macOS it can also
+fonts, and the temporary folder of the current preview. On Linux it can also
+read the random-number source (`/dev/urandom`) and the local list of user
+accounts (`/etc/passwd` and `/etc/nsswitch.conf`). On macOS it can also
 read, but not change, the checked list of LibreOffice parts it may load, and
 it can check that the folders above these exist, without seeing what is in
 them. It cannot read your files, the agents' files, other previews or anything
 else Omnipus stores. Checking a folder shows when something in it was last
 added or removed, but not what. On Linux the kernel sandbox cannot stop any
 program from checking whether a file or folder exists; LibreOffice still
-cannot list folders or read files outside the folders named here.
+cannot list folders or read files outside the folders and files named here.
+
+**LibreOffice on Linux.** LibreOffice keeps its control connection point in the
+shared `/tmp` folder. While it converts a document, it may create connection
+points there, and it may delete files and connection points (not folders) in
+`/tmp` and its sub-folders that the account Omnipus runs as is allowed to
+delete. A document crafted to take over LibreOffice could use this during the
+preview to delete such files, including other programs' connection points, and
+to put its own connection point in their place. It cannot read, list or change
+what is inside files there, and it cannot create files, folders or links there.
+If the Omnipus data folder lies under `/tmp`, it is inside this delete right
+too, so keep the data folder outside `/tmp`.
+
+LibreOffice also reads the list of user accounts (account names, home folders
+and login shells; no passwords, and every account on the computer can already
+read it), so that its connection point belongs to the account Omnipus runs as
+instead of being open to every account on the computer. With
+`sandbox.filesystem_model` set to `confined`, Omnipus's own sandbox can block
+that read; the connection point is then open to every account on the computer
+while the preview runs.
+
+A stricter setup, with a separate private folder for each preview and a block
+on LibreOffice opening network connections itself, is not switched on yet; it
+is tracked in issue #1856.
 
 Agents can never get write access to these programs' folders: shell approvals
 (**Allow** and **Allow once**), mounts (including one that contains a program
