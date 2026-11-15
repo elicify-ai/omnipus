@@ -67,13 +67,13 @@ func TestOpencode226R2_RunThenResumeUsesCapturedSessionID(t *testing.T) {
 // R2 item 2: tool capture lines 1 and 4 open two steps. Test below, exactly at,
 // and above that count; cap=1 must cancel on step 2 before emitting DONE or End.
 func TestOpencode226R2_StepStartTurnCap(t *testing.T) {
-	for _, cap := range []int{1, 2, 3} {
-		t.Run(fmt.Sprintf("cap_%d", cap), func(t *testing.T) {
+	for _, turnLimit := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("cap_%d", turnLimit), func(t *testing.T) {
 			data := opencode226R2Read(t, "opencode-2.2.6", "tool.stdout.ndjson")
 			opts, _ := opencode226R2Stub(t, data, 0, "opencode v2.2.6")
-			opts.MaxTurns = cap
+			opts.MaxTurns = turnLimit
 			events := opencode226R2Run(t, NewOpencodeDriver(nil), opts)
-			if cap == 1 {
+			if turnLimit == 1 {
 				opencode226R2AssertKinds(t, events, []EventKind{EventKindStart, EventKindToolCall, EventKindToolResult, EventKindError})
 				opencode226R2AssertError(t, events[len(events)-1], "turn cap exceeded: 2 turns (max 1)")
 			} else {

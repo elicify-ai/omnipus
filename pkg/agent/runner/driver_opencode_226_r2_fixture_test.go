@@ -31,9 +31,9 @@ func init() {
 // The sidecar is test-fixture configuration, not a gateway/SPA wire format.
 // Keep it beside the executable: version probing really scrubs the environment.
 type opencode226R2ProcessConfig struct {
-	VersionOutput string
-	Stdout        []byte
-	ExitCode      int
+	VersionOutput string `json:"VersionOutput"`
+	Stdout        []byte `json:"Stdout"`
+	ExitCode      int    `json:"ExitCode"`
 }
 
 func opencode226R2ServeProcess() int {
@@ -48,7 +48,7 @@ func opencode226R2ServeProcess() int {
 		return 2
 	}
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
-		if _, err := fmt.Fprintln(os.Stdout, cfg.VersionOutput); err != nil {
+		if _, writeErr := fmt.Fprintln(os.Stdout, cfg.VersionOutput); writeErr != nil {
 			return 2
 		}
 		return 0
