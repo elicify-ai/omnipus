@@ -126,6 +126,14 @@ export function takeLibraryAttachments(): LibraryAttachment[] {
   return drained
 }
 
+/** Non-reactive subscription and count, for code outside React (the draft-owner note in the runtime). */
+export function subscribeLibraryAttachments(listener: () => void): () => void {
+  return subscribe(listener)
+}
+export function libraryAttachmentCount(): number {
+  return attachments.length
+}
+
 /** Reactive read of the pending set for the composer chip row. */
 export function useLibraryAttachments(): LibraryAttachment[] {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)

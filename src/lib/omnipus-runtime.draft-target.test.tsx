@@ -13,7 +13,8 @@ import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 import { useOmnipusRuntime } from './omnipus-runtime'
-import { markComposerSubmit, resetDraftTarget } from './draft-target'
+import { resetDraftTarget } from './draft-target'
+import { addLibraryAttachment, takeLibraryAttachments } from './library-attachment'
 
 type Composer = ReturnType<typeof useOmnipusRuntime>['thread']['composer']
 type UploadResult = Awaited<ReturnType<typeof api.uploadFiles>>
@@ -37,11 +38,10 @@ describe('useOmnipusRuntime: the chat a draft was written in', () => {
     })
     useUiStore.setState({ addToast: vi.fn() })
   })
-  afterEach(() => { vi.useRealTimers() })
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); takeLibraryAttachments() })
 
-  // What the submit entry points do: mark the draft, then send. The send may still be uploading when this returns.
+  // Every submit path ends in composer.send(). The send may still be uploading when this returns.
   function startSubmit(composer: Composer): Promise<void> {
-    markComposerSubmit(composer.getState())
     return Promise.resolve(composer.send())
   }
   async function submit(composer: Composer): Promise<void> {
@@ -180,5 +180,59 @@ describe('useOmnipusRuntime: the chat a draft was written in', () => {
     act(() => { composer.setText('new in B') })
     await submit(composer)
     expect(sent()).toStrictEqual([['new in B', 'chat-b', undefined]])
+  })
+
+  // CHECK r2 R2-F1: the slash menu sends "/clear" (and a deferred submit sends its text) straight through
+  // composer.send(), with no submit entry point of ours in between. The owner rides in the composer, so it still holds.
+  it('a slash command sent straight through the composer while B is attached still carries the draft owner A', async () => {
+    const { result } = renderHook(() => useOmnipusRuntime())
+    const composer = result.current.thread.composer
+    act(() => { composer.setText('half written in A') })
+    switchTo('chat-b')
+    act(() => { composer.setText('/clear') })
+    await submit(composer)
+    expect(sent()).toStrictEqual([['/clear', 'chat-a', undefined]])
+  })
+
+  // CHECK r2 R2-F2: a file in A, empty text, sent from B while a turn is streaming in B.
+  it('a file in A with empty text, sent from B while B is streaming, carries chat A', async () => {
+    vi.mocked(api.uploadFiles).mockResolvedValueOnce(uploaded('a.txt', 'media://a'))
+    const { result } = renderHook(() => useOmnipusRuntime())
+    const composer = result.current.thread.composer
+    await act(async () => { await composer.addAttachment(file('a.txt')) })
+    switchTo('chat-b')
+    act(() => { useChatStore.setState({ isStreaming: true }) })
+    await submit(composer)
+    expect(sent()).toStrictEqual([['', 'chat-a', ['media://a']]])
+  })
+
+  // CHECK r2 R2-F3: a library file is staged outside the composer; it is a draft too.
+  it('a library file staged in A and sent with text typed in B carries chat A', async () => {
+    const { result } = renderHook(() => useOmnipusRuntime())
+    const composer = result.current.thread.composer
+    act(() => { addLibraryAttachment({ mediaId: 'm1', ref: 'media://workspace/w/m1', filename: 'lib.png', contentType: 'image/png' }) })
+    switchTo('chat-b')
+    act(() => { composer.setText('typed in B') })
+    await submit(composer)
+    expect(sent()).toStrictEqual([['typed in B', 'chat-a', ['media://workspace/w/m1']]])
+  })
+
+  // CHECK r2 R2-F4: nothing is evicted, because there is no table: 60 later sends leave A's pending send alone.
+  it('a submission still uploading while 60 other drafts are sent keeps its chat', async () => {
+    const release = deferredUpload()
+    const { result } = renderHook(() => useOmnipusRuntime())
+    const composer = result.current.thread.composer
+    act(() => { composer.setText('from A') })
+    await act(async () => { await composer.addAttachment(file('a.txt')) })
+    const sendA = startSubmit(composer)
+    switchTo('chat-b')
+    for (let i = 0; i < 60; i++) {
+      act(() => { composer.setText(`b ${i}`) })
+      await submit(composer)
+    }
+    await act(async () => { release(uploaded('a.txt', 'media://a')); await sendA })
+    const last = sent().at(-1)
+    expect(last).toStrictEqual(['from A', 'chat-a', ['media://a']])
+    expect(sent().slice(0, 60).every(([, chat]) => chat === 'chat-b')).toBe(true)
   })
 })

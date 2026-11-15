@@ -1,64 +1,55 @@
-// #1428 step 2: remember which chat a composer draft was written in, so Send cannot deliver it to a
+// #1428 step 2: a composer draft keeps the chat it was written in, so Send cannot deliver it to a
 // different chat when the attached chat changed in between (for example a helper opened from the
-// Activity panel while the draft was still in the box). Module scope: the normal chat has one composer.
+// Activity panel while the draft was still in the box).
 //
-// A submit is matched to its owner by what the composer snapshots at send time: the text plus the ids of
-// the attached files. Marks of the same key are taken in the order they were made (a text-only send
-// reaches onNew in submit order); a send with files can finish later, but its key differs.
+// The owner travels with the draft itself: when a draft begins (text, files or a staged library file)
+// the owning chat is written into the composer quote slot. assistant-ui snapshots that slot at send
+// start, per submission, and hands it back as message.metadata.custom.quote, so every way of sending
+// (Enter, the Send button, mid-stream, slash commands, deferred sends) carries its own owner and nothing
+// is matched by text. The quote slot has no other use in omnipus today; a quote that is not ours is
+// never touched.
 import { useSessionStore } from '@/store/session'
 import { queueTargetFor } from '@/store/chat/queue-target'
 
-interface Submitted { key: string; chat: string | undefined }
+export interface DraftQuote { text: string; messageId: string }
 
-/** Marks that were never taken (a failed hand-off) are dropped oldest first. */
-const MAX_MARKS = 50
+const OWNER_PREFIX = 'omnipus-draft-owner:'
 let draftStarted = false
 let draftChat: string | undefined
-const submitted: Submitted[] = []
 
-function submitKey(text: string, attachmentIds: readonly string[]): string {
-  return JSON.stringify([text, attachmentIds])
+/** True for a quote slot value written by this module. */
+export function isOwnerQuote(quote: { messageId?: string } | undefined): boolean {
+  return !!quote?.messageId?.startsWith(OWNER_PREFIX)
 }
 
-/** Called on every change of the composer: the chat attached when a draft begins owns it. A draft is text or files. */
-export function noteDraftContent(hasContent: boolean): void {
+/**
+ * Called on every change of the composer or of the staged library files. Returns the owner quote the
+ * composer should carry now (undefined: none). The chat attached when a draft begins owns it.
+ */
+export function noteDraftContent(hasContent: boolean): DraftQuote | undefined {
   if (!hasContent) {
     endDraft()
-    return
+    return undefined
   }
-  if (draftStarted) return
-  draftStarted = true
-  draftChat = queueTargetFor(useSessionStore.getState().activeSessionId)
+  if (!draftStarted) {
+    draftStarted = true
+    draftChat = queueTargetFor(useSessionStore.getState().activeSessionId)
+  }
+  return draftChat ? { text: '', messageId: OWNER_PREFIX + draftChat } : undefined
 }
 
-/** The draft is over (the composer is empty, or the composer went away). Marks already made stay. */
+/** The draft is over (nothing is left in the composer), or the composer went away. */
 export function endDraft(): void {
   draftStarted = false
   draftChat = undefined
 }
 
-/**
- * Called at every submit entry point, before the runtime empties the composer and starts its async
- * hand-off. A submit the composer will refuse (nothing to send) leaves no mark behind.
- */
-export function markComposerSubmit(state: { text?: string; attachments?: readonly { id: string }[] }): void {
-  const text = state.text ?? ''
-  const ids = (state.attachments ?? []).map((a) => a.id)
-  if (!text.trim() && ids.length === 0) return
-  const chat = draftStarted ? draftChat : queueTargetFor(useSessionStore.getState().activeSessionId)
-  submitted.push({ key: submitKey(text, ids), chat })
-  if (submitted.length > MAX_MARKS) submitted.shift()
-}
-
-/** Called first thing in the runtime's onNew, whatever happens next: the chat this submit was written in, if marked. */
-export function takeDraftTarget(text: string, attachmentIds: readonly string[]): string | undefined {
-  const key = submitKey(text, attachmentIds)
-  const index = submitted.findIndex((entry) => entry.key === key)
-  if (index < 0) return undefined
-  return submitted.splice(index, 1)[0].chat
+/** The chat a submitted message was written in, from its own quote; undefined when it carries none. */
+export function draftOwnerOf(message: { metadata?: { custom?: Record<string, unknown> } }): string | undefined {
+  const quote = message.metadata?.custom?.quote as { messageId?: string } | undefined
+  return isOwnerQuote(quote) ? quote?.messageId?.slice(OWNER_PREFIX.length) : undefined
 }
 
 export function resetDraftTarget(): void {
   endDraft()
-  submitted.length = 0
 }

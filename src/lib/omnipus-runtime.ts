@@ -10,8 +10,8 @@ import type { ChatMessage, MediaAttachment } from "@/store/chat";
 import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
-import { takeLibraryAttachments, mediaRefURL } from "@/lib/library-attachment";
-import { endDraft, noteDraftContent, takeDraftTarget } from "@/lib/draft-target";
+import { takeLibraryAttachments, mediaRefURL, subscribeLibraryAttachments, libraryAttachmentCount } from "@/lib/library-attachment";
+import { draftOwnerOf, endDraft, isOwnerQuote, noteDraftContent } from "@/lib/draft-target";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
 import { isCancelledTurn, type StatusSuffixInput } from "@/lib/truncation";
 
@@ -324,7 +324,7 @@ export function useOmnipusRuntime() {
         .join("\n");
       // #1428 step 2: the chat this draft was written in. Taken first, so a send that ends early below
       // (nothing to send, a failed upload) cannot leave its mark behind for a later draft.
-      const expectedSessionId = takeDraftTarget(text, (message.attachments ?? []).map((att) => att.id));
+      const expectedSessionId = draftOwnerOf(message);
 
       // Pull the media:// refs (and display metadata) the attachment adapter
       // stashed during send(), keyed by attachment id.
@@ -388,16 +388,21 @@ export function useOmnipusRuntime() {
     },
     onCancel: async () => { cancelStream() },
   });
-  // #1428 step 2: note the chat a draft (text or files) is written in, whatever way it changes.
+  // #1428 step 2: the chat a draft (text, files or a staged library file) is written in rides in the
+  // composer quote slot, so each submission carries its own owner.
   useEffect(() => {
     const composer = runtime.thread.composer;
     const note = () => {
       const state = composer.getState();
-      noteDraftContent(state.text.trim().length > 0 || state.attachments.length > 0);
+      const hasContent = state.text.trim().length > 0 || state.attachments.length > 0 || libraryAttachmentCount() > 0;
+      const owner = noteDraftContent(hasContent);
+      if (owner ? state.quote?.messageId !== owner.messageId : isOwnerQuote(state.quote)) composer.setQuote(owner);
     };
     const unsubscribe = composer.subscribe(note);
+    const unsubscribeLibrary = subscribeLibraryAttachments(note);
     return () => {
       unsubscribe();
+      unsubscribeLibrary();
       endDraft();
     };
   }, [runtime]);
