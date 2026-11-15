@@ -1,4 +1,4 @@
-import type { MediaAttachment, OutboundQueueItem, QueuedOutboundMessage } from './types'
+import type { OutboundQueueItem, QueuedOutboundMessage } from './types'
 
 /**
  * #1428 step 1: a queued message goes only to the chat it was written in.
@@ -166,15 +166,8 @@ export function holdDraftForItsChat(
   message: QueuedOutboundMessage,
   expectedSessionId: string | undefined,
   activeSessionId: string | null,
-  media: { mediaRefs: string[]; attachments: MediaAttachment[] },
 ): QueuedOutboundMessage | null {
   const target = queueTargetFor(expectedSessionId ?? null)
   if (!target || target === activeSessionId) return null
-  return {
-    ...message,
-    seq: nextQueueSeq(),
-    targetSessionId: target,
-    ...(media.mediaRefs.length > 0 ? { mediaRefs: media.mediaRefs } : {}),
-    ...(media.attachments.length > 0 ? { media: media.attachments } : {}),
-  }
+  return { ...message, seq: nextQueueSeq(), targetSessionId: target }
 }

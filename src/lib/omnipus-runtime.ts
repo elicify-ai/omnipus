@@ -11,7 +11,7 @@ import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
 import { takeLibraryAttachments, mediaRefURL } from "@/lib/library-attachment";
-import { noteDraftText, takeDraftTarget } from "@/lib/draft-target";
+import { endDraft, noteDraftContent, takeDraftTarget } from "@/lib/draft-target";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
 import { isCancelledTurn, type StatusSuffixInput } from "@/lib/truncation";
 
@@ -322,6 +322,9 @@ export function useOmnipusRuntime() {
         .filter((p): p is { type: "text"; text: string } => p.type === "text")
         .map((p) => p.text)
         .join("\n");
+      // #1428 step 2: the chat this draft was written in. Taken first, so a send that ends early below
+      // (nothing to send, a failed upload) cannot leave its mark behind for a later draft.
+      const expectedSessionId = takeDraftTarget(text, (message.attachments ?? []).map((att) => att.id));
 
       // Pull the media:// refs (and display metadata) the attachment adapter
       // stashed during send(), keyed by attachment id.
@@ -375,8 +378,7 @@ export function useOmnipusRuntime() {
       const modelChoice = nextModel
         ? { model_name: nextModel, ...(nextModelProvider ? { provider: nextModelProvider } : {}), ...(nextEffort ? { reasoning_effort: nextEffort } : {}) }
         : {};
-      // #1428 step 2: the chat this draft was written in; sendMessage holds it for that chat if another is attached.
-      const expectedSessionId = takeDraftTarget(text);
+      // sendMessage holds the draft for its own chat if another chat is attached.
       const target = expectedSessionId ? { expectedSessionId } : {};
       if (mediaRefs.length > 0) {
         sendMessage(text, { mediaRefs, attachments, ...modelChoice, ...target });
@@ -386,10 +388,18 @@ export function useOmnipusRuntime() {
     },
     onCancel: async () => { cancelStream() },
   });
-  // #1428 step 2: note the chat a draft is written in, whatever way the text changes.
+  // #1428 step 2: note the chat a draft (text or files) is written in, whatever way it changes.
   useEffect(() => {
     const composer = runtime.thread.composer;
-    return composer.subscribe(() => noteDraftText(composer.getState().text));
+    const note = () => {
+      const state = composer.getState();
+      noteDraftContent(state.text.trim().length > 0 || state.attachments.length > 0);
+    };
+    const unsubscribe = composer.subscribe(note);
+    return () => {
+      unsubscribe();
+      endDraft();
+    };
   }, [runtime]);
   return runtime;
 }

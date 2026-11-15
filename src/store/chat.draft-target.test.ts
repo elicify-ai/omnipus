@@ -79,6 +79,27 @@ describe('#1428 step 2: a draft goes to the chat it was written in', () => {
     expect(frames[0].media).toStrictEqual(['media://one'])
   })
 
+  it('a held draft keeps its files through an offline bounce and shows them on its message (CHECK r1 F4, F5)', () => {
+    const send = connect()
+    openChat('chat-b')
+    const file = { type: 'file' as const, url: '/m/one', filename: 'one.txt', contentType: 'text/plain' }
+    act(() => { useChatStore.getState().sendMessage('see file', { expectedSessionId: 'chat-a', mediaRefs: ['media://one'], attachments: [file] }) })
+    const heldId = queued()[0].id
+    // The connection drops before the held draft is released: opening A sends it back to the queue.
+    act(() => { useConnectionStore.getState().setConnected(false) })
+    openChat('chat-a')
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    expect(messageFrames(send)).toStrictEqual([])
+    expect(queued().map((item) => [item.id, item.mediaRefs, item.media])).toStrictEqual([[heldId, ['media://one'], [file]]])
+    act(() => { useConnectionStore.getState().setConnected(true) })
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    const frames = messageFrames(send)
+    expect(frames.map((frame) => [frame.session_id, frame.media])).toStrictEqual([['chat-a', ['media://one']]])
+    const bubble = useChatStore.getState().sessionsById['chat-a']?.messagesById[heldId]
+    expect(bubble?.media).toStrictEqual([file])
+    expect(bubble?.mediaRefs).toStrictEqual(['media://one'])
+  })
+
   it('a full queue does not drop the draft', () => {
     connect()
     openChat('chat-b')

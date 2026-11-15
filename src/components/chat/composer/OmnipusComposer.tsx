@@ -38,7 +38,7 @@ import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
-import { markDraftSubmit } from '@/lib/draft-target'
+import { markComposerSubmit } from '@/lib/draft-target'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
@@ -318,7 +318,10 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
     const text = composerRuntime.getState().text ?? slashMenu.inputValue
     return recipientAddressBlocked(text) !== null
   }, [composerRuntime, slashMenu.inputValue])
-  const markSubmit = useCallback(() => markDraftSubmit(composerRuntime.getState().text ?? slashMenu.inputValue), [composerRuntime, slashMenu.inputValue])
+  const markSubmit = useCallback(() => {
+    const state = composerRuntime.getState()
+    markComposerSubmit({ text: state.text ?? slashMenu.inputValue, attachments: state.attachments })
+  }, [composerRuntime, slashMenu.inputValue])
 
   return {
     profile: SESSION_COMPOSER_PROFILE,

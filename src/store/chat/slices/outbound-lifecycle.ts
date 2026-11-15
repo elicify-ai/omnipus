@@ -86,10 +86,18 @@ function buildMetadataFrame(
 /** Resolves the client-generated correlation id + queued timestamp for a
  * send, defaulting both when the caller (a fresh sendMessage call, not a
  * queue replay) didn't supply them. */
-function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?: string }) {
+function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?: string; mediaRefs?: string[]; attachments?: MediaAttachment[] }) {
   const clientMessageId = opts?.clientMessageId ?? generateId()
   const queuedAt = opts?.queuedAt ?? new Date().toISOString()
-  return { clientMessageId, queuedAt, queuedMessage: { id: clientMessageId, content, timestamp: queuedAt } }
+  // The queue item keeps the message's attachments, so a re-enqueue (offline, held for another chat) never loses them.
+  const queuedMessage: QueuedOutboundMessage = {
+    id: clientMessageId,
+    content,
+    timestamp: queuedAt,
+    ...(opts?.mediaRefs?.length ? { mediaRefs: opts.mediaRefs } : {}),
+    ...(opts?.attachments?.length ? { media: opts.attachments } : {}),
+  }
+  return { clientMessageId, queuedAt, queuedMessage }
 }
 
 /** Builds the optimistic user bubble for a send, carrying the correlation id
@@ -447,9 +455,8 @@ function holdDraftForOtherChat(
   message: QueuedOutboundMessage,
   expectedSessionId: string | undefined,
   activeSessionId: string | null,
-  media: { mediaRefs: string[]; attachments: MediaAttachment[] },
 ): boolean {
-  const held = holdDraftForItsChat(message, expectedSessionId, activeSessionId, media)
+  const held = holdDraftForItsChat(message, expectedSessionId, activeSessionId)
   if (!held) return false
   get().enqueueOutboundMessage(content, held, true)
   useUiStore.getState().addToast({ message: 'Your message was written in another chat. It will be sent when that chat is open.', variant: 'default' })
@@ -557,7 +564,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
-      if (holdDraftForOtherChat(get, content, untargetedMessage, opts?.expectedSessionId, rawActiveSessionId, { mediaRefs, attachments })) return // #1428 step 2: held for its own chat
+      if (holdDraftForOtherChat(get, content, untargetedMessage, opts?.expectedSessionId, rawActiveSessionId)) return // #1428 step 2: held for its own chat
       // #1428: a queued message remembers the chat it was typed in.
       const queuedMessage = stampQueuedMessage(untargetedMessage, rawActiveSessionId, getPendingFirstSend(get())?.clientMessageId, opts?.queueSeq)
       // Ordinary sends, mid-turn steering and new-answer requests share the

@@ -216,7 +216,7 @@ afterEach(async () => {
   })
 })
 
-import { noteDraftText, takeDraftTarget, resetDraftTarget } from '@/lib/draft-target'
+import { noteDraftContent, takeDraftTarget, resetDraftTarget } from '@/lib/draft-target'
 
 describe('submit paths record the chat the draft was written in (#1428 step 2)', () => {
   async function runtimeWith(text: string) {
@@ -229,29 +229,58 @@ describe('submit paths record the chat the draft was written in (#1428 step 2)',
   }
 
   // The draft begins while chat A is attached; then another chat (a helper opened from the Activity row) is attached.
-  function draftInAThenSwitchToB(text: string) {
+  function draftInAThenSwitchToB() {
     resetDraftTarget()
     act(() => { useSessionStore.setState({ activeSessionId: 'chat-a' }) })
-    noteDraftText(text)
+    noteDraftContent(true)
     act(() => { useSessionStore.setState({ activeSessionId: 'chat-b' }) })
   }
 
   it('Enter (form submit) marks the draft with the chat it was typed in, not the attached one', async () => {
     await runtimeWith('typed in A')
-    draftInAThenSwitchToB('typed in A')
+    draftInAThenSwitchToB()
     render(<OmnipusComposer />)
     act(() => { fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'typed in A' } }) })
     act(() => { fireEvent.submit(screen.getByTestId('composer-form')) })
-    expect(takeDraftTarget('typed in A')).toBe('chat-a')
+    expect(takeDraftTarget('typed in A', [])).toBe('chat-a')
   })
 
   it('the Send button marks the draft with the chat it was typed in', async () => {
     await runtimeWith('typed in A')
-    draftInAThenSwitchToB('typed in A')
+    draftInAThenSwitchToB()
     render(<OmnipusComposer />)
     act(() => { fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'typed in A' } }) })
     act(() => { fireEvent.click(screen.getByTestId('chat-send')) })
-    expect(takeDraftTarget('typed in A')).toBe('chat-a')
+    expect(takeDraftTarget('typed in A', [])).toBe('chat-a')
+  })
+
+  it('mid-stream Enter marks the draft with the chat it was typed in', async () => {
+    await runtimeWith('typed in A')
+    draftInAThenSwitchToB()
+    act(() => { useChatStore.setState({ isStreaming: true }) })
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+    act(() => { fireEvent.change(input, { target: { value: 'typed in A' } }) })
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    expect(takeDraftTarget('typed in A', [])).toBe('chat-a')
+  })
+
+  it('the mid-stream send button marks the draft with the chat it was typed in', async () => {
+    await runtimeWith('typed in A')
+    draftInAThenSwitchToB()
+    act(() => { useChatStore.setState({ isStreaming: true }) })
+    render(<OmnipusComposer />)
+    act(() => { fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'typed in A' } }) })
+    act(() => { fireEvent.click(screen.getByTestId('chat-send-mid-stream')) })
+    expect(takeDraftTarget('typed in A', [])).toBe('chat-a')
+  })
+
+  it('Enter in an empty composer leaves no mark', async () => {
+    await runtimeWith('')
+    resetDraftTarget()
+    render(<OmnipusComposer />)
+    act(() => { fireEvent.submit(screen.getByTestId('composer-form')) })
+    expect(takeDraftTarget('', [])).toBeUndefined()
   })
 
   it('a refused Send (blocked recipient) does not leave a mark behind', async () => {
@@ -262,6 +291,6 @@ describe('submit paths record the chat the draft was written in (#1428 step 2)',
     act(() => { fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'go' } }) })
     act(() => { useSessionStore.setState({ resolvingSessionForWorkspace: { ws_refused: true } }) })
     act(() => { fireEvent.submit(screen.getByTestId('composer-form')) })
-    expect(takeDraftTarget('go')).toBeUndefined()
+    expect(takeDraftTarget('go', [])).toBeUndefined()
   })
 })
