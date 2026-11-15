@@ -16,7 +16,9 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -71,6 +73,10 @@ type projItem struct {
 	// Tool / item frames, unsequenced, in the order they must be sent.
 	start []byte
 	end   []byte
+
+	// namedCopy: a provider notice item holding a helper's top-chat copy
+	// (#1537), kept across this chat's own done.
+	namedCopy bool
 }
 
 // runningTool reports a tool call whose result has not been published yet.
@@ -170,12 +176,23 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 			it.turnID = meta.turnID
 		}
 		touched = "item:" + meta.key
+		if isProviderNoticeKey(meta.key) {
+			// #1537 FR-008: provider notices replay in the order they were
+			// last published, so an older retry superseded by a later
+			// recovered (or a silence clear followed by a new retry) cannot
+			// come back as the final state. Other item kinds keep their
+			// first-created order.
+			p.moveToEnd(touched)
+			it.namedCopy = isNamedProviderCopy(frame)
+		}
 	case hubKindDone:
 		// done(T) is published only after T's final answer was persisted
 		// (persist-before-done, §4.3), and every earlier round and tool call
 		// was persisted before it too — so everything is covered by any
-		// transcript read taken from here on.
-		p.clear()
+		// transcript read taken from here on. #1537 FR-008: a helper's named
+		// provider notice copy is not part of this chat's own turn and is
+		// never persisted; it stays until that helper turn ends.
+		p.clearKeepingNamedProviderCopies()
 		return
 	default:
 		return
@@ -254,6 +271,60 @@ func (p *activeTurnProjection) forgetTurn(turnID string) {
 
 func (p *activeTurnProjection) clear() {
 	p.order, p.items, p.bytes, p.truncated = nil, nil, 0, false
+}
+
+// Projection item key prefixes of the provider notice frames (#1537 limits
+// the replay-order and done changes to exactly these two).
+const (
+	providerRetryItemPrefix  = "provider_retry:"
+	providerStatusItemPrefix = "provider_status:"
+)
+
+func isProviderNoticeKey(key string) bool {
+	return strings.HasPrefix(key, providerRetryItemPrefix) || strings.HasPrefix(key, providerStatusItemPrefix)
+}
+
+// namedCopyField is the generated frame's child_session_id key as encoded
+// on the wire. Inside a JSON string value a quote is always escaped, so this
+// byte sequence occurs only as the object key itself.
+var namedCopyField = []byte(`"child_session_id":`) //nolint:gochecknoglobals // immutable lookup bytes
+
+// isNamedProviderCopy reports whether a provider notice frame is a top-chat
+// copy of a helper's notice (it carries child_session_id, #1537).
+func isNamedProviderCopy(frame []byte) bool {
+	return bytes.Contains(frame, namedCopyField)
+}
+
+// moveToEnd moves key to the end of the replay order.
+func (p *activeTurnProjection) moveToEnd(key string) {
+	for i, k := range p.order {
+		if k == key {
+			p.order = append(append(p.order[:i:i], p.order[i+1:]...), key)
+			return
+		}
+	}
+}
+
+// clearKeepingNamedProviderCopies is clear for a done: it keeps only the
+// named provider notice copies of helper turns, which leave with their own
+// helper turn's end (hubTurnEnd → forgetTurn).
+func (p *activeTurnProjection) clearKeepingNamedProviderCopies() {
+	keep := p.order[:0]
+	bytesKept := 0
+	for _, key := range p.order {
+		it := p.items[key]
+		if it != nil && it.kind == hubKindItem && it.namedCopy && isProviderNoticeKey(it.id) {
+			keep = append(keep, key)
+			bytesKept += len(it.text) + len(it.start) + len(it.end)
+			continue
+		}
+		delete(p.items, key)
+	}
+	if len(keep) == 0 {
+		p.clear()
+		return
+	}
+	p.order, p.bytes, p.truncated = keep, bytesKept, false
 }
 
 // snapshot copies the projection out for use after the hub lock is released.

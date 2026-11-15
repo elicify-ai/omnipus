@@ -54,7 +54,13 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 		// #1534: a new provider call starts with no pre-Stop text of its
 		// own; a streamed attempt records what it shows (stop_turn_end.go).
 		cr.rr.rq.ri.rf.rt.ts.setStopShown("", false)
-		return cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
+		resp, err := cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
+		if err == nil {
+			// #1537 FR-006: the model answered after an announced retry
+			// with no recovered note (fallback first call, outer retry).
+			cr.rr.rq.ri.rf.rt.noteProviderAnswered()
+		}
+		return resp, err
 	}
 
 	cr.rr.rq.ri.rf.response = nil
@@ -592,11 +598,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 			cr.rr.rq.ri.rf.err = context.Canceled
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
-		cr.rr.rq.ri.rf.rt.al.emitEvent(
-			EventKindLLMRetry,
-			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-			cr.timeoutRetryPayload(retry, backoff),
-		)
+		cr.emitTimeoutRetry(retry, backoff)
 		// ADR-091 boundary 5 (FR-B-001): a steered
 		// session's retry notice is never the user's audience.
 		// audienceFor also calls steer.BoundaryObserver.Observe before this
@@ -1007,17 +1009,51 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) timeoutRetryPayload(retry 
 		provider = rt.activeCandidates[0].Provider
 	}
 	sentAt := time.Now()
-	return LLMRetryPayload{
-		Attempt:     retry + 2,
-		MaxRetries:  cr.maxRetries,
-		Reason:      reason,
-		Error:       cr.rr.rq.ri.rf.err.Error(),
-		Backoff:     backoff,
-		Provider:    provider,
-		Model:       rt.llmModel,
-		SentAt:      sentAt,
-		RetryAt:     sentAt.Add(backoff),
-		MaxAttempts: cr.maxRetries + 1,
-		SessionID:   u9ToolExecSessionIDs(rt.ts),
+	// #1537: a helper turn's retry is addressed to its top chat and carries
+	// its own chat, so the hub publishes the helper copy and the named top
+	// copy. A chat's own turn keeps the transcript session as before.
+	sessionID := u9ToolExecSessionIDs(rt.ts)
+	top, child := providerNoticeSessions(rt.ts)
+	if child != "" {
+		sessionID = top
 	}
+	return LLMRetryPayload{
+		Attempt:        retry + 2,
+		MaxRetries:     cr.maxRetries,
+		Reason:         reason,
+		Error:          cr.rr.rq.ri.rf.err.Error(),
+		Backoff:        backoff,
+		Provider:       provider,
+		Model:          rt.llmModel,
+		SentAt:         sentAt,
+		RetryAt:        sentAt.Add(backoff),
+		MaxAttempts:    cr.maxRetries + 1,
+		SessionID:      sessionID,
+		ChildSessionID: child,
+	}
+}
+
+// emitTimeoutRetry announces the loop's timeout retry (issue #1664 B5). A
+// helper turn's retry also leaves a named top-chat row that clears when the
+// model answers (#1537 FR-006, noteProviderAnswered).
+func (cr *agentLoopRunTurnResponseCallLLMWithRetries) emitTimeoutRetry(retry int, backoff time.Duration) {
+	rt := cr.rr.rq.ri.rf.rt
+	payload := cr.timeoutRetryPayload(retry, backoff)
+	rt.al.emitEvent(EventKindLLMRetry, rt.ts.eventMeta("runTurn", "turn.llm.retry"), payload)
+	if payload.ChildSessionID != "" {
+		rt.namedRetryPending.Store(true)
+	}
+}
+
+// providerNoticeSessions is the address of a turn's provider retry notice
+// (#1537 FR-001/002, both retry producers: providerRetryObserver and the
+// timeout retry above): top is the routing (top) chat the frame is stamped
+// with; child is the turn's own chat when it differs from a non-empty top —
+// a helper turn — else "". WS payload stamping (ADR-057 consumer set).
+func providerNoticeSessions(ts *turnState) (top, child string) {
+	top = string(ts.routingSessionID)
+	if own := ts.transcriptSessionID; top != "" && own != "" && own != top {
+		child = own
+	}
+	return top, child
 }
