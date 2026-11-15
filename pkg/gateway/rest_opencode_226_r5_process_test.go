@@ -29,8 +29,11 @@ func init() {
 	if name != "oc226-r5-process" && name != "oc226-r5-process.exe" {
 		return
 	}
-	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "run") {
-		os.Exit(opencode226R5ServeProcess())
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "run", "-p", "--ask-for-approval":
+			os.Exit(opencode226R5ServeProcess())
+		}
 	}
 }
 
@@ -43,13 +46,17 @@ type opencode226R5ProcessObservation struct {
 }
 
 func opencode226R5ServeProcess() int {
+	dir := filepath.Dir(os.Args[0])
 	if os.Args[1] == "--version" {
-		if _, err := fmt.Fprintln(os.Stdout, "opencode v2.2.6"); err != nil {
+		version, err := os.ReadFile(filepath.Join(dir, "version.txt"))
+		if err != nil {
+			return 2
+		}
+		if _, writeErr := fmt.Fprintln(os.Stdout, string(version)); writeErr != nil {
 			return 2
 		}
 		return 0
 	}
-	dir := filepath.Dir(os.Args[0])
 	address, err := os.ReadFile(filepath.Join(dir, "control.addr"))
 	if err != nil {
 		return 2
@@ -98,6 +105,17 @@ type opencode226R5ProcessFixture struct {
 }
 
 func opencode226R5NewProcessFixture(t *testing.T) *opencode226R5ProcessFixture {
+	t.Helper()
+	capture, err := os.ReadFile(filepath.Join("..", "agent", "runner", "testdata", "opencode-2.2.6", "plain.stdout.ndjson"))
+	require.NoError(t, err, "replay the real 2.2.6 plain capture, not invented stream vocabulary")
+	require.Contains(t, string(capture), "CAPTURE-OK", "instrument: the supplied answer is present in the capture")
+	return opencode226R5NewStreamProcessFixture(t, "opencode v2.2.6", capture)
+}
+
+// Only the process edge is synthetic. Each driver's production parser receives
+// the complete, unchanged fixture stream. Version text is a handshake stub,
+// not evidence that an installed CLI or that version was exercised.
+func opencode226R5NewStreamProcessFixture(t *testing.T, version string, capture []byte) *opencode226R5ProcessFixture {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -154,9 +172,7 @@ func opencode226R5NewProcessFixture(t *testing.T) *opencode226R5ProcessFixture {
 	require.NoError(t, copyErr)
 	require.NoError(t, closeErr)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "control.addr"), []byte(listener.Addr().String()), 0o600))
-	capture, err := os.ReadFile(filepath.Join("..", "agent", "runner", "testdata", "opencode-2.2.6", "plain.stdout.ndjson"))
-	require.NoError(t, err, "replay the real 2.2.6 plain capture, not invented stream vocabulary")
-	require.Contains(t, string(capture), "CAPTURE-OK", "instrument: the supplied answer is present in the capture")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "version.txt"), []byte(version), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "capture.ndjson"), capture, 0o600))
 	return f
 }
@@ -188,7 +204,12 @@ func opencode226R5FinishProcess(t *testing.T, decoder *json.Decoder, conn net.Co
 
 func opencode226R5SaveProgram(t *testing.T, api *restAPI, program string) {
 	t.Helper()
-	t11bSaveProgram(t, api, "opencode", program)
+	opencode226R5SaveProgramForCLI(t, api, "opencode", program)
+}
+
+func opencode226R5SaveProgramForCLI(t *testing.T, api *restAPI, cli, program string) {
+	t.Helper()
+	t11bSaveProgram(t, api, cli, program)
 	// The following real REST PUT refreshes config from disk. Persist this
 	// fixture's Settings row too, so that refresh cannot erase its program.
 	data, err := json.Marshal(api.agentLoop.GetConfig())

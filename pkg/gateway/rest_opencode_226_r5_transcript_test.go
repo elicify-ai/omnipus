@@ -68,6 +68,7 @@ func TestOpencode226R5_DC_OneTextIsStoredAndHandedBackOnce(t *testing.T) {
 			"D-C: ONE captured text event must produce exactly ONE stored assistant chat message in the helper session")
 	})
 	t.Run("parent_handback", func(t *testing.T) {
+		opencode226R5WaitForParentDelivery(t, api, parent, child)
 		entries, readErr := api.agentLoop.GetMessageInboxStore().Entries(parent)
 		require.NoError(t, readErr)
 		var handbacks []gen.SessionMessageHandback

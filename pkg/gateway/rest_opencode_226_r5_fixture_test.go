@@ -32,6 +32,11 @@ func opencode226R5OriginalEnv() map[string]string {
 
 func opencode226R5WorkerAPI(t *testing.T) (*restAPI, string) {
 	t.Helper()
+	return opencode226R5WorkerAPIForCLI(t, "opencode")
+}
+
+func opencode226R5WorkerAPIForCLI(t *testing.T, cli string) (*restAPI, string) {
+	t.Helper()
 	api := buildExecutorTestAPI(t)
 	const id = "oc226-r5-worker"
 	record := config.AgentConfig{
@@ -41,7 +46,7 @@ func opencode226R5WorkerAPI(t *testing.T) (*restAPI, string) {
 		Model:       &config.AgentModelConfig{Primary: opencode226R5OriginalModel},
 		Tools:       api.agentLoop.GetConfig().Agents.List[0].Tools,
 		Subagents: &config.SubagentsConfig{Executor: &config.ExecutorConfig{
-			Kind: config.ExecutorKindExternalCLI, CLI: "opencode",
+			Kind: config.ExecutorKindExternalCLI, CLI: cli,
 			CLIArgs: opencode226R5OriginalArgs, EnvOverrides: opencode226R5OriginalEnv(),
 		}},
 	}
