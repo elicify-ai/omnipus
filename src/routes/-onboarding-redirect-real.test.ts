@@ -75,7 +75,7 @@ function setStoredSession(): void {
 }
 
 function loggedFetchFailure(): boolean {
-  return errorSpy.mock.calls.some((call) => call[0] === FETCH_FAILURE_LOG)
+  return errorSpy.mock.calls.some((call: readonly unknown[]) => call[0] === FETCH_FAILURE_LOG)
 }
 
 async function settle(): Promise<Outcome> {
