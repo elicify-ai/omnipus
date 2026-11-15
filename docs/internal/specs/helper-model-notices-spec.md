@@ -88,12 +88,15 @@ A frame that breaks the both-or-neither rule, or `ended` without child fields, i
 - **Clearing the named line in the main chat:**
   - Silence then data: the helper's `responding` frame is copied as well.
   - Retry then success with the same model: the `recovered` frame is copied.
-  - Retry then success through a fallback model that answered at once (no `recovered` is sent): the top chat receives a `provider_status` `responding` copy for that helper turn, and the named line clears. The fallback note itself is not copied to the main chat.
+  - Retry then success **without** a `recovered` frame (a fallback model answered on its first call, or an outer `no_response` / `empty_reply` retry was followed by a prompt answer): the top chat receives a `provider_status` `responding` copy for that helper turn when the model answers, and the named line clears. No retry count is invented, and the fallback note itself is not copied to the main chat. The helper's own chat keeps today's own-chat rule for this case (FR-004).
   - Helper turn ends (finished, failed or stopped): `ended` to the top chat.
+- **Producer order (silence then retry):** when a retry is scheduled while a silence notice is active, the `responding` that clears the silence is published **before** the new `provider_retry`, in both chats. A `responding` therefore only ever clears notices published before it, and the new countdown survives, live and on replay.
+- **Same turn, later retry:** a helper turn can retry, recover, run a tool and later retry again under the same `turn_id`. The later retry is current and replaces the recovered row; only an older retry superseded by a later recovery must not come back on replay.
 - **Reload and reconnect** use the existing active-turn projection; no new snapshot field. Three changes make it correct:
   1. The top chat's projection keeps a helper's main-chat copies when the main agent's own `done` arrives. They leave only when that helper's turn ends; the gateway then sends `ended` (sequenced in the top chat, so an incremental catch-up replays it).
   2. The browser keeps one server-clock estimate per connection: the largest of (`sent_at`, or `session_state.emitted_at`, plus the time elapsed since that frame arrived) over the frames it received. The retry countdown and the silence time use this estimate instead of the single frame's `sent_at`. This is the rule `ProviderRetryFrame.sent_at` already documents.
-  3. On attach, a turn's provider notices are re-sent in the order they were last published (scoped to the `provider_retry:` / `provider_status:` items), so a retry line cannot reappear after that turn's recovered line.
+  3. On attach, a turn's provider notices are re-sent in the order they were last published (scoped to the `provider_retry:` / `provider_status:` items), so an older retry superseded by a later recovered line cannot reappear.
+  4. **Non-incremental attach reconciles the named rows.** When an attach completes successfully as a full snapshot or as `live_only` (history unavailable, too-old cursor, or a gateway restart), the browser replaces that chat's named helper rows with exactly the rows the attach's projection delivered. Loaded history, the main agent's own notices and live frames released after the completion boundary are kept. A failed or superseded attach changes nothing. An incremental attach keeps relying on the replayed `ended`. No new snapshot field, stored tombstone or polling.
 - Nothing new is stored. Retry, silence and recovered notices stay live only and are never saved to a transcript.
 
 ---
@@ -171,7 +174,10 @@ The main agent and its helpers can all wait on a model at the same time. Each on
 - **More than three helpers shown at once** (waiting or recovered): rows are ordered by the time of each helper turn's first notice, oldest first. The first three are shown; the rest are summed up in one summary line that counts them without saying they are waiting (exact wording: chief's copy review). When a shown row clears, the next one moves up. Order survives updates and reloads. Expected: never more than four rows.
 - **Helper of a helper** (possible on a stock install: General Purpose, Planner and Jim may delegate, and every team member has a self-delegation edge of depth 10): the named line appears in the top chat (the chat the user started) and names the agent whose model is waiting. The grandchild's own chat shows its notices like any helper chat. The middle helper's chat gets no named line. The top chat's line leaves on `ended` when the grandchild's turn ends, because the top chat never receives the grandchild's `subagent_end`.
 - **Main chat reloaded while a helper is still waiting**: the named line is shown within 2 seconds of the chat finishing loading, with the countdown measured from the server's current time.
-- **Main chat disconnects briefly and the helper ends meanwhile**: on reconnect the catch-up replays `ended`; the named line is gone.
+- **Main chat disconnects briefly and the helper ends meanwhile**: on an incremental reconnect the catch-up replays `ended`; on a full or `live_only` reconnect the rows are reconciled with the delivered projection. Either way the ended helper's line is gone and a still-waiting helper's line stays.
+- **Silence, then a retry is scheduled**: the silence clears and the new retry countdown stays (both chats, live and after reload).
+- **Retry, recovered, tool call, then a new retry in the same turn**: the new retry is shown; it is not suppressed by the earlier recovered line.
+- **Timeout or empty-reply retry, then the model answers promptly and the helper runs a long tool call**: the named line clears when the model answers.
 - **Same helper chat, a later turn**: a late `ended` for the earlier turn does not clear the later turn's line.
 - **Helper chat opened after the notice was sent**: same as a normal chat that attaches late; the current notice is shown with the right countdown.
 - **Retry wait ends while the line is shown, and no new notice comes**: the countdown stops at 0:00 and the line stays until the next notice or the helper's end (same as the main agent's own retry line today).
@@ -433,7 +439,8 @@ Boundary conditions:
 **Traces to**: User Story 2, Acceptance Scenario 7
 **Category**: Edge Case
 
-- **Given** Researcher's first model gets 429 with `Retry-After: 2` twice and its fallback model answers on its first call
+- **Given** Researcher's first model gets 429 with `Retry-After: 2` on all three of its allowed calls and its fallback model answers on its first call with a tool request
+- **And** the fake model's request log shows three calls to the first model and one to the fallback (positive control)
 - **And** Researcher then runs a 30-second tool call
 - **When** the fallback model's answer arrives
 - **Then** Researcher's named row is gone from the main chat while Researcher is still working
@@ -468,15 +475,57 @@ Boundary conditions:
 - **Then** Researcher's row shows the recovered wording
 - **But** no retry countdown for Researcher is shown
 
-#### Scenario: Missed end during a disconnect
+#### Scenario Outline: Missed end during a disconnect
 
 **Traces to**: User Story 2, Acceptance Scenario 5
 **Category**: Error Path
 
-- **Given** the main chat shows Researcher's named row
+- **Given** the main chat shows named rows for Researcher and Writer
 - **And** the main chat's connection drops
-- **When** Researcher finishes and the connection comes back
+- **When** Researcher finishes while Writer still waits, and the connection comes back with a `<catch-up kind>` attach
 - **Then** Researcher's named row is gone after the catch-up
+- **And** Writer's named row is still shown
+
+| catch-up kind |
+|---|
+| incremental (journal replays `ended`) |
+| full snapshot (cursor too old) |
+| full snapshot after a gateway restart |
+| live_only (history unavailable) |
+
+#### Scenario: Silence clear does not erase the new retry
+
+**Traces to**: User Story 2, Acceptance Scenarios 1 and 3
+**Category**: Edge Case
+
+- **Given** Researcher's named silence row is shown after 30 s of silence
+- **When** Researcher's call then fails with 429 (`Retry-After: 20`) and a retry is scheduled
+- **Then** the main chat shows Researcher's named retry countdown, and the helper's chat shows the same countdown
+- **And** after a reload 5 s later both still show the countdown (0:14–0:16)
+
+#### Scenario: A later retry in the same turn is shown
+
+**Traces to**: User Story 2, Acceptance Scenario 4
+**Category**: Edge Case
+
+- **Given** Researcher's turn had a retry, then a recovered status, then a tool call
+- **When** Researcher's next model call in the same turn gets 429 and a retry is scheduled
+- **Then** Researcher's named row shows the new retry countdown, live and after a reload
+
+#### Scenario Outline: Named row clears after a timeout or empty-reply retry succeeds
+
+**Traces to**: User Story 2, Acceptance Scenarios 7 and 9
+**Category**: Alternate Path
+
+- **Given** Researcher's first call `<misbehaves>` and the next call answers promptly with a tool request
+- **And** Researcher then runs a 30-second tool call
+- **When** the model's answer arrives
+- **Then** Researcher's named row is gone from the main chat while Researcher is still working, also after a reload during the tool call
+
+| misbehaves |
+|---|
+| sends no first byte within the request timeout |
+| closes the stream without sending anything |
 
 #### Scenario: A late end of an earlier turn does not clear a new wait
 
@@ -631,8 +680,9 @@ Setup for every row: the scripted fake-model instance from `/workspace/logs/1537
 | UAT-H7 | US2-1, US2-5 (helper of a helper) | Top chat asks General Purpose to delegate to itself, and the child to delegate once more; the grandchild's first call gets 429 (Retry-After 10), then 200; the grandchild finishes while the middle helper is still running | Top chat: a named row for the grandchild, then the recovered row, then gone when the grandchild's turn ends. Middle chat: no named row. Grandchild chat: retry and recovered lines | nested delegation | Screenshots of top, middle and grandchild chats | yes |
 | UAT-H8 | US2-8 | Retry-After 30 while the main agent still writes; main agent finishes at second 3; reload the main chat at second 5 | Named row back within 2 s, countdown 0:24–0:26 | projection, clock | Screenshot after reload | yes |
 | UAT-H9 | US3 | Real screen reader (Orca or VoiceOver) on UAT-H2 and UAT-H6's main chat | Each state change announced once with the helper's name; no tick announcements | accessibility | Recorded announcement log | no: needs a human screen-reader pass |
-| UAT-H10 | US2-7 | Helper's first model gets 429 twice (Retry-After 2), its fallback answers at once, then a 30 s tool call | Named row gone while the helper still works; no fallback note in the main chat | fallback clearing | Screenshot during the tool call | yes |
-| UAT-H11 | US1-5, US2-9 | Helper's first call: no first byte within the request timeout; then (second run) an empty stream | Retry lines with the no-response / empty-reply wording in both chats | #1664 retries | Frame log + screenshots | yes |
+| UAT-H10 | US2-7 | Helper's first model gets 429 on all three calls (Retry-After 2), its fallback answers at once with a tool request, then a 30 s tool call; check the fake model's request log (3 + 1 calls) | Named row gone while the helper still works; no fallback note in the main chat | fallback clearing | Screenshot during the tool call | yes |
+| UAT-H11 | US1-5, US2-9 | Helper's first call: no first byte within the request timeout; then (second run) an empty stream; each time the next call answers with a tool request and a 30 s tool call follows | Retry lines with the no-response / empty-reply wording in both chats; the main chat's named row clears when the model answers, while the tool still runs | #1664 retries | Frame log + screenshots | yes |
+| UAT-H12 | Missed end (full and live_only catch-up) | Two helpers waiting; cut the main chat's network; one helper finishes; restore the network after the journal is gone (gateway restart) | Finished helper's row gone, waiting helper's row kept | catch-up reconciliation | Screenshot after reconnect | yes |
 
 ### Test Implementation Order
 
@@ -642,13 +692,15 @@ Setup for every row: the scripted fake-model instance from `/workspace/logs/1537
 | 1a | `TestHelperTimeoutAndEmptyRetryPublishBothCopies` (placeholder) | Unit (Go) | Named row for timeout and empty reply; Helper's chat timeout/empty | The #1664 producers get the same two copies |
 | 1b | `TestHelperTurnEndPublishesEndedToTopChat` (placeholder) | Unit (Go) | Named row leaves (outline); Missed end; Late end of an earlier turn; Grandchild | One `ended` per helper turn with a main-chat copy, sequenced in the top chat |
 | 1c | `TestProjectionKeepsHelperCopyAcrossRootDone` (placeholder) | Unit (Go) | Reload after the main agent finished | Root `done` leaves a helper copy; the helper's turn end removes it; main Stop and new main turn likewise |
-| 1d | `TestProjectionReplaysProviderItemsInLastPublishOrder` (placeholder) | Unit (Go) | Stale retry does not come back | Permutations of waiting / retry / recovered; replayed final state equals live state; other item kinds keep their order |
-| 1e | `TestHelperFallbackSuccessSendsRespondingCopy` (placeholder) | Unit (Go) | Named retry row clears on fallback | Main-chat `responding` copy; no fallback note in the top chat |
+| 1d | `TestProjectionReplaysProviderItemsInLastPublishOrder` (placeholder) | Unit (Go) | Stale retry does not come back; A later retry in the same turn is shown | Permutations of waiting / retry / recovered, plus retry → recovered → tool → new retry under one turn id; replayed final state equals live state; other item kinds keep their order |
+| 1e | `TestHelperAnswerWithoutRecoveredSendsRespondingCopy` (placeholder) | Unit (Go) | Named retry row clears on fallback; Named row clears after a timeout or empty-reply retry succeeds | Main-chat `responding` copy on first-call fallback success and on outer timeout/empty retry success; no invented count; no fallback note in the top chat |
+| 1f | `TestSilenceClearPublishedBeforeNewRetry` (placeholder) | Unit (Go, real producer to gateway) | Silence clear does not erase the new retry | waiting → retry scheduled: `responding` precedes `provider_retry` in both chats; projected replay keeps the countdown |
 | 2 | `TestHelperProviderStatusPublishesToHelperAndNamedRootCopy` (placeholder) | Unit (Go) | Named silence row; silence clears; recovered | waiting / responding / recovered |
 | 3 | `TestOwnTurnProviderFramesCarryNoChildFields` (placeholder) | Unit (Go) | Recovered does not clear own countdown | Regression control: root's own frames unchanged (may pass on the release head) |
 | 3a | `TestHelperNoticesAreNotPersisted` (placeholder) | Unit (Go) | Notices are not saved | No transcript write for any notice; fallback note still saved (positive control) |
 | 4 | contract fixture tests (placeholder) | Contract | Old tab drops the copy; all wire scenarios | Both copies validate; both-or-neither; `ended` only with child fields; old schema rejects the copy |
 | 5 | `provider-frames.helper-rows.test.ts` (placeholder) | Unit (SPA) | Two helpers; one ending; recovered does not clear own; late end; fallback clearing | Per-helper-turn keying; own slots untouched |
+| 5a | `catchup.helper-rows-reconcile.test.ts` (placeholder) | Unit (SPA) | Missed end (outline) | Full snapshot, restart and live_only attach replace named rows with the delivered projection; ended row leaves, active row stays; failed/superseded attach changes nothing |
 | 5b | `provider-clock.reattach.test.ts` (placeholder) | Unit (SPA) | Reload after the main agent finished; Reload of the helper's chat | A re-sent retry with `sent_at` 5 s before `emitted_at` counts down from 25 s; same for silence time; own notices too |
 | 6 | `ChatScreen.helper-named-rows.test.tsx` (placeholder) | Unit (SPA) | Named row idle/writing; unknown name; more than three; promotion; screen reader | Render without streaming; prefix; "Helper" fallback; overflow; one live region |
 | 6b | `ChatScreen.helper-chat-before-first-byte.test.tsx` (placeholder) | Unit (SPA) | Helper's chat retry before anything streamed | Notice shows while the chat's turn is active and nothing streamed |
@@ -678,7 +730,10 @@ RED rule: new-behaviour tests fail on the release head with a saved log. Regress
 | 7 | 429 (Retry-After 60), user stops helper at second 5 | cancel | named row removed | Named row leaves (stopped) | |
 | 8 | no first byte within the request timeout, then 200 | #1664 | no-response retry wording in both chats | Timeout outlines | |
 | 9 | empty stream, then 200 | #1664 | empty-reply retry wording in both chats | Timeout outlines | |
-| 10 | first model 429 ×2 (Retry-After 2), fallback 200 at once, then 30 s tool call | fallback | named row cleared during the tool call; no fallback note in the main chat | Fallback clearing | |
+| 10 | first model 429 ×3 (Retry-After 2), fallback 200 with a tool request at once, then 30 s tool call | fallback | request log 3 + 1; named row cleared during the tool call; no fallback note in the main chat | Fallback clearing | |
+| 12 | silent 31 s, then 429 (Retry-After 20), then 200 | silence then retry | silence cleared, retry countdown kept live and after reload | Silence clear does not erase the new retry | producer order |
+| 13 | no first byte, then a prompt tool request, then 30 s tool | timeout success | named row cleared on answer, no recovered count invented | Named row clears after a timeout retry succeeds | |
+| 14 | 429 → 200 (tool) → 429 → 200 in one turn | same-turn retry | second retry shown live and after reload | A later retry in the same turn is shown | |
 | 11 | Retry-After 30, main agent done at s3, reload at s5 | reload | countdown 0:24–0:26 | Reload after the main agent finished | |
 
 #### Dataset: Main chat composition
@@ -706,6 +761,7 @@ RED rule: new-behaviour tests fail on the release head with a saved log. Regress
 | Fallback note goes to the helper's chat and is saved | `pkg/agent` fallback note tests | No | unchanged; positive control in order 3a |
 | Channel retry notice suppressed for steered helpers | `pkg/agent/steer_boundary_containment_test.go` (BoundaryRetryNotice) | Yes: order 7a adds the root-channel positive control | #1851 out of scope |
 | Snapshot attach order for tool cards, media and errors | gateway projection tests | No | must stay green unmodified; order 1d checks the other kinds keep their order |
+| Closed set of `routingSessionID` readers (names `providerRetryObserver` and `emitProviderStatus`) | `pkg/agent/routing_session_id_consumer_set_adr057_test.go::TestRoutingSessionID_ConsumerSetIsClosed` | No new test; run it as an affected regression | keep it unchanged where possible; if a reader legitimately moves or is added, update only that entry with its reason and keep the closed-set and positive-control assertions; never delete, skip or broaden it |
 
 ---
 
@@ -716,9 +772,11 @@ RED rule: new-behaviour tests fail on the release head with a saved log. Regress
 - **FR-003**: System MUST NOT set `child_session_id` / `agent_id` on frames about a chat's own turn, and MUST NOT change how those frames are shown live. Exception: after a reload or reconnect, the main agent's own countdown and silence time are measured with the server-clock estimate of FR-008.
 - **FR-004**: The helper's chat MUST show the retry line, silence notice and recovered line for the helper's model calls, with the same rules a chat uses for its own model calls, also while nothing has been streamed in that chat yet.
 - **FR-005**: The main chat MUST show one row per affected helper turn, starting with the helper's display name (or "Helper" when the name is unknown, never an id), followed by the same wording the helper's chat shows, whether or not the main agent is writing.
-- **FR-006**: A named row MUST update on the same helper turn's next notice; clear when that helper's model answers again after silence or a fallback model answers at once; and disappear when that helper turn ends (finished, failed or stopped), including when the end happened while the main chat was disconnected.
+- **FR-006**: A named row MUST update on the same helper turn's next notice (including a later retry in the same turn); clear when that helper's model answers after a silence notice, or answers after an announced retry without a `recovered` frame (first-call fallback success, or a successful outer `no_response` / `empty_reply` retry); and disappear when that helper turn ends (finished, failed or stopped), including when the end happened while the main chat was disconnected, whatever kind of catch-up follows.
+- **FR-013**: When a retry is scheduled while a silence notice is active, the silence clear MUST be published before the new retry, so the new countdown survives in both chats, live and on replay.
+- **FR-014**: A successfully completed full-snapshot or `live_only` attach MUST replace the chat's named helper rows with exactly those in the delivered projection; a failed or superseded attach MUST change nothing.
 - **FR-007**: A helper's notice MUST NOT replace, clear or restart the main agent's own notice or another helper turn's row, and an `ended` for one turn MUST NOT clear another turn's row.
-- **FR-008**: After a reload or reconnect during a helper's wait — including after the main agent finished its reply — both chats MUST show the current notice within 2 s of loading, with the countdown and silence time measured against the server's current time (`session_state.emitted_at`), not the notice's original send time, and never a retry line after that turn's recovered line. No new snapshot field is added.
+- **FR-008**: After a reload or reconnect during a helper's wait — including after the main agent finished its reply — both chats MUST show the current notice within 2 s of loading, with the countdown and silence time measured against the server's current time (`session_state.emitted_at`), not the notice's original send time. An older retry superseded by a later recovered line MUST NOT reappear; a later retry in the same turn remains current. No new snapshot field is added.
 - **FR-009**: The main chat MUST show at most three named rows, ordered by each helper turn's first notice, plus one summary row counting the rest without calling them waiting; a cleared row is replaced by the next one.
 - **FR-010**: The named-row area MUST have exactly one polite live region, whose text starts with the helper's name, changes only on a state change, and never on countdown ticks.
 - **FR-011**: System MUST NOT save retry, silence or recovered notices to any transcript, MUST NOT copy the fallback note to the main chat, and MUST NOT change channel retry messages.
@@ -758,9 +816,11 @@ RED rule: new-behaviour tests fail on the release head with a saved log. Regress
 | FR-003 | US-4 | Recovered does not clear own countdown; Reload of the helper's chat | 3, 5, 5b; UAT-H5 | none for the live part (regression guard); DOC-002 for reload |
 | FR-004 | US-1 | Helper's chat retry before anything streamed; silence; recovered; silence clears; reload of the helper's chat | 6b, 7; UAT-H1, H4 | DOC-001 |
 | FR-005 | US-2 | Named retry row; Named silence row; Unknown helper name; Grandchild | 6, 7; UAT-H2, H3, H4, H7 | DOC-002 |
-| FR-006 | US-2 | Named row turns into recovered; Named row leaves (outline); silence clears; fallback clears; Missed end | 1b, 1e, 5, 6, 7; UAT-H2, H4, H10 | DOC-002 |
+| FR-006 | US-2 | Named row turns into recovered; Named row leaves (outline); silence clears; fallback clears; timeout/empty success clears (outline); later retry in the same turn; Missed end (outline) | 1b, 1d, 1e, 5, 5a, 6, 7; UAT-H2, H4, H10, H11, H12 | DOC-002 |
+| FR-013 | US-2 | Silence clear does not erase the new retry | 1f, 7 | DOC-002 |
+| FR-014 | US-2 | Missed end (outline: full snapshot, restart, live_only) | 5a, 7; UAT-H12 | DOC-002 |
 | FR-007 | US-4 | Recovered does not clear own; Two helpers; One helper ending; Late end of an earlier turn | 1b, 5, 7; UAT-H5, H6 | DOC-002 |
-| FR-008 | US-1, US-2 | Reload after the main agent finished; Reload of the helper's chat; Stale retry does not come back | 1c, 1d, 5b, 7; UAT-H8 | DOC-002 |
+| FR-008 | US-1, US-2 | Reload after the main agent finished; Reload of the helper's chat; Stale retry does not come back; A later retry in the same turn is shown | 1c, 1d, 5b, 7; UAT-H8 | DOC-002 |
 | FR-009 | US-4 | More than three rows (outline); Row promotion | 6 | DOC-002 |
 | FR-010 | US-3 | Screen reader hears each helper's name once | 6; UAT-H9 | none: the visible text is documented in DOC-002 |
 | FR-011 | US-1, US-2 | Notices are not saved; Channels stay unchanged; Named retry row clears on fallback | 3a, 7a, 1e | DOC-003 |
@@ -789,4 +849,5 @@ RED rule: new-behaviour tests fail on the release head with a saved log. Regress
 - Q: Wire shape? → A: Two optional fields `child_session_id` / `agent_id` plus a new `provider_status` state `ended`; no new frame type (architect ruling, 2026-11-15).
 - Q: Reload as a MUST, with a snapshot field? → A: MUST, without a new snapshot field: projection keeps helper copies across the main agent's `done`, a server-clock estimate from `session_state.emitted_at`, and last-publish replay order (architect ruling, 2026-11-15).
 - Q: Helper of a helper? → A: Reachable on a stock install; named row in the top chat only; middle chat unchanged; cleared by `ended` (architect ruling, 2026-11-15).
-- Q: Grill round 1 (REVISE, 8 MAJOR, 6 MINOR, 3 OBS) — founder questions? → A: None; the grill raised no new product choice. All findings fixed in this revision; exact strings go to the chief for voice review.
+- Q: Grill round 1 (REVISE, 8 MAJOR, 6 MINOR, 3 OBS) — founder questions? → A: None; the grill raised no new product choice. Round 2 found MAJ-006, MAJ-007 and MIN-002/005 only partly fixed (see below).
+- Q: Grill round 2 (REVISE, 3 MAJOR, 4 MINOR) — founder questions? → A: None. Fix round 2: producer order silence-clear before retry (FR-013); non-incremental attach reconciles named rows (FR-014); a `responding` copy clears the named row after a first-call fallback or a successful timeout/empty retry, with no invented count and own-chat behaviour unchanged (FR-006); fallback fixture uses three primary 429s; same-turn later retry stays current (FR-008); routing-reader guard added to the regression list. Open: the Epic link (chief). Exact strings go to the chief for voice review. Under the chief's review cap this is the last fixing round; the next step is the build.
