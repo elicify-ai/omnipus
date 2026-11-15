@@ -1,7 +1,7 @@
 # Feature Specification: Notifications and chat system messages
 
-**Created**: 2026-10-30 · **Revised**: 2026-10-31 (grill round-1 fix); 2026-11-01 (grill round-2 correction — the one final fix round; no third grill); 2026-11-05 (founder answers NS1, OQ-1, OQ-2 applied as D81–D83; W1 applied as D84)
-**Status**: Approved (founder, 2026-11-07) — round-2 correction applied (R2-MAJ-002…014 and R2-MIN-001…004; dispositions in §34); founder decisions D63–D80 unchanged (§32); the items held for the founder are answered and applied: NS1 = A → D81 (R2-MAJ-001, mask the whole response before first-line extraction), OQ-1 = A → D82, OQ-2 = A → D83, W1 = A → D84 (server-loss banner and chat line, §11.3) (§30.2, §30.3, §32)
+**Created**: 2026-10-30 · **Revised**: 2026-10-31 (grill round-1 fix); 2026-11-01 (grill round-2 correction — the one final fix round; no third grill); 2026-11-05 (founder answers NS1, OQ-1, OQ-2 applied as D81–D83; W1 applied as D84); 2026-11-15 (**#1857 amendment — draft for review**: §13.8 turn-failure kinds and wording, FR-092/FR-093, §30.4 open questions, D85 placeholder — pending founder review)
+**Status**: Approved (founder, 2026-11-07) — round-2 correction applied (R2-MAJ-002…014 and R2-MIN-001…004; dispositions in §34); founder decisions D63–D80 unchanged (§32); the items held for the founder are answered and applied: NS1 = A → D81 (R2-MAJ-001, mask the whole response before first-line extraction), OQ-1 = A → D82, OQ-2 = A → D83, W1 = A → D84 (server-loss banner and chat line, §11.3) (§30.2, §30.3, §32) — **amendment for #1857 in review** (draft: §13.8 not yet founder-approved; §30.4 open; D85 placeholder)
 **Author**: architect (spec author), for team-lead (Mac squad)
 **Branch / base**: `landing/notifications`, created from `release/v0.1.1` at `4cad412bf`; requirements merged at `e21febf4f`; round-0 spec `eafa2b1c5`; voice skill landed at `e77af6cc9`
 **Change size**: feature (structural, cross-tree: `contracts/`, `pkg/notifications`, `pkg/gateway`, `pkg/agent`, `pkg/providers`, `src/`, user docs under `docs/`). Flow: grill round 2 done (the last spec grill) → round-2 correction → founder answers to NS1, OQ-1, OQ-2 applied (D81–D83) → founder answer W1 = A applied (D84, 2026-11-05) → RED/GREEN/CHECK → **one** 5-reviewer gate on the one frozen Part-1 cut (D63) → candidate CI → hands-on UAT on the exact commit (touches `pkg/agent` and gateway WebSocket handlers) → founder's yes → one landing.
@@ -539,6 +539,7 @@ Rules:
 - **Scheduled vs not scheduled** (round-1 MAJ-004). A run is *scheduled* only when it was dispatched by the Calendar trigger (`TaskTriggerScheduler.RunScheduled`) or by a gateway schedule job (`scheduledRunner.RunScheduled`). Scheduled runs produce `schedule_*` kinds and never also `task_*` kinds. A manual Run-now of a Calendar task (`TaskRunKindManual`) produces `task_finished` / `task_failed` only (§8.1).
 - **Own actions** (D31). Kinds are produced from engine outcomes, never from the user's own edit: a task moved on the Board, a plan stopped by the user, a goal stopped by the user (`stopped_by_user`), a run the user stopped (`Task.CancelReason` set) and the start of a run the user launched produce nothing (§8.1).
 - **Needs-you locks** (D69, D67). The three Needs-you kinds have both switches locked on, severity `needs_you` (sticky pop-up), and are listed in every lock rule, test and document as *three* kinds.
+- **Turn-failure chat lines (#1857 amendment, §13.8).** The kinds above are unchanged by the #1857 amendment: a failed turn's chat line is not a centre kind. The failure kinds of §13.8 (including the external CLI worker kinds) surface only as the turn's own chat error line (§11) and, through the existing `task_failed` body, as a neutral cause sentence (§13.6).
 
 ---
 
@@ -1132,6 +1133,89 @@ Slot values are taken at the emit site and baked into the finished sentence; onl
 
 When a slot's fact is unknown at the emit site, the variant without that slot is used (§11.4). Codes that are non-terminal notices today (e.g. `model_unavailable` reporting a substitution while the reply continues) stay non-terminal: only their wording changes. The exact emit symbol for each code is pinned by the WP-1 RED test for that code (T-45).
 
+### 13.8 Turn-failure kinds and wording (#1857 amendment — DRAFT, pending founder review)
+
+Issue #1857 (child of the notifications Epic #1604, founder decision 2026-11-15): when a turn fails, the user too often sees only the generic `unknown` line — "This turn didn't finish, and we can't tell why. Retry — …" — even when the server knows the reason. The requirement is **FR-092** (§21): no turn failure ends in the generic line when a safe reason is known; the generic line remains only for a genuinely unknown reason. The sanitizer stays **fail-closed** (ADR-051, §13.3, §15.1): no raw provider or CLI text, no secrets, no file paths and no command lines in the user message; masking runs exactly as FR-070/D81 define it.
+
+This subsection is the amendment's deliverable set: the failure-kind list (§13.8.2, swept from release head `5d20e539f`), the proposed wording (§13.8.3, written with the `omnipus-voice` skill), the open questions (§30.4) and the decision placeholder **D85** (§32, "pending founder review"). The Mac team's error-case comment on #1857 was **not yet posted** at draft time (0 comments on 2026-11-15); it is incorporated before the grill when it arrives. Draft status: the wording table and the proposed codes await the founder's review; nothing here is implemented.
+
+#### 13.8.1 Where the generic line comes from today
+
+- The catalogue copy: `unknown` in `contracts/components/schemas/LLMError.yaml` `x-user-messages` (generated into `src/lib/api/generated/llm-error-messages.ts` and `pkg/api/generated/llm_error_messages.gen.go`), returned by `pkg/agent/translate_error.go::defaultUserMessage` for `CodeUnknown`. A transcript entry classified `unknown` replays the same line (the trusted-stage guard in `pkg/agent/turn_transcript.go` exists so a *typed* copy survives reload; an `unknown` one never had one).
+- The classifier's residual verdict: `pkg/agent/translate_error.go::classifyByMessage` (reached for every error with no HTTP status — including the whole external CLI worker path, which builds a synthetic `ProviderError{Status: 0}` in `pkg/agent/external_dispatch.go::SanitizeRunnerError`) matches only capability/media shapes, content policy, context overflow, tool-args/schema, rate-limit wording and transport wording (`providers.IsTransportFailure`). CLI flag-parse, CLI model-unavailable, CLI sign-in and bare exit-status wording match none of them → `CodeUnknown` → the generic line. That is the exact mechanism the OpenCode hands-on found (#1857).
+- A second, older generic line: the panic-recovery sentence `"Error processing message: the agent turn failed unexpectedly. Please try again."` (`pkg/agent/session_worker.go::processTurn`, `pkg/agent/loop_unroutable.go::dispatchUnroutableMessage`) — not the `unknown` catalogue copy, but the same "no reason" shape, and it breaks voice rule 9 ("please"). Listed below as row B8.
+- The release catalogue has **31** codes (the spec's round-0 count of 29 grew by `provider_empty_reply` and `model_route_unavailable` before landing); every row below names the code a kind maps to **today** in that catalogue.
+
+#### 13.8.2 Failure-kind list (swept at release head `5d20e539f`)
+
+Certainty per row: **Verified** = read in this amendment's sweep; **Inferred** = reasoned from read code without executing it. "Generic today?" = the user-visible chat line is the `unknown` copy.
+
+**A. Provider-attempt kinds (the control group — already typed)**
+
+| # | Failure kind | Comes from (`file::symbol`) | Code today | Generic today? | Safe facts known (no raw text) | Proposed |
+|---|---|---|---|---|---|---|
+| A1 | Provider error with a pinned body shape (401/403 auth, 402/insufficient-quota billing, 413, 404 retirement phrases, media shapes, content policy, context overflow, tool-args/schema, 429) | `pkg/agent/translate_error.go::classifyByHTTPStatus` | own codes | No | provider, model, `provider_says` (masked, §13.3), status (Verbose only, VS-2) | unchanged — the control that already works |
+| A2 | Transport failure of a dispatched attempt (DNS, refused, unreachable, TLS, timeout, dropped connection) | `pkg/agent/translate_error.go::isNetworkMessage` + `pkg/providers.IsTransportFailure`; classification table §14.1 | `network` | No | provider, model, host, `reason` | unchanged — N2 lines (§13.2) |
+| A3 | Provider error event inside a 200 stream | `pkg/agent/translate_error.go::TranslateTurnError` (`StreamProviderError` branch) | per-kind (`network`/`rate_limited`/`quota_billing`/`provider_auth_failed`/`provider_rejected`/`content_policy`) | No | provider, stream error kind | unchanged |
+| A4 | Residual dispatched-provider failure with no pinned shape (4xx body matching nothing, 200 with an unparseable body, adapter pre-send failure) | `pkg/agent/translate_error.go::classifyByHTTPStatus` (residual → `unknown`); `::TranslateTurnError` promotes only a residual **400** to `provider_request_rejected` | `unknown` (400 → `provider_request_rejected`) | **Yes, conditionally** — every non-400 residual ends the turn generic | provider, model, status (when one arrived) | at the **terminal presentation only**, name every dispatched-but-unclassified attempt `provider_error` (no-quote API form, §13.2) — never inside `classifyByProviderError`, so the FR-017 media strip-retry gate (`pkg/agent/media_downgrade.go::outcomeFallbackEligible`) keeps reading `CodeUnknown` untouched. **OQ-1857-4 (architect)** |
+| A5 | Fallback chain exhausted, last attempt unclassifiable | `pkg/agent/translate_error.go::errorToProviderError` (reverse walk) → same residual verdict | `unknown` | **Yes, conditionally** (same shape as A4) | provider, model of the last attempt | same as A4 |
+| A6 | Wait budget exhausted (D14, 10 min/turn) | `pkg/providers/fallback_retry.go::WaitBudget` (`MaxWaitBudgetPerTurn`), checked before each wait | none — retries stop; the turn ends on the **last attempt's** error | inherits A4/A5 | budget fact (waited, not failed anew) | no own code; the final line is the last attempt's classified line. Stated here so the list is complete (Inferred: no separate budget error exists — verified by reading `fallback_retry.go`) |
+| A7 | Stall, empty stream, request timeout, cancellation | `common.ErrStreamStalled`/`ErrEmptyStream` → `provider_stalled`/`provider_empty_reply`; `typedExitCode` → `turn_timed_out`/`turn_canceled` | own codes | No | stall minutes, timeout | unchanged |
+
+**B. Pre-turn and loop kinds**
+
+| # | Failure kind | Comes from (`file::symbol`) | Code today | Generic today? | Safe facts known | Proposed |
+|---|---|---|---|---|---|---|
+| B1 | Pre-turn refusals (no provider, no model, unknown context window, agent on no workspace, working folder unopenable, Judge time limit, Judge conclusion not saved) | `pkg/agent/translate_error.go::TranslateTurnError` sentinel branches (`ErrAgentNeedsProvider`, `ErrAgentModelUnassigned`, `ErrContextWindowUnknown`, `ErrAgentNotWorkspaceMember`, `ErrWorkspaceWorkDirUnavailable`, `ErrJudgeTimeLimit`, `CodeJudgeConclusionFailed` in `pkg/agent/goal_child_completion.go`) | own codes | No | agent name, path (masked), limit | unchanged |
+| B2 | Model switch failure (non-terminal) and unresolved explicit pair (terminal) | `pkg/agent/loop_run_turn.go` switch-fail branch (`model_switch` stage); `pkg/agent/effort_pair_switch.go::refuseUnresolvedPair` | `model_unavailable` | No | requested model, loaded model | unchanged (wording already specific) |
+| B3 | Omnipus's own rate limiter (SEC-26) refuses an iteration | `pkg/agent/loop_run_turn.go::beginIteration` → `"rate limit: %s (retry after %.0fs)"` → substring match → `rate_limited` | `rate_limited` — **misattributed**: the copy blames the provider ("temporarily overloaded") for Omnipus's own limit (§11.4 already keeps this row unassembled) | No — but wrong | policy rule name, retry-after seconds | own sentence under a decision: new copy for the own-limiter case (**OQ-1857-5**, recommended in scope: the current line misleads) |
+| B4 | Tool-iteration ceiling (native turn) | `pkg/agent/loop_run_turn.go::finalizeTurn` → `toolLimitResponse` (`pkg/agent/loop.go::toolLimitResponse`) | none (fixed content notice + `turn_failed`) | No | limit, agent name | unchanged (already plain and actionable) |
+| B5 | Tool-denial budget aborts the turn | `pkg/agent/tool_denial.go::toolDenialAbortReason` → `abortTurn` (curated, shown as written) | none (curated text) | No — but internal-flavoured (`blocked: tool %q denied (%s) for agent %q …`) | tool name, denial count, enumerated denial reason (timeout/denied/saturated) | wording row (§13.8.3 W8) |
+| B6 | Hook abort / hard abort | `pkg/agent/loop.go::hookAbortError`, `::abortTurn` (curated hook reason) | none (curated text) | No | hook's own decision text (caller-curated, trusted stage) | unchanged |
+| B7 | The sender's message could not be saved | `pkg/agent/window_runtime.go::messageNotSavedReply`, consumed in `pkg/agent/translate_error.go::TranslateTurnError` (`messageNotSavedError` branch) | `unknown` carrying the fixed reply | No (own text), but breaks voice rule 9 ("Sorry", "please") | none beyond the fact | wording row (W9) |
+| B8 | Panic during a turn (recovery line) | `pkg/agent/session_worker.go::processTurn`, `pkg/agent/loop_unroutable.go::dispatchUnroutableMessage` | none (fixed text) | No (own text) — same no-reason shape as the generic line; "Please" violates the guard | none | wording row (W10) |
+| B9 | `delegated_task_limit` | **no producer** — `grep` over the whole release tree finds only the constant (`pkg/agent/translate_error.go`), the `mustNotDropEvent` gate (`pkg/agent/eventbus.go`) and the generated catalogue; nothing emits the code. §13.7 pins slots for a code nothing raises today | n/a | n/a | — | **accidental finding for team-lead** (same class as AF-2 `system_overload`): either the delegated-task limit path gets its emitter in this Epic's scope or the code and its §13.7 row are marked reserved. Not decided here |
+
+**C. External CLI worker kinds (the #1857 core — all currently generic)**
+
+All C rows reach the classifier through `pkg/agent/external_dispatch.go::SanitizeRunnerError` (synthetic status-0 `ProviderError` → `classifyByMessage`) and surface as the `external_cli` error event + transcript entry (`emitExternalCLIErrorEvent`), then — when fatal — as the curated turn error `"external-cli run failed: …"`. Raw stderr stays in `SanitizedRunnerError.LogText` / gateway.log only.
+
+| # | Failure kind | Comes from (`file::symbol`) | Code today | Generic today? | Safe facts known (no raw text) | Proposed code (OQ-1857-2) |
+|---|---|---|---|---|---|---|
+| C1 | CLI rejects its command line — flag parse/usage error (e.g. OpenCode's "2 occurrences" of `--model`, an unknown option) | non-zero exit stderr tail: `pkg/agent/runner/driver_opencode.go::Run` post-`cmd.Wait` branch (same shape `driver_claude.go`, `driver_codex.go`) | `unknown` | **Yes** | CLI name (claude/codex/opencode); that the command line was rejected before any work ran. Not the flag text itself (raw command line — OQ-1857-3) | `external_cli_invalid_args` |
+| C2 | CLI cannot use/route the model (e.g. OpenCode stream `"error"` event, "provider.no-route" wording) | `pkg/agent/runner/driver_opencode.go::parseLine` `"error"` case → fatal `ErrorEvent` | `unknown` | **Yes** | CLI name; the model string Omnipus passed (`runner.RunOptions.Model`, user-chosen) | `external_cli_model_unavailable` |
+| C3 | CLI auth/sign-in failure (expired or missing CLI sign-in) | same exit path as C1 (stderr wording); **no dispatch-time pre-check exists** — `pkg/agent/runner/conntest.go::FailureReason` (`unauthenticated`) is the Settings connection test only | `unknown` | **Yes** | CLI name; that sign-in is needed | `external_cli_needs_signin` (attribution `user`, mirroring `needs_provider`) |
+| C4 | CLI exits non-zero with no recognised cause (everything else in the stderr tail) | same exit path as C1 | `unknown` | **Yes** | CLI name; exit status belongs in technical details only (VS-2) | `external_cli_failed` |
+| C5 | CLI turn cap exceeded (the CLI worker's own iteration limit) | `pkg/agent/runner/driver_opencode.go::parseLine` `"turn cap exceeded: %d turns (max %d)"` (fatal; claude/codex equivalents) | `unknown` | **Yes** | CLI name, turn count, cap (numbers — safe) | `external_cli_turn_limit` |
+| C6 | CLI stream read error (stdout pipe failed mid-run) | `pkg/agent/runner/driver_stream.go::streamParser` (`"stream read error: %v"`, fatal) | `unknown` (the cause wording rarely matches a pattern) | **Yes** | CLI name; transport classification via `providers.IsTransportFailure` when the cause is one | `network` when transport, else `external_cli_failed` |
+| C7 | CLI program fails to launch after the path check passed (exec race) | `pkg/agent/runner/driver_opencode.go::Run` `cmd.Start` error → `"external-cli dispatch: driver start (%s): %w"` (`pkg/agent/external_dispatch.go`) → the turn-error path | `unknown` | **Yes** (surface of the spawn error Inferred — the classification path is the same `TranslateTurnError` substrate as every turn error) | CLI name; that the program could not be started | `external_cli_failed` (start variant) |
+| C8 | Missing CLI binary / failing configured program path | `pkg/agent/external_run_program.go::resolveRunProgram` → `thirdpartycli.RunProgram` refusal → `reportProgramRefusal` (curated, shown as written) | none (curated refusal text) | No — control row | program path fact (curated text) | unchanged code path; its refusal text is WP-6 wording-manifest scope |
+
+Totals: **25 kinds** listed; **9 end in the generic line today** (C1–C7 always; A4/A5 conditionally); the amendment gives **7** of them a specific line (C1–C7, five new codes + `network` reuse + `external_cli_failed` covering two shapes), A4/A5 the existing `provider_error`/`provider_request_rejected` forms, and rewrites four near-miss texts (B3, B5, B7, B8).
+
+Proposed new codes are **contract data**: `external_cli_invalid_args`, `external_cli_model_unavailable`, `external_cli_needs_signin`, `external_cli_failed`, `external_cli_turn_limit` join the `LLMError.yaml` enum with catalogue copy and attributions (`config` for invalid-args/model-unavailable/turn-limit, `user` for needs-signin, `ambiguous` for failed — architect confirms), one atomic WP-0-style contract change per Hard Constraint #8. `{cli}` joins the closed slot vocabulary (the generators validate slots; same mechanism as VS-3). OQ-1857-2 put the alternatives to the architect/founder before any contract edit.
+
+#### 13.8.3 Proposed wording (chat forms, written with the `omnipus-voice` skill)
+
+These are the sentences for the founder's wording review. Chat voice ("I"); a `task_failed` centre body carries the neutral variant of the same cause sentence (R-WD-8, §13.6), written at WP-6 from the approved chat text. `{cli}` is the new slot; `{n}` exists. Every line passes the skill self-check: what happened · observed why · one action; no blame; no status codes or paths at Normal; sentence case; no "please" outside the D48 sentence; no emoji; one to three short sentences.
+
+| W | Kind | Current line | Proposed line (chat) | What the user can do | Notes |
+|---|---|---|---|---|---|
+| W1 | C1 invalid args | "This turn didn't finish, and we can't tell why. Retry — …" | `I couldn't start {cli}: it rejected its own command line, so nothing ran. Check the CLI worker's preset parameters in Settings.` | Check the preset parameters; fix the duplicated or unknown option | Names no flag text (OQ-1857-3); nothing ran, so retry alone cannot help — the action points at the setting |
+| W2 | C2 model unavailable in the CLI | generic line | `I couldn't run the task in {cli}: it couldn't use the model {model}. Pick a model {cli} offers, or check that {cli} is signed in.` | Pick another model for the worker, or re-sign-in | `{model}` is the string Omnipus passed — the name the user picked |
+| W3 | C3 CLI sign-in | generic line | `{cli} is not signed in, so the run stopped. Sign in to {cli} again, then retry the task.` | Sign in again, retry | Mirrors `needs_provider`'s shape; attribution `user`, so the retry advice is allowed |
+| W4 | C4 exit, unknown cause | generic line | `I couldn't finish the run in {cli}: it exited with an error and didn't say why. Retry the task; if it keeps happening, check that {cli} works on its own.` | Retry; then test the CLI outside Omnipus | Exit status stays in technical details (VS-2); the honest no-reason case keeps its "didn't say why" wording (D7) |
+| W5 | C5 CLI turn cap | generic line | `I stopped the run in {cli}: it reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings.` | Split the task, or raise the limit | `{n}` = the CLI's resolved max turns |
+| W6 | C6 stream read error | generic line | transport: `The connection to {cli} dropped mid-run. Retry the task.` · otherwise W4's sentence | Retry | Reuses `network` for the transport case (N2 pattern applies to the retry/final forms if a retry follows) |
+| W7 | C7 launch failure | generic line | `I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.` | Check the program path | The `external_cli_failed` start variant; same remedy family as C8's curated refusal |
+| W8 | B5 denial-budget abort | `blocked: tool "X" denied (timeout) for agent "Y" — the turn reached its limit of 10 tool denials` | `I stopped this turn: {tool} kept being denied and the turn reached its limit of {n} denials. Approve the tool or adjust its permissions, then run the task again.` | Approve the tool / adjust permissions, re-run | Replaces the internal-flavoured curated text; enumerated denial reasons stay available for Verbose details |
+| W9 | B7 message not saved | `Sorry, I couldn't save your message — please try again later.` | `I couldn't save your message, so it wasn't sent. Check that the disk has space, then send it again.` | Free disk space, resend | Removes "Sorry"/"please" (voice rule 9); states the consequence (not sent) |
+| W10 | B8 panic line | `Error processing message: the agent turn failed unexpectedly. Please try again.` | `I couldn't finish this turn — something inside Omnipus failed. Retry; if it keeps happening, please report it to the Omnipus.ai team.` | Retry; report if it repeats | The one D48 sentence is the allowed "please" (voice rule 1); the fix genuinely is ours, said in one clause |
+| W11 | B3 own rate limiter | `The model provider is temporarily overloaded. Wait a moment, then retry.` (misattributed) | `I've reached this agent's hourly limit for model requests. Wait {seconds} s, then retry.` | Wait, retry | OQ-1857-5; attribution `product`; `{seconds}` = the limiter's retry-after |
+| W12 | A4/A5 dispatched-but-unclassified | generic line | `{provider} ({host}) answered with an error. Fix: retry in a moment; if it repeats, switch model.` — the §13.2 API-final no-quote form | Retry; switch model if it repeats | No new text: reuses the agreed API-final no-quote variant; `unknown` remains only for the genuinely nothing-known case |
+
+The generic line itself keeps today's copy for the reserved case (a failure with no known safe reason). **W1–W7 and W12 are the #1857 deliverable**; W8–W11 are adjacent voice rewrites found by the same sweep, offered in the same review so the founder rules on the pattern once.
+
 ---
 
 ## 14. Connection handling and logging (R-LOG-1…4, R-EV-2; D13, D32, D44, D64, D72, D73, D74)
@@ -1160,6 +1244,8 @@ Not observed (no class, no log line, no incident): every failure returned before
 **Kind per class** (D71 — FQ-6 in review-revised form): network → `provider_unreachable`; api with code `quota_billing` → `provider_quota_exhausted`; api with a provider 429 → `provider_rate_limited`; api with 401/403 at account level, 408, 5xx or 529 → `provider_error`; model-specific API conditions (`model_retired`, `bad_model`, `context_too_long`, `content_policy`, `request_too_large`, `media_unsupported`, a 400 `context_length_exceeded`) stay chat-only and raise no incident. `unknown` raises no incident.
 
 **Kind and code are separate (round-2 R2-MAJ-013).** The chat error **code** decides the chat line and its action; the incident **kind** decides the centre entry. An authentication rejection (401, or 403 for a bad key) keeps chat code `provider_auth_failed` with its own remedy (Update the key; **Open settings**) and, being account-level, raises the `provider_error` incident (D71). 408, 5xx and 529 are chat code `provider_error` and raise the same kind.
+
+**Outside this table (#1857 amendment).** Failure kinds that do not come from a dispatched provider attempt — the external CLI worker kinds (C1–C8), the pre-turn and loop kinds (B1–B9) and the residual/unknown cases A4–A6 — are listed with their codes, their generic-line status and their proposed wording in §13.8; this section's classification is unchanged by that amendment.
 
 ### 14.2 Per-attempt observation (round-1 MAJ-009; round-2 R2-MAJ-008)
 
@@ -1995,6 +2081,36 @@ Motion: every animation (pop-up slide, in-progress pulse, ellipsis) is static un
 - **When** the user opens the centre
 - **Then** one "Connections to AI providers are failing" entry lists ten causes, earliest incident first, and ends with "and 1 more"; its `causes_omitted` is 1
 
+#### S-133: No CLI-worker failure ends in the generic line (#1857)
+**Traces to**: FR-092 · **Category**: Error Path
+- **Given** each external CLI worker failure shape of §13.8.2 C1–C7 (a flag-parse stderr tail, a stream `"error"` no-route event, a sign-in stderr, a bare non-zero exit, a turn-cap message, a stream read error, a driver start failure), driven through `SanitizeRunnerError`/`TranslateTurnError`
+- **When** each is classified
+- **Then** none returns `unknown`; each returns its row's proposed code (`external_cli_invalid_args`, `external_cli_model_unavailable`, `external_cli_needs_signin`, `external_cli_failed`, `external_cli_turn_limit`, or `network` for the transport stream error), and the chat line is that code's §13.8.3 sentence with `{cli}` filled
+
+#### S-134: CLI sign-in failure says what to do and nothing raw
+**Traces to**: FR-092, FR-093 · **Category**: Happy Path
+- **Given** a fake CLI exiting non-zero with an auth failure and a stderr tail carrying a token-shaped string
+- **When** the run fails in a chat
+- **Then** the error line reads the W3 sign-in sentence with the CLI's name and no stderr text on it; the masked tail appears only in the Verbose/Debug technical details; retryable is false
+
+#### S-135: The generic line remains only for the unknown case
+**Traces to**: FR-092 · **Category**: Alternate Path
+- **Given** a failure with no matcher match, no structured provider facts and no dispatch (the reserved case of §13.8.2)
+- **When** it is translated
+- **Then** the generic `unknown` line is shown unchanged — the one case the generic copy keeps
+
+#### S-136: CLI stderr never crosses to the main line
+**Traces to**: FR-093 · **Category**: Error Path
+- **Given** a CLI stderr tail containing a file path, a flag with its value, and a key-shaped string
+- **When** the failure is shown at Normal, Verbose and Debug
+- **Then** no path, no flag-with-value text and no key-shaped string appear on the main line at any level; the masked tail appears only in technical details, and gateway.log keeps the raw text
+
+#### S-137: The new lines pass the voice guard
+**Traces to**: FR-092 · **Category**: Happy Path
+- **Given** the §13.8.3 proposed lines W1–W12 as catalogue fixtures
+- **When** the voice guard (§13.4) runs over them
+- **Then** it passes: no product-as-actor, no "we/our/us", no "please" outside the D48 sentence, no "!", no emoji, sentence case; `{cli}` is in the closed slot vocabulary and every slot renders a real value
+
 ### Feature: connection logging
 
 #### S-80: Outline — failure class in the log
@@ -2279,6 +2395,8 @@ Tests are written **before** code by the one qa-lead RED author; CHECK by a diff
 | T-30 | `pkg/gateway::TestScheduleFailedBodyHasNoRawError` | Integration | S-01, S-90 | masking + translation |
 | T-51 | `pkg/gateway::TestSplitRegisteredValueMaskedThroughRealPath` (DS-SEC row 15: a fake provider HTTP server — the only stub, at the network boundary — returns the DS-EXTRACT row 17 `text/plain` error body; the real provider client, error capture, extraction, masking, transcript write, notification router, logger and replay run unchanged; each of the six surfaces is reached through its real producer — a chat turn failing finally (main line, technical details, log line), the same body on a fallback hop answered by a second fake model (fallback note), a Calendar-scheduled task failing (centre body, §15.4), and a reload (replayed history); asserts that no substring of 4 or more characters of the registered value appears on any surface and that `[redacted]` does; mutation check: selecting the first line before masking must make it fail with `AbC123x` visible) | Integration | S-90, S-92 | D81, R2-MAJ-001 |
 | T-44 | `pkg/gateway::TestPart1NoNewOutboundSend` (the router never publishes outbound) + `TestPublishChannelAlertUnchanged` (characterisation of today's alert through the real `scheduledRunner` failure path) | Integration | FR-090 | D62 boundary |
+| T-52 | `pkg/agent::TestTurnFailureKindClassification` (#1857; RED first: the §13.8.2 fixture set — every C1–C7 CLI wording shape through `SanitizeRunnerError`/`TranslateTurnError` returns its proposed code and never `unknown`; the A4/A5 residual dispatched attempts return `provider_error`/`provider_request_rejected` at the terminal presentation while `classifyByProviderError` still returns `CodeUnknown` so `pkg/agent/media_downgrade.go::outcomeFallbackEligible` is byte-identically unchanged; the reserved case of S-135 still returns `unknown`) | Unit | S-133, S-135 | FR-092, OQ-1857-4 |
+| T-53 | `pkg/agent::TestSanitizeRunnerErrorSafeFacts` (#1857; a CLI stderr tail with a path, a flag-with-value and a key-shaped string: the main line is the fixed §13.8.3 sentence with `{cli}` filled, no raw text at any level, the masked tail only in technical details, gateway.log keeps the raw text; the §13.8.3 lines pass the voice guard) | Unit | S-134, S-136, S-137 | FR-093 |
 | T-31 | `tests/e2e/notifications-centre.spec.ts` (filters, navigate, states, delete, clear all, two tabs, offline delete reconcile) | E2E | S-03, S-05, S-11, S-22, S-24, S-43, S-100 | user path |
 | T-32 | `tests/e2e/notifications-needs-you.spec.ts` (approval in another tab, resolve everywhere, D70 rule, no modal, delete keeps request) | E2E | S-10, S-23, S-45, S-46, S-97 | D19, D30, D80 |
 | T-33 | `tests/e2e/notifications-preferences.spec.ts` (switches, locks, workspace tri-state, unreadable, conflict) | E2E | S-30, S-31, S-32, S-34, S-37, S-39 | preferences UI |
@@ -2624,6 +2742,8 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 | FR-083 | Every new or changed surface MUST meet §16A (keyboard order, focus trap and repair, single announcements, reduced motion, 320 px reflow). | R-NC-2, R-PU-1…4, R-SL-2/4/7 |
 | FR-090 | Part 1 MUST NOT add any outbound send; `publishChannelAlert` stays unchanged until Part 2 replaces it, pinned by a characterisation test. | D62, R-EXT-12 |
 | FR-091 | Every behaviour change that a user sees MUST have the matching user-facing documentation update of §25 in the same cut, audited by docs-verifier. | DoD |
+| FR-092 | No turn failure with a known safe reason MUST end in the generic `unknown` line: every failure kind of §13.8.2 MUST classify to its row's code and show its §13.8.3 sentence; the generic line remains only for a failure with no known safe reason (S-135). The media strip-retry gate's classifier input MUST stay byte-identical (`outcomeFallbackEligible` keeps reading `CodeUnknown` from `classifyByProviderError`; only the terminal presentation changes, OQ-1857-4). *(#1857 amendment — pending founder review, D85)* | #1857, ADR-051 |
+| FR-093 | The CLI-sanitizer path MUST keep raw CLI stderr off every user-facing surface: the main line carries only the fixed §13.8.3 sentence with safe facts (CLI name, model, counts); the masked stderr tail appears only at Verbose/Debug technical details; gateway.log keeps the raw text. No file path, no command-line text and no secret on the main line at any level. *(#1857 amendment — pending founder review, D85)* | #1857, ADR-051 §RD5, R-SEC-1 |
 
 ---
 
@@ -2736,6 +2856,8 @@ One row per `screen` and per action `kind` of §7.6: required ids present → na
 | D82 | FR-070 | S-90 (DS-SEC row 13) | T-13 | DOC-12 |
 | D83 | FR-005, FR-005a | S-15, S-16 | T-39 | DOC-01 |
 | D84 | FR-034 | S-53, S-124 | T-34 | DOC-02, DOC-09 |
+| FR-092, FR-093 (#1857 amendment) | FR-092, FR-093 | S-133, S-134, S-135, S-136, S-137 | T-52, T-53 | DOC-02, DOC-08, DOC-12 (TODOs pending the founder's wording review, §13.8.3) |
+| D85 (placeholder — **pending founder review**) | FR-092, FR-093 | S-133…S-137 | T-52, T-53 | DOC-02, DOC-08, DOC-12 |
 | (accessibility) | FR-083 | S-118, S-119, S-120, S-121 | T-49 | DOC-01 |
 | (documentation) | FR-091 | every scenario mapped in this table's Docs column | docs-verifier audit | DOC-01…DOC-15 (DOC-15: index entries) |
 
@@ -2804,6 +2926,8 @@ The implementing leads draft every page below in the same cut (FR-091); `docs-ve
 | DOC-16 | `docs/previews.md` | changed | (round-2 R2-MAJ-014) The copy-link steps (today step 4, "Use the copy button on the card…"): the permanent helper text under **Copy link** saying who can open the link and until when (the link is the credential), and that the button's label reads "Copied" for 2 s instead of a pop-up (§16, S-99) |
 
 No user-visible effect, so no page: the router refactor, file locking, the recipient file-name hash, the wording manifest, the voice guard.
+
+**#1857 amendment (draft, §13.8):** DOC-02 (chat system lines) and DOC-08 (providers and models) gain the new turn-failure lines of §13.8.3, the five `external_cli_*` codes' copy and the reserved generic-line case; DOC-12 gains nothing new (the fail-closed rule is unchanged) but keeps its masking passage accurate for the CLI path. These TODOs are fixed when the founder approves the wording — the amendment lands its documentation rows with the code, per FR-091.
 
 ---
 
@@ -2987,6 +3111,21 @@ Founder answer given 2026-11-05, put by team-lead and recorded here the same day
 |---|---|---|---|
 | W1 — the banner and chat line shown when the page loses the server | A: drop the sentence "Your agents keep working." New text, on both surfaces, when the server is unreachable: "Can't reach the server right now. This page reconnects on its own when it's back." After reconnecting, the user sees what happened | D84 | §11.2 catalogue row, §11.3, §13.1 VS-5, §13.5 FE-076, S-53, S-124, U12, FR-034, DOC-02, DOC-09 |
 
+### 30.4 Open for #1857 (put with the wording review — pending founder/architect answers)
+
+The #1857 amendment's open decisions (§13.8). Each is listed with options and a recommendation; none is decided in the draft. The founder's wording review rules on W1–W12 as a pattern (D65); these questions travel with it.
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| OQ-1857-1 | May the CLI's own stderr wording be quoted on the main line the way a provider's message is (`provider_says`, mask → extract → cap)? | **A**: yes — run CLI stderr through the same pipeline and quote it · **B**: no — fixed sentences with safe facts only (CLI name, model, counts); the masked stderr tail stays in Verbose/Debug technical details and gateway.log | **B**. CLI stderr is machine text (paths, command lines, stack traces) — exactly what the sanitizer must keep off the message; the provider-quote precedent (D28) was for provider *messages*, a different text class |
+| OQ-1857-2 | New wire codes for the CLI kinds, or map onto existing ones? | **A**: add the five `external_cli_*` codes of §13.8.2 (contract enum change, one atomic WP-0-style change) · **B**: reuse existing codes (`provider_auth_failed` for sign-in, `model_unavailable` for no-route, `provider_request_rejected` for flag parse) — no contract change, but wrong owners and wrong remedies | **A**. A CLI worker is not the model provider; reusing provider codes misattributes the fault and breaks the copy rules (a `config` line must not tell the user to retry, an auth line must not say "switch model"). Architect owns the contract shape |
+| OQ-1857-3 | Is the *name* of the offending CLI flag safe to show (e.g. "the --model option was given twice")? | **A**: parse the flag name out of the stderr and validate it against a known flag list before showing · **B**: never name the flag — "an option was invalid or given twice" | **B** initially (fail-closed); **A** can follow later if the architect pins a validated per-CLI flag list with its own tests |
+| OQ-1857-4 *(architect)* | Does a dispatched-but-unclassified provider attempt become `provider_error` at the terminal presentation (A4/A5), keeping `unknown` only for genuinely nothing-known failures — without touching the media strip-retry gate? | **A**: yes, terminal-presentation-only · **B**: keep `unknown` at the terminal too (the generic line stays for residual shapes) | **A**. The attempt was dispatched; §14.1's `unknown` row exists for exactly the residual class, and the FR-017 gate (`outcomeFallbackEligible`) reads `classifyByProviderError`, not the presentation — both facts verified in the sweep |
+| OQ-1857-5 | The own rate limiter (SEC-26) currently shows the provider-overloaded `rate_limited` copy (B3). Fix in this amendment's scope? | **A**: yes — one new catalogue variant ("I've reached this agent's hourly limit…", attribution `product`) · **B**: defer to the WP-6 wording manifest as a listed id | **A** — the current line misleads about the fault's owner; the fix is one variant, and the sweep pinned the emit site (`loop_run_turn.go::beginIteration`) |
+| OQ-1857-6 *(team-lead)* | `delegated_task_limit` has no producer (B9). Give the delegated-task limit path its emitter in this Epic, or mark the code reserved? | **A**: emitter in scope (the §13.7 slot row already exists) · **B**: mark reserved in §13.7 and drop it from the manifest's live ids until an emitter exists | **B** for this amendment — an emitter is new behaviour, not wording; file it so the code is not silently dead (same class as AF-2) |
+
+Also pending, not a decision: the Mac team's error-case comment on #1857 was not yet posted at draft time (0 comments on 2026-11-15). It is incorporated into §13.8.2/§13.8.3 before the grill when it arrives; if it names kinds already listed, their rows gain the Mac wording evidence.
+
 ---
 
 ## 31. Ambiguity warnings, assumptions, accidental findings
@@ -3043,6 +3182,7 @@ Founder answer given 2026-11-05, put by team-lead and recorded here the same day
 - 2026-11-01 — Round-2 correction (the one final fix round, no third grill): R2-MAJ-002…014 and R2-MIN-001…004 corrected (§34); R2-MAJ-001 held as NS1 and OQ-1/OQ-2 held with the founder, marked in place with no provisional answer.
 - 2026-11-05 — Founder answers applied (spec text only): NS1 = A → D81 (the whole response is masked before the message is selected; DS-SEC row 15 and T-51 drive a value split across two lines through the real path, oracle: no fragment of the value visible); OQ-1 = A → D82 (masking recognises known key shapes only; short fragments with no known prefix are the documented limit, §15.1 and DOC-12); OQ-2 = A → D83 (owner-less tasks, plans, schedules and sessions notify every configured account until per-person access exists). Every held-for-the-founder marker removed.
 - 2026-11-05 — Founder answer W1 = A → D84 (spec text only): the banner and the chat line shown when the page loses the server drop the sentence "Your agents keep working."; when the server is unreachable both read "Can't reach the server right now. This page reconnects on its own when it's back."; after reconnecting the user sees what happened (§11.3, VS-5, S-53, S-124, U12, FR-034).
+- 2026-11-15 — #1857 amendment drafted (spec text only, no code): the failure-kind list and proposed wording are §13.8, swept read-only from release head `5d20e539f` (the notifications branch is ~1,100 commits behind the release, so the sweep did not use this branch's tree); FR-092/FR-093, S-133…S-137, T-52/T-53 added; open questions in §30.4; D85 placeholder "pending founder review" in §32. The Mac team's error-case comment on #1857 was not yet posted at draft time and is incorporated before the grill. The catalogue count in §13.2's premise (29 codes) is 31 at the release head — noted in §13.8.1, no §13.2 text changed by this amendment.
 ---
 
 ## 32. Decisions Log (continues REQ D1–D62)
@@ -3071,6 +3211,7 @@ Founder answer given 2026-11-05, put by team-lead and recorded here the same day
 | D82 | Short key fragments without a known prefix (OQ-1) | Accept and document: masking recognises known key shapes only; a short fragment with no known prefix (under 24 characters, e.g. `…a1b2c3`) is not caught. Stated in the security section (§15.1) and in the user-facing limits on the security page (DOC-12); DS-SEC row 13 pins it | Such a fragment cannot be told apart from ordinary text; hiding every provider message with a 6+ character letter-and-digit run (option B) would remove many useful messages | Interview | 2026-11-05 |
 | D83 | Recipients for workspace objects and owner-less sessions (OQ-2) | Owner-less tasks, plans and Calendar schedules, and sessions with a readable but empty owner, notify every configured account until per-person access exists (#1421); a session started by a signed-in person still notifies only that person; attribution fields are never recipients | No per-account access gate exists today, so every account can already see and act on these objects; option B needs a new contract field and a rule for objects created by agents | Interview | 2026-11-05 |
 | D84 | Browser↔server banner and chat line (W1, VS-5) | The sentence "Your agents keep working." is dropped from the app-wide banner and the open-chat line. When the server is unreachable both read "Can't reach the server right now. This page reconnects on its own when it's back." After reconnecting, the user sees what happened: finished work in the refreshed history, or the existing Interrupted notice if the gateway restarted | The browser cannot tell a dropped connection from a stopped gateway, so neither surface may claim the agents are still working. Founder: "W1 = A" | Interview | 2026-11-05 |
+| D85 | Turn-failure kinds and wording (#1857) | **PENDING FOUNDER REVIEW** — the requirement (FR-092/FR-093), the failure-kind list (§13.8.2), the proposed wording (§13.8.3 W1–W12) and the open questions (§30.4 OQ-1857-1…6) await the founder's wording review and answers; nothing in §13.8 is decided or implemented until then. Placeholder row so the traceability matrix stays complete; this row is filled with the founder's answers when the review lands | The founder calls the generic line the worst possible message (#1857, 2026-11-15); the wording pattern is his review, per D65 | Issue #1857; sweep at release head `5d20e539f` | 2026-11-15 |
 
 ---
 
