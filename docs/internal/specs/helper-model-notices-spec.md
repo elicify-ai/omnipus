@@ -723,7 +723,10 @@ RED rule: new-behaviour tests fail on the release head with a saved log. Regress
 |---|---|---|---|---|---|
 | 1 | 429, Retry-After 10, then 200 | happy | retry line then recovered (1 retry) in both chats | Named retry row; recovered | probe run-03 shape |
 | 2 | 429, Retry-After 1, then 200 | min wait | countdown starts at 0:01; recovered | Named retry row | smallest wait the frame allows |
-| 3 | 429, Retry-After 300, then 200 | over the cap | countdown starts at most 2:00 | Named retry row | honoured wait capped at 120 s |
+| 3 | 429, Retry-After 120, then 200 | at the cap | countdown starts at 2:00; recovered | Named retry row | largest wait the retry policy honours |
+| 3b | 429, Retry-After 300 on the helper's first model; its fallback model answers 200 | over the cap | no retry is scheduled and no retry line or named retry row appears in either chat; the fallback model answers at once (fake-model request log: 1 + 1 calls) | Named retry row (absent) | the unchanged retry policy skips a wait above 120 s and moves to the next model; it is not capped |
+
+Correction 2026-11-15 (chief, Q1 A, 20:28Z): dataset row 3 used to expect `Retry-After: 300` to show a countdown capped at 2:00. That was wrong: the unchanged retry policy (`pkg/providers/retry_plan.go::FallbackChain.inPlaceRetry`, the A-4 ceiling) skips any wait above 120 s before scheduling or announcing a retry. Row 3 now tests exactly 120 s, and row 3b tests the over-the-cap skip. The retry policy is not changed by this feature.
 | 4 | silent 29 s, then answer | below threshold | no silence notice anywhere | Named silence row | boundary |
 | 5 | silent 35 s, then answer | above threshold | silence notice at ≥30 s in both chats, cleared on answer | Named silence row; clears | |
 | 6 | 500 on every call | error | helper fails; named row removed when the helper ends | Named row leaves (fails) | |
