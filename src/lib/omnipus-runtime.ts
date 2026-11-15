@@ -10,8 +10,9 @@ import type { ChatMessage, MediaAttachment } from "@/store/chat";
 import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
-import { takeLibraryAttachments, mediaRefURL, subscribeLibraryAttachments, libraryAttachmentCount } from "@/lib/library-attachment";
-import { draftOwnerOf, endDraft, isOwnerQuote, noteDraftContent } from "@/lib/draft-target";
+import { takeLibraryAttachments, mediaRefURL } from "@/lib/library-attachment";
+import { queueTargetFor } from "@/store/chat/queue-target";
+import { draftMayGoTo, draftOwnerOf, endDraft, isOwnerQuote, noteDraftContent, takeSessionCreatedForDraft } from "@/lib/draft-target";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
 import { isCancelledTurn, type StatusSuffixInput } from "@/lib/truncation";
 
@@ -270,6 +271,13 @@ export function convertMessage(
 
 // ── Runtime hook ──────────────────────────────────────────────────────────────
 
+/** How the notice names a chat: its title when the session store knows it, else a plain description. */
+function chatLabel(chatId: string | undefined): string {
+  if (!chatId) return "a new chat";
+  const known = Object.values(useSessionStore.getState().sessionByWorkspace ?? {}).find((d) => d?.id === chatId);
+  return known?.title ? `"${known.title}"` : "the chat that is open now";
+}
+
 /** Put an unsent draft back into the composer (text first, files that were already uploaded as they are). */
 function restoreDraft(composer: ReturnType<typeof useExternalStoreRuntime>["thread"]["composer"], text: string, attachments: readonly CompleteAttachment[]): void {
   const current = composer.getState().text;
@@ -332,14 +340,14 @@ export function useOmnipusRuntime() {
       // #1428 step 2: the chat this draft was written in. Taken first, so a send that ends early below
       // (nothing to send, a failed upload) cannot leave its mark behind for a later draft.
       const owner = draftOwnerOf(message);
-      // Fallback: when the owner is missing, or the draft was written with no chat and a chat is attached now,
-      // nobody can say where it belongs. It goes back into the box with a notice and is never sent.
-      if (!owner && useSessionStore.getState().activeSessionId) {
+      const attached = queueTargetFor(useSessionStore.getState().activeSessionId);
+      // A draft goes only to the chat it was written in. Anything else, and any draft whose owner nobody can
+      // tell, is not sent: it goes back into the box and the notice names where Send would go now.
+      if (!draftMayGoTo(owner, attached, takeSessionCreatedForDraft())) {
         restoreDraft(runtime.thread.composer, text, message.attachments ?? []);
-        addToast({ message: "Could not tell which chat this message was written in, so it was not sent. It is back in the message box.", variant: "error" });
+        addToast({ message: `Not sent. Your text is back. Sending now goes to ${chatLabel(attached)}.`, variant: "error" });
         return;
       }
-      const expectedSessionId = owner || undefined;
 
       // Pull the media:// refs (and display metadata) the attachment adapter
       // stashed during send(), keyed by attachment id.
@@ -372,7 +380,7 @@ export function useOmnipusRuntime() {
       // itself (not lib.mediaId) — a bare /api/v1/media/{id} route 404s for
       // workspace-scoped entries (HandleMedia is a legacy-registry lookup
       // that rejects any id containing "/"); see mediaRefURL's doc comment.
-      for (const lib of takeLibraryAttachments()) {
+      for (const lib of takeLibraryAttachments((chat) => (owner ? chat === owner : chat === undefined || chat === attached))) {
         mediaRefs.push(lib.ref);
         attachments.push({
           type: isImageAttachment(lib.filename, lib.contentType) ? "image" : "file",
@@ -393,31 +401,27 @@ export function useOmnipusRuntime() {
       const modelChoice = nextModel
         ? { model_name: nextModel, ...(nextModelProvider ? { provider: nextModelProvider } : {}), ...(nextEffort ? { reasoning_effort: nextEffort } : {}) }
         : {};
-      // sendMessage holds the draft for its own chat if another chat is attached.
-      const target = expectedSessionId ? { expectedSessionId } : {};
       if (mediaRefs.length > 0) {
-        sendMessage(text, { mediaRefs, attachments, ...modelChoice, ...target });
+        sendMessage(text, { mediaRefs, attachments, ...modelChoice });
       } else {
-        sendMessage(text, nextModel || expectedSessionId ? { ...modelChoice, ...target } : undefined);
+        sendMessage(text, nextModel ? modelChoice : undefined);
       }
     },
     onCancel: async () => { cancelStream() },
   });
-  // #1428 step 2: the chat a draft (text, files or a staged library file) is written in rides in the
+  // #1428 step 2: the chat a draft (text or files) is written in rides in the
   // composer quote slot, so each submission carries its own owner.
   useEffect(() => {
     const composer = runtime.thread.composer;
     const note = () => {
       const state = composer.getState();
-      const hasContent = state.text.trim().length > 0 || state.attachments.length > 0 || libraryAttachmentCount() > 0;
+      const hasContent = state.text.trim().length > 0 || state.attachments.length > 0;
       const owner = noteDraftContent(hasContent);
       if (owner ? state.quote?.messageId !== owner.messageId : isOwnerQuote(state.quote)) composer.setQuote(owner);
     };
     const unsubscribe = composer.subscribe(note);
-    const unsubscribeLibrary = subscribeLibraryAttachments(note);
     return () => {
       unsubscribe();
-      unsubscribeLibrary();
       endDraft();
     };
   }, [runtime]);

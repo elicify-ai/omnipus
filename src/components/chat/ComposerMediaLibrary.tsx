@@ -40,6 +40,8 @@ import {
 } from '@/lib/api'
 import type { MediaLibraryEntry } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useSessionStore } from '@/store/session'
+import { queueTargetFor } from '@/store/chat/queue-target'
 import { useUiStore } from '@/store/ui'
 import {
   addLibraryAttachment,
@@ -220,7 +222,8 @@ function PickerRow({ entry, busy }: { entry: MediaLibraryEntry; busy: boolean })
  * (the ref is dropped before send, so onNew never threads it).
  */
 export function LibraryAttachmentChips() {
-  const attachments = useLibraryAttachments()
+  const chat = queueTargetFor(useSessionStore((s) => s.activeSessionId))
+  const attachments = useLibraryAttachments().filter((a) => a.chat === chat) // #1428 step 2: only this chat's files
   if (attachments.length === 0) return null
   return (
     <div className="flex flex-wrap gap-[var(--space-1)] px-[var(--space-1)]" data-testid="library-attachment-chips">

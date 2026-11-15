@@ -38,6 +38,30 @@ export function noteDraftContent(hasContent: boolean): DraftQuote | undefined {
   return draftChat ? { text: '', messageId: OWNER_PREFIX + draftChat } : undefined
 }
 
+let createdForDraft: string | undefined
+
+/** The upload adapter made this chat for the draft being sent (a first message that carries a file). */
+export function noteSessionCreatedForDraft(sessionId: string): void {
+  createdForDraft = sessionId
+}
+
+/** Read and clear: whether the attached chat is the one this send created. Called once per submission. */
+export function takeSessionCreatedForDraft(): string | undefined {
+  const id = createdForDraft
+  createdForDraft = undefined
+  return id
+}
+
+/**
+ * May a submission go to the chat attached now? A draft with an owner goes only to its owner. A draft with no
+ * owner (written before any chat existed, or never from the composer) goes only when no real chat is attached
+ * (the send makes one) or the attached chat is the one its own upload just created.
+ */
+export function draftMayGoTo(owner: string | undefined, attached: string | undefined, createdForThisSend: string | undefined): boolean {
+  if (owner) return owner === attached
+  return !attached || attached === createdForThisSend
+}
+
 /** The draft is over (nothing is left in the composer), or the composer went away. */
 export function endDraft(): void {
   draftStarted = false

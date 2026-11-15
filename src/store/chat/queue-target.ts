@@ -156,18 +156,3 @@ export function selectQueuedRows(
       typeof item !== 'string' && !shownIds.has(item.id) && queuedItemShownHere(item, activeSessionId))
     .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
 }
-
-/**
- * #1428 step 2: a draft written in one chat reaches Send while another chat is attached. It is held for the
- * chat it was written in (with its attachments), never sent into the attached chat. Null when there is no
- * mismatch: no recorded chat, a chat that has no id yet, or the attached chat is the one it was written in.
- */
-export function holdDraftForItsChat(
-  message: QueuedOutboundMessage,
-  expectedSessionId: string | undefined,
-  activeSessionId: string | null,
-): QueuedOutboundMessage | null {
-  const target = queueTargetFor(expectedSessionId ?? null)
-  if (!target || target === activeSessionId) return null
-  return { ...message, seq: nextQueueSeq(), targetSessionId: target }
-}

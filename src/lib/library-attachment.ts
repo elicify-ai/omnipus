@@ -19,6 +19,9 @@
 // remove updates the chip row synchronously without prop-drilling.
 
 import { useSyncExternalStore } from 'react'
+import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
+import { queueTargetFor } from '@/store/chat/queue-target'
 
 /** One pending library-ref attachment, drained by onNew on send. */
 export interface LibraryAttachment { // not-wire-format: client-side UI store for pending composer attachments; never serialized over the wire
@@ -32,6 +35,8 @@ export interface LibraryAttachment { // not-wire-format: client-side UI store fo
   filename: string
   /** MIME sniffed from the stored bytes. */
   contentType: string
+  /** #1428 step 2: the chat it was staged in (undefined: no chat yet). It is sent only from that chat. */
+  chat?: string
 }
 
 let attachments: LibraryAttachment[] = []
@@ -88,10 +93,10 @@ export function mediaRefURL(ref: string): string {
 
 /** Add a pending library attachment. Returns the new attachment's id. */
 export function addLibraryAttachment(
-  entry: Omit<LibraryAttachment, 'id'>,
+  entry: Omit<LibraryAttachment, 'id' | 'chat'>,
 ): string {
   const id = `lib-${Date.now()}-${counter++}`
-  attachments = [...attachments, { id, ...entry }]
+  attachments = [...attachments, { id, ...entry, chat: queueTargetFor(useSessionStore.getState().activeSessionId) }]
   emit()
   return id
 }
@@ -117,21 +122,29 @@ export function clearLibraryAttachments(): void {
  * send guarantees a single send cannot re-thread the same ref into a later
  * message if the send itself fails downstream.
  */
-export function takeLibraryAttachments(): LibraryAttachment[] {
-  const drained = attachments
+export function takeLibraryAttachments(belongs: (chat: string | undefined) => boolean = () => true): LibraryAttachment[] {
+  const drained = attachments.filter((a) => belongs(a.chat))
   if (drained.length > 0) {
-    attachments = []
+    attachments = attachments.filter((a) => !belongs(a.chat))
     emit()
   }
   return drained
 }
 
-/** Non-reactive subscription and count, for code outside React (the draft-owner note in the runtime). */
-export function subscribeLibraryAttachments(listener: () => void): () => void {
-  return subscribe(listener)
+/**
+ * Enter with only library files staged (no text, no uploaded file) cannot send: the composer counts text and
+ * uploaded files only. Say so instead of doing nothing. True when the submit was refused here.
+ */
+export function refuseLibraryOnlySubmit(text: string, uploadedFiles: number): boolean {
+  if (text.trim() || uploadedFiles > 0) return false
+  if (libraryAttachmentsFor(queueTargetFor(useSessionStore.getState().activeSessionId)).length === 0) return false
+  useUiStore.getState().addToast({ message: 'Add a message to send the library file.', variant: 'error' })
+  return true
 }
-export function libraryAttachmentCount(): number {
-  return attachments.length
+
+/** The staged files that belong to this chat (the composer shows only these). */
+export function libraryAttachmentsFor(chat: string | undefined): LibraryAttachment[] {
+  return attachments.filter((a) => a.chat === chat)
 }
 
 /** Reactive read of the pending set for the composer chip row. */

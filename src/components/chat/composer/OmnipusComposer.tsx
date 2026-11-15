@@ -45,6 +45,7 @@ import { isGoalRunning } from '@/lib/goalActivity'
 import { fetchAgents } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from '../AttachmentCard'
 import { ComposerMediaLibraryButton, LibraryAttachmentChips } from '../ComposerMediaLibrary'
+import { refuseLibraryOnlySubmit } from '@/lib/library-attachment'
 import { cn } from '@/lib/utils'
 import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
 import type { UseSlashMenuResult } from '@/hooks/useSlashMenu'
@@ -864,6 +865,11 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
             // locally and prevent it from reaching the backend. This converges the
             // typed+Enter path with the palette selection path.
             if (slashMenu.interceptClientCommand()) {
+              e.preventDefault()
+              return
+            }
+            // #1428 step 2: library files alone cannot send; say so instead of doing nothing.
+            if (profile.mediaLibrary && refuseLibraryOnlySubmit(composerRuntime.getState().text ?? slashMenu.inputValue, composerRuntime.getState().attachments?.length ?? 0)) {
               e.preventDefault()
               return
             }

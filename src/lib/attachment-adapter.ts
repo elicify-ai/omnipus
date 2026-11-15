@@ -16,6 +16,7 @@
 //              omnipus-runtime.ts) can thread it into our WS transport.
 //   remove() — drop any stashed ref.
 
+import { noteSessionCreatedForDraft } from "@/lib/draft-target";
 import type {
   AttachmentAdapter,
   CompleteAttachment,
@@ -90,6 +91,7 @@ async function ensureSession(): Promise<string> {
         useWorkspacesStore.getState().activeWorkspaceId ?? undefined,
       );
       setActiveSession(created.id, created.agent_id, null);
+      noteSessionCreatedForDraft(created.id); // #1428 step 2: the draft being sent owns this new chat
       return created.id;
     })().finally(() => {
       sessionEnsure = null;

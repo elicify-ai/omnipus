@@ -26,8 +26,8 @@ import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
 import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent, retryAgentsRoster } from '../recipientSend'
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
-import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, QueuedOutboundMessage, SessionChatState } from '../types'
-import { holdDraftForItsChat, mergeDrainBatch, stampQueuedMessage } from '../queue-target'
+import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
+import { mergeDrainBatch, stampQueuedMessage } from '../queue-target'
 import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
 import { settleAllCancelAcks } from '../stop-checkpoint'
@@ -86,18 +86,10 @@ function buildMetadataFrame(
 /** Resolves the client-generated correlation id + queued timestamp for a
  * send, defaulting both when the caller (a fresh sendMessage call, not a
  * queue replay) didn't supply them. */
-function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?: string; mediaRefs?: string[]; attachments?: MediaAttachment[] }) {
+function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?: string }) {
   const clientMessageId = opts?.clientMessageId ?? generateId()
   const queuedAt = opts?.queuedAt ?? new Date().toISOString()
-  // The queue item keeps the message's attachments, so a re-enqueue (offline, held for another chat) never loses them.
-  const queuedMessage: QueuedOutboundMessage = {
-    id: clientMessageId,
-    content,
-    timestamp: queuedAt,
-    ...(opts?.mediaRefs?.length ? { mediaRefs: opts.mediaRefs } : {}),
-    ...(opts?.attachments?.length ? { media: opts.attachments } : {}),
-  }
-  return { clientMessageId, queuedAt, queuedMessage }
+  return { clientMessageId, queuedAt, queuedMessage: { id: clientMessageId, content, timestamp: queuedAt } }
 }
 
 /** Builds the optimistic user bubble for a send, carrying the correlation id
@@ -448,21 +440,6 @@ function outboundWorkspaceId(sessionId: string | null): string {
     : ''
 }
 
-/** #1428 step 2: a draft written in another chat waits for that chat (queued with its attachments); it is never sent into the attached one. */
-function holdDraftForOtherChat(
-  get: () => ChatStore,
-  content: string,
-  message: QueuedOutboundMessage,
-  expectedSessionId: string | undefined,
-  activeSessionId: string | null,
-): boolean {
-  const held = holdDraftForItsChat(message, expectedSessionId, activeSessionId)
-  if (!held) return false
-  get().enqueueOutboundMessage(content, held, true)
-  useUiStore.getState().addToast({ message: 'Your message was written in another chat. It will be sent when that chat is open.', variant: 'default' })
-  return true
-}
-
 export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
   return {
     enqueueOutboundMessage: (content, queuedMessage, alreadyAccepted) => {
@@ -555,7 +532,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
 
     sendMessage: (content, opts) => {
       if (blockSendForWorkspaceEntry('send')) return
-      const { mediaRefs = [], attachments = [] } = opts ?? {}
+      const mediaRefs = opts?.mediaRefs ?? []
+      const attachments = opts?.attachments ?? []
       const { clientMessageId, queuedAt, queuedMessage: untargetedMessage } = beginSend(content, opts)
       // Phase 1 / FR-010: per-turn model override. Trim and strip empty
       // strings so absent and "" are equivalent (the WS frame is omitted
@@ -564,7 +542,6 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
-      if (holdDraftForOtherChat(get, content, untargetedMessage, opts?.expectedSessionId, rawActiveSessionId)) return // #1428 step 2: held for its own chat
       // #1428: a queued message remembers the chat it was typed in.
       const queuedMessage = stampQueuedMessage(untargetedMessage, rawActiveSessionId, getPendingFirstSend(get())?.clientMessageId, opts?.queueSeq)
       // Ordinary sends, mid-turn steering and new-answer requests share the
