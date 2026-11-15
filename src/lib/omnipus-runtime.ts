@@ -3,7 +3,7 @@
 
 import { useEffect } from "react";
 import { useExternalStoreRuntime } from "@assistant-ui/react";
-import type { ThreadMessageLike, AppendMessage } from "@assistant-ui/react";
+import type { ThreadMessageLike, AppendMessage, CompleteAttachment } from "@assistant-ui/react";
 import { useChatStore } from "@/store/chat";
 import { useSessionStore } from "@/store/session";
 import type { ChatMessage, MediaAttachment } from "@/store/chat";
@@ -270,6 +270,13 @@ export function convertMessage(
 
 // ── Runtime hook ──────────────────────────────────────────────────────────────
 
+/** Put an unsent draft back into the composer (text first, files that were already uploaded as they are). */
+function restoreDraft(composer: ReturnType<typeof useExternalStoreRuntime>["thread"]["composer"], text: string, attachments: readonly CompleteAttachment[]): void {
+  const current = composer.getState().text;
+  composer.setText(current.trim() ? `${text}\n${current}` : text);
+  for (const att of attachments) void composer.addAttachment(att);
+}
+
 export function useOmnipusRuntime() {
   const messages = useChatStore((s) => s.messages);
   const toolCalls = useChatStore((s) => s.toolCalls);
@@ -324,7 +331,15 @@ export function useOmnipusRuntime() {
         .join("\n");
       // #1428 step 2: the chat this draft was written in. Taken first, so a send that ends early below
       // (nothing to send, a failed upload) cannot leave its mark behind for a later draft.
-      const expectedSessionId = draftOwnerOf(message);
+      const owner = draftOwnerOf(message);
+      // Fallback: when the owner is missing, or the draft was written with no chat and a chat is attached now,
+      // nobody can say where it belongs. It goes back into the box with a notice and is never sent.
+      if (!owner && useSessionStore.getState().activeSessionId) {
+        restoreDraft(runtime.thread.composer, text, message.attachments ?? []);
+        addToast({ message: "Could not tell which chat this message was written in, so it was not sent. It is back in the message box.", variant: "error" });
+        return;
+      }
+      const expectedSessionId = owner || undefined;
 
       // Pull the media:// refs (and display metadata) the attachment adapter
       // stashed during send(), keyed by attachment id.

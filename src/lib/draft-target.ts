@@ -44,7 +44,11 @@ export function endDraft(): void {
   draftChat = undefined
 }
 
-/** The chat a submitted message was written in, from its own quote; undefined when it carries none. */
+/**
+ * The chat a submitted message was written in, from its own quote. undefined: no owner (a draft written with no
+ * chat attached, or a message that never came from the composer). The runtime treats that as doubt when a chat
+ * is attached now.
+ */
 export function draftOwnerOf(message: { metadata?: { custom?: Record<string, unknown> } }): string | undefined {
   const quote = message.metadata?.custom?.quote as { messageId?: string } | undefined
   return isOwnerQuote(quote) ? quote?.messageId?.slice(OWNER_PREFIX.length) : undefined

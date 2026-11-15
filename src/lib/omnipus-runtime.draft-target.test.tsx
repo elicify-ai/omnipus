@@ -235,4 +235,39 @@ describe('useOmnipusRuntime: the chat a draft was written in', () => {
     expect(last).toStrictEqual(['from A', 'chat-a', ['media://a']])
     expect(sent().slice(0, 60).every(([, chat]) => chat === 'chat-b')).toBe(true)
   })
+
+  // Chief, 12:55Z: a draft with no owner is doubt, never a send into the attached chat.
+  it('a message that carries no owner while a chat is attached is not sent and goes back into the box with a notice', async () => {
+    const addToast = vi.fn()
+    useUiStore.setState({ addToast })
+    const { result } = renderHook(() => useOmnipusRuntime())
+    const thread = result.current.thread
+    await act(async () => { thread.append({ role: 'user', content: [{ type: 'text', text: 'appended without an owner' }] }) })
+    expect(sent()).toStrictEqual([])
+    expect(thread.composer.getState().text).toBe('appended without an owner')
+    expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error', message: expect.stringContaining('not sent') }))
+  })
+
+  it('a draft written with no chat attached, sent after a chat was attached, is not sent and goes back into the box', async () => {
+    useSessionStore.setState({ activeSessionId: null })
+    const addToast = vi.fn()
+    useUiStore.setState({ addToast })
+    const { result } = renderHook(() => useOmnipusRuntime())
+    const composer = result.current.thread.composer
+    act(() => { composer.setText('typed with no chat') })
+    switchTo('chat-b')
+    await submit(composer)
+    expect(sent()).toStrictEqual([])
+    expect(composer.getState().text).toBe('typed with no chat')
+    expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
+  })
+
+  it('a library file staged with no owner stays staged when the send goes back into the box', async () => {
+    const { result } = renderHook(() => useOmnipusRuntime())
+    const thread = result.current.thread
+    act(() => { addLibraryAttachment({ mediaId: 'm1', ref: 'media://workspace/w/m1', filename: 'lib.png', contentType: 'image/png' }) })
+    await act(async () => { thread.append({ role: 'user', content: [{ type: 'text', text: 'no owner' }] }) })
+    expect(sent()).toStrictEqual([])
+    expect(takeLibraryAttachments().map((a) => a.ref)).toStrictEqual(['media://workspace/w/m1'])
+  })
 })
