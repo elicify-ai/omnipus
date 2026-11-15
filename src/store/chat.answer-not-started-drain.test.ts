@@ -92,6 +92,23 @@ describe('#1834 answer_not_started releases the queued follow-up', () => {
     expect(useChatStore.getState().isStreaming).toBe(true)
   })
 
+  it('CHECK r2 F1: a delayed old error after Generate again does not release another turn', () => {
+    const { sender, id } = pendingFirstSend(['A follow 1', 'A follow 2'])
+    frame(notStarted(id))
+    expect(sentTexts(sender)).toStrictEqual(['A first', 'A follow 1'])
+    // Generate again re-marks the original row as saved (it is not durable proof of settlement).
+    act(() => {
+      const bucket = useChatStore.getState().sessionsById.a
+      const row = Object.values(bucket.messagesById).find((m) => m.clientMessageId === id)!
+      useChatStore.setState({
+        sessionsById: { ...useChatStore.getState().sessionsById, a: { ...bucket, messagesById: { ...bucket.messagesById, [row.id]: { ...row, firstSendStatus: 'saved' } } } },
+      })
+    })
+    frame(notStarted(id))
+    expect(sentTexts(sender)).toStrictEqual(['A first', 'A follow 1'])
+    expect(queuedTexts()).toStrictEqual(['A follow 2'])
+  })
+
   it('CHECK r1 F2: an error for a background chat does not release another chat\'s queued item', () => {
     const { sender, id } = pendingFirstSend()
     act(() => useSessionStore.getState().setActiveSession('b', 'mia'))
