@@ -22,26 +22,36 @@ import (
 // the chain, so this is where channel users learn about it.
 func (rt *agentLoopRunTurn) providerRetryObserver() providers.RetryObserver {
 	return func(info providers.RetryInfo) {
+		// Issue #1478: the wait is shown by this retry line, never as
+		// silence. #1537 FR-013: a showing silence notice is cleared BEFORE
+		// the retry is published, so the clear can never erase the new
+		// countdown (live, or on replay in last-publish order).
+		if w := rt.providerSilence; w != nil {
+			w.retryScheduled(info.RetryAt)
+		}
+		// #1537: a helper turn's retry also carries its own chat; the hub
+		// publishes the helper copy and the named top-chat copy.
+		top, child := providerNoticeSessions(rt.ts)
 		rt.al.emitEvent(
 			EventKindProviderRetry,
 			rt.ts.eventMeta("runTurn", "turn.llm.retry"),
 			LLMRetryPayload{
-				Attempt:     info.Attempt,
-				Reason:      info.Reason,
-				Provider:    info.Provider,
-				Model:       info.Model,
-				RetryAt:     info.RetryAt,
-				SentAt:      info.SentAt,
-				MaxAttempts: info.MaxAttempts,
-				SessionID:   string(rt.ts.routingSessionID),
+				Attempt:        info.Attempt,
+				Reason:         info.Reason,
+				Provider:       info.Provider,
+				Model:          info.Model,
+				RetryAt:        info.RetryAt,
+				SentAt:         info.SentAt,
+				MaxAttempts:    info.MaxAttempts,
+				SessionID:      top,
+				ChildSessionID: child,
 			},
 		)
+		if child != "" {
+			rt.namedRetryPending.Store(true) // FR-006: cleared when the model answers
+		}
 		// Only the #1280 plan sends it: a C-8 rate-limit retry of an earlier
 		// candidate never did, and the next candidate answers soon anyway.
-		// Issue #1478: the wait is shown by this retry line, never as silence.
-		if w := rt.providerSilence; w != nil {
-			w.retryScheduled(info.RetryAt)
-		}
 		if info.Attempt == 2 && info.MaxAttempts == providers.RetryPlanMaxAttempts {
 			rt.publishRetryNotice()
 		}

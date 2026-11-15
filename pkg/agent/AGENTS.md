@@ -51,11 +51,17 @@ The ten implementation files:
   RESUMES a turn: first run and revival (`SteerLauncher.Dispatch`), the wake
   (`loop_inbound.go::processSteeredSystemWake`), and the bounded post-turn
   steering drain (`steer_turn_drain.go`). Identity is never per-path.
-  **Boot is not one of those paths** — `boot_sweep.go::
-  SteerBootRecovery` never calls it; a steered session still mid-flight at
-  boot is marked `OutcomeInterrupted` and delivered to its parent rather
-  than resumed. (That file's own header says so; this list used to claim
-  boot as a fourth entry point.)
+  **Boot reaches it only through revival.** `boot_sweep.go::
+  SteerBootRecovery.recoverSteered` first lands a restart stop on a steered
+  session still mid-flight at boot (its running tool calls are settled as
+  interrupted); `boot_helper_resume.go::SteerBootRecovery.resumeRestartHelper`
+  then revives an eligible native delegated helper whose lasting state is
+  that restart stop and dispatches it through `SteerLauncher.Dispatch` — the
+  revival path above. Not resumed, and left stopped: third-party workers,
+  `create_task` runs, a session with an accepted Stop still pending, an agent
+  that is no longer registered or a refused workspace; a refused resume is
+  recorded visibly ("Resume did not start."). (This entry used to say boot
+  never resumes a helper; the code wins.)
 - `pkg/agent/steer_turn_drain.go` — after a dispatched child's turn exits,
   drains steering that landed beyond `runTurn`'s final poll through the
   shared continuation dequeue path, with bounded retry and one completion

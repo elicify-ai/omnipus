@@ -431,11 +431,10 @@ func (h *WSHandler) hubProviderRetry(evt agent.Event) {
 		return
 	}
 	frame := generated.ProviderRetryFrame{
-		Type:      string(generated.WsFrameTypeProviderRetry),
-		SessionId: sid,
-		TurnId:    evt.Meta.TurnID,
-		Provider:  p.Provider,
-		Model:     p.Model,
+		Type:     string(generated.WsFrameTypeProviderRetry),
+		TurnId:   evt.Meta.TurnID,
+		Provider: p.Provider,
+		Model:    p.Model,
 		// json.Marshal renders time.Time as RFC3339Nano in the time's own
 		// location — Format(RFC3339Nano) is byte-identical to that, so the
 		// frame strings match what a decoder of the marshaled payload sees.
@@ -446,23 +445,20 @@ func (h *WSHandler) hubProviderRetry(evt agent.Event) {
 		MaxAttempts:       p.MaxAttempts,
 		ErrorCode:         providerRetryErrorCode(p.Reason),
 	}
-	data, err := json.Marshal(frame)
-	if err != nil {
-		logsafeError("ws: marshal provider_retry for hub failed", "session_id", sid, "error", err)
-		return
-	}
 	// Gate finding F3 / spec section 2 (MAJ-108): the retry frame registers
 	// as a projection item under a stable per-turn key - a newer retry for
 	// the same turn replaces the item's frame (the rebuild shows only the
 	// pending attempt), and the item leaves with the turn (forgetTurn at
 	// TurnEnd). Empty-meta publishing never registered the retry with the
 	// projection, so a mid-retry snapshot/rebuild showed a turn with no
-	// visible retry.
-	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeProviderRetry), hubFrameMeta{
-		kind:   hubKindItem,
-		key:    "provider_retry:" + evt.Meta.TurnID,
-		turnID: evt.Meta.TurnID,
-	}, data, nil)
+	// visible retry. #1537: a helper turn's retry goes to the helper's chat
+	// and, named, to the top chat (ws_helper_notices.go).
+	h.hubPublishProviderNotice(string(generated.WsFrameTypeProviderRetry), evt, sid, p.ChildSessionID, false,
+		func(sessionID string, child, agentID *string) ([]byte, error) {
+			copyFrame := frame
+			copyFrame.SessionId, copyFrame.ChildSessionId, copyFrame.AgentId = sessionID, child, agentID
+			return json.Marshal(copyFrame)
+		})
 }
 
 // providerRetryErrorCode maps the retry payload's reason to the frame's
@@ -726,4 +722,7 @@ func (h *WSHandler) hubTurnEnd(evt agent.Event) {
 			hub.forgetTurn(turnID)
 		}
 	}
+	// #1537 FR-012: a helper turn that left a named notice in its top chat
+	// clears it there with exactly one sequenced provider_status `ended`.
+	h.hubHelperNoticeEnded(turnID)
 }
