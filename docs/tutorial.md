@@ -18,19 +18,21 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
 1. **Install and start Omnipus.** Follow the method for your computer in [getting started](getting-started.md), then open `http://localhost:5000`.
 
-   **What you see:** A fresh install opens the setup wizard. If you see a sign-in screen instead, this install has already been set up. Sign in or use a different data directory before continuing.
+   **What you see:** A fresh install you run yourself — the kind [getting started](getting-started.md) covers — opens the setup wizard straight away. If you see a sign-in screen instead, this install has already been set up: sign in and continue. To start again from nothing, point Omnipus at an empty data folder before you open it (set `OMNIPUS_HOME` to that folder, or mount a new Docker data folder).
+
+   On a hosted Omnipus service, or in the desktop app, you sign in first, even before setup. The wizard then shows two setup screens: your name and preferences, then your model provider. You are not asked for a username or password. The sign-in you just used is your account. In the next step, fill in the name, tone, and detail screen, and skip the username and password screens — those appear only when you run Omnipus yourself.
 
    **If it does not look like that:** Check that the Omnipus process or container is running. If the page does not open, or another app is using port `5000`, follow [troubleshooting](troubleshooting.md).
 
-2. **Create the admin account and set your preferences.** On **What should I call you?**, enter your admin username. Continue to **Set your password**, enter at least eight characters, and enter the same password again. Continue through the personal-preferences screen: enter your name and choose the tone and level of detail you prefer. Then open **Select your model provider and default model**.
+2. **Set your preferences, and create the admin account only if the wizard asks.** When you run Omnipus yourself, the first **What should I call you?** screen wants the username for the one account on this install. Continue to **Set your password**, enter at least eight characters, and enter the same password again. On every install, the next **What should I call you?** screen wants your name, **Tone**, and **How much detail**. On a hosted service or the desktop app, that name screen is the first screen. Then open **Select your model provider and default model**.
 
-   **What you see:** Password guidance appears while you type. After the password, another **What should I call you?** screen asks for your name, **Tone** and **How much detail**. Continuing opens **Select your model provider and default model**.
+   **What you see:** A password screen, when there is one, shows guidance while you type. The name screen asks for your name, **Tone**, and **How much detail**. Continuing opens **Select your model provider and default model**.
 
    **If it does not look like that:** Remove any blank username. If you cannot continue from the password screen, check its length and make sure both entries match.
 
 3. **Connect a provider.** Choose a provider on **Select your model provider and default model**. Use its sign-in option when offered, or enter its key. Choose **Default model** and run **Check connection** (or **Check sign-in** for a sign-in provider).
 
-   **What you see:** A successful check unlocks **Finish**. Select it to create the account, save the provider, and sign you in. The last screen introduces **Mia — Assistant**.
+   **What you see:** A successful check unlocks **Finish**. Select it to save the provider and complete setup — on an install you set up yourself, this also creates your admin account and signs you in. The last screen introduces **Mia — Assistant**.
 
    **If it does not look like that:** Read the message beside the connection check. Recopy a rejected key, complete any provider sign-in, or check the custom endpoint when the provider requires one. A local provider must already be running. The [settings](settings.md) page owns the full provider guide.
 
@@ -88,7 +90,7 @@ The table below shows the trail you should have after this walkthrough.
 
 | You created | Where you can find it | What confirms it worked |
 |---|---|---|
-| Admin account and provider | Settings | You can sign in and Mia can answer |
+| Provider, and an admin account only when you run Omnipus yourself | Settings → Providers; the sign-in screen | You can open the app, and Mia can answer |
 | `First project` workspace | Sidebar | Chat opens; Tasks, Calendar, Library, Mail and Team toggle panels; the workspace name or compact-menu Settings opens workspace settings |
 | Teammate agent | Agents and the workspace Team panel | The agent is available for workspace work |
 | First task | Workspace Tasks panel | Its Board card reaches a final status |
