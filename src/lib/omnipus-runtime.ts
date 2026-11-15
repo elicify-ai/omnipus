@@ -1,6 +1,7 @@
 // AssistantUI runtime adapter — bridges the Zustand chat store + WebSocket protocol
 // to useExternalStoreRuntime so AssistantUI primitives can render our messages.
 
+import { useEffect } from "react";
 import { useExternalStoreRuntime } from "@assistant-ui/react";
 import type { ThreadMessageLike, AppendMessage } from "@assistant-ui/react";
 import { useChatStore } from "@/store/chat";
@@ -10,6 +11,7 @@ import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
 import { takeLibraryAttachments, mediaRefURL } from "@/lib/library-attachment";
+import { noteDraftText, takeDraftTarget } from "@/lib/draft-target";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
 import { isCancelledTurn, type StatusSuffixInput } from "@/lib/truncation";
 
@@ -296,7 +298,7 @@ export function useOmnipusRuntime() {
   const nextModelProvider = useChatStore((s) => s.nextModelProvider);
   const nextEffort = useChatStore((s) => s.nextEffort);
 
-  return useExternalStoreRuntime<ChatMessage>({
+  const runtime = useExternalStoreRuntime<ChatMessage>({
     messages,
     isRunning: isStreaming,
     convertMessage: (msg) => {
@@ -373,12 +375,21 @@ export function useOmnipusRuntime() {
       const modelChoice = nextModel
         ? { model_name: nextModel, ...(nextModelProvider ? { provider: nextModelProvider } : {}), ...(nextEffort ? { reasoning_effort: nextEffort } : {}) }
         : {};
+      // #1428 step 2: the chat this draft was written in; sendMessage holds it for that chat if another is attached.
+      const expectedSessionId = takeDraftTarget(text);
+      const target = expectedSessionId ? { expectedSessionId } : {};
       if (mediaRefs.length > 0) {
-        sendMessage(text, { mediaRefs, attachments, ...modelChoice });
+        sendMessage(text, { mediaRefs, attachments, ...modelChoice, ...target });
       } else {
-        sendMessage(text, nextModel ? modelChoice : undefined);
+        sendMessage(text, nextModel || expectedSessionId ? { ...modelChoice, ...target } : undefined);
       }
     },
     onCancel: async () => { cancelStream() },
   });
+  // #1428 step 2: note the chat a draft is written in, whatever way the text changes.
+  useEffect(() => {
+    const composer = runtime.thread.composer;
+    return composer.subscribe(() => noteDraftText(composer.getState().text));
+  }, [runtime]);
+  return runtime;
 }

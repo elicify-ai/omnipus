@@ -411,6 +411,9 @@ export interface QueuedOutboundMessage {
   firstSendOwner?: string
   /** #1833: the unconfirmed chat this follow-up was typed under was abandoned. It is held, never sent, until the user discards it. */
   abandoned?: boolean
+  /** #1428 step 2: attachments of a draft held for its own chat; sent with it when that chat is attached. */
+  mediaRefs?: string[]
+  media?: MediaAttachment[]
 }
 
 /** Strings remain readable for persisted/test state created before #823. */
@@ -1260,7 +1263,7 @@ export interface ChatStore extends HistorySlice {
    * button attaches to its message into Omnipus's main (W1 create an agent,
    * W18 set up a team, for a named workspace). Never an instruction.
    */
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; queueSeq?: number; workflowStart?: WorkflowStart }) => void
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; queueSeq?: number; workflowStart?: WorkflowStart; expectedSessionId?: string }) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED

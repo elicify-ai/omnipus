@@ -38,6 +38,7 @@ import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
+import { markDraftSubmit } from '@/lib/draft-target'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
@@ -179,6 +180,8 @@ export interface ComposerConversation { // not-wire-format: React props for the 
   slashMenu: UseSlashMenuResult
   /** True when the current text must not be sent (the caller keeps the text). */
   sendBlocked: () => boolean
+  /** #1428 step 2: record the chat the draft was written in, just before a submit (normal chat only). */
+  markSubmit?: () => void
   /** Notices shown in the box's notice area, above the card (group chat). */
   notices?: React.ReactNode
 }
@@ -315,6 +318,7 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
     const text = composerRuntime.getState().text ?? slashMenu.inputValue
     return recipientAddressBlocked(text) !== null
   }, [composerRuntime, slashMenu.inputValue])
+  const markSubmit = useCallback(() => markDraftSubmit(composerRuntime.getState().text ?? slashMenu.inputValue), [composerRuntime, slashMenu.inputValue])
 
   return {
     profile: SESSION_COMPOSER_PROFILE,
@@ -330,6 +334,7 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
     goalRunning,
     slashMenu,
     sendBlocked,
+    markSubmit,
   }
 }
 
@@ -646,6 +651,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
     // mid-stream Send button/hint even though the composer visually still
     // holds that whitespace.
     const hadSendableText = slashMenu.inputValue.trim().length > 0
+    if (hadSendableText) conversation.markSubmit?.()
     composerRuntime.send()
     if (hadSendableText) {
       // Fix-4 mirror resync — see the identical call + comment in onSubmit
@@ -886,6 +892,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
             // isStreaming guard, interceptClientCommand(), nor the
             // @-recipient block intercepted it above), so this can't clear
             // the mirror out from under a blocked/intercepted send.
+            conversation.markSubmit?.()
             slashMenu.onInputChange('')
           }}
         >
@@ -1148,7 +1155,9 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
                 // note above), so the composer text is kept.
                 if (recipientAddressBlockedNow()) {
                   e.preventDefault()
+                  return
                 }
+                conversation.markSubmit?.()
               }}
               className={cn(
                 'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
