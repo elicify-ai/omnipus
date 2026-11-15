@@ -42,7 +42,7 @@ function call(name: string, id: string, args: Record<string, string>) {
   return { role: 'assistant', tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] };
 }
 const REMEMBER = call('remember', 'memory-scripted-remember', { content: NONCE, category: 'reference', room: 'shared' });
-const RECALL = call('recall_memory', 'memory-scripted-recall', { query: NONCE, room: 'shared' });
+const RECALL = call('recall_memory', 'memory-scripted-recall', { query: NONCE });
 const ABSENT = call('recall_memory', 'memory-scripted-missing', { query: MISSING, room: 'shared' });
 const result = (id: string, content: unknown) => ({ role: 'tool', tool_call_id: id, content });
 const user = (turn: number): { role: string; content: string } => ({ role: 'user', content: PROMPTS[turn] });
@@ -102,7 +102,7 @@ describe('scripted memory round-trip provider (#1661)', () => {
       history.push({ role: 'assistant', content: 'Memory stored.' }, user(1));
       const third = await post(provider, history);
       expect(third.status).toBe(200);
-      expect(choices(await third.text())).toEqual(toolChoices('recall_memory', 'memory-scripted-recall', { query: NONCE, room: 'shared' }));
+      expect(choices(await third.text())).toEqual(toolChoices('recall_memory', 'memory-scripted-recall', { query: NONCE }));
       const recalled = `found on disk\n${NONCE}\nend of memory`;
       history.push(RECALL, result('memory-scripted-recall', recalled));
       const fourth = await post(provider, history);
@@ -147,7 +147,7 @@ describe('scripted memory round-trip provider (#1661)', () => {
         history.push({ role: 'assistant', content: 'Memory stored.' }, user(1));
         const recall = await post(provider, withClock(history));
         expect(recall.status, 'turn marker selects recall, not an earlier prompt or the clock').toBe(200);
-        expect(choices(await recall.text())).toEqual(toolChoices('recall_memory', 'memory-scripted-recall', { query: NONCE, room: 'shared' }));
+        expect(choices(await recall.text())).toEqual(toolChoices('recall_memory', 'memory-scripted-recall', { query: NONCE }));
         const echoed = await post(provider, withClock([...history, RECALL, result('memory-scripted-recall', 'ONLY THE CURRENT RESULT')]));
         expect(echoed.status).toBe(200);
         const output = await echoed.text();
@@ -306,8 +306,8 @@ describe('index-query and result contract carried from #1800', () => {
       const response = await post(provider, history);
       expect(response.status).toBe(200);
       expect(choices(await response.text()), 'the reordered query reaches the real tool-call boundary').toEqual(
-        toolChoices('recall_memory', 'memory-scripted-recall', { query: INDEX_QUERY, room: 'shared' }));
-      const recall = call('recall_memory', 'memory-scripted-recall', { query: INDEX_QUERY, room: 'shared' });
+        toolChoices('recall_memory', 'memory-scripted-recall', { query: INDEX_QUERY }));
+      const recall = call('recall_memory', 'memory-scripted-recall', { query: INDEX_QUERY });
       const echoed = await post(provider, [...history, recall, result('memory-scripted-recall', 'ONLY THE INDEX RESULT')]);
       expect(echoed.status).toBe(200);
       const output = await echoed.text();
@@ -322,7 +322,7 @@ describe('index-query and result contract carried from #1800', () => {
     try {
       const history = await indexedRecallHistory(provider);
       expect((await post(provider, history)).status).toBe(200);
-      const recall = call('recall_memory', 'memory-scripted-recall', { query: INDEX_QUERY, room: 'shared' });
+      const recall = call('recall_memory', 'memory-scripted-recall', { query: INDEX_QUERY });
       await rejected(await post(provider, [...history, recall]), 'expected the correlated recall_memory call and result for turn 2');
       expect(provider.evidence.errors).toEqual(['expected the correlated recall_memory call and result for turn 2']);
     } finally { await provider.close(); }
@@ -340,6 +340,36 @@ describe('index-query and result contract carried from #1800', () => {
       expect(output).not.toContain(NONCE);
       expect(output).not.toContain(MISSING);
       expect(provider.evidence.errors).toEqual([]);
+    } finally { await provider.close(); }
+  });
+});
+
+describe('default-scope recall and request recording (#1661 fix round 2)', () => {
+  it('records the room-less reordered recall from the actual follow-up request', async () => {
+    const provider = await startIndexed();
+    try {
+      const history = await indexedRecallHistory(provider);
+      expect((await post(provider, history)).status).toBe(200);
+      const recall = call('recall_memory', 'memory-scripted-recall', { query: INDEX_QUERY });
+      const messages = [...history, recall, result('memory-scripted-recall', 'INDEX DEFAULT RESULT')];
+      const response = await post(provider, messages);
+      expect(response.status, 'the positive recall must omit room to use the real default scope').toBe(200);
+      expect(choices(await response.text())).toEqual(textChoices('Memory recall result:\n\n```text\nINDEX DEFAULT RESULT\n```'));
+      expect(provider.requests[3], 'request 4 records the actual room-less call and received result').toEqual({ stream: true, messages, tools: TOOLS });
+      expect(provider.evidence.errors).toEqual([]);
+    } finally { await provider.close(); }
+  });
+
+  it('rejects an added room key instead of accepting changed default-scope arguments', async () => {
+    const provider = await start();
+    try {
+      const history = [...await firstTurn(provider), user(1)];
+      expect((await post(provider, history)).status).toBe(200);
+      const changed = call('recall_memory', 'memory-scripted-recall', { query: NONCE, room: 'shared' });
+      await rejected(await post(provider, [...history, changed, result('memory-scripted-recall', 'received')]),
+        'expected the correlated recall_memory call and result for turn 2');
+      expect(provider.evidence.errors).toEqual(['expected the correlated recall_memory call and result for turn 2']);
+      expect(provider.evidence.issuedCalls).toBe(2);
     } finally { await provider.close(); }
   });
 });

@@ -34,9 +34,10 @@ export async function startMemoryRoundTripProvider(options: MemoryScriptOptions)
   const requests: unknown[] = [];
   // Argument shapes from pkg/tools/memory.go::{RememberTool,RecallMemoryTool}.Parameters.
   // Explicit shared room is required for remember, not an inferred default.
+  // Positive recall omits room to exercise the real tool's default both scope.
   const turns = [
     { id: 'memory-scripted-remember', name: 'remember', args: { content: options.nonce, category: 'reference', room: 'shared' } },
-    { id: 'memory-scripted-recall', name: 'recall_memory', args: { query: options.recallQuery ?? options.nonce, room: 'shared' } },
+    { id: 'memory-scripted-recall', name: 'recall_memory', args: { query: options.recallQuery ?? options.nonce } },
     { id: 'memory-scripted-missing', name: 'recall_memory', args: { query: options.missingNonce, room: 'shared' } },
   ];
   const server = http.createServer((req, res) => {

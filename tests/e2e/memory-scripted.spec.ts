@@ -13,9 +13,10 @@ import { openSessionByDeepLink } from './fixtures/session-setup';
 // One always-on scripted spec (stubs-3), replacing #1800's deleted twins:
 // tests/e2e/memory-scripted-round-trip.spec.ts,
 // tests/e2e/fixtures/memory-scripted-provider.ts and
-// tests/e2e/fixtures/memory-scripted-provider.test.ts. Their assertion trace is
-// /workspace/logs/memory-scripted/ta/twin-trace.md. Reordered recall distinguishes
-// token-index lookup from substring scan; exact shared success is required.
+// tests/e2e/fixtures/memory-scripted-provider.test.ts. Turn 2 omits room to
+// exercise the default both-room scope; its actual recorded call must use the
+// reordered query. Token-index lookup differs from substring scan; remember
+// must still report exact shared success and write the shared-room file.
 // The original memory-remember-recall.spec.ts remains the live-model smoke.
 // Probe budget: one onboarding validation, no extra model calls for memory.
 test.describe.configure({ retries: 0 });
@@ -45,6 +46,56 @@ async function settled(page: Page, turn: number) {
   await expect(chatInput(page), `(e) turn ${turn}: composer is enabled after settlement`).toBeEnabled();
 }
 
+type MemoryProvider = Awaited<ReturnType<typeof startMemoryRoundTripProvider>>;
+
+function assertIssuedRecallArguments(provider: MemoryProvider, recallQuery: string) {
+  // External model protocol, not a gateway wire type. Read the real follow-up
+  // body, never the provider's options, generated call or evidence summary.
+  const followUp = provider.requests[3] as {
+    messages?: Array<{ role?: string; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> }>;
+  };
+  const calls = (followUp?.messages ?? []).filter((message) => message.role === 'assistant')
+    .flatMap((message) => message.tool_calls ?? []).filter((call) => call.id === 'memory-scripted-recall');
+  expect(calls, '(c) request 4 carries exactly one issued recall call').toHaveLength(1);
+  expect(calls[0].function?.name, '(c) the issued call is recall_memory').toBe('recall_memory');
+  expect(JSON.parse(calls[0].function?.arguments ?? 'null'), '(c) issued recall arguments use the reordered query and default scope')
+    .toEqual({ query: recallQuery });
+}
+
+async function assertAbsentMemory(page: Page, provider: MemoryProvider, prompt: string, nonce: string, missingNonce: string) {
+  const input = chatInput(page);
+  await test.step('positive control: never-stored nonce is absent from recall result and assistant answer', async () => {
+    await input.fill(prompt);
+    await input.press('Enter');
+    await expect.poll(() => provider.evidence.streamRequests, { message: 'control: third recall and follow-up reached the provider' }).toBe(6);
+    const missing = provider.evidence.toolResults.filter((item) => item.request === 6 && item.callId === 'memory-scripted-missing');
+    expect(missing, 'control: provider received exactly one result from the real absent-memory lookup').toHaveLength(1);
+    expect(missing[0].name, 'control: result is recall_memory, not remembered user text').toBe('recall_memory');
+    expect(missing[0].content, 'control (c): tool result does not manufacture the never-stored nonce').not.toContain(missingNonce);
+    expect(missing[0].content, 'control (c): a different query must not return the stored memory either').not.toContain(nonce);
+    expect(missing[0].content, 'control (c): the never-stored query has no matching entries').toBe('no matching entries');
+    await settled(page, 3);
+    const answer = assistantMessages(page).nth(2).locator('pre:not([data-history-tool-row] pre):not([data-testid="tool-call-badge"] pre)');
+    await expect(answer, 'control (d): the absent lookup still renders its real result').toHaveCount(1);
+    await expect(answer, 'control (d): absent lookup answer is visible').toBeVisible();
+    await expect(answer, 'control (d): answer echoes only the absent lookup result').toHaveText(missing[0].content);
+    await expect(answer, 'control (d): answer does not manufacture the never-stored nonce').not.toContainText(missingNonce);
+    await expect(answer, 'control (d): answer does not echo the old stored nonce').not.toContainText(nonce);
+    await expect(assistantMessages(page).filter({ hasText: missingNonce }), 'control (d): no assistant row contains the never-stored nonce').toHaveCount(0);
+    await settled(page, 3);
+    expect(provider.evidence.streamRequests, '(e) three two-request turns total exactly six provider requests').toBe(6);
+    expect(provider.evidence.probeRequests, '(e) one onboarding probe and no extra memory-loop model probes').toBe(1);
+    expect(provider.evidence.issuedCalls, '(e) exactly one remember and two recall calls').toBe(3);
+    const currentResults = provider.evidence.toolResults.filter((item) =>
+      (item.request === 2 && item.callId === 'memory-scripted-remember') ||
+      (item.request === 4 && item.callId === 'memory-scripted-recall') ||
+      (item.request === 6 && item.callId === 'memory-scripted-missing'));
+    expect(currentResults, '(e) exactly three current correlated tool results').toHaveLength(3);
+    expect(provider.evidence.errors, '(e) no unexpected scripted-provider traffic').toEqual([]);
+    await expect(userMessages(page), '(e) exactly three user turns in this fresh chat').toHaveCount(3);
+  });
+}
+
 // Only the external model HTTP edge is scripted. Tools, room routing, disk,
 // index, provider tool messages, gateway socket and SPA rendering stay real.
 test('scripted memory round trip: remember writes, index recalls, SPA renders; absent nonce stays absent', async ({ page }, info) => {
@@ -59,7 +110,7 @@ test('scripted memory round trip: remember writes, index recalls, SPA renders; a
   const missingNonce = `unrecorded${randomUUID().replaceAll('-', '')}`;
   const prompts = [
     `Scripted memory turn 1: remember ${nonce} in shared memory as a reference.`,
-    `Scripted memory turn 2: recall ${recallQuery} from shared memory.`,
+    `Scripted memory turn 2: recall ${recallQuery} using the default memory scope.`,
     `Scripted memory turn 3: recall ${missingNonce} from shared memory.`,
   ] as const;
   const provider = await startMemoryRoundTripProvider({ nonce, recallQuery, missingNonce, prompts });
@@ -125,6 +176,7 @@ test('scripted memory round trip: remember writes, index recalls, SPA renders; a
       await input.fill(prompts[1]);
       await input.press('Enter');
       await expect.poll(() => provider.evidence.streamRequests, { message: '(e) turn 2: recall and follow-up both reached the provider' }).toBe(4);
+      assertIssuedRecallArguments(provider, recallQuery);
       const recalled = provider.evidence.toolResults.filter((item) => item.request === 4 && item.callId === 'memory-scripted-recall');
       // Core oracle: not a transcript/query/tool-card match. These bytes were
       // returned by the REAL recall_memory through the agent loop to the model.
@@ -145,36 +197,7 @@ test('scripted memory round trip: remember writes, index recalls, SPA renders; a
       expect(provider.evidence.issuedCalls, '(e) exactly remember then recall_memory').toBe(2);
     });
 
-    await test.step('positive control: never-stored nonce is absent from recall result and assistant answer', async () => {
-      await input.fill(prompts[2]);
-      await input.press('Enter');
-      await expect.poll(() => provider.evidence.streamRequests, { message: 'control: third recall and follow-up reached the provider' }).toBe(6);
-      const missing = provider.evidence.toolResults.filter((item) => item.request === 6 && item.callId === 'memory-scripted-missing');
-      expect(missing, 'control: provider received exactly one result from the real absent-memory lookup').toHaveLength(1);
-      expect(missing[0].name, 'control: result is recall_memory, not remembered user text').toBe('recall_memory');
-      expect(missing[0].content, 'control (c): tool result does not manufacture the never-stored nonce').not.toContain(missingNonce);
-      expect(missing[0].content, 'control (c): a different query must not return the stored memory either').not.toContain(nonce);
-      expect(missing[0].content, 'control (c): the never-stored query has no matching entries').toBe('no matching entries');
-      await settled(page, 3);
-      const answer = assistantMessages(page).nth(2).locator('pre:not([data-history-tool-row] pre):not([data-testid="tool-call-badge"] pre)');
-      await expect(answer, 'control (d): the absent lookup still renders its real result').toHaveCount(1);
-      await expect(answer, 'control (d): absent lookup answer is visible').toBeVisible();
-      await expect(answer, 'control (d): answer echoes only the absent lookup result').toHaveText(missing[0].content);
-      await expect(answer, 'control (d): answer does not manufacture the never-stored nonce').not.toContainText(missingNonce);
-      await expect(answer, 'control (d): answer does not echo the old stored nonce').not.toContainText(nonce);
-      await expect(assistantMessages(page).filter({ hasText: missingNonce }), 'control (d): no assistant row contains the never-stored nonce').toHaveCount(0);
-      await settled(page, 3);
-      expect(provider.evidence.streamRequests, '(e) three two-request turns total exactly six provider requests').toBe(6);
-      expect(provider.evidence.probeRequests, '(e) one onboarding probe and no extra memory-loop model probes').toBe(1);
-      expect(provider.evidence.issuedCalls, '(e) exactly one remember and two recall calls').toBe(3);
-      const currentResults = provider.evidence.toolResults.filter((item) =>
-        (item.request === 2 && item.callId === 'memory-scripted-remember') ||
-        (item.request === 4 && item.callId === 'memory-scripted-recall') ||
-        (item.request === 6 && item.callId === 'memory-scripted-missing'));
-      expect(currentResults, '(e) exactly three current correlated tool results').toHaveLength(3);
-      expect(provider.evidence.errors, '(e) no unexpected scripted-provider traffic').toEqual([]);
-      await expect(userMessages(page), '(e) exactly three user turns in this fresh chat').toHaveCount(3);
-    });
+    await assertAbsentMemory(page, provider, prompts[2], nonce, missingNonce);
   } finally {
     console.log(`[memory-scripted] provider evidence ${JSON.stringify(provider.evidence)}`);
     try {
