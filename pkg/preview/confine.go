@@ -21,12 +21,19 @@ type confinement struct {
 	// readExec are folders the program may read and execute.
 	readExec []string
 	// readOnly are folders the program may read but not change (LibreOffice:
-	// the macOS filtered registry folder and the system font folders).
+	// the macOS filtered registry folder and the system font folders; on
+	// Linux also the files /dev/urandom, /etc/passwd and /etc/nsswitch.conf,
+	// spec §3.6 variant C).
 	readOnly []string
 	// readWrite are folders the program may write (LibreOffice: scratch).
 	readWrite []string
 	// socketDir is the macOS LibreOffice socket folder (bind + connect).
 	socketDir string
+	// makeSocketRemove are folders beneath which the program may create Unix
+	// sockets and remove or rename entries that are not folders, and nothing
+	// else (sandbox.AccessMakeSocketRemoveFile). Linux LibreOffice only:
+	// /tmp, where it keeps its control socket (spec §3.6 variant C, FR-061).
+	makeSocketRemove []string
 	// lookup are folders the program may look up but not list or read: the
 	// folders above the converter's own listed folders (spec §3.4 D8d), set
 	// only for LibreOffice (foldersAbove).

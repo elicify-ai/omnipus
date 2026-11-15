@@ -142,6 +142,9 @@ type renderSeatbeltProfileState struct {
 //     plus an implicit file-read* allow (Seatbelt requires read access to mmap
 //     a binary; note this is NOT universal — Landlock treats execute and read
 //     as independent rights).
+//   - FilesystemRules with AccessMakeSocketRemoveFile → render error, no
+//     profile: the value is Linux-only (office-preview spec §3.6 D3) and has
+//     no Seatbelt rendering, so the start fails closed instead of losing it.
 //   - BindPortRules    → (allow network-bind    (local  tcp "*:<port>"))
 //   - ConnectPortRules → (allow network-outbound (remote tcp "*:<port>"))
 //
@@ -215,6 +218,9 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 		}
 		if rule.Access == 0 {
 			return "", fmt.Errorf("seatbelt: filesystem rule for %q has no access flags", rule.Path)
+		}
+		if rule.Access&AccessMakeSocketRemoveFile != 0 {
+			return "", fmt.Errorf("seatbelt: filesystem rule for %q carries the Linux-only make-socket/remove-file access, which has no macOS rendering", rule.Path)
 		}
 
 		target, traversal := resolveSeatbeltPath(rule.Path)

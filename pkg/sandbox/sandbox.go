@@ -23,6 +23,18 @@ const (
 	AccessRead    uint64 = 1 << 0
 	AccessWrite   uint64 = 1 << 1
 	AccessExecute uint64 = 1 << 2
+
+	// AccessMakeSocketRemoveFile lets the program create Unix sockets, and
+	// remove or rename entries that are not folders, beneath the rule's
+	// path — nothing else: no reading, listing or writing, and no creating
+	// regular files, folders, links, pipes or devices (office-preview spec
+	// §3.6 D3, Linux converter variant C). Linux maps it to exactly the
+	// Landlock MAKE_SOCK and REMOVE_FILE rights (both ABI v1). The macOS
+	// profile renderer refuses a rule carrying it — there is no Seatbelt
+	// rendering, so the start fails closed instead of losing the rule
+	// silently — and Windows has no file rules. It is never a subset of
+	// AccessWrite, which grants every write-class right.
+	AccessMakeSocketRemoveFile uint64 = 1 << 3
 )
 
 // PathRule describes filesystem access for a single path.

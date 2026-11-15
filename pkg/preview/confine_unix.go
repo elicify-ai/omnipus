@@ -23,6 +23,9 @@ func (c confinement) policy() sandbox.SandboxPolicy {
 	for _, d := range c.readWrite {
 		p.FilesystemRules = append(p.FilesystemRules, sandbox.PathRule{Path: d, Access: sandbox.AccessRead | sandbox.AccessWrite})
 	}
+	for _, d := range c.makeSocketRemove {
+		p.FilesystemRules = append(p.FilesystemRules, sandbox.PathRule{Path: d, Access: sandbox.AccessMakeSocketRemoveFile})
+	}
 	if c.socketDir != "" {
 		p.FilesystemRules = append(p.FilesystemRules, sandbox.PathRule{Path: c.socketDir, Access: sandbox.AccessRead | sandbox.AccessWrite})
 		p.UnixSocketRules = append(p.UnixSocketRules, sandbox.UnixSocketRule{Path: c.socketDir, Bind: true, Connect: true})

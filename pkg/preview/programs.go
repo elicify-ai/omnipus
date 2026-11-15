@@ -300,6 +300,16 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 			env = append(env, "URE_MORE_SERVICES=<"+fileURL(o.registry)+">*")
 		}
 	}
+	if runtime.GOOS == "linux" {
+		// Spec §3.6 variant C (FR-061), converter only: LibreOffice creates
+		// its control socket in /tmp and removes it when it exits, reads
+		// /dev/urandom, and looks up its own account in the account list so
+		// the socket is named for that account instead of being left open to
+		// every account (mode 0777). Nothing else is added: no /var/tmp, no
+		// OSL_SOCKET_PATH, no port change.
+		conf.makeSocketRemove = []string{"/tmp"}
+		conf.readOnly = append(conf.readOnly, "/dev/urandom", "/etc/passwd", "/etc/nsswitch.conf")
+	}
 	if runtime.GOOS == "windows" {
 		env = append(env, "TEMP="+dirs["tmp"], "TMP="+dirs["tmp"], "USERPROFILE="+dirs["home"], "SystemRoot="+os.Getenv("SystemRoot"))
 	}
