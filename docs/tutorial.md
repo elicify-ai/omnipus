@@ -18,7 +18,7 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
 1. **Install and start Omnipus.** Follow the method for your computer in [getting started](getting-started.md), then open `http://localhost:5000`.
 
-   **What you see:** A fresh install opens the setup wizard. If you see a sign-in screen instead, this install has already been set up. Sign in or use a different data directory before continuing.
+   **What you see:** A fresh install you set up yourself — the kind [getting started](getting-started.md) covers — opens the setup wizard straight away. If you see a sign-in screen instead, this install has already been set up: sign in and continue, or use a different data directory first if you wanted a fresh start. On a hosted Omnipus service the order is different: you sign in first, even before setup, and the wizard then shows just two setup screens — your name and preferences, then your model provider. You are not asked to create an admin account, because your sign-in is your account, so skip the account screens in the next step.
 
    **If it does not look like that:** Check that the Omnipus process or container is running. If the page does not open, or another app is using port `5000`, follow [troubleshooting](troubleshooting.md).
 
@@ -30,7 +30,7 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
 3. **Connect a provider.** Choose a provider on **Select your model provider and default model**. Use its sign-in option when offered, or enter its key. Choose **Default model** and run **Check connection** (or **Check sign-in** for a sign-in provider).
 
-   **What you see:** A successful check unlocks **Finish**. Select it to create the account, save the provider, and sign you in. The last screen introduces **Mia — Assistant**.
+   **What you see:** A successful check unlocks **Finish**. Select it to save the provider and complete setup — on an install you set up yourself, this also creates your admin account and signs you in. The last screen introduces **Mia — Assistant**.
 
    **If it does not look like that:** Read the message beside the connection check. Recopy a rejected key, complete any provider sign-in, or check the custom endpoint when the provider requires one. A local provider must already be running. The [settings](settings.md) page owns the full provider guide.
 
@@ -88,7 +88,7 @@ The table below shows the trail you should have after this walkthrough.
 
 | You created | Where you can find it | What confirms it worked |
 |---|---|---|
-| Admin account and provider | Settings | You can sign in and Mia can answer |
+| Your account and provider | Settings | You can sign in and Mia can answer |
 | `First project` workspace | Sidebar | Chat opens; Tasks, Calendar, Library, Mail and Team toggle panels; the workspace name or compact-menu Settings opens workspace settings |
 | Teammate agent | Agents and the workspace Team panel | The agent is available for workspace work |
 | First task | Workspace Tasks panel | Its Board card reaches a final status |
