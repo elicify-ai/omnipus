@@ -116,7 +116,9 @@ function handleFirstSendError(context: FirstSendFrameContext, frame: Extract<Fra
   }
   const bucket = context.get().sessionsById[frame.session_id]
   const user = findFirstSendMessage(bucket, frame.client_message_id)
-  if (user?.firstSendStatus) {
+  // A repeated error for a message already settled as answer_not_started must not clear or
+  // drain again: by then a queued follow-up may be running in this chat (CHECK #1834 F1).
+  if (user?.firstSendStatus && user.firstSendStatus !== 'answer_not_started') {
     context.withBucket(frame.session_id, (current) => produce(current, (draft) => {
       draft.messagesById[user.id].firstSendStatus = 'answer_not_started'
       draft.messagesById[user.id].deliveryStatus = 'received'
@@ -138,6 +140,10 @@ function handleFirstSendError(context: FirstSendFrameContext, frame: Extract<Fra
       draft.recoveredFirstSend = undefined
     }))
     if (pending?.clientMessageId === frame.client_message_id) context.set({ pendingFirstSend: null })
+    // The chat is now open, idle and connected, and no reply is running, so no later
+    // terminal frame will release a follow-up queued under the first message (#1834). The
+    // drain in confirmFirstSend ran while the bucket was still streaming and did nothing.
+    if (useSessionStore.getState().activeSessionId === frame.session_id) context.get().drainOutboundQueue()
   }
   queryClient.invalidateQueries({ queryKey: ['sessions'] })
   return true
