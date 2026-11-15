@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef } from 'react'
-import { createFileRoute, redirect, useNavigate, useRouteContext } from '@tanstack/react-router'
+import { createFileRoute, isRedirect, redirect, useNavigate, useRouteContext } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -27,7 +27,7 @@ import { isApiError } from '@/lib/api-error'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 import { useUiStore } from '@/store/ui'
-import { useAuthStore, hasStoredSession } from '@/store/auth'
+import { useAuthStore } from '@/store/auth'
 import { queryClient } from '@/lib/queryClient'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
@@ -68,10 +68,10 @@ import {
 // indicator tracks only the numbered steps.
 //
 // Which mode applies is read off GET /state's `identity.mode` — see
-// readOnboardingAuthMode below. That field is being added to AppState by a
-// parallel lane and is NOT yet in the generated OpenAPI types this file
-// imports, so it is read defensively through a local type extension rather
-// than a generated property.
+// readOnboardingAuthMode below. `mode` and `signed_in` are generated fields
+// of AppState's identity (AppStateIdentity), so both are read off the
+// response itself; the only defensive case left is a missing state
+// altogether (the query has not answered yet).
 //
 // SECURITY / DEFAULT DIRECTION: local (upstream) is the fallback, platform
 // is the opt-in. A hosted or desktop server always answers an explicit
@@ -1823,13 +1823,13 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
 export const Route = createFileRoute('/onboarding')({
   beforeLoad: async () => {
     // FR-OB-001 / US-1: sign-in is a gate BEFORE onboarding — in PLATFORM
-    // mode (ADR-0008), where a browser with no session has nothing to
-    // onboard. In LOCAL mode (WP5, ADR-0010), or when the mode can't be
-    // determined at all, onboarding itself is what creates the first session
-    // — the two admin-account steps above are the whole point — so there is
-    // nothing to gate on there. That is also upstream's own behaviour at the
-    // merge base: upstream's beforeLoad has no sign-in gate whatsoever,
-    // because upstream has no other mode.
+    // mode (ADR-0008), where a browser the server does not report as signed
+    // in has nothing to onboard. In LOCAL mode (WP5, ADR-0010), or when the
+    // mode can't be determined at all, onboarding itself is what creates the
+    // first session — the two admin-account steps above are the whole point
+    // — so there is nothing to gate on there. That is also upstream's own
+    // behaviour at the merge base: upstream's beforeLoad has no sign-in gate
+    // whatsoever, because upstream has no other mode.
     //
     // Which mode applies is read off GET /state, so the fetch runs FIRST
     // (unlike this route's behaviour before WP5, which checked
@@ -1849,13 +1849,26 @@ export const Route = createFileRoute('/onboarding')({
       // SECURITY: gate on an EXPLICIT 'platform', never on "not local" — see
       // the SECURITY note above readOnboardingAuthMode. 'local', undefined,
       // and any other value all take upstream's own no-gate path.
-      if (onboardingAuthMode === 'platform' && !hasStoredSession()) {
+      //
+      // The sign-in decision comes from the SERVER's /state answer, not from
+      // this browser: platform mode passes only on a strict
+      // identity.signed_in === true. False, missing, null or a non-boolean
+      // all redirect to /login — a localStorage hasStoredSession() hint must
+      // never open the gate (hosted SSO owners carry a gateway cookie and
+      // have no stored hint at all — issue #1858).
+      if (onboardingAuthMode === 'platform' && state?.identity?.signed_in !== true) {
         throw redirect({ to: '/login' })
       }
       return { appStateBannerMessage: null as string | null, onboardingAuthMode }
     } catch (err) {
-      // Re-throw redirect so we don't swallow navigation errors.
-      if (err && typeof err === 'object' && 'to' in err) throw err
+      // Re-throw the router's OWN redirect Responses so navigation is never
+      // swallowed: @tanstack/router-core's redirect() returns a Response
+      // carrying the target under .options.to, which only isRedirect()
+      // recognises (issue #1858 — the old `'to' in err` check matched no
+      // real redirect, so the sign-in gate fell open into the wizard). A
+      // lookalike value that merely has a `to` property is data, not
+      // navigation, and takes the fetch-failure path below.
+      if (isRedirect(err)) throw err
       // Log non-redirect errors so operators can diagnose fetch failures.
       console.error('onboarding.app_state_fetch_failed', err)
       // The mode is unknown when the fetch itself failed — same rule as

@@ -40,7 +40,6 @@
         "tests/e2e/open-in-chat.spec.ts",
         "tests/e2e/settings.spec.ts",
         "tests/e2e/memory-remember-recall.spec.ts",
-        "tests/e2e/memory-scripted-round-trip.spec.ts",
         "tests/e2e/agent-grep.spec.ts"
       ]
     },
@@ -186,7 +185,8 @@
         "tests/e2e/web-serve-malformed.spec.ts",
         "tests/e2e/chat-history-paging.soft-budget-screen-coverage.spec.ts",
         "tests/e2e/chat-history-paging.usage-reload.spec.ts",
-        "tests/e2e/chat-history-paging.large-output-preview.spec.ts"
+        "tests/e2e/chat-history-paging.large-output-preview.spec.ts",
+        "tests/e2e/memory-scripted.spec.ts"
       ]
     },
     {

@@ -12,6 +12,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gitevidence"
 	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -45,7 +47,7 @@ func (al *AgentLoop) collectGoalReminderProgress(sessionID string, rec *goal.Goa
 	if err != nil {
 		return progress, false, err
 	}
-	progress.descendant, err = al.reminderDescendantOutput(sessionID, scope, work, since)
+	progress.descendant, err = al.reminderDescendantOutput(sessionID, rec, scope, work, since)
 	if err != nil {
 		return progress, false, err
 	}
@@ -146,16 +148,56 @@ func (al *AgentLoop) reminderEvidence(rec *goal.Goal, scope *goalReminderScope, 
 	return progress, nil
 }
 
-func (al *AgentLoop) reminderDescendantOutput(root string, scope *goalReminderScope, work *goalReminderWork, since time.Time) (bool, error) {
+// goalReminderHelperWindowStart is when the goal started (Activate and
+// Reactivate stamp StartedAt). It is not the moving activity watermark: a
+// helper active at any moment since the goal started belongs to the goal
+// (issue #1852). A record without StartedAt falls back to its creation.
+func goalReminderHelperWindowStart(rec *goal.Goal) time.Time {
+	if rec == nil {
+		return time.Time{}
+	}
+	if rec.StartedAt != nil {
+		return *rec.StartedAt
+	}
+	return rec.CreatedAt
+}
+
+// goalReminderHelperInWindow reports whether a helper was active since the
+// goal started: created at or after the start, last active at or after it,
+// or still running (a running turn's activity is stamped only at admission
+// and at its end). A session without a lifecycle record cannot be proven
+// old, so it stays in.
+func goalReminderHelperInWindow(record *session.LifecycleRecord, start time.Time) bool {
+	if record == nil || start.IsZero() {
+		return true
+	}
+	return !record.CreatedAt.Before(start) || !record.LastActivityAt.Before(start) ||
+		record.State == session.LifecycleRunning
+}
+
+func (al *AgentLoop) reminderDescendantOutput(root string, rec *goal.Goal, scope *goalReminderScope, work *goalReminderWork, since time.Time) (bool, error) {
 	progress := false
+	start := goalReminderHelperWindowStart(rec)
+	records := make(map[string]*session.LifecycleRecord, len(scope.records))
+	for i := range scope.records {
+		records[scope.records[i].SessionID] = &scope.records[i]
+	}
+	skipped := make(map[string]bool)
 	for id := range scope.sessions {
 		if id == root {
 			continue // root text/claim-only replies are deliberately not progress
 		}
+		if !goalReminderHelperInWindow(records[id], start) {
+			continue // helpers from before the goal never affect its reminder
+		}
 		store := al.ResolveSessionStore(id)
 		if store == nil {
-			return false, fmt.Errorf("goal reminder: descendant store for %q is unavailable", id)
+			// Deleted or archived during the goal: skip visibly, never as progress.
+			skipped[id] = true
+			noteGoalReminderUnavailableHelper(work, rec.GoalID, id)
+			continue
 		}
+		delete(work.unavailableWarned, id) // back again: a later loss is logged anew
 		entries, err := store.ReadTranscript(id)
 		if err != nil {
 			return false, fmt.Errorf("goal reminder: read descendant activity: %w", err)
@@ -166,13 +208,32 @@ func (al *AgentLoop) reminderDescendantOutput(root string, scope *goalReminderSc
 			}
 		}
 	}
-	for _, record := range scope.records {
+	for i := range scope.records {
+		record := &scope.records[i]
 		if record.SessionID == root || !scope.sessions[record.SessionID] || record.FinalDelivery == nil || record.FinalDelivery.CommitID == "" {
 			continue
+		}
+		if skipped[record.SessionID] || !goalReminderHelperInWindow(record, start) {
+			continue // a skipped or pre-goal helper's final delivery is not progress either
 		}
 		progress = reminderEvent(work, "child-final:"+record.FinalDelivery.CommitID, record.LastActivityAt, since) || progress
 	}
 	return progress, nil
+}
+
+// noteGoalReminderUnavailableHelper writes the skip WARN once per goal and
+// helper. Every assessment sweep sees the same lost helper; repeating the
+// line would bury other warnings. The caller holds work.mu.
+func noteGoalReminderUnavailableHelper(work *goalReminderWork, goalID, id string) {
+	if work.unavailableWarned[id] {
+		return
+	}
+	if work.unavailableWarned == nil {
+		work.unavailableWarned = make(map[string]bool)
+	}
+	work.unavailableWarned[id] = true
+	logger.WarnCF("agent", "goal reminder: skipped a helper session whose transcript cannot be opened; it does not count as progress",
+		map[string]any{"session_id": id, "goal_id": goalID, "reason": "the helper's session store is unavailable (deleted or archived)"})
 }
 
 // reminderScopedDiff reuses the existing guarded HEAD-range boundary. Unlike
