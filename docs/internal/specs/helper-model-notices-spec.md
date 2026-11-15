@@ -1,4 +1,4 @@
-`Status: In review`
+`Status: Approved`
 
 `ADR: none — no open design decision` (the founder chose option A on 2026-11-15; the architect ruled on the wire shape, reload and nested helpers on 2026-11-15 — ruling recorded in Clarifications below)
 
@@ -6,7 +6,7 @@
 
 **Created**: 2026-11-15 (revised 2026-11-15 after grill-spec round 1 and the architect ruling)
 **Input**: founder decision Q1 A on #1537 (relayed by the chief in #cross-team, 2026-11-15 14:59Z); probe result `/workspace/logs/1537/RESULT-1537.md`; tester report `/workspace/logs/1537/tester/report.md`; validator report `/workspace/logs/1537/validator/report.md` (VALIDATOR VERDICT: CONFIRMED); architect ruling `/workspace/logs/1537/architect/ruling.md`; grill round 1 `docs/internal/specs/helper-model-notices-spec-review.md`. No interview-me file exists for this issue: the founder's input is the A/B/C/D options page and the one-line answer "Q1 A".
-**Epic**: to be supplied by the chief before the spec is approved (#1537 carries `priority:P2-medium`, `status:parked`; no Epic is linked yet). Related open issue: #1280.
+**Epic**: #1143 "[Epic] Release v0.1.1: fix the issues found in the current release" (chief, 2026-11-15 16:19Z). Related open issue: #1280.
 **Riders**: #1850 "Delegated agents: model-delay notices overwrite each other in one chat" (same frames, same browser slots; folded in as User Story 4; chief confirmed it stays a rider, 2026-11-15 15:05Z; owner Team B). Not a rider: #1851 "Delegated agents: a helper's model retry is never announced to chat channels" (channels stay as they are; see Non-Behaviors).
 **Agent tool field table**: no agent-managed object changed.
 
@@ -300,7 +300,7 @@ Boundary conditions:
 |---|------------------|------------------------|---------------------|
 | 1 | Wire shape | — | Resolved by the architect (2026-11-15): two optional fields plus `ended`. |
 | 2 | Reload during a helper's wait | — | Resolved by the architect (2026-11-15): no new snapshot field; three fixes under "API and Data". |
-| 3 | Exact wording of the name prefix, the "Helper" fallback and the summary row | Copied from this spec without voice review | Chief reviews the exact strings in the product's voice before GREEN (chief, 2026-11-15 15:05Z). |
+| 3 | Exact wording of the name prefix, the "Helper" fallback and the summary row | — | Resolved by the chief's voice review (2026-11-15 16:19Z): prefix "{Helper name}: " + the helper chat's own sentence, unchanged; unknown name "Helper: "; summary "1 more helper has a model notice" / "{N} more helpers have model notices" (never "waiting"); the announcement is the same sentence as the visible line with the time frozen at notice start, recovered e.g. "Researcher: Connection came back — the model answered after 1 retry." |
 | 4 | Helper of a helper | — | Resolved by the architect (2026-11-15): reachable today; top chat only; middle chat unchanged; cleared by `ended`. Revisit the middle chat only if UAT-H7 shows confusion. |
 | 5 | Whether a helper's own chat counts as "streaming" while its turn waits on the model before the first byte | The developer reuses the streaming gate and the helper chat still shows nothing | RED must cover "helper chat, helper turn active, nothing streamed yet" (order 6b); GREEN makes the notice show whenever that chat's turn is active. |
 
@@ -850,4 +850,5 @@ RED rule: new-behaviour tests fail on the release head with a saved log. Regress
 - Q: Reload as a MUST, with a snapshot field? → A: MUST, without a new snapshot field: projection keeps helper copies across the main agent's `done`, a server-clock estimate from `session_state.emitted_at`, and last-publish replay order (architect ruling, 2026-11-15).
 - Q: Helper of a helper? → A: Reachable on a stock install; named row in the top chat only; middle chat unchanged; cleared by `ended` (architect ruling, 2026-11-15).
 - Q: Grill round 1 (REVISE, 8 MAJOR, 6 MINOR, 3 OBS) — founder questions? → A: None; the grill raised no new product choice. Round 2 found MAJ-006, MAJ-007 and MIN-002/005 only partly fixed (see below).
-- Q: Grill round 2 (REVISE, 3 MAJOR, 4 MINOR) — founder questions? → A: None. Fix round 2: producer order silence-clear before retry (FR-013); non-incremental attach reconciles named rows (FR-014); a `responding` copy clears the named row after a first-call fallback or a successful timeout/empty retry, with no invented count and own-chat behaviour unchanged (FR-006); fallback fixture uses three primary 429s; same-turn later retry stays current (FR-008); routing-reader guard added to the regression list. Open: the Epic link (chief). Exact strings go to the chief for voice review. Under the chief's review cap this is the last fixing round; the next step is the build.
+- Q: Grill round 2 (REVISE, 3 MAJOR, 4 MINOR) — founder questions? → A: None. Fix round 2: producer order silence-clear before retry (FR-013); non-incremental attach reconciles named rows (FR-014); a `responding` copy clears the named row after a first-call fallback or a successful timeout/empty retry, with no invented count and own-chat behaviour unchanged (FR-006); fallback fixture uses three primary 429s; same-turn later retry stays current (FR-008); routing-reader guard added to the regression list. Under the chief's review cap this is the last fixing round; the next step is the build.
+- Q: Epic and wording? → A: Epic #1143; wording A–D approved as written (chief, 16:19Z). Build approved: Opus backend + Opus frontend pair, ChatGPT test author (RED first), Sonnet CHECK, chief sign-off on handleProviderFrame before GREEN, hands-on on the exact commit, 3 reviewers.
