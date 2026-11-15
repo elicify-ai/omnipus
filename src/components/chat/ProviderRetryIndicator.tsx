@@ -45,6 +45,20 @@ export interface ProviderRetryIndicatorProps {
   /** The chain's previous candidate — present only on a within-provider move (MIN-104). */
   previousProvider?: string
   previousModel?: string
+  /**
+   * #1537 — a main-chat named helper row: the helper's display name, shown
+   * as "{label}: " before the unchanged sentence. Absent for a chat's own
+   * notice.
+   */
+  label?: string
+  /**
+   * #1537 FR-010 — false inside the named-row area, which owns the single
+   * polite live region for helper notices; this indicator then renders no
+   * live region of its own. Defaults to true (a chat's own notice).
+   */
+  liveRegion?: boolean
+  /** Root test id; defaults to "provider-retry-indicator". */
+  testId?: string
 }
 
 /**
@@ -133,6 +147,16 @@ function buildWaitingLine(props: ProviderRetryIndicatorProps, remainingSecondsVa
   return `${displayName} ${retryProblemClause(errorCode)}. Retrying automatically in ${countdown} (attempt ${attempt} of ${maxAttempts}).`
 }
 
+/**
+ * #1537 — the line exactly as this indicator shows it at `nowMs` ("Retrying
+ * now…" once the wait has run out). The named-row area uses it for its own
+ * frozen announcement, so announced and visible sentences cannot drift.
+ */
+export function providerRetryLineAt(props: ProviderRetryIndicatorProps, nowMs: number): string {
+  const remaining = remainingRetrySeconds(props.retryAt, props.sentAt, props.receivedAt, nowMs)
+  return remaining > 0 ? buildWaitingLine(props, remaining) : 'Retrying now…'
+}
+
 // MAJ-016 — one {key, text} pair for the frozen announcement: the key
 // identifies the attempt (so the effect below can tell "still this attempt"
 // from "a new attempt started"), the text is the line at THIS computation's
@@ -147,7 +171,7 @@ function computeAnnouncement(props: ProviderRetryIndicatorProps): { key: string;
 }
 
 export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
-  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel, errorCode } = props
+  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel, errorCode, label, liveRegion = true, testId = 'provider-retry-indicator' } = props
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
@@ -181,19 +205,23 @@ export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
 
   return (
     <div
-      data-testid="provider-retry-indicator"
+      data-testid={testId}
       data-state={waiting ? 'waiting' : 'retrying-now'}
       className="flex min-w-0 items-center gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-0-5)]"
     >
       <span aria-hidden className="size-2 shrink-0 rounded-full bg-[var(--color-warning)]" />
       {/* MAJ-016 — the frozen full line is announced once per attempt; the
-          ticking mm:ss span below sits OUTSIDE this live region. */}
-      <div role="status" aria-live="polite" className="sr-only">
-        {announcementText}
-      </div>
+          ticking mm:ss span below sits OUTSIDE this live region. #1537: a
+          named helper row leaves announcing to the named-row area. */}
+      {liveRegion && (
+        <div role="status" aria-live="polite" className="sr-only">
+          {announcementText}
+        </div>
+      )}
       {/* 6b U3b — wraps, never truncates: at the narrow width the Team panel
           leaves, the cause, countdown and "(attempt N of M)" stay readable. */}
       <span className="min-w-0 break-words font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        {label !== undefined && `${label}: `}
         {visibleText}
       </span>
     </div>

@@ -26,6 +26,13 @@ export function emptySessionState(): SessionChatState {
     sessionCost: 0,
     rateLimitEvent: null,
     providerRetryEvent: null,
+    // #1537: explicit empties so a fresh bucket's foreground projection
+    // replaces (not inherits) the previous chat's notice state — a missing
+    // key is left untouched by the store's merge on a session switch.
+    providerStatusEvent: null,
+    providerHelperRows: [],
+    providerHelperAttachKeys: null,
+    providerServerClock: null,
     providerFallbackPairsSeen: new Set<string>(),
     lastUserMessageAt: null,
     cancelStage: null,
