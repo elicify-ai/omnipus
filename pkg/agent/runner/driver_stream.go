@@ -183,15 +183,19 @@ func streamParserMulti(
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
 		slog.Warn("runner: stream scanner error", "run_id", runID, "err", err)
-		select {
-		case out <- RunEvent{
+		// The parser positively knows the stream read failed, so this fatal
+		// event must REACH the consumer — even when the channel is full (#904
+		// F1 delivery). A dropped error here let callers read emittedFatal
+		// as false and synthesize a successful End over a broken stream.
+		// Callers that cannot drain concurrently must not use a bounded
+		// channel they never read during parsing.
+		if deliverFatal(ctx, out, RunEvent{
 			Kind:      EventKindError,
 			RunID:     runID,
 			Timestamp: time.Now().UTC(),
 			Err:       &ErrorEvent{Message: fmt.Sprintf("stream read error: %v", err), Fatal: true},
-		}:
+		}) {
 			emittedFatal = true
-		default:
 		}
 	}
 	return emittedFatal

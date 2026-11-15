@@ -233,6 +233,17 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 			return events, ok
 		}, ch)
 
+		// Liveness: the scanner may have stopped early (e.g. an oversized
+		// token) while stdout still has unread data. exec's stdout copier is
+		// then blocked writing into this pipe and Cmd.Wait waits for that
+		// copy — waiting on waitErr here would deadlock until the context is
+		// canceled. Close the read end NOW: the blocked write fails, the
+		// copier finishes, and Wait can return. Scanning has already stopped,
+		// so the unread remainder is unusable regardless. Harmless on the
+		// normal EOF path (the copier has already finished); the deferred
+		// close below becomes a no-op.
+		_ = pr.Close()
+
 		err := <-waitErr
 		if err != nil && runCtx.Err() == nil {
 			// Surface the captured stderr tail at Warn so operators can diagnose
@@ -412,6 +423,15 @@ func (d *OpencodeDriver) parseLine(
 		}}, true
 	}
 
+	// ≥ 2.x announces the native conversation as a top-level sessionID on
+	// every event line. Capture it so Resume/ResumeWith continue THIS
+	// conversation via -s/--session (FR-043); the ≥ 0.1.0 vocabulary announces
+	// it as session.start/session.complete session_id, handled in their
+	// branches below. A legacy line has no top-level sessionID field.
+	if sessionID, ok := rawJSONField(raw, "sessionID"); ok && sessionID != "" {
+		storeNativeID(&d.mu, &d.nativeID, sessionID)
+	}
+
 	switch typ {
 	case "content.delta":
 		if ev, emitted := d.parseContentDelta(raw, runID); emitted {
@@ -561,7 +581,9 @@ func parseOpencodeTextPart(raw []byte, runID string) ([]RunEvent, bool) {
 		} `json:"part"`
 	}
 	if err := json.Unmarshal(raw, &ev); err != nil {
-		return nil, false
+		// The line was recognized as a text event, so losing its payload to a
+		// decode failure is not an ignorable unknown type (F3): surface it.
+		return []RunEvent{undecodableOpencodeEvent(runID, "text", err)}, true
 	}
 	if ev.Part.Text == "" {
 		return nil, false
@@ -576,10 +598,14 @@ func parseOpencodeTextPart(raw []byte, runID string) ([]RunEvent, bool) {
 // parseOpencodeToolUse handles the "tool_use" event (opencode ≥ 2.x). One
 // COMPLETED line carries both the call and its result in part.state, so it
 // yields two public events in stream order: the ToolCall, then the correlated
-// ToolResult (status "completed" is a success — this vocabulary records no
-// error shape, so IsError stays false). A part whose state has not reached
-// "completed" (pending/running updates) yields the ToolCall only: the call
-// happened, but no result is asserted for a call that has not finished.
+// ToolResult. status "completed" yields a successful result; status "error"
+// yields the FAILED result with part.state.error's diagnostic and IsError set
+// — the same public result path a success takes, so the live tool-start gets
+// its matching failure outcome. The failed status prevails over any stale
+// success-shaped output field, and the failure is a tool outcome, not a
+// run-fatal one: the agent may recover (later records still stream). A part
+// still pending/running yields the ToolCall only: no result is asserted for
+// a call that has not finished.
 func parseOpencodeToolUse(raw []byte, runID string) ([]RunEvent, bool) {
 	var ev struct {
 		Part struct {
@@ -589,11 +615,14 @@ func parseOpencodeToolUse(raw []byte, runID string) ([]RunEvent, bool) {
 				Status string          `json:"status"`
 				Input  json.RawMessage `json:"input"`
 				Output json.RawMessage `json:"output"`
+				Error  string          `json:"error"`
 			} `json:"state"`
 		} `json:"part"`
 	}
 	if err := json.Unmarshal(raw, &ev); err != nil {
-		return nil, false
+		// Recognized tool event with an undecodable payload — never silence
+		// it (F3); the call record would otherwise vanish without a trace.
+		return []RunEvent{undecodableOpencodeEvent(runID, "tool_use", err)}, true
 	}
 	if ev.Part.ID == "" && ev.Part.Tool == "" {
 		return nil, false
@@ -607,7 +636,8 @@ func parseOpencodeToolUse(raw []byte, runID string) ([]RunEvent, bool) {
 			ToolInput: safeCopyRaw(ev.Part.State.Input),
 		},
 	}}
-	if ev.Part.State.Status == "completed" && len(ev.Part.State.Output) > 0 {
+	switch {
+	case ev.Part.State.Status == "completed" && len(ev.Part.State.Output) > 0:
 		events = append(events, RunEvent{
 			Kind:  EventKindToolResult,
 			RunID: runID,
@@ -617,8 +647,39 @@ func parseOpencodeToolUse(raw []byte, runID string) ([]RunEvent, bool) {
 				Output:   safeCopyRaw(ev.Part.State.Output),
 			},
 		})
+	case ev.Part.State.Status == "error":
+		// Terminal failed tool (the installed 2.2.6 emitter's
+		// session.tool.failed branch sends status:"error" with
+		// error:state.error.message). The diagnostic is the output, IsError
+		// marks the outcome; nothing is treated as a run-fatal condition.
+		events = append(events, RunEvent{
+			Kind:  EventKindToolResult,
+			RunID: runID,
+			ToolResult: &ToolResultEvent{
+				CallID:   ev.Part.ID,
+				ToolName: ev.Part.Tool,
+				Output:   safeMarshal(ev.Part.State.Error),
+				IsError:  true,
+			},
+		})
 	}
 	return events, true
+}
+
+// undecodableOpencodeEvent builds the visible fatal error for a recognized
+// event line whose typed payload cannot be decoded (F3). The content is
+// lost, so the failure must be public, name the event kind for diagnosis,
+// and — being fatal — prevent a later successful completion.
+func undecodableOpencodeEvent(runID, kind string, err error) RunEvent {
+	slog.Warn("runner/opencode: undecodable event payload", "run_id", runID, "event", kind, "err", err)
+	return RunEvent{
+		Kind:  EventKindError,
+		RunID: runID,
+		Err: &ErrorEvent{
+			Message: fmt.Sprintf("opencode returned an undecodable %s event: %v", kind, err),
+			Fatal:   true,
+		},
+	}
 }
 
 // parseOpencodeError handles the "error" event. opencode ≥ 2.x nests the
