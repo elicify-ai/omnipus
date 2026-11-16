@@ -14,8 +14,11 @@ import { checkNoticeVisibilityInstrument } from './fixtures/helper-notices-instr
 import { expectRestartedWriter } from './fixtures/helper-notices-restart';
 import { reloadCountdownPair } from './fixtures/helper-notices-reload';
 import { expectNoStaleRestartRows } from './fixtures/helper-notices-catchup';
+import { countdownReloadCases } from './fixtures/helper-notices-native';
 
-test.use({ storageState: { cookies: [], origins: [] } });
+// T14: trace/video are worker-scoped in Playwright, so disable them at file scope.
+// Page-side paint JSON, passive frame receipts and explicit screenshots remain.
+test.use({ storageState: { cookies: [], origins: [] }, trace: 'off', video: 'off' });
 test.describe.configure({ retries: 0 });
 test.setTimeout(150_000);
 
@@ -151,8 +154,9 @@ for (const seconds of [29, 35]) {
   });
 }
 
+countdownReloadCases(() => {
 test('silence then 429: clear-before-retry live and after reload in both chats', async ({ page }, info) => {
-  const scene = await createNoticeScene(page, info, { script: 'silence-retry', wait: 20, parentSilenceRetry: true });
+  const scene = await createNoticeScene(page, info, { script: 'silence-retry', wait: 20, parentSilenceRetry: true, nativeNotices: true });
   try {
     await scene.releaseFailures();
     // Derive the opaque own turn id from an actual main-agent token, not a
@@ -212,7 +216,7 @@ test('silence then 429: clear-before-retry live and after reload in both chats',
 });
 
 test('reload at s5 after root done at s3 retains 0:24..0:26 in top and helper', async ({ page }, info) => {
-  const scene = await createNoticeScene(page, info, { script: 'retry', wait: 30, parentWriting: true });
+  const scene = await createNoticeScene(page, info, { script: 'retry', wait: 30, parentWriting: true, nativeNotices: true });
   try {
     await scene.releaseFailures(); await expectNamed(scene);
     await afterRealWait(scene, 3); scene.provider.parentFinish.resolve();
@@ -226,7 +230,7 @@ test('reload at s5 after root done at s3 retains 0:24..0:26 in top and helper', 
 });
 
 test('same turn retry → recovery → real tool → retry: only current row replays', async ({ page }, info) => {
-  const scene = await createNoticeScene(page, info, { script: 'repeat', wait: 10 });
+  const scene = await createNoticeScene(page, info, { script: 'repeat', wait: 10, nativeNotices: true });
   try {
     await scene.releaseFailures(); await expectNamed(scene);
     await recoverHelper(scene);
@@ -242,6 +246,8 @@ test('same turn retry → recovery → real tool → retry: only current row rep
     await expect.poll(() => visibleNamed(page, 'Researcher', 'after 1 retry')).toEqual([]);
   } finally { await scene.close(); }
 });
+
+}); // T14: end anonymous trace/video-off countdown group.
 
 for (const finish of ['failed', 'stopped'] as const) {
   test(`named row leaves when helper ${finish}`, async ({ page }, info) => {
@@ -409,6 +415,7 @@ for (const catchup of ['incremental', 'snapshot', 'restart', 'live_only'] as con
   });
 }
 
+countdownReloadCases(() => {
 test('ordered real held end removes only its helper; two rows become one and replay stays current', async ({ page }, info) => {
   // T8 approved split B: browser covers legal ordered transport/replay for two
   // real helper turns; the same-chat late-publication race is the sequenced
@@ -448,13 +455,16 @@ test('ordered real held end removes only its helper; two rows become one and rep
     expect(await visibleNamed(page, 'Researcher', oldClause)).toEqual([]);
     await expectNamed(scene, 'Researcher', survivorClause);
     expect(await ended(scene, 1), 'positive control: the surviving helper is still working').toBe('working');
+    // T14: the held-end controls above keep their real proxy; only the later
+    // measured reload is native. Exclude its warm-up from the reload fence.
+    await scene.nativeCountdownPage();
     const before = scene.traffic.frames.length;
     await reloadCountdownPair(scene, info, 'ordered-survivor', [1], 1);
     await expect.poll(() => scene.traffic.frames.slice(before).filter(f => f.type === 'catch_up_complete').length,
       { message: 'positive control: actual server replay completed after reload' }).toBeGreaterThan(0);
-    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
+    await expect.poll(() => visibleNamed(scene.page, 'Researcher', 'Retrying automatically'),
       { message: 'FR-008: replay retains exactly the still-active turn', timeout: 2_000 }).toHaveLength(1);
-    expect(await visibleNamed(page, 'Researcher', oldClause)).toEqual([]);
+    expect(await visibleNamed(scene.page, 'Researcher', oldClause)).toEqual([]);
     await expectNamed(scene, 'Researcher', survivorClause);
   } finally { await scene.close(); }
 });
@@ -464,7 +474,7 @@ for (const composition of ['3 waiting', '4 recovered', '2 waiting + 2 recovered'
     const count = composition === '3 waiting' ? 3 : 4;
     // T12: recoverHelper consumes the first two10s waits. Only the helpers
     // that must STILL be waiting at reload get60s; recovery timing is unchanged.
-    const scene = await createNoticeScene(page, info, { script: 'retry', wait: 10, count,
+    const scene = await createNoticeScene(page, info, { script: 'retry', wait: 10, count, nativeNotices: true,
       helperWaits: composition === '2 waiting + 2 recovered' ? [10, 10, 60, 60] : undefined });
     try {
       await scene.releaseFailures(); await expectNamed(scene);
@@ -499,6 +509,8 @@ for (const composition of ['3 waiting', '4 recovered', '2 waiting + 2 recovered'
     } finally { await scene.close(); }
   });
 }
+
+}); // T14: end anonymous trace/video-off overflow/survivor group.
 
 test('named announcement has one polite owner and frozen countdown text', async ({ page }, info) => {
   const scene = await createNoticeScene(page, info, { script: 'retry', helperScripts: ['retry', 'silence'], wait: 60, count: 2 });
