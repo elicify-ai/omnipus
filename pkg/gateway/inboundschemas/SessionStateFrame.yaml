@@ -124,6 +124,16 @@ properties:
     type: string
     format: date-time
     description: RFC 3339 timestamp of when the server computed this snapshot.
+  emitted_at_ms:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      #1537 FR-008. Unix epoch milliseconds of the same instant as
+      emitted_at (both come from one server clock reading). The SPA prefers
+      it as its server-clock sample for provider countdowns and falls back to
+      emitted_at when it is absent. Optional: older gateways omit it. Keep in
+      sync by hand with contracts/asyncapi.yaml's inline SessionStateFrame.
   secret_requests:
     type: array
     maxItems: 1000

@@ -1044,6 +1044,7 @@ export const SessionStateFrame = z
     active_turn: SessionStateActiveTurn.optional(),
     boot_id: z.string().optional(),
     emitted_at: z.string(),
+    emitted_at_ms: z.number().int().min(0).optional(),
   })
   .strict();
 

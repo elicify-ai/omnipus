@@ -12,14 +12,16 @@ import { installNoticeLink } from './helper-notices-link';
 import { removeSessionHistoryIndex } from './chat-history';
 import { visibleNamedRows } from './helper-notices-visible';
 import { installNoticePaintRecorder } from './helper-notices-paint';
+import { installNoticeCatchupRecorder } from './helper-notices-catchup';
+import { directNoticeLink } from './helper-notices-native';
 
 // not-wire-format: private scenario/traffic instrumentation, not a gateway DTO.
 export type NoticeScene = Awaited<ReturnType<typeof createNoticeScene>>;
 export type NoticeTraffic = ReturnType<typeof observeNotices>;
-export function observeNotices(page: Page) {
-  const frames: Record<string, unknown>[] = [];
-  const receivedAt: number[] = [];
-  const sends: Record<string, unknown>[] = [];
+export function observeNotices(page: Page, existing?: { frames: Record<string, unknown>[]; receivedAt: number[]; sends: Record<string, unknown>[] }) {
+  const frames: Record<string, unknown>[] = existing?.frames ?? [];
+  const receivedAt: number[] = existing?.receivedAt ?? [];
+  const sends: Record<string, unknown>[] = existing?.sends ?? [];
   page.on('websocket', socket => {
     if (!socket.url().includes('/api/v1/chat/ws')) return;
     socket.on('framereceived', ({ payload }) => {
@@ -31,7 +33,7 @@ export function observeNotices(page: Page) {
   return { frames, receivedAt, sends };
 }
 
-export async function createNoticeScene(page: Page, info: TestInfo, options: NoticeScriptOptions & { duplicateNames?: boolean; unavailableHistory?: boolean; helperNames?: string[] }) {
+export async function createNoticeScene(page: Page, info: TestInfo, options: NoticeScriptOptions & { duplicateNames?: boolean; unavailableHistory?: boolean; helperNames?: string[]; nativeNotices?: boolean }) {
   if (process.env.HEAVY_SLOT && process.env.HEAVY_SLOT !== 'remote') throw new Error('REFUSED: helper-notice browser tests require a runner, never local heavy fallback');
   const provider = await startHelperNoticesProvider(options);
   let gateway: GatewayProcess | undefined;
@@ -100,12 +102,15 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
       expect(unavailable.status).toBe(200);
       expect(SessionDetail.parse(unavailable.body).history_state).toMatchObject({ status: 'unavailable', reason: 'index_missing' });
     }
-    const link = await installNoticeLink(page);
+    const catchupReceipt = await installNoticeCatchupRecorder(page, root.id);
+    const link = options.nativeNotices ? directNoticeLink(page, traffic) : await installNoticeLink(page);
+    let nativeMain = options.nativeNotices ?? false;
     link.setRoot(root.id);
     await page.context().addCookies((await gateway.browserStorageState()).cookies);
-    const mainPaints = await installNoticePaintRecorder(page, info, 'main');
+    let mainPaints = await installNoticePaintRecorder(page, info, 'main');
     await openSessionByDeepLink(page, root.id, gateway.baseURL);
     await waitForConnected(page, { timeout: 15_000 });
+    await catchupReceipt.first(info, 'initial');
     await chatInput(page).fill('HM_ROOT_TASK. Delegate the exact scripted helper tasks.');
     await chatInput(page).press('Enter');
     await expect.poll(() => provider.helpers.filter(h => h.calls > 0).length, { message: 'positive control: real helper requests reached the fake model', timeout: 20_000 }).toBe(options.count ?? 1);
@@ -140,7 +145,27 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
       expect(calls.map(c => c.status), 'real delegate successes, not just a scripted sentence').toEqual(Array.from({ length: delegationCount }, () => 'success'));
     }
     const gw = gateway;
-    return { gateway: gw, provider, page, own, traffic, ownTraffic, children, agents, parent, root, workspace, link,
+    return { gateway: gw, provider, get page() { return page; }, own, traffic, ownTraffic, children, agents, parent, root, workspace, link, catchupReceipt,
+      async nativeCountdownPage() {
+        if (!nativeMain) {
+          // T10 needs the real held end BEFORE measurement. Archive it, then
+          // park the routed page (and close its socket). Keep the original
+          // fixture page alive for its independent teardown hooks.
+          await mainPaints.attach();
+          const context = page.context();
+          await page.goto('about:blank');
+          page = await context.newPage(); childrenPages.push(page);
+          observeNotices(page, traffic);
+          const warmup = await installNoticeCatchupRecorder(page, root.id);
+          mainPaints = await installNoticePaintRecorder(page, info, 'main-native-reload');
+          await openSessionByDeepLink(page, root.id, gw.baseURL);
+          await waitForConnected(page);
+          // Drain the actual page/parser completion BEFORE the measured fence.
+          await warmup.first(info, 'native-warmup-before-measured-reload');
+          nativeMain = true;
+        }
+        return page;
+      },
       async releaseFailures() {
         if (!options.parentWriting && !options.parentRetry && !options.parentSilenceRetry) { provider.parentFinish.resolve(); await expect.poll(() => provider.evidence.parentDone).toBe(true); }
         for (let i = 0; i < provider.fail.length; i++) {

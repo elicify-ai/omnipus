@@ -64,10 +64,14 @@ func FixtureToolApprovalRequiredFrame_Edge() ToolApprovalRequiredFrame {
 // SessionStateFrame — pending_approvals MUST be a non-nil slice.
 
 func FixtureSessionStateFrame_Populated() SessionStateFrame {
+	// #1537 FR-008: emitted_at and emitted_at_ms come from one clock reading.
+	now := time.Now()
+	emittedAtMs := now.UnixMilli()
 	return SessionStateFrame{
-		Type:      "session_state",
-		UserId:    "user-admin-1",
-		EmittedAt: time.Now().UTC().Format(time.RFC3339),
+		Type:        "session_state",
+		UserId:      "user-admin-1",
+		EmittedAt:   now.UTC().Format(time.RFC3339),
+		EmittedAtMs: &emittedAtMs,
 		PendingApprovals: []SessionStatePendingApproval{
 			{
 				ApprovalId:  "ap-1",
@@ -109,6 +113,8 @@ func FixtureSessionStateFrame_Edge() SessionStateFrame {
 		Type:      "session_state",
 		UserId:    "user-unicode-🔑",
 		EmittedAt: "2026-05-17T00:00:01Z",
+		// #1537 FR-008: the same instant as emitted_at, with its millisecond part.
+		EmittedAtMs: func() *int64 { v := int64(1778976001999); return &v }(),
 		PendingApprovals: []SessionStatePendingApproval{
 			{ApprovalId: "ap-1", SessionId: "sess-1", ToolName: "tool.a", AgentId: "jim", ExpiresInMs: 1,
 				ToolCallId: "tc-1", TurnId: "turn-1", Args: map[string]any{}},

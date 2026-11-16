@@ -27,17 +27,28 @@ export async function reloadCountdownPair(scene: NoticeScene, info: TestInfo, la
   if (!scene.own.url().endsWith(`/sessions/${scene.children[ownIndex].id}`)) {
     await openSessionByDeepLink(scene.own, scene.children[ownIndex].id, scene.gateway.baseURL);
   }
-  // Both documents have the init recorder BEFORE reload. Both branches finish
-  // and attach their timestamps even if one fails; rethrow, never swallow it.
-  const results = await Promise.allSettled([
-    (async () => {
-      await scene.page.reload(); await waitForConnected(scene.page);
-      await expectRestoredCountdowns(scene.page, info, `${label}-main`, [...mainOwn, ...named]);
-    })(),
-    (async () => {
-      await scene.own.reload(); await waitForConnected(scene.own);
-      await expectRestoredCountdowns(scene.own, info, `${label}-helper`, [helper]);
-    })(),
-  ]);
-  for (const result of results) if (result.status === 'rejected') throw result.reason;
+  const main = await scene.nativeCountdownPage();
+  // T14: no routed socket in the measured path, no proxy delay subtraction.
+  // Only ONE page reloads at a time; trace/video are off in these case scopes.
+  // The init recorder's navigation origin/deadline and both assertions are
+  // unchanged: waiting for the server is charged to the SAME strict2s budget.
+  const failures: unknown[] = [];
+  for (const [measuredPage, audience, targets, traffic] of [
+    [main, 'main', [...mainOwn, ...named], scene.traffic],
+    [scene.own, 'helper', [helper], scene.ownTraffic],
+  ] as const) {
+    try {
+      expect(measuredPage.video(), 'T14 measured reload has no video recording').toBeNull();
+      const beforeReload = traffic.frames.length;
+      await measuredPage.reload(); await waitForConnected(measuredPage);
+      await info.attach(`helper-notice-reload-environment-${label}-${audience}`, { body: JSON.stringify({ audience,
+        serial: true, transport: 'native-no-proxy', proxyDelaySubtractedMs: 0, video: 'off',
+        reloadFrames: traffic.frames.slice(beforeReload).filter(f => ['session_state', 'catch_up_complete'].includes(String(f.type))) }), contentType: 'application/json' });
+      await expectRestoredCountdowns(measuredPage, info, `${label}-${audience}`, [...targets]);
+      expect(traffic.frames.slice(beforeReload).some(f => f.type === 'catch_up_complete' && f.session_id === targets[0].sessionId),
+        'T14 positive control: THIS native measured reload completed its actual attach').toBe(true);
+    } catch (error) { failures.push(error); }
+  }
+  // Collect both serial branches' evidence, but never convert a failure to pass.
+  for (const error of failures) throw error;
 }
