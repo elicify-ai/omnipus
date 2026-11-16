@@ -10,7 +10,14 @@ export async function installNoticeLink(page: Page) {
   const blocked = new Set<WebSocketRoute>();
   const sockets: Array<{ client: WebSocketRoute; server: WebSocketRoute }> = [];
   const frames: Record<string, unknown>[] = [];
+  const forwarded: Record<string, unknown>[] = [];
   const events: Array<{ kind: string; at: number }> = [];
+  function forward(raw: string | Buffer, socket: WebSocketRoute, frame: Record<string, unknown>) {
+    // page.on('websocket').framereceived sees upstream frames even when held.
+    // Every page-directed send, on EVERY owned socket, passes this boundary.
+    socket.send(raw);
+    forwarded.push(frame);
+  }
   await page.routeWebSocket('**/api/v1/chat/ws*', socket => {
     events.push({ kind: offline ? 'rejected-offline' : 'connect-to-server', at: Date.now() });
     if (offline) { socket.close({ code: 1001, reason: 'scripted network outage' }); return; }
@@ -32,11 +39,11 @@ export async function installNoticeLink(page: Page) {
       // T8 split B: a transport can stall an ordered suffix, never let newer
       // frames overtake a held sequenced end (including an attach replay).
       if (blocked.has(socket)) { held.push({ raw, socket, frame }); return; }
-      if (!offline) socket.send(raw);
+      if (!offline) forward(raw, socket, frame);
     });
   });
   return {
-    frames, events,
+    frames, forwarded, events,
     setRoot(id: string) { root = id; },
     disconnect() {
       expect(sockets.length, 'network instrument owns a real connected socket').toBeGreaterThan(0);
@@ -61,7 +68,7 @@ export async function installNoticeLink(page: Page) {
         'positive instrument: a real ended frame starts the ordered held suffix').toBe(true);
       holdEnd = false;
       const delivered = held.splice(0);
-      for (const item of delivered) item.socket.send(item.raw);
+      for (const item of delivered) forward(item.raw, item.socket, item.frame);
       blocked.clear();
       return delivered.map(item => item.frame);
     },

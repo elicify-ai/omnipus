@@ -83,15 +83,33 @@ func TestHelperOuterRetryCarriesBothSessionIdentities(t *testing.T) {
 }
 
 func TestHelperSilenceClearPrecedesRetryProducer(t *testing.T) {
-	h, rt := hmAgentTurn(t)
-	rt.providerSilence = &providerSilenceWatch{rt: rt, waiting: true, lastActivity: time.Now().Add(-31 * time.Second)}
-	rt.providerRetryObserver()(providers.RetryInfo{Reason: "rate_limit", Provider: "p", Model: "m", Attempt: 2, MaxAttempts: 6, SentAt: time.Now(), RetryAt: time.Now().Add(20 * time.Second)})
-	require.Len(t, h.events, 2)
-	require.Equal(t, EventKindProviderStatus, h.events[0].Kind, "FR-013: silence clear is published BEFORE the new retry")
-	clearPayload, ok := h.events[0].Payload.(ProviderStatusPayload)
-	require.True(t, ok, "silence clear has the documented in-process status payload")
-	require.Equal(t, "responding", clearPayload.State)
-	require.Equal(t, EventKindProviderRetry, h.events[1].Kind, "the new countdown must be the final event")
+	// Chief's FR-013 ruling includes the main agent's OWN turn, not just a
+	// helper's own-chat copy. Keep both serial variants in this existing case.
+	for _, audience := range []string{"own", "helper"} {
+		h, rt := hmAgentTurn(t)
+		if audience == "own" {
+			h.ts.routingSessionID = session.RoutingSessionID(h.sid)
+			require.Equal(t, h.sid, h.ts.transcriptSessionID, "own-turn positive control: real transcript identity")
+			require.Equal(t, h.ts.transcriptSessionID, string(h.ts.routingSessionID), "own-turn positive control: not helper routing")
+		} else {
+			require.NotEqual(t, h.ts.transcriptSessionID, string(h.ts.routingSessionID), "helper routing remains covered")
+		}
+		rt.emitProviderStatus(ProviderStatusPayload{State: "waiting", SilentSince: time.Now().Add(-31 * time.Second)})
+		rt.providerSilence = &providerSilenceWatch{rt: rt, waiting: true, lastActivity: time.Now().Add(-31 * time.Second)}
+		rt.providerRetryObserver()(providers.RetryInfo{Reason: "rate_limit", Provider: "p", Model: "m", Attempt: 2, MaxAttempts: 6, SentAt: time.Now(), RetryAt: time.Now().Add(20 * time.Second)})
+		require.Len(t, h.events, 3, "FR-013 %s: waiting, clear and retry are all published", audience)
+		waiting, ok := h.events[0].Payload.(ProviderStatusPayload)
+		require.True(t, ok, "%s: initial waiting uses the status payload", audience)
+		require.Equal(t, "waiting", waiting.State, "%s: silence really precedes the failure", audience)
+		if audience == "own" {
+			require.Empty(t, hmPayloadChild(t, h.events[0].Payload), "own-turn positive control: no helper identity")
+		}
+		require.Equal(t, EventKindProviderStatus, h.events[1].Kind, "FR-013 %s: silence clear is published BEFORE the new retry", audience)
+		clearPayload, ok := h.events[1].Payload.(ProviderStatusPayload)
+		require.True(t, ok, "%s: silence clear has the documented in-process status payload", audience)
+		require.Equal(t, "responding", clearPayload.State, "%s: the old silence is cleared", audience)
+		require.Equal(t, EventKindProviderRetry, h.events[2].Kind, "FR-013 %s: the new countdown must be the final event", audience)
+	}
 }
 
 func TestHelperNoticesAreNotPersisted(t *testing.T) {

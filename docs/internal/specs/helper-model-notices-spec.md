@@ -270,7 +270,7 @@ Boundary conditions:
 - `ended` is never published without `child_session_id`. `child_session_id` and `agent_id` are both present or both absent.
 - Both copies validate against the generated schemas.
 
-**Timing**: the named row is visible within 2 s of the main-chat copy arriving; after a reload during the wait, within 2 s of the chat finishing loading. After a reload at second 5 of a 30-second wait, the countdown reads between 0:24 and 0:26.
+**Timing**: the named row is visible within 2 s of the main-chat copy arriving; after a reload during the wait, within 2 s of the chat finishing loading. After a reload during the wait, the countdown reads the true remaining time at the moment the countdown is painted, ±1 s (for example, after a reload at second 5 of a 30-second wait that paints 1 s after the reload, 0:23–0:25); the 2 s display budget above is measured separately, from the reload to that paint. (Correction 2026-11-16, chief ruling T9 A: the earlier fixed range 0:24–0:26 ignored the load time the same sentence allows.)
 
 **Count**: at most 4 named-area rows (3 rows plus 1 summary) at any time.
 
@@ -454,7 +454,7 @@ Boundary conditions:
 - **Given** Researcher's named retry row is shown with `Retry-After: 30` while the main agent is still writing
 - **And** the main agent finishes its reply at second 3
 - **When** the user reloads the main chat at second 5
-- **Then** within 2 s of the chat loading, Researcher's named row is back with a countdown between 0:24 and 0:26
+- **Then** within 2 s of the chat loading, Researcher's named row is back with a countdown showing the true remaining time at the moment the countdown is painted, ±1 s
 
 #### Scenario: Reload of the helper's chat during the wait
 
@@ -463,7 +463,7 @@ Boundary conditions:
 
 - **Given** the helper's chat shows the retry line with `Retry-After: 30`
 - **When** the user reloads the helper's chat at second 5
-- **Then** within 2 s of loading the retry line is back with a countdown between 0:24 and 0:26
+- **Then** within 2 s of loading the retry line is back with a countdown showing the true remaining time at the moment the countdown is painted, ±1 s
 
 #### Scenario: Stale retry does not come back after recovery on reload
 
@@ -514,7 +514,7 @@ Correction 2026-11-16 (chief ruling U1 (a), 00:57Z). This row used to be "full s
 - **Given** Researcher's named silence row is shown after 30 s of silence
 - **When** Researcher's call then fails with 429 (`Retry-After: 20`) and a retry is scheduled
 - **Then** the main chat shows Researcher's named retry countdown, and the helper's chat shows the same countdown
-- **And** after a reload 5 s later both still show the countdown (0:14–0:16)
+- **And** after a reload 5 s later both still show the countdown, each reading the true remaining time at the moment the countdown is painted, ±1 s, painted within 2 s of loading
 
 #### Scenario: A later retry in the same turn is shown
 
@@ -691,7 +691,7 @@ Setup for every row: the scripted fake-model instance from `/workspace/logs/1537
 | UAT-H5 | US4-1 | Main agent's own call 429 (Retry-After 20); helper recovers at second 5 | Main agent's own countdown unchanged; named recovered row below it | #1850 | Screenshot + DOM check of both | yes |
 | UAT-H6 | US4-2, US4-3 | Two helpers: one 429, one silent; then one finishes | Two named rows; one removed on finish | #1850 | Screenshot sequence | yes |
 | UAT-H7 | US2-1, US2-5 (helper of a helper) | Top chat asks General Purpose to delegate to itself, and the child to delegate once more; the grandchild's first call gets 429 (Retry-After 10), then 200; the grandchild finishes while the middle helper is still running | Top chat: a named row for the grandchild, then the recovered row, then gone when the grandchild's turn ends. Middle chat: no named row. Grandchild chat: retry and recovered lines | nested delegation | Screenshots of top, middle and grandchild chats | yes |
-| UAT-H8 | US2-8 | Retry-After 30 while the main agent still writes; main agent finishes at second 3; reload the main chat at second 5 | Named row back within 2 s, countdown 0:24–0:26 | projection, clock | Screenshot after reload | yes |
+| UAT-H8 | US2-8 | Retry-After 30 while the main agent still writes; main agent finishes at second 3; reload the main chat at second 5 | Named row back within 2 s of loading; countdown shows the true remaining time at the moment the countdown is painted, ±1 s (about 0:23–0:25 for a 1 s load) | projection, clock | Screenshot after reload | yes |
 | UAT-H9 | US3 | Real screen reader (Orca or VoiceOver) on UAT-H2 and UAT-H6's main chat | Each state change announced once with the helper's name; no tick announcements | accessibility | Recorded announcement log | no: needs a human screen-reader pass |
 | UAT-H10 | US2-7 | Helper's first model gets 429 on all three calls (Retry-After 2), its fallback answers at once with a tool request, then a 30 s tool call; check the fake model's request log (3 + 1 calls) | Named row gone while the helper still works; no fallback note in the main chat | fallback clearing | Screenshot during the tool call | yes |
 | UAT-H11 | US1-5, US2-9 | Helper's first call: no first byte within the request timeout; then (second run) an empty stream; each time the next call answers with a tool request and a 30 s tool call follows | Retry lines with the no-response / empty-reply wording in both chats; the main chat's named row clears when the model answers, while the tool still runs | #1664 retries | Frame log + screenshots | yes |
@@ -750,7 +750,7 @@ Correction 2026-11-15 (chief, Q1 A, 20:28Z): dataset row 3 used to expect `Retry
 | 12 | silent 31 s, then 429 (Retry-After 20), then 200 | silence then retry | silence cleared, retry countdown kept live and after reload | Silence clear does not erase the new retry | producer order |
 | 13 | no first byte, then a prompt tool request, then 30 s tool | timeout success | named row cleared on answer, no recovered count invented | Named row clears after a timeout retry succeeds | |
 | 14 | 429 → 200 (tool) → 429 → 200 in one turn | same-turn retry | second retry shown live and after reload | A later retry in the same turn is shown | |
-| 11 | Retry-After 30, main agent done at s3, reload at s5 | reload | countdown 0:24–0:26 | Reload after the main agent finished | |
+| 11 | Retry-After 30, main agent done at s3, reload at s5 | reload | painted within 2 s of loading; countdown = the true remaining time at the moment the countdown is painted, ±1 s | Reload after the main agent finished | |
 
 #### Dataset: Main chat composition
 
@@ -804,7 +804,7 @@ Correction 2026-11-15 (chief, Q1 A, 20:28Z): dataset row 3 used to expect `Retry
 - **SC-002**: In the same run, the helper's chat shows the retry line (today: only "Waiting for response…").
 - **SC-003**: The existing own-notice tests for #1280, #1478 and #1664 pass unmodified.
 - **SC-004**: In the overlap run (UAT-H5), the main agent's own countdown is still shown 1 s after the helper's recovered frame.
-- **SC-005**: After a reload at second 5 of a 30-second helper wait (main agent already finished), the named countdown reads 0:24–0:26.
+- **SC-005**: After a reload at second 5 of a 30-second helper wait (main agent already finished), the named countdown is painted within 2 s of loading and reads the true remaining time at the moment the countdown is painted, ±1 s.
 - **SC-006**: The e2e spec passes 3 runs in a row with retries=0 in its stubs shard.
 
 ---

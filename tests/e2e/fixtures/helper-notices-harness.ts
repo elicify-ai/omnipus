@@ -11,6 +11,7 @@ import { startHelperNoticesProvider, type NoticeScriptOptions } from './helper-n
 import { installNoticeLink } from './helper-notices-link';
 import { removeSessionHistoryIndex } from './chat-history';
 import { visibleNamedRows } from './helper-notices-visible';
+import { installNoticePaintRecorder } from './helper-notices-paint';
 
 // not-wire-format: private scenario/traffic instrumentation, not a gateway DTO.
 export type NoticeScene = Awaited<ReturnType<typeof createNoticeScene>>;
@@ -102,6 +103,7 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
     const link = await installNoticeLink(page);
     link.setRoot(root.id);
     await page.context().addCookies((await gateway.browserStorageState()).cookies);
+    const mainPaints = await installNoticePaintRecorder(page, info, 'main');
     await openSessionByDeepLink(page, root.id, gateway.baseURL);
     await waitForConnected(page, { timeout: 15_000 });
     await chatInput(page).fill('HM_ROOT_TASK. Delegate the exact scripted helper tasks.');
@@ -122,6 +124,7 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
     expect(children).toHaveLength(options.count ?? 1);
     const own = await page.context().newPage(); childrenPages.push(own);
     const ownTraffic = observeNotices(own);
+    const ownPaints = await installNoticePaintRecorder(own, info, 'helper');
     await openSessionByDeepLink(own, children.at(-1)!.id, gateway.baseURL);
     await waitForConnected(own, { timeout: 15_000 });
     const detail = await gateway.apiFetch('GET', `/api/v1/sessions/${root.id}`);
@@ -139,7 +142,7 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
     const gw = gateway;
     return { gateway: gw, provider, page, own, traffic, ownTraffic, children, agents, parent, root, workspace, link,
       async releaseFailures() {
-        if (!options.parentWriting && !options.parentRetry) { provider.parentFinish.resolve(); await expect.poll(() => provider.evidence.parentDone).toBe(true); }
+        if (!options.parentWriting && !options.parentRetry && !options.parentSilenceRetry) { provider.parentFinish.resolve(); await expect.poll(() => provider.evidence.parentDone).toBe(true); }
         for (let i = 0; i < provider.fail.length; i++) {
           const before = traffic.frames.filter(f => f.type === 'provider_retry').length;
           provider.fail[i].resolve();
@@ -157,7 +160,10 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
       async close() {
         try {
           await info.attach('helper-model-provider-evidence', { body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json' });
-          await info.attach('helper-model-raw-notice-traffic', { body: JSON.stringify({ top: traffic, own: ownTraffic, linkEvents: link.events }, null, 2), contentType: 'application/json' });
+          await info.attach('helper-model-raw-notice-traffic', { body: JSON.stringify({ top: traffic, own: ownTraffic, linkEvents: link.events,
+            linkForwardedNotices: link.forwarded.filter(f => f.type === 'provider_retry' || f.type === 'provider_status') }, null, 2), contentType: 'application/json' });
+          const paints = await Promise.allSettled([mainPaints.attach(), ownPaints.attach()]);
+          for (const result of paints) if (result.status === 'rejected') throw result.reason;
         } finally {
           for (const p of childrenPages) await p.close();
           // Tear down the owned PID before releasing scripted answers:

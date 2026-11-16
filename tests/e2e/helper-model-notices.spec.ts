@@ -12,6 +12,7 @@ import { recoverHelper } from './fixtures/helper-notices-recovery';
 import { expectPainted, paintedText, visibleNamedRows } from './fixtures/helper-notices-visible';
 import { checkNoticeVisibilityInstrument } from './fixtures/helper-notices-instrument';
 import { expectRestartedWriter } from './fixtures/helper-notices-restart';
+import { reloadCountdownPair } from './fixtures/helper-notices-reload';
 
 test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ retries: 0 });
@@ -150,29 +151,57 @@ for (const seconds of [29, 35]) {
 }
 
 test('silence then 429: clear-before-retry live and after reload in both chats', async ({ page }, info) => {
-  const scene = await createNoticeScene(page, info, { script: 'silence-retry', wait: 20 });
+  const scene = await createNoticeScene(page, info, { script: 'silence-retry', wait: 20, parentSilenceRetry: true });
   try {
     await scene.releaseFailures();
-    await expect.poll(() => scene.link.frames.some(f => f.type === 'provider_status' && f.state === 'waiting'),
-      { message: 'positive control: silence watcher reached its real 30 s threshold', timeout: 35_000 }).toBe(true);
-    await expectNamed(scene, 'Researcher', "hasn't responded");
+    // Derive the opaque own turn id from an actual main-agent token, not a
+    // helper copy or an assumed turn-id format. Legacy status has no agent_id.
+    const ownStart = scene.link.forwarded.find(f => f.type === 'token' && f.session_id === scene.root.id &&
+      f.agent_id === scene.parent.id && f.content === 'HM_PARENT_DELEGATING ');
+    const ownTurn = ownStart?.turn_id;
+    expect(ownTurn, 'FR-013 own positive control: real main-agent token identifies the OWN turn').toEqual(expect.any(String));
+    const ownWaiting = () => scene.link.forwarded.find(f => f.type === 'provider_status' && f.state === 'waiting' &&
+      f.session_id === scene.root.id && !f.child_session_id && f.turn_id === ownTurn);
+    await expect.poll(ownWaiting, { message: 'FR-013 own positive control: real main-agent silence threshold', timeout: 35_000 }).toBeDefined();
+    const ownRequest = scene.provider.evidence.requests.find(r => r.role === 'parent' && r.call === 2);
+    expect(ownRequest, 'own continuation actually reached the scripted model edge').toBeDefined();
+    expect(ownRequest!.status, 'own request is still silent before the external HTTP failure').toBeUndefined();
+    await expectPainted(page.getByTestId('provider-waiting-indicator'), /hasn't responded/);
+    scene.provider.parentFailure.resolve();
+    const ownRetry = () => scene.link.forwarded.find(f => f.type === 'provider_retry' && f.session_id === scene.root.id &&
+      !f.child_session_id && f.turn_id === ownTurn);
+    await expect.poll(ownRetry, { message: 'FR-013 own positive control: real retry after own HTTP 429' }).toBeDefined();
+    expect(ownRequest!.status, 'the actual own model request failed with 429').toBe(429);
+    expect(ownRetry()!.retry_after_seconds, 'own backoff is the scripted 60 s, independent of the helper 20 s').toBe(60);
+    const ownEvents = scene.link.forwarded.filter(f => f.session_id === scene.root.id && !f.child_session_id &&
+      f.turn_id === ownTurn && (f.type === 'provider_status' || f.type === 'provider_retry'));
+    expect(ownEvents.slice(0, 3).map(f => f.type === 'provider_retry' ? 'retry' : f.state),
+      'FR-013 own live: silence clear is published BEFORE the new own retry').toEqual(['waiting', 'responding', 'retry']);
+    const ownSentence = /^openrouter is rate-limiting requests right now\. Retrying automatically in \d:\d{2} \(attempt 2 of 6\)\.$/;
+    await expectPainted(page.getByTestId('provider-retry-indicator'), ownSentence);
+    await expect(page.getByTestId('provider-waiting-indicator'), 'FR-013 own live: old silence is gone').toHaveCount(0);
+    const helperWaitingIndex = () => scene.traffic.frames.findIndex(f => f.type === 'provider_status' && f.state === 'waiting' &&
+      f.session_id === scene.root.id && f.turn_id !== ownTurn);
+    await expect.poll(helperWaitingIndex, { message: 'positive control: the helper silence copy actually arrived',
+      timeout: Math.max(1, scene.provider.helpers[0].firstAt + 35_000 - Date.now()) }).toBeGreaterThanOrEqual(0);
+    await expectNamed(scene, 'Researcher', "hasn't responded", scene.traffic.receivedAt[helperWaitingIndex()]);
     scene.provider.answer[0].resolve();
     await expectNamed(scene);
-    for (const [sid, frames] of [[scene.root.id, scene.traffic.frames], [scene.children[0].id, scene.ownTraffic.frames]] as const) {
-      const relevant = frames.filter(f => f.session_id === sid && (f.type === 'provider_status' || f.type === 'provider_retry'));
+    for (const [sid, frames] of [[scene.root.id, scene.link.forwarded], [scene.children[0].id, scene.ownTraffic.frames]] as const) {
+      const relevant = frames.filter(f => f.session_id === sid && f.turn_id !== ownTurn && (f.type === 'provider_status' || f.type === 'provider_retry'));
       expect(relevant.slice(0, 3).map(f => f.type === 'provider_retry' ? 'retry' : f.state)).toEqual(['waiting', 'responding', 'retry']);
     }
     await afterRealWait(scene, 5);
-    await Promise.all([
-      (async () => {
-        await page.reload(); await waitForConnected(page);
-        await expectNamed(scene, 'Researcher', '0:1[4-6]');
-      })(),
-      (async () => {
-        await scene.own.reload(); await waitForConnected(scene.own);
-        await expectPainted(scene.own.getByTestId('provider-retry-indicator'), /0:1[4-6]/);
-      })(),
-    ]);
+    const beforeReload = scene.link.forwarded.length;
+    // Chief correction b57b0f8713: true remaining at FIRST page-side paint
+    // ±1s; independent measured navigation→paint <=2s, never poll-return time.
+    await reloadCountdownPair(scene, info, 'silence-429', [0], 0,
+      [{ sessionId: scene.root.id, kind: 'own', retryAt: String(ownRetry()!.retry_at) }]);
+    await expectPainted(page.getByTestId('provider-retry-indicator'), ownSentence);
+    await expect(page.getByTestId('provider-waiting-indicator'), 'FR-013 own reload: old silence cannot erase the retry').toHaveCount(0);
+    await expect.poll(() => scene.link.forwarded.slice(beforeReload).filter(f => f.type === 'provider_retry' &&
+      f.session_id === scene.root.id && !f.child_session_id && f.turn_id === ownTurn).map(f => f.retry_at),
+    { message: 'FR-013 own replay: the same real countdown survives actual reload', timeout: 2_000 }).toEqual([ownRetry()!.retry_at]);
     await afterRealWait(scene, 21); await workingTool(scene);
     await expectNamed(scene, 'Researcher', 'after 1 retry');
     await page.reload(); await waitForConnected(page);
@@ -188,16 +217,9 @@ test('reload at s5 after root done at s3 retains 0:24..0:26 in top and helper', 
     await afterRealWait(scene, 3); scene.provider.parentFinish.resolve();
     await expect.poll(() => scene.provider.evidence.parentDone).toBe(true);
     await afterRealWait(scene, 5);
-    await Promise.all([
-      (async () => {
-        await page.reload(); await waitForConnected(page);
-        await expectNamed(scene, 'Researcher', '0:2[4-6]');
-      })(),
-      (async () => {
-        await scene.own.reload(); await waitForConnected(scene.own);
-        await expectPainted(scene.own.getByTestId('provider-retry-indicator'), /0:2[4-6]/);
-      })(),
-    ]);
+    // Historical case title/identity retained; b57b0f8713 replaces the old
+    // fixed range with the page-measured ±1s oracle in BOTH chats.
+    await reloadCountdownPair(scene, info, 'thirty-second-wait');
     await recordScene(scene, info, 'reattach-five-seconds');
   } finally { await scene.close(); }
 });
@@ -214,7 +236,8 @@ test('same turn retry → recovery → real tool → retry: only current row rep
     await expectNamed(scene);
     const retries = scene.traffic.frames.filter(f => f.type === 'provider_retry' && f.child_session_id === scene.children[0].id);
     expect(new Set(retries.map(f => f.turn_id)).size).toBe(1);
-    await page.reload(); await waitForConnected(page); await expectNamed(scene);
+    await reloadCountdownPair(scene, info, 'same-turn-later-retry');
+    await expectNamed(scene);
     await expect.poll(() => visibleNamed(page, 'Researcher', 'after 1 retry')).toEqual([]);
   } finally { await scene.close(); }
 });
@@ -408,21 +431,24 @@ test('ordered real held end removes only its helper; two rows become one and rep
     await expect.poll(() => ended(scene, 0)).toBe('stopped');
     await expect.poll(() => scene.link.heldEnded().filter(f => f.turn_id === old!.turn_id).length,
       { message: 'positive control: the actual stopped-turn end is held before its ordered suffix' }).toBe(1);
-    expect(scene.traffic.frames.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id),
-      'positive control: no old end reached the page before release').toEqual([]);
+    expect(scene.link.forwarded.filter(f => f.type === 'provider_retry').map(f => f.child_session_id),
+      'positive delivery instrument: both real retries were forwarded to the page').toEqual(scene.children.map(c => c.id));
+    expect(scene.link.forwarded.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id),
+      'FR-006 delivery control: no old end is forwarded on ANY owned socket before release').toEqual([]);
     await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
       { message: 'FR-005/006: both rows remain until ordered ended delivery', timeout: 2_000 }).toHaveLength(2);
     const suffix = scene.link.deliverHeldEnd();
     const end = suffix.find(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id);
     expect(end?.seq, 'positive control: the real held end retains its original server sequence').toEqual(expect.any(Number));
-    await expect.poll(() => scene.traffic.frames.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id).length).toBe(1);
+    expect(scene.link.forwarded.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id),
+      'FR-006 delivery control: the exact original end is forwarded once, only on release').toEqual([end]);
     await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
       { message: 'FR-006/007: ordered end leaves exactly the other helper turn', timeout: 2_000 }).toHaveLength(1);
     expect(await visibleNamed(page, 'Researcher', oldClause)).toEqual([]);
     await expectNamed(scene, 'Researcher', survivorClause);
     expect(await ended(scene, 1), 'positive control: the surviving helper is still working').toBe('working');
     const before = scene.traffic.frames.length;
-    await page.reload(); await waitForConnected(page);
+    await reloadCountdownPair(scene, info, 'ordered-survivor', [1], 1);
     await expect.poll(() => scene.traffic.frames.slice(before).filter(f => f.type === 'catch_up_complete').length,
       { message: 'positive control: actual server replay completed after reload' }).toBeGreaterThan(0);
     await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
@@ -448,7 +474,13 @@ for (const composition of ['3 waiting', '4 recovered', '2 waiting + 2 recovered'
         expect((await paintedText(summary))[0]).not.toContain('waiting');
         await expect.poll(() => visibleNamed(page, scene.agents[3].name, 'retry|Retrying')).toEqual([]);
       } else await expect(summary).toHaveCount(0);
-      await page.reload(); await waitForConnected(page);
+      if (recover < count) {
+        const waiting = Array.from({ length: Math.min(3, count) - recover }, (_, i) => i + recover);
+        await reloadCountdownPair(scene, info, `overflow-${composition}`, waiting, recover);
+      } else {
+        // All rows are recovered: no countdown is expected or fabricated.
+        await page.reload(); await waitForConnected(page);
+      }
       for (let i = 0; i < 3; i++) await expectNamed(scene, scene.agents[i].name, i < recover ? 'after 1 retry' : 'Retrying');
     } finally { await scene.close(); }
   });

@@ -1,65 +1,71 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
-// Test instrument, not a product selector contract. Read each painted text node,
-// never an ancestor's aggregate textContent/innerText (which can include a frozen
-// announcement). Filter candidate rows by prefix BEFORE testing the clause: a
-// Researcher wrapper must not borrow Writer's "responded" from a sibling row.
-export async function paintedRows(locator: Locator, prefix = '^', clause = '.*', minimal = false) {
-  return locator.evaluateAll((nodes, options) => {
-    const excluded = '[aria-live], [role="status"], [role="alert"], [role="log"], [aria-hidden="true"], [hidden], [inert], .sr-only, script, style, template';
-    const allowed = new Map<Element, boolean>();
-    function canPaint(element: Element): boolean {
-      const cached = allowed.get(element);
-      if (cached !== undefined) return cached;
-      let ok = element instanceof HTMLElement && !element.closest(excluded) &&
+// Standalone so the page-side first-paint recorder uses EXACTLY this reader.
+// Cache inherited visibility/clipping once per element, not once per text node
+// and ancestor on every candidate. Never read aggregate text as visible text.
+export function readPaintedRows(nodes: Element[], options: { prefix: string; clause: string; minimal: boolean }) {
+  const excluded = '[aria-live], [role="status"], [role="alert"], [role="log"], [aria-hidden="true"], [hidden], [inert], .sr-only, script, style, template';
+  type Clip = { ok: boolean; left: number; right: number; top: number; bottom: number };
+  const geometry = new Map<Element, Clip>();
+  function clip(element: Element): Clip {
+    const cached = geometry.get(element);
+    if (cached) return cached;
+    const parent = element.parentElement ? clip(element.parentElement) : { ok: true, left: 0, right: innerWidth, top: 0, bottom: innerHeight };
+    const value = { ...parent };
+    if (value.ok) {
+      value.ok = element instanceof HTMLElement && !element.matches(excluded) &&
         element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
-      for (let parent: Element | null = element; ok && parent; parent = parent.parentElement) {
-        const css = getComputedStyle(parent);
-        // CSS-only screen-reader clipping is hidden too, even without a class
-        // or an ARIA marker. No clipped announcement supplies notice evidence.
-        if (css.clip !== 'auto' || css.clipPath !== 'none' || css.opacity === '0') ok = false;
+      if (value.ok) {
+        const css = getComputedStyle(element);
+        value.ok = css.clip === 'auto' && css.clipPath === 'none' && css.opacity !== '0';
+        if (/hidden|clip|auto|scroll/.test(css.overflowX + css.overflowY)) {
+          const box = element.getBoundingClientRect();
+          if (/hidden|clip|auto|scroll/.test(css.overflowX)) {
+            value.left = Math.max(value.left, box.left); value.right = Math.min(value.right, box.right);
+          }
+          if (/hidden|clip|auto|scroll/.test(css.overflowY)) {
+            value.top = Math.max(value.top, box.top); value.bottom = Math.min(value.bottom, box.bottom);
+          }
+        }
       }
-      allowed.set(element, ok);
-      return ok;
     }
-    const pieces = new Map<Node, Array<{ text: string; rects: DOMRect[] }>>();
-    function painted(node: Node): Array<{ text: string; rects: DOMRect[] }> {
-      const cached = pieces.get(node);
-      if (cached) return cached;
-      let result: Array<{ text: string; rects: DOMRect[] }> = [];
-      if (node.nodeType === Node.TEXT_NODE && node.textContent && node.parentElement && canPaint(node.parentElement)) {
+    geometry.set(element, value);
+    return value;
+  }
+  const pieces = new Map<Node, Array<{ text: string; rects: DOMRect[] }>>();
+  function painted(node: Node): Array<{ text: string; rects: DOMRect[] }> {
+    const cached = pieces.get(node);
+    if (cached) return cached;
+    let result: Array<{ text: string; rects: DOMRect[] }> = [];
+    if (node.nodeType === Node.TEXT_NODE && node.textContent && node.parentElement) {
+      const bounds = clip(node.parentElement);
+      if (bounds.ok) {
         const range = document.createRange();
         range.selectNodeContents(node);
-        const rects = [...range.getClientRects()].filter(rect => {
-          let left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
-          let top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
-          for (let p = node.parentElement; p; p = p.parentElement) {
-            const css = getComputedStyle(p), box = p.getBoundingClientRect();
-            if (/hidden|clip|auto|scroll/.test(css.overflowX)) {
-              left = Math.max(left, box.left); right = Math.min(right, box.right);
-            }
-            if (/hidden|clip|auto|scroll/.test(css.overflowY)) {
-              top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom);
-            }
-          }
-          return right - left > 1 && bottom - top > 1;
-        });
+        const rects = [...range.getClientRects()].filter(rect =>
+          Math.min(bounds.right, rect.right) - Math.max(bounds.left, rect.left) > 1 &&
+          Math.min(bounds.bottom, rect.bottom) - Math.max(bounds.top, rect.top) > 1);
         if (rects.length) result = [{ text: node.textContent, rects }];
-      } else if (node instanceof Element && canPaint(node)) {
-        result = [...node.childNodes].flatMap(painted);
       }
-      pieces.set(node, result);
-      return result;
-    }
-    const candidates = nodes.map(node => {
-      const content = painted(node);
-      return { node, text: content.map(p => p.text).join('').replace(/\s+/g, ' ').trim(),
-        lines: new Set(content.flatMap(p => p.rects.map(r => Math.round(r.top)))).size };
-    }).filter(row => row.text && new RegExp(options.prefix).test(row.text));
-    return candidates.filter(row => (!options.minimal || !candidates.some(other =>
-      other.node !== row.node && row.node.contains(other.node))) && new RegExp(`(?:${options.clause})`).test(row.text))
-      .map(({ text, lines }) => ({ text, lines }));
-  }, { prefix, clause, minimal });
+    } else if (node instanceof Element && clip(node).ok) result = [...node.childNodes].flatMap(painted);
+    pieces.set(node, result);
+    return result;
+  }
+  const prefix = new RegExp(options.prefix), clause = new RegExp(`(?:${options.clause})`);
+  // Do not prefix-filter raw textContent: a hidden leading child could then
+  // hide an otherwise valid painted prefix. Prefix-check only painted text.
+  const candidates = nodes.map(node => {
+    const content = painted(node);
+    return { node, text: content.map(p => p.text).join('').replace(/\s+/g, ' ').trim(),
+      lines: new Set(content.flatMap(p => p.rects.map(r => Math.round(r.top)))).size };
+  }).filter(row => row.text && prefix.test(row.text));
+  return candidates.filter(row => (!options.minimal || !candidates.some(other =>
+    other.node !== row.node && row.node.contains(other.node))) && clause.test(row.text))
+    .map(({ text, lines }) => ({ text, lines }));
+}
+
+export async function paintedRows(locator: Locator, prefix = '^', clause = '.*', minimal = false) {
+  return locator.evaluateAll(readPaintedRows, { prefix, clause, minimal });
 }
 
 export async function paintedText(locator: Locator) {

@@ -11,7 +11,7 @@ export function barrier() {
   return { promise, resolve };
 }
 // not-wire-format: fixture scenario controls; never sent to a gateway API.
-export type NoticeScriptOptions = { script: HelperScript; helperScripts?: HelperScript[]; wait?: number; helperWaits?: number[]; count?: number; parentWriting?: boolean; parentRetry?: boolean; nested?: boolean };
+export type NoticeScriptOptions = { script: HelperScript; helperScripts?: HelperScript[]; wait?: number; helperWaits?: number[]; count?: number; parentWriting?: boolean; parentRetry?: boolean; parentSilenceRetry?: boolean; nested?: boolean };
 
 type ModelRequest = { stream?: boolean; model?: string; messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>;
   tools?: Array<{ function?: { name?: string } }> };
@@ -19,6 +19,7 @@ type ModelRequest = { stream?: boolean; model?: string; messages?: Array<{ role?
 export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
   let agents: string[] = [];
   const parentFinish = barrier();
+  const parentFailure = barrier();
   const fail = Array.from({ length: options.count ?? 1 }, barrier);
   const answer = fail.map(barrier);
   const finish = fail.map(barrier);
@@ -30,9 +31,9 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
     return 'data: ' + JSON.stringify({ id: 'hm-script', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
       created: Math.floor(Date.now() / 1000), choices: [{ index: 0, delta, finish_reason: reason }] }) + '\n\n';
   }
-  function tools(res: http.ServerResponse, calls: Array<{ id: string; name: string; args: object }>) {
+  function tools(res: http.ServerResponse, calls: Array<{ id: string; name: string; args: object }>, lead = '') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    res.end(chunk({ role: 'assistant', tool_calls: calls.map((c, index) => ({ index, id: c.id, type: 'function',
+    res.end((lead ? chunk({ role: 'assistant', content: lead }) : '') + chunk({ role: 'assistant', tool_calls: calls.map((c, index) => ({ index, id: c.id, type: 'function',
       function: { name: c.name, arguments: JSON.stringify(c.args) } })) }) + chunk({}, 'tool_calls') + 'data: [DONE]\n\n');
   }
   function toolFor(body: ModelRequest, res: http.ServerResponse, index: number) {
@@ -133,11 +134,21 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
       row.status = 200;
       if (!(body.tools ?? []).some(t => t.function?.name === 'delegate')) throw new Error('real delegate tool not offered');
       tools(res, Array.from({ length: options.nested ? 1 : helpers.length }, (_, i) => ({ id: `hm-delegate-${i}`, name: 'delegate',
-        args: { action: 'run', agent_id: agents[i], task: `HM_HELPER_${i}_TASK. Return HM_CHILD_${i}_OK.`, label: `helper ${i}` } }))); return;
+        args: { action: 'run', agent_id: agents[i], task: `HM_HELPER_${i}_TASK. Return HM_CHILD_${i}_OK.`, label: `helper ${i}` } })),
+      options.parentSilenceRetry ? 'HM_PARENT_DELEGATING ' : ''); return;
     }
     const results = (body.messages ?? []).filter(m => m.role === 'tool' && m.tool_call_id?.startsWith('hm-delegate-'));
     if (!results.length) throw new Error('parent continuation lacks correlated real delegate result');
     evidence.delegateResults.push(...results);
+    if (options.parentSilenceRetry && evidence.parentCalls === 2) {
+      // Real OWN continuation: send no headers/tokens until the real 30 s
+      // silence notice is observed, then fail only this external HTTP call.
+      await parentFailure.promise;
+      if (res.destroyed) return;
+      row.status = 429;
+      res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '60' });
+      res.end(JSON.stringify({ error: { message: 'main model is temporarily rate limited' } })); return;
+    }
     if (options.parentRetry && evidence.parentCalls === 2) {
       row.status = 429;
       res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '20' });
@@ -168,7 +179,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
       resolve(`http://127.0.0.1:${a.port}`);
     });
   });
-  return { url, evidence, helpers, fail, answer, finish, parentFinish,
+  return { url, evidence, helpers, fail, answer, finish, parentFinish, parentFailure,
     setAgents(ids: string[]) { agents = ids; },
     nextHelperTurn(index: number, retryWait = options.wait ?? 10) {
       // Only reset the external model script after the real stopped turn.
@@ -176,7 +187,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
       answer[index] = barrier(); finish[index] = barrier();
     },
     async close() {
-      parentFinish.resolve(); for (const gate of [...fail, ...answer, ...finish]) gate.resolve();
+      parentFinish.resolve(); parentFailure.resolve(); for (const gate of [...fail, ...answer, ...finish]) gate.resolve();
       await delay(0);
       await new Promise<void>((resolve, reject) => { server.close(e => e ? reject(e) : resolve()); server.closeAllConnections(); });
     },
