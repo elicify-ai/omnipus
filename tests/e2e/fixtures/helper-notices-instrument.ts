@@ -1,6 +1,7 @@
 import { expect, type Page, type TestInfo } from '@playwright/test';
 import { visibleNamed } from './helper-notices-harness';
 import { expectPainted, visibleNamedRows } from './helper-notices-visible';
+import { checkFirstPaintInstrument } from './helper-notices-paint';
 
 // Instrument controls, inside an existing product case: no added case, mocked
 // app, synthetic frame, paid model, or product PASS from this fixture page.
@@ -34,8 +35,12 @@ export async function checkNoticeVisibilityInstrument(page: Page, info: TestInfo
     }
     await probe.setContent('<div><p>R(1)+. [x]: current notice</p><p>R1xx: wrong agent</p></div>');
     expect(await visibleNamed(probe, 'R(1)+. [x]', 'current notice')).toEqual(['R(1)+. [x]: current notice']);
+    await probe.setContent('<div><span hidden>not a prefix</span><p>Researcher: visible countdown 0:13</p></div>');
+    expect(await visibleNamed(probe, 'Researcher', '0:13'), 'a hidden leading node cannot hide a real painted prefix').toEqual(['Researcher: visible countdown 0:13']);
+    await checkFirstPaintInstrument(probe, info);
     await info.attach('painted-notice-instrument', { body: JSON.stringify({ hiddenLayouts: layouts, positivePaintedText: '0:13',
-      rejectedFrozenText: '0:14', groupedAlternation: true, literalName: true, oldInstrumentFalsePositive: true }), contentType: 'application/json' });
+      rejectedFrozenText: '0:14', groupedAlternation: true, literalName: true, oldInstrumentFalsePositive: true,
+      firstPaintCounterControls: ['immutable first value', 'off by3s', 'not restored', '2000/2001ms', '1/1.001s'], pageClockOnly: true }), contentType: 'application/json' });
     console.log(`NOTICE VISIBILITY INSTRUMENT: ${layouts.length} hidden/announcement layouts rejected; painted text, literal name, prefix isolation and reflow controls passed`);
   } finally { await probe.close(); }
 }
