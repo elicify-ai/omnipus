@@ -41,7 +41,11 @@ it('S1 ten-year inconsistent sample cannot poison a later normal sample or its h
   feed({ ...active('own-turn', '2026-11-15T12:00:05.000Z'), emitted_at_ms: future })
   act(() => vi.advanceTimersByTime(1000))
   feed({ ...active('own-turn', '2026-11-15T12:00:06.000Z'), emitted_at_ms: SERVER + 6000 }, retry())
-  expect.soft(bucket().providerServerClock, 'S1: implausible numeric/text mismatch must not win the largest-offset clock over a later normal sample').toEqual({ serverMs: SERVER + 6000, clientMs: CLIENT + 1000 })
+  // FR-008 fixes the estimate, not which equivalent sample pair wins a tie.
+  const clock = bucket().providerServerClock
+  const offset = clock ? clock.serverMs - clock.clientMs : undefined
+  expect.soft(offset, 'S1: the server-clock estimate equals the normal sample offset, regardless of equal-offset sample retention').toBe((SERVER + 6000) - (CLIENT + 1000))
+  expect.soft(offset, 'S1: the ten-year sample must not survive as the server-clock estimate').not.toBe(future - CLIENT)
   const { container } = mount()
   expect(named(container, 'Researcher', '').map(row => row.textContent), 'FR-008 S1: normal server s6 leaves 0:24; a poisoned clock must not force Retrying now').toEqual([
     'Researcher: openrouter is rate-limiting requests right now. Retrying automatically in 0:24 (attempt 2 of 6).',
