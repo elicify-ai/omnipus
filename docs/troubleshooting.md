@@ -220,7 +220,7 @@ When a retry succeeds, the chat notes that the connection came back and after ho
 
 These retry, waiting and recovered notices are live only: they are not saved in either chat, so reopening a finished conversation does not show them. The note that a fallback model answered is still saved, in the helper's own chat only. On a channel such as Telegram, the single "Retrying — please wait..." message covers only the agent you talk to there, never its helpers.
 
-After a gateway upgrade, reload every browser tab that stayed open across it; the "New version available — refresh to update" message asks for this. Until it is reloaded, such a tab can miss helper lines and, after a reconnect, waiting approvals, questions or secret requests, and its countdowns can read a few seconds high.
+After a gateway upgrade, reload every browser tab that stayed open across it; the "New version available — refresh to update" message asks for this. Until it is reloaded, such a tab does not yet show the new helper retry lines, because it still runs the previous copy of the web app. It also refuses server messages that contain parts it does not recognise, so if the connection reconnects before the reload, the tab can miss approvals, questions and secret requests that are still waiting. They appear after you reload.
 
 If the last attempt also fails, the turn ends with the cause in plain words — for example "We couldn't reach the model provider" — and your message stays in the chat, so you can retry or switch models.
 
