@@ -12,6 +12,7 @@ import { installNoticeLink } from './helper-notices-link';
 import { removeSessionHistoryIndex } from './chat-history';
 import { visibleNamedRows } from './helper-notices-visible';
 import { installNoticePaintRecorder } from './helper-notices-paint';
+import { installNoticeCatchupRecorder } from './helper-notices-catchup';
 
 // not-wire-format: private scenario/traffic instrumentation, not a gateway DTO.
 export type NoticeScene = Awaited<ReturnType<typeof createNoticeScene>>;
@@ -100,12 +101,14 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
       expect(unavailable.status).toBe(200);
       expect(SessionDetail.parse(unavailable.body).history_state).toMatchObject({ status: 'unavailable', reason: 'index_missing' });
     }
+    const catchupReceipt = await installNoticeCatchupRecorder(page, root.id);
     const link = await installNoticeLink(page);
     link.setRoot(root.id);
     await page.context().addCookies((await gateway.browserStorageState()).cookies);
     const mainPaints = await installNoticePaintRecorder(page, info, 'main');
     await openSessionByDeepLink(page, root.id, gateway.baseURL);
     await waitForConnected(page, { timeout: 15_000 });
+    await catchupReceipt.first(info, 'initial');
     await chatInput(page).fill('HM_ROOT_TASK. Delegate the exact scripted helper tasks.');
     await chatInput(page).press('Enter');
     await expect.poll(() => provider.helpers.filter(h => h.calls > 0).length, { message: 'positive control: real helper requests reached the fake model', timeout: 20_000 }).toBe(options.count ?? 1);
@@ -140,7 +143,7 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
       expect(calls.map(c => c.status), 'real delegate successes, not just a scripted sentence').toEqual(Array.from({ length: delegationCount }, () => 'success'));
     }
     const gw = gateway;
-    return { gateway: gw, provider, page, own, traffic, ownTraffic, children, agents, parent, root, workspace, link,
+    return { gateway: gw, provider, page, own, traffic, ownTraffic, children, agents, parent, root, workspace, link, catchupReceipt,
       async releaseFailures() {
         if (!options.parentWriting && !options.parentRetry && !options.parentSilenceRetry) { provider.parentFinish.resolve(); await expect.poll(() => provider.evidence.parentDone).toBe(true); }
         for (let i = 0; i < provider.fail.length; i++) {
