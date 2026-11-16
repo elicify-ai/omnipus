@@ -1,7 +1,7 @@
 // #1537 FR-008 / chief Q8 A: nearest-second digits, positive half ties UP,
 // at least 0:01 for every positive wait; Retrying now starts at raw zero.
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { ProviderRetryIndicator, remainingRetrySeconds } from './ProviderRetryIndicator'
 
 const SERVER = Date.parse('2026-11-15T12:00:00Z')
@@ -87,3 +87,16 @@ it.each([[1400, '0:01'], [1600, '0:02'], [29100, '0:29'], [29600, '0:30']] as co
     expectTimeoutWaiting(getByTestId('provider-retry-indicator'), countdown, `raw${remainingMs}ms nearest`)
   },
 )
+
+it('FR-008 Q8 a1500ms wait switches exactly at the deadline, not the next one-second tick', () => {
+  const { getByTestId } = indicator(1500, 'no_response')
+  const row = getByTestId('provider-retry-indicator')
+  // One mounted instance: the deadline lies between its 1000ms/2000ms ticks.
+  act(() => { vi.advanceTimersByTime(1499) })
+  expectTimeoutWaiting(row, '0:01', 'deadline +1499ms, raw1ms')
+  act(() => { vi.advanceTimersByTime(1) })
+  expect(row.querySelector('span:not([aria-hidden])')?.textContent,
+    'FR-008 Q8 deadline +1500ms: visible Retrying now without another tick').toBe('Retrying now…')
+  expect(row, 'FR-008 Q8 deadline +1500ms: retrying-now exactly at raw0ms').toHaveAttribute('data-state', 'retrying-now')
+  expect(row, 'FR-008 Q8 deadline +1500ms: no stale waiting sentence').not.toHaveTextContent('Retrying automatically')
+})
