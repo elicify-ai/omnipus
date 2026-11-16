@@ -22,7 +22,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
   const fail = Array.from({ length: options.count ?? 1 }, barrier);
   const answer = fail.map(barrier);
   const finish = fail.map(barrier);
-  const helpers = fail.map(() => ({ calls: 0, success: false, toolSent: false, complete: false, firstAt: 0 }));
+  const helpers = fail.map(() => ({ calls: 0, success: false, toolSent: false, complete: false, firstAt: 0, retryWait: options.wait ?? 10 }));
   const evidence = { requests: [] as Array<{ role: string; call: number; model: string; at: number; status?: number }>, errors: [] as string[],
     delegateResults: [] as unknown[], offeredTools: [] as string[][], parentCalls: 0, parentHeld: false, parentDone: false, toolResults: [] as unknown[] };
 
@@ -100,7 +100,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
       if (script === 'silence' || script === 'silence-retry') await answer[index].promise;
       if (script !== 'silence') {
         row.status = script === 'failure' ? 500 : 429;
-        res.writeHead(row.status, { 'Content-Type': 'application/json', 'Retry-After': String(options.wait ?? 10) });
+        res.writeHead(row.status, { 'Content-Type': 'application/json', 'Retry-After': String(state.retryWait) });
         res.end(JSON.stringify({ error: { message: 'scripted helper unavailable', code: row.status === 429 ? 'rate_limit_exceeded' : 'server_error' } })); return;
       }
     }
@@ -116,7 +116,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
     if (script === 'repeat' && !state.complete) {
       state.complete = true;
       row.status = 429;
-      res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(options.wait ?? 10) });
+      res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(state.retryWait) });
       res.end(JSON.stringify({ error: { message: 'second same-turn rate limit', code: 'rate_limit_exceeded' } })); return;
     }
     await finish[index].promise;
@@ -170,9 +170,9 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
   });
   return { url, evidence, helpers, fail, answer, finish, parentFinish,
     setAgents(ids: string[]) { agents = ids; },
-    nextHelperTurn(index: number) {
+    nextHelperTurn(index: number, retryWait = options.wait ?? 10) {
       // Only reset the external model script after the real stopped turn.
-      helpers[index] = { calls: 0, success: false, toolSent: false, complete: false, firstAt: 0 };
+      helpers[index] = { calls: 0, success: false, toolSent: false, complete: false, firstAt: 0, retryWait };
       answer[index] = barrier(); finish[index] = barrier();
     },
     async close() {
