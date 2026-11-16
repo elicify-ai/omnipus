@@ -10,19 +10,24 @@ import { waitForConnected, chatInput } from './selectors';
 import { startHelperNoticesProvider, type NoticeScriptOptions } from './helper-notices-provider';
 import { installNoticeLink } from './helper-notices-link';
 import { removeSessionHistoryIndex } from './chat-history';
+import { visibleNamedRows } from './helper-notices-visible';
 
 // not-wire-format: private scenario/traffic instrumentation, not a gateway DTO.
 export type NoticeScene = Awaited<ReturnType<typeof createNoticeScene>>;
 export type NoticeTraffic = ReturnType<typeof observeNotices>;
 export function observeNotices(page: Page) {
   const frames: Record<string, unknown>[] = [];
+  const receivedAt: number[] = [];
   const sends: Record<string, unknown>[] = [];
   page.on('websocket', socket => {
     if (!socket.url().includes('/api/v1/chat/ws')) return;
-    socket.on('framereceived', ({ payload }) => { frames.push(JSON.parse(payload.toString()) as Record<string, unknown>); });
+    socket.on('framereceived', ({ payload }) => {
+      receivedAt.push(performance.now());
+      frames.push(JSON.parse(payload.toString()) as Record<string, unknown>);
+    });
     socket.on('framesent', ({ payload }) => { sends.push(JSON.parse(payload.toString()) as Record<string, unknown>); });
   });
-  return { frames, sends };
+  return { frames, receivedAt, sends };
 }
 
 export async function createNoticeScene(page: Page, info: TestInfo, options: NoticeScriptOptions & { duplicateNames?: boolean; unavailableHistory?: boolean; helperNames?: string[] }) {
@@ -152,7 +157,7 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
       async close() {
         try {
           await info.attach('helper-model-provider-evidence', { body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json' });
-          await info.attach('helper-model-raw-notice-traffic', { body: JSON.stringify({ top: traffic, own: ownTraffic }, null, 2), contentType: 'application/json' });
+          await info.attach('helper-model-raw-notice-traffic', { body: JSON.stringify({ top: traffic, own: ownTraffic, linkEvents: link.events }, null, 2), contentType: 'application/json' });
         } finally {
           for (const p of childrenPages) await p.close();
           // Tear down the owned PID before releasing scripted answers:
@@ -171,14 +176,16 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
 }
 
 export async function visibleNamed(page: Page, name: string, clause: string) {
-  // Hidden polite announcements do not count as product visibility evidence.
-  return page.locator('span, p, div').filter({ hasText: new RegExp(`^${name}: .*${clause}`) }).evaluateAll(nodes => {
-    const visible = nodes.filter(n => !(n as HTMLElement).closest('[aria-live], .sr-only, [aria-hidden="true"]') && (n as HTMLElement).checkVisibility());
-    return visible.filter(n => !visible.some(other => other !== n && n.contains(other))).map(n => n.textContent?.trim());
-  });
+  return (await visibleNamedRows(page, name, clause)).map(row => row.text);
 }
-export async function expectNamed(scene: NoticeScene, name = 'Researcher', clause = 'Retrying automatically') {
-  await expect.poll(() => visibleNamed(scene.page, name, clause), { message: `FR-005: ${name} named row in the real main chat`, timeout: 2_000 }).toHaveLength(1);
+export async function expectNamed(scene: NoticeScene, name = 'Researcher', clause = 'Retrying automatically', receivedAt = performance.now()) {
+  // Timing/FR-005: a prerequisite wait never grants a new display budget. For
+  // recovery, callers supply the actual relevant main-copy receipt time.
+  await expect.poll(() => visibleNamed(scene.page, name, clause), {
+    message: `FR-005: ${name} named row in the real main chat`,
+    timeout: Math.max(1, receivedAt + 2_000 - performance.now()),
+  }).toHaveLength(1);
+  expect(performance.now() - receivedAt, 'Timing: named row painted within 2 s of the relevant main-chat copy').toBeLessThanOrEqual(2_000);
 }
 export async function recordScene(scene: NoticeScene, info: TestInfo, label: string) {
   await info.attach(`${label}-main-admin`, { body: await scene.page.screenshot({ fullPage: true }), contentType: 'image/png' });

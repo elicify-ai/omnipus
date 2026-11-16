@@ -9,7 +9,9 @@ export async function installNoticeLink(page: Page) {
   const held: Array<{ raw: string | Buffer; socket: WebSocketRoute }> = [];
   const sockets: Array<{ client: WebSocketRoute; server: WebSocketRoute }> = [];
   const frames: Record<string, unknown>[] = [];
+  const events: Array<{ kind: string; at: number }> = [];
   await page.routeWebSocket('**/api/v1/chat/ws*', socket => {
+    events.push({ kind: offline ? 'rejected-offline' : 'connect-to-server', at: Date.now() });
     if (offline) { socket.close({ code: 1001, reason: 'scripted network outage' }); return; }
     const server = socket.connectToServer();
     sockets.push({ client: socket, server });
@@ -32,14 +34,24 @@ export async function installNoticeLink(page: Page) {
     });
   });
   return {
-    frames,
+    frames, events,
     setRoot(id: string) { root = id; },
     disconnect() {
       expect(sockets.length, 'network instrument owns a real connected socket').toBeGreaterThan(0);
+      events.push({ kind: 'disconnect', at: Date.now() });
       offline = true;
       for (const link of sockets) { link.client.close({ code: 1001, reason: 'scripted network outage' }); link.server.close(); }
     },
-    reconnect(snapshot = false) { forceSnapshot = snapshot; offline = false; },
+    async reconnect(snapshot = false) {
+      events.push({ kind: 'reconnect', at: Date.now() });
+      forceSnapshot = snapshot; offline = false;
+      // Restore the network edge, including its ordinary browser signal.
+      // After a real 30 s tool, the offline retry at31s may just have failed;
+      // a 15 s test wait cannot cover the next documented 30 s backoff. Do not
+      // widen it or reach into connection-manager state to force a socket.
+      await page.evaluate(() => window.dispatchEvent(new Event('online')));
+      events.push({ kind: 'online-dispatched', at: Date.now() });
+    },
     holdEnded() { holdEnd = true; },
     deliverHeldEnd() {
       expect(held.length, 'positive instrument: a real ended frame was delayed').toBeGreaterThan(0);

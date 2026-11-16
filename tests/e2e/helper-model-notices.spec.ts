@@ -8,13 +8,17 @@ import { openSessionByDeepLink } from './fixtures/session-setup';
 import { createNoticeScene, expectNamed, visibleNamed, recordScene, type NoticeScene } from './fixtures/helper-notices-harness';
 import type { HelperScript } from './fixtures/helper-notices-provider';
 import { SessionDetail } from '../../src/lib/api/generated/schemas';
+import { recoverHelper } from './fixtures/helper-notices-recovery';
+import { expectPainted, paintedText, visibleNamedRows } from './fixtures/helper-notices-visible';
+import { checkNoticeVisibilityInstrument } from './fixtures/helper-notices-instrument';
 
 test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ retries: 0 });
 test.setTimeout(150_000);
 
 async function afterRealWait(scene: NoticeScene, seconds: number) {
-  const initial = scene.traffic.frames.find(f => f.type === 'provider_retry' && f.session_id === scene.root.id);
+  const initial = scene.traffic.frames.find(f => f.type === 'provider_retry' && f.session_id === scene.root.id &&
+    f.child_session_id === scene.children[0].id);
   expect(initial?.sent_at, 'positive timing instrument: real server retry frame').toEqual(expect.any(String));
   await delay(Math.max(0, Date.parse(String(initial!.sent_at)) + seconds * 1000 - Date.now()));
 }
@@ -31,17 +35,19 @@ async function ended(scene: NoticeScene, index = 0) {
 
 for (const writing of [false, true]) {
   test(`429 then success: helper before first byte, named main row while writing=${writing}, recovered then ended`, async ({ page }, info) => {
+    if (!writing) await checkNoticeVisibilityInstrument(page, info);
     const scene = await createNoticeScene(page, info, { script: 'retry', wait: 10, parentWriting: writing });
     try {
       await scene.releaseFailures();
       await expectNamed(scene);
       await expect(scene.own.getByTestId('provider-retry-indicator'), 'FR-001/004: helper own retry before any answer').toBeVisible();
-      await expect(scene.own.getByTestId('provider-retry-indicator')).not.toContainText('Researcher:');
+      await expectPainted(scene.own.getByTestId('provider-retry-indicator'), /Retrying automatically/);
+      expect((await paintedText(scene.own.getByTestId('provider-retry-indicator')))[0]).not.toContain('Researcher:');
       expect(scene.ownTraffic.frames.filter(f => f.type === 'token' && f.session_id === scene.children[0].id)).toEqual([]);
       await recordScene(scene, info, '429-before-byte');
-      scene.provider.answer[0].resolve();
-      await expectNamed(scene, 'Researcher', 'after 1 retry');
-      await expect(scene.own.getByText('Connection came back — the model answered after 1 retry.', { exact: true })).toBeVisible();
+      await recoverHelper(scene);
+      await expectPainted(scene.own.getByText('Connection came back — the model answered after 1 retry.', { exact: true }),
+        'Connection came back — the model answered after 1 retry.');
       await workingTool(scene);
       expect(await ended(scene)).toBe('working');
       scene.provider.finish[0].resolve();
@@ -54,8 +60,8 @@ for (const writing of [false, true]) {
       await expect.poll(() => scene.provider.evidence.parentDone).toBe(true);
       await page.reload(); await waitForConnected(page);
       await scene.own.reload(); await waitForConnected(scene.own);
-      await expect(page.getByText('HM_ROOT_OK', { exact: false })).toBeVisible();
-      await expect(scene.own.getByText('HM_CHILD_0_OK', { exact: true })).toBeVisible();
+      await expectPainted(page.getByText('HM_ROOT_OK', { exact: false }), /HM_ROOT_OK/);
+      await expectPainted(scene.own.getByText('HM_CHILD_0_OK', { exact: true }), 'HM_CHILD_0_OK');
       await expect(page.getByTestId('provider-retry-indicator')).toHaveCount(0);
       await expect(scene.own.getByTestId('provider-waiting-indicator')).toHaveCount(0);
     } finally { await scene.close(); }
@@ -68,8 +74,7 @@ test('minimum Retry-After 1 is announced and recovers without an invented extra 
     await scene.releaseFailures(); await expectNamed(scene);
     const namedRetry = scene.traffic.frames.find(f => f.type === 'provider_retry' && f.child_session_id === scene.children[0].id);
     expect(namedRetry?.retry_after_seconds).toBe(1);
-    scene.provider.answer[0].resolve();
-    await expectNamed(scene, 'Researcher', 'after 1 retry');
+    await recoverHelper(scene);
   } finally { await scene.close(); }
 });
 
@@ -80,7 +85,7 @@ for (const script of ['empty', 'timeout'] as const) {
       await scene.releaseFailures();
       const clause = script === 'empty' ? 'sent an empty reply' : 'did not start answering in time';
       await expectNamed(scene, 'Researcher', clause);
-      await expect(scene.own.getByTestId('provider-retry-indicator')).toContainText(clause);
+      await expectPainted(scene.own.getByTestId('provider-retry-indicator'), new RegExp(clause));
       scene.provider.answer[0].resolve(); await workingTool(scene);
       await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying')).toEqual([]);
       expect(await ended(scene)).toBe('working');
@@ -109,8 +114,8 @@ test('fallback first-call tool answer: primary 429 x3 + fallback x1 clears named
     scene.provider.finish[0].resolve();
     await expect.poll(() => ended(scene), { timeout: 40_000 }).toBe('done');
     await scene.own.reload(); await waitForConnected(scene.own);
-    await expect(scene.own.getByText(/Answered by the Fallback model/)).toBeVisible();
-    await expect(scene.own.getByText('HM_CHILD_0_OK', { exact: true })).toBeVisible();
+    await expectPainted(scene.own.getByText(/Answered by the Fallback model/), /Answered by the Fallback model/);
+    await expectPainted(scene.own.getByText('HM_CHILD_0_OK', { exact: true }), 'HM_CHILD_0_OK');
   } finally { await scene.close(); }
 });
 
@@ -129,6 +134,7 @@ for (const seconds of [29, 35]) {
           { message: 'real 30 second silence watcher must fire', timeout: 35_000 }).toBeGreaterThan(0);
         await expectNamed(scene, 'Researcher', "hasn't responded");
         await expect(scene.own.getByTestId('provider-waiting-indicator')).toBeVisible();
+        await expectPainted(scene.own.getByTestId('provider-waiting-indicator'), /hasn't responded/);
         await delay(Math.max(0, start + 35_000 - Date.now()));
       }
       scene.provider.answer[0].resolve(); await workingTool(scene);
@@ -152,10 +158,16 @@ test('silence then 429: clear-before-retry live and after reload in both chats',
       expect(relevant.slice(0, 3).map(f => f.type === 'provider_retry' ? 'retry' : f.state)).toEqual(['waiting', 'responding', 'retry']);
     }
     await afterRealWait(scene, 5);
-    await page.reload(); await waitForConnected(page);
-    await scene.own.reload(); await waitForConnected(scene.own);
-    await expect.poll(() => visibleNamed(page, 'Researcher', '0:1[4-6]'), { timeout: 2_000 }).toHaveLength(1);
-    await expect(scene.own.getByTestId('provider-retry-indicator')).toContainText(/0:1[4-6]/, { timeout: 2_000 });
+    await Promise.all([
+      (async () => {
+        await page.reload(); await waitForConnected(page);
+        await expectNamed(scene, 'Researcher', '0:1[4-6]');
+      })(),
+      (async () => {
+        await scene.own.reload(); await waitForConnected(scene.own);
+        await expectPainted(scene.own.getByTestId('provider-retry-indicator'), /0:1[4-6]/);
+      })(),
+    ]);
     await afterRealWait(scene, 21); await workingTool(scene);
     await expectNamed(scene, 'Researcher', 'after 1 retry');
     await page.reload(); await waitForConnected(page);
@@ -171,10 +183,16 @@ test('reload at s5 after root done at s3 retains 0:24..0:26 in top and helper', 
     await afterRealWait(scene, 3); scene.provider.parentFinish.resolve();
     await expect.poll(() => scene.provider.evidence.parentDone).toBe(true);
     await afterRealWait(scene, 5);
-    await Promise.all([page.reload(), scene.own.reload()]);
-    await Promise.all([waitForConnected(page), waitForConnected(scene.own)]);
-    await expect.poll(() => visibleNamed(page, 'Researcher', '0:2[4-6]'), { timeout: 2_000 }).toHaveLength(1);
-    await expect(scene.own.getByTestId('provider-retry-indicator')).toContainText(/0:2[4-6]/, { timeout: 2_000 });
+    await Promise.all([
+      (async () => {
+        await page.reload(); await waitForConnected(page);
+        await expectNamed(scene, 'Researcher', '0:2[4-6]');
+      })(),
+      (async () => {
+        await scene.own.reload(); await waitForConnected(scene.own);
+        await expectPainted(scene.own.getByTestId('provider-retry-indicator'), /0:2[4-6]/);
+      })(),
+    ]);
     await recordScene(scene, info, 'reattach-five-seconds');
   } finally { await scene.close(); }
 });
@@ -183,7 +201,7 @@ test('same turn retry → recovery → real tool → retry: only current row rep
   const scene = await createNoticeScene(page, info, { script: 'repeat', wait: 10 });
   try {
     await scene.releaseFailures(); await expectNamed(scene);
-    scene.provider.answer[0].resolve(); await expectNamed(scene, 'Researcher', 'after 1 retry');
+    await recoverHelper(scene);
     await page.reload(); await waitForConnected(page);
     await expectNamed(scene, 'Researcher', 'after 1 retry');
     await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically')).toEqual([]);
@@ -223,10 +241,9 @@ for (const duplicateNames of [false, true]) {
       else { await expectNamed(scene); await expectNamed(scene, 'Writer'); }
       const ownBefore = scene.traffic.frames.find(f => f.type === 'provider_retry' && !f.child_session_id && f.session_id === scene.root.id);
       expect(ownBefore?.retry_after_seconds).toBe(20);
-      await afterRealWait(scene, 5);
-      scene.provider.answer[0].resolve();
-      await expectNamed(scene, 'Researcher', 'after 1 retry');
-      await expect(page.getByTestId('provider-retry-indicator').filter({ hasText: 'attempt' }).first()).toBeVisible();
+      await recoverHelper(scene);
+      const ownIndicator = page.getByTestId('provider-retry-indicator').first();
+      await expectPainted(ownIndicator, /^openrouter is rate-limiting.*attempt/);
       expect(scene.traffic.frames.filter(f => f.type === 'provider_retry' && !f.child_session_id && f.session_id === scene.root.id), 'helper recovery cannot restart the root retry time').toEqual([ownBefore]);
       scene.provider.finish[0].resolve();
       await expect.poll(() => ended(scene), { timeout: 40_000 }).toBe('done');
@@ -243,21 +260,19 @@ test('four helpers: first-three order, truthful summary and promotion; 320px com
     await scene.releaseFailures(); await expectNamed(scene, longName);
     await expectNamed(scene, 'Writer'); await expectNamed(scene, 'Helper 2');
     await expect.poll(() => visibleNamed(page, 'Helper 3', 'Retrying')).toEqual([]);
-    await expect(page.getByText('1 more helper has a model notice', { exact: true })).toBeVisible();
+    await expectPainted(page.getByText('1 more helper has a model notice', { exact: true }), '1 more helper has a model notice');
     await page.setViewportSize({ width: 320, height: 800 });
-    const lineCount = await page.locator('span, p, div').filter({ hasText: new RegExp(`^${longName}: .*Retrying automatically`) }).evaluateAll(nodes => {
-      const visible = nodes.filter(n => !(n as HTMLElement).closest('[aria-live], .sr-only, [aria-hidden="true"]') && (n as HTMLElement).checkVisibility());
-      const row = visible.find(n => !visible.some(other => other !== n && n.contains(other)));
-      if (!row) throw new Error('FR-009: visible long-name row missing before reflow measurement');
-      const range = document.createRange(); range.selectNodeContents(row);
-      return new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size;
-    });
+    const measured = await visibleNamedRows(page, longName, 'Retrying automatically');
+    expect(measured, 'FR-009: one painted long-name row before reflow measurement').toHaveLength(1);
+    const lineCount = measured[0].lines;
     expect(lineCount, 'FR-009: the maximum-length helper name wraps onto multiple lines at 320px').toBeGreaterThan(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'FR-009 narrow row wraps without horizontal scrolling').toBe(true);
     await expect(chatInput(page)).toBeEnabled(); await expect(page.getByTestId('stop-btn')).toBeEnabled();
     await chatInput(page).fill('composer remains usable');
-    await scene.own.goto(`${scene.gateway.baseURL}/#/sessions/${scene.children[0].id}`);
-    await waitForConnected(scene.own); await scene.own.getByTestId('stop-btn').click();
+    await openSessionByDeepLink(scene.own, scene.children[0].id, scene.gateway.baseURL);
+    await scene.own.getByTestId('stop-btn').click();
+    await expect.poll(() => ended(scene, 0), { message: 'positive control: Stop targeted the oldest helper, not the previous route' }).toBe('stopped');
+    expect(await ended(scene, 3), 'the overflow helper genuinely remains active to promote').toBe('working');
     await expectNamed(scene, 'Helper 3');
     await expect(page.getByText('1 more helper has a model notice', { exact: true })).toHaveCount(0);
     await recordScene(scene, info, 'narrow-promotion');
@@ -272,7 +287,7 @@ test('grandchild copies go top and own only, then clear while middle helper is s
     try {
       await openSessionByDeepLink(middle, scene.children[0].id, scene.gateway.baseURL); await waitForConnected(middle);
       await expect.poll(() => visibleNamed(middle, 'Researcher', 'Retrying')).toEqual([]);
-      scene.provider.answer[1].resolve(); await expectNamed(scene, 'Researcher', 'after 1 retry');
+      await recoverHelper(scene, 1);
       scene.provider.finish[1].resolve();
       await expect.poll(() => ended(scene, 1), { timeout: 40_000 }).toBe('done');
       await expect.poll(() => visibleNamed(page, 'Researcher', 'retry')).toEqual([]);
@@ -327,14 +342,16 @@ for (const catchup of ['incremental', 'snapshot', 'restart', 'live_only'] as con
         // approved Writer-survives oracle; an injected boot frame is not proof.
         await scene.gateway.kill9(); await scene.gateway.restart({ relogin: false });
       }
-      scene.link.reconnect(catchup === 'snapshot' || catchup === 'live_only');
+      await scene.link.reconnect(catchup === 'snapshot' || catchup === 'live_only');
       await waitForConnected(page, { timeout: 15_000 });
       await expect.poll(() => scene.link.frames.slice(before).filter(f => f.type === 'catch_up_complete' && f.session_id === scene.root.id).length).toBeGreaterThan(0);
       const completion = scene.link.frames.slice(before).find(f => f.type === 'catch_up_complete' && f.session_id === scene.root.id);
       expect(completion?.mode, 'real server selected the specified catch-up path').toBe(catchup === 'incremental' ? 'incremental' : catchup === 'live_only' ? 'live_only' : 'snapshot');
       if (catchup === 'snapshot') expect(scene.link.frames.slice(before).find(f => f.type === 'session_snapshot')?.reason).toBe('retention_exceeded');
       if (catchup === 'restart') expect(scene.link.frames.slice(before).find(f => f.type === 'session_snapshot')?.reason).toBe('boot_mismatch');
-      await expect.poll(() => visibleNamed(page, 'Researcher', 'retry|responded')).toEqual([]);
+      // FR-006: the ended turn has no row of ANY notice state. A lowercase
+      // "retry" alternative would also miss a stale "Retrying now…" row.
+      await expect.poll(() => visibleNamed(page, 'Researcher', '.*')).toEqual([]);
       await expectNamed(scene, 'Writer', "hasn't responded");
       await recordScene(scene, info, `missed-end-${catchup}`);
     } finally { await scene.close(); }
@@ -347,15 +364,34 @@ test('late real ended for the old turn cannot remove the newer turn in the same 
     await scene.releaseFailures(); await expectNamed(scene);
     const old = scene.traffic.frames.find(f => f.type === 'provider_retry' && f.child_session_id === scene.children[0].id);
     expect(old?.turn_id).toEqual(expect.any(String));
+    // Distinguishing the two visible countdown bands requires the old60s
+    // notice to be strictly below one minute before the new120s turn starts.
+    await afterRealWait(scene, 2);
     scene.link.holdEnded();
     await scene.own.getByTestId('stop-btn').click();
     await expect.poll(() => ended(scene)).toBe('stopped');
-    scene.provider.nextHelperTurn(0);
+    // Distinct valid waits make the two turns' visible rows distinguishable:
+    // old60s is below one minute now, new120s is above one minute. Counts alone
+    // would miss an implementation that retained the old row and lost the new.
+    scene.provider.nextHelperTurn(0, 120);
     await chatInput(scene.own).fill('HM_HELPER_0_TASK. Start the next turn.'); await chatInput(scene.own).press('Enter');
     await expect.poll(() => scene.traffic.frames.filter(f => f.type === 'provider_retry' && f.child_session_id === scene.children[0].id && f.turn_id !== old?.turn_id).length).toBeGreaterThan(0);
-    await expectNamed(scene);
+    const newer = scene.traffic.frames.filter(f => f.type === 'provider_retry' && f.child_session_id === scene.children[0].id).at(-1);
+    expect(newer?.turn_id).not.toBe(old?.turn_id);
+    expect(newer?.retry_after_seconds).toBe(120);
+    const oldClause = 'Retrying automatically in 0:[0-5][0-9] ';
+    const newClause = 'Retrying automatically in (?:1:[0-5][0-9]|2:00) ';
+    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'), {
+      message: 'FR-005/006/007: both affected turns remain until the old ended arrives', timeout: 2_000,
+    }).toHaveLength(2);
+    await expectNamed(scene, 'Researcher', oldClause);
+    await expectNamed(scene, 'Researcher', newClause);
     scene.link.deliverHeldEnd();
-    await expectNamed(scene);
+    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'), {
+      message: 'FR-006: exactly the newer turn remains after the old ended', timeout: 2_000,
+    }).toHaveLength(1);
+    await expect.poll(() => visibleNamed(page, 'Researcher', oldClause)).toEqual([]);
+    await expectNamed(scene, 'Researcher', newClause);
     expect(await ended(scene)).toBe('working');
   } finally { await scene.close(); }
 });
@@ -367,12 +403,13 @@ for (const composition of ['3 waiting', '4 recovered', '2 waiting + 2 recovered'
     try {
       await scene.releaseFailures(); await expectNamed(scene);
       const recover = composition === '4 recovered' ? count : composition === '2 waiting + 2 recovered' ? 2 : 0;
-      for (let i = 0; i < recover; i++) scene.provider.answer[i].resolve();
+      await Promise.all(Array.from({ length: recover }, (_, i) =>
+        recoverHelper(scene, i, scene.agents[i].name, i < 3)));
       for (let i = 0; i < 3; i++) await expectNamed(scene, scene.agents[i].name, i < recover ? 'after 1 retry' : 'Retrying');
       const summary = page.getByText('1 more helper has a model notice', { exact: true });
       if (count === 4) {
-        await expect(summary).toBeVisible();
-        await expect(summary).not.toContainText('waiting');
+        await expectPainted(summary, '1 more helper has a model notice');
+        expect((await paintedText(summary))[0]).not.toContain('waiting');
         await expect.poll(() => visibleNamed(page, scene.agents[3].name, 'retry|Retrying')).toEqual([]);
       } else await expect(summary).toHaveCount(0);
       await page.reload(); await waitForConnected(page);
