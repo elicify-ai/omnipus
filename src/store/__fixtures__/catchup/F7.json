@@ -17,6 +17,7 @@
           "frame": {
             "boot_id": "boot-1",
             "emitted_at": "2026-01-01T00:00:01Z",
+            "emitted_at_ms": 1767225601250,
             "pending_approvals": [],
             "type": "session_state",
             "user_id": ""
@@ -71,6 +72,7 @@
           "frame": {
             "boot_id": "boot-1",
             "emitted_at": "2026-01-01T00:00:02Z",
+            "emitted_at_ms": 1767225602250,
             "history_state": {
               "status": "available"
             },
