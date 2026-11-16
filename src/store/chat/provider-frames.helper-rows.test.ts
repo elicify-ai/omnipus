@@ -30,10 +30,19 @@ describe('#1537 per-helper-turn notice reduction', () => {
   })
 
   it('a late old-turn ended cannot clear the same chat newer turn', () => {
-    feed(retry(), retry('child-a', 'turn-new'), status('ended', 'child-a', 'turn-a'))
+    // T8 split B: this is the pre-publication race in legal server order,
+    // not an already-sequenced old frame injected behind a browser cursor.
+    feed(retry('child-a', 'turn-a', { seq: 1, attempt: 2 }),
+      retry('child-a', 'turn-new', { seq: 2, attempt: 3 }))
     const { container } = mount()
-    expect(named(container, 'Researcher', 'Retrying automatically')).toHaveLength(1)
-    feed(status('ended', 'child-a', 'turn-new'))
+    expect(named(container, 'Researcher', 'Retrying automatically'), 'FR-005: both affected turns exist before the old end').toHaveLength(2)
+    expect(named(container, 'Researcher', '(attempt 2 of 6)')).toHaveLength(1)
+    expect(named(container, 'Researcher', '(attempt 3 of 6)')).toHaveLength(1)
+    feed(status('ended', 'child-a', 'turn-a', { seq: 3 }))
+    expect(named(container, 'Researcher', 'Retrying automatically'), 'FR-007: late old end removes exactly the old turn').toHaveLength(1)
+    expect(named(container, 'Researcher', '(attempt 2 of 6)'), 'FR-006: the old turn is gone').toHaveLength(0)
+    expect(named(container, 'Researcher', '(attempt 3 of 6)'), 'FR-007: the specifically newer turn survives the old end').toHaveLength(1)
+    feed(status('ended', 'child-a', 'turn-new', { seq: 4 }))
     expect(named(container, 'Researcher', 'Retrying automatically')).toHaveLength(0)
   })
 
@@ -48,8 +57,12 @@ describe('#1537 per-helper-turn notice reduction', () => {
   })
 
   it('root done leaves named helper rows; a later same-turn retry supersedes recovered', () => {
-    feed(active(), retry(), { type: 'done', session_id: SID, turn_id: 'own-turn', stats: {} }, status('recovered'))
+    feed(active(), retry())
     const { container } = mount()
+    expect(named(container, 'Researcher', 'Retrying automatically'), 'M-done positive control: helper retry exists before root done').toHaveLength(1)
+    feed({ type: 'done', session_id: SID, turn_id: 'own-turn', stats: {} })
+    expect(named(container, 'Researcher', 'Retrying automatically'), 'FR-008: root done must preserve the helper retry before any later notice').toHaveLength(1)
+    feed(status('recovered'))
     expect(named(container, 'Researcher', 'after 1 retry.')).toHaveLength(1)
     feed(retry('child-a', 'turn-a', { attempt: 3 }))
     expect(named(container, 'Researcher', '(attempt 3 of 6)')).toHaveLength(1)

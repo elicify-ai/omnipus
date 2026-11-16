@@ -11,6 +11,7 @@ import { SessionDetail } from '../../src/lib/api/generated/schemas';
 import { recoverHelper } from './fixtures/helper-notices-recovery';
 import { expectPainted, paintedText, visibleNamedRows } from './fixtures/helper-notices-visible';
 import { checkNoticeVisibilityInstrument } from './fixtures/helper-notices-instrument';
+import { expectRestartedWriter } from './fixtures/helper-notices-restart';
 
 test.use({ storageState: { cookies: [], origins: [] } });
 test.describe.configure({ retries: 0 });
@@ -60,7 +61,11 @@ for (const writing of [false, true]) {
       await expect.poll(() => scene.provider.evidence.parentDone).toBe(true);
       await page.reload(); await waitForConnected(page);
       await scene.own.reload(); await waitForConnected(scene.own);
-      await expectPainted(page.getByText('HM_ROOT_OK', { exact: false }), /HM_ROOT_OK/);
+      // FR-011 preserves ordinary saved answers; it does not forbid a second
+      // real parent turn after handback. Each accepted answer must be painted.
+      await expect.poll(() => paintedText(page.getByText('HM_ROOT_OK', { exact: false })), {
+        message: 'FR-011: a genuine saved root answer remains painted after reload', timeout: 2_000,
+      }).toEqual(expect.arrayContaining([expect.stringMatching(/HM_ROOT_OK/)]));
       await expectPainted(scene.own.getByText('HM_CHILD_0_OK', { exact: true }), 'HM_CHILD_0_OK');
       await expect(page.getByTestId('provider-retry-indicator')).toHaveCount(0);
       await expect(scene.own.getByTestId('provider-waiting-indicator')).toHaveCount(0);
@@ -247,7 +252,21 @@ for (const duplicateNames of [false, true]) {
       expect(scene.traffic.frames.filter(f => f.type === 'provider_retry' && !f.child_session_id && f.session_id === scene.root.id), 'helper recovery cannot restart the root retry time').toEqual([ownBefore]);
       scene.provider.finish[0].resolve();
       await expect.poll(() => ended(scene), { timeout: 40_000 }).toBe('done');
-      await expect.poll(() => visibleNamed(page, duplicateNames ? 'Researcher' : 'Writer', 'Retrying')).toHaveLength(1);
+      // Writer's second HTTP call has now been silent through Researcher's
+      // real30s tool. FR-006 requires the next notice, not the obsolete5s retry.
+      const writerCall = scene.provider.evidence.requests.find(r => r.role === 'helper-1' && r.call === 2);
+      expect(writerCall, 'positive control: Writer actually made its second model request').toBeDefined();
+      const writerRetry = scene.traffic.frames.find(f => f.type === 'provider_retry' && f.child_session_id === scene.children[1].id);
+      expect(writerRetry?.turn_id, 'positive control: second helper has its own real retry turn').toEqual(expect.any(String));
+      const waitingIndex = () => scene.traffic.frames.findIndex(f => f.type === 'provider_status' && f.state === 'waiting' &&
+        f.child_session_id === scene.children[1].id && f.turn_id === writerRetry!.turn_id);
+      // Actual second request→silence threshold30s plus the spec's2s show budget.
+      await expect.poll(waitingIndex, { message: 'FR-006: actual Writer silence notice after its unanswered retry',
+        timeout: Math.max(1, writerCall!.at + 32_000 - Date.now()) }).toBeGreaterThanOrEqual(0);
+      await expectNamed(scene, duplicateNames ? 'Researcher' : 'Writer', "hasn't responded", scene.traffic.receivedAt[waitingIndex()]);
+      await expect.poll(() => visibleNamed(page, duplicateNames ? 'Researcher' : 'Writer', '.*'),
+        { message: 'FR-007: exactly the still-active helper remains, in its current state' }).toHaveLength(1);
+      if (!duplicateNames) expect(await visibleNamed(page, 'Researcher', '.*'), 'FR-006: ended Researcher has no row').toEqual([]);
     } finally { await scene.close(); }
   });
 }
@@ -325,7 +344,7 @@ for (const roster of ['missing', 'loading', 'failed'] as const) {
 
 // FR-006/014: fault only transport, never notice production/reducer state.
 for (const catchup of ['incremental', 'snapshot', 'restart', 'live_only'] as const) {
-  test(`missed helper end reconnects through ${catchup}; Writer survives and Researcher leaves`, async ({ page }, info) => {
+  test(`missed helper end reconnects through ${catchup}; ${catchup === 'restart' ? 'old rows clear before Writer resumes its notice' : 'Writer survives and Researcher leaves'}`, async ({ page }, info) => {
     const scene = await createNoticeScene(page, info, { script: 'retry', helperScripts: ['retry', 'silence'], wait: 10, count: 2, unavailableHistory: catchup === 'live_only' });
     try {
       await scene.releaseFailures(); await expectNamed(scene);
@@ -337,9 +356,12 @@ for (const catchup of ['incremental', 'snapshot', 'restart', 'live_only'] as con
       await expect.poll(() => ended(scene, 0), { message: 'positive control: actual helper ends while top is disconnected', timeout: 45_000 }).toBe('done');
       expect(await ended(scene, 1), 'Writer genuinely remains active before catch-up').toBe('working');
       const before = scene.link.frames.length;
+      const oldWriter = scene.traffic.frames.find(f => f.type === 'provider_status' && f.state === 'waiting' && f.child_session_id === scene.children[1].id);
+      const writerCalls = scene.provider.evidence.requests.filter(r => r.role === 'helper-1').length;
+      const restartAt = Date.now();
       if (catchup === 'restart') {
-        // Drive an actual restart, including native-helper resume. Keep the
-        // approved Writer-survives oracle; an injected boot frame is not proof.
+        // Corrected spec f900e29a72: interrupted notices are not persisted;
+        // an actual resumed turn must earn a new notice, not replay the old one.
         await scene.gateway.kill9(); await scene.gateway.restart({ relogin: false });
       }
       await scene.link.reconnect(catchup === 'snapshot' || catchup === 'live_only');
@@ -349,50 +371,64 @@ for (const catchup of ['incremental', 'snapshot', 'restart', 'live_only'] as con
       expect(completion?.mode, 'real server selected the specified catch-up path').toBe(catchup === 'incremental' ? 'incremental' : catchup === 'live_only' ? 'live_only' : 'snapshot');
       if (catchup === 'snapshot') expect(scene.link.frames.slice(before).find(f => f.type === 'session_snapshot')?.reason).toBe('retention_exceeded');
       if (catchup === 'restart') expect(scene.link.frames.slice(before).find(f => f.type === 'session_snapshot')?.reason).toBe('boot_mismatch');
+      if (catchup === 'restart') {
+        expect(await visibleNamed(page, 'Writer', '.*'), 'restart BDD: no stale Writer at the first post-catch-up check').toEqual([]);
+        expect(await visibleNamed(page, 'Researcher', '.*'), 'restart BDD: no stale Researcher at the first post-catch-up check').toEqual([]);
+      }
       // FR-006: the ended turn has no row of ANY notice state. A lowercase
       // "retry" alternative would also miss a stale "Retrying now…" row.
       await expect.poll(() => visibleNamed(page, 'Researcher', '.*')).toEqual([]);
-      await expectNamed(scene, 'Writer', "hasn't responded");
+      if (catchup === 'restart') await expectRestartedWriter(scene, restartAt, writerCalls, oldWriter?.turn_id);
+      else await expectNamed(scene, 'Writer', "hasn't responded");
       await recordScene(scene, info, `missed-end-${catchup}`);
     } finally { await scene.close(); }
   });
 }
 
-test('late real ended for the old turn cannot remove the newer turn in the same helper chat', async ({ page }, info) => {
-  const scene = await createNoticeScene(page, info, { script: 'retry', wait: 60 });
+test('ordered real held end removes only its helper; two rows become one and replay stays current', async ({ page }, info) => {
+  // T8 approved split B: browser covers legal ordered transport/replay for two
+  // real helper turns; the same-chat late-publication race is the sequenced
+  // reducer case (old retry1, newer retry2, old ended3), not transport reordering.
+  const scene = await createNoticeScene(page, info, { script: 'retry', helperWaits: [60, 120], count: 2, duplicateNames: true });
   try {
-    await scene.releaseFailures(); await expectNamed(scene);
+    await scene.releaseFailures();
+    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'), {
+      message: 'FR-005/007: two real same-name helper turns are separately visible', timeout: 2_000,
+    }).toHaveLength(2);
+    await afterRealWait(scene, 2);
+    const oldClause = 'Retrying automatically in 0:[0-5][0-9] ';
+    const survivorClause = 'Retrying automatically in (?:1:[0-5][0-9]|2:00) ';
+    await expectNamed(scene, 'Researcher', oldClause);
+    await expectNamed(scene, 'Researcher', survivorClause);
     const old = scene.traffic.frames.find(f => f.type === 'provider_retry' && f.child_session_id === scene.children[0].id);
     expect(old?.turn_id).toEqual(expect.any(String));
-    // Distinguishing the two visible countdown bands requires the old60s
-    // notice to be strictly below one minute before the new120s turn starts.
-    await afterRealWait(scene, 2);
     scene.link.holdEnded();
+    await openSessionByDeepLink(scene.own, scene.children[0].id, scene.gateway.baseURL);
     await scene.own.getByTestId('stop-btn').click();
-    await expect.poll(() => ended(scene)).toBe('stopped');
-    // Distinct valid waits make the two turns' visible rows distinguishable:
-    // old60s is below one minute now, new120s is above one minute. Counts alone
-    // would miss an implementation that retained the old row and lost the new.
-    scene.provider.nextHelperTurn(0, 120);
-    await chatInput(scene.own).fill('HM_HELPER_0_TASK. Start the next turn.'); await chatInput(scene.own).press('Enter');
-    await expect.poll(() => scene.traffic.frames.filter(f => f.type === 'provider_retry' && f.child_session_id === scene.children[0].id && f.turn_id !== old?.turn_id).length).toBeGreaterThan(0);
-    const newer = scene.traffic.frames.filter(f => f.type === 'provider_retry' && f.child_session_id === scene.children[0].id).at(-1);
-    expect(newer?.turn_id).not.toBe(old?.turn_id);
-    expect(newer?.retry_after_seconds).toBe(120);
-    const oldClause = 'Retrying automatically in 0:[0-5][0-9] ';
-    const newClause = 'Retrying automatically in (?:1:[0-5][0-9]|2:00) ';
-    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'), {
-      message: 'FR-005/006/007: both affected turns remain until the old ended arrives', timeout: 2_000,
-    }).toHaveLength(2);
-    await expectNamed(scene, 'Researcher', oldClause);
-    await expectNamed(scene, 'Researcher', newClause);
-    scene.link.deliverHeldEnd();
-    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'), {
-      message: 'FR-006: exactly the newer turn remains after the old ended', timeout: 2_000,
-    }).toHaveLength(1);
-    await expect.poll(() => visibleNamed(page, 'Researcher', oldClause)).toEqual([]);
-    await expectNamed(scene, 'Researcher', newClause);
-    expect(await ended(scene)).toBe('working');
+    await expect.poll(() => ended(scene, 0)).toBe('stopped');
+    await expect.poll(() => scene.link.heldEnded().filter(f => f.turn_id === old!.turn_id).length,
+      { message: 'positive control: the actual stopped-turn end is held before its ordered suffix' }).toBe(1);
+    expect(scene.traffic.frames.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id),
+      'positive control: no old end reached the page before release').toEqual([]);
+    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
+      { message: 'FR-005/006: both rows remain until ordered ended delivery', timeout: 2_000 }).toHaveLength(2);
+    const suffix = scene.link.deliverHeldEnd();
+    const end = suffix.find(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id);
+    expect(end?.seq, 'positive control: the real held end retains its original server sequence').toEqual(expect.any(Number));
+    await expect.poll(() => scene.traffic.frames.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id).length).toBe(1);
+    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
+      { message: 'FR-006/007: ordered end leaves exactly the other helper turn', timeout: 2_000 }).toHaveLength(1);
+    expect(await visibleNamed(page, 'Researcher', oldClause)).toEqual([]);
+    await expectNamed(scene, 'Researcher', survivorClause);
+    expect(await ended(scene, 1), 'positive control: the surviving helper is still working').toBe('working');
+    const before = scene.traffic.frames.length;
+    await page.reload(); await waitForConnected(page);
+    await expect.poll(() => scene.traffic.frames.slice(before).filter(f => f.type === 'catch_up_complete').length,
+      { message: 'positive control: actual server replay completed after reload' }).toBeGreaterThan(0);
+    await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
+      { message: 'FR-008: replay retains exactly the still-active turn', timeout: 2_000 }).toHaveLength(1);
+    expect(await visibleNamed(page, 'Researcher', oldClause)).toEqual([]);
+    await expectNamed(scene, 'Researcher', survivorClause);
   } finally { await scene.close(); }
 });
 
@@ -429,8 +465,13 @@ test('named announcement has one polite owner and frozen countdown text', async 
     await delay(1100);
     await expect(live).toHaveText(frozen);
     await expect(live.locator('[aria-live], [role="status"]')).toHaveCount(0);
+    const area = page.getByTestId('provider-helper-rows');
+    const announcementNodes = '[aria-live], [role="status"], [role="alert"], [role="log"]';
+    await expect(area, 'FR-010: inspect all named rows, not only descendants of the announcement owner').toHaveCount(1);
+    await expect(area.locator(announcementNodes), 'FR-010: retry row has no indicator-owned live region').toHaveCount(0);
     await expect.poll(() => scene.link.frames.some(f => f.type === 'provider_status' && f.state === 'waiting' && f.child_session_id === scene.children[1].id), { timeout: 35_000 }).toBe(true);
     await expect(live).toHaveCount(1); await expect(live).toHaveText(/^Writer:/);
+    await expect(area.locator(announcementNodes), 'FR-010: waiting row has no indicator-owned live region either').toHaveCount(0);
     const writerText = await live.innerText(); await delay(1100);
     await expect(live).toHaveText(writerText);
   } finally { await scene.close(); }
