@@ -2,6 +2,7 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest'
 import { act } from '@testing-library/react'
 import { reset, feed, retry, status, active, mount, named, lines, roster, AT } from '../../../tests/helper-model-notices/harness'
+import { ChatScreen } from './ChatScreen'
 
 beforeEach(reset)
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
@@ -81,7 +82,8 @@ it('the unchanged own notice renders above the separate named helper rows', () =
 it('one polite region owns frozen named state changes; countdown ticks never change it', () => {
   vi.useFakeTimers(); vi.setSystemTime(new Date(AT))
   feed(retry())
-  const { container } = mount()
+  const view = mount()
+  const { container } = view
   const row = named(container, 'Researcher', '0:30')
   expect(row).toHaveLength(1)
   const polite = [...container.querySelectorAll<HTMLElement>('[aria-live="polite"]')]
@@ -89,11 +91,19 @@ it('one polite region owns frozen named state changes; countdown ticks never cha
   expect(polite, 'FR-010: exactly one owner for named notices').toHaveLength(1)
   expect(polite[0].textContent?.trim()).toBe('Researcher: openrouter is rate-limiting requests right now. Retrying automatically in 0:30 (attempt 2 of 6).')
   expect(polite[0].querySelectorAll('[aria-live], [role="status"]')).toHaveLength(0)
+  const area = container.querySelector<HTMLElement>('[data-testid="provider-helper-rows"]')
+  expect(area, 'FR-010: named rows have a distinct area from the one announcement owner').not.toBeNull()
+  const announcementNodes = '[aria-live], [role="status"], [role="alert"], [role="log"]'
+  expect(area!.querySelectorAll(announcementNodes), 'FR-010: retry indicators inside named rows own no live region').toHaveLength(0)
   const initial = polite[0].textContent
   act(() => vi.advanceTimersByTime(1000))
   expect(named(container, 'Researcher', '0:29')).toHaveLength(1)
   expect(polite[0].textContent).toBe(initial)
+  // No new notice: an ordinary parent render must not thaw the announcement.
+  view.rerender(<ChatScreen />)
+  expect(polite[0].textContent, 'FR-010: an unrelated parent render must not re-announce the ticking countdown').toBe(initial)
   feed(status('waiting', 'writer-chat', 'writer-turn', { agent_id: 'writer' }))
   expect(polite[0].textContent).toContain('Writer:')
   expect(named(container, 'Writer', "hasn't responded")).toHaveLength(1)
+  expect(area!.querySelectorAll(announcementNodes), 'FR-010: waiting indicators inside named rows own no live region either').toHaveLength(0)
 })

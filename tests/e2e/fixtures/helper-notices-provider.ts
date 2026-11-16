@@ -11,7 +11,7 @@ export function barrier() {
   return { promise, resolve };
 }
 // not-wire-format: fixture scenario controls; never sent to a gateway API.
-export type NoticeScriptOptions = { script: HelperScript; helperScripts?: HelperScript[]; wait?: number; count?: number; parentWriting?: boolean; parentRetry?: boolean; nested?: boolean };
+export type NoticeScriptOptions = { script: HelperScript; helperScripts?: HelperScript[]; wait?: number; helperWaits?: number[]; count?: number; parentWriting?: boolean; parentRetry?: boolean; nested?: boolean };
 
 type ModelRequest = { stream?: boolean; model?: string; messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>;
   tools?: Array<{ function?: { name?: string } }> };
@@ -22,7 +22,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
   const fail = Array.from({ length: options.count ?? 1 }, barrier);
   const answer = fail.map(barrier);
   const finish = fail.map(barrier);
-  const helpers = fail.map(() => ({ calls: 0, success: false, toolSent: false, complete: false, firstAt: 0, retryWait: options.wait ?? 10 }));
+  const helpers = fail.map((_, i) => ({ calls: 0, success: false, toolSent: false, complete: false, firstAt: 0, retryWait: options.helperWaits?.[i] ?? options.wait ?? 10 }));
   const evidence = { requests: [] as Array<{ role: string; call: number; model: string; at: number; status?: number }>, errors: [] as string[],
     delegateResults: [] as unknown[], offeredTools: [] as string[][], parentCalls: 0, parentHeld: false, parentDone: false, toolResults: [] as unknown[] };
 

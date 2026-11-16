@@ -6,7 +6,8 @@ export async function installNoticeLink(page: Page) {
   let forceSnapshot = false;
   let holdEnd = false;
   let root = '';
-  const held: Array<{ raw: string | Buffer; socket: WebSocketRoute }> = [];
+  const held: Array<{ raw: string | Buffer; socket: WebSocketRoute; frame: Record<string, unknown> }> = [];
+  const blocked = new Set<WebSocketRoute>();
   const sockets: Array<{ client: WebSocketRoute; server: WebSocketRoute }> = [];
   const frames: Record<string, unknown>[] = [];
   const events: Array<{ kind: string; at: number }> = [];
@@ -27,9 +28,10 @@ export async function installNoticeLink(page: Page) {
     server.onMessage(raw => {
       const frame = JSON.parse(raw.toString()) as Record<string, unknown>;
       frames.push(frame);
-      if (holdEnd && frame.type === 'provider_status' && frame.state === 'ended' && frame.session_id === root) {
-        held.push({ raw, socket }); return;
-      }
+      if (holdEnd && frame.type === 'provider_status' && frame.state === 'ended' && frame.session_id === root) blocked.add(socket);
+      // T8 split B: a transport can stall an ordered suffix, never let newer
+      // frames overtake a held sequenced end (including an attach replay).
+      if (blocked.has(socket)) { held.push({ raw, socket, frame }); return; }
       if (!offline) socket.send(raw);
     });
   });
@@ -53,10 +55,15 @@ export async function installNoticeLink(page: Page) {
       events.push({ kind: 'online-dispatched', at: Date.now() });
     },
     holdEnded() { holdEnd = true; },
+    heldEnded() { return held.filter(item => item.frame.type === 'provider_status' && item.frame.state === 'ended').map(item => item.frame); },
     deliverHeldEnd() {
-      expect(held.length, 'positive instrument: a real ended frame was delayed').toBeGreaterThan(0);
+      expect(held.some(item => item.frame.type === 'provider_status' && item.frame.state === 'ended'),
+        'positive instrument: a real ended frame starts the ordered held suffix').toBe(true);
       holdEnd = false;
-      for (const item of held.splice(0)) item.socket.send(item.raw);
+      const delivered = held.splice(0);
+      for (const item of delivered) item.socket.send(item.raw);
+      blocked.clear();
+      return delivered.map(item => item.frame);
     },
   };
 }
