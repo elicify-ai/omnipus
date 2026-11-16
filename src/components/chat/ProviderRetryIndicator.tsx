@@ -103,13 +103,27 @@ export function formatRetryCountdown(totalSeconds: number): string {
 }
 
 /**
+ * The raw C-11 skew-corrected remaining milliseconds; 0 for any unparseable
+ * timestamp.
+ */
+function remainingRetryMs(retryAt: string, sentAt: string, receivedAt: string, nowMs: number): number {
+  const retryMs = Date.parse(retryAt)
+  const sentMs = Date.parse(sentAt)
+  const receivedMs = Date.parse(receivedAt)
+  if (!Number.isFinite(retryMs) || !Number.isFinite(sentMs) || !Number.isFinite(receivedMs)) return 0
+  return retryMs - (sentMs + (nowMs - receivedMs))
+}
+
+/**
  * C-11 skew-corrected remaining seconds: `retry_at − (sent_at + (clientNow −
  * receivedAt))`, clamped at 0. Any unparseable timestamp renders as 0
  * (→ "Retrying now…") rather than NaN.
  *
- * #1537 FR-008: rounded to the NEAREST second, half-second ties up
- * (29.5 s → 30, 0.5 s → 1), live and restored alike. So "Retrying now…" can
- * show up to 0.5 s before `retry_at`.
+ * #1537 FR-008 (chief Q8 A): the digits round to the NEAREST second,
+ * half-second ties up (29.5 s → 30), but never below 1 while any time
+ * remains — so 0 ("Retrying now…") means the raw remaining milliseconds are
+ * ≤ 0: never before `retry_at`, and every positive wait shows the cause
+ * sentence. Live and restored rows and the helper's own chat alike.
  */
 export function remainingRetrySeconds(
   retryAt: string,
@@ -117,13 +131,11 @@ export function remainingRetrySeconds(
   receivedAt: string,
   nowMs: number,
 ): number {
-  const retryMs = Date.parse(retryAt)
-  const sentMs = Date.parse(sentAt)
-  const receivedMs = Date.parse(receivedAt)
-  if (!Number.isFinite(retryMs) || !Number.isFinite(sentMs) || !Number.isFinite(receivedMs)) return 0
-  const serverNowMs = sentMs + (nowMs - receivedMs)
-  // Math.round rounds .5 up for positive values; Math.max(0, -0) is +0.
-  return Math.max(0, Math.round((retryMs - serverNowMs) / 1000))
+  const remainingMs = remainingRetryMs(retryAt, sentAt, receivedAt, nowMs)
+  if (remainingMs <= 0) return 0
+  // Math.round rounds .5 up for positive values; a sub-half-second remainder
+  // still reads 0:01, not "Retrying now…".
+  return Math.max(1, Math.round(remainingMs / 1000))
 }
 
 /**
@@ -190,6 +202,19 @@ export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
     }, 1000)
     return () => clearInterval(interval)
   }, [])
+
+  // #1537 FR-008 (chief Q8 A): "Retrying now…" appears exactly at retry_at,
+  // not at the next mount-aligned tick — one timeout at the raw remaining
+  // milliseconds forces that render. Re-armed on every render input change
+  // (each tick included), cleared on unmount and when retry_at changes.
+  const rawRemainingMs = remainingRetryMs(retryAt, sentAt, receivedAt, nowMs)
+  useEffect(() => {
+    if (rawRemainingMs <= 0) return
+    const timeout = setTimeout(() => {
+      flushSync(() => setNowMs(Date.now()))
+    }, rawRemainingMs)
+    return () => clearTimeout(timeout)
+  }, [rawRemainingMs])
 
   const remaining = remainingRetrySeconds(retryAt, sentAt, receivedAt, nowMs)
   const waiting = remaining > 0
