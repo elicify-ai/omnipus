@@ -210,7 +210,7 @@ export function reduceHelperStatus(
       return writeRow(b, identity, turnId, null)
     case 'recovered': {
       const retries = statusFrame.retries
-      if (typeof retries !== 'number' || !Number.isFinite(retries) || retries < 1) {
+      if (typeof retries !== 'number' || !Number.isFinite(retries) || !Number.isInteger(retries) || retries < 1) {
         // Contract violation (retries is what the line exists to say):
         // render nothing rather than invented copy.
         logDiagnostic('chatProviderStatusSkipped', { sessionId, frameState: statusFrame.state, helper: true })
