@@ -490,8 +490,21 @@ Boundary conditions:
 |---|
 | incremental (journal replays `ended`) |
 | full snapshot (cursor too old) |
-| full snapshot after a gateway restart |
 | live_only (history unavailable) |
+
+#### Scenario: Missed end across a gateway restart
+
+**Traces to**: User Story 2, Acceptance Scenario 5
+**Category**: Error Path
+
+Correction 2026-11-16 (chief ruling U1 (a), 00:57Z). This row used to be "full snapshot after a gateway restart" in the outline above, and it expected Writer's row to stay. That cannot hold. Notices live only in memory ("Nothing new is stored"), so a restart loses them. Boot also stops the interrupted helper turn and resumes it as a new turn. Evidence: run green-e2e-3, /workspace/logs/1537/build/green-fe/e2e-green-e2e-3.log (frames: `session_snapshot` reason `boot_mismatch` with no provider notices; the fake model's new Writer request in the same second).
+
+- **Given** the main chat shows named rows for Researcher and Writer
+- **And** the main chat's connection drops
+- **When** Researcher finishes while Writer still waits, the gateway restarts, and the connection comes back with a full snapshot
+- **Then** after the catch-up Researcher's named row is gone, and Writer has no named row yet (its interrupted turn resumes as a new turn)
+- **And** Writer's named row returns when the resumed turn reaches its next notice: the silence notice after 30 s of no answer, or a retry, whichever comes first
+- **But** if the resumed turn never reaches a notice, Writer's row must not reappear
 
 #### Scenario: Silence clear does not erase the new retry
 
@@ -682,7 +695,7 @@ Setup for every row: the scripted fake-model instance from `/workspace/logs/1537
 | UAT-H9 | US3 | Real screen reader (Orca or VoiceOver) on UAT-H2 and UAT-H6's main chat | Each state change announced once with the helper's name; no tick announcements | accessibility | Recorded announcement log | no: needs a human screen-reader pass |
 | UAT-H10 | US2-7 | Helper's first model gets 429 on all three calls (Retry-After 2), its fallback answers at once with a tool request, then a 30 s tool call; check the fake model's request log (3 + 1 calls) | Named row gone while the helper still works; no fallback note in the main chat | fallback clearing | Screenshot during the tool call | yes |
 | UAT-H11 | US1-5, US2-9 | Helper's first call: no first byte within the request timeout; then (second run) an empty stream; each time the next call answers with a tool request and a 30 s tool call follows | Retry lines with the no-response / empty-reply wording in both chats; the main chat's named row clears when the model answers, while the tool still runs | #1664 retries | Frame log + screenshots | yes |
-| UAT-H12 | Missed end (full and live_only catch-up) | Two helpers waiting; cut the main chat's network; one helper finishes; restore the network after the journal is gone (gateway restart) | Finished helper's row gone, waiting helper's row kept | catch-up reconciliation | Screenshot after reconnect | yes |
+| UAT-H12 | Missed end (full and live_only catch-up, and gateway restart) | Two helpers waiting; cut the main chat's network; one helper finishes; restore the network after the journal is gone. Repeat with a gateway restart instead | Without a restart: the finished helper's row is gone and the waiting helper's row is kept. With a restart: the finished helper's row is gone, the waiting helper has no row right after reconnect, and its row returns at its resumed turn's next notice (silence after 30 s, or a retry). Correction 2026-11-16, chief ruling U1 (a) | catch-up reconciliation | Screenshot after reconnect | yes |
 
 ### Test Implementation Order
 
