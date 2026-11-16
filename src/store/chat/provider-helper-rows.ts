@@ -48,19 +48,20 @@ export function helperRowKey(childSessionId: string, turnId: string): string {
 }
 
 /**
- * FR-008 — fold one server-time sample (a frame's `sent_at` or a
- * `session_state.emitted_at`, received at client time `clientMs`) into the
- * chat's estimate. Keeps the larger server-minus-client offset, so the
- * estimate never moves backwards. An unparseable sample changes nothing.
+ * FR-008 — fold one server-time sample (a frame's `sent_at`, or a
+ * `session_state.emitted_at_ms` in Unix milliseconds, else its
+ * `emitted_at`; received at client time `clientMs`) into the chat's
+ * estimate. Keeps the larger server-minus-client offset, so the estimate
+ * never moves backwards. An unparseable or absent sample changes nothing.
  */
 export function noteServerClock(
   clock: ProviderServerClock | null | undefined,
-  serverIso: string | undefined,
+  serverSample: string | number | undefined,
   clientMs: number,
 ): ProviderServerClock | null {
   const current = clock ?? null
-  if (typeof serverIso !== 'string') return current
-  const serverMs = Date.parse(serverIso)
+  if (typeof serverSample !== 'string' && typeof serverSample !== 'number') return current
+  const serverMs = typeof serverSample === 'number' ? serverSample : Date.parse(serverSample)
   if (!Number.isFinite(serverMs) || !Number.isFinite(clientMs)) return current
   if (current && current.serverMs - current.clientMs >= serverMs - clientMs) return current
   return { serverMs, clientMs }

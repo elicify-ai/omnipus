@@ -179,11 +179,12 @@ function handleSessionStateFrame(
     const receivedMs = Date.now()
     withBucket(targetSid, b => ({
       sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, frame.session_tokens_total),
-      // #1537 FR-008: emitted_at is the server's current time on attach — a
+      // #1537 FR-008: emitted_at_ms (else the whole-second emitted_at, from an
+      // older gateway) is the server's current time on attach — a
       // server-clock sample for the reload countdown. FR-014: this attach's
       // session_state opens the window that records which named helper rows
       // its projection delivers (reconciled at catch_up_complete).
-      providerServerClock: noteServerClock(b.providerServerClock, frame.emitted_at, receivedMs),
+      providerServerClock: noteServerClock(b.providerServerClock, frame.emitted_at_ms ?? frame.emitted_at, receivedMs),
       ...beginHelperAttach(),
     }))
   }
