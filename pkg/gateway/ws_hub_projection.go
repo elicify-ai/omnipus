@@ -177,12 +177,14 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 		}
 		touched = "item:" + meta.key
 		if isProviderNoticeKey(meta.key) {
-			// #1537 FR-008: provider notices replay in the order they were
-			// last published, so an older retry superseded by a later
-			// recovered (or a silence clear followed by a new retry) cannot
-			// come back as the final state. Other item kinds keep their
-			// first-created order.
-			p.moveToEnd(touched)
+			// #1537 FR-008: a turn's provider notices replay in the order
+			// they were last published within that turn, so an older retry
+			// superseded by a later recovered (or a silence clear followed
+			// by a new retry) cannot come back as the final state. Across
+			// turns each turn keeps the position of its first notice
+			// (FR-009, Q11 A). Other item kinds keep their first-created
+			// order.
+			p.moveAfterTurnProviderNotices(touched, it.turnID)
 			it.namedCopy = isNamedProviderCopy(frame)
 		}
 	case hubKindDone:
@@ -295,14 +297,31 @@ func isNamedProviderCopy(frame []byte) bool {
 	return bytes.Contains(frame, namedCopyField)
 }
 
-// moveToEnd moves key to the end of the replay order.
-func (p *activeTurnProjection) moveToEnd(key string) {
+// moveAfterTurnProviderNotices moves the provider notice item key to right
+// after the last OTHER provider notice item of the same turn, so it never
+// passes another turn's items. A turn's only provider notice stays where it
+// is: a new one was just appended, an updated one keeps its first-notice
+// position.
+func (p *activeTurnProjection) moveAfterTurnProviderNotices(key, turnID string) {
+	from, last := -1, -1
 	for i, k := range p.order {
 		if k == key {
-			p.order = append(append(p.order[:i:i], p.order[i+1:]...), key)
-			return
+			from = i
+			continue
+		}
+		if it := p.items[k]; it != nil && it.kind == hubKindItem && it.turnID == turnID && isProviderNoticeKey(it.id) {
+			last = i
 		}
 	}
+	if from < 0 || last < 0 {
+		return
+	}
+	order := append(p.order[:from:from], p.order[from+1:]...)
+	at := last + 1
+	if last > from {
+		at = last // the removal shifted it down by one
+	}
+	p.order = append(order[:at:at], append([]string{key}, order[at:]...)...)
 }
 
 // clearKeepingNamedProviderCopies is clear for a done: it keeps only the
