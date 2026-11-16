@@ -15,6 +15,7 @@ import { expectRestartedWriter } from './fixtures/helper-notices-restart';
 import { reloadCountdownPair } from './fixtures/helper-notices-reload';
 import { expectNoStaleRestartRows } from './fixtures/helper-notices-catchup';
 import { countdownReloadCases } from './fixtures/helper-notices-native';
+import { expectOrderedTrio, runLaterAOrderCase, runCR1OrderCase } from './fixtures/helper-notices-order';
 
 // T14: trace/video are worker-scoped in Playwright, so disable them at file scope.
 // Page-side paint JSON, passive frame receipts and explicit screenshots remain.
@@ -482,6 +483,7 @@ for (const composition of ['3 waiting', '4 recovered', '2 waiting + 2 recovered'
       await Promise.all(Array.from({ length: recover }, (_, i) =>
         recoverHelper(scene, i, scene.agents[i].name, i < 3)));
       for (let i = 0; i < 3; i++) await expectNamed(scene, scene.agents[i].name, i < recover ? 'after 1 retry' : 'Retrying');
+      await expectOrderedTrio(scene, `overflow ${composition} LIVE`);
       const summary = page.getByText('1 more helper has a model notice', { exact: true });
       if (count === 4) {
         await expectPainted(summary, '1 more helper has a model notice');
@@ -506,11 +508,22 @@ for (const composition of ['3 waiting', '4 recovered', '2 waiting + 2 recovered'
         await page.reload(); await waitForConnected(page);
       }
       for (let i = 0; i < 3; i++) await expectNamed(scene, scene.agents[i].name, i < recover ? 'after 1 retry' : 'Retrying');
+      await expectOrderedTrio(scene, `overflow ${composition} RELOAD`);
     } finally { await scene.close(); }
   });
 }
 
 }); // T14: end anonymous trace/video-off overflow/survivor group.
+
+for (const later of ['second retry', 'silence then retry'] as const) {
+  test(`Q11 first-notice A/B/C trio survives A ${later} and full snapshot reload`, async ({ page }, info) => {
+    await runLaterAOrderCase(page, info, later);
+  });
+}
+
+test('CR1 first-silent A stays before B/C after responding, retry and full snapshot reload', async ({ page }, info) => {
+  await runCR1OrderCase(page, info);
+});
 
 test('named announcement has one polite owner and frozen countdown text', async ({ page }, info) => {
   const scene = await createNoticeScene(page, info, { script: 'retry', helperScripts: ['retry', 'silence'], wait: 60, count: 2 });
