@@ -26,9 +26,16 @@ func TestContract_SessionStateFrame_EmittedAtMs(t *testing.T) {
 			var schema map[string]any
 			require.NoError(t, yaml.Unmarshal(raw, &schema))
 			if copyName == "asyncapi-inline" {
-				schema = schema["components"].(map[string]any)["schemas"].(map[string]any)["SessionStateFrame"].(map[string]any)
+				components, ok := schema["components"].(map[string]any)
+				require.True(t, ok, "Q1 parity asyncapi-inline: components must be a mapping")
+				schemas, ok := components["schemas"].(map[string]any)
+				require.True(t, ok, "Q1 parity asyncapi-inline: components.schemas must be a mapping")
+				sessionState, ok := schemas["SessionStateFrame"].(map[string]any)
+				require.True(t, ok, "Q1 parity asyncapi-inline: components.schemas.SessionStateFrame must be a mapping")
+				schema = sessionState
 			}
-			properties := schema["properties"].(map[string]any)
+			properties, ok := schema["properties"].(map[string]any)
+			require.True(t, ok, "Q1 parity %s: properties must be a mapping", copyName)
 			property, exists := properties["emitted_at_ms"].(map[string]any)
 			assert.True(t, exists, "Q1 parity %s: emitted_at_ms property must exist", copyName)
 			assert.Equal(t, "integer", property["type"], "Q1 parity %s: emitted_at_ms is integer", copyName)
