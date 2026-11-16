@@ -29,7 +29,7 @@ import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { useNotificationsStore } from '@/store/notifications'
 import { reconcileSecretRequests } from './secret-request-frames'
-import { beginHelperAttach, noteServerClock } from '../provider-helper-rows'
+import { beginHelperAttach, noteServerClock, sessionStateClockSample } from '../provider-helper-rows'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -179,12 +179,12 @@ function handleSessionStateFrame(
     const receivedMs = Date.now()
     withBucket(targetSid, b => ({
       sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, frame.session_tokens_total),
-      // #1537 FR-008: emitted_at_ms (else the whole-second emitted_at, from an
-      // older gateway) is the server's current time on attach — a
+      // #1537 FR-008: emitted_at_ms when it agrees with emitted_at (else the
+      // whole-second emitted_at; Q12 A S1) is the server's current time on attach — a
       // server-clock sample for the reload countdown. FR-014: this attach's
       // session_state opens the window that records which named helper rows
       // its projection delivers (reconciled at catch_up_complete).
-      providerServerClock: noteServerClock(b.providerServerClock, frame.emitted_at_ms ?? frame.emitted_at, receivedMs),
+      providerServerClock: noteServerClock(b.providerServerClock, sessionStateClockSample(frame.emitted_at, frame.emitted_at_ms), receivedMs),
       ...beginHelperAttach(),
     }))
   }

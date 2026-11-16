@@ -47,12 +47,38 @@ export function helperRowKey(childSessionId: string, turnId: string): string {
   return `${childSessionId}\u0000${turnId}`
 }
 
+/** JavaScript Date's limit: |ms| above this is an Invalid Date. */
+const DATE_LIMIT_MS = 8_640_000_000_000_000
+
+function isDateMs(ms: number): boolean {
+  return Number.isFinite(ms) && Math.abs(ms) <= DATE_LIMIT_MS
+}
+
+/**
+ * FR-008 (#1537 Q12 A, S1) — the server-time sample of one `session_state`.
+ * The gateway stamps `emitted_at_ms` and `emitted_at` from one clock reading,
+ * `emitted_at` truncated to whole seconds. So `emitted_at_ms` is used only
+ * when it lies in that second, [emitted_at, emitted_at + 1000 ms); any other
+ * value (or an unparseable `emitted_at`) falls back to `emitted_at`.
+ */
+export function sessionStateClockSample(
+  emittedAt: string | undefined,
+  emittedAtMs: number | undefined,
+): string | number | undefined {
+  if (typeof emittedAtMs !== 'number') return emittedAt
+  const textMs = typeof emittedAt === 'string' ? Date.parse(emittedAt) : Number.NaN
+  if (!Number.isFinite(textMs)) return emittedAt
+  const secondStartMs = Math.floor(textMs / 1000) * 1000
+  return emittedAtMs >= secondStartMs && emittedAtMs < secondStartMs + 1000 ? emittedAtMs : emittedAt
+}
+
 /**
  * FR-008 — fold one server-time sample (a frame's `sent_at`, or a
- * `session_state.emitted_at_ms` in Unix milliseconds, else its
- * `emitted_at`; received at client time `clientMs`) into the chat's
- * estimate. Keeps the larger server-minus-client offset, so the estimate
- * never moves backwards. An unparseable or absent sample changes nothing.
+ * `session_state` sample from `sessionStateClockSample`; received at client
+ * time `clientMs`) into the chat's estimate. Keeps the larger
+ * server-minus-client offset, so the estimate never moves backwards; on an
+ * equal offset the newer sample is kept (the same estimate). A sample or
+ * client time that is not a valid Date (#1537 S1) changes nothing.
  */
 export function noteServerClock(
   clock: ProviderServerClock | null | undefined,
@@ -62,8 +88,8 @@ export function noteServerClock(
   const current = clock ?? null
   if (typeof serverSample !== 'string' && typeof serverSample !== 'number') return current
   const serverMs = typeof serverSample === 'number' ? serverSample : Date.parse(serverSample)
-  if (!Number.isFinite(serverMs) || !Number.isFinite(clientMs)) return current
-  if (current && current.serverMs - current.clientMs >= serverMs - clientMs) return current
+  if (!isDateMs(serverMs) || !isDateMs(clientMs)) return current
+  if (current && current.serverMs - current.clientMs > serverMs - clientMs) return current
   return { serverMs, clientMs }
 }
 

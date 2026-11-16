@@ -102,6 +102,9 @@ export function formatRetryCountdown(totalSeconds: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
+/** The largest delay a browser `setTimeout` honours (signed 32-bit ms). */
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+
 /**
  * The raw C-11 skew-corrected remaining milliseconds; 0 for any unparseable
  * timestamp.
@@ -210,9 +213,12 @@ export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
   const rawRemainingMs = remainingRetryMs(retryAt, sentAt, receivedAt, nowMs)
   useEffect(() => {
     if (rawRemainingMs <= 0) return
+    // #1537 S2: browsers overflow a delay above 2^31 − 1 ms into a
+    // near-immediate callback. A longer wait arms the maximum; its render
+    // re-arms with the time still remaining.
     const timeout = setTimeout(() => {
       flushSync(() => setNowMs(Date.now()))
-    }, rawRemainingMs)
+    }, Math.min(rawRemainingMs, MAX_TIMER_DELAY_MS))
     return () => clearTimeout(timeout)
   }, [rawRemainingMs])
 

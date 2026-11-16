@@ -19,10 +19,17 @@ export interface NoticeClockAnchor {
   receivedAt: string
 }
 
-/** The estimate as an indicator anchor; the notice's own pair when no estimate exists. */
+/**
+ * The estimate as an indicator anchor; the notice's own pair when no estimate
+ * exists or (#1537 S1) either value is not a valid Date — never a throw from
+ * rendering, never a mixed pair.
+ */
 export function clockAnchor(clock: ProviderServerClock | null | undefined, own: NoticeClockAnchor): NoticeClockAnchor {
   if (!clock) return own
-  return { sentAt: new Date(clock.serverMs).toISOString(), receivedAt: new Date(clock.clientMs).toISOString() }
+  const server = new Date(clock.serverMs)
+  const client = new Date(clock.clientMs)
+  if (Number.isNaN(server.getTime()) || Number.isNaN(client.getTime())) return own
+  return { sentAt: server.toISOString(), receivedAt: client.toISOString() }
 }
 
 /** Freeze the chat's clock estimate per notice (identity). */
