@@ -363,14 +363,21 @@ func TestBashBackgroundChildEnvStaysScrubbed(t *testing.T) {
 	// file can exist while still empty or partial, and asserting on it then
 	// misreads an incomplete report as an R1 leak. The report is complete
 	// once the FINAL `path=` line is present and newline-terminated.
+	// (S1) A leak must not WAIT for that completeness: on every successful
+	// read, fail at once on a newline-terminated sentinel line with a
+	// non-empty value, so a child that leaks and then stalls (never writing
+	// `path=`) fails with the leak message instead of timing out.
 	report := filepath.Join(ws, "env-report.txt")
 	deadline := time.Now().Add(10 * time.Second)
 	var data []byte
 	for {
 		read, readErr := os.ReadFile(report)
-		if readErr == nil && childEnvReportComplete(read) {
-			data = read
-			break
+		if readErr == nil {
+			sentinelLeakFatal(t, read)
+			if childEnvReportComplete(read) {
+				data = read
+				break
+			}
 		}
 		if time.Now().After(deadline) {
 			// Timeout diagnostics carry counts only — never report values.
@@ -400,6 +407,45 @@ func childEnvReportComplete(data []byte) bool {
 	return strings.HasPrefix(body, "path=")
 }
 
+// sentinelLeakFatal fails the test with the R1 leak message when a COMPLETE
+// (newline-terminated) sentinelA=/sentinelB= line carries a non-empty value.
+// Safe to call on a report that is still being written: it never fires on a
+// torn line and never prints the value. (S1 finding on #1868: a leak must
+// fail fast even while the report is still incomplete.)
+func sentinelLeakFatal(t *testing.T, report []byte) {
+	t.Helper()
+	if terminatedSentinelLeak(report) {
+		t.Fatalf("child env report shows a non-empty sentinel line — R1 leak through the real child")
+	}
+}
+
+// terminatedSentinelLeak judges a sentinel value only from a COMPLETE line.
+// Splitting the report on "\n", every element is a newline-terminated line
+// except a trailing unterminated one, which is TORN (still being written)
+// and is skipped: a value is trusted only once its line is provably
+// finished, so the leak verdict never rests on partial evidence. A torn
+// non-empty prefix would in practice already imply a leak (written bytes
+// never shrink and the value cannot become empty later), but the check does
+// not rely on that; if a real leak is caught torn, the next poll — 20 ms
+// later — sees the terminated line and fires, so fail-fast costs at most
+// one poll cycle.
+func terminatedSentinelLeak(report []byte) bool {
+	s := string(report)
+	lines := strings.Split(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		lines = lines[:len(lines)-1]
+	}
+	for _, line := range lines {
+		if after, ok := strings.CutPrefix(line, "sentinelA="); ok && after != "" {
+			return true
+		}
+		if after, ok := strings.CutPrefix(line, "sentinelB="); ok && after != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // assertChildEnvReport checks a child-printed env report: sentinels UNSET,
 // workspace bin present on the child PATH, host PATH tail intact. Values are
 // fake sentinels; the failure path never prints the whole report or any
@@ -417,10 +463,12 @@ func assertChildEnvReport(t *testing.T, output, wsBin string) {
 	t.Helper()
 	// The child prints `sentinelA=%s` with plain `$VAR` expansion: unset
 	// expands EMPTY, so a leak shows up as a non-empty value. The guard
-	// requires both lines present AND empty (presence below, emptiness here).
-	if extractEnvVar(output, "sentinelA=") != "" || extractEnvVar(output, "sentinelB=") != "" {
-		t.Fatalf("child env report shows a non-empty sentinel line — R1 leak through the real child")
-	}
+	// requires both lines present AND empty (leak judgment here, presence
+	// below) — through the SAME terminated-line judgment the wait loop uses
+	// (S1: one authority for the leak verdict). A complete report's sentinel
+	// lines are all newline-terminated, so this is equivalent for the
+	// completed reports and foreground outputs asserted here.
+	sentinelLeakFatal(t, []byte(output))
 	var missing []string
 	for _, prefix := range []string{"sentinelA=", "sentinelB=", "path="} {
 		if !hasReportLine(output, prefix) {
