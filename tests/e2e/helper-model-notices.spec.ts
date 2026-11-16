@@ -150,23 +150,65 @@ for (const seconds of [29, 35]) {
 }
 
 test('silence then 429: clear-before-retry live and after reload in both chats', async ({ page }, info) => {
-  const scene = await createNoticeScene(page, info, { script: 'silence-retry', wait: 20 });
+  const scene = await createNoticeScene(page, info, { script: 'silence-retry', wait: 20, parentSilenceRetry: true });
   try {
     await scene.releaseFailures();
-    await expect.poll(() => scene.link.frames.some(f => f.type === 'provider_status' && f.state === 'waiting'),
-      { message: 'positive control: silence watcher reached its real 30 s threshold', timeout: 35_000 }).toBe(true);
-    await expectNamed(scene, 'Researcher', "hasn't responded");
+    // Derive the opaque own turn id from an actual main-agent token, not a
+    // helper copy or an assumed turn-id format. Legacy status has no agent_id.
+    const ownStart = scene.link.forwarded.find(f => f.type === 'token' && f.session_id === scene.root.id &&
+      f.agent_id === scene.parent.id && f.content === 'HM_PARENT_DELEGATING ');
+    const ownTurn = ownStart?.turn_id;
+    expect(ownTurn, 'FR-013 own positive control: real main-agent token identifies the OWN turn').toEqual(expect.any(String));
+    const ownWaiting = () => scene.link.forwarded.find(f => f.type === 'provider_status' && f.state === 'waiting' &&
+      f.session_id === scene.root.id && !f.child_session_id && f.turn_id === ownTurn);
+    await expect.poll(ownWaiting, { message: 'FR-013 own positive control: real main-agent silence threshold', timeout: 35_000 }).toBeDefined();
+    const ownRequest = scene.provider.evidence.requests.find(r => r.role === 'parent' && r.call === 2);
+    expect(ownRequest, 'own continuation actually reached the scripted model edge').toBeDefined();
+    expect(ownRequest!.status, 'own request is still silent before the external HTTP failure').toBeUndefined();
+    await expectPainted(page.getByTestId('provider-waiting-indicator'), /hasn't responded/);
+    scene.provider.parentFailure.resolve();
+    const ownRetry = () => scene.link.forwarded.find(f => f.type === 'provider_retry' && f.session_id === scene.root.id &&
+      !f.child_session_id && f.turn_id === ownTurn);
+    await expect.poll(ownRetry, { message: 'FR-013 own positive control: real retry after own HTTP 429' }).toBeDefined();
+    expect(ownRequest!.status, 'the actual own model request failed with 429').toBe(429);
+    expect(ownRetry()!.retry_after_seconds, 'own backoff is the scripted 60 s, independent of the helper 20 s').toBe(60);
+    const ownEvents = scene.link.forwarded.filter(f => f.session_id === scene.root.id && !f.child_session_id &&
+      f.turn_id === ownTurn && (f.type === 'provider_status' || f.type === 'provider_retry'));
+    expect(ownEvents.slice(0, 3).map(f => f.type === 'provider_retry' ? 'retry' : f.state),
+      'FR-013 own live: silence clear is published BEFORE the new own retry').toEqual(['waiting', 'responding', 'retry']);
+    const ownSentence = /^openrouter is rate-limiting requests right now\. Retrying automatically in \d:\d{2} \(attempt 2 of 6\)\.$/;
+    await expectPainted(page.getByTestId('provider-retry-indicator'), ownSentence);
+    await expect(page.getByTestId('provider-waiting-indicator'), 'FR-013 own live: old silence is gone').toHaveCount(0);
+    const helperWaitingIndex = () => scene.traffic.frames.findIndex(f => f.type === 'provider_status' && f.state === 'waiting' &&
+      f.session_id === scene.root.id && f.turn_id !== ownTurn);
+    await expect.poll(helperWaitingIndex, { message: 'positive control: the helper silence copy actually arrived',
+      timeout: Math.max(1, scene.provider.helpers[0].firstAt + 35_000 - Date.now()) }).toBeGreaterThanOrEqual(0);
+    await expectNamed(scene, 'Researcher', "hasn't responded", scene.traffic.receivedAt[helperWaitingIndex()]);
     scene.provider.answer[0].resolve();
     await expectNamed(scene);
-    for (const [sid, frames] of [[scene.root.id, scene.traffic.frames], [scene.children[0].id, scene.ownTraffic.frames]] as const) {
-      const relevant = frames.filter(f => f.session_id === sid && (f.type === 'provider_status' || f.type === 'provider_retry'));
+    for (const [sid, frames] of [[scene.root.id, scene.link.forwarded], [scene.children[0].id, scene.ownTraffic.frames]] as const) {
+      const relevant = frames.filter(f => f.session_id === sid && f.turn_id !== ownTurn && (f.type === 'provider_status' || f.type === 'provider_retry'));
       expect(relevant.slice(0, 3).map(f => f.type === 'provider_retry' ? 'retry' : f.state)).toEqual(['waiting', 'responding', 'retry']);
     }
     await afterRealWait(scene, 5);
+    const beforeReload = scene.link.forwarded.length;
     await Promise.all([
       (async () => {
         await page.reload(); await waitForConnected(page);
-        await expectNamed(scene, 'Researcher', '0:1[4-6]');
+        // Start BOTH display checks at the loading boundary. Own-replay
+        // prerequisites must never grant the helper a fresh later 2 s budget.
+        await Promise.all([
+          (async () => {
+            await expectPainted(page.getByTestId('provider-retry-indicator'), ownSentence);
+            await expect(page.getByTestId('provider-waiting-indicator'), 'FR-013 own reload: old silence cannot erase the retry').toHaveCount(0);
+            await expect.poll(() => scene.link.forwarded.slice(beforeReload).filter(f => f.type === 'provider_retry' &&
+              f.session_id === scene.root.id && !f.child_session_id && f.turn_id === ownTurn).map(f => f.retry_at),
+            { message: 'FR-013 own replay: the same real countdown survives actual reload', timeout: 2_000 }).toEqual([ownRetry()!.retry_at]);
+          })(),
+          (async () => {
+            await expectNamed(scene, 'Researcher', '0:1[4-6]');
+          })(),
+        ]);
       })(),
       (async () => {
         await scene.own.reload(); await waitForConnected(scene.own);
@@ -408,14 +450,17 @@ test('ordered real held end removes only its helper; two rows become one and rep
     await expect.poll(() => ended(scene, 0)).toBe('stopped');
     await expect.poll(() => scene.link.heldEnded().filter(f => f.turn_id === old!.turn_id).length,
       { message: 'positive control: the actual stopped-turn end is held before its ordered suffix' }).toBe(1);
-    expect(scene.traffic.frames.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id),
-      'positive control: no old end reached the page before release').toEqual([]);
+    expect(scene.link.forwarded.filter(f => f.type === 'provider_retry').map(f => f.child_session_id),
+      'positive delivery instrument: both real retries were forwarded to the page').toEqual(scene.children.map(c => c.id));
+    expect(scene.link.forwarded.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id),
+      'FR-006 delivery control: no old end is forwarded on ANY owned socket before release').toEqual([]);
     await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
       { message: 'FR-005/006: both rows remain until ordered ended delivery', timeout: 2_000 }).toHaveLength(2);
     const suffix = scene.link.deliverHeldEnd();
     const end = suffix.find(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id);
     expect(end?.seq, 'positive control: the real held end retains its original server sequence').toEqual(expect.any(Number));
-    await expect.poll(() => scene.traffic.frames.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id).length).toBe(1);
+    expect(scene.link.forwarded.filter(f => f.type === 'provider_status' && f.state === 'ended' && f.turn_id === old!.turn_id),
+      'FR-006 delivery control: the exact original end is forwarded once, only on release').toEqual([end]);
     await expect.poll(() => visibleNamed(page, 'Researcher', 'Retrying automatically'),
       { message: 'FR-006/007: ordered end leaves exactly the other helper turn', timeout: 2_000 }).toHaveLength(1);
     expect(await visibleNamed(page, 'Researcher', oldClause)).toEqual([]);

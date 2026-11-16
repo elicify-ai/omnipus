@@ -47,10 +47,15 @@ describe('#1537 per-helper-turn notice reduction', () => {
   })
 
   it.each(['responding', 'ended'])('%s clears only the addressed helper, not Writer or own waiting', state => {
-    feed(active(), status('waiting', '', 'own-turn'), retry(), status('waiting', 'child-b', 'turn-b', { agent_id: 'writer' }))
+    feed(active(), status('waiting', '', 'own-turn'))
     const own = structuredClone(bucket().providerStatusEvent)
+    expect(own, 'FR-007 positive control: own waiting exists BEFORE any helper frame').not.toBeNull()
+    feed(retry())
+    expect(bucket().providerStatusEvent, 'FR-007: helper retry preserves the non-null own waiting notice').toEqual(own)
+    feed(status('waiting', 'child-b', 'turn-b', { agent_id: 'writer' }))
+    expect(bucket().providerStatusEvent, 'FR-007: helper waiting preserves the original non-null own waiting notice').toEqual(own)
     feed(status(state))
-    expect(bucket().providerStatusEvent).toEqual(own)
+    expect(bucket().providerStatusEvent, `FR-007: helper ${state} preserves the original non-null own waiting notice`).toEqual(own)
     const { container } = mount()
     expect(named(container, 'Researcher', 'Retrying automatically')).toHaveLength(0)
     expect(named(container, 'Writer', "hasn't responded")).toHaveLength(1)

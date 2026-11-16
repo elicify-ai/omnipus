@@ -139,7 +139,7 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
     const gw = gateway;
     return { gateway: gw, provider, page, own, traffic, ownTraffic, children, agents, parent, root, workspace, link,
       async releaseFailures() {
-        if (!options.parentWriting && !options.parentRetry) { provider.parentFinish.resolve(); await expect.poll(() => provider.evidence.parentDone).toBe(true); }
+        if (!options.parentWriting && !options.parentRetry && !options.parentSilenceRetry) { provider.parentFinish.resolve(); await expect.poll(() => provider.evidence.parentDone).toBe(true); }
         for (let i = 0; i < provider.fail.length; i++) {
           const before = traffic.frames.filter(f => f.type === 'provider_retry').length;
           provider.fail[i].resolve();
@@ -157,7 +157,8 @@ export async function createNoticeScene(page: Page, info: TestInfo, options: Not
       async close() {
         try {
           await info.attach('helper-model-provider-evidence', { body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json' });
-          await info.attach('helper-model-raw-notice-traffic', { body: JSON.stringify({ top: traffic, own: ownTraffic, linkEvents: link.events }, null, 2), contentType: 'application/json' });
+          await info.attach('helper-model-raw-notice-traffic', { body: JSON.stringify({ top: traffic, own: ownTraffic, linkEvents: link.events,
+            linkForwardedNotices: link.forwarded.filter(f => f.type === 'provider_retry' || f.type === 'provider_status') }, null, 2), contentType: 'application/json' });
         } finally {
           for (const p of childrenPages) await p.close();
           // Tear down the owned PID before releasing scripted answers:
