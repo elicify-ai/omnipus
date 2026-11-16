@@ -119,3 +119,19 @@ func FilterKey(cli string) string {
 	}
 	return cli
 }
+
+// MergeEnvOverrides exports executor_opts.go's mergeEnvOverrides — the ONE
+// merge each driver's Run already applies to the child environment it spawns
+// (protected OMNIPUS_* keys are skipped, a saved override replaces the
+// same-named entry in place, new names are appended). Exported SOLELY so
+// pkg/gateway's executor smoke test (rest_executor_smoketest.go::
+// runExecutorSmokeTest) can prepare RunOptions.Env through the SAME merge
+// the delegated dispatch path receives at driver level, instead of keeping a
+// second, diverging copy of the merge rules — the smoke test must hand the
+// CLI exactly what a real delegated run would hand it (D-B, opencode-226
+// R5). The dispatch path itself is unchanged: every driver keeps calling the
+// unexported mergeEnvOverrides internally inside Run, so this wrapper adds
+// no second merge implementation and no new behaviour.
+func MergeEnvOverrides(baseEnv []string, overrides map[string]string, runLabel string) []string {
+	return mergeEnvOverrides(baseEnv, overrides, runLabel)
+}

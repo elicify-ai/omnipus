@@ -69,9 +69,10 @@ The ten implementation files:
   `steer.BoundaryObserver.Observe` BEFORE acting on the decision. Also holds
   `SetSteerAudienceDeps`, which injects the I-5 trio onto the loop.
 - `pkg/agent/steer_completion.go` — `completeSteeredTurn` applies the
-  goal-less completion disposition after a real turn exits (deliver first,
-  then mark terminal, so boot recovery can repair the gap rather than lose
-  the child's only result).
+  goal-less completion disposition after a real turn exits (commit the
+  terminal state first, then publish the final to the parent, then record
+  InboxAppended, so boot recovery repairs any crash in the remaining gap
+  rather than losing the child's only result).
 - `pkg/agent/stop_session.go` — `StopSession`, the ONE session Stop for
   people and agents (web, `/stop`, `/cancel`, channels, REST delete,
   `delegate(action="stop_all")` via `StopDelegatedTree`, the redirect stop

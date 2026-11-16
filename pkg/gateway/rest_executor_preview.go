@@ -189,7 +189,7 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 	// when building argv, via the exported LooksLikeProviderModel helper.
 	if cli == "opencode" && model != "" && !runner.LooksLikeProviderModel(model) {
 		resp.ModelDroppedReason = strPtr(fmt.Sprintf(
-			"model %q is not shaped like \"provider/model\" (opencode requires exactly one \"/\" separator with non-empty content on both sides); --model was omitted so the CLI falls back to its own configured default",
+			"model %q needs a provider prefix followed by \"/\" and a non-empty model path; the model path may itself contain additional slashes (for example openrouter/deepseek/deepseek-v4.1-flash); --model was omitted so the CLI falls back to its own configured default",
 			model,
 		))
 	}

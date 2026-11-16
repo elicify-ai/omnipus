@@ -251,10 +251,14 @@ func ParseExternalStream(data []byte, runID string) []RunEvent {
 	var events []RunEvent
 	ctx := context.Background()
 	out := make(chan RunEvent, 256)
-	streamParser(ctx, bytes.NewReader(data), runID, func(raw []byte) (RunEvent, bool) {
-		return parseExternalLine(raw, runID)
-	}, out)
-	close(out)
+	// Drain concurrently (see ParseClaudeStreamJSON): fatal delivery needs a
+	// live consumer while parsing runs.
+	go func() {
+		streamParser(ctx, bytes.NewReader(data), runID, func(raw []byte) (RunEvent, bool) {
+			return parseExternalLine(raw, runID)
+		}, out)
+		close(out)
+	}()
 	for ev := range out {
 		events = append(events, ev)
 	}
