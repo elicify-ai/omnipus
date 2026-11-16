@@ -4,7 +4,7 @@ import http from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { E2E_FALLBACK } from './e2e-model';
 
-export type HelperScript = 'retry' | 'silence' | 'silence-retry' | 'empty' | 'timeout' | 'fallback' | 'repeat' | 'failure';
+export type HelperScript = 'retry' | 'silence' | 'silence-retry' | 'retry-silence-retry' | 'tool-retry' | 'empty' | 'timeout' | 'fallback' | 'repeat' | 'failure';
 export function barrier() {
   let resolve!: () => void;
   const promise = new Promise<void>(yes => { resolve = yes; });
@@ -23,6 +23,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
   const fail = Array.from({ length: options.count ?? 1 }, barrier);
   const answer = fail.map(barrier);
   const finish = fail.map(barrier);
+  const secondFailure = fail.map(barrier); // Q11: release only after the real second-call silence is observed.
   const helpers = fail.map((_, i) => ({ calls: 0, success: false, toolSent: false, complete: false, firstAt: 0, retryWait: options.helperWaits?.[i] ?? options.wait ?? 10 }));
   const evidence = { requests: [] as Array<{ role: string; call: number; model: string; at: number; status?: number }>, errors: [] as string[],
     delegateResults: [] as unknown[], offeredTools: [] as string[][], parentCalls: 0, parentHeld: false, parentDone: false, toolResults: [] as unknown[] };
@@ -86,6 +87,27 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
       res.end(chunk({ content: 'HM_MIDDLE_OK' }, 'stop') + 'data: [DONE]\n\n'); return;
     }
     const script = options.helperScripts?.[index] ?? options.script;
+    if (script === 'tool-retry' && !state.complete) {
+      // CR1: B/C/D execute a real tool while A's first model call is silent.
+      // Their first retry is then released separately, not a simultaneous
+      // 30s waiting frame from four held initial HTTP requests.
+      if (!state.toolSent) { row.status = 200; toolFor(body, res, index); return; }
+      const result = (body.messages ?? []).find(m => m.role === 'tool' && m.tool_call_id === `hm-hold-${index}`);
+      if (!result) throw new Error('CR1 warmup lacks its correlated real tool result');
+      evidence.toolResults.push(result);
+      await fail[index].promise;
+      if (res.destroyed) return;
+      state.complete = true; row.status = 429;
+      res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(state.retryWait) });
+      res.end(JSON.stringify({ error: { message: 'scripted first retry after real tool', code: 'rate_limit_exceeded' } })); return;
+    }
+    if (script === 'retry-silence-retry' && call === 2) {
+      await secondFailure[index].promise;
+      if (res.destroyed) return;
+      row.status = 429;
+      res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(state.retryWait) });
+      res.end(JSON.stringify({ error: { message: 'scripted 429 after second-call silence', code: 'rate_limit_exceeded' } })); return;
+    }
     const primaryFailure = script === 'fallback' && body.model !== 'hm-fallback' && !state.success;
     if (call === 1 || primaryFailure || script === 'failure') {
       await fail[index].promise;
@@ -179,7 +201,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
       resolve(`http://127.0.0.1:${a.port}`);
     });
   });
-  return { url, evidence, helpers, fail, answer, finish, parentFinish, parentFailure,
+  return { url, evidence, helpers, fail, answer, finish, secondFailure, parentFinish, parentFailure,
     setAgents(ids: string[]) { agents = ids; },
     nextHelperTurn(index: number, retryWait = options.wait ?? 10) {
       // Only reset the external model script after the real stopped turn.
@@ -187,7 +209,7 @@ export async function startHelperNoticesProvider(options: NoticeScriptOptions) {
       answer[index] = barrier(); finish[index] = barrier();
     },
     async close() {
-      parentFinish.resolve(); parentFailure.resolve(); for (const gate of [...fail, ...answer, ...finish]) gate.resolve();
+      parentFinish.resolve(); parentFailure.resolve(); for (const gate of [...fail, ...answer, ...finish, ...secondFailure]) gate.resolve();
       await delay(0);
       await new Promise<void>((resolve, reject) => { server.close(e => e ? reject(e) : resolve()); server.closeAllConnections(); });
     },
