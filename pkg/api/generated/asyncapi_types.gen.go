@@ -1550,6 +1550,8 @@ type SessionStateFrame struct {
 	// #823 review finding 7. Stable identifier for this gateway process, minted once at startup. Keep in sync by hand with contracts/components/schemas/SessionStateFrame.yaml.
 	BootId    *string `json:"boot_id,omitempty"`
 	EmittedAt string  `json:"emitted_at"`
+	// #1537 FR-008. Unix epoch milliseconds of the same instant as emitted_at (one server clock reading). The SPA prefers it as its server-clock sample and falls back to emitted_at when absent. Optional: older gateways omit it. Keep in sync by hand with contracts/components/schemas/SessionStateFrame.yaml.
+	EmittedAtMs *int64 `json:"emitted_at_ms,omitempty"`
 	// Required on attach's session-scoped emit; absent on the unscoped connection-open emit. Describes server readiness, never proof that the client loaded a page. Unavailable history leaves authorized current controls independent.
 	HistoryState *SessionHistoryState `json:"history_state,omitempty"`
 	// Always array, never null. Capped at 1000.

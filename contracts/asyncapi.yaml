@@ -6756,6 +6756,16 @@ components:
         emitted_at:
           type: string
           format: date-time
+        emitted_at_ms:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            #1537 FR-008. Unix epoch milliseconds of the same instant as emitted_at
+            (one server clock reading). The SPA prefers it as its server-clock sample
+            and falls back to emitted_at when absent. Optional: older gateways omit
+            it. Keep in sync by hand with
+            contracts/components/schemas/SessionStateFrame.yaml.
     SystemOverloadFrame:
       title: SystemOverloadFrame
       description: >

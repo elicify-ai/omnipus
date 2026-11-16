@@ -937,6 +937,7 @@ export interface SessionStateFrame {
   active_turn?: SessionStateActiveTurn;
   boot_id?: string;
   emitted_at: string;
+  emitted_at_ms?: number;
 }
 
 export interface SystemOverloadFrame {
