@@ -1,4 +1,4 @@
-`Status: Approved`
+Status: Approved
 
 `ADR: none — no open design decision` (the founder chose option A on 2026-11-15; the architect ruled on the wire shape, reload and nested helpers on 2026-11-15 — ruling recorded in Clarifications below)
 
