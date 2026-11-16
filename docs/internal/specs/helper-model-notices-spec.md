@@ -37,7 +37,7 @@ GitNexus was not available on this pod. The facts below come from ripgrep and re
 | `pkg/gateway/websocket_forward_hub.go::WSHandler.hubProviderRetry`, `hubPublishMetaAlsoTo`, `hubTurnEnd` | modifies | Publishes the frame into one chat's hub (each hub numbers its own frames); `hubTurnEnd` forgets a helper turn's projection items but sends no clearing frame |
 | `pkg/gateway/websocket_forward_provider_status.go::WSHandler.hubProviderStatus` | modifies | Same for `provider_status` |
 | `pkg/gateway/ws_hub_projection.go::activeTurnProjection` (`update`, `item`, `projectionFrames`) | modifies | Re-sends a chat's live notices to a freshly attached tab. Today `done` clears the **whole** projection, and items keep their first-created order |
-| `pkg/gateway/ws_tool_approval.go::WSHandler.sessionStateBytes` | reads, unchanged | `session_state.emitted_at`: the server's current time, sent on every attach |
+| `pkg/gateway/ws_tool_approval.go::WSHandler.sessionStateBytes` | modifies (additive) | `session_state.emitted_at` (unchanged) and the new `session_state.emitted_at_ms`: the server's current time, from one clock reading, sent on every attach |
 | `src/store/chat/slices/provider-frames.ts::handleProviderFrame` | modifies | One retry slot and one status slot per chat; any newer frame replaces the slot; status frames clear the retry slot; builds the recovered line as a system message. This is the #1850 mechanism |
 | `src/store/chat/messages.ts::endTurnState` | modifies (scope only) | Clears the chat's own retry slot at its turn end regardless of turn id; must keep touching the own slot only |
 | `src/components/chat/ProviderRetryIndicator.tsx` (`remainingRetrySeconds`), `src/components/chat/ProviderWaitingIndicator.tsx` | modifies | Own hidden polite live region plus a ticking visible span; countdown computed from the single frame's `sent_at` |
@@ -62,17 +62,18 @@ GitNexus was not available on this pod. The facts below come from ripgrep and re
 
 ## Contract Changes (contract-first — Hard Constraint #8)
 
-Shape settled by the architect (2026-11-15): two additive optional fields plus one new status value. No new frame type.
+Shape settled by the architect (2026-11-15): two additive optional fields plus one new status value. No new frame type. Chief ruling Q1 A (2026-11-16) adds one more additive optional field, `SessionStateFrame.emitted_at_ms`.
 
 | Schema | New / Changed | File | Notes |
 |---|---|---|---|
 | ProviderRetryFrame | changed (additive) | `contracts/components/schemas/ProviderRetryFrame.yaml` **and** the inline `components.schemas.ProviderRetryFrame` in `contracts/asyncapi.yaml` (the generator reads the inline copy) | Two new optional properties: `child_session_id` (string, 1–255) and `agent_id` (string, 1–255). Set only on the main-chat copy of a helper's notice: `child_session_id` is the helper's own chat (the session whose model call this is), `agent_id` is that helper's agent. Both present or both absent. Absent on a frame about the chat's own turn and on the copy sent to the helper's own chat. The description's "the turn-end frame clears it" gains: "a main-chat copy is cleared by the helper's `provider_status` `ended` or `responding` frame, never by the main chat's own turn end." |
 | ProviderStatusFrame | changed (additive) | `contracts/components/schemas/ProviderStatusFrame.yaml` **and** the inline `components.schemas.ProviderStatusFrame` in `contracts/asyncapi.yaml` | The same two optional properties with the same meaning and the same both-or-neither rule, and a new `state` value `ended`: sent only on a main-chat copy (child fields set) when that helper turn has ended; the main chat removes that helper's named line. `ended` never appears on a frame without `child_session_id`. |
 | `contracts/asyncapi.yaml` message descriptions | changed | `provider_retry` / `provider_status` | A helper's notice is published twice: once to the helper's chat (no child fields) and once to the top chat (child fields set). When the helper's turn ends, the gateway sends `provider_status` `ended` to the top chat for every helper turn that left a named line there. |
+| SessionStateFrame | changed (additive) | `contracts/components/schemas/SessionStateFrame.yaml` **and** the inline `components.schemas.SessionStateFrame` in `contracts/asyncapi.yaml` | New optional `emitted_at_ms` (integer, int64, minimum 0, Unix epoch milliseconds of the same instant as `emitted_at`, from one clock reading). `emitted_at` keeps its meaning and whole-second format. The browser prefers `emitted_at_ms` for the FR-008 server-clock sample and falls back to `emitted_at` when it is absent. Parity test: `TestContract_SessionStateFrame_EmittedAtMs` checks both YAML copies and the generated SPA schema. A browser tab still running an older SPA rejects the new field and must be reloaded after a gateway upgrade. (Correction 2026-11-16, chief ruling Q1 A: an additive millisecond field replaces the whole-second clock sample; `emitted_at` is unchanged.) |
 
 Sequence (Hard Constraint #8): backend edits both representations of each schema → runs `scripts/gen-contracts.sh` → commits the generated `pkg/api/generated/` and `src/lib/api/generated/` with the contract change in one commit → consumers use the generated types only → `make verify-contracts` shows no drift.
 
-Extends only these two schemas. It must not collide with:
+Extends only these three schemas. It must not collide with:
 - `SubagentStartFrame` / `SubagentStateFrame`: same names, same meaning. For a direct helper, `child_session_id` is the same value those frames carry. For a helper of a helper, the top chat has no `subagent_start` for it; the named line is the only trace of it there.
 - `ProviderFallbackFrame`: unchanged. It still goes to the helper's chat only.
 
@@ -92,9 +93,9 @@ A frame that breaks the both-or-neither rule, or `ended` without child fields, i
   - Helper turn ends (finished, failed or stopped): `ended` to the top chat.
 - **Producer order (silence then retry):** when a retry is scheduled while a silence notice is active, the `responding` that clears the silence is published **before** the new `provider_retry`, in both chats. A `responding` therefore only ever clears notices published before it, and the new countdown survives, live and on replay.
 - **Same turn, later retry:** a helper turn can retry, recover, run a tool and later retry again under the same `turn_id`. The later retry is current and replaces the recovered row; only an older retry superseded by a later recovery must not come back on replay.
-- **Reload and reconnect** use the existing active-turn projection; no new snapshot field. Three changes make it correct:
+- **Reload and reconnect** use the existing active-turn projection; the snapshot gains only the additive `session_state.emitted_at_ms` clock field (Correction 2026-11-16, chief ruling Q1 A: an additive millisecond field replaces the whole-second clock sample; `emitted_at` is unchanged.) Three changes make it correct:
   1. The top chat's projection keeps a helper's main-chat copies when the main agent's own `done` arrives. They leave only when that helper's turn ends; the gateway then sends `ended` (sequenced in the top chat, so an incremental catch-up replays it).
-  2. The browser keeps one server-clock estimate per connection: the largest of (`sent_at`, or `session_state.emitted_at`, plus the time elapsed since that frame arrived) over the frames it received. The retry countdown and the silence time use this estimate instead of the single frame's `sent_at`. This is the rule `ProviderRetryFrame.sent_at` already documents.
+  2. The browser keeps one server-clock estimate per connection: the largest of (`sent_at`, or `session_state.emitted_at_ms` — else `session_state.emitted_at` when the field is absent — plus the time elapsed since that frame arrived) over the frames it received. The retry countdown and the silence time use this estimate instead of the single frame's `sent_at`. This is the rule `ProviderRetryFrame.sent_at` already documents.
   3. On attach, a turn's provider notices are re-sent in the order they were last published (scoped to the `provider_retry:` / `provider_status:` items), so an older retry superseded by a later recovered line cannot reappear.
   4. **Non-incremental attach reconciles the named rows.** When an attach completes successfully as a full snapshot or as `live_only` (history unavailable, too-old cursor, or a gateway restart), the browser replaces that chat's named helper rows with exactly the rows the attach's projection delivered. Loaded history, the main agent's own notices and live frames released after the completion boundary are kept. A failed or superseded attach changes nothing. An incremental attach keeps relying on the replayed `ended`. No new snapshot field, stored tombstone or polling.
 - Nothing new is stored. Retry, silence and recovered notices stay live only and are never saved to a transcript.
@@ -258,7 +259,7 @@ Boundary conditions:
 - The system must not put provider error text, agent ids or session ids into any visible row.
 - The system must not add a dismiss button or a Stop button to the named rows.
 - The system must not weaken the strict frame validation to make old tabs accept the new fields.
-- The system must not add a new snapshot field, a polling loop, a stored notice log or a feature flag for this feature.
+- The system must not add a polling loop, a stored notice log or a feature flag for this feature, nor any snapshot field other than the additive `session_state.emitted_at_ms` (Correction 2026-11-16, chief ruling Q1 A: an additive millisecond field replaces the whole-second clock sample; `emitted_at` is unchanged.)
 
 ### Machine-Verifiable Constraints
 
@@ -288,7 +289,7 @@ Boundary conditions:
 ### Gateway to browser (WebSocket)
 
 - **Data in / out**: `provider_retry` / `provider_status`, two copies for a helper turn, plus `ended`.
-- **Contract**: `contracts/asyncapi.yaml` and the two schemas above.
+- **Contract**: `contracts/asyncapi.yaml` and the three schemas above.
 - **On failure**: a dropped socket recovers through the existing per-session catch-up; each copy is sequenced in its own chat, so `ended` is replayed on incremental reconnect.
 - **Development**: real gateway, isolated instance (`--allow-empty --sandbox=off`), never the live instance.
 
@@ -299,7 +300,7 @@ Boundary conditions:
 | # | What's Ambiguous | Likely Agent Assumption | Question to Resolve |
 |---|------------------|------------------------|---------------------|
 | 1 | Wire shape | — | Resolved by the architect (2026-11-15): two optional fields plus `ended`. |
-| 2 | Reload during a helper's wait | — | Resolved by the architect (2026-11-15): no new snapshot field; three fixes under "API and Data". |
+| 2 | Reload during a helper's wait | — | Resolved by the architect (2026-11-15): three fixes under "API and Data". Amended by chief ruling Q1 A (2026-11-16): one additive snapshot field, `session_state.emitted_at_ms`, because the whole-second `emitted_at` cannot hold FR-008's ±1 s. |
 | 3 | Exact wording of the name prefix, the "Helper" fallback and the summary row | — | Resolved by the chief's voice review (2026-11-15 16:19Z): prefix "{Helper name}: " + the helper chat's own sentence, unchanged; unknown name "Helper: "; summary "1 more helper has a model notice" / "{N} more helpers have model notices" (never "waiting"); the announcement is the same sentence as the visible line with the time frozen at notice start, recovered e.g. "Researcher: Connection came back — the model answered after 1 retry." |
 | 4 | Helper of a helper | — | Resolved by the architect (2026-11-15): reachable today; top chat only; middle chat unchanged; cleared by `ended`. Revisit the middle chat only if UAT-H7 shows confusion. |
 | 5 | Whether a helper's own chat counts as "streaming" while its turn waits on the model before the first byte | The developer reuses the streaming gate and the helper chat still shows nothing | RED must cover "helper chat, helper turn active, nothing streamed yet" (order 6b); GREEN makes the notice show whenever that chat's turn is active. |
@@ -792,7 +793,7 @@ Correction 2026-11-15 (chief, Q1 A, 20:28Z): dataset row 3 used to expect `Retry
 - **FR-013**: When a retry is scheduled while a silence notice is active, the silence clear MUST be published before the new retry, so the new countdown survives in both chats, live and on replay.
 - **FR-014**: A successfully completed full-snapshot or `live_only` attach MUST replace the chat's named helper rows with exactly those in the delivered projection; a failed or superseded attach MUST change nothing.
 - **FR-007**: A helper's notice MUST NOT replace, clear or restart the main agent's own notice or another helper turn's row, and an `ended` for one turn MUST NOT clear another turn's row.
-- **FR-008**: After a reload or reconnect during a helper's wait — including after the main agent finished its reply — both chats MUST show the current notice within 2 s of loading, with the countdown and silence time measured against the server's current time (`session_state.emitted_at`), not the notice's original send time. An older retry superseded by a later recovered line MUST NOT reappear; a later retry in the same turn remains current. No new snapshot field is added.
+- **FR-008**: After a reload or reconnect during a helper's wait — including after the main agent finished its reply — both chats MUST show the current notice within 2 s of loading, with the countdown and silence time measured against the server's current time (`session_state.emitted_at_ms`, else `session_state.emitted_at` when the field is absent), not the notice's original send time. The countdown shows the remaining time rounded to the nearest second, so "Retrying now…" can appear up to 0.5 s before the retry time. An older retry superseded by a later recovered line MUST NOT reappear; a later retry in the same turn remains current. The only new snapshot field is the additive `session_state.emitted_at_ms` (Correction 2026-11-16, chief ruling Q1 A: an additive millisecond field replaces the whole-second clock sample; `emitted_at` is unchanged.)
 - **FR-009**: The main chat MUST show at most three named rows, ordered by each helper turn's first notice, plus one summary row counting the rest without calling them waiting; a cleared row is replaced by the next one.
 - **FR-010**: The named-row area MUST have exactly one polite live region, whose text starts with the helper's name, changes only on a state change, and never on countdown ticks.
 - **FR-011**: System MUST NOT save retry, silence or recovered notices to any transcript, MUST NOT copy the fallback note to the main chat, and MUST NOT change channel retry messages.
@@ -863,7 +864,7 @@ Correction 2026-11-15 (chief, Q1 A, 20:28Z): dataset row 3 used to expect `Retry
 - Q: Do chat channels follow the web? → A: Not in this spec; #1851 tracks it separately (filed by the chief).
 - Q: Should the notices be saved? → A: No. Option A did not ask for it; kept live only (FR-011).
 - Q: Wire shape? → A: Two optional fields `child_session_id` / `agent_id` plus a new `provider_status` state `ended`; no new frame type (architect ruling, 2026-11-15).
-- Q: Reload as a MUST, with a snapshot field? → A: MUST, without a new snapshot field: projection keeps helper copies across the main agent's `done`, a server-clock estimate from `session_state.emitted_at`, and last-publish replay order (architect ruling, 2026-11-15).
+- Q: Reload as a MUST, with a snapshot field? → A: MUST, without a new snapshot field: projection keeps helper copies across the main agent's `done`, a server-clock estimate from `session_state.emitted_at`, and last-publish replay order (architect ruling, 2026-11-15). Amended 2026-11-16 (chief ruling Q1 A): the clock estimate uses the new additive `session_state.emitted_at_ms`, because whole-second `emitted_at` plus rounding up made the countdown read up to about 2 s high.
 - Q: Helper of a helper? → A: Reachable on a stock install; named row in the top chat only; middle chat unchanged; cleared by `ended` (architect ruling, 2026-11-15).
 - Q: Grill round 1 (REVISE, 8 MAJOR, 6 MINOR, 3 OBS) — founder questions? → A: None; the grill raised no new product choice. Round 2 found MAJ-006, MAJ-007 and MIN-002/005 only partly fixed (see below).
 - Q: Grill round 2 (REVISE, 3 MAJOR, 4 MINOR) — founder questions? → A: None. Fix round 2: producer order silence-clear before retry (FR-013); non-incremental attach reconciles named rows (FR-014); a `responding` copy clears the named row after a first-call fallback or a successful timeout/empty retry, with no invented count and own-chat behaviour unchanged (FR-006); fallback fixture uses three primary 429s; same-turn later retry stays current (FR-008); routing-reader guard added to the regression list. Under the chief's review cap this is the last fixing round; the next step is the build.
