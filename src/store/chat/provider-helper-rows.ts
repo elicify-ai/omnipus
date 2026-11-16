@@ -76,9 +76,8 @@ export function sessionStateClockSample(
  * FR-008 — fold one server-time sample (a frame's `sent_at`, or a
  * `session_state` sample from `sessionStateClockSample`; received at client
  * time `clientMs`) into the chat's estimate. Keeps the larger
- * server-minus-client offset, so the estimate never moves backwards; on an
- * equal offset the newer sample is kept (the same estimate). A sample or
- * client time that is not a valid Date (#1537 S1) changes nothing.
+ * server-minus-client offset, so the estimate never moves backwards. A
+ * sample or client time that is not a valid Date (#1537 S1) changes nothing.
  */
 export function noteServerClock(
   clock: ProviderServerClock | null | undefined,
@@ -89,7 +88,7 @@ export function noteServerClock(
   if (typeof serverSample !== 'string' && typeof serverSample !== 'number') return current
   const serverMs = typeof serverSample === 'number' ? serverSample : Date.parse(serverSample)
   if (!isDateMs(serverMs) || !isDateMs(clientMs)) return current
-  if (current && current.serverMs - current.clientMs > serverMs - clientMs) return current
+  if (current && current.serverMs - current.clientMs >= serverMs - clientMs) return current
   return { serverMs, clientMs }
 }
 
