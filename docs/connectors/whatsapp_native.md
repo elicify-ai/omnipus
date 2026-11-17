@@ -39,7 +39,7 @@ Build through the make targets — they inject the required `goolm,stdjson` buil
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `enabled` | bool | Yes | Activate the WhatsApp channel. |
-| `session_store_path` | string | No | Directory for the SQLite session database (`store.db`). Defaults to `<workspace>/whatsapp` when empty (typically `~/.omnipus/workspace/whatsapp`). |
+| `session_store_path` | string | No | Directory for the SQLite session database (`store.db`). Defaults to `<workspace>/whatsapp/<channel-name>` when empty (typically `~/.omnipus/workspace/whatsapp/whatsapp` for a channel named `whatsapp`). |
 | `allow_from` | []string | No | Allowlist of WhatsApp JIDs (sender phone numbers or group IDs). Empty means all senders are accepted. |
 | `group_trigger` | object | No | Controls when the bot responds in group chats. `mention_only: true` restricts responses to @-mentions (reads `ContextInfo.MentionedJID`); `prefixes` lists additional trigger strings. |
 
