@@ -344,11 +344,17 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string, historyState
 		}
 	}
 
+	// #1537 FR-008: one clock reading feeds both fields. emitted_at keeps its
+	// whole-second RFC 3339 form; emitted_at_ms is the same instant in Unix
+	// milliseconds, the precise server-clock sample for reload countdowns.
+	now := time.Now()
+	emittedAtMs := now.UnixMilli()
 	frame := generated.SessionStateFrame{
 		Type:             string(generated.WsFrameTypeSessionState),
 		UserId:           wc.userID,
 		PendingApprovals: pendingApprovals,
-		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
+		EmittedAt:        now.UTC().Format(time.RFC3339),
+		EmittedAtMs:      &emittedAtMs,
 	}
 	// #823 BE-DESIGN.md §3.4: every connection opens with a session_state,
 	// so this is how a client learns the gateway's current boot id and can

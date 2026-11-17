@@ -192,6 +192,12 @@ type WSHandler struct {
 	// without newWSHandler, which then reads "not watching" everywhere.
 	chatPresence *chatPresenceStore
 
+	// helperNotices remembers each helper turn that left a named provider
+	// notice copy in a top chat, so its turn end sends exactly one
+	// provider_status `ended` there (#1537 FR-012; ws_helper_notices.go).
+	// The zero value is ready to use.
+	helperNotices helperNoticeTurns
+
 	// activeConns tracks in-flight ServeHTTP goroutines so Wait() can block
 	// until all connections have fully torn down (used by tests to avoid
 	// tempdir cleanup races).

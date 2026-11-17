@@ -186,6 +186,7 @@
         "tests/e2e/chat-history-paging.soft-budget-screen-coverage.spec.ts",
         "tests/e2e/chat-history-paging.usage-reload.spec.ts",
         "tests/e2e/chat-history-paging.large-output-preview.spec.ts",
+        "tests/e2e/helper-model-notices.spec.ts",
         "tests/e2e/memory-scripted.spec.ts"
       ]
     },

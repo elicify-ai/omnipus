@@ -45,6 +45,20 @@ export interface ProviderRetryIndicatorProps {
   /** The chain's previous candidate — present only on a within-provider move (MIN-104). */
   previousProvider?: string
   previousModel?: string
+  /**
+   * #1537 — a main-chat named helper row: the helper's display name, shown
+   * as "{label}: " before the unchanged sentence. Absent for a chat's own
+   * notice.
+   */
+  label?: string
+  /**
+   * #1537 FR-010 — false inside the named-row area, which owns the single
+   * polite live region for helper notices; this indicator then renders no
+   * live region of its own. Defaults to true (a chat's own notice).
+   */
+  liveRegion?: boolean
+  /** Root test id; defaults to "provider-retry-indicator". */
+  testId?: string
 }
 
 /**
@@ -88,10 +102,31 @@ export function formatRetryCountdown(totalSeconds: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
+/** The largest delay a browser `setTimeout` honours (signed 32-bit ms). */
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+
+/**
+ * The raw C-11 skew-corrected remaining milliseconds; 0 for any unparseable
+ * timestamp.
+ */
+function remainingRetryMs(retryAt: string, sentAt: string, receivedAt: string, nowMs: number): number {
+  const retryMs = Date.parse(retryAt)
+  const sentMs = Date.parse(sentAt)
+  const receivedMs = Date.parse(receivedAt)
+  if (!Number.isFinite(retryMs) || !Number.isFinite(sentMs) || !Number.isFinite(receivedMs)) return 0
+  return retryMs - (sentMs + (nowMs - receivedMs))
+}
+
 /**
  * C-11 skew-corrected remaining seconds: `retry_at − (sent_at + (clientNow −
  * receivedAt))`, clamped at 0. Any unparseable timestamp renders as 0
  * (→ "Retrying now…") rather than NaN.
+ *
+ * #1537 FR-008 (chief Q8 A): the digits round to the NEAREST second,
+ * half-second ties up (29.5 s → 30), but never below 1 while any time
+ * remains — so 0 ("Retrying now…") means the raw remaining milliseconds are
+ * ≤ 0: never before `retry_at`, and every positive wait shows the cause
+ * sentence. Live and restored rows and the helper's own chat alike.
  */
 export function remainingRetrySeconds(
   retryAt: string,
@@ -99,12 +134,11 @@ export function remainingRetrySeconds(
   receivedAt: string,
   nowMs: number,
 ): number {
-  const retryMs = Date.parse(retryAt)
-  const sentMs = Date.parse(sentAt)
-  const receivedMs = Date.parse(receivedAt)
-  if (!Number.isFinite(retryMs) || !Number.isFinite(sentMs) || !Number.isFinite(receivedMs)) return 0
-  const serverNowMs = sentMs + (nowMs - receivedMs)
-  return Math.max(0, Math.ceil((retryMs - serverNowMs) / 1000))
+  const remainingMs = remainingRetryMs(retryAt, sentAt, receivedAt, nowMs)
+  if (remainingMs <= 0) return 0
+  // Math.round rounds .5 up for positive values; a sub-half-second remainder
+  // still reads 0:01, not "Retrying now…".
+  return Math.max(1, Math.round(remainingMs / 1000))
 }
 
 /**
@@ -133,6 +167,16 @@ function buildWaitingLine(props: ProviderRetryIndicatorProps, remainingSecondsVa
   return `${displayName} ${retryProblemClause(errorCode)}. Retrying automatically in ${countdown} (attempt ${attempt} of ${maxAttempts}).`
 }
 
+/**
+ * #1537 — the line exactly as this indicator shows it at `nowMs` ("Retrying
+ * now…" once the wait has run out). The named-row area uses it for its own
+ * frozen announcement, so announced and visible sentences cannot drift.
+ */
+export function providerRetryLineAt(props: ProviderRetryIndicatorProps, nowMs: number): string {
+  const remaining = remainingRetrySeconds(props.retryAt, props.sentAt, props.receivedAt, nowMs)
+  return remaining > 0 ? buildWaitingLine(props, remaining) : 'Retrying now…'
+}
+
 // MAJ-016 — one {key, text} pair for the frozen announcement: the key
 // identifies the attempt (so the effect below can tell "still this attempt"
 // from "a new attempt started"), the text is the line at THIS computation's
@@ -147,7 +191,7 @@ function computeAnnouncement(props: ProviderRetryIndicatorProps): { key: string;
 }
 
 export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
-  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel, errorCode } = props
+  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel, errorCode, label, liveRegion = true, testId = 'provider-retry-indicator' } = props
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
@@ -161,6 +205,22 @@ export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
     }, 1000)
     return () => clearInterval(interval)
   }, [])
+
+  // #1537 FR-008 (chief Q8 A): "Retrying now…" appears exactly at retry_at,
+  // not at the next mount-aligned tick — one timeout at the raw remaining
+  // milliseconds forces that render. Re-armed on every render input change
+  // (each tick included), cleared on unmount and when retry_at changes.
+  const rawRemainingMs = remainingRetryMs(retryAt, sentAt, receivedAt, nowMs)
+  useEffect(() => {
+    if (rawRemainingMs <= 0) return
+    // #1537 S2: browsers overflow a delay above 2^31 − 1 ms into a
+    // near-immediate callback. A longer wait arms the maximum; its render
+    // re-arms with the time still remaining.
+    const timeout = setTimeout(() => {
+      flushSync(() => setNowMs(Date.now()))
+    }, Math.min(rawRemainingMs, MAX_TIMER_DELAY_MS))
+    return () => clearTimeout(timeout)
+  }, [rawRemainingMs])
 
   const remaining = remainingRetrySeconds(retryAt, sentAt, receivedAt, nowMs)
   const waiting = remaining > 0
@@ -181,19 +241,23 @@ export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
 
   return (
     <div
-      data-testid="provider-retry-indicator"
+      data-testid={testId}
       data-state={waiting ? 'waiting' : 'retrying-now'}
       className="flex min-w-0 items-center gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-0-5)]"
     >
       <span aria-hidden className="size-2 shrink-0 rounded-full bg-[var(--color-warning)]" />
       {/* MAJ-016 — the frozen full line is announced once per attempt; the
-          ticking mm:ss span below sits OUTSIDE this live region. */}
-      <div role="status" aria-live="polite" className="sr-only">
-        {announcementText}
-      </div>
+          ticking mm:ss span below sits OUTSIDE this live region. #1537: a
+          named helper row leaves announcing to the named-row area. */}
+      {liveRegion && (
+        <div role="status" aria-live="polite" className="sr-only">
+          {announcementText}
+        </div>
+      )}
       {/* 6b U3b — wraps, never truncates: at the narrow width the Team panel
           leaves, the cause, countdown and "(attempt N of M)" stay readable. */}
       <span className="min-w-0 break-words font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        {label !== undefined && `${label}: `}
         {visibleText}
       </span>
     </div>

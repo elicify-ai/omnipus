@@ -10,7 +10,18 @@ description: >
   `retries` automatic retries (the "reconnected" note). Built from named fields
   only, never provider text. The SPA keys one per-turn item on turn_id; each
   newer frame for the turn replaces the previous one and the turn-end frame
-  clears it.
+  clears it. A main-chat copy is cleared by the helper's `ended` or
+  `responding` frame, never by the main chat's own turn end.
+
+  Issue #1537: a helper's status is published twice — once to the helper's
+  own chat (no child fields) and once to the top chat with `child_session_id`
+  and `agent_id` set; the copies are equal except `session_id`,
+  `child_session_id`, `agent_id` and `seq`. When a helper's model answers
+  after an announced retry without a `recovered` note, only the top chat
+  receives a `responding` copy. `ended`: sent only on a top-chat copy when
+  that helper turn has ended (finished, failed or stopped); the main chat
+  removes that helper's named row. Both identity fields are present or both
+  absent, and `ended` never appears without them (the anyOf below).
 type: object
 required:
   - type
@@ -19,6 +30,18 @@ required:
   - state
   - sent_at
 additionalProperties: false
+anyOf:
+  - required:
+      - child_session_id
+      - agent_id
+  - properties:
+      child_session_id: false
+      agent_id: false
+      state:
+        enum:
+          - waiting
+          - responding
+          - recovered
 properties:
   type:
     type: string
@@ -28,6 +51,23 @@ properties:
     minLength: 1
     maxLength: 255
     description: Session whose turn is waiting on the provider.
+  child_session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: >-
+      Issue #1537. Set only on the top chat's copy of a helper's notice: the
+      helper's own chat (the session whose model call this is). Sent together
+      with agent_id. Absent on a frame about the chat's own turn and on the
+      copy sent to the helper's own chat.
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: >-
+      Issue #1537. Set only on the top chat's copy of a helper's notice: the
+      helper's agent. Sent together with child_session_id. An id, never shown;
+      the browser looks the display name up in its own agent list.
   turn_id:
     type: string
     minLength: 1
@@ -39,7 +79,8 @@ properties:
       - waiting
       - responding
       - recovered
-    description: The provider-call state (see the frame description).
+      - ended
+    description: The provider-call state (see the frame description). `ended` only with child_session_id and agent_id.
   sent_at:
     type: string
     format: date-time

@@ -17,6 +17,14 @@ import type {
 } from '@/lib/api/generated/asyncapi-types'
 import { getMessages } from '../messages'
 import { applyMessageArray } from '../session'
+import {
+  buildRetryEventData,
+  buildWaitingEventData,
+  noteServerClock,
+  providerFrameIdentity,
+  reduceHelperRetry,
+  reduceHelperStatus,
+} from '../provider-helper-rows'
 import type {
   ChatMessage,
   ChatStore,
@@ -121,41 +129,39 @@ export function handleProviderFrame({ frame, targetSid, get, withBucket }: Provi
       // entry, before any await/scheduling, so the indicator's
       // serverNow = sent_at + (clientNow − receivedAt) derivation has its
       // anchor. Never compared against sent_at directly.
-      const receivedAt = new Date().toISOString()
+      const receivedMs = Date.now()
+      const receivedAt = new Date(receivedMs).toISOString()
       const retryFrame = frame as ProviderRetryFrame
+      // #1537 — a top-chat copy of a helper's notice (both identity fields)
+      // goes to that helper turn's own named row and never touches this
+      // chat's own slot (#1850). A lone identity field is a contract
+      // violation: logged and ignored, never mistaken for an own frame.
+      const identity = providerFrameIdentity(retryFrame)
+      if (identity.kind === 'malformed') {
+        logDiagnostic('chatProviderHelperIdentityInvalid', { sessionId: targetSid, frameType: frame.type })
+        return true
+      }
+      if (identity.kind === 'helper') {
+        withBucket(targetSid, (b) => ({
+          ...reduceHelperRetry(b, retryFrame, identity, receivedAt),
+          providerServerClock: noteServerClock(b.providerServerClock, retryFrame.sent_at, receivedMs),
+        }))
+        return true
+      }
       withBucket(targetSid, (b) => {
-        const prev = b.providerRetryEvent
         // MIN-104 — the model-switch qualifier applies only when the chain
         // MOVED within one provider (openrouter/model-a → openrouter/model-b).
         // A same-model retry (attempt 2 of the same candidate) and a
         // cross-provider move render the plain provider line; a new turn's
-        // first frame has no previous candidate at all.
-        const sameTurn = prev != null && prev.turnId === retryFrame.turn_id
-        const movedWithinProvider = sameTurn
-          && prev.provider === retryFrame.provider
-          && prev.model !== retryFrame.model
-        const movedAcrossProviders = sameTurn && prev.provider !== retryFrame.provider
-        const next: ProviderRetryEventData = {
-          turnId: retryFrame.turn_id,
-          provider: retryFrame.provider,
-          model: retryFrame.model,
-          retryAt: retryFrame.retry_at,
-          sentAt: retryFrame.sent_at,
-          receivedAt,
-          attempt: retryFrame.attempt,
-          maxAttempts: retryFrame.max_attempts,
-          // Issues #1280/#1478 wording round — the cause class the indicator
-          // renders in plain English (never the raw code). Optional on the
-          // type only for forward/backward compat with frames that pre-date
-          // the field; the contract requires it since #1280.
-          ...(typeof retryFrame.error_code === 'string' && retryFrame.error_code.length > 0
-            ? { errorCode: retryFrame.error_code }
-            : {}),
-          ...(movedWithinProvider && !movedAcrossProviders
-            ? { previousProvider: prev.provider, previousModel: prev.model }
-            : {}),
+        // first frame has no previous candidate at all. Issues #1280/#1478:
+        // the cause class (error_code) rides along for the plain-English
+        // clause. Both rules live in buildRetryEventData.
+        const next: ProviderRetryEventData = buildRetryEventData(retryFrame, b.providerRetryEvent, receivedAt)
+        return {
+          providerRetryEvent: next,
+          // #1537 FR-008 — the chat's server-clock estimate (reload clock).
+          providerServerClock: noteServerClock(b.providerServerClock, retryFrame.sent_at, receivedMs),
         }
-        return { providerRetryEvent: next }
       })
       return true
     }
@@ -163,28 +169,35 @@ export function handleProviderFrame({ frame, targetSid, get, withBucket }: Provi
     case 'provider_status': {
       if (!targetSid) return true
       const statusFrame = frame as ProviderStatusFrame
+      const identity = providerFrameIdentity(statusFrame)
+      if (identity.kind === 'malformed') {
+        logDiagnostic('chatProviderHelperIdentityInvalid', { sessionId: targetSid, frameType: frame.type })
+        return true
+      }
+      if (identity.kind === 'helper') {
+        // #1537 — helper turn's named row only (see the provider_retry case).
+        const receivedMs = Date.now()
+        const receivedAt = new Date(receivedMs).toISOString()
+        withBucket(targetSid, (b) => ({
+          ...reduceHelperStatus(b, statusFrame, identity, receivedAt, targetSid),
+          providerServerClock: noteServerClock(b.providerServerClock, statusFrame.sent_at, receivedMs),
+        }))
+        return true
+      }
       // The store manages the notice slot only; the recovered note and the
       // stale retry-line clear are handled here so the reducer stays the one
       // place that owns these slots' invariants.
       if (statusFrame.state === 'waiting') {
         // C-11 — the receipt anchor, captured at reducer entry (same rule as
         // the provider_retry case above).
-        const receivedAt = new Date().toISOString()
+        const receivedMs = Date.now()
+        const receivedAt = new Date(receivedMs).toISOString()
         withBucket(targetSid, (b) => ({
-          providerStatusEvent: {
-            state: 'waiting',
-            turnId: statusFrame.turn_id,
-            silentSince: statusFrame.silent_since ?? statusFrame.sent_at,
-            ...(typeof statusFrame.stall_at === 'string' && statusFrame.stall_at.length > 0
-              ? { stallAt: statusFrame.stall_at }
-              : {}),
-            // Issue #1664 B3 — the attempt count, only when the frame carries both.
-            ...(typeof statusFrame.attempt === 'number' && typeof statusFrame.max_attempts === 'number'
-              ? { attempt: statusFrame.attempt, maxAttempts: statusFrame.max_attempts }
-              : {}),
-            sentAt: statusFrame.sent_at,
-            receivedAt,
-          } satisfies ProviderStatusEventData,
+          // Issue #1664 B3 — the attempt count rides along only when the
+          // frame carries both (buildWaitingEventData).
+          providerStatusEvent: buildWaitingEventData(statusFrame, receivedAt) satisfies ProviderStatusEventData,
+          // #1537 FR-008 — the chat's server-clock estimate (reload clock).
+          providerServerClock: noteServerClock(b.providerServerClock, statusFrame.sent_at, receivedMs),
           // The wait this turn's last provider_retry frame announced has
           // clearly FIRED — a call is running now (silence is measured inside
           // it). A countdown line frozen at "Retrying now…" under the waiting

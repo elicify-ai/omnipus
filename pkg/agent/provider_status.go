@@ -66,6 +66,14 @@ type ProviderStatusPayload struct { // not-wire-format: in-process event payload
 	// zero = not counted.
 	Attempt     int `json:"attempt"`
 	MaxAttempts int `json:"max_attempts"`
+	// ChildSessionID (#1537 FR-001/002): the helper's own chat when the
+	// turn's own chat differs from its top chat (SessionID); the hub then
+	// publishes one copy to each. Empty for a chat's own turn.
+	ChildSessionID string `json:"ChildSessionID"`
+	// NamedCopyOnly (#1537 FR-006): the helper's model answered after an
+	// announced retry without a recovered note; only the top chat's named
+	// row is cleared, the helper's own chat keeps its own-chat rule.
+	NamedCopyOnly bool `json:"NamedCopyOnly"`
 }
 
 // providerSilenceWatch tracks one provider round's silence.
@@ -201,12 +209,36 @@ func (rt *agentLoopRunTurn) noteProviderRecovered(retries int) {
 	}
 }
 
+// noteProviderAnswered clears a helper's named retry row when its model
+// answered after an announced retry and no recovered note followed (#1537
+// FR-006: a fallback model answering on its first call, or a successful outer
+// no_response / empty_reply retry). No retry count is invented.
+func (rt *agentLoopRunTurn) noteProviderAnswered() {
+	if rt == nil || !rt.namedRetryPending.Load() {
+		return
+	}
+	rt.emitProviderStatus(ProviderStatusPayload{State: ProviderStatusResponding, NamedCopyOnly: true})
+}
+
 // emitProviderStatus stamps the session and server time and emits the event.
+// A helper turn (own chat differs from its top chat) also carries its own
+// chat, so the hub publishes the helper copy and the named top copy (#1537).
 func (rt *agentLoopRunTurn) emitProviderStatus(p ProviderStatusPayload) {
 	if rt == nil || rt.al == nil || rt.ts == nil {
 		return
 	}
-	p.SessionID = string(rt.ts.routingSessionID)
+	top := string(rt.ts.routingSessionID)
+	p.SessionID = top
+	if own := rt.ts.transcriptSessionID; top != "" && own != "" && own != top {
+		p.ChildSessionID = own
+		if p.State == ProviderStatusResponding || p.State == ProviderStatusRecovered {
+			// The named row's retry is answered or replaced by this state.
+			rt.namedRetryPending.Store(false)
+		}
+	}
+	if p.NamedCopyOnly && p.ChildSessionID == "" {
+		return // a chat's own turn keeps its existing rules (FR-003)
+	}
 	p.SentAt = time.Now()
 	rt.al.emitEvent(EventKindProviderStatus, rt.ts.eventMeta("runTurn", "turn.llm.provider_status"), p)
 }

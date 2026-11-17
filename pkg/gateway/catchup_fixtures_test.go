@@ -20,7 +20,8 @@
 // replaced consistently within a fixture: the same raw value always maps to
 // the same placeholder ("sess-1", "turn-1", "msg-1", ...), so relationships —
 // a token's message_id equal to the replayed message's id — survive.
-// Timestamps become fixed, increasing instants; durations become 1.
+// Timestamps become fixed, increasing instants; durations become 1; a
+// session_state's emitted_at_ms becomes its emitted_at second + 250 ms.
 // Sequence numbers are real.
 
 package gateway
@@ -221,7 +222,15 @@ type fixtureNormalizer struct {
 	positions   map[string]string
 	generations map[string]string
 	timeCount   int
+	problems    []string
 }
+
+// fixtureEmittedAtMsOffset is the sub-second part every normalized
+// session_state emitted_at_ms gets: inside its object's normalized emitted_at
+// second, so the SPA's same-second check (sessionStateClockSample, #1537 S1)
+// takes the millisecond path; not zero, so that path stays distinguishable
+// from the whole-second emitted_at fallback.
+const fixtureEmittedAtMsOffset = 250
 
 func newFixtureNormalizer() *fixtureNormalizer {
 	return &fixtureNormalizer{ids: map[string]string{}, counts: map[string]int{},
@@ -271,6 +280,7 @@ func (n *fixtureNormalizer) norm(v any, key string) any {
 		for _, k := range keys {
 			x[k] = n.norm(x[k], k)
 		}
+		n.emittedAtMs(x)
 		return x
 	case []any:
 		for i := range x {
@@ -306,7 +316,27 @@ func (n *fixtureNormalizer) frame(t *testing.T, raw json.RawMessage) json.RawMes
 	require.NoError(t, json.Unmarshal(raw, &v))
 	out, err := json.Marshal(n.norm(v, ""))
 	require.NoError(t, err)
+	require.Empty(t, n.problems, "fixture normalization could not make every run-specific value fixed")
 	return out
+}
+
+// emittedAtMs replaces a session_state's run-specific emitted_at_ms (#1537,
+// FR-008) with the same object's ALREADY normalized emitted_at second plus
+// fixtureEmittedAtMsOffset. It runs after the object's keys were normalized,
+// so the pairing is per object, not per occurrence order. An emitted_at_ms
+// without a parseable emitted_at beside it is recorded as a problem rather
+// than left raw.
+func (n *fixtureNormalizer) emittedAtMs(x map[string]any) {
+	if _, present := x["emitted_at_ms"]; !present {
+		return
+	}
+	text, _ := x["emitted_at"].(string)
+	second, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		n.problems = append(n.problems, fmt.Sprintf("emitted_at_ms without a parseable emitted_at (%q): %v", text, err))
+		return
+	}
+	x["emitted_at_ms"] = float64(second.UnixMilli() + fixtureEmittedAtMsOffset)
 }
 
 // finishFixture normalizes every tab's events and writes or checks the file.

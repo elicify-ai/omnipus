@@ -23,6 +23,7 @@ import { replayErrorRetryAttempts, replayErrorRetryTimers } from '../runtime-sta
 import { flushHeldClearProjection } from '../clear-refetch'
 import type { ChatMessage, ChatStore, SessionChatState } from '../types'
 import { finishRecoveredFirstSend } from './first-send-frames'
+import { completeHelperAttach } from '../provider-helper-rows'
 import { acknowledgeShownCatchUp, noteServerAttentionFrame } from '@/store/session/foregroundAck'
 
 type Frame = Parameters<ChatStore['handleFrame']>[0]
@@ -187,6 +188,13 @@ function handleCatchUpCompleteFrame({ frame, targetSid, get, set, withBucket }: 
     clearTimeout(replayErrorRetryTimers[targetSid])
     delete replayErrorRetryTimers[targetSid]
   }
+  // #1537 FR-014 — a successful full-snapshot or live_only attach replaces
+  // the chat's named helper rows with exactly the rows its projection
+  // delivered (an ended helper's row leaves, a still-waiting one stays);
+  // incremental attaches rely on the replayed `ended`. Superseded
+  // completions are dropped before this reducer; failed attaches never
+  // complete. Live frames released after this boundary apply afterwards.
+  withBucket(targetSid, (b) => completeHelperAttach(b, completeFrame.mode))
   withBucket(targetSid, (b) => produce(b, (draft) => {
     const bootChanged = completeFrame.boot_id !== draft.cursor?.bootId
     draft.cursor = cursorFromTerminalFrame(completeFrame, draft.cursor?.bootId)

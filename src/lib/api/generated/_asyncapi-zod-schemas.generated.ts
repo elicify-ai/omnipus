@@ -763,10 +763,12 @@ export const RateLimitFrame = z
   })
   .strict();
 
-export const ProviderRetryFrame = z
+export const ProviderRetryFrameBase = z
   .object({
     type: z.literal("provider_retry"),
     session_id: z.string().min(1).max(255),
+    child_session_id: z.string().min(1).max(255).optional(),
+    agent_id: z.string().min(1).max(255).optional(),
     turn_id: z.string().min(1).max(128),
     provider: z.string().min(1).max(256),
     model: z.string().min(1).max(256),
@@ -780,12 +782,18 @@ export const ProviderRetryFrame = z
   })
   .strict();
 
-export const ProviderStatusFrame = z
+export const ProviderRetryFrame = ProviderRetryFrameBase.refine((v) => (v["child_session_id"] !== undefined && v["agent_id"] !== undefined) || ((v["child_session_id"] === undefined) && (v["agent_id"] === undefined)), {
+  message: "does not satisfy the schema's anyOf constraint",
+});
+
+export const ProviderStatusFrameBase = z
   .object({
     type: z.literal("provider_status"),
     session_id: z.string().min(1).max(255),
+    child_session_id: z.string().min(1).max(255).optional(),
+    agent_id: z.string().min(1).max(255).optional(),
     turn_id: z.string().min(1).max(128),
-    state: z.enum(["waiting", "responding", "recovered"]),
+    state: z.enum(["waiting", "responding", "recovered", "ended"]),
     sent_at: z.string(),
     silent_since: z.string().optional(),
     stall_at: z.string().optional(),
@@ -795,6 +803,10 @@ export const ProviderStatusFrame = z
     seq: z.number().int().min(1).optional(),
   })
   .strict();
+
+export const ProviderStatusFrame = ProviderStatusFrameBase.refine((v) => (v["child_session_id"] !== undefined && v["agent_id"] !== undefined) || ((v["child_session_id"] === undefined) && (v["agent_id"] === undefined) && (v["state"] === undefined || ["waiting","responding","recovered"].includes(v["state"]))), {
+  message: "does not satisfy the schema's anyOf constraint",
+});
 
 export const ContextWindowNoticeFrameNotice = z
   .object({
@@ -1023,6 +1035,7 @@ export const SessionStateFrame = z
     active_turn: SessionStateActiveTurn.optional(),
     boot_id: z.string().optional(),
     emitted_at: z.string(),
+    emitted_at_ms: z.number().int().min(0).optional(),
   })
   .strict();
 
@@ -1793,8 +1806,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   ReplayErrorFrame,
   ToolResultProjectionFrame,
   RateLimitFrame,
-  ProviderRetryFrame,
-  ProviderStatusFrame,
+  ProviderRetryFrameBase,
+  ProviderStatusFrameBase,
   ContextWindowNoticeFrame,
   ProviderFallbackFrame,
   ProviderFallbackNote,
@@ -1850,7 +1863,16 @@ export const WsFrame = z.discriminatedUnion("type", [
   MailPanelObserverFrame,
   MailPanelObserverAckFrame,
   MailPanelObserverErrorFrame,
-]);
+]).superRefine((v, ctx) => {
+  const refined = ({
+    "message": MessageFrame,
+    "provider_retry": ProviderRetryFrame,
+    "provider_status": ProviderStatusFrame,
+  } as Record<string, z.ZodTypeAny>)[v.type];
+  if (!refined) return;
+  const result = refined.safeParse(v);
+  if (!result.success) for (const issue of result.error.issues) ctx.addIssue(issue);
+});
 
 export type WsFrameType = z.infer<typeof WsFrameType>;
 export type WsFrame = z.infer<typeof WsFrame>;
