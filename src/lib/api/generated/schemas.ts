@@ -14840,7 +14840,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/security/rate-limits",
     alias: "getRateLimits",
-    description: `Returns the current rate-limit config and the live daily LLM cost. Hot-reloaded — requires_restart is always false on PUT.
+    description: `Returns the current per-agent sliding-window rate-limit config: the two caps max_agent_llm_calls_per_hour and max_agent_tool_calls_per_minute (0 &#x3D; unlimited), and enabled, true when either cap is above 0. Per ADR-053 D12 the SEC-26 USD daily cost cap was retired; no cost is returned. Hot-reloaded — requires_restart is always false on PUT.
 `,
     requestFormat: "json",
     response: RateLimitsResponse,
@@ -14856,7 +14856,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/security/rate-limits",
     alias: "updateRateLimits",
-    description: `Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).
+    description: `Partial update — any subset of the two per-agent cap fields (max_agent_llm_calls_per_hour, max_agent_tool_calls_per_minute). The retired daily_cost_cap_usd field (ADR-053 D12) is rejected with HTTP 400. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).
 `,
     requestFormat: "json",
     parameters: [
