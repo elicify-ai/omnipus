@@ -308,15 +308,37 @@ func TestSendOriginHandler_SV13_RecipientMismatchRefusedBeforeRequest(t *testing
 	conn := s.dialBrowserConn(t)
 	drainAdmissionOneShot(t, conn)
 	b := s.mintChat(t, conn, soKeyB, "SV-13 mint")
+	mintDone := readFrameOfType(t, conn, "done", lifecycleEW)
+	require.Equal(t, b, mintDone.SessionID, "SV-13 SETUP: drain the mint turn before observing the recipient frame")
+	before := s.transcriptLen(t, b)
 	raw := []byte(`{"type":"message","agent_id":"mia","session_id":"` + b +
 		`","client_message_id":"so-sv13","origin":{"kind":"chat","session_id":"so-other-chat"},"content":"x",` +
-		`"recipient":{"agent_id":"mia"}}}`)
+		`"recipient":{"agent_id":"mia"}}`)
+	var sent generated.MessageFrame
+	require.NoError(t, json.Unmarshal(raw, &sent), "SV-13 SETUP: exact outbound bytes must be valid JSON before send")
+	require.Equal(t, &b, sent.SessionId, "SV-13 SETUP: the outbound target is the minted chat")
+	require.Equal(t, soChatOrigin("so-other-chat"), sent.Origin, "SV-13 SETUP: the outbound origin mismatches the target")
+	require.NotNil(t, sent.Recipient, "SV-13 SETUP: the outbound frame must exercise the recipient branch")
+	require.Equal(t, "mia", sent.Recipient.AgentId)
+	t.Logf("SV-13 SETUP: mint done drained; exact outbound JSON validated: %s", raw)
 	soSend(t, conn, raw)
 	frames := soWindow(t, conn, soRequesterWindow)
+	for _, f := range frames {
+		t.Logf("SV-13 response: %s", f.Raw)
+	}
+	// Spec r9 §6.1 SV-13 and §5 S-2: refuse the origin mismatch before
+	// recipient handling or any side effect, including message_status.
+	require.Equal(t, []string{"send_refused"}, soTypes(frames), "SV-13: only send_refused may precede recipient handling")
 	refused := soRefusedFrame(t, frames, "SV-13")
 	require.Equal(t, "wrong_chat", refused.Reason)
+	require.NotNil(t, refused.ClientMessageId)
 	require.Equal(t, "so-sv13", *refused.ClientMessageId)
+	require.Equal(t, "message", refused.RefusedFrame)
+	require.Equal(t, &b, refused.SessionId)
+	require.Equal(t, sent.Origin, refused.Origin)
+	require.Nil(t, refused.ClientFrameId)
 	require.NotContains(t, soTypes(frames), "user_message", "SV-13: the refused frame never reaches a recipient")
+	require.Equal(t, before, s.transcriptLen(t, b), "SV-13: the refused recipient frame must not change the transcript")
 }
 
 // TestSendOriginHandler_SV17b_OldTabShapesNeverGetReceipt is SV-17b.
