@@ -8,6 +8,11 @@ interface AutoSaveIndicatorProps {
   className?: string
   /** Timestamp of the last successful save, surfaced when status === 'saved'. */
   lastSavedAt?: Date | null
+  /**
+   * DOM id of the always-mounted live region, so the controls it reports on
+   * can point at it with `aria-describedby`.
+   */
+  id?: string
 }
 
 function formatSavedAt(date: Date): string {
@@ -35,7 +40,7 @@ function formatSavedAt(date: Date): string {
  * SaveStatus's (MemorySection) semantics so both indicators announce
  * consistently.
  */
-export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }: AutoSaveIndicatorProps) {
+export function AutoSaveIndicator({ status, error, className = '', lastSavedAt, id }: AutoSaveIndicatorProps) {
   const isError = status === 'error'
   // ADR-083 EMB-004/EMB-007 (Step 0) — a save refused with a 409 because
   // someone else changed the file is a CONFLICT the person can act on
@@ -46,6 +51,7 @@ export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }
 
   return (
     <span
+      id={id}
       className={clsx("inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] transition-opacity duration-300", status === 'saved' ? 'opacity-60' : status === 'idle' ? 'opacity-0' : 'opacity-100', className)}
       aria-live={isError || isConflict ? undefined : 'polite'}
       role={isError || isConflict ? 'alert' : undefined}

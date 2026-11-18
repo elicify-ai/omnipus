@@ -313,6 +313,9 @@ export function AutoApproveControl() {
 
 // ── SecuritySection ────────────────────────────────────────────────────────────
 
+/** #1882: DOM id of the rate-limit save-status live region. */
+const RATE_LIMITS_SAVE_STATUS_ID = 'security-rate-limits-save-status'
+
 export function SecuritySection() {
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
@@ -505,7 +508,9 @@ export function SecuritySection() {
             Control how protected your setup is and adjust agent boundaries.
           </p>
         </div>
-        <AutoSaveIndicator status={saveStatus} error={saveError} />
+        {/* #1882: the rate-limit inputs name this live region with
+            aria-describedby, so their save status has a stable identity. */}
+        <AutoSaveIndicator id={RATE_LIMITS_SAVE_STATUS_ID} status={saveStatus} error={saveError} />
       </div>
 
       {/* ── PRIMARY LAYER (US-B1): Security health + plain outcome controls ──── */}
@@ -611,6 +616,7 @@ export function SecuritySection() {
                 </div>
                 <Input
                   id="agent-llm-calls-per-hour"
+                  aria-describedby={RATE_LIMITS_SAVE_STATUS_ID}
                   type="number"
                   min="0"
                   value={agentLlmCallsPerHour}
@@ -626,6 +632,7 @@ export function SecuritySection() {
                 </div>
                 <Input
                   id="agent-tool-calls-per-minute"
+                  aria-describedby={RATE_LIMITS_SAVE_STATUS_ID}
                   type="number"
                   min="0"
                   value={agentToolCallsPerMin}
