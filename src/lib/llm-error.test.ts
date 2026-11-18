@@ -459,7 +459,15 @@ describe('provider-messages — subtype trust gate (rows 12, 30)', () => {
         expect(display.message).toBe(le.message)
         continue
       }
-      expect(display.message).toBe(codeToDisplay[code]) // pin: passes today; the gate must never regress it
+      // #1857 D-A (chief ruling B): an unflagged error is untrusted and goes
+      // through the codeToMessage guard. The expectation is derived from the
+      // generated template itself, never by calling the code under test: a
+      // slotted catalogue sentence must never reach the screen raw, so the
+      // generic `unknown` sentence is shown; a slot-free code keeps its own copy.
+      const template = codeToDisplay[code]
+      const want = /\{[a-z_]+\}/.test(template) ? codeToDisplay.unknown : template
+      expect(display.message).toBe(want) // pin: slot-free codes stay byte-identical; slotted never raw
+      expect(display.message).not.toMatch(/\{[a-z_]+\}/)
     }
   })
 
