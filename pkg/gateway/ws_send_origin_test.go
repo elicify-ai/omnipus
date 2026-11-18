@@ -194,11 +194,17 @@ func soMessage(sessionID *string, origin *generated.SendOrigin, clientMsgID, con
 	return f
 }
 
-// soSend marshals and writes one frame.
+// soSend writes raw []byte frames verbatim; typed frames are marshalled once.
+// Re-marshalling []byte would send a base64 JSON string instead of the frame.
+// TestSendOriginRawFramesOnWire verifies the actual bytes at a live receiver.
 func soSend(t *testing.T, conn *websocket.Conn, frame any) {
 	t.Helper()
-	raw, err := json.Marshal(frame)
-	require.NoError(t, err)
+	raw, isRaw := frame.([]byte)
+	if !isRaw {
+		var err error
+		raw, err = json.Marshal(frame)
+		require.NoError(t, err)
+	}
 	require.NoError(t, conn.SetWriteDeadline(time.Now().Add(10*time.Second)))
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
 }
@@ -303,26 +309,36 @@ func TestCheckSendOrigin(t *testing.T) {
 
 	t.Run("malformed origin refused origin_malformed", func(t *testing.T) {
 		s := newSendOriginSrv(t, &restMockProvider{})
-		conn := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		b := s.mintChat(t, conn, soKeyB, "check-malformed mint")
-		// Null is not absent (§4.3.2: "origin: null is M-1, origin absent is
-		// P2") and unknown-kind/extra-property origins fail C-1 — the raw
-		// wire carries shapes the typed struct cannot express.
-		for name, originJSON := range map[string]string{
-			"null origin":      `null`,
-			"unknown kind":     `{"kind":"room","session_id":"` + b + `"}`,
-			"both fields":      `{"kind":"chat","session_id":"` + b + `","new_chat_key":"` + soKeyA + `"}`,
-			"short key":        `{"kind":"new_chat","new_chat_key":"short"}`,
-			"extra property":   `{"kind":"chat","session_id":"` + b + `","workspace_id":"w"}`,
-			"key on chat kind": `{"kind":"chat","new_chat_key":"` + soKeyA + `"}`,
-		} {
-			soSend(t, conn, []byte(`{"type":"message","agent_id":"mia","session_id":"`+b+
-				`","client_message_id":"so-malformed-1","origin":`+originJSON+`,"content":"x"}`))
-			frames := soWindow(t, conn, 4*time.Second)
-			refused := soRefusedFrame(t, frames, "P1a row: "+name)
-			require.Equal(t, "origin_malformed", refused.Reason, "P1a row %s: wrong reason (frames: %v)", name, soTypes(frames))
-			require.Equal(t, "message", refused.RefusedFrame, "P1a row %s: wrong refused_frame", name)
+		mintConn := s.dialBrowserConn(t)
+		drainAdmissionOneShot(t, mintConn)
+		b := s.mintChat(t, mintConn, soKeyB, "check-malformed mint")
+		readFrameOfType(t, mintConn, "done", lifecycleEW)
+		waitForLifecycleState(t, s.lc, b, session.LifecycleCompleted)
+		// Spec r9 §4.3.2 P1a/M-1/M-2: present-but-malformed origin gets
+		// send_refused{origin_malformed}, never the §4.3.4 old-tab error.
+		// The live wire control uses this same dataset and sender.
+		for _, row := range soMalformedOriginFrames(b) {
+			t.Run(row.name, func(t *testing.T) {
+				// Each shape has its own connection: a read-window timeout or
+				// failed assertion must not prevent the other shapes executing.
+				conn := s.dialBrowserConn(t)
+				drainAdmissionOneShot(t, conn)
+				bindIdleCancelFixture(t, conn, b)
+				before := s.transcriptLen(t, b)
+				soSend(t, conn, row.raw)
+				frames := soWindow(t, conn, 4*time.Second)
+				refused := soRefusedFrame(t, frames, "P1a row: "+row.name)
+				require.Equal(t, "origin_malformed", refused.Reason, "P1a row %s: wrong reason (frames: %v)", row.name, soTypes(frames))
+				require.Equal(t, "message", refused.RefusedFrame, "P1a row %s: wrong refused_frame", row.name)
+				require.Equal(t, []string{"send_refused"}, soTypes(frames), "P1a: exactly one refusal, no side-effect frames or snapshot")
+				expected, err := json.Marshal(generated.SendRefusedFrame{
+					Type: "send_refused", Reason: "origin_malformed", RefusedFrame: "message",
+					SessionId: &b, ClientMessageId: strPtr("so-malformed-1"),
+				})
+				require.NoError(t, err)
+				require.JSONEq(t, string(expected), string(frames[0].Raw), "P1a/C-4: exact valid echoes, malformed origin omitted, unsequenced")
+				require.Equal(t, before, s.transcriptLen(t, b), "P1a: refused input must not change the transcript")
+			})
 		}
 	})
 

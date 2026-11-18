@@ -684,12 +684,13 @@ func TestCancelIdle_ReplyIsRequesterOnly(t *testing.T) {
 	}
 }
 
-// TestCancelIdle_OldTabOriginLessCancelRefusedNotIdle is N-6's second old-tab
-// case, on the idle chat (the handler the origin-less cancel must never
-// reach): an old tab's OWN origin-less cancel takes the 4.3.4 refusal path
-// (send_refused + the out-of-date snapshot replies; their exact shape is
-// SV-4's oracle in ws_send_origin_handler_test.go). Here the #1841-side
-// claims: a refusal happens, and no cancel_idle.
+// TestCancelIdle_OldTabOriginLessCancelRefusedNotIdle is spec r9 §4.14
+// N-6's second old-tab case. Section 4.3.4's cancel row requires the existing
+// error carrier with exact OUTDATED_STOP text and a synthetic message id,
+// followed by session_state only when bound to the target (R1/R2). It is NOT
+// send_refused: that carrier is for a present origin (§4.3.2 P1a/P1b/P1c).
+// An origin-less browser cancel never reaches the idle handler, even on an
+// idle chat. SV-19(d): the completed chat's snapshot has no active_turn.
 func TestCancelIdle_OldTabOriginLessCancelRefusedNotIdle(t *testing.T) {
 	srv, cookie, _, lc := newIdleCancelServer(t, &restMockProvider{})
 	conn := dialIdleCancelBrowser(t, srv, cookie)
@@ -697,23 +698,37 @@ func TestCancelIdle_OldTabOriginLessCancelRefusedNotIdle(t *testing.T) {
 	sid := mintIdleFixtureChat(t, conn, "old-tab: the idle chat cancelled origin-less")
 	readFrameOfType(t, conn, "done", lifecycleEW)
 	waitForLifecycleState(t, lc, sid, session.LifecycleCompleted)
+	// Bind explicitly and drain attach's legitimate snapshot so only the
+	// refusal's ordered error + snapshot can satisfy the assertion below.
+	bindIdleCancelFixture(t, conn, sid)
 
 	// The old tab's shape: NO origin, NO client_frame_id.
 	require.NoError(t, conn.WriteJSON(generated.CancelFrame{Type: "cancel", SessionId: sid, Scope: strPtr("tree")}))
 	replies := collectCancelReplies(t, conn, idleWindow)
 
-	sawRefusal := false
 	for _, r := range replies {
-		if r.Type == "send_refused" {
-			sawRefusal = true
-		}
 		require.NotEqual(t, "cancel_idle", r.Type,
 			"N-6(ii): a refused origin-less cancel never reaches the idle handler — no cancel_idle (got %s)", r.Raw)
 	}
-	require.True(t, sawRefusal,
-		"N-6(ii) violated (F-h as-is): the browser connection's origin-less cancel is EXECUTED today "+
-			"(frames: %v) — the 4.3.4 refusal path must take it instead, so the origin-less Stop never runs",
-		replyTypes(replies))
+	require.Equal(t, []string{"error", "session_state"}, replyTypes(replies),
+		"N-6(ii)/spec r9 §4.3.4: old-tab cancel must be refused with the outdated error then the bound snapshot, "+
+			"never executed or answered with send_refused/command_received (actual: %v)", replyTypes(replies))
+	var refusal generated.ErrorFrame
+	require.NoError(t, json.Unmarshal(replies[0].Raw, &refusal), "old-tab refusal must decode with the existing error carrier")
+	require.Equal(t, "error", refusal.Type)
+	require.Equal(t, "Not stopped. Reload this page.", refusal.Message, "§4.3.4: OUTDATED_STOP exact text")
+	require.Equal(t, &sid, refusal.SessionId, "§4.3.4: message-scoped refusal names the target, never a global error")
+	require.NotNil(t, refusal.ClientMessageId, "§4.3.4: synthetic id keeps the old reducer's refusal message-scoped")
+	require.Regexp(t, `^outdated-[A-Za-z0-9_-]{12}$`, *refusal.ClientMessageId, "§4.3.4: outdated- plus 12 URL-safe chars")
+	require.Nil(t, refusal.FirstMessageError, "§4.3.4: this is not a first-message failure")
+	var snapshot generated.SessionStateFrame
+	require.NoError(t, json.Unmarshal(replies[1].Raw, &snapshot), "old-tab refusal snapshot must decode")
+	require.Equal(t, "session_state", snapshot.Type)
+	require.Equal(t, &sid, snapshot.SessionId, "§4.3.4: snapshot belongs to the bound target")
+	require.Nil(t, snapshot.ActiveTurn, "SV-19(d): a completed idle chat has no active turn")
+	var snapshotFields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(replies[1].Raw, &snapshotFields))
+	require.NotContains(t, snapshotFields, "active_turn", "SV-19(d): absent when idle, not an active_turn:null placeholder")
 }
 
 func replyTypes(replies []idleReply) []string {
