@@ -153,7 +153,7 @@ A provider can also report an error after it has already started streaming a rep
 
 A billing or key error is never retried, because every attempt would be billed and fail the same way. The provider's own error text appears only with **Verbose chat** on.
 
-If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Closing the originating browser connection does not cancel the turn or redirect that notice to another conversation: terminal delivery retains the conversation's session ID. Conflicting tool names produce the standard “This turn didn’t finish, and we can’t tell why” failure notice rather than silence.
+If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Closing the originating browser connection does not cancel the turn or redirect that notice to another conversation: terminal delivery retains the conversation's session ID. Conflicting tool names stop the turn with a notice that two tools have the same name, rather than silence; when one of them comes from a connected MCP server, the notice asks you to check the agent's tools and MCP servers.
 
 ## A helper finished but the open parent chat is blank
 
