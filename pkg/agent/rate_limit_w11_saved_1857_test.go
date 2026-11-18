@@ -52,3 +52,44 @@ func TestRecordRateLimitDenial_LLMCall_SavesFilledW11Sentence_1857(t *testing.T)
 	assert.NotContains(t, lowered, "retry after", "no internal retry-after text in the saved record")
 	assert.False(t, messageHasSlots(entry.Content), "no raw {slot} in the saved record: %q", entry.Content)
 }
+
+// #1857 X1b (CHECK W-A). The {minutes} fact is the limiter wait rounded UP to
+// whole minutes (diagnosis fix A: ceil(seconds/60)). The exact-minute cases
+// separate round-up from "truncate then add one": 60 s is 1 minute, not 2.
+// Each expected sentence is the generated W11 template with {minutes} filled.
+func TestRecordRateLimitDenial_LLMCall_W11MinutesRoundUp_1857(t *testing.T) {
+	cases := []struct {
+		name    string
+		seconds float64
+		minutes string
+	}{
+		{"one second short of a minute boundary rounds to 1", 59, "1"},
+		{"exactly 60 s is 1 minute", 60, "1"},
+		{"61 s rounds up to 2 minutes", 61, "2"},
+		{"exactly 3600 s is 60 minutes", 3600, "60"},
+	}
+	template := generated.LLMErrorUserMessages["agent_request_limit"]
+	require.Contains(t, template, "{minutes}", "SETUP: W11 in the generated catalogue carries the {minutes} slot")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			al, ts := newTestAgentLoopForRateLimit(t)
+			store, sessionID := newRateLimitTranscript(t, ts)
+			al.recordRateLimitDenial(ts, "llm_call", RateLimitPayload{
+				Scope:             "agent",
+				Resource:          "llm_call",
+				PolicyRule:        "agent_max_llm_per_hour",
+				RetryAfterSeconds: tc.seconds,
+				AgentID:           ts.agentID,
+			}, nil)
+			var systemEntries []session.TranscriptEntry
+			for _, e := range readTranscriptEntries(t, store, sessionID) {
+				if e.Type == session.EntryTypeSystem {
+					systemEntries = append(systemEntries, e)
+				}
+			}
+			require.Len(t, systemEntries, 1)
+			assert.Equal(t, strings.ReplaceAll(template, "{minutes}", tc.minutes), systemEntries[0].Content,
+				"%v s must save W11 with %s minute(s)", tc.seconds, tc.minutes)
+		})
+	}
+}
