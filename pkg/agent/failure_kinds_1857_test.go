@@ -162,6 +162,45 @@ func requireNoRawSegment(t *testing.T, row, surface string, text string) {
 	}
 }
 
+// The dedicated server-log lines the B25/B26 reporters write — raw error in
+// their "error" field (sec2 A: raw text goes to the server log only). The
+// markers ARE the production log messages, characterized here so the log
+// assertion identifies THAT line; the event logger's copy of an emitted frame
+// never carries them:
+//   - pkg/agent/execution_disposition.go::reportOrdinarySettlementFailure —
+//     logger.ErrorCF("agent.worker", "the turn finished, but saving its final
+//     state failed", …{"error": err.Error()})
+//   - pkg/agent/goal_record_error.go::reportGoalReadError —
+//     logger.ErrorCF("agent", "goal_read_error: "+message, …{"error": err.Error()})
+const (
+	test1857B25SettlementLogMarker = "the turn finished, but saving its final state failed"
+	test1857B26GoalReadLogMarker   = "goal_read_error: "
+)
+
+// test1857RequireRawOnDedicatedLogLine requires the captured server log to
+// contain the reporter's dedicated ErrorCF line (identified by its log-message
+// marker) AND the raw error on that same line. Removing only the dedicated
+// line fails here even while the frame still carries the raw text — the event
+// logger's frame copy lacks the marker. Cleaning the user text while keeping
+// the ErrorCF line does not fail it: the line's error field still carries the
+// raw text, so only the code/raw-text checks fail in that mutant.
+func test1857RequireRawOnDedicatedLogLine(t *testing.T, logFile, lineMarker, raw, row string) {
+	t.Helper()
+	logBytes, readErr := os.ReadFile(logFile)
+	require.NoError(t, readErr, "SETUP: reading the captured server log")
+	dedicated := 0
+	for _, line := range strings.Split(string(logBytes), "\n") {
+		if !strings.Contains(line, lineMarker) {
+			continue
+		}
+		dedicated++
+		assert.Contains(t, line, raw,
+			"%s: the dedicated server log line (%q) must keep the raw error — sec2 A: raw text goes to the server log only", row, lineMarker)
+	}
+	require.NotZero(t, dedicated,
+		"%s: the dedicated server log line (%q) must exist — removing only that ErrorCF line fails here even while the frame's raw text still reaches the log through the event logger's frame copy", row, lineMarker)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // T-52 — pkg/agent::TestTurnFailureKindClassification
 // ─────────────────────────────────────────────────────────────────────────────
@@ -861,13 +900,11 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 				"T-55/B25 (§13.8.2 B25): raw error text reached the rendered frame detail (technical details)")
 		}
 
-		// And the one permitted surface still has it: the server log keeps
-		// the raw error (a fix that deletes the log line alongside the frame
-		// text fails here).
-		logBytes, logErr := os.ReadFile(logFile)
-		require.NoError(t, logErr, "SETUP: reading the captured server log")
-		assert.Contains(t, string(logBytes), test1857UniqueRawError.Error(),
-			"T-55/B25 (§13.8.5 B25 oracle): the raw error must still reach the server log — the fixed sentence replaces it only on user surfaces (raw text in the server log only)")
+		// And the one permitted surface still has it: the DEDICATED ErrorCF
+		// line keeps the raw error — identified by its marker so the event
+		// logger's copy of a still-raw frame cannot satisfy this in its place.
+		test1857RequireRawOnDedicatedLogLine(t, logFile, test1857B25SettlementLogMarker, test1857UniqueRawError.Error(),
+			"T-55/B25 (§13.8.5 B25 oracle)")
 	})
 
 	t.Run("B26_goal_read_failure_goal_state_unavailable_no_raw_text", func(t *testing.T) {
@@ -927,13 +964,11 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 		assert.Equal(t, "goal_state_unavailable", goalPayload.Code,
 			"T-55/B26 (§13.8.5 B26): the goal-read failure must carry goal_state_unavailable, got %q (today CodeUnknown)", goalPayload.Code)
 
-		// And the one permitted surface still has it: the server log keeps
-		// the raw error (a fix that deletes the log line alongside the
-		// message fails here).
-		logBytes, logErr := os.ReadFile(logFile)
-		require.NoError(t, logErr, "SETUP: reading the captured server log")
-		assert.Contains(t, string(logBytes), test1857UniqueRawError.Error(),
-			"T-55/B26 (§13.8.5 B26 oracle): the raw error must still reach the server log — the fixed sentence replaces it only on user surfaces (raw text in the server log only)")
+		// And the one permitted surface still has it: the DEDICATED ErrorCF
+		// line keeps the raw error — identified by its marker so the event
+		// logger's copy of a still-raw frame cannot satisfy this in its place.
+		test1857RequireRawOnDedicatedLogLine(t, logFile, test1857B26GoalReadLogMarker, test1857UniqueRawError.Error(),
+			"T-55/B26 (§13.8.5 B26 oracle)")
 	})
 
 	t.Run("B26_refusal_carrier_fixed", func(t *testing.T) {
