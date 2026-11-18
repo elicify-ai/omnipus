@@ -55,7 +55,11 @@ func TranscriptWriteFailures() uint64 {
 // strip-retry. A later distinct classified failure must keep its own code
 // — otherwise reload tells the user the model rejected an image.
 func outcomeRelabelApplies(current, relabel LLMErrorCode) bool {
-	return relabel != "" && (current == "" || current == CodeUnknown || current == CodeProviderRequestRejected)
+	// #1857 R-4: provider_error is, like provider_request_rejected, a
+	// residual promoted at the terminal presentation; a classified media
+	// relabel still wins over it.
+	return relabel != "" && (current == "" || current == CodeUnknown ||
+		current == CodeProviderRequestRejected || current == CodeProviderError)
 }
 
 // warnAbandonedTranscriptWrite emits the ADR-057 FR-003/BDD-04 WARN record

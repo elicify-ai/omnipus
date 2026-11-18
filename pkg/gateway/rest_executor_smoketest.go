@@ -312,6 +312,7 @@ func smokeTestFail(errMsg string, durationMs int, usedAgentWorkspace bool) gen.E
 // restAPIRunExecutorSmokeTest carries the shared state of runExecutorSmokeTest across its stages.
 type restAPIRunExecutorSmokeTest struct {
 	cli                string
+	model              string // #1857: the {model} fact for a CLI sentence
 	cliArgsRaw         string
 	durationMs         func() int
 	resolvedBinary     string
@@ -333,7 +334,7 @@ func (a *restAPI) runExecutorSmokeTest(
 	ctx context.Context,
 	cli, model, cliArgsRaw, agentID string,
 ) (gen.ExecutorSmokeTestResponse, string, string) {
-	ra := &restAPIRunExecutorSmokeTest{cli: cli, cliArgsRaw: cliArgsRaw}
+	ra := &restAPIRunExecutorSmokeTest{cli: cli, model: model, cliArgsRaw: cliArgsRaw}
 
 	start := time.Now()
 	ra.durationMs = func() int { return int(time.Since(start).Milliseconds()) }
@@ -613,7 +614,10 @@ func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestRes
 	if ra.ok {
 		resp = smokeTestOK(ra.responseText, ra.durationMs(), ra.usedAgentWorkspace)
 	} else {
-		resp = smokeTestFail(ra.errMsg, ra.durationMs(), ra.usedAgentWorkspace)
+		// #1857: fill the CLI sentence's {cli}/{model} slots from the facts
+		// this handler knows; a slot with no fact falls back to the generic
+		// sentence, never a literal slot.
+		resp = smokeTestFail(agent.RenderCLIMessage(ra.errMsg, ra.cli, ra.model), ra.durationMs(), ra.usedAgentWorkspace)
 	}
 
 	// The response body's Error field is already sanitized (never raw
@@ -662,6 +666,22 @@ const smokeTestPermissionDeniedErr = "the CLI attempted a tool call, which is de
 //     copy (the prior "The AI service encountered an error." generic
 //     message swallowed the load-bearing timing signal).
 func sanitizeSmokeTestErrorMessage(rawMessage string) string {
+	return sanitizeSmokeTestRunnerError(rawMessage, "")
+}
+
+// sanitizeSmokeTestRunnerError is sanitizeSmokeTestErrorMessage with the
+// structured error type the driver read (runner.ErrorEvent.Type).
+//
+// #1857 B18 (§13.8.5): after the smoke-test-internal short-circuits, the
+// Settings test classifies through the SAME CLI-only classifier as the run
+// path (agent.SanitizeRunnerErrorWithType), so a recognised CLI cause (a
+// rejected command line, an unavailable model, sign-in, the turn cap, a
+// relayed upstream refusal) gets its catalogue sentence here too. The
+// returned sentence may still carry its {cli}/{model} slots;
+// restAPIRunExecutorSmokeTest.buildResponse renders them. An unrecognised
+// cause (external_cli_failed with no variant) keeps the generic unknown
+// sentence this surface has always shown.
+func sanitizeSmokeTestRunnerError(rawMessage, structuredType string) string {
 	if rawMessage == "" {
 		return "The external CLI failed. See gateway.log for details."
 	}
@@ -671,11 +691,14 @@ func sanitizeSmokeTestErrorMessage(rawMessage string) string {
 	if strings.Contains(strings.ToLower(rawMessage), "timeout") {
 		return "The smoke test hit the timeout bound before completing. See gateway.log for details."
 	}
-	llm := agent.TranslateLLMError(&agent.ProviderError{Body: rawMessage, Err: nil}, rawMessage)
-	if llm.Message == "" {
+	sanitized := agent.SanitizeRunnerErrorWithType(rawMessage, structuredType)
+	if sanitized.AssistantText == "" {
 		return "The external CLI failed. See gateway.log for details."
 	}
-	return llm.Message
+	if sanitized.AssistantText == agent.UserMessageForCode(agent.CodeExternalCLIFailed) {
+		return agent.UserMessageForCode(agent.CodeUnknown)
+	}
+	return sanitized.AssistantText
 }
 
 // drainSmokeTestRun consumes the CONSENT-ROUTED event stream (ch is the `out`
@@ -735,11 +758,14 @@ func drainSmokeTestRun(
 					sb.WriteString(ev.Output.Text)
 				}
 			case runner.EventKindError:
-				msg := "run failed"
+				msg, errType := "run failed", ""
 				if ev.Err != nil && ev.Err.Message != "" {
 					msg = ev.Err.Message
 				}
-				sanitized := sanitizeSmokeTestErrorMessage(msg)
+				if ev.Err != nil {
+					errType = ev.Err.Type
+				}
+				sanitized := sanitizeSmokeTestRunnerError(msg, errType)
 				if sanitized != msg {
 					// The response body is sanitized on purpose (Wave 1 /
 					// ADR-051 §RD5 MAJ-005 — never leak raw provider/CLI text

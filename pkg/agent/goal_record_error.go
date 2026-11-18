@@ -25,15 +25,19 @@ func (err *goalRecordReadError) Unwrap() error { return err.cause }
 // fallback. Keep the cause in the session transcript as well as the live error
 // surface: an unattended operation must remain explainable after reconnect.
 func (al *AgentLoop) reportGoalReadError(sessionID, operation string, err error) string {
-	message := fmt.Sprintf("Goal state could not be read; %s deferred: %v", operation, err)
-	logger.ErrorCF("agent", "goal_read_error: "+message,
+	logMessage := fmt.Sprintf("Goal state could not be read; %s deferred: %v", operation, err)
+	logger.ErrorCF("agent", "goal_read_error: "+logMessage,
 		map[string]any{"component": "goal", "session_id": sessionID, "operation": operation, "error": err.Error()})
+	// #1857 B26 (sec2 A): the raw error reaches the log line above only;
+	// the transcript, the live frame and the returned final content carry
+	// the goal_state_unavailable catalogue sentence.
+	message := defaultUserMessage(CodeGoalStateUnavailable)
 	if store := al.goalSessionStoreFor(sessionID); store != nil {
 		al.writeGoalSystemTranscript(store, sessionID, "", message)
 	}
 	if al.audienceFor(context.Background(), steer.BoundaryTypedErrorFrame, sessionID) != steer.AudienceNone {
 		al.emitEvent(EventKindError, EventMeta{Source: "goal_loop", SessionKey: sessionID}, ErrorPayload{
-			Stage: "goal_record_read", Code: string(CodeUnknown), Message: message, SessionID: sessionID,
+			Stage: "goal_record_read", Code: string(CodeGoalStateUnavailable), Message: message, SessionID: sessionID,
 		})
 	}
 	return message

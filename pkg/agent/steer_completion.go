@@ -720,6 +720,13 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 	switch {
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
 		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
+	case errors.As(runErr, new(*externalCLIRunError)):
+		// #1857 (§13.8.4 parent completion row): a classified CLI failure
+		// reaches the parent agent as its typed code and sentence — never the
+		// internal "external-cli run failed: " form (gateway.log only).
+		var cliErr *externalCLIRunError
+		errors.As(runErr, &cliErr)
+		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + cliErr.agentText()
 	case runErr != nil:
 		// Every untrusted failure can echo request data, including an unknown
 		// stream code with no HTTP facts. Only curated Omnipus text bypasses
