@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
@@ -11,8 +12,9 @@ import {
   NOT_STOPPED,
   UNCERTAIN_LINE,
   FakeSocket,
-  connection,
+  deliverFrame,
   framesOf,
+  flushInbound,
   installFakeWebSocket,
   mountComposer,
   resetBindingWorld,
@@ -21,9 +23,98 @@ import {
   typeIntoComposer,
 } from '@/test/sendBinding1428'
 
+let live: WsConnection | null = null
+
 afterEach(() => {
   vi.useRealTimers()
+  live?.disconnect()
+  live = null
+  vi.unstubAllGlobals()
 })
+
+const EMITTED = '2026-11-18T00:00:00Z'
+
+function seedTurn(sessionId: string, turnId: string): void {
+  seedStreamingAnswer(sessionId)
+  act(() => {
+    useChatStore.setState((s) => ({
+      sessionsById: {
+        ...(s.sessionsById ?? {}),
+        [sessionId]: {
+          ...((s.sessionsById ?? {})[sessionId] ?? {}),
+          activeTurnId: turnId,
+          isStreaming: true,
+        },
+      },
+    }))
+  })
+}
+
+/** Spec 4.7: an open, supported connection. The command is sent on this socket. */
+function openLive(): FakeSocket {
+  installFakeWebSocket()
+  live = new WsConnection({
+    onFrames: (frames) => {
+      for (const frame of frames) deliverFrame(frame as never)
+    },
+    onConnected: () => {},
+    onDisconnected: () => {},
+    onError: () => {},
+  })
+  live.connect()
+  const socket = FakeSocket.instances.at(-1)
+  if (!socket) throw new Error('socket was not created')
+  act(() => { socket.open() })
+  act(() => { socket.receive({ type: 'server_capabilities', send_origin: true }) })
+  useConnectionStore.setState({ connection: live, isConnected: true, reconnectPhase: null })
+  return socket
+}
+
+function sessionSnapshot(sessionId: string, turnId?: string, bootId?: string) {
+  return {
+    type: 'session_state' as const,
+    user_id: 'ada',
+    pending_approvals: [] as [],
+    session_id: sessionId,
+    emitted_at: EMITTED,
+    auto_approve_modifier: true,
+    ...(bootId ? { boot_id: bootId } : {}),
+    ...(turnId ? { active_turn: { turn_id: turnId, agent_id: 'mia', started_at: EMITTED } } : {}),
+  }
+}
+
+/** Spec 4.7: close before any receipt, then the next connection's snapshot.
+ *  Today's socket holds a session_state until catch_up_complete when an
+ *  attach is in flight, and delivers the batch on the next animation frame.
+ *  Both are the transport, not the reconciliation under test. */
+async function closeThenSnapshot(first: FakeSocket, frame: ReturnType<typeof sessionSnapshot>): Promise<FakeSocket> {
+  const before = FakeSocket.instances.length
+  first.close(4008, 'catch-up required')
+  const next = FakeSocket.instances.at(-1)
+  expect(next, 'spec 4.7: the close opens the next connection').toBeTruthy()
+  expect(next).not.toBe(first)
+  expect(FakeSocket.instances.length, 'spec 4.7: one reconnect').toBe(before + 1)
+  act(() => { next!.open() })
+  act(() => { next!.receive({ type: 'server_capabilities', send_origin: true }) })
+  act(() => { next!.receive(frame) })
+  act(() => {
+    next!.receive({
+      type: 'catch_up_complete',
+      session_id: frame.session_id,
+      seq: 1,
+      mode: 'snapshot',
+    })
+  })
+  await flushInbound()
+  return next!
+}
+
+function expectSnapshotApplied(sessionId: string): void {
+  expect(
+    useChatStore.getState().sessionsById[sessionId]?.autoApproveEffective,
+    'spec 4.7: the reattach snapshot reached the reducer',
+  ).toBe(true)
+}
 
 async function typeRedirect(text: string): Promise<void> {
   await typeIntoComposer(text)
@@ -74,100 +165,131 @@ describe('command records (spec 4.7)', () => {
 
   it('BR-23c a close before receipt keeps an uncertain item and does not resend', async () => {
     resetBindingWorld()
+    const socket = openLive()
     mountComposer()
     await typeRedirect('/stop-redirect y')
-    connection().fail = true
-    act(() => { useConnectionStore.setState({ isConnected: false }) })
+    expect(socket.sent.some((frame) => frame.type === 'redirect'), 'BR-23c: the redirect was handed over').toBe(true)
+    const next = await closeThenSnapshot(socket, sessionSnapshot('chat-a'))
+    expectSnapshotApplied('chat-a')
     expect(screen.getByText('May not have been delivered'), 'BR-23c: the close is uncertain').toBeTruthy()
     expect(screen.getByText(UNCERTAIN_LINE), 'BR-23c: the may-already line').toBeTruthy()
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: 'Copy' }))
     expect(await navigator.clipboard.readText(), 'BR-23c: Copy is the command').toBe('/stop-redirect y')
-    connection().fail = false
-    act(() => { useConnectionStore.setState({ isConnected: true }) })
-    expect(framesOf('redirect', sent()), 'BR-23c: the next connection does not resend it').toEqual([])
+    expect(
+      next.sent.filter((frame) => frame.type === 'redirect' || frame.type === 'cancel' || frame.type === 'message'),
+      'BR-23c: the next connection does not resend it',
+    ).toEqual([])
   })
 
   it('BR-23d sixty commands without a receipt stay sixty items', async () => {
     resetBindingWorld()
+    const socket = openLive()
     mountComposer()
     for (let i = 0; i < 60; i++) {
       await typeRedirect(`/stop-redirect n${i}`)
     }
-    connection().fail = true
-    act(() => { useConnectionStore.setState({ isConnected: false }) })
+    expect(socket.sent.filter((frame) => frame.type === 'redirect'), 'BR-23d: all sixty were handed over').toHaveLength(60)
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a'))
+    expectSnapshotApplied('chat-a')
     expect(screen.getByText('60 not sent'), 'BR-23d: none of the sixty is dropped').toBeTruthy()
   })
 
   it('BR-23c1 the same turn still running shows the notice and the uncertain item', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     await typeRedirect('/stop-redirect y')
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    // Notice is established by the snapshot below. Fake timers cover that
-    // step only; they hang userEvent if they are on during typing.
-    vi.useFakeTimers()
-    connection().fail = true
-    deliverFrame({
-      type: 'session_state',
-      session_id: 'chat-a',
-      active_turn: { turn_id: 'T' },
-    } as never)
+    expect(socket.sent.some((frame) => frame.type === 'redirect'), 'BR-23c1: the redirect was handed over').toBe(true)
+    const next = await closeThenSnapshot(socket, sessionSnapshot('chat-a', 'T'))
+    expectSnapshotApplied('chat-a')
     expect(screen.getByText('May not have been delivered')).toBeTruthy()
     expect(screen.getByText(NOT_STOPPED), 'BR-23c1: the same turn shows the notice').toBeTruthy()
     expect(screen.getByTestId('stop-btn'), 'BR-23c1: Stop stays available').toBeEnabled()
+    vi.useFakeTimers()
     await act(async () => { vi.advanceTimersByTime(30_000) })
     expect(screen.getByText(NOT_STOPPED), 'BR-23c1: still there after 30s').toBeTruthy()
-    expect(framesOf('redirect', sent()).filter((f) => (f as { instruction?: string }).instruction === 'y'), 'BR-23c1: no automatic redirect').toEqual([])
+    expect(
+      next.sent.filter((frame) => frame.type === 'redirect'),
+      'BR-23c1: no automatic redirect',
+    ).toEqual([])
   })
 
   it('BR-23c2 no active turn means the item and no notice', async () => {
     resetBindingWorld()
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     await typeRedirect('/stop-redirect y')
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'chat-a' } as never)
-    expect(screen.getByText('May not have been delivered')).toBeTruthy()
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a'))
+    expectSnapshotApplied('chat-a')
+    expect(screen.getByText('May not have been delivered'), 'BR-23c2: the uncertain item stays').toBeTruthy()
     expect(screen.queryByText(NOT_STOPPED), 'BR-23c2: a finished turn shows no notice').toBeNull()
   })
 
   it('BR-23c3 a different turn id shows the item and no notice', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     await typeRedirect('/stop-redirect y')
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'chat-a', active_turn: { turn_id: 'T2' } } as never)
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a', 'T2'))
+    expectSnapshotApplied('chat-a')
+    expect(screen.getByText('May not have been delivered'), 'BR-23c3: the uncertain item stays').toBeTruthy()
     expect(screen.queryByText(NOT_STOPPED), 'BR-23c3: a new turn is not the captured one').toBeNull()
-    expect(screen.getByText('May not have been delivered')).toBeTruthy()
   })
 
   it('BR-23c4 a helper target follows the same three outcomes', async () => {
     resetBindingWorld()
+    const socket = openLive()
     act(() => { useSessionStore.getState().setActiveSession('helper-1', 'mia', 'core') })
-    seedStreamingAnswer('helper-1')
+    seedTurn('helper-1', 'H')
     mountComposer()
     await typeRedirect('/stop-redirect y')
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'helper-1', active_turn: { turn_id: 'H' } } as never)
+    await closeThenSnapshot(socket, sessionSnapshot('helper-1', 'H'))
+    expectSnapshotApplied('helper-1')
     expect(screen.getByText(NOT_STOPPED), 'BR-23c4: a helper uses the same notice').toBeTruthy()
-    expect(screen.getByText('May not have been delivered')).toBeTruthy()
+    expect(screen.getByText('May not have been delivered'), 'BR-23c4: the uncertain item stays').toBeTruthy()
   })
 
   it('BR-23c5 a restarted gateway that reuses the turn id still shows the notice', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     await typeRedirect('/stop-redirect y')
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'server_capabilities', send_origin: true })
-    deliverFrame({ type: 'session_state', boot_id: 'boot-2', session_id: 'chat-a', active_turn: { turn_id: 'T' } } as never)
+    const handed = socket.sent.filter((frame) => frame.type === 'redirect').length
+    expect(handed, 'BR-23c5: the redirect was handed over').toBe(1)
+    const before = FakeSocket.instances.length
+    socket.close(4008, 'catch-up required')
+    const next = FakeSocket.instances.at(-1)
+    expect(next).not.toBe(socket)
+    expect(FakeSocket.instances.length).toBe(before + 1)
+    act(() => { next!.open() })
+    act(() => { next!.receive({ type: 'server_capabilities', send_origin: true }) })
+    act(() => { next!.receive(sessionSnapshot('chat-a', undefined, 'boot-2')) })
+    act(() => { next!.receive(sessionSnapshot('chat-a', 'T', 'boot-2')) })
+    act(() => {
+      next!.receive({
+        type: 'catch_up_complete',
+        session_id: 'chat-a',
+        seq: 1,
+        boot_id: 'boot-2',
+        mode: 'snapshot',
+      })
+    })
+    await flushInbound()
+    expectSnapshotApplied('chat-a')
     expect(screen.getByText(NOT_STOPPED), 'BR-23c5: a reused id still shows the notice').toBeTruthy()
+    expect(screen.getByText('May not have been delivered'), 'BR-23c5: the uncertain item stays').toBeTruthy()
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: 'Copy' }))
-    expect(await navigator.clipboard.readText()).toBe('/stop-redirect y')
-    expect(framesOf('redirect', sent()).length, 'BR-23c5: nothing is sent automatically').toBe(1)
+    expect(await navigator.clipboard.readText(), 'BR-23c5: Copy is the command').toBe('/stop-redirect y')
+    expect(
+      next!.sent.filter((frame) => frame.type === 'redirect' || frame.type === 'cancel' || frame.type === 'message'),
+      'BR-23c5: nothing is sent automatically',
+    ).toEqual([])
   })
 
   it('BR-23e an OPEN socket that throws restores the text once and does not wait for a close', async () => {
@@ -203,125 +325,149 @@ describe('command records (spec 4.7)', () => {
 
   it('BR-23f a Stop closed before receipt follows the turn id', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     const user = userEvent.setup()
     await user.click(screen.getByTestId('stop-btn'))
-    vi.useFakeTimers()
-    connection().fail = true
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'chat-a', active_turn: { turn_id: 'T' } } as never)
+    expect(socket.sent.some((frame) => frame.type === 'cancel'), 'BR-23f a: Stop was handed over').toBe(true)
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a', 'T'))
+    expectSnapshotApplied('chat-a')
     expect(screen.getByText(NOT_STOPPED), 'BR-23f a: the same turn shows the notice').toBeTruthy()
+    vi.useFakeTimers()
     await act(async () => { vi.advanceTimersByTime(30_000) })
     expect(screen.getByText(NOT_STOPPED), 'BR-23f a: still present after 30s').toBeTruthy()
     expect(screen.getByTestId('stop-btn')).toBeEnabled()
   })
 
-  // GUARD, not RED proof. Both assertions are absence. They pass until the
-  // notice and the Unsent list exist, and they fail if a finished turn shows either.
+  // Absence with a live-positive control: the snapshot must land in the bucket
+  // (auto_approve_modifier). A reconciliation that shows the notice for no
+  // turn, or that never applies the snapshot, turns this red.
   it('BR-23f b a snapshot with no active turn shows no notice', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     const user = userEvent.setup()
     await user.click(screen.getByTestId('stop-btn'))
-    connection().fail = true
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'chat-a' } as never)
+    expect(socket.sent.some((frame) => frame.type === 'cancel'), 'BR-23f b: Stop was handed over').toBe(true)
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a'))
+    expectSnapshotApplied('chat-a')
     expect(screen.queryByText(NOT_STOPPED), 'BR-23f b: a finished turn shows no notice').toBeNull()
     expect(screen.queryByText('May not have been delivered'), 'BR-23f b: the Stop record is gone').toBeNull()
   })
 
-  // GUARD, not RED proof. Same absence shape as BR-23f b, for a different turn id.
+  // Same control as BR-23f b, for a different turn id (MU-41's second half).
   it('BR-23f c a different turn id shows no notice', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     const user = userEvent.setup()
     await user.click(screen.getByTestId('stop-btn'))
-    connection().fail = true
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'chat-a', active_turn: { turn_id: 'T2' } } as never)
+    expect(socket.sent.some((frame) => frame.type === 'cancel'), 'BR-23f c: Stop was handed over').toBe(true)
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a', 'T2'))
+    expectSnapshotApplied('chat-a')
     expect(screen.queryByText(NOT_STOPPED), 'BR-23f c: a new turn is not the captured one').toBeNull()
     expect(screen.queryByText('May not have been delivered'), 'BR-23f c: the Stop record is gone').toBeNull()
   })
 
   it('BR-23f d the settling turn\'s own done removes the notice', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     const user = userEvent.setup()
     await user.click(screen.getByTestId('stop-btn'))
-    connection().fail = true
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'chat-a', active_turn: { turn_id: 'T' } } as never)
+    const next = await closeThenSnapshot(socket, sessionSnapshot('chat-a', 'T'))
+    expectSnapshotApplied('chat-a')
     expect(screen.getByText(NOT_STOPPED), 'BR-23f d: the same turn shows the notice first').toBeTruthy()
-    const before = sent().length
-    deliverFrame({ type: 'done', session_id: 'chat-a', turn_id: 'T' } as never)
+    const before = next.sent.length
+    act(() => {
+      next.receive({ type: 'done', session_id: 'chat-a', turn_id: 'T' })
+    })
     expect(screen.queryByText(NOT_STOPPED), 'BR-23f d: that turn\'s done removes the notice').toBeNull()
     expect(screen.queryByTestId('stop-btn'), 'BR-23f d: Stop is not rendered').toBeNull()
-    const auto = sent().slice(before).filter((frame) => frame.type === 'cancel' || frame.type === 'redirect' || frame.type === 'message')
+    const auto = next.sent.slice(before).filter((frame) => frame.type === 'cancel' || frame.type === 'redirect' || frame.type === 'message')
     expect(auto, 'BR-23f d: done sends nothing').toEqual([])
   })
 
   it('BR-23c cancel c1 the same turn shows the notice and the uncertain item', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     await typeIntoComposer('/cancel')
     const user = userEvent.setup()
     await user.keyboard('{Enter}')
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    connection().fail = true
-    deliverFrame({ type: 'session_state', session_id: 'chat-a', active_turn: { turn_id: 'T' } } as never)
+    expect(socket.sent.some((frame) => frame.type === 'cancel'), 'BR-23c cancel: the cancel was handed over').toBe(true)
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a', 'T'))
+    expectSnapshotApplied('chat-a')
     expect(screen.getByText('May not have been delivered'), 'BR-23c cancel: the item stays').toBeTruthy()
     expect(screen.getByText(NOT_STOPPED), 'BR-23c cancel: the same turn shows the notice').toBeTruthy()
   })
 
   it('BR-23c cancel c2 no active turn shows the item and no notice', async () => {
     resetBindingWorld()
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     await typeIntoComposer('/cancel')
     const user = userEvent.setup()
     await user.keyboard('{Enter}')
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'chat-a' } as never)
-    expect(screen.getByText('May not have been delivered')).toBeTruthy()
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a'))
+    expectSnapshotApplied('chat-a')
+    expect(screen.getByText('May not have been delivered'), 'BR-23c cancel: the item stays').toBeTruthy()
     expect(screen.queryByText(NOT_STOPPED), 'BR-23c cancel: a finished turn shows no notice').toBeNull()
   })
 
   it('BR-23c cancel c3 a different turn id shows the item and no notice', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     await typeIntoComposer('/cancel')
     const user = userEvent.setup()
     await user.keyboard('{Enter}')
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    deliverFrame({ type: 'session_state', session_id: 'chat-a', active_turn: { turn_id: 'T2' } } as never)
-    expect(screen.getByText('May not have been delivered')).toBeTruthy()
+    await closeThenSnapshot(socket, sessionSnapshot('chat-a', 'T2'))
+    expectSnapshotApplied('chat-a')
+    expect(screen.getByText('May not have been delivered'), 'BR-23c cancel: the item stays').toBeTruthy()
     expect(screen.queryByText(NOT_STOPPED), 'BR-23c cancel: a new turn shows no notice').toBeNull()
   })
 
   it('BR-23f e a new boot id that reuses the turn id shows the notice and sends nothing', async () => {
     resetBindingWorld()
-    seedStreamingAnswer('chat-a')
+    const socket = openLive()
+    seedTurn('chat-a', 'T')
     mountComposer()
     const user = userEvent.setup()
     await user.click(screen.getByTestId('stop-btn'))
-    const { deliverFrame } = await import('@/test/sendBinding1428')
-    const before = sent().length
-    deliverFrame({ type: 'server_capabilities', send_origin: true })
-    deliverFrame({ type: 'session_state', boot_id: 'boot-new' } as never)
-    deliverFrame({
-      type: 'session_state',
-      session_id: 'chat-a',
-      boot_id: 'boot-new',
-      active_turn: { turn_id: 'T' },
-    } as never)
+    expect(socket.sent.some((frame) => frame.type === 'cancel'), 'BR-23f e: Stop was handed over').toBe(true)
+    const before = FakeSocket.instances.length
+    socket.close(4008, 'catch-up required')
+    const next = FakeSocket.instances.at(-1)
+    expect(next).not.toBe(socket)
+    expect(FakeSocket.instances.length).toBe(before + 1)
+    act(() => { next!.open() })
+    act(() => { next!.receive({ type: 'server_capabilities', send_origin: true }) })
+    act(() => { next!.receive(sessionSnapshot('chat-a', undefined, 'boot-new')) })
+    act(() => { next!.receive(sessionSnapshot('chat-a', 'T', 'boot-new')) })
+    act(() => {
+      next!.receive({
+        type: 'catch_up_complete',
+        session_id: 'chat-a',
+        seq: 1,
+        boot_id: 'boot-new',
+        mode: 'snapshot',
+      })
+    })
+    await flushInbound()
+    expectSnapshotApplied('chat-a')
     expect(screen.getByText(NOT_STOPPED), 'BR-23f e: the reused id shows the notice').toBeTruthy()
-    expect(screen.getByTestId('stop-btn')).toBeEnabled()
-    const auto = sent().slice(before).filter((frame) => frame.type === 'cancel' || frame.type === 'redirect' || frame.type === 'message')
-    expect(auto, 'BR-23f e: nothing is sent automatically').toEqual([])
+    expect(screen.getByTestId('stop-btn'), 'BR-23f e: Stop stays available').toBeEnabled()
+    expect(
+      next!.sent.filter((frame) => frame.type === 'cancel' || frame.type === 'redirect' || frame.type === 'message'),
+      'BR-23f e: nothing is sent automatically',
+    ).toEqual([])
   })
 })

@@ -13,6 +13,7 @@ import {
   FakeSocket,
   connection,
   deliverFrame,
+  flushInbound,
   framesOf,
   installFakeWebSocket,
   mountComposer,
@@ -144,6 +145,109 @@ describe('current-tab not-stopped notice (spec 4.7)', () => {
     expect(screen.queryByText(NOTICE), 'BR-25d2: the chat\'s own done removes it').toBeNull()
   })
 
+  it('BR-25f the refusal snapshot then done ends the turn and keeps helper rows', async () => {
+    // Spec 6.2 BR-25f: replay the two SV-19 orders through this tab's reducer.
+    // Not the old-SPA artifact harness.
+    const row = {
+      key: 'h1\u0000ht',
+      childSessionId: 'h1',
+      agentId: 'mia',
+      turnId: 'ht',
+      notice: { kind: 'recovered' as const, retries: 1 },
+    }
+    function seedRows(): void {
+      act(() => {
+        useChatStore.setState((s) => ({
+          sessionsById: {
+            ...(s.sessionsById ?? {}),
+            'chat-a': {
+              ...((s.sessionsById ?? {})['chat-a'] ?? {}),
+              providerHelperRows: [row],
+            },
+          },
+        }))
+      })
+    }
+    function rows(): unknown {
+      return useChatStore.getState().sessionsById['chat-a']?.providerHelperRows
+    }
+    resetBindingWorld()
+    seedStreamingAnswer('chat-a')
+    seedRows()
+    mountComposer()
+    const user = userEvent.setup()
+    await user.click(stopButton())
+    const id = (framesOf('cancel', sent())[0] as { client_frame_id?: string })?.client_frame_id ?? 'c-stop'
+    deliverFrame({
+      type: 'send_refused',
+      reason: 'wrong_chat',
+      refused_frame: 'cancel',
+      client_frame_id: id,
+      session_id: 'chat-a',
+      origin: { kind: 'chat', session_id: 'chat-b' },
+    })
+    deliverFrame({
+      type: 'session_state',
+      user_id: 'ada',
+      pending_approvals: [],
+      session_id: 'chat-a',
+      emitted_at: '2026-11-18T00:00:00Z',
+      active_turn: { turn_id: 'T', agent_id: 'mia', started_at: '2026-11-18T00:00:00Z' },
+    } as never)
+    expect(screen.getByText(NOTICE), 'BR-25f: the turn is still running, so the notice is shown').toBeTruthy()
+    expect(stopButton(), 'BR-25f: Stop stays while the turn runs').toBeEnabled()
+    expect(rows(), 'BR-25f: helper rows survive the refusal and the snapshot').toEqual([row])
+    deliverFrame({ type: 'done', session_id: 'chat-a', turn_id: 'T' } as never)
+    expect(screen.queryByText(NOTICE), 'BR-25f: done removes the notice').toBeNull()
+    expect(screen.queryByTestId('stop-btn'), 'BR-25f: Stop is not rendered').toBeNull()
+    expect(useChatStore.getState().sessionsById['chat-a']?.isStreaming, 'BR-25f: the turn is not streaming').toBe(false)
+    expect(rows(), 'BR-25f: helper rows are unchanged after done').toEqual([row])
+  })
+
+  it('BR-25f done before the snapshot without a turn ends the same way', async () => {
+    const row = {
+      key: 'h1\u0000ht',
+      childSessionId: 'h1',
+      agentId: 'mia',
+      turnId: 'ht',
+      notice: { kind: 'recovered' as const, retries: 1 },
+    }
+    resetBindingWorld()
+    seedStreamingAnswer('chat-a')
+    act(() => {
+      useChatStore.setState((s) => ({
+        sessionsById: {
+          ...(s.sessionsById ?? {}),
+          'chat-a': { ...((s.sessionsById ?? {})['chat-a'] ?? {}), providerHelperRows: [row] },
+        },
+      }))
+    })
+    mountComposer()
+    const user = userEvent.setup()
+    await user.click(stopButton())
+    const id = (framesOf('cancel', sent())[0] as { client_frame_id?: string })?.client_frame_id ?? 'c-stop'
+    deliverFrame({
+      type: 'send_refused',
+      reason: 'wrong_chat',
+      refused_frame: 'cancel',
+      client_frame_id: id,
+      session_id: 'chat-a',
+      origin: { kind: 'chat', session_id: 'chat-b' },
+    })
+    deliverFrame({ type: 'done', session_id: 'chat-a', turn_id: 'T' } as never)
+    deliverFrame({
+      type: 'session_state',
+      user_id: 'ada',
+      pending_approvals: [],
+      session_id: 'chat-a',
+      emitted_at: '2026-11-18T00:00:00Z',
+    } as never)
+    expect(screen.queryByText(NOTICE), 'BR-25f: the second order leaves no notice').toBeNull()
+    expect(screen.queryByTestId('stop-btn'), 'BR-25f: Stop is not rendered').toBeNull()
+    expect(useChatStore.getState().sessionsById['chat-a']?.isStreaming, 'BR-25f: isStreaming is false').toBe(false)
+    expect(useChatStore.getState().sessionsById['chat-a']?.providerHelperRows, 'BR-25f: helper rows are unchanged').toEqual([row])
+  })
+
   // GUARD of today's freeze. The "no notice" half is absence until the notice exists.
   it('BR-25e a received Stop shows no notice and freezes as today', async () => {
     resetBindingWorld()
@@ -248,27 +352,82 @@ describe('current-tab not-stopped notice (spec 4.7)', () => {
   })
 
   it('BR-25g g a notice for A does not disarm a window armed for B', async () => {
+    // Spec BR-25g (g) and 4.7: Stop in B is handed over, so the window is armed
+    // for B. No switch after that. A's unconfirmed Stop is reconciled by a
+    // background reattach snapshot (close before receipt, then session_state
+    // for A with the same turn still running). That notice is not rendered
+    // while B is open (BR-25 (d)). B stays armed, and the second press within
+    // 3s is Stop all for B. A send_refused whose id matches no record is not
+    // used (spec 4.8: it shows no notice). Opening A is only how the test
+    // reads that the notice was established, after B's window is already proven.
     resetBindingWorld()
+    seedStreamingAnswer('chat-a')
+    act(() => {
+      useChatStore.setState((s) => ({
+        sessionsById: {
+          ...(s.sessionsById ?? {}),
+          'chat-a': {
+            ...((s.sessionsById ?? {})['chat-a'] ?? {}),
+            activeTurnId: 'T',
+            isStreaming: true,
+          },
+        },
+      }))
+    })
+    installFakeWebSocket()
+    live = new WsConnection({
+      onFrames: (frames) => { for (const frame of frames) deliverFrame(frame as never) },
+      onConnected: () => {},
+      onDisconnected: () => {},
+      onError: () => {},
+    })
+    live.connect()
+    const first = FakeSocket.instances.at(-1)
+    if (!first) throw new Error('socket was not created')
+    act(() => { first.open() })
+    act(() => { first.receive({ type: 'server_capabilities', send_origin: true }) })
+    useConnectionStore.setState({ connection: live, isConnected: true, reconnectPhase: null })
+    mountComposer()
+    fireEvent.click(stopButton())
+    expect(first.sent.some((frame) => frame.type === 'cancel'), 'BR-25g g: A\'s Stop was handed over').toBe(true)
+    first.close(4008, 'catch-up required')
+    const next = FakeSocket.instances.at(-1)
+    expect(next, 'BR-25g g: the close reconnects').not.toBe(first)
+    act(() => { next!.open() })
+    act(() => { next!.receive({ type: 'server_capabilities', send_origin: true }) })
+    useConnectionStore.setState({ connection: live, isConnected: true, reconnectPhase: null })
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
     seedStreamingAnswer('chat-b')
-    mountComposer()
-    const user = userEvent.setup()
-    await user.click(stopButton())
+    fireEvent.click(stopButton())
     expect(stopButton().getAttribute('title'), 'BR-25g g: B is armed').toContain('helpers')
-    deliverFrame({
-      type: 'send_refused',
-      reason: 'wrong_chat',
-      refused_frame: 'cancel',
-      client_frame_id: 'a-stop',
-      session_id: 'chat-a',
-      origin: { kind: 'chat', session_id: 'chat-a' },
+    act(() => {
+      next!.receive({
+        type: 'session_state',
+        user_id: 'ada',
+        pending_approvals: [],
+        session_id: 'chat-a',
+        emitted_at: '2026-11-18T00:00:00Z',
+        auto_approve_modifier: true,
+        active_turn: { turn_id: 'T', agent_id: 'mia', started_at: '2026-11-18T00:00:00Z' },
+      })
     })
-    expect(screen.getByText(NOTICE), 'BR-25g g: A\'s notice is established').toBeTruthy()
+    act(() => {
+      next!.receive({ type: 'catch_up_complete', session_id: 'chat-a', seq: 1, mode: 'snapshot' })
+    })
+    await flushInbound()
+    expect(
+      useChatStore.getState().sessionsById['chat-a']?.autoApproveEffective,
+      'BR-25g g: the background snapshot reached the reducer',
+    ).toBe(true)
+    expect(screen.queryByText(NOTICE), 'BR-25g g: A\'s notice is not shown in B').toBeNull()
     expect(stopButton().getAttribute('title'), 'BR-25g g: B stays armed').toContain('helpers')
-    await user.click(stopButton())
-    expect(framesOf('cancel', sent()).at(-1), 'BR-25g g: B\'s second press is still Stop all').toEqual(
-      expect.objectContaining({ scope: 'tree', session_id: 'chat-b' }),
+    fireEvent.click(stopButton())
+    const tree = next!.sent.filter((frame) => frame.type === 'cancel' && (frame as { session_id?: string }).session_id === 'chat-b')
+    expect(tree.at(-1), 'BR-25g g: B\'s second press is still Stop all').toEqual(
+      expect.objectContaining({ type: 'cancel', scope: 'tree', session_id: 'chat-b' }),
     )
+    act(() => { useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core') })
+    expect(screen.getByText(NOTICE), 'BR-25g g: the background snapshot established A\'s notice').toBeTruthy()
   })
 
   async function pressStopOnLiveSocket(): Promise<FakeSocket> {
@@ -292,15 +451,28 @@ describe('current-tab not-stopped notice (spec 4.7)', () => {
     return socket
   }
 
-  function reattachSameTurn(socket: FakeSocket): void {
+  async function reattachSameTurn(socket: FakeSocket): Promise<void> {
     act(() => { socket.open() })
+    act(() => { socket.receive({ type: 'server_capabilities', send_origin: true }) })
     act(() => {
       socket.receive({
         type: 'session_state',
+        user_id: 'ada',
+        pending_approvals: [],
         session_id: 'chat-a',
-        active_turn: { turn_id: 'T' },
-      } as never)
+        emitted_at: '2026-11-18T00:00:00Z',
+        auto_approve_modifier: true,
+        active_turn: { turn_id: 'T', agent_id: 'mia', started_at: '2026-11-18T00:00:00Z' },
+      })
     })
+    act(() => {
+      socket.receive({ type: 'catch_up_complete', session_id: 'chat-a', seq: 1, mode: 'snapshot' })
+    })
+    await flushInbound()
+    expect(
+      useChatStore.getState().sessionsById['chat-a']?.autoApproveEffective,
+      'BR-25g e: the reattach snapshot reached the reducer',
+    ).toBe(true)
   }
 
   it('BR-25g e a 4008 close before receipt disarms Stop all when the same turn is still running', async () => {
@@ -312,7 +484,7 @@ describe('current-tab not-stopped notice (spec 4.7)', () => {
     const next = FakeSocket.instances.at(-1)
     expect(next, 'BR-25g e: 4008 opens the next socket immediately').toBeTruthy()
     expect(next).not.toBe(first)
-    reattachSameTurn(next!)
+    await reattachSameTurn(next!)
     expect(screen.getByText(NOTICE), 'BR-25g e: the same turn shows the notice').toBeTruthy()
     expect(stopButton().getAttribute('aria-label'), 'BR-25g e: the label is Stop').toBe('Stop generation')
     expect(stopButton().getAttribute('title'), 'BR-25g e: Stop all is disarmed').toBe('Stop (Escape)')
@@ -337,7 +509,9 @@ describe('current-tab not-stopped notice (spec 4.7)', () => {
     await act(async () => { vi.advanceTimersByTime(1) })
     const next = FakeSocket.instances.at(-1)
     expect(next).not.toBe(first)
-    reattachSameTurn(next!)
+    // The retry wait needed fake timers. The snapshot flush uses a real frame.
+    vi.useRealTimers()
+    await reattachSameTurn(next!)
     const auto = next!.sent.filter((frame) =>
       frame.type === 'cancel' || frame.type === 'redirect' || frame.type === 'message')
     expect(auto, 'BR-25g e: the retry itself sends no control frame').toEqual([])

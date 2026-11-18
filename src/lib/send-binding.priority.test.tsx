@@ -5,6 +5,7 @@ import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { addLibraryAttachment } from '@/lib/library-attachment'
 import { useChatStore } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import { useSessionStore } from '@/store/session'
 import {
   SWITCHED,
@@ -143,6 +144,10 @@ describe('refusal, restore and remount (spec 4.8 / 4.9)', () => {
   })
 
   it('BR-12 a confirmed 404 is a deleted chat; a 500 is not', async () => {
+    // F7 (chief 2026-11-18, option 1): this error{code:not_found} frame IS the
+    // confirmed-404 signal (spec r9 BR-12). Kept as written. A REST 404 alone
+    // must not mark the chat deleted; that case is recorded in RED-FE-GAPS.md
+    // and is not added here — the lead is asking the chief before that edit.
     resetBindingWorld()
     mountComposer()
     await typeIntoComposer('gone')
@@ -178,7 +183,14 @@ function seedOtherTurn(): void {
       ...s,
       sessionsById: {
         ...(s.sessionsById ?? {}),
-        'chat-c': { isStreaming: true, messagesById: {}, messageOrder: [], toolCalls: {}, toolCallOrder: [] },
+        'chat-c': {
+          ...emptySessionState(),
+          isStreaming: true,
+          messagesById: {},
+          messageOrder: [],
+          toolCalls: {},
+          toolCallOrder: [],
+        },
       },
     }))
   })

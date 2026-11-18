@@ -41,9 +41,13 @@ def put(tree, path, content):
     file.write_text(content, encoding="utf-8")
 
 def expect(tree, label, want):
+    # Spec 12.3 runs `bash scripts/check-bound-send.sh` from the repo root.
+    # The spec defines no REPO_ROOT variable; the fixture tree is the working
+    # directory. Whether the checker roots at that directory or at the script
+    # file is not stated (RED-FE-GAPS).
     result = subprocess.run(
         ["bash", str(check)],
-        env=dict(os.environ, REPO_ROOT=str(tree)),
+        cwd=tree,
         capture_output=True, text=True, check=False,
     )
     if result.returncode != want:

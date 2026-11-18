@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AssistantRuntimeProvider } from '@assistant-ui/react'
 import { useEffect, type ReactNode } from 'react'
-import { useComposerRuntime } from '@assistant-ui/react'
+import { useComposerRuntime, useThreadRuntime } from '@assistant-ui/react'
 import { expect, vi } from 'vitest'
 import type { ClientFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import type { ChatMessage } from '@/store/chat'
@@ -211,6 +211,22 @@ export const composerProbe = {
   attachments: 0,
 }
 
+/** Spec 4.5 rule 5: a runtime append is a submit entry. The probe calls the real thread runtime. */
+export const runtimeProbe = {
+  append: (text: string): void => {
+    void text
+    throw new Error('runtime append probe is not mounted')
+  },
+}
+
+function RuntimeProbe() {
+  const thread = useThreadRuntime()
+  runtimeProbe.append = (text: string) => {
+    thread.append(text)
+  }
+  return null
+}
+
 function ComposerProbe() {
   const runtime = useComposerRuntime()
   useEffect(() => {
@@ -230,6 +246,7 @@ function ChatSurface({ sidebar }: { sidebar: boolean }) {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ComposerProbe />
+      <RuntimeProbe />
       <OmnipusComposer />
       {sidebar ? (
         <>
@@ -267,6 +284,9 @@ export function resetBindingWorld(): RecordingConnection {
   })
   composerProbe.text = ''
   composerProbe.attachments = 0
+  runtimeProbe.append = () => {
+    throw new Error('runtime append probe is not mounted')
+  }
   apiMocks.fetchSessions.mockReset().mockResolvedValue([])
   apiMocks.fetchAgents.mockReset().mockResolvedValue([makeAgent()])
   apiMocks.fetchWorkspaces.mockReset().mockResolvedValue([makeWorkspace()])
@@ -389,9 +409,16 @@ export function deliverFrame(frame: ServerFrame): void {
   // Today's session_state handler reads pending_approvals before any
   // product behaviour under test. A spec snapshot that omits it is still a
   // session_state; the empty list is the handler's "none pending" input.
-  const safe = frame.type === 'session_state' && !('pending_approvals' in frame)
-    ? { ...frame, pending_approvals: [] }
-    : frame
+  // Narrow on the discriminator first: spreading the ServerFrame union is
+  // not a legal object spread, and `in` against the required field narrows
+  // the true branch to never.
+  let safe: ServerFrame = frame
+  if (frame.type === 'session_state') {
+    const pending = Object.prototype.hasOwnProperty.call(frame, 'pending_approvals')
+      ? frame.pending_approvals
+      : []
+    safe = { ...frame, pending_approvals: pending }
+  }
   act(() => {
     useChatStore.getState().handleFrame(safe as never)
   })
@@ -422,6 +449,8 @@ export function seedStreamingAnswer(sessionId: string, content = 'partial answer
           isReplaying: false,
           toolCalls: {},
           toolCallOrder: [],
+          // releaseSessionHistory reads this map. A partial bucket throws.
+          textAtToolCallStart: {},
         },
       },
       messages: [bubble],
@@ -436,6 +465,11 @@ export function controlFrames(frames: ClientFrame[]): ClientFrame[] {
 }
 
 export async function flushInbound(): Promise<void> {
+  // Fake timers (the 1006 retry) never fire rAF until they are advanced.
+  if (vi.isFakeTimers()) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    return
+  }
   await act(async () => {
     await new Promise<void>((resolve) => {
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())

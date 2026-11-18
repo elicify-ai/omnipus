@@ -79,6 +79,13 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     const user = userEvent.setup()
     await typeIntoComposer('first for K')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
+    const queued = useChatStore.getState().outboundQueue.find((item) =>
+      typeof item !== 'string' && item.content === 'first for K')
+    const originalId = useChatStore.getState().pendingFirstSend?.clientMessageId
+      ?? (queued && typeof queued !== 'string' ? queued.id : undefined)
+    expect(originalId, 'BR-13b: the offline Send captured the original client_message_id').toEqual(
+      expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
+    )
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
     connection().fail = false
     expect(apiMocks.createSession, 'BR-13b: no create while B is open').not.toHaveBeenCalled()
@@ -92,9 +99,10 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     await user.click(screen.getByRole('button', { name: 'Open and send' }))
     const message = framesOf('message', sent())[0] as { origin?: { new_chat_key?: string }; client_message_id?: string }
     const key = assertNewChatKey(message?.origin?.new_chat_key)
-    expect(message, 'BR-13b: one first message with the original id').toEqual(expect.objectContaining({
+    expect(message, 'BR-13b: one first message with that same id').toEqual(expect.objectContaining({
       content: 'first for K',
       agent_id: 'mia',
+      client_message_id: originalId,
       origin: { kind: 'new_chat', new_chat_key: key },
     }))
     expect(framesOf('message', sent()), 'BR-13b: delivered once').toHaveLength(1)
@@ -105,11 +113,22 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     mountComposer()
     const original = 'media://workspace/w1/original'
     for (let i = 0; i < 60; i++) {
-      apiMocks.uploadFiles.mockResolvedValueOnce({ files: [{ ref: `media://workspace/w1/other-${i}` }] })
+      apiMocks.uploadFiles.mockResolvedValueOnce({
+        files: [{ ref: `media://workspace/w1/other-${i}`, name: `o${i}.txt`, content_type: 'text/plain' }],
+      })
     }
-    const { requireFn } = await import('./send-binding.module')
-    const capture = await requireFn('./bound-send', 'captureSubmission', 'spec 4.6.3 / BR-21')
-    const frozen = capture('restore', {
+    for (let i = 0; i < 60; i++) {
+      await apiMocks.uploadFiles('chat-a', [new File(['o'], `o${i}.txt`, { type: 'text/plain' })], 'w1')
+    }
+    expect(apiMocks.uploadFiles.mock.calls, 'BR-21: the 60 other uploads ran').toHaveLength(60)
+    expect(
+      apiMocks.uploadFiles.mock.calls.some((call) => JSON.stringify(call).includes(original)),
+      'BR-21: none of those uploads is the restored ref',
+    ).toBe(false)
+    const { requireFn } = await import('@/test/send-binding.module')
+    // Path column of spec 4.6.1 ("Restore, then Send"), not an invented slug.
+    const capture = await requireFn('../lib/bound-send', 'captureSubmission', 'spec 4.6.1 / BR-21')
+    const frozen = capture('Restore, then Send', {
       text: 'resend me',
       files: [{ kind: 'uploaded', id: 'f1', ref: original, workspaceId: 'w1', name: 'orig.txt', mime: 'text/plain' }],
       libraryPicks: [],
@@ -118,7 +137,7 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
       origin: { kind: 'chat', session_id: 'chat-a' },
       target: 'chat-a',
     })
-    const sendBound = await requireFn('./bound-send', 'sendBound', 'spec 4.6.1 / BR-21')
+    const sendBound = await requireFn('../lib/bound-send', 'sendBound', 'spec 4.6.1 / BR-21')
     sendBound(frozen)
     expect(framesOf('message', sent()), 'BR-21: the original ref is sent, not a later upload').toEqual([
       expect.objectContaining({
@@ -127,6 +146,10 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
         origin: { kind: 'chat', session_id: 'chat-a' },
       }),
     ])
+    expect(
+      JSON.stringify(framesOf('message', sent())),
+      'BR-21: a later upload ref is not on the frame',
+    ).not.toContain('other-59')
   })
 
   it('BR-18 sign-out drops an in-flight upload, and completing it changes nothing', async () => {

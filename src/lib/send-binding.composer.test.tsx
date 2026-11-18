@@ -2,7 +2,7 @@
 // Oracles: SPEC-C r9. Not the spike, not observed output.
 import { afterEach, describe, expect, it } from 'vitest'
 import { act } from 'react'
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   BaseComposerRuntimeCore,
@@ -16,15 +16,15 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import {
   composerProbe,
-  connection,
   framesOf,
   input,
   mountComposer,
   resetBindingWorld,
+  runtimeProbe,
   sent,
   typeIntoComposer,
 } from '@/test/sendBinding1428'
-import { requireFn } from './send-binding.module'
+import { requireFn } from '@/test/send-binding.module'
 
 const LIB_REF = 'media://workspace/w1/lib-file-1'
 
@@ -80,11 +80,19 @@ afterEach(() => {
   act(() => { useUiStore.setState({ toasts: [] }) })
 })
 
-/** Spec B-12 does not quote the library-only notice. A notice is a toast or a
- *  status region other than the always-mounted composer chrome. */
+/** Spec B-12 (r9): a library-only Enter shows no notice. The activity poll's
+ *  own warning toast is not that notice (it fires because the test has no
+ *  activity-runs route). A send notice, in the composer or as any other toast,
+ *  still counts. */
+const ACTIVITY_POLL_TOAST = "Couldn't refresh task and scheduler runs. The list may be out of date."
+
 function libraryNoticeText(): string {
-  const toast = useUiStore.getState().toasts.map((t) => t.message).filter(Boolean).join('\n')
-  const live = screen.getAllByRole('status')
+  const root = screen.getByTestId('composer-card').parentElement
+  const toast = useUiStore.getState().toasts
+    .map((t) => t.message)
+    .filter((message) => message && message !== ACTIVITY_POLL_TOAST)
+    .join('\n')
+  const live = Array.from(root?.querySelectorAll('[role="status"]') ?? [])
     .filter((el) => {
       const id = el.getAttribute('data-testid')
       return id !== 'session-token-counter' && id !== 'slash-menu-status'
@@ -112,7 +120,23 @@ function dropFile(file: File): void {
   fireEvent.drop(dropZone(), { dataTransfer: { files: [file] } })
 }
 
+/** The chip is committed by composerRuntime.addAttachment, which resolves
+ *  on a microtask. A synchronous query misses a chip that is about to render. */
+async function waitStaged(name: string, message: string): Promise<void> {
+  await waitFor(() => {
+    expect(stagedFile(name), message).not.toBeNull()
+  })
+}
+
+/** A staged file is visible text, or (images) only the thumbnail alt / Remove name. */
+function stagedFile(name: string): HTMLElement | null {
+  return screen.queryByText(name)
+    ?? screen.queryByAltText(name)
+    ?? screen.queryByRole('button', { name: `Remove ${name}` })
+}
+
 async function openDraftText(): Promise<string | undefined> {
+  // Specifiers are relative to src/test/send-binding.module.ts.
   const getDraft = await requireFn('../store/chat/drafts', 'getDraft', 'spec 4.4.3 / B-1')
   const canonical = await requireFn('../store/chat/drafts', 'canonical', 'spec 4.4.1')
   const openKey = useSessionStore.getState().activeSessionId
@@ -128,15 +152,19 @@ describe('session composer binding (spec 4.5)', () => {
     resetBindingWorld()
     mountComposer()
     await typeIntoComposer('hello A')
+    dropFile(new File(['a'], 'hello-a.txt', { type: 'text/plain' }))
+    await waitStaged('hello-a.txt', 'BR-1: the file is staged before the switch')
     act(() => {
       useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core')
     })
     expect(input().value, 'BR-1: W2 chat must not show A\'s draft').not.toBe('hello A')
     expect(input().value, 'BR-1: W2 box is A\'s text or empty of it').toBe('')
+    expect(stagedFile('hello-a.txt'), 'BR-1: W2 must not show A\'s file').toBeNull()
     act(() => {
       useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core')
     })
     expect(input().value, 'BR-1: returning to A restores "hello A"').toBe('hello A')
+    expect(stagedFile('hello-a.txt'), 'BR-1: returning to A restores the file').not.toBeNull()
     expect(framesOf('message', sent()), 'BR-1: switching chats sends no message').toEqual([])
     expect(await openDraftText(), 'BR-1: the store, not the runtime, holds A').toBe('hello A')
   })
@@ -156,9 +184,10 @@ describe('session composer binding (spec 4.5)', () => {
     expect(input().value, 'BR-2: A is intact').toBe('for A')
   })
 
-  it('BR-10 library-only Enter shows a notice, sends no frame, and keeps the file staged', async () => {
-    // Spec B-12 / BR-10. The notice wording is "today's notice"; the spec does
-    // not quote it (recorded in RED-FE-GAPS). Quoted outcomes are asserted.
+  it('BR-10 library-only Enter sends nothing and keeps the file, then a later Send carries it', async () => {
+    // Spec B-12 / BR-10 (chief 2026-11-18, option a). Silent no-op: no frame,
+    // no notice, file stays staged. There is no notice leg. MU-17 is
+    // library_only_enter_sends.
     resetBindingWorld()
     mountComposer()
     act(() => {
@@ -173,22 +202,24 @@ describe('session composer binding (spec 4.5)', () => {
     await user.click(input())
     await user.keyboard('{Enter}')
     expect(framesOf('message', sent()), 'BR-10 idle: no frame').toEqual([])
-    expect(screen.getByTestId('library-chip-lib-file-1'), 'BR-10: file stays staged').toBeTruthy()
-    expect(libraryNoticeText(), 'BR-10 idle: a notice is shown (spec B-12 does not quote the words)').not.toBe('')
+    expect(screen.getByTestId('library-chip-lib-file-1'), 'BR-10 idle: file stays staged').toBeTruthy()
+    expect(libraryNoticeText(), 'BR-10 idle: no notice').toBe('')
+    expect(input().value, 'BR-10 idle: the box stays empty').toBe('')
 
     act(() => {
       useChatStore.setState({ isStreaming: true })
-      useUiStore.setState({ toasts: [] })
     })
     await user.keyboard('{Enter}')
     expect(framesOf('message', sent()), 'BR-10 streaming: no frame').toEqual([])
     expect(screen.getByTestId('library-chip-lib-file-1'), 'BR-10 streaming: file stays staged').toBeTruthy()
-    expect(libraryNoticeText(), 'BR-10 streaming: the notice is shown again').not.toBe('')
+    expect(libraryNoticeText(), 'BR-10 streaming: no notice').toBe('')
 
+    // The two Enters are done. Send is the idle control; Stop replaces it while streaming.
+    act(() => { useChatStore.setState({ isStreaming: false }) })
     await user.type(input(), 'with the file')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
     const messages = framesOf('message', sent())
-    expect(messages, 'BR-10: the later Send carries the library file').toEqual([
+    expect(messages, 'BR-10: typing text and Send carries the library file').toEqual([
       expect.objectContaining({
         type: 'message',
         content: 'with the file',
@@ -196,6 +227,7 @@ describe('session composer binding (spec 4.5)', () => {
         origin: { kind: 'chat', session_id: 'chat-a' },
       }),
     ])
+    expect(messages, 'BR-10: exactly one frame').toHaveLength(1)
   })
 
   it('BR-17 rapid switches keep each draft, mirror only the open draft, and never call composer.send', async () => {
@@ -277,42 +309,149 @@ describe('session composer binding (spec 4.5)', () => {
   })
 
   it('BR-17 drop keeps the file on the chat that received it', async () => {
+    // Images render as a thumbnail: the name is the alt and the Remove label,
+    // not a text node. queryByText cannot see it even when the chip is there.
     resetBindingWorld()
     mountComposer()
     dropFile(new File(['a'], 'a-dropped.png', { type: 'image/png' }))
+    await waitStaged('a-dropped.png', 'BR-17 drop: the file is staged on A before any switch')
     switchTo('chat-b')
-    expect(screen.queryByText('a-dropped.png'), 'BR-17: B does not show A\'s dropped file').toBeNull()
+    expect(stagedFile('a-dropped.png'), 'BR-17: B does not show A\'s dropped file').toBeNull()
     switchTo('chat-a')
-    expect(screen.getByText('a-dropped.png'), 'BR-17: A still shows its dropped file').toBeTruthy()
+    expect(stagedFile('a-dropped.png'), 'BR-17: A still shows its dropped file').not.toBeNull()
     expect(framesOf('message', sent()), 'BR-17: dropping a file sends nothing').toEqual([])
   })
 
   it('BR-17 paste of a non-image file is staged for the chat that received it', async () => {
-    // Spec 4.5 rule 2 / A3: every pasted file, not only images.
+    // Spec 4.5 rule 2 / A3: every pasted file, not only images. kind:'file' is
+    // what a browser clipboard item carries; a missing kind must not hide it.
     resetBindingWorld()
     mountComposer()
     const file = new File(['notes'], 'notes.pdf', { type: 'application/pdf' })
     fireEvent.paste(input(), {
-      clipboardData: { items: [{ type: 'application/pdf', getAsFile: () => file }] },
+      clipboardData: {
+        files: [file],
+        items: [{ kind: 'file', type: 'application/pdf', getAsFile: () => file }],
+      },
     })
-    expect(screen.queryByText('notes.pdf'), 'BR-17: the pasted file is staged').not.toBeNull()
+    await waitStaged('notes.pdf', 'BR-17: the pasted file is staged')
     switchTo('chat-b')
-    expect(screen.queryByText('notes.pdf'), 'BR-17: B does not show A\'s paste').toBeNull()
+    expect(stagedFile('notes.pdf'), 'BR-17: B does not show A\'s paste').toBeNull()
+    switchTo('chat-a')
+    expect(stagedFile('notes.pdf'), 'BR-17: A still shows the pasted file').not.toBeNull()
   })
 
   it('BR-17 harmful-file confirmation writes the file to the chat that received the drop', async () => {
-    // Spec 4.5 rule 2: the key captured at the drop survives a switch before confirm.
+    // Spec 4.5 rule 2 keeps size/type validation, so the file must be one
+    // isAcceptedFile accepts. .exe is the product's harmful extension; a PDF
+    // MIME is on the accept list, so the chip can appear. An octet-stream
+    // .exe is rejected after confirm and never tests the captured key.
     resetBindingWorld()
     mountComposer()
-    dropFile(new File(['x'], 'malware.exe', { type: 'application/octet-stream' }))
+    dropFile(new File(['%PDF-1.4'], 'payload.exe', { type: 'application/pdf' }))
     expect(screen.getByRole('alertdialog', { name: 'Potentially harmful file(s)' })).toBeTruthy()
+    expect(screen.getByText(/payload\.exe/), 'BR-17: the dialog names the dropped file').toBeTruthy()
     switchTo('chat-b')
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: 'Continue' }))
     await user.click(screen.getByRole('button', { name: 'Upload' }))
-    expect(screen.queryByText('malware.exe'), 'BR-17: confirming in B does not attach the file to B').toBeNull()
+    await act(async () => { await Promise.resolve() })
+    expect(stagedFile('payload.exe'), 'BR-17: confirming in B does not attach the file to B').toBeNull()
     switchTo('chat-a')
-    expect(screen.getByText('malware.exe'), 'BR-17: the file lands in A, the chat that received the drop').toBeTruthy()
+    expect(stagedFile('payload.exe'), 'BR-17: the file lands in A, the chat that received the drop').not.toBeNull()
+  })
+
+  it('BR-17 removing a chip deletes that chat\'s file only', async () => {
+    resetBindingWorld()
+    mountComposer()
+    dropFile(new File(['a'], 'remove-me.txt', { type: 'text/plain' }))
+    await waitStaged('remove-me.txt', 'BR-17 remove: the file is staged')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Remove remove-me.txt' }))
+    expect(stagedFile('remove-me.txt'), 'BR-17 remove: the chip is gone').toBeNull()
+    switchTo('chat-b')
+    dropFile(new File(['b'], 'keep-b.txt', { type: 'text/plain' }))
+    await waitStaged('keep-b.txt', 'BR-17 remove: B staged its own file')
+    switchTo('chat-a')
+    expect(stagedFile('remove-me.txt'), 'BR-17 remove: A does not get the file back').toBeNull()
+    expect(stagedFile('keep-b.txt'), 'BR-17 remove: B\'s file is not on A').toBeNull()
+    switchTo('chat-b')
+    expect(stagedFile('keep-b.txt'), 'BR-17 remove: B kept its own file').not.toBeNull()
+  })
+
+  it('BR-17 a file alone can be sent, and a form submit does not call composer.send', async () => {
+    resetBindingWorld()
+    mountComposer()
+    dropFile(new File(['only'], 'only.txt', { type: 'text/plain' }))
+    await waitStaged('only.txt', 'BR-17 file-only: the file is staged')
+    const send = screen.getByRole('button', { name: 'Send message' })
+    expect(send, 'BR-17 file-only: Send is eligible with a file and no text').toBeEnabled()
+    const user = userEvent.setup()
+    await user.click(send)
+    expect(implSends, 'BR-17 file-only: composer.send is not called').toEqual([])
+    expect(framesOf('message', sent()), 'BR-17 file-only: the frame carries the file and origin A').toEqual([
+      expect.objectContaining({
+        type: 'message',
+        origin: { kind: 'chat', session_id: 'chat-a' },
+      }),
+    ])
+    const fileFrame = framesOf('message', sent())[0] as { media?: string[]; content?: string }
+    expect(fileFrame?.content ?? '', 'BR-17 file-only: no invented text').toBe('')
+    expect(fileFrame?.media?.length ?? 0, 'BR-17 file-only: the file is on the frame').toBeGreaterThan(0)
+  })
+
+  it('BR-17 form submit and streaming Enter go through submitDraft', async () => {
+    resetBindingWorld()
+    mountComposer()
+    await typeIntoComposer('from the form')
+    const form = input().closest('form')
+    expect(form, 'BR-17 form: the composer is a form').not.toBeNull()
+    fireEvent.submit(form!)
+    expect(implSends, 'BR-17 form: composer.send is not called').toEqual([])
+    expect(framesOf('message', sent()), 'BR-17 form: one message with origin A').toEqual([
+      expect.objectContaining({
+        type: 'message',
+        content: 'from the form',
+        origin: { kind: 'chat', session_id: 'chat-a' },
+      }),
+    ])
+    act(() => { useChatStore.setState({ isStreaming: true }) })
+    await typeIntoComposer('while streaming')
+    const user = userEvent.setup()
+    await user.click(input())
+    await user.keyboard('{Enter}')
+    expect(implSends, 'BR-17 streaming Enter: composer.send is not called').toEqual([])
+    expect(framesOf('message', sent()).at(-1), 'BR-17 streaming Enter: the open draft is submitted').toEqual(
+      expect.objectContaining({
+        type: 'message',
+        content: 'while streaming',
+        origin: { kind: 'chat', session_id: 'chat-a' },
+      }),
+    )
+  })
+
+  it('BR-17 a runtime append submits the open draft and a remount keeps it', async () => {
+    resetBindingWorld()
+    const view = mountComposer()
+    await typeIntoComposer('kept across remount')
+    dropFile(new File(['f'], 'kept.txt', { type: 'text/plain' }))
+    await waitStaged('kept.txt', 'BR-17 remount: the file is staged before unmount')
+    view.unmount()
+    mountComposer()
+    expect(input().value, 'BR-17 remount: DOM text is the open draft').toBe('kept across remount')
+    expect(composerProbe.text, 'BR-17 remount: runtime text is the open draft').toBe('kept across remount')
+    expect(stagedFile('kept.txt'), 'BR-17 remount: the file is still staged').not.toBeNull()
+    const before = framesOf('message', sent()).length
+    act(() => { runtimeProbe.append('appended by the runtime') })
+    await act(async () => { await Promise.resolve() })
+    expect(implSends, 'BR-17 runtime append: composer.send is not called').toEqual([])
+    expect(framesOf('message', sent()).slice(before), 'BR-17 runtime append: one message for the open chat').toEqual([
+      expect.objectContaining({
+        type: 'message',
+        content: 'appended by the runtime',
+        origin: { kind: 'chat', session_id: 'chat-a' },
+      }),
+    ])
   })
 
   it('BR-17 picker captures the key at the button click, not at the file change', async () => {

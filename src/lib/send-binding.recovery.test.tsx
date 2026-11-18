@@ -3,20 +3,33 @@ import { describe, expect, it } from 'vitest'
 import { act } from 'react'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useChatStore } from '@/store/chat'
+import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { WsConnection } from '@/lib/ws'
 import {
   RESTORED_LINE,
   UNCERTAIN_LINE,
+  FakeSocket,
+  apiMocks,
+  deleteOpenChatThroughSidebar,
   deliverFrame,
+  flushInbound,
   framesOf,
+  installFakeWebSocket,
+  makeSession,
   mountComposer,
   resetBindingWorld,
+  seedSavedChat,
   sent,
   typeIntoComposer,
 } from '@/test/sendBinding1428'
 
 describe('recovery UI and the leave warning (spec 4.9 / B-23)', () => {
   it('BR-19 Open, Discard and a narrow screen keep the specified focus', async () => {
+    // Each item below is produced by the signal spec 4.8 / 4.9 names.
+    // jsdom reports scrollWidth and clientWidth as 0, so a width comparison
+    // cannot fail; the 375px horizontal-scroll check is an e2e gap.
     resetBindingWorld()
     mountComposer()
     const user = userEvent.setup()
@@ -31,10 +44,19 @@ describe('recovery UI and the leave warning (spec 4.9 / B-23)', () => {
       origin: { kind: 'chat', session_id: 'chat-a' },
       client_message_id: id,
     })
+    deliverFrame({
+      type: 'error',
+      code: 'not_found',
+      message: '404',
+      client_message_id: id,
+      session_id: 'chat-a',
+    } as never)
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
-    await user.click(screen.getByRole('button', { name: '1 not sent' }))
+    expect(screen.getByText('Deleted chat'), 'BR-19: the confirmed 404 names a deleted origin').toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Move text here' }), 'BR-19: a deleted origin offers Move text here').toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /not sent/ }))
     const discard = screen.getAllByRole('button', { name: 'Discard' })
-    expect(discard.length, 'BR-19: more than one item').toBeGreaterThan(1)
+    expect(discard.length, 'BR-19: the seeded items each have Discard').toBeGreaterThan(1)
     discard[0].focus()
     await user.click(discard[0])
     await user.click(screen.getByRole('button', { name: 'Discard' }))
@@ -42,6 +64,7 @@ describe('recovery UI and the leave warning (spec 4.9 / B-23)', () => {
       screen.getAllByRole('button', { name: /Open|Copy/ })[0],
     )
     const last = screen.getAllByRole('button', { name: 'Discard' }).at(-1)
+    expect(last, 'BR-19: a last item remains').toBeTruthy()
     last?.focus()
     await user.click(last!)
     await user.click(screen.getByRole('button', { name: 'Discard' }))
@@ -49,13 +72,80 @@ describe('recovery UI and the leave warning (spec 4.9 / B-23)', () => {
       screen.getByTestId('chat-input'),
     )
     expect(screen.getByText(RESTORED_LINE), 'BR-19: an open chat says the text was restored, not sent').toBeTruthy()
+  })
+
+  it('BR-19 a close before receipt lists the uncertain command', async () => {
+    // Spec 4.7 / 4.9: the connection that carried the command closes before a receipt.
+    resetBindingWorld()
+    installFakeWebSocket()
+    const live = new WsConnection({
+      onFrames: (frames) => { for (const frame of frames) deliverFrame(frame as never) },
+      onConnected: () => {},
+      onDisconnected: () => {},
+      onError: () => {},
+    })
+    live.connect()
+    const socket = FakeSocket.instances.at(-1)
+    expect(socket, 'BR-19: the command rides a real socket').toBeTruthy()
+    act(() => { socket!.open() })
+    act(() => { socket!.receive({ type: 'server_capabilities', send_origin: true }) })
+    useConnectionStore.setState({ connection: live, isConnected: true, reconnectPhase: null })
+    mountComposer()
+    await typeIntoComposer('/stop-redirect held')
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('chat-input'))
+    await user.keyboard('{Enter}')
+    expect(socket!.sent.some((frame) => frame.type === 'redirect'), 'BR-19: the redirect was handed over').toBe(true)
+    const count = FakeSocket.instances.length
+    socket!.close(4008, 'catch-up required')
+    const next = FakeSocket.instances.at(-1)
+    expect(next, 'BR-19: the close opens the next connection').not.toBe(socket)
+    expect(FakeSocket.instances.length, 'BR-19: reconnect happened').toBe(count + 1)
+    act(() => { next!.open() })
+    act(() => {
+      next!.receive({
+        type: 'session_state',
+        user_id: 'ada',
+        pending_approvals: [],
+        session_id: 'chat-a',
+        emitted_at: '2026-11-18T00:00:00Z',
+        auto_approve_modifier: true,
+      })
+    })
+    act(() => {
+      next!.receive({
+        type: 'catch_up_complete',
+        session_id: 'chat-a',
+        seq: 1,
+        mode: 'snapshot',
+      })
+    })
+    await flushInbound()
+    expect(
+      useChatStore.getState().sessionsById['chat-a']?.autoApproveEffective,
+      'BR-19: the reattach snapshot reached the reducer',
+    ).toBe(true)
+    expect(screen.getByText('May not have been delivered'), 'BR-19: the close before receipt is uncertain').toBeTruthy()
     expect(screen.getByText(UNCERTAIN_LINE), 'BR-19: an uncertain item carries the may-already line').toBeTruthy()
-    expect(screen.getByText(/New chat with Mia in Sales/), 'BR-19: an uncreated chat is named').toBeTruthy()
-    expect(screen.getByText('Deleted chat'), 'BR-19: a deleted origin is named').toBeTruthy()
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 })
     window.dispatchEvent(new Event('resize'))
-    const region = screen.getByRole('status', { name: /not sent/i })
-    expect(region.scrollWidth, 'BR-19: 375px does not scroll sideways').toBeLessThanOrEqual(region.clientWidth + 1)
+    const line = screen.getByRole('button', { name: /not sent/ })
+    expect(line.textContent ?? '', 'BR-19: below 640px the notice is one disclosure line').toMatch(/not sent/)
+  })
+
+  it('BR-19 an uncreated chat is named from the offline first send', async () => {
+    resetBindingWorld()
+    mountComposer({ sidebar: true })
+    const saved = makeSession({ id: 'saved-new', title: 'Saved New', workspace_id: 'w1', agent_id: 'mia' })
+    seedSavedChat(saved)
+    apiMocks.fetchSessions.mockResolvedValue([saved])
+    apiMocks.fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core' } as never])
+    await deleteOpenChatThroughSidebar('Saved New')
+    const user = userEvent.setup()
+    await typeIntoComposer('first for the new chat')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
+    expect(screen.getByText('New chat with Mia in Sales'), 'BR-19: an uncreated chat is named').toBeTruthy()
   })
 
   it('B-23 warns before unload while a draft exists, and not when the box is empty', async () => {

@@ -45,26 +45,88 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     await reachNewChat(makeSession({ id: 'saved-w1', title: 'Saved W1', workspace_id: 'w1' }))
     await typeIntoComposer('file for K1')
     dropFile('k1.txt')
-    let releaseCreate: (value: unknown) => void = () => {}
-    apiMocks.createSession.mockImplementation(() => new Promise((resolve) => { releaseCreate = resolve }))
+    // One slot per createSession call. A single `releaseCreate` is overwritten
+    // by K2's create, so releasing it would complete K2, not K1 (MU-3 / MU-9).
+    const pendingCreates: Array<(value: unknown) => void> = []
+    apiMocks.createSession.mockImplementation(() => new Promise((resolve) => { pendingCreates.push(resolve) }))
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: 'Send message' }))
+    expect(pendingCreates, 'BR-5: K1\'s creation is held').toHaveLength(1)
     const k1 = assertNewChatKey(
       (apiMocks.createSession.mock.calls[0]?.[0] as { new_chat_key?: string } | undefined)?.new_chat_key,
     )
     await reachNewChat(makeSession({ id: 'saved-w2', title: 'Saved W2', workspace_id: 'w2', agent_id: 'mia' }))
     await typeIntoComposer('private K2')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
+    expect(pendingCreates, 'BR-5: K2\'s creation is held separately').toHaveLength(2)
     const k2 = assertNewChatKey(
       (apiMocks.createSession.mock.calls[1]?.[0] as { new_chat_key?: string } | undefined)?.new_chat_key,
     )
     expect(k2, 'BR-5: each entry mints a different key').not.toBe(k1)
-    await act(async () => { releaseCreate({ id: 's1', agent_id: 'mia', workspace_id: 'w1' }) })
+    await act(async () => { pendingCreates[0]!({ id: 's1', agent_id: 'mia', workspace_id: 'w1' }) })
     expect(useSessionStore.getState().activeSessionId, 'BR-5: S1 is not activated while K2 is open').toBeNull()
     expect(screen.getByText(SWITCHED), 'BR-5: K1 is ineligible and says switched chats').toBeTruthy()
-    const uploads = apiMocks.uploadFiles.mock.calls.map((call) => JSON.stringify(call))
-    expect(uploads.some((body) => body.includes('w2') && body.includes('k1.txt')), 'BR-5: K1\'s file is not uploaded to W2').toBe(false)
+    const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => JSON.stringify(call).includes('k1.txt'))
+    expect(k1Uploads, 'BR-5: K1\'s file is uploaded').not.toEqual([])
+    expect(
+      k1Uploads.every((call) => call[2] === 'w1' || JSON.stringify(call).includes('w1')),
+      'BR-5: K1\'s file is uploaded to W1',
+    ).toBe(true)
+    expect(
+      k1Uploads.some((call) => call[2] === 'w2' || (JSON.stringify(call).includes('w2') && JSON.stringify(call).includes('k1.txt'))),
+      'BR-5: K1\'s file is not uploaded to W2',
+    ).toBe(false)
     expect(framesOf('message', sent()).some((frame) => (frame as { content?: string }).content === 'private K2'), 'BR-5: K2\'s text is its own send').toBe(true)
+  })
+
+  it('BR-5 with the barrier on the upload, K1\'s file stays in W1 while K2 is open', async () => {
+    // Spec BR-5: "Repeat with the barrier on the upload."
+    resetBindingWorld()
+    mountComposer({ sidebar: true })
+    const w1 = makeWorkspace({ id: 'w1', name: 'Sales' })
+    const w2 = makeWorkspace({ id: 'w2', name: 'Support' })
+    apiMocks.fetchWorkspaces.mockResolvedValue([w1, w2])
+    let created = 0
+    apiMocks.createSession.mockImplementation(async () => {
+      created += 1
+      return {
+        id: created === 1 ? 's1' : 's2',
+        agent_id: 'mia',
+        workspace_id: created === 1 ? 'w1' : 'w2',
+      }
+    })
+    const pendingUploads: Array<(value: unknown) => void> = []
+    apiMocks.uploadFiles.mockImplementation(() => new Promise((resolve) => { pendingUploads.push(resolve) }))
+    await reachNewChat(makeSession({ id: 'saved-w1b', title: 'Saved W1b', workspace_id: 'w1' }))
+    await typeIntoComposer('file for K1')
+    dropFile('k1.txt')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    const k1 = assertNewChatKey(
+      (apiMocks.createSession.mock.calls[0]?.[0] as { new_chat_key?: string } | undefined)?.new_chat_key,
+    )
+    expect(pendingUploads, 'BR-5 upload: K1\'s upload is held').toHaveLength(1)
+    await reachNewChat(makeSession({ id: 'saved-w2b', title: 'Saved W2b', workspace_id: 'w2', agent_id: 'mia' }))
+    await typeIntoComposer('private K2')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    const k2 = assertNewChatKey(
+      (apiMocks.createSession.mock.calls.at(-1)?.[0] as { new_chat_key?: string } | undefined)?.new_chat_key,
+    )
+    expect(k2, 'BR-5 upload: K2 mints its own key').not.toBe(k1)
+    await act(async () => {
+      pendingUploads[0]!({ files: [{ ref: 'media://workspace/w1/k1', name: 'k1.txt', content_type: 'text/plain' }] })
+    })
+    expect(useSessionStore.getState().activeSessionId, 'BR-5 upload: S1 is not activated while K2 is open').not.toBe('s1')
+    expect(screen.getByText(SWITCHED), 'BR-5 upload: K1 says switched chats').toBeTruthy()
+    const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => JSON.stringify(call).includes('k1.txt'))
+    expect(
+      k1Uploads.some((call) => String(call[2]) === 'w2'),
+      'BR-5 upload: K1\'s file is not uploaded to W2',
+    ).toBe(false)
+    expect(
+      k1Uploads.some((call) => String(call[2]) === 'w1'),
+      'BR-5 upload: K1\'s file is uploaded to W1',
+    ).toBe(true)
   })
 
   it('BR-6 a follow-up during an upload in the same chat is accepted there', async () => {
@@ -136,9 +198,8 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
 
   it('BR-16 Open browser does not activate a chat the person has left', async () => {
     resetBindingWorld()
-    const view = mountComposer({ sidebar: true })
+    mountComposer({ sidebar: true })
     await reachNewChat(makeSession({ id: 'saved-16', title: 'Saved 16', agent_id: 'mia' }))
-    view.rerender
     const { render } = await import('@testing-library/react')
     render(<ChatControls />)
     let release: (value: unknown) => void = () => {}

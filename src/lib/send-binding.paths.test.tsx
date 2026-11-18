@@ -1,7 +1,7 @@
 // #1428 step 2 RED. Spec 4.6.1, B-4, BR-3a, BR-15.
 import { describe, expect, it } from 'vitest'
 import { act } from 'react'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   apiMocks,
@@ -22,9 +22,10 @@ import { useSessionStore } from '@/store/session'
 import { openOmnipusChat } from '@/store/omnipusChat'
 import { makeBucketMessages } from '@/store/chat/messages'
 import { emptyHistoryState } from '@/store/chat/history-state'
+import { emptySessionState } from '@/store/chat/session'
 import { submitAnnotation } from '@/lib/browserAnnotate'
 import { MermaidDiagram } from '@/components/chat/mermaid-renderer'
-import { requireFn } from './send-binding.module'
+import { requireFn } from '@/test/send-binding.module'
 
 const PANEL = 'panel-1'
 const OMNIPUS_MAIN = 'omnipus-main'
@@ -34,8 +35,9 @@ describe('capture and non-navigation paths (spec 4.6.1)', () => {
     resetBindingWorld()
     mountComposer()
     await typeIntoComposer('secret A')
-    const capture = await requireFn('./bound-send', 'captureSubmission', 'spec 4.6.1 / BR-3a')
-    const frozen = capture('composer-send', {
+    const capture = await requireFn('../lib/bound-send', 'captureSubmission', 'spec 4.6.1 / BR-3a')
+    // Path column of spec 4.6.1, not an invented slug.
+    const frozen = capture('Composer Send', {
       text: 'secret A',
       files: [],
       libraryPicks: [],
@@ -51,7 +53,7 @@ describe('capture and non-navigation paths (spec 4.6.1)', () => {
       origin: { kind: 'chat', session_id: 'chat-a' },
     })
     const sendsBefore = apiMocks.uploadFiles.mock.calls.length + apiMocks.createSession.mock.calls.length
-    const sendBound = await requireFn('./bound-send', 'sendBound', 'spec 4.6.1 / AL-1 / BR-3a')
+    const sendBound = await requireFn('../lib/bound-send', 'sendBound', 'spec 4.6.1 / AL-1 / BR-3a')
     sendBound(frozen)
     expect(controlFrames(sent()), 'BR-3a: zero frames; the fake server is not asked').toEqual([])
     expect(
@@ -61,17 +63,18 @@ describe('capture and non-navigation paths (spec 4.6.1)', () => {
     expect(screen.getByTestId('chat-input'), 'BR-3a: text restored once into A').toHaveValue('secret A')
   })
 
-  it('BR-15 typed /cancel in A then Enter in B submits only B', async () => {
+  it('BR-15 typed /cancel in A is held, and Enter in B submits only B', async () => {
+    // Spec BR-15: type /cancel in A, then Enter in B. Enter is not pressed in A,
+    // so the command stays held on A's draft.
     resetBindingWorld()
     mountComposer()
     await typeIntoComposer('/cancel')
-    const user = userEvent.setup()
-    await user.keyboard('{Enter}')
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
     await typeIntoComposer('only B')
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('chat-input'))
     await user.keyboard('{Enter}')
-    const cancels = framesOf('cancel', sent())
-    expect(cancels.every((frame) => (frame as { session_id?: string }).session_id !== 'chat-b'), 'BR-15: B does not receive A\'s cancel').toBe(true)
+    expect(framesOf('cancel', sent()), 'BR-15: Enter in B does not send A\'s /cancel').toEqual([])
     expect(framesOf('message', sent()), 'BR-15: Enter in B sends B\'s draft only').toEqual([
       expect.objectContaining({
         type: 'message',
@@ -80,6 +83,8 @@ describe('capture and non-navigation paths (spec 4.6.1)', () => {
         origin: { kind: 'chat', session_id: 'chat-b' },
       }),
     ])
+    act(() => { useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core') })
+    expect(screen.getByTestId('chat-input'), 'BR-15: A still holds /cancel').toHaveValue('/cancel')
   })
 
   it('BR-15 Generate again sends the saved message with origin of that chat', () => {
@@ -97,6 +102,7 @@ describe('capture and non-navigation paths (spec 4.6.1)', () => {
         ...s,
         sessionsById: {
           'chat-a': {
+            ...emptySessionState(),
             ...makeBucketMessages([message]),
             history: emptyHistoryState(),
             isStreaming: false,
@@ -186,18 +192,32 @@ describe('capture and non-navigation paths (spec 4.6.1)', () => {
     ])
   })
 
-  it('BR-15 Stop and Escape carry the control chat as origin', async () => {
+  it('BR-15 Stop, Escape and tree stop carry the control chat as origin', async () => {
     resetBindingWorld()
     seedStreamingAnswer('chat-a')
     mountComposer()
-    const user = userEvent.setup()
-    await user.click(screen.getByTestId('stop-btn'))
-    expect(framesOf('cancel', sent()), 'BR-15: Stop origin is the control chat').toEqual([
+    const box = screen.getByTestId('chat-input')
+    box.focus()
+    fireEvent.keyDown(box, { key: 'Escape', code: 'Escape' })
+    expect(framesOf('cancel', sent()), 'BR-15: Escape origin is the control chat, not a tree stop').toEqual([
       expect.objectContaining({
         type: 'cancel',
         session_id: 'chat-a',
         origin: { kind: 'chat', session_id: 'chat-a' },
       }),
     ])
+    expect(framesOf('cancel', sent())[0], 'BR-15: Escape is not Stop all').not.toHaveProperty('scope')
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('stop-btn'))
+    const cancels = framesOf('cancel', sent())
+    expect(cancels, 'BR-15: the second press inside the window is the tree stop').toHaveLength(2)
+    expect(cancels[1], 'BR-15: tree stop origin is the control chat').toEqual(
+      expect.objectContaining({
+        type: 'cancel',
+        scope: 'tree',
+        session_id: 'chat-a',
+        origin: { kind: 'chat', session_id: 'chat-a' },
+      }),
+    )
   })
 })
