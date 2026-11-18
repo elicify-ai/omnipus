@@ -157,8 +157,22 @@ func NewRateLimiterRegistry() *RateLimiterRegistry {
 	}
 }
 
+// setLimit applies a changed limit to a live window (#1882). It takes the
+// same lock as allowAt, so the limit and the recorded events change together
+// and a concurrent Allow sees either the old or the new limit, never a mix.
+// Events already recorded are kept: raising lets the next call through,
+// lowering refuses calls until enough of them age out of the window.
+func (sw *SlidingWindow) setLimit(limit int) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.maxCount = limit
+}
+
 // GetOrCreate returns the SlidingWindow for the given key, creating it with
-// the supplied limit and window duration if it does not yet exist.
+// the supplied limit and window duration if it does not yet exist. An
+// existing window takes the supplied limit (#1882): callers pass the limit
+// configured now, so a limit changed in Settings applies to the running
+// limiter without a restart and without resetting the counts already used.
 func (r *RateLimiterRegistry) GetOrCreate(
 	key string,
 	limit int,
@@ -170,12 +184,14 @@ func (r *RateLimiterRegistry) GetOrCreate(
 	sw, ok := r.windows[key]
 	r.mu.RUnlock()
 	if ok {
+		sw.setLimit(limit)
 		return sw
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sw, ok = r.windows[key]; ok {
+		sw.setLimit(limit)
 		return sw
 	}
 	sw = NewSlidingWindow(limit, window, scope, scopeID, resource)
