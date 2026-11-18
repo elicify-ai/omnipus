@@ -41,6 +41,10 @@ type userMessageEntry struct {
 	message         string
 	attribution     string
 	providerMessage string
+	// variants maps a variant key to its sentence (#1857): a code whose
+	// instance classes need different sentences carries them here. Sorted by
+	// key at emit time so the artifact is deterministic.
+	variants map[string]string
 }
 
 // userMessageCatalogue is the validated catalogue extracted from the contract.
@@ -60,7 +64,22 @@ const (
 	// providerMessageKey is the optional per-entry key carrying the templated
 	// provider variant of the sentence (provider-messages spec §6, OBS-002).
 	providerMessageKey = "provider_message"
+
+	// variantsKey is the optional per-entry mapping of variant key → sentence
+	// (#1857, notifications spec §13.8).
+	variantsKey = "variants"
 )
+
+// messageSlots is the CLOSED slot vocabulary for `message` and `variants`
+// sentences (#1857, notifications spec §13.8): facts the server fills at the
+// emit site. Mirrored in scripts/_gen-asyncapi-types.mjs (MESSAGE_SLOTS) —
+// keep the two sets identical.
+var messageSlots = map[string]bool{
+	"{cli}":     true,
+	"{model}":   true,
+	"{n}":       true,
+	"{minutes}": true,
+}
 
 // providerMessageSlots is the CLOSED slot vocabulary for provider_message
 // templates (provider-messages spec §6). Both generators hard-fail on any
@@ -155,7 +174,17 @@ func extractUserMessageCatalogue(doc map[string]any, schemaName string) (*userMe
 		if err := validateTemplateSlots(providerMessage); err != nil {
 			return nil, fmt.Errorf("%s.%s.%s: %w", schemaName, userMessagesKey, code, err)
 		}
-		entries = append(entries, userMessageEntry{code: code, message: message, attribution: attribution, providerMessage: providerMessage})
+		if err := validateSlots("message", message, messageSlots); err != nil {
+			return nil, fmt.Errorf("%s.%s.%s: %w", schemaName, userMessagesKey, code, err)
+		}
+		variants, err := extractVariants(rawEntry[variantsKey])
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s.%s.%s: %w", schemaName, userMessagesKey, code, variantsKey, err)
+		}
+		entries = append(entries, userMessageEntry{
+			code: code, message: message, attribution: attribution,
+			providerMessage: providerMessage, variants: variants,
+		})
 		seen[code] = true
 	}
 
@@ -196,6 +225,52 @@ func validateTemplateSlots(t string) error {
 		}
 	}
 	return nil
+}
+
+// validateSlots enforces balanced braces and the given closed vocabulary on
+// one catalogue sentence; field names the sentence in the error.
+func validateSlots(field, t string, vocabulary map[string]bool) error {
+	if strings.Count(t, "{") != strings.Count(t, "}") {
+		return fmt.Errorf("%s has unbalanced braces (%d open, %d close)",
+			field, strings.Count(t, "{"), strings.Count(t, "}"))
+	}
+	for _, slot := range templateSlots(t) {
+		if !vocabulary[slot] {
+			keys := make([]string, 0, len(vocabulary))
+			for k := range vocabulary {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			return fmt.Errorf("%s uses slot %q — not in the closed slot vocabulary (%s)",
+				field, slot, strings.Join(keys, " "))
+		}
+	}
+	return nil
+}
+
+// extractVariants reads an entry's optional variants mapping: every key and
+// sentence must be a non-empty string, and every sentence obeys the message
+// slot vocabulary. Absent → nil.
+func extractVariants(raw any) (map[string]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	rawMap, ok := raw.(map[string]any)
+	if !ok || len(rawMap) == 0 {
+		return nil, fmt.Errorf("must be a non-empty mapping of variant key → sentence, got %T", raw)
+	}
+	out := make(map[string]string, len(rawMap))
+	for key, rawSentence := range rawMap {
+		sentence, _ := rawSentence.(string)
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(sentence) == "" {
+			return nil, fmt.Errorf("variant %q must be a non-empty string", key)
+		}
+		if err := validateSlots("variant "+key, sentence, messageSlots); err != nil {
+			return nil, err
+		}
+		out[key] = sentence
+	}
+	return out, nil
 }
 
 // templateSlots returns every {slot} token in a template, in order.
@@ -337,6 +412,29 @@ func generateUserMessages(cat *userMessageCatalogue) ([]byte, error) {
 		if e.providerMessage != "" {
 			fmt.Fprintf(&buf, "\t%q: %q,\n", e.code, e.providerMessage)
 		}
+	}
+	buf.WriteString("}\n\n")
+
+	buf.WriteString("// LLMErrorMessageVariants maps the codes that carry catalogue variants to\n")
+	buf.WriteString("// their variant key → sentence map (#1857, notifications spec §13.8). A code\n")
+	buf.WriteString("// absent from this map has only its catalogue message. Sentences may carry\n")
+	buf.WriteString("// the closed message slots ({cli} {model} {n} {minutes}); the TypeScript\n")
+	buf.WriteString("// half is llmErrorMessageVariants in src/lib/api/generated/llm-error-messages.ts.\n")
+	buf.WriteString("var LLMErrorMessageVariants = map[string]map[string]string{\n")
+	for _, e := range cat.entries {
+		if len(e.variants) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(e.variants))
+		for k := range e.variants {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		fmt.Fprintf(&buf, "\t%q: {\n", e.code)
+		for _, k := range keys {
+			fmt.Fprintf(&buf, "\t\t%q: %q,\n", k, e.variants[k])
+		}
+		buf.WriteString("\t},\n")
 	}
 	buf.WriteString("}\n")
 
