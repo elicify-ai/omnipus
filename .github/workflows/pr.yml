@@ -3126,10 +3126,17 @@ jobs:
       - name: Install the system libraries LibreOffice links against
         # From the ELF NEEDED entries of soffice.bin and libmergedlo.so that the
         # LibreOffice archive does not ship itself, plus a known font set.
+        # fonts-lato and fonts-wqy-zenhei are system fonts LibreOffice does not
+        # bundle (a named Latin font and a CJK font): the Q1 B row
+        # TestPreviewOffice_Q1B_ForcedConfinedBootMatchesOpen refuses to run
+        # without them, because a font lost to the confined boot would
+        # otherwise be invisible. fontconfig provides the fc-list it uses to
+        # check that both fonts are present (libfontconfig1 is the library only).
         run: |
           sudo apt-get update
           sudo apt-get install -y libx11-6 libxext6 libxinerama1 libcairo2 libcups2t64 libdbus-1-3 \
-            libfontconfig1 libfreetype6 libglib2.0-0t64 libnss3 libnspr4 fonts-liberation
+            libfontconfig1 libfreetype6 libglib2.0-0t64 libnss3 libnspr4 fonts-liberation \
+            fontconfig fonts-lato fonts-wqy-zenhei
 
       - name: Restore downloaded archives
         # Saves re-downloading only. provision.sh and build.sh check the

@@ -171,7 +171,11 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 		allowed = append(allowed, clean)
 	}
 
-	policy := DefaultPolicyForModel(
+	// The shared base, not DefaultPolicyForModel: the per-turn policy does not
+	// carry the boot-only confinedBootExtraReads (founder Q1 B). Those reads
+	// are the Office converter's, and the turn/tool seam must not gain them
+	// (T-118 / FR-061).
+	policy := basePolicyForModel(
 		in.Model, in.HomePath, allowed, in.AllowedExecPaths, in.WarnFn, in.BindPorts)
 
 	// A5/A6 allowance rules (runtime generations, document prefix, document

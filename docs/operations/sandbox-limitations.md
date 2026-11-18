@@ -80,9 +80,13 @@ LibreOffice also reads the list of user accounts (account names, home folders
 and login shells; no passwords, and every account on the computer can already
 read it), so that its connection point belongs to the account Omnipus runs as
 instead of being open to every account on the computer. With
-`sandbox.filesystem_model` set to `confined`, Omnipus's own sandbox can block
-that read; the connection point is then open to every account on the computer
-while the preview runs.
+`sandbox.filesystem_model` set to `confined`, Omnipus's own sandbox on Linux
+also allows three reads, and nothing more: the list of user accounts
+(`/etc/passwd`) and the system font folders (`/usr/share/fonts` and, when it
+exists, `/usr/local/share/fonts`). They are there so previews keep the
+installed fonts and LibreOffice's connection point stays private to the
+account Omnipus runs as. They are read-only, and the separate sandbox Omnipus
+builds for each agent shell command does not include them.
 
 A stricter setup, with a separate private folder for each preview and a block
 on LibreOffice opening network connections itself, is not switched on yet; it
