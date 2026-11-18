@@ -209,13 +209,14 @@ func runExternalCLISubTurn(
 
 	ed.agent = ed.childTS.agent
 	if ed.agent == nil || ed.agent.Subagents == nil || ed.agent.Subagents.Executor == nil {
-		// #1857 B16-config: typed; the text is unchanged.
-		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, "", "",
+		// #1857 B16-config: typed; the text is unchanged. No program is
+		// known yet, so the no_program sentence (W19) is shown.
+		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, cliVariantNoProgram, "",
 			fmt.Errorf("external-cli dispatch: missing executor config"))
 	}
 	cli := ed.agent.Subagents.Executor.CLI
 	if cli == "" {
-		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, "", "",
+		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, cliVariantNoProgram, "",
 			fmt.Errorf("external-cli dispatch: executor.cli is empty (set claude-code, codex, or opencode)"))
 	}
 
@@ -1151,6 +1152,12 @@ type SanitizedRunnerError struct {
 	// ONLY this. NEVER the raw stderr.
 	AssistantText string
 
+	// NeutralText is the same catalogue sentence in the neutral voice
+	// (#1857 design note D-B B1) for surfaces outside a chat: the parent's
+	// tool result, the completion message, the task centre and the Settings
+	// test. Rendered together with AssistantText from the same facts.
+	NeutralText string
+
 	// LogText is the operator-facing copy (raw + classifier code). Lands
 	// in gateway.log only, never on the wire and never in the transcript.
 	LogText string
@@ -1194,8 +1201,16 @@ func SanitizeRunnerError(rawMessage string) SanitizedRunnerError {
 // error type the driver read (runner.ErrorEvent.Type; "" when none) — the
 // entry point for the Settings test path (§13.8.5 B18: the same CLI-only
 // classifier as the run path).
+//
+// #1857: the {n} fact (the CLI's own turn cap) is known only here, from the
+// classified message, so it is filled in both voices now; the caller fills
+// {cli}/{model} from its own facts (RenderCLIMessage).
 func SanitizeRunnerErrorWithType(rawMessage, structuredType string) SanitizedRunnerError {
-	return sanitizeRunnerErrorTyped(rawMessage, structuredType)
+	s := sanitizeRunnerErrorTyped(rawMessage, structuredType)
+	count := messageSlotFacts{n: s.failure.maxTurns}
+	s.AssistantText = fillMessageSlots(s.AssistantText, count)
+	s.NeutralText = fillMessageSlots(s.NeutralText, count)
+	return s
 }
 
 // sanitizeRunnerErrorTyped is SanitizeRunnerError with the structured error
@@ -1206,11 +1221,14 @@ func sanitizeRunnerErrorTyped(rawMessage, structuredType string) SanitizedRunner
 	}
 	failure := classifyCLIFailure(rawMessage, structuredType)
 	assistant := catalogueSentence(failure.code, failure.variant)
+	neutral := neutralCatalogueSentence(failure.code, failure.variant)
 	if assistant == "" {
 		assistant = "The external CLI failed. See gateway.log for details."
+		neutral = assistant
 	}
 	return SanitizedRunnerError{
 		AssistantText: assistant,
+		NeutralText:   neutral,
 		LogText:       rawMessage,
 		Code:          failure.code,
 		Retryable:     isRetryable(failure.code),

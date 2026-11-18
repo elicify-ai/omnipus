@@ -132,9 +132,9 @@ var LLMErrorUserMessages = map[string]string{
 	"external_cli_upstream_refused":  "The model {cli} uses is limiting requests right now. Try the task again in a moment.",
 	"provider_error":                 "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 	"agent_request_limit":            "I've reached my limit of model requests for this hour. I can continue in {minutes} minutes, or you can raise the limit in Settings.",
-	"tool_assembly_duplicate":        "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
-	"transcript_save_failed":         "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
-	"goal_state_unavailable":         "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
+	"tool_assembly_duplicate":        "I couldn't get my tools ready because two of them have the same name, so this turn didn't run. We don't know why this happened; if it keeps happening, please report it to the Omnipus.ai team.",
+	"transcript_save_failed":         "This turn finished, but I couldn't save its final state. Recent messages may be missing from your history; check the answer above before repeating anything.",
+	"goal_state_unavailable":         "I couldn't read the goal for this conversation, so I didn't continue working on it. Try again in a moment.",
 	"external_cli_not_found":         "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
 	"external_cli_invalid_config":    "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
 	"unknown":                        "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
@@ -216,5 +216,46 @@ var LLMErrorMessageVariants = map[string]map[string]string{
 	},
 	"external_cli_upstream_refused": {
 		"out_of_credit": "{cli}'s model provider account is out of credit. Top up that account to run tasks with {cli}.",
+	},
+	"tool_assembly_duplicate": {
+		"mcp": "I couldn't get my tools ready: two tools have the same name, and one comes from a connected MCP server. Check this agent's tools and MCP servers.",
+	},
+	"external_cli_invalid_config": {
+		"no_program": "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings.",
+	},
+}
+
+// LLMErrorNeutralMessages maps the codes whose chat sentence has a neutral-voice
+// twin to that twin (#1857, design note D-B B1, notifications spec §13.8.4
+// rule 4): the form used outside a chat (task centre, parent tool result,
+// completion message, Settings test). A code absent from this map has a chat
+// sentence with no first person, which serves both voices. Go-only: no SPA
+// surface renders the neutral form.
+var LLMErrorNeutralMessages = map[string]string{
+	"external_cli_invalid_args":      "{cli} rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting.",
+	"external_cli_model_unavailable": "The run in {cli} could not use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings.",
+	"external_cli_failed":            "The run in {cli} stopped with an error that could not be identified. Retry the task; if it keeps happening, check that {cli} works on its own.",
+	"external_cli_turn_limit":        "The run in {cli} reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings.",
+	"agent_request_limit":            "This agent reached its limit of model requests for this hour. It can continue in {minutes} minutes, or the limit can be raised in Settings.",
+	"tool_assembly_duplicate":        "The agent's tools could not be made ready because two of them have the same name, so the turn didn't run. Why this happened is not known; if it keeps happening, please report it to the Omnipus.ai team.",
+	"transcript_save_failed":         "The run finished, but its final state could not be saved. Recent messages may be missing from the history; check the result before repeating any part of the task.",
+	"goal_state_unavailable":         "The goal for this conversation could not be read, so the work did not continue. Try again in a moment.",
+	"external_cli_not_found":         "{cli} could not be launched. Check the CLI worker's program path in Settings.",
+	"external_cli_invalid_config":    "{cli} could not be launched. Check the CLI worker's program path in Settings.",
+}
+
+// LLMErrorNeutralVariants maps the codes whose variants carry neutral-voice
+// twins to their variant key → neutral sentence map, with exactly the keys of
+// LLMErrorMessageVariants for that code (#1857, design note D-B B1).
+var LLMErrorNeutralVariants = map[string]map[string]string{
+	"external_cli_failed": {
+		"start":       "{cli} could not be launched. Check the CLI worker's program path in Settings.",
+		"stream_read": "The run in {cli} ended because reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own.",
+	},
+	"tool_assembly_duplicate": {
+		"mcp": "The agent's tools could not be made ready: two tools have the same name, and one comes from a connected MCP server. Check the agent's tools and MCP servers.",
+	},
+	"external_cli_invalid_config": {
+		"no_program": "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings.",
 	},
 }
