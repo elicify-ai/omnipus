@@ -250,10 +250,10 @@ func validateSlots(field, t string, vocabulary map[string]bool) error {
 
 // extractVariants reads an entry's optional variants mapping: every key and
 // sentence must be a non-empty string, and every sentence obeys the message
-// slot vocabulary. Absent → nil.
+// slot vocabulary. Absent → an empty map (the code has no variants).
 func extractVariants(raw any) (map[string]string, error) {
 	if raw == nil {
-		return nil, nil
+		return map[string]string{}, nil
 	}
 	rawMap, ok := raw.(map[string]any)
 	if !ok || len(rawMap) == 0 {
