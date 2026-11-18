@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "component": "CopyButton",
+  "exports": [
+    "CopyButton",
+    "COPY_FEEDBACK_MS"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/copy-button.tsx",
+  "documentation": "docs/internal/design/components/copy-button.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "sm",
+    "default"
+  ],
+  "states": [
+    "idle",
+    "copied",
+    "failed",
+    "disabled",
+    "focus-visible"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/copy-button.stories.tsx",
+      "exports": [
+        "Default"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "copy-button-unit",
+      "kind": "unit",
+      "file": "src/components/ui/copy-button.test.tsx",
+      "test": "CopyButton — idle identity (§2.8) renders a button whose accessible name is the default label \"Copy\"",
+      "applicable": true
+    },
+    {
+      "id": "copy-button-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/copy-button.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "copy-button-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CopyButton [check:copy-button-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "copy-button-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CopyButton [check:copy-button-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "copy-button-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CopyButton [check:copy-button-browser] browser",
+      "story": "Default",
+      "applicable": true,
+      "requiredTargets": [
+        {
+          "selector": "[data-testid=\"copy-button-story\"] button",
+          "attribute": "aria-label",
+          "value": "Copy webhook URL"
+        }
+      ]
+    },
+    {
+      "id": "copy-button-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CopyButton [check:copy-button-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "copy-button-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "CopyButton adds no motion; the icon swap is instantaneous."
+    },
+    {
+      "id": "copy-button-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CopyButton [check:copy-button-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "copy-button-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CopyButton [check:copy-button-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "copy-button-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CopyButton [check:copy-button-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "copy-button-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CopyButton [check:copy-button-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

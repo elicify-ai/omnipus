@@ -70,7 +70,6 @@ func (c *failOnceChannel) IsRunning() bool {
 }
 func (c *failOnceChannel) IsAllowed(string) bool               { return true }
 func (c *failOnceChannel) IsAllowedSender(bus.SenderInfo) bool { return true }
-func (c *failOnceChannel) ReasoningChannelID() string          { return "" }
 
 func (c *failOnceChannel) delivered() (texts, media []string) {
 	c.mu.Lock()

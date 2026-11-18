@@ -4,6 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { onboardViaAPI } from './fixtures/onboard-via-api.js';
 import { requireLiveModelKeys } from './fixtures/e2e-model-keys.js';
+import { reloadBearerFileFor, writeReloadBearer } from './fixtures/reload-bearer.js';
 
 const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
   ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
@@ -298,9 +299,8 @@ async function globalSetup(): Promise<void> {
       throw new Error(`POST /api/v1/auth/login failed: ${res.status()} — ${body}`);
     }
     // Validate the response shape (proof the login itself succeeded and
-    // returned the expected LoginResponse contract) — the bearer token
-    // itself is deliberately not persisted anywhere; the SPA never reads one
-    // anymore (ADR-044), so there is nothing to write it into.
+    // returned the expected LoginResponse contract). The bearer is persisted
+    // only in the reload-bearer file below; it is never exposed to the SPA.
     const json = (await res.json()) as { token: string };
     if (!json.token) throw new Error('Login response missing token field');
 
@@ -328,6 +328,32 @@ async function globalSetup(): Promise<void> {
         '(see ADR-044 / preview-on-main-listener-spec.md S8/S9).',
       );
     }
+
+    // Persist the login-minted admin BEARER next to the storageState, in a file
+    // named after the FULL auth-file path (fixtures/reload-bearer.ts::
+    // reloadBearerFileFor) — on the Fly CI worker every shard's auth file sits
+    // in one folder, so a fixed name let concurrent shards read each other's
+    // gateway token. This is
+    // the ONE bearer in the suite that never rotates: HandleLogin APPENDS the
+    // token to the admin account's bearer set (SEC-1 / UAT #399 — eviction
+    // only past config.MaxUserTokens), while the omnipus-session cookie rides
+    // the SINGLE-SLOT session_token_hash that every further login overwrites.
+    // Specs that must authenticate to POST /reload — the health server accepts
+    // ONLY a Gateway.Users/CLIToken bearer (issues #276/#640; no cookie, no
+    // bypass) — read this file instead of minting their own login, which would
+    // rotate the shared session cookie out from under every later spec in the
+    // shard (scripts/check-e2e-login-crosstalk.sh; the 2026-09-27 ui-heavy
+    // incident was exactly that). The token deliberately does NOT go into the
+    // storageState's localStorage — ADR-044 removed the JS-readable-token
+    // surface and the SPA must never see it; a plain file the browser never
+    // reads keeps that guarantee while giving server-side callers a stable
+    // credential.
+    // writeReloadBearer creates the folder: on a fresh CI checkout
+    // fixtures/.auth/ does not exist yet (it is gitignored and only created in
+    // Step 3 below). Readers send it with Node fetch, never a traced
+    // Playwright request (fixtures/reload-bearer.ts::postReloadWithBearer).
+    writeReloadBearer(AUTH_FILE, json.token);
+    console.log(`[E2E global-setup] Stored the admin reload bearer at ${reloadBearerFileFor(AUTH_FILE)}`);
   } finally {
     await ctx.dispose();
   }

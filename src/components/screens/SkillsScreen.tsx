@@ -18,7 +18,8 @@ import {
   Clock,
   Copy,
 } from '@phosphor-icons/react'
-import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
+import { SkeletonList, ErrorState } from '@/components/shared/ListStates'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -327,7 +328,12 @@ export function SkillsScreen() {
           ) : mcpLoading ? (
             <SkeletonList />
           ) : mcpServers.length === 0 ? (
-            <EmptyState icon={<HardDrives size={40} weight="thin" />} message="No MCP servers connected." />
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><HardDrives className="size-[var(--icon-size-prominent)]" /></EmptyMedia>
+                <EmptyDescription>No MCP servers connected.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
             <div className="space-y-[var(--space-2)]">
               {mcpServers.map((server) => {
@@ -457,7 +463,12 @@ export function SkillsScreen() {
           ) : toolsLoading ? (
             <SkeletonList />
           ) : tools.length === 0 ? (
-            <EmptyState icon={<Wrench size={40} weight="thin" />} message="No tools available." />
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><Wrench className="size-[var(--icon-size-prominent)]" /></EmptyMedia>
+                <EmptyDescription>No tools available.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
             <ToolsOverview tools={tools} />
           )}
@@ -597,10 +608,12 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
       </p>
 
       {categories.length === 0 ? (
-        <EmptyState
-          icon={<Wrench size={40} weight="thin" />}
-          message="No tools available."
-        />
+        <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><Wrench className="size-[var(--icon-size-prominent)]" /></EmptyMedia>
+                <EmptyDescription>No tools available.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
       ) : (
         <div className="space-y-[var(--space-2)]">
           {categories.map((cat) => {

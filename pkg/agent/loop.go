@@ -59,6 +59,8 @@ type AgentLoop struct {
 	cfg      *config.Config
 	registry *AgentRegistry
 	state    *state.Manager
+	// effortRejected remembers rejected effort pairs until restart (FR-057).
+	effortRejected effortRejections
 
 	// configGen is a monotonic counter bumped every time al.cfg is replaced
 	// with a new pointer, under al.mu.Lock() — currently by SwapConfig and by
@@ -741,6 +743,10 @@ func NewAgentLoop(
 	provider providers.LLMProvider,
 ) (*AgentLoop, error) {
 	nal := &newAgentLoop{cfg: cfg, msgBus: msgBus, provider: provider}
+	// Parse the provider catalog once at construction: every request's
+	// effort plan reads it, and a first parse inside the recap's one overall
+	// time limit would spend that budget before the first call (S-97).
+	_ = providers.ProviderCatalog()
 
 	// CONV saved-chat cutover boot step (architect Q10/Q11): convert any
 	// pre-cutover saved chat in the shared archive BEFORE registry/per-agent
@@ -1537,6 +1543,10 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 //     "agent:<owner>:session:<id>" form, collision-free across isolated runs.
 //   - It sets AutoDenyAsk so any `ask`-policy tool call is denied without
 //     blocking for approval (FR-009) — no operator is present.
+//   - It publishes the persisted prompt and marks the turn WebchatLiveStream
+//     so viewers bound to the session see the prompt and the streamed answer
+//     live (#1442, scheduled_live_view.go); Channel/ChatID stay as passed,
+//     so channel-keyed behavior is unchanged.
 //
 // The caller (the gateway's scheduled-job runner) resolves the owner + picks
 // the session per session_mode and supplies a concrete sessionID; it imposes
@@ -1605,6 +1615,8 @@ func (al *AgentLoop) ProcessScheduled(
 			map[string]any{"session_id": sessionID, "owner": ownerAgentID, "error": err.Error()})
 		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
+	// #1442: the prompt is persisted; publish it live to the session's viewers.
+	al.publishScheduledPrompt(ownerAgentID, sessionKey, sessionID, userEntry)
 
 	// FIX 1 (re-review): WorkspaceID was never threaded here, so any tool
 	// media a scheduled/heartbeat-fired run produces silently degraded to the
@@ -1652,6 +1664,7 @@ func (al *AgentLoop) ProcessScheduled(
 		TranscriptStore:     transcriptStore,
 		WorkspaceID:         workspaceID,
 		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
+		WebchatLiveStream:   true, // #1442: answer streams live to the session's viewers
 	})
 	if err == nil && ctx.Err() == context.DeadlineExceeded {
 		// A deadline-forced hard abort (pkg/gateway/schedules.go's
@@ -1824,63 +1837,6 @@ func (al *AgentLoop) runAgentLoopBody(
 	return result.finalContent, nil
 }
 
-func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {
-	cm := al.getChannelManager()
-	if cm == nil {
-		return ""
-	}
-	if ch, ok := cm.GetChannel(channelName); ok {
-		return ch.ReasoningChannelID()
-	}
-	return ""
-}
-
-func (al *AgentLoop) handleReasoning(
-	ctx context.Context,
-	reasoningContent, channelName, channelID string,
-) {
-	if reasoningContent == "" || channelName == "" || channelID == "" {
-		return
-	}
-
-	// Check context cancellation before attempting to publish, since
-	// PublishOutbound's select may race between send and ctx.Done().
-	if reasoningPublishCanceledOnEntry(ctx, channelName) {
-		return
-	}
-
-	// Use a short timeout so the goroutine does not block indefinitely when
-	// the outbound bus is full.  Reasoning output is best-effort; dropping it
-	// is acceptable to avoid goroutine accumulation.
-	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer pubCancel()
-
-	if err := al.bus.PublishOutbound(pubCtx, bus.OutboundMessage{
-		Channel: channelName,
-		ChatID:  channelID,
-		Content: reasoningContent,
-	}); err != nil {
-		// Treat context.DeadlineExceeded / context.Canceled as expected
-		// (bus full under load, or parent canceled).  Check the error
-		// itself rather than ctx.Err(), because pubCtx may time out
-		// (5 s) while the parent ctx is still active.
-		// Also treat ErrBusClosed as expected — it occurs during normal
-		// shutdown when the bus is closed before all goroutines finish.
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
-			errors.Is(err, bus.ErrBusClosed) {
-			logger.DebugCF("agent", "Reasoning publish skipped (timeout/cancel)", map[string]any{
-				"channel": channelName,
-				"error":   err.Error(),
-			})
-		} else {
-			logger.WarnCF("agent", "Failed to publish reasoning (best-effort)", map[string]any{
-				"channel": channelName,
-				"error":   err.Error(),
-			})
-		}
-	}
-}
-
 // isMessagingChannel returns true for external human-messaging channel types.
 // Tool feedback is emitted only on these channels; webchat, system/cli/subagent,
 // cron schedules, and unknown/empty channels remain silent because either the UI
@@ -2005,7 +1961,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// the assistant answer entry, on the streaming path (finalizeStreamer
 	// writes the answer) and the non-streaming path alike.
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.writePendingFallbackNotes()
-	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.Finish(rz.rc.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested()) }()
+	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.finishAfterExitNotice() }() // #1775: notice after the answer, before the marker
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx)
 	// ADR-087 D6.8, the ONE choke point (see preserveTruncatedAccumulator's
 	// doc comment). REGISTRATION ORDER IS LOAD-BEARING, the same way the
@@ -2045,6 +2001,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			},
 		)
 	}()
+	// #1651: retire the turn BEFORE turn.end on every exit (registered after
+	// the emit, so LIFO runs it first), as finalizeTurn does inline on the
+	// completed path. Its own defer: a panic here cannot skip the emit.
+	defer rz.rc.rx.rr.rq.ri.rf.rt.al.clearActiveTurn(rz.rc.rx.rr.rq.ri.rf.rt.ts)
 
 	// A turn that ended in error must never close by claiming success.
 	//
@@ -2212,7 +2172,7 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
+	al.emitTurnExitFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm) // #1775: transcript write deferred
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,

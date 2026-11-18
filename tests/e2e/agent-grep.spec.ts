@@ -34,7 +34,7 @@ import { test, expect, type BrowserContext, type Page, type TestInfo } from '@pl
 import * as fs from 'fs';
 import * as path from 'path';
 import http from 'node:http';
-import { waitForConnected } from './fixtures/selectors';
+import { assistantMessages, waitForConnected } from './fixtures/selectors';
 import { freshChat } from './fixtures/session-setup';
 import { GatewayProcess } from './fixtures/gateway-process';
 import { E2E_FALLBACK } from './fixtures/e2e-model';
@@ -96,12 +96,9 @@ async function apiHeaders(page: Page): Promise<Record<string, string>> {
   };
 }
 
-// ── DOM helpers (same selectors as memory-remember-recall.spec.ts) ────────────
+// ── DOM helpers (assistantMessages comes from fixtures/selectors) ─────────────
 
 const chatInput = (page: Page) => page.locator('textarea[aria-label="Message input"]');
-
-const assistantMessages = (page: Page) =>
-  page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])');
 
 /**
  * Wait for any follow-up LLM call the agent starts after a tool call — the

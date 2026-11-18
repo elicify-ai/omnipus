@@ -8,7 +8,7 @@ Every workspace has a **Tasks** control in its top bar, alongside Calendar, Libr
 
 - **Board** — a kanban of eligible top-level workspace tasks, grouped by status in six columns. Scheduled tasks are hidden, and subtasks are not separate Board cards.
 - **List** — unscheduled user tasks as a table, with per-column sorting and filtering. Unlike the Board, it can include subtasks as rows.
-- **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
+- **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. Scheduled tasks are hidden, the same as on Board and List. That view belongs to planning; see [plans](plans.md).
 
 Above the views, the compact **Plans** header and **New Plan** stay visible. The band is open by default when plans exist, and collapsed when there are none. Click **Plans** to fold or unfold it. The tile area has compact space above and below it. **Unhide done plans** is an unchecked checkbox at the bottom-left of that area, below **All tasks**; it appears when completed plans exist. Checking it reveals completed tiles. Click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
 
@@ -114,10 +114,23 @@ Only the agent that created a task may change what it asks for — its instructi
 | `{"type": "once", "config": {"at_ms": …}}` | One run at that time (milliseconds since 1970, UTC) |
 | `{"type": "recurring", "config": {"rrule": …, "dtstart_ms": …, "tz": …}}` | A repeating series, managed like any series on the [Calendar](calendar.md) |
 
+- `dtstart_ms` is the first occurrence in **milliseconds** since 1970 (13 digits, for example `1794816000000`). A value before 2000-01-01 is almost certainly seconds and is refused with a message that names the field and the unit, so the task cannot silently run at the wrong time.
 - A task created with a schedule begins in **Inbox** and waits there for its occurrence.
 - Adding a future schedule to a task in **Next** moves it to **Inbox** in the same save, so it cannot start early. Blocked, running and finished tasks keep their status.
 - An agent cannot schedule a task in another workspace: creating one with a schedule there, or adding a schedule to one, is refused and nothing is saved. Only the assignee there or a person can schedule it.
 - To stop a schedule, send `{"type": "manual", "config": {}}`. The schedule is removed and the task keeps its current status.
+
+**What you see in chat.** When an agent creates, changes, starts or deletes a task, the chat shows a short card instead of the raw tool result, both as it happens and when you reopen the chat later. The card's heading says what the agent did: "I scheduled the task" (a new task that has a schedule), "I created the task" (a new task without one), "I updated the task", "I started the task" or "I deleted the task". If the agent starts a task that is already running, the heading reads "The task is already running", because nothing new was started. The card shows the task's title when the agent's call includes one and, when the call carries a schedule, that schedule in plain words rather than as a raw rule. A one-time run is shown in your own local time, the same way the task detail panel shows it. A repeating schedule is shown in the schedule's own time zone: its clock time, the days it falls on and the date it ends. For example, a weekly report scheduled for Monday morning in Berlin reads:
+
+```
+I scheduled the task
+Weekly report
+Repeats every week on Monday at 09:00 (Berlin time).
+```
+
+A schedule with an end date names the run time first and the end date last, with no clock time on the end date: "Repeats every day at 09:00 (Los Angeles time), ends November 10, 2026."
+
+Every card offers **Open tasks**. When the agent's call names a workspace, **Open tasks** opens that workspace's Tasks panel, and the card also offers **Open calendar**. When the call names no workspace, **Open tasks** opens the Tasks panel of your default workspace, on its Board, and there is no **Open calendar**. A start or a delete never names a workspace, and a create or an update may leave it out, which means the agent's own workspace. If the agent was working in another workspace, the task is not on that Board: open that workspace and click **Tasks**. If the task was saved but its schedule could not be activated, the card says so: "I saved the task, but its schedule isn't active. The saved schedule is still the one to use. Open Calendar and save it again." A call that fails, or that the task tool refuses, shows a short alert instead of a card, followed by **Open tasks**. When a reason came back, the alert names the action and then gives that reason as it was received, for example `I couldn't update the task. task "task_99" not found`. When none did, it reads "I couldn't create the task, and no reason was given. Try again." The action word is "create", "update", "start" or "delete". This is the same live and when you reopen the chat later.
 
 ## Task statuses
 
@@ -177,7 +190,7 @@ A named connection that cannot be set up (`model_route_unavailable`), and a conf
 - **A task in a plan is driven by its plan.** It has no Run or Stop control of its own; start, stop, and restart happen at the plan level. See [plans](plans.md).
 - **Dependency circles are rejected.** A chain may not loop back on itself, and dependencies stay inside one plan.
 - **Runs stop after the attempt limit** — three by default. When attempts are spent, the task lands in Failed.
-- **Board and List hide scheduled tasks.** Use the workspace [Calendar](calendar.md) to manage scheduled and repeating work.
+- **Board, List and Graph hide scheduled tasks.** Use the workspace [Calendar](calendar.md) to manage scheduled and repeating work.
 - **An assignee warning means the agent cannot finish this task as configured.** The warning names the fix, usually a tool permission; starting anyway fails at once.
 - **Deleting a task cannot be undone.** The confirmation is your last chance.
 
@@ -185,6 +198,6 @@ A named connection that cannot be set up (`model_route_unavailable`), and a conf
 
 - [workspaces](workspaces.md) — what a workspace is, and how its team decides who can be assigned.
 - [plans](plans.md) — the Graph view, plan membership, and how a plan starts its tasks.
-- [calendar](calendar.md) — scheduled and repeating tasks, which the Board and List hide.
+- [calendar](calendar.md) — scheduled and repeating tasks, which the Board, List and Graph hide.
 - [goals](goals.md) — the goal loop behind every run, and the judge that scores it.
 - [agents](agents.md) — the agents you can assign to a task, and what each is for.

@@ -31,6 +31,12 @@ export function ToastContainer() {
           // scripts/design-system-locks/controls.mjs, FIX-ROLEBUTTON notes,
           // which name this exact call site).
           role={toast.variant === 'error' ? 'alert' : 'status'}
+          // #1639: a toast sits outside any open sheet or dialog, so a
+          // pointerdown on it (e.g. Dismiss) reached Radix's document-level
+          // outside-press listener and closed the open editor, discarding its
+          // unsaved draft. Pressing a toast is never a request to dismiss the
+          // surface underneath it.
+          onPointerDown={(event) => event.stopPropagation()}
           className={cn(
             'flex items-start gap-[var(--space-2-5)] rounded-lg border px-[var(--space-3)] py-[var(--space-2-5)] shadow-lg pointer-events-auto',
             'animate-in slide-in-from-bottom-2 fade-in',

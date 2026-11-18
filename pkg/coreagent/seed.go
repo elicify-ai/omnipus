@@ -112,6 +112,11 @@ var allStaticToolNames = []string{
 	// their denyAllThenOverride stamps (they can never be session owners; an
 	// advertised always-erroring tool violates their minimal seeds).
 	"AskUserQuestion",
+	// show_to_user (chat-links spec US-6, FR-019): opens the Library in the
+	// user's watching web chat. Main allow / Worker deny through the founder's
+	// 2026-10-22 default tool table (NewCustomAgentToolsCfg plus
+	// workerTierDeniedTools); Omnipus keeps its fixed list (D-F2).
+	"show_to_user",
 	// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004): the validated
 	// write-path over the goal record (definition/criteria/DoD), seeded
 	// ALLOW for every human-facing agent alongside AskUserQuestion — it can
@@ -346,6 +351,9 @@ var allStaticToolNames = []string{
 	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
 	"connect_channel", "connect_mailbox", "set_agent_permissions",
 	"read_conversation", "list_mailboxes",
+	// channels-spec-r8 FR-032: the dedicated outbound-list writer, implemented
+	// in pkg/sysagent/tools and always asking (FR-036).
+	"set_channel_outbound",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -574,21 +582,21 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 }
 
 // FreshSelfDelegationMaxDepth is the ADR-090 FR-006 pin for a freshly seeded
-// SELF workspace edge (any agent, from == to): 3, or the lower configured
+// SELF workspace edge (any agent, from == to): 10, or the lower configured
 // global ceiling. Applied per-edge by SeededEdgeDepth — never as a role-wide
 // DelegationPolicy.Depth, which would also clamp an agent's other edges.
-const FreshSelfDelegationMaxDepth = 3
+const FreshSelfDelegationMaxDepth = 10
 
 // SeededEdgeDepth returns the depth pointer a freshly seeded workspace edge
 // should carry. Every SELF-edge (from == to) gets an explicit
 // min(FreshSelfDelegationMaxDepth, ceiling) so a raised global cap cannot
-// deepen a fresh self-chain beyond 3, and a lowered cap cannot cause
+// deepen a fresh self-chain beyond 10, and a lowered cap cannot cause
 // Validate to drop the edge — with no ID predicate: session-core C-DELEGATE
 // (E-DELEGATE-CONFIG) applies the fresh self default to every freshly seeded
 // self-row, not only Jim/Worker. Every non-self pair copies policyDepth (nil
 // stays inherit). ceiling is the already-resolved effective global cap
 // (delegationDepthCeiling / workspaceDelegationDepthCeiling); non-positive
-// is treated as unset and the pin stays 3.
+// is treated as unset and the pin stays 10.
 func SeededEdgeDepth(from, to string, policyDepth *int, ceiling int) *int {
 	return SeededEdgeDepthWithSelf(from, to, policyDepth, nil, ceiling)
 }
@@ -988,6 +996,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"edit_file":     allow,
 				"append_file":   allow,
 				"send_file":     allow,
+				"show_to_user":  allow,
 				"request_mount": ask,
 				"serve_web":     allow,
 				// Drafting and received attachments do not send mail.
@@ -1008,6 +1017,10 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// ceiling raise does not remove the agent's Ask posture.
 				"environment_setup": ask,
 				"bash":              config.ToolPolicyDeny,
+				// Founder Q4 (2026-11-03): every chat-capable agent may change
+				// a connection's posting list, always with a fresh approval
+				// (channels-spec-r8 FR-036); workers are denied below.
+				"set_channel_outbound": ask,
 			}),
 		},
 	}
@@ -1016,11 +1029,12 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 // workerTierDeniedTools is the Main-only set from the 2026-10-22 default
 // tool table. Workers may list secrets but ask their main agent to request
 // one; they do not author goals, plans, new tasks or retrospectives, and
-// they do not change skills (skills spec r15 §10).
+// they do not change skills (skills spec r15 §10). Founder Q4 (2026-11-03)
+// opens set_channel_outbound to chat-capable (Main) agents only.
 var workerTierDeniedTools = []string{
 	"answer_request", "read_conversation", "set_goal", "run_retrospective",
 	"create_plan", "execute_plan", "update_plan", "stop_plan", "plan_correct", "create_task",
-	"request_secret", "edit_skill",
+	"request_secret", "edit_skill", "show_to_user", "set_channel_outbound",
 }
 
 // RestrictForWorkerTier turns Main creation defaults into Worker defaults

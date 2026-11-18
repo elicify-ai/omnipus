@@ -17,6 +17,12 @@ import (
 // reports whether the requested session's own stop timeline already sent
 // the requester a cancel_stage frame.
 func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool) (report steer.CancelReport, cascaded bool, outcome agent.CancelOutcome, staged bool, err error) {
+	return h.requestScopedStopShown(wc, sessionID, stopAll, nil)
+}
+
+// requestScopedStopShown is requestScopedStop carrying the web client's
+// screen checkpoint (#1534) for the requested session's own turn.
+func (h *WSHandler) requestScopedStopShown(wc *wsConn, sessionID string, stopAll bool, shown *agent.StopShown) (report steer.CancelReport, cascaded bool, outcome agent.CancelOutcome, staged bool, err error) {
 	// Timers can fire while a large durable cascade is still being collected.
 	// Publish an immutable report atomically; never race a timer with appends.
 	var stageReport atomic.Pointer[steer.CancelReport]
@@ -32,6 +38,7 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 		Channel:   "web",
 		Tree:      stopAll,
 		Canceller: stopper,
+		Shown:     shown,
 		// FR-024: tell the session's tabs which queued messages Stop discarded.
 		OnInputDiscarded: h.announceDiscardedInput,
 		HooksFor: func(id string) agent.CancelHooks {

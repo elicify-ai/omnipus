@@ -26,6 +26,8 @@ import { classifySetGoalCall } from './tools/SetGoalToolUI'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
 import { ProviderWaitingIndicator } from './ProviderWaitingIndicator'
+import { ProviderHelperRows } from './ProviderHelperRows'
+import { useNoticeClock } from './useNoticeClock'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
@@ -34,7 +36,7 @@ import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
 import { OmnipusComposer } from './composer/OmnipusComposer'
 import { MarkdownText } from './markdown-text'
 import { CATCH_UP_SMOOTH, ThreadRevealContext } from './useOpenReveal'
-import { ModelFooter } from './ModelFooter'
+import { ModelFooter, TurnEffortNote } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { isClearCommandText } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
@@ -43,7 +45,8 @@ import { assistantRowCorrelationAttributes } from './assistantRowAttributes'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { stampToolCallOffset } from '@/store/chat/session'
-import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
+import { selectQueuedRows } from '@/store/chat/queue-target'
+import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import { HistoryShowRest, historyCallPosition, useHistoryPartGroups, useHistoryUserText, type DisplayPart } from './historyTextOverlay'
 import { useConnectionStore } from '@/store/connection'
@@ -61,6 +64,7 @@ import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, 
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
+import { buildTerminalMessageStatus } from '@/lib/omnipus-runtime'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
@@ -76,6 +80,7 @@ import {
 import { useChatAgents } from './useChatAgents'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
+import { AssistantMediaItem } from './AssistantMediaItem'
 import {
   AssistantMessageConnectionStatus,
   UnansweredUserMessageStatus,
@@ -256,6 +261,7 @@ export function UserMessage() {
             latest
             isClearCommand={isClearCommandText(storeMessage.content)}
             onRetry={() => useChatStore.getState().resendMessage(storeMessage.id)}
+            onDiscard={() => useChatStore.getState().discardQueuedMessage(storeMessage.id)}
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(storeMessage.id)}
           />
         )}
@@ -704,23 +710,9 @@ function InlineMedia() {
 
   return (
     <div className="flex flex-col gap-[var(--space-2)] mt-[var(--space-2)]">
-      {storeMsg.media.map((m, i) =>
-        m.type === 'image' ? (
-          <div key={`${m.url}-${i}`} className="max-w-2xl">
-            <ChatImage
-              src={m.url}
-              alt={m.caption || m.filename}
-              filename={m.filename}
-            />
-            {m.caption && (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
-            )}
-          </div>
-        ) : (
-          // FR-081: the same file card as the settled rows.
-          <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
-        ),
-      )}
+      {storeMsg.media.map((m, i) => (
+        <AssistantMediaItem key={`${m.url}-${i}`} kind={m.type === 'image' ? 'image' : 'file'} url={m.url} filename={m.filename} caption={m.caption} contentType={m.contentType} libraryRef={m.libraryRef} />
+      ))}
     </div>
   )
 }
@@ -950,6 +942,7 @@ export function VirtualUserMessageRow({
             latest={latest}
             isClearCommand={isClearCommandText(message.content)}
             onRetry={() => useChatStore.getState().resendMessage(message.id)}
+            onDiscard={() => useChatStore.getState().discardQueuedMessage(message.id)}
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(message.id)}
           />
         )}
@@ -1206,7 +1199,10 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
       data-message-role="assistant"
       data-message-id={message.id}
       {...assistantRowCorrelationAttributes(message)}
-      data-status="complete"
+      // #1671: the turn's outcome, not a fixed "complete" — a stopped turn
+      // showing "(interrupted)" is incomplete/cancelled here exactly as on
+      // the live AssistantUI row (one rule: buildTerminalMessageStatus).
+      data-status={buildTerminalMessageStatus(message).type}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
@@ -1220,23 +1216,9 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
-              {mediaItems.map((m, i) =>
-                m.type === 'image' ? (
-                  <div key={`${m.url}-${i}`} className="max-w-2xl">
-                    <ChatImage
-                      src={m.url}
-                      alt={m.caption || m.filename}
-                      filename={m.filename}
-                    />
-                    {m.caption && (
-                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
-                    )}
-                  </div>
-                ) : (
-                  // FR-002: a keyboard-operable download with an inline error and Retry.
-                  <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
-                ),
-              )}
+              {mediaItems.map((m, i) => (
+                <AssistantMediaItem key={`${m.url}-${i}`} kind={m.type === 'image' ? 'image' : 'file'} url={m.url} filename={m.filename} caption={m.caption} contentType={m.contentType} libraryRef={m.libraryRef} />
+              ))}
             </div>
           )}
 
@@ -1267,7 +1249,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               (incorrectly) rendering the paragraph as one unbroken block. */}
           {partGroups.map(group => <div key={group.key} data-history-part={group.position}>{group.parts.map((part: DisplayPart, idx) => {
             if (part.type === 'text') {
-              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
+              return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} chatLinks />
             }
             if (part.type === 'more') return <HistoryShowRest key={`more-${part.position}`} sessionId={activeSessionId ?? ''} position={part.position} originalSizeBytes={part.originalSizeBytes} />
             const callId = part.call.id
@@ -1333,7 +1315,8 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
         {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so
             replay sessions show the same model footer as the live
             AssistantUI render. */}
-        {message.role === 'assistant' && <ModelFooter model={message.model} />}
+        {message.role === 'assistant' && <TurnEffortNote effort={message.effort} />}
+        {message.role === 'assistant' && <ModelFooter model={message.model} effort={message.effort} turnReasoningTokens={message.turnReasoningTokens} />}
         {liveRow && <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />}
       </div>
     </article>
@@ -1683,6 +1666,12 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   // model has gone quiet). Cleared by the frame handler on responding/
   // recovered; like the retry line it renders only while the turn streams.
   const providerStatusEvent = useChatStore((s) => s.providerStatusEvent)
+  // #1537 — the main chat's named helper rows (shown idle or writing) and
+  // the chat's server-clock estimate (FR-008 reload clock, own notices too).
+  const providerHelperRows = useChatStore((s) => s.providerHelperRows)
+  const providerServerClock = useChatStore((s) => s.providerServerClock)
+  const ownRetryClock = useNoticeClock(providerRetryEvent, providerServerClock, providerRetryEvent ?? null)
+  const ownWaitingClock = useNoticeClock(providerStatusEvent, providerServerClock, providerStatusEvent ?? null)
   const isStreaming = useChatStore((s) => s.isStreaming)
   // ADR-049 D6/US-12/SD-C9: loop indicator state, same session-scoped
   // foreground field as rateLimitEvent above. (Goal pill state is read
@@ -1700,9 +1689,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const pendingDrainQueue = useChatStore((s) => s.pendingDrainQueue)
   const queuedMessages = useMemo(() => {
     const existingIds = new Set(messages.map((message) => message.id))
-    return [...pendingDrainQueue, ...outboundQueue]
-      .filter((item): item is QueuedOutboundMessage => typeof item !== 'string' && !existingIds.has(item.id))
-      .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+    return selectQueuedRows(pendingDrainQueue, outboundQueue, existingIds, activeSessionId)
       .map((item): ChatMessage => ({
         id: item.id,
         session_id: activeSessionId ?? undefined,
@@ -1710,7 +1697,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         content: item.content,
         timestamp: item.timestamp,
         status: 'done',
-        deliveryStatus: 'queued',
+        deliveryStatus: item.abandoned ? 'unsaved' : 'queued',
       }))
   }, [activeSessionId, messages, outboundQueue, pendingDrainQueue])
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
@@ -1833,8 +1820,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 provider={providerRetryEvent.provider}
                 model={providerRetryEvent.model}
                 retryAt={providerRetryEvent.retryAt}
-                sentAt={providerRetryEvent.sentAt}
-                receivedAt={providerRetryEvent.receivedAt}
+                sentAt={ownRetryClock?.sentAt ?? providerRetryEvent.sentAt}
+                receivedAt={ownRetryClock?.receivedAt ?? providerRetryEvent.receivedAt}
                 attempt={providerRetryEvent.attempt}
                 maxAttempts={providerRetryEvent.maxAttempts}
                 errorCode={providerRetryEvent.errorCode}
@@ -1853,12 +1840,21 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             <div className="px-[var(--space-3)] pb-[var(--space-2)]">
               <ProviderWaitingIndicator
                 silentSince={providerStatusEvent.silentSince}
-                sentAt={providerStatusEvent.sentAt}
-                receivedAt={providerStatusEvent.receivedAt}
+                sentAt={ownWaitingClock?.sentAt ?? providerStatusEvent.sentAt}
+                receivedAt={ownWaitingClock?.receivedAt ?? providerStatusEvent.receivedAt}
                 stallAt={providerStatusEvent.stallAt}
+                attempt={providerStatusEvent.attempt}
+                maxAttempts={providerStatusEvent.maxAttempts}
               />
             </div>
           )}
+
+          {/* #1537 — named helper rows: one per helper turn whose model is
+              retrying, silent or just recovered, below the chat's own
+              notices. NOT gated on isStreaming: the main chat shows them
+              while idle too (FR-005). One polite live region (FR-010). */}
+          <ProviderHelperRows rows={providerHelperRows} clock={providerServerClock} />
+
 
           {/* Goal/loop indicator — ADR-049 D6/US-12/SD-C9: the goal pill was
               RELOCATED to the bottom-right GoalPillTray (FE-1, ADR-053 US-14);

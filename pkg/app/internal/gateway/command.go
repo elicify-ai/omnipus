@@ -3,7 +3,9 @@ package gateway
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +17,21 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
+
+// terminalBootMessage is what a failed boot shows on the terminal (#1823).
+// InitPanic sends os.Stderr, and with it the full "Error: ..." line, to the 0600
+// panic log, so an operator saw nothing. The full text stays there; the terminal
+// copy is built so it cannot leak: a boot error can carry credentials in any
+// shape (URL userinfo, query tokens, key=value), and masking by pattern cannot
+// cover them all. A listener bind failure holds only an address and an OS error,
+// so it is shown in full; every other failure gets a pointer to the log.
+func terminalBootMessage(err error, home string) string {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "listen" && opErr.Addr != nil {
+		return fmt.Sprintf("Error: cannot listen on %s: %v", opErr.Addr, opErr.Err)
+	}
+	return fmt.Sprintf("Error: startup failed; the reason is in %s", filepath.Join(home, "logs", "gateway_panic.log"))
+}
 
 func NewGatewayCommand() *cobra.Command {
 	var debug bool
@@ -127,8 +144,20 @@ func NewGatewayCommand() *cobra.Command {
 			// the top-level main.go. Distinguish via a sentinel error.
 			var sbErr *gateway.SandboxBootError
 			if errors.As(runErr, &sbErr) {
+				// Full text to os.Stderr (the panic log once InitPanic ran), as
+				// before; a safe summary to the terminal (#1823).
 				fmt.Fprintln(os.Stderr, "Error:", runErr)
+				if logger.StderrRedirected() {
+					fmt.Fprintln(logger.BootStderr(), terminalBootMessage(runErr, home))
+				}
 				os.Exit(gateway.ExitSandboxConfig)
+			}
+			// When nothing was redirected (failure before InitPanic) the
+			// top-level print already reaches the terminal: print once.
+			// Otherwise the top-level print goes to the panic log, so show the
+			// safe summary on the stderr the process started with (#1823).
+			if logger.StderrRedirected() {
+				fmt.Fprintln(logger.BootStderr(), terminalBootMessage(runErr, home))
 			}
 			return runErr
 		},

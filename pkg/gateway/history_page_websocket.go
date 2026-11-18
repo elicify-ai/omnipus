@@ -131,7 +131,7 @@ func (wh *wsHandlerHandleAttachSession) historyDeps() historyPageProjectionDeps 
 			lifecycle = ls
 		}
 	}
-	return historyPageProjectionDeps{MediaStore: mediaStore, ToolStore: wh.h.toolStore, TerminalAsk: loadTerminalAskRecord(wh.store, wh.attachID), Lifecycle: lifecycle}
+	return historyPageProjectionDeps{MediaStore: mediaStore, ToolStore: wh.h.toolStore, TerminalAsk: loadTerminalAskRecord(wh.store, wh.attachID), Lifecycle: lifecycle, Home: wh.h.home}
 }
 func (wh *wsHandlerHandleAttachSession) sendPreparedHistorySnapshot() {
 	logsafeInfo("ws: catch_up", "event", "catch_up", "mode", "snapshot", "reason", wh.res.Reason, "session_id", wh.attachID, "chat_id", wh.chatID, "head", wh.res.Head)

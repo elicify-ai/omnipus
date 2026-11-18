@@ -14,6 +14,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -53,7 +54,13 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 		// #1534: a new provider call starts with no pre-Stop text of its
 		// own; a streamed attempt records what it shows (stop_turn_end.go).
 		cr.rr.rq.ri.rf.rt.ts.setStopShown("", false)
-		return cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
+		resp, err := cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
+		if err == nil {
+			// #1537 FR-006: the model answered after an announced retry
+			// with no recovered note (fallback first call, outer retry).
+			cr.rr.rq.ri.rf.rt.noteProviderAnswered()
+		}
+		return resp, err
 	}
 
 	cr.rr.rq.ri.rf.response = nil
@@ -141,6 +148,11 @@ agentLoopRunTurnResponseCallLLMWithRetriesLoop1:
 
 // handleAttemptFailure handles repair, media downgrade, and exhausted fallback errors for one attempt.
 func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry int) agentLoopRunTurnResponseCallLLMWithRetriesFlow {
+	// Issue #1664 B3: the waiting notice of this call shows "attempt N of
+	// max" — the loop makes at most maxRetries+1 calls.
+	rt := cr.rr.rq.ri.rf.rt
+	rt.providerAttempt, rt.providerMaxAttempts = retry+1, cr.maxRetries+1
+	defer func() { rt.providerAttempt, rt.providerMaxAttempts = 0, 0 }()
 	cr.rr.rq.ri.rf.response, cr.rr.rq.ri.rf.err = cr.rr.rq.ri.rf.callLLM(cr.rr.rq.ri.rf.callMessages, cr.rr.rq.ri.rf.providerToolDefs)
 	if cr.rr.rq.ri.rf.err == nil {
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
@@ -306,6 +318,11 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 			if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 				return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 			}
+			// Issue #1664 B7: same Stop rule as the timeout retry below.
+			if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+				cr.rr.rq.ri.rf.err = context.Canceled
+				return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+			}
 			// Apply the same "don't retry if partial content was already
 			// streamed" guard as the isTimeoutError path to avoid duplicating
 			// text in an in-progress SPA bubble.
@@ -343,7 +360,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 					Backoff:    backoff,
 				},
 			)
-			if sleepErr := sleepWithContext(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
+			if sleepErr := cr.rr.rq.ri.rf.rt.ts.waitRetryBackoff(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
 				if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 					cr.rr.rq.ri.turnStatus = TurnEndStatusAborted
 					cr.rr.ret0, cr.rr.ret1 = cr.rr.rq.ri.rf.rt.al.abortTurn(cr.rr.rq.ri.rf.rt.ts, "llm_retry_backoff", hardInterruptAbortReason)
@@ -420,6 +437,12 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		// events before the canceled turnCtx collapses the backoff. Breaking
 		// here lets the canceled turn finalize quietly.
 		if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
+			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+		}
+		// Issue #1664 B7: a Stop that already reached the turn ends it
+		// canceled — no retry frame, no further provider call.
+		if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+			cr.rr.rq.ri.rf.err = context.Canceled
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
 		// FIX 1: only inline-retry a transport-drop when NO partial content
@@ -568,17 +591,14 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		if backoff < 500*time.Millisecond {
 			backoff = 500 * time.Millisecond
 		}
-		cr.rr.rq.ri.rf.rt.al.emitEvent(
-			EventKindLLMRetry,
-			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-			LLMRetryPayload{
-				Attempt:    retry + 1,
-				MaxRetries: cr.maxRetries,
-				Reason:     "timeout",
-				Error:      cr.rr.rq.ri.rf.err.Error(),
-				Backoff:    backoff,
-			},
-		)
+		// Issue #1664 R3-8: a Stop can land after the checks above (during
+		// the turn-timeout event or the window trim). Re-check right before
+		// announcing the retry so no retry frame follows a Stop.
+		if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+			cr.rr.rq.ri.rf.err = context.Canceled
+			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+		}
+		cr.emitTimeoutRetry(retry, backoff)
 		// ADR-091 boundary 5 (FR-B-001): a steered
 		// session's retry notice is never the user's audience.
 		// audienceFor also calls steer.BoundaryObserver.Observe before this
@@ -591,7 +611,10 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 			"retry":   retry,
 			"backoff": backoff.String(),
 		})
-		if sleepErr := sleepWithContext(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
+		// Issue #1664 B7: a Stop during the announced backoff wakes the wait
+		// (context.Canceled) and the turn ends canceled below, before any
+		// further provider call or retry frame.
+		if sleepErr := cr.rr.rq.ri.rf.rt.ts.waitRetryBackoff(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
 			if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 				cr.rr.rq.ri.turnStatus = TurnEndStatusAborted
 				cr.rr.ret0, cr.rr.ret1 = cr.rr.rq.ri.rf.rt.al.abortTurn(cr.rr.rq.ri.rf.rt.ts, "llm_timeout_backoff", hardInterruptAbortReason)
@@ -776,10 +799,8 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	//     reported — handled in the no-tool-calls branch below. Silence
 	//     is the defect there, not the malformation.
 	//
-	// ReasoningContent is stripped too: the no-tool-calls branch falls
-	// back to it when Content is empty, so leaving it alone would just
-	// move the leak. Mutating it here is safe — handleReasoning below
-	// receives its own string copy.
+	// ReasoningContent is stripped too, so no downstream consumer of the
+	// private reasoning carrier sees the residue either.
 	rr.orphanMarkup, rr.hasOrphanMarkup = stripOrphanToolCallMarkup(rr.rq.ri.rf.response)
 	if rr.hasOrphanMarkup {
 		logger.WarnCF("agent", "LLM emitted unparseable tool-call markup as text; markup suppressed",
@@ -795,15 +816,12 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 			})
 	}
 
+	// Reasoning text is never published or logged (effort-levels spec FR-016,
+	// FR-017): the debug line below carries only its length.
 	reasoningContent := rr.rq.ri.rf.response.Reasoning
 	if reasoningContent == "" {
 		reasoningContent = rr.rq.ri.rf.response.ReasoningContent
 	}
-	rr.rq.ri.rf.rt.spawnReasoningPublish(
-		reasoningContent,
-		rr.rq.ri.rf.rt.ts.channel,
-		rr.rq.ri.rf.rt.al.targetReasoningChannelID(rr.rq.ri.rf.rt.ts.channel),
-	)
 	rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindLLMResponse,
 		rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.response"),
@@ -815,13 +833,12 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	)
 
 	llmResponseFields := map[string]any{
-		"agent_id":       rr.rq.ri.rf.rt.ts.agent.ID,
-		"iteration":      rr.rq.ri.rf.rt.iteration,
-		"content_chars":  len(rr.rq.ri.rf.response.Content),
-		"tool_calls":     len(rr.rq.ri.rf.response.ToolCalls),
-		"reasoning":      rr.rq.ri.rf.response.Reasoning,
-		"target_channel": rr.rq.ri.rf.rt.al.targetReasoningChannelID(rr.rq.ri.rf.rt.ts.channel),
-		"channel":        rr.rq.ri.rf.rt.ts.channel,
+		"agent_id":        rr.rq.ri.rf.rt.ts.agent.ID,
+		"iteration":       rr.rq.ri.rf.rt.iteration,
+		"content_chars":   len(rr.rq.ri.rf.response.Content),
+		"tool_calls":      len(rr.rq.ri.rf.response.ToolCalls),
+		"reasoning_chars": len([]rune(reasoningContent)),
+		"channel":         rr.rq.ri.rf.rt.ts.channel,
 	}
 	if rr.rq.ri.rf.response.Usage != nil {
 		llmResponseFields["prompt_tokens"] = rr.rq.ri.rf.response.Usage.PromptTokens
@@ -830,56 +847,6 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	}
 	logger.DebugCF("agent", "LLM response", llmResponseFields)
 	return agentLoopRunTurnResponseNext
-}
-
-// reasoningPublishCanceledOnEntry reports whether ctx is already canceled,
-// logging when it is — the one path in handleReasoning (loop.go) that
-// silently drops the reasoning trace, so it must at least explain why.
-// Extracted into this sibling file rather than inlined in loop.go, which is
-// pinned at its exact grandfathered line count (scripts/budgets/files.txt)
-// and may only shrink.
-func reasoningPublishCanceledOnEntry(ctx context.Context, channelName string) bool {
-	if ctx.Err() == nil {
-		return false
-	}
-	logger.DebugCF("agent", "Reasoning publish skipped (context already canceled on entry)", map[string]any{
-		"channel": channelName,
-		"error":   ctx.Err().Error(),
-	})
-	return true
-}
-
-// reasoningPublishScheduledHook is a test-only synchronization seam. When
-// non-nil, it runs synchronously on the reasoning-publish goroutine started
-// by spawnReasoningPublish below, immediately after the goroutine starts and
-// before any publish work happens. A test uses it to pin that goroutine at a
-// chosen point in time relative to when the turn itself ends and cancels
-// turnCtx — an ordering otherwise reproducible only by chance under load.
-// Always nil in production; never set outside a test.
-var reasoningPublishScheduledHook func()
-
-// spawnReasoningPublish launches the best-effort reasoning-trace publish for
-// this turn on its own goroutine. Nothing in runTurn waits for it — it is
-// fire-and-forget — and runTurn cancels its own turnCtx via defer
-// (loop.go::runTurn, "defer rz.rc.turnCancel()") as soon as it returns. If
-// the Go scheduler does not run this goroutine until after that
-// cancellation (plausible under load — reproduced deterministically in
-// loop_reasoning_turn_cancel_test.go), handing it turnCtx directly would
-// make handleReasoning observe an already-canceled context on entry and
-// return without publishing: the reasoning trace silently dropped, with no
-// error surfaced anywhere. context.WithoutCancel detaches the goroutine from
-// turnCtx's cancellation (and from its own turn timeout) while
-// handleReasoning's own bounded 5s publish timeout remains the sole
-// lifetime bound, so the goroutine can never leak and the publish attempt
-// is never skipped merely because the turn ended first.
-func (rt *agentLoopRunTurn) spawnReasoningPublish(reasoningContent, channel, channelID string) {
-	detachedCtx := context.WithoutCancel(rt.turnCtx)
-	go func() {
-		if reasoningPublishScheduledHook != nil {
-			reasoningPublishScheduledHook()
-		}
-		rt.al.handleReasoning(detachedCtx, reasoningContent, channel, channelID)
-	}()
 }
 
 // recordToolCalls normalizes and records tool calls before execution begins.
@@ -938,6 +905,9 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 		Content:          rr.rq.ri.rf.response.Content,
 		ReasoningContent: rr.rq.ri.rf.response.ReasoningContent,
 		ThinkingBlocks:   append([]string(nil), rr.rq.ri.rf.response.ThinkingBlocks...),
+		// FR-013: the OpenRouter carrier rides the tool-call message so the
+		// continuation (and every reload) replays it to that route.
+		ReasoningDetails: cloneReasoningDetails(rr.rq.ri.rf.response.ReasoningDetails),
 	}
 	for i, tc := range rr.normalizedToolCalls {
 		argumentsJSON, marshalErr := json.Marshal(rr.recordToolArgs[i])
@@ -1017,4 +987,73 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 
 	rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseTools)
 	return nil
+}
+
+// timeoutRetryPayload is the loop's timeout-retry event (issue #1664 B5): it
+// carries what the provider_retry frame renders — the call ABOUT to be made
+// (the providers.RetryInfo convention, 2..max), the total calls, when the
+// backoff ends (RetryAt = SentAt + Backoff) and the frame's session (the
+// transcript session, u9ToolExecSessionIDs — routingSessionID is never a
+// frame destination, ADR-057 consumer set). Reason
+// "empty_reply" marks an empty stream (common.ErrEmptyStream), "timeout"
+// every other timeout-class failure; the hub maps them to the frame's
+// error_code. Error stays log-only.
+func (cr *agentLoopRunTurnResponseCallLLMWithRetries) timeoutRetryPayload(retry int, backoff time.Duration) LLMRetryPayload {
+	rt := cr.rr.rq.ri.rf.rt
+	reason := "timeout"
+	if errors.Is(cr.rr.rq.ri.rf.err, common.ErrEmptyStream) {
+		reason = "empty_reply"
+	}
+	provider := ""
+	if len(rt.activeCandidates) > 0 {
+		provider = rt.activeCandidates[0].Provider
+	}
+	sentAt := time.Now()
+	// #1537: a helper turn's retry is addressed to its top chat and carries
+	// its own chat, so the hub publishes the helper copy and the named top
+	// copy. A chat's own turn keeps the transcript session as before.
+	sessionID := u9ToolExecSessionIDs(rt.ts)
+	top, child := providerNoticeSessions(rt.ts)
+	if child != "" {
+		sessionID = top
+	}
+	return LLMRetryPayload{
+		Attempt:        retry + 2,
+		MaxRetries:     cr.maxRetries,
+		Reason:         reason,
+		Error:          cr.rr.rq.ri.rf.err.Error(),
+		Backoff:        backoff,
+		Provider:       provider,
+		Model:          rt.llmModel,
+		SentAt:         sentAt,
+		RetryAt:        sentAt.Add(backoff),
+		MaxAttempts:    cr.maxRetries + 1,
+		SessionID:      sessionID,
+		ChildSessionID: child,
+	}
+}
+
+// emitTimeoutRetry announces the loop's timeout retry (issue #1664 B5). A
+// helper turn's retry also leaves a named top-chat row that clears when the
+// model answers (#1537 FR-006, noteProviderAnswered).
+func (cr *agentLoopRunTurnResponseCallLLMWithRetries) emitTimeoutRetry(retry int, backoff time.Duration) {
+	rt := cr.rr.rq.ri.rf.rt
+	payload := cr.timeoutRetryPayload(retry, backoff)
+	rt.al.emitEvent(EventKindLLMRetry, rt.ts.eventMeta("runTurn", "turn.llm.retry"), payload)
+	if payload.ChildSessionID != "" {
+		rt.namedRetryPending.Store(true)
+	}
+}
+
+// providerNoticeSessions is the address of a turn's provider retry notice
+// (#1537 FR-001/002, both retry producers: providerRetryObserver and the
+// timeout retry above): top is the routing (top) chat the frame is stamped
+// with; child is the turn's own chat when it differs from a non-empty top —
+// a helper turn — else "". WS payload stamping (ADR-057 consumer set).
+func providerNoticeSessions(ts *turnState) (top, child string) {
+	top = string(ts.routingSessionID)
+	if own := ts.transcriptSessionID; top != "" && own != "" && own != top {
+		child = own
+	}
+	return top, child
 }

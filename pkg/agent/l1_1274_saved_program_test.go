@@ -38,7 +38,7 @@ func TestL11274CreateRefusesAnAgentSuppliedCLIPath(t *testing.T) {
 }
 
 // r17 §3.6: a saved program that fails its checks refuses the run with the
-// CheckFailed text naming the check and the saved path, before the driver.
+// CheckFailed text naming the check, never the saved path (Q48), before the driver.
 func TestL11274SavedProgramFailingChecksRefusesRun(t *testing.T) {
 	for _, cli := range []string{"claude-code", "codex", "opencode"} {
 		for _, class := range []string{"nonexistent", "directory", "non-executable"} {
@@ -62,13 +62,15 @@ func TestL11274SavedProgramFailingChecksRefusesRun(t *testing.T) {
 					t.Errorf("program_warning must name the %s check, got %q", check, warning)
 				}
 				fake, _ := l11274DriverSeam(t, f)
+				logs := t11Q48CaptureRefusalLogs(t)
 				refused := l11274DelegateAndReadRefusal(t, f, id, "must not run a bad program")
-				if !strings.Contains(refused, check) || !l11274ReasonNamesPath(refused, path) {
-					t.Errorf("run refusal must name check %q and path %q, got %q", check, path, refused)
+				if !strings.Contains(refused, check) || l11274ReasonNamesPath(refused, path) {
+					t.Errorf("Q48: run refusal must name check %q but omit path %q, got %q", check, path, refused)
 				}
 				if got := len(fake.RecordedRunOpts()); got != 0 {
 					t.Errorf("a refused run reached the driver %d times, want 0", got)
 				}
+				t11Q48AssertServerOnlyPath(t, logs, refused, check, path)
 			})
 		}
 	}

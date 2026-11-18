@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "component": "Empty",
+  "exports": [
+    "Empty",
+    "EmptyHeader",
+    "EmptyMedia",
+    "EmptyTitle",
+    "EmptyDescription",
+    "EmptyContent"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/empty.tsx",
+  "documentation": "docs/internal/design/components/empty.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default",
+    "icon"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "informational"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/empty.stories.tsx",
+      "exports": [
+        "Default"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "empty-unit",
+      "kind": "unit",
+      "file": "src/components/ui/empty.test.tsx",
+      "test": "Empty — slot contract every slot renders with its kebab-case data-slot",
+      "applicable": true
+    },
+    {
+      "id": "empty-interaction",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "Empty is presentational; actions placed inside it are covered by their own Button contract."
+    },
+    {
+      "id": "empty-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Empty [check:empty-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "empty-keyboard",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Empty creates no focus target or keyboard operation."
+    },
+    {
+      "id": "empty-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Empty [check:empty-browser] browser",
+      "story": "Default",
+      "applicable": true,
+      "requiredTargets": [
+        {
+          "selector": "[data-slot=\"empty\"] [data-slot=\"empty-title\"]",
+          "text": "No notifications yet"
+        }
+      ]
+    },
+    {
+      "id": "empty-pointer",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Empty is not a hit target."
+    },
+    {
+      "id": "empty-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Empty has no animation or transition."
+    },
+    {
+      "id": "empty-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Empty [check:empty-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "empty-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Empty [check:empty-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "empty-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Empty [check:empty-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "empty-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Empty [check:empty-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

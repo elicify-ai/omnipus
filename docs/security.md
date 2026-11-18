@@ -75,8 +75,16 @@ The chat switch is the one place that can turn Auto-approve **on** when the glob
 
 - **The program and its standard parameters are person-only.** They are set in **Settings → Third-party agents** (see [settings](settings.md#third-party-agents)). An agent that sends a `cli_path` is refused, and a worker's kind and command-line tool cannot change after it is created.
 - **Environment values are always masked.** A worker's stored environment values are shown as `••••••` when they are read back, in the web app or through `get_agent`.
-- **Standard parameters are shown in clear and are not filtered.** Your value is passed exactly as typed, so keys and passwords belong in the worker's masked environment, never in the standard parameters.
+- **Standard parameters are shown in clear and the argument filter does not touch them.** Your value is passed to the tool exactly as typed, so keys and passwords belong in the worker's masked environment, never in the standard parameters.
 - **Agents can look, not change.** An agent can read a worker's saved program and parameters, read-only, and whether a run would start.
+
+### Third-party agent programs and parameters
+
+The program each external tool runs, and the standard parameters added to every run, are set only by a signed-in person under **Settings → Third-party agents** (see [settings](settings.md#third-party-agents)). Agents have no tool, setting or other route that changes them. A program inside a folder agents can write to is refused when you save it and again before every run. Those folders are the Omnipus data folder, every agent's working folder, every workspace folder, every host folder mounted into a workspace, and any extra folder the sandbox lets agents write. The list also includes the operating system's temporary folder when it is absolute and is not the shared `/tmp` or `/private/tmp`, together with its resolved spelling. On macOS this is normally the folder named by `TMPDIR`; Windows uses its own temporary-folder selection. Shared temporary folders are not added automatically by this rule, but locations there are still checked when another configured root covers them. This reflects the normal enforcing per-turn sandbox policy, which removes the blanket shared-temp write grant. It is not a promise of protection in God Mode or without an enforcing sandbox. If that list cannot be read in full, for example because a workspace's list of mounted folders is unreadable, Omnipus cannot check the location, so every program is refused until the list can be read again; the server log names the cause. Omnipus does not check who owns the program or who else may change it, so keep it somewhere only trusted users can write.
+
+The standard parameters may hold **any** parameter the tool accepts; Omnipus does not filter them and shows no warning. **Omnipus does not sandbox external command-line tools**: they start in their working folder with a reduced environment and their web traffic routed through Omnipus's egress proxy, but no Omnipus file confinement applies to them, and a working folder is not a boundary. Claude Code already runs with its own permission prompts turned off. A Codex parameter such as `--dangerously-bypass-approvals-and-sandbox` also turns off Codex's own sandbox, and Codex can then read and write anything the user account running Omnipus can. Add such a parameter only if you accept that.
+
+Every external-worker run writes one audit entry with the program, the flags the safety filter dropped from the agent's own flags, and the standard parameters. While the setting `tools.filter_sensitive_data` is on, which is the default, the audit copy of the parameters passes through the sensitive-data filter: any value Omnipus holds as a secret is replaced by `[FILTERED]`. The same applies to the reason given for a parameter the filter would drop, and to the old and new value recorded when you change the parameters in Settings. Turning `tools.filter_sensitive_data` off means these audit entries hold the parameters as typed, apart from the credential formats the audit log always redacts (see [audit log redaction](operations/security-considerations.md#audit-log-redaction)). Either way, the tool receives what you typed. The filter only knows secrets Omnipus already holds, so a key that exists only in the parameters stays readable in the audit log. If Omnipus has no configuration to read when it writes the entry, the entry says the text was not recorded instead of holding clear text. A run that uses standard parameters also carries the note "person preset used; flag filter bypassed for preset parameters", even when no parameter is one the filter would drop. When a standard parameter is one the filter would drop from an agent, the entry also says so and gives the reason. **Send a test message** on a worker's **Runtime** tab is a real run too: its audit entry holds the standard parameters under the same filter rule, with the same note.
 
 ### Auto-approve and the kernel sandbox
 
@@ -97,7 +105,7 @@ There is no mode badge in the chat header. The composer has one labelled **Auto*
 
 | What you see | Meaning |
 |---|---|
-| **Auto** pressed and greyed out, with the God Mode tooltip | God Mode is on. The button cannot be changed. Every tool runs without asking, except a tool that an agent itself sets to Ask, which still asks, and a tool that an agent has denied, which stays denied. |
+| **Auto** pressed and greyed out, with the God Mode tooltip | God Mode is on. The button cannot be changed. Every tool runs without asking, except `set_channel_outbound`, which always asks, a tool that an agent itself sets to Ask, which still asks, and a tool that an agent has denied, which stays denied. |
 | **Auto** not pressed | Auto-approve is off for this chat. Every tool set to Ask prompts. |
 | **Auto** pressed | Auto-approve is on. Safe calls run; the rest ask. |
 | **Auto** pressed, tooltip adds the no-sandbox caution | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The caution is in that same tooltip, not a second label. |
@@ -124,7 +132,7 @@ The first time you turn God Mode on through this screen, on an installation that
 
 | Area | Under God Mode |
 |---|---|
-| Tool policies | Every tool's global (installation-wide) policy is treated as Allow — no prompt from that policy, for any tool. |
+| Tool policies | Every tool's global (installation-wide) policy is treated as Allow — no prompt from that policy — for every tool except `set_channel_outbound`, which always asks for approval. A global Deny for that one tool stays in force. |
 | Shell approval | God Mode removes the global shell approval requirement. A per-agent Ask can still require approval, and a per-agent Deny still blocks the tool. Operator deny rules and the surviving outside-workspace write guard also remain in force. |
 | Kernel filesystem confinement | Widened for shell and environment-setup children. A protected-file floor remains on Linux and macOS only while an enforcing kernel sandbox is active; Off, Permissive and degraded/unavailable operation install no floor. Application path checks still apply. |
 | Kernel network-port controls | Off for the shell's own commands: they can bind or connect to any port, not just an allowed list. |
@@ -188,7 +196,7 @@ For reading, this matches the shell. Under Auto-approve, the shell command `cat 
 
 **Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, turn Auto-approve off, or set those two tools to Deny for that agent. Email is different: `send_email` and `reply` keep asking whenever they're set to Ask, even with Auto-approve on.
 
-**These registered tools keep asking when their effective policy is Ask, even with Auto-approve on.** God Mode is a separate override: it removes global Ask, but a per-agent Ask or Deny still applies.
+**These registered tools keep asking when their effective policy is Ask, even with Auto-approve on.** God Mode is a separate override: it removes global Ask, but a per-agent Ask or Deny still applies. The one exception is `set_channel_outbound`: it asks with a fresh card on every call, in God Mode too, and its approvals are never remembered (see [tools](tools.md#changing-who-a-connector-may-start-messages-to)).
 
 | Group | Tools |
 |---|---|
@@ -199,7 +207,7 @@ For reading, this matches the shell. Under Auto-approve, the shell command `cat 
 | Browser scripts and uploads | `browser_evaluate`, `browser_upload_file` |
 | Settings and diagnostics | `set_config`, `run_doctor` |
 | Providers | `configure_provider`, `test_provider` |
-| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `test_channel` |
+| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `set_channel_outbound`, `test_channel` |
 | Connected servers | `add_mcp_server`, `remove_mcp_server` |
 | Agents and workspaces | `create_agent`, `update_agent`, `set_agent_permissions`, `update_workspace` |
 | Skills | `edit_skill`. A write into a skill folder with `write_file`, `edit_file` or `append_file` asks too, whenever `edit_skill` is Ask |
@@ -442,9 +450,9 @@ A part Omnipus cannot read reliably, such as a program name built from a variabl
 
 Rules match the program by where it really is on disk, not by the word typed. A rule for `rm` also catches `/bin/rm -rf build` for `deny` and `ask`. An `allow` rule for `git` does not approve a different program that happens to be named `git` earlier on the agent's path.
 
-**A deny or ask rule also catches the program run through a wrapper.** Omnipus looks through `env`, `sudo`, `doas`, `nice`, `ionice`, `nohup`, `setsid`, `timeout`, `stdbuf`, `time`, `command`, `builtin`, `exec` and `xargs` to the program they go on to run, including one wrapper inside another (`env sudo rm -rf x`). A rule for `rm` catches every one of the examples above the same as it catches plain `rm -rf x`.
+**A deny or ask rule also catches the program run through a wrapper.** Omnipus looks through `env`, `sudo`, `doas`, `nice`, `ionice`, `nohup`, `setsid`, `timeout`, `stdbuf`, `time`, `command`, `builtin`, `exec` and `xargs` to the program they go on to run, including one wrapper inside another (`env sudo rm -rf x`). Wrapper names are recognised in any letter case, the same way as the interpreter names below (`SUDO rm -rf x` is treated like `sudo rm -rf x`). A rule for `rm` catches every one of the examples above the same as it catches plain `rm -rf x`. A `deny` or `ask` rule written for the wrapper itself still applies when Omnipus looks through it: with a `deny` rule for `sudo`, `sudo printf x` is refused, even though `printf` has no rule.
 
-**A command that runs another program through an interpreter is treated with extra caution**, because Omnipus cannot see inside the text it hands that interpreter: `bash -c "…"`, `sh -c "…"`, `zsh -c "…"`, `eval …`, `source …`, `python -c "…"` (and `python3`, and other Python versions), `perl -e "…"`, `ruby -e "…"`, and `node -e "…"`. When any of your deny rules names a program whose name appears as a whole word inside that text — for example a `deny` rule for `rm` and a command `bash -c "rm -rf x"` — Omnipus refuses it, the same as it would refuse plain `rm -rf x`. If none of your deny rules' names appear that way, but you have written **any** `ask` or `deny` rule at all, Omnipus asks before running the interpreter command rather than silently letting it through — an interpreter is exactly the shape that could be hiding something a rule would otherwise have caught. With no rules written at all, the shell's own Ask/Auto/God Mode handling decides whether an interpreter command runs.
+**A command that runs another program through an interpreter is treated with extra caution**, because Omnipus cannot see inside the text it hands that interpreter: `bash -c "…"`, `sh -c "…"`, `zsh -c "…"`, `eval …`, `source …`, `python -c "…"` (and `python3`, and other Python versions), `perl -e "…"`, `ruby -e "…"`, and `node -e "…"`. These interpreter names are recognised in any letter case, including spellings that use a special Unicode form of a letter, such as the long s (`ſ`) in place of `s`, because a case-insensitive filesystem such as the macOS default runs the same interpreter for them (`BASH -c "…"` is treated like `bash -c "…"`). Recognising a name this way only adds checks; it does not decide whether an `allow` rule applies. A name written with capital letters, such as `BASH`, never satisfies an `allow` rule. A spelling that differs by a special Unicode letter, such as `baſh`, is judged like any other name, by the program it leads to on disk, so it satisfies an `allow` rule only when it leads to the program that rule names. When any of your deny rules names a program whose name appears as a whole word inside that text — for example a `deny` rule for `rm` and a command `bash -c "rm -rf x"` — Omnipus refuses it, the same as it would refuse plain `rm -rf x`. If none of your deny rules' names appear that way, but you have written **any** `ask` or `deny` rule at all, Omnipus asks before running the interpreter command rather than silently letting it through — an interpreter is exactly the shape that could be hiding something a rule would otherwise have caught. With no rules written at all, the shell's own Ask/Auto/God Mode handling decides whether an interpreter command runs.
 
 **What this still cannot catch.** A wrapper Omnipus does not recognize (something other than the list above) is not looked through — if your denied program's name later appears as one of that unrecognized command's own words, Omnipus asks rather than silently allowing it (so you still see it), but it cannot always tell you that word is really about to run as a command. And inside an interpreter's text, only a whole-word name match is checked — a program built at run time from pieces, or referred to indirectly, can still slip past. The kernel sandbox (Enforce mode), not this text-based check, is what actually stops a command from reaching outside your workspace or the network regardless of how its text was written.
 
@@ -463,7 +471,8 @@ The "starting with" choice is offered only for a single plain command, where app
 
 - a chained command (`a && b`), because the words after a prefix could belong to the next part;
 - a bare program with no arguments (`ls`), because that would approve any use of `ls`;
-- a command run through a wrapper such as `sudo`, `env`, `timeout`, `xargs` or `sh -c`, because the wrapper alone would approve whatever it goes on to run;
+- a command run through a wrapper such as `sudo`, `env`, `timeout` or `xargs`, because the wrapper alone would approve whatever it goes on to run;
+- a command run by `sh`, such as `sh -c "…"` or a script file such as `sh build.sh`, in any letter case of `sh`, because `sh` runs whatever script it is given, and a remembered prefix would also cover a different script with the same name in another folder;
 - a command with redirection, substitution or an environment-variable prefix;
 - any command on Windows.
 
@@ -704,6 +713,52 @@ Three named exceptions:
 - **Gateway restart.** When the command line (`omnipus start`) or the desktop launcher starts the gateway in the background, the new gateway receives its own data-directory location and, if you started the current process with them, the master-key or key-file value and the web token — those are its own unlock and login values, and without them a headless restart could not open your saved credentials. No other value is forwarded.
 - **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
 - **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk: God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
+
+## Chat links and opening the Library for you
+
+Agents can point you at files in two ways. Both open a viewer only: they never give an agent, or you, access to a file you could not already open.
+
+| Feature | What it does | Limits |
+|---|---|---|
+| Chat links | A file an agent mentions in web chat can be a link (`omnipus://file/<workspace>/<path>`) that opens the Library at that file. | Produced only in web chat. Telegram, email and other channels get the file name, never a link, so no workspace name leaves Omnipus. A file outside every workspace Library is shown as its full path with no link. Clicking a link opens the Library with your own Library permissions. |
+| `show_to_user` | An agent asks the Library beside your chat to open a file. | Main agents (Mia, Jim and main agents you create) have it by default; worker agents and Omnipus do not. It works only in your own web chat, never from a helper the agent started, and only for a file in that chat's own workspace or its mounted folders that the agent is allowed to read and that can actually be opened. |
+
+When `show_to_user` is called:
+
+- **It opens by itself only while you are looking at that chat.** "Looking" means the browser tab is visible and that chat is on screen. Otherwise the chat shows an **Open in Library** notice and nothing opens until you click it.
+- **Unsaved Library edits are never discarded.** If the Library has unsaved changes, you get the notice instead; clicking it asks before leaving your edits.
+- **It happens live only.** The request is not saved in the chat history, so reloading the page or reconnecting never opens anything.
+- **It is rate-limited.** At most 5 calls per minute in one chat. A call refused for another reason does not use up any of the five.
+- **Refusals do not reveal what exists.** A file that does not exist, a file the agent may not read, a protected file such as Omnipus's master key, and the workspace root all get the same refusal text. One exception remains: a link (symlink) inside the workspace that points at a protected file can get a different refusal while that file is missing than once it exists. Neither answer reveals the file's contents.
+- **Audit entries.** Each `show_to_user` call writes a `tool_call` audit entry with the agent, the outcome and a reason code. Success uses `ok`. Refusals use `outside`, `other workspace`, `denied-or-missing`, `no workspace`, `delegated session`, `wrong channel` or `rate limit`, and two internal failures use `policy_unavailable` (the turn's file permissions could not be worked out) and `request_id_unavailable` (no random request id could be created). A successful entry also records the workspace and the Library path; a refusal entry never records the reference the agent sent. If writing the audit entry fails, the gateway logs that failure.
+- **It shows the Library's existing preview of that file.** It adds no new way of displaying files.
+
+**What the agent learns about you.** On each web-chat turn the agent sees one line, `User watching: yes` or `User watching: no`, about that chat only. It does not learn which device or how many tabs you have. Each open tab tells Omnipus about the chat it shows. A tab's report lasts 45 seconds unless the tab refreshes it, and ends when the tab closes. Two current limits of this signal:
+
+- The server accepts a report for any chat the connection is allowed to open, not only the chat it is attached to.
+- Switching to another chat without the tab sending a "stopped watching" report leaves the old chat marked as watched until the report expires.
+
+So `User watching: yes` can occasionally be stale. This affects only what the agent is told. Whether the Library opens is decided again by the tab itself when the request arrives.
+
+## Checking an external command-line program
+
+**Check CLI** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`) runs the program at the path entered in that tool's **Program path** field, exactly as entered, with `--version` to read its version. It saves nothing.
+
+Only a signed-in person can use it: the request must come from one of the configured user accounts. Requests made with the command-line token, while development-bypass mode is on, or with the legacy `OMNIPUS_BEARER_TOKEN` when no user account exists are refused with HTTP 403 before the request is read or any program starts. Settings then shows an error notice. The check itself never saves a program path or an agent, and **Save** works without it.
+
+Before starting anything, Omnipus checks the program file with the same check that **Settings → Third-party agents** and every run use. The path must be absolute. Omnipus follows every link on the way to the real file and refuses the path — reason **path-not-allowed**, with a message naming the program and the failed check but no path, nothing started — when:
+
+- the file, any link on the way, or the folder holding such a link, is inside the Omnipus data folder, an agent's working folder, a workspace, a workspace mount, any extra folder the sandbox lets agents write or the per-user temporary folder (places agents can write) (the check asks the filesystem whether two names are the same folder, so a different spelling the volume treats as the same — letter case, or an accented name such as `Café` written in its composed or decomposed Unicode form on macOS — is refused too);
+- the list of those places cannot be read completely — for example a workspace's mount record is unreadable — because then the check cannot tell what is safe (the message names the check `location_unverifiable`);
+- the file is not a regular file, or — on Linux and macOS — the account running Omnipus cannot execute it. On Windows only the regular-file and extension rules are checked before launch; if Windows then refuses to start the program, the result is **handshake-failed**, not **path-not-allowed**.
+
+These program-check refusals never include a file path or operating-system error. Run refusals, command-preview errors and Check CLI notices name the program and failed check. A Settings save explains the reason in plain words; its response carries the program key and failed check separately in `details.cli` and `details.check`. The path and system details are recorded only in the server log. The runner connection check treats a program that passed these checks the same way: if it cannot start or reports no version, its result is fixed text, and the program's output stays in the server log.
+
+The check only asks whether an agent could have planted the program. It does not check who owns the program or who else can change it: like any program you run yourself, keeping the CLI and its folders protected is your responsibility.
+
+On Windows the path must be a full drive or network (UNC) path to an `.exe`, `.cmd` or `.bat` file, without short `8.3` names (such as `PROGRA~1`) or alternate data streams. **Windows junctions are not followed yet:** a program reached through a junction (a Windows folder link) that points into an agent-writable folder is not recognised as being there. Use the check on Windows only for programs installed outside agent folders and reached without junctions.
+
+When the check passes, Omnipus runs exactly the file it checked, by the same path, with no further lookup — on Linux, macOS and Windows alike. An empty or whitespace-only path is reported as **missing-binary** and nothing starts; any other path is checked exactly as given, surrounding spaces included. Passing the check does not sandbox the program: external command-line workers run outside the Omnipus sandbox (see [sandbox limitations](operations/sandbox-limitations.md#external-command-line-workers-run-outside-the-omnipus-sandbox)).
 
 ## Limits and things to watch
 

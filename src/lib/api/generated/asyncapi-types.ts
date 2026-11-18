@@ -93,7 +93,9 @@ export type WsFrameType =
   | "room_snapshot"
   | "room_entry"
   | "room_member_state"
-  | "room_meta";
+  | "room_meta"
+  | "open_in_library"
+  | "chat_presence";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -107,6 +109,14 @@ export interface SessionHistoryState {
   status: "available" | "unavailable";
   reason?: "index_missing" | "index_inconsistent" | "catchup_limit" | "storage_error" | "projection_error";
   message?: string;
+}
+
+export interface EffortRecord {
+  chosen?: string;
+  sent?: string;
+  reason?: "mapped" | "not_supported" | "continuation" | "rejected" | "rejected_earlier" | "extra_body";
+  provider?: string;
+  model?: string;
 }
 
 export interface RoomRef {
@@ -190,12 +200,18 @@ export interface RoomDeliveryState {
   reason?: string;
 }
 
+export interface LibraryRef {
+  workspace_id: string;
+  path: string;
+}
+
 export interface MediaPart {
   type: "image" | "audio" | "video" | "file";
   url: string;
   filename: string;
   content_type: string;
   caption?: string;
+  library_ref?: LibraryRef;
 }
 
 export interface RoomEntry {
@@ -293,6 +309,8 @@ export interface MessageFrame {
   auto_approve?: boolean | null;
   metadata?: {
     model_name?: string;
+    provider?: string;
+    reasoning_effort?: string;
     workspace_id?: string;
     workspace_setup_kickoff?: boolean;
     [key: string]: unknown;
@@ -303,6 +321,11 @@ export interface CancelFrame {
   type: "cancel";
   session_id: string;
   scope?: "session" | "tree";
+  shown?: {
+    turn_id?: string;
+    message_id?: string;
+    code_points: number;
+  };
 }
 
 export interface RedirectFrame {
@@ -317,6 +340,12 @@ export interface PingFrame {
 
 export interface PongFrame {
   type: "pong";
+}
+
+export interface ChatPresenceFrame {
+  type: "chat_presence";
+  session_id: string;
+  watching: boolean;
 }
 
 export interface AttachSessionFrame {
@@ -383,6 +412,8 @@ export interface DoneStats {
   turn_failed?: boolean;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
+  effort?: EffortRecord;
+  reasoning_tokens?: number;
   [key: string]: unknown;
 }
 
@@ -398,7 +429,7 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
+  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "provider_empty_reply" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
@@ -411,7 +442,7 @@ export interface LLMError {
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
+  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "provider_empty_reply" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   provider_message?: boolean;
@@ -641,6 +672,8 @@ export interface ReplayMessageFrame {
   };
   seq?: number;
   terminal_outcome?: boolean;
+  effort?: EffortRecord;
+  turn_reasoning_tokens?: number;
 }
 
 export interface ReplayErrorFrame {
@@ -682,6 +715,8 @@ export interface RateLimitFrame {
 export interface ProviderRetryFrame {
   type: "provider_retry";
   session_id: string;
+  child_session_id?: string;
+  agent_id?: string;
   turn_id: string;
   provider: string;
   model: string;
@@ -697,11 +732,15 @@ export interface ProviderRetryFrame {
 export interface ProviderStatusFrame {
   type: "provider_status";
   session_id: string;
+  child_session_id?: string;
+  agent_id?: string;
   turn_id: string;
-  state: "waiting" | "responding" | "recovered";
+  state: "waiting" | "responding" | "recovered" | "ended";
   sent_at: string;
   silent_since?: string;
   stall_at?: string;
+  attempt?: number;
+  max_attempts?: number;
   retries?: number;
   seq?: number;
 }
@@ -758,6 +797,15 @@ export interface MediaFrame {
   session_id: string;
   parts: Array<MediaPart>;
   seq?: number;
+}
+
+export interface OpenInLibraryFrame {
+  type: "open_in_library";
+  session_id: string;
+  call_id: string;
+  request_id: string;
+  workspace_id: string;
+  path: string;
 }
 
 export interface CommandSegmentInfo {
@@ -889,6 +937,7 @@ export interface SessionStateFrame {
   active_turn?: SessionStateActiveTurn;
   boot_id?: string;
   emitted_at: string;
+  emitted_at_ms?: number;
 }
 
 export interface SystemOverloadFrame {
@@ -1501,6 +1550,7 @@ export type WsFrame =
   | RedirectFrame
   | PingFrame
   | PongFrame
+  | ChatPresenceFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | SessionStartedFrame
@@ -1527,6 +1577,7 @@ export type WsFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
+  | OpenInLibraryFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
@@ -1586,6 +1637,7 @@ export type ClientFrame =
   | CancelFrame
   | RedirectFrame
   | PingFrame
+  | ChatPresenceFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | AskUserAnswerFrame
@@ -1604,7 +1656,7 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["attach_room", "auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
+export const ClientFrameTypes = ["attach_room", "auth", "message", "cancel", "redirect", "ping", "chat_presence", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -1640,6 +1692,7 @@ export type ServerFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
+  | OpenInLibraryFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame

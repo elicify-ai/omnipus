@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { Agent, Provider, Session, Workspace } from '@/lib/api/generated/openapi-types'
+import type { Agent, Provider, ProvidersCatalog, Session, Workspace } from '@/lib/api/generated/openapi-types'
 import { availableDetail, page } from '../chat-history-paging/fixtures'
 
 // Discriminating inputs, not product defaults. Restored expectations come from
@@ -22,7 +22,7 @@ export const agent: Agent = {
   max_tool_iterations_override_ignored: false,
 }
 
-export const providers: Provider[] = [
+export const providers = [
   {
     id: 'openrouter', name: 'openrouter', display_name: 'OpenRouter',
     status: 'connected', auth_method: 'api_key', dependents: [], backs_default: true,
@@ -33,7 +33,27 @@ export const providers: Provider[] = [
     status: 'connected', auth_method: 'api_key', dependents: [], backs_default: false,
     models: [DEFAULT_MODEL],
   },
-]
+] satisfies Provider[]
+
+// Declared HTTP data for the composer's real effort-capability query. The
+// catalog includes every connected pair; it is not an empty catalog that hides
+// the chip. Session/model persistence still runs through the real application.
+const catalog: ProvidersCatalog = {
+  schema_version: '2.0.0', version: 'v2026.10.23', updated_at: FIXTURE_TIME,
+  source: 'session-return contract fixture', served_from: 'embedded', stale: false,
+  default_resize_limits: { long_edge_px: 2000, max_bytes: 5242880 },
+  providers: providers.map((provider) => ({
+    id: provider.id, name: provider.display_name, company: provider.display_name,
+    api: provider.id === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://backup.invalid/v1',
+    protocol: 'openai-compatible', tier: 'standard', auth_methods: ['api_key'],
+    aliases: [], locality: 'cloud',
+    models: provider.models.map((id) => ({
+      id, name: id, context_window: 128000, max_output_tokens: 8192,
+      input_modalities: ['text'], tool_call: true, status: 'active',
+      ...(id === FIRST_CHOICE ? {} : { reasoning: { levels: ['low', 'medium', 'high'], switch: false } }),
+    })),
+  })),
+}
 
 export const workspace: Workspace = {
   revision: 'b'.repeat(64), id: WORKSPACE_ID, name: 'Linked workspace',
@@ -74,6 +94,7 @@ export function installSessionReturnNetwork(options: {
         } satisfies import('@/lib/api/generated/openapi-types').AppState)
         case '/api/v1/agents': return Response.json([agent])
         case '/api/v1/providers': return Response.json(providers)
+        case '/api/v1/providers/catalog': return Response.json(catalog)
         case '/api/v1/commands': return Response.json([])
         case '/api/v1/skills': return Response.json([])
         case `/api/v1/agents/${agent.id}/activity-runs`: return Response.json([])

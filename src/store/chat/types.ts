@@ -14,7 +14,9 @@ import type {
   CancelFrame,
   ServerFrame,
   LLMError as GeneratedLLMError,
+  LibraryRef,
   WorkflowStart,
+  ProviderStatusFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
@@ -39,6 +41,8 @@ export interface MediaAttachment {
   filename: string
   contentType: string
   caption?: string
+  /** chat-links FR-021: the sent file's Library location (generated wire type), when it has one. */
+  libraryRef?: LibraryRef
 }
 
 // FR-H-008/FR-H-009: a subagent span brackets one sub-turn.
@@ -399,6 +403,14 @@ export interface QueuedOutboundMessage {
   id: string
   content: string
   timestamp: string
+  /** #1428: the chat this message was written in. Absent for the first message of a new chat, which has no chat id yet. */
+  targetSessionId?: string
+  /** #1428: order in which the app accepted the message; survives a bounce back into the queue, independent of the clock. */
+  seq?: number
+  /** #1428: client id of the unconfirmed first send this follow-up was typed under; only that send's chat may adopt it. */
+  firstSendOwner?: string
+  /** #1833: the unconfirmed chat this follow-up was typed under was abandoned. It is held, never sent, until the user discards it. */
+  abandoned?: boolean
 }
 
 /** Strings remain readable for persisted/test state created before #823. */
@@ -469,13 +481,68 @@ export interface ProviderStatusEventData {
   turnId: string
   /** Server clock — the last provider activity (or the round's start). */
   silentSince: string
-  /** Server clock — when the silence limit would end the call; absent when unknown. */
+  /** Server clock — when the silence limit would end this attempt; absent when unknown. */
   stallAt?: string
+  /** Issue #1664 B3 — frame `attempt` (1-based); absent when the frame does not count the call. */
+  attempt?: ProviderStatusFrame['attempt']
+  /** Issue #1664 B3 — frame `max_attempts`; absent when the frame does not count the call. */
+  maxAttempts?: ProviderStatusFrame['max_attempts']
   sentAt: string
   receivedAt: string
 }
 
+/**
+ * #1537 (helper-model-notices spec FR-005/006) — the one notice a main-chat
+ * named helper row currently shows. A row shows the latest notice of its
+ * helper turn: a retry countdown, a silence notice or the recovered line.
+ */
+export type ProviderHelperNotice =
+  | { kind: 'retry'; retry: ProviderRetryEventData }
+  | { kind: 'waiting'; waiting: ProviderStatusEventData }
+  | { kind: 'recovered'; retries: number }
+
+/**
+ * #1537 — one named helper row of the main (top) chat, built only from
+ * `provider_retry` / `provider_status` frames that carry BOTH
+ * `child_session_id` and `agent_id` (the top-chat copy of a helper's
+ * notice). Keyed by helper chat + helper turn (FR-007), never by agent or
+ * name, so two copies of one agent keep separate rows. Array position in
+ * `SessionChatState.providerHelperRows` is the turn's first-notice order
+ * (FR-009). `notice: null` is a row a `responding` copy cleared: hidden and
+ * uncounted, but it keeps its first-notice position until the turn's
+ * `ended`, so a later notice of the same turn returns to the same place.
+ */
+export interface ProviderHelperRow {
+  key: string
+  childSessionId: string
+  agentId: string
+  turnId: string
+  notice: ProviderHelperNotice | null
+}
+
+/**
+ * #1537 FR-008 — the chat's server-clock estimate on this connection: the
+ * largest (server time − client receipt time) seen over the frames received
+ * for the chat (`provider_retry` / `provider_status` `sent_at` and
+ * `session_state.emitted_at`). Server now = serverMs + (clientNow − clientMs).
+ * It only ever moves forward, so an older sample cannot pull it back.
+ */
+export interface ProviderServerClock {
+  serverMs: number
+  clientMs: number
+}
+
 /** All per-session chat state for one concurrent session. */
+/** #1534: see SessionChatState.appliedTokenPoints. */
+export interface AppliedTokenPoints { // not-wire-format: client-side counter of applied token text, never sent as-is
+  /** Last wire message_id whose token was applied to this bubble. */
+  messageId: string
+  /** turn_id carried by that token, when it had one. */
+  turnId?: string
+  /** Applied code points per wire message_id of this bubble. */
+  codePoints: Record<string, number>
+}
+
 export interface SessionChatState {
   history: SessionHistoryState
   historyNotice?: string
@@ -623,6 +690,20 @@ export interface SessionChatState {
    */
   providerStatusEvent?: ProviderStatusEventData | null
   /**
+   * #1537 — the chat's named helper rows (see ProviderHelperRow), in
+   * first-notice order. Written only by slices/provider-frames.ts for frames
+   * with helper identity, and replaced by a successful full-snapshot or
+   * `live_only` attach (FR-014). Never touched by this chat's own turn end.
+   */
+  providerHelperRows?: ProviderHelperRow[]
+  /**
+   * #1537 FR-014 — the helper-row keys the current attach delivered, from its
+   * `session_state` to its `catch_up_complete`; null outside an attach.
+   */
+  providerHelperAttachKeys?: string[] | null
+  /** #1537 FR-008 — see ProviderServerClock. */
+  providerServerClock?: ProviderServerClock | null
+  /**
    * provider-messages §7.4/D17 — the (unavailable, answered) model pairs for
    * which a fallback note is already visible in THIS chat (live-appended by
    * the `provider_fallback` case, or seeded by a `replay_provider_fallback`
@@ -742,6 +823,15 @@ export interface SessionChatState {
    * `{}` / `false` and every write site initializes it first.
    */
   mergedReplayMessageIds?: Record<string, true>
+  /**
+   * #1534: per assistant bubble id, the token text this client APPLIED to
+   * it, counted in Unicode code points per wire message_id, plus the last
+   * applied message_id and its turn. Read by markLastMessageInterrupted for
+   * the Stop checkpoint (stop-checkpoint.ts). Kept on the bucket so it shares
+   * the bucket's lifetime: a reset or replaced bucket never inherits counts.
+   * Optional: absent until a keyed token is applied.
+   */
+  appliedTokenPoints?: Record<string, AppliedTokenPoints>
   /**
    * ADR-049 D6/US-12: latest `goal_status` frame for this session, or
    * null/undefined when no goal is active. Session-scoped — the frame
@@ -1044,6 +1134,12 @@ export interface ChatStore extends HistorySlice {
   providerRetryEvent?: ProviderRetryEventData | null
   /** Issues #1478/#1280 — foreground projection of the session's `provider_status` waiting slot. Optional — see the SessionChatState field's doc comment. */
   providerStatusEvent?: ProviderStatusEventData | null
+  /** #1537 — foreground projection of the session's named helper rows. */
+  providerHelperRows?: ProviderHelperRow[]
+  /** #1537 — foreground projection of the session's attach key window. */
+  providerHelperAttachKeys?: string[] | null
+  /** #1537 FR-008 — foreground projection of the session's server-clock estimate. */
+  providerServerClock?: ProviderServerClock | null
   /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
   goalStatus?: GoalStatusFrame | null
   /**
@@ -1100,6 +1196,17 @@ export interface ChatStore extends HistorySlice {
    * choice is eligible to travel with a new chat's pending first message.
    */
   setNextModel: (model: string | null, provider?: string | null, source?: 'user') => void
+  /**
+   * Effort levels FR-055: the chat's effort for the next message, kept with
+   * the per-chat model choice (same lifetime, SessionModelChoice.effort).
+   * '' = Not set (the agent's setting applies). Sent as
+   * `metadata.reasoning_effort` when set.
+   */
+  nextEffort: string
+  /** The value was set by `/effort` in this conversation (gold dot, "set for this conversation", S-41). */
+  nextEffortByCommand: boolean
+  /** Set the chat's effort. source='user' records it with the explicit choice so a new chat's first send keeps it. */
+  setNextEffort: (effort: string, byCommand: boolean, source?: 'user') => void
 
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void
@@ -1132,8 +1239,11 @@ export interface ChatStore extends HistorySlice {
    * session — e.g. the browser panel's "Take over" pausing its own pinned
    * session. Omitted (the default) targets the active session, matching
    * every pre-existing call site (Stop button, Escape, `/cancel`).
+   * Returns the #1534 checkpoint of the bubble it froze (what the screen
+   * showed), or undefined when there is nothing to report
+   * (stop-checkpoint.ts::shownCheckpointFor).
    */
-  markLastMessageInterrupted: (sessionId?: string) => void
+  markLastMessageInterrupted: (sessionId?: string) => NonNullable<CancelFrame['shown']> | undefined
 
   startToolCall: (callId: string, tool: string, params: Record<string, unknown>) => void
   resolveToolCall: (callId: string, result: unknown, status: 'success' | 'error', durationMs?: number, error?: string) => void
@@ -1161,9 +1271,11 @@ export interface ChatStore extends HistorySlice {
   /** Pending outbound messages queued while WS was disconnected. Max 5. */
   outboundQueue: OutboundQueueItem[]
   /** Queue a message for when the WS reconnects. Returns false if queue is full. */
-  enqueueOutboundMessage: (content: string, queuedMessage?: QueuedOutboundMessage) => boolean
+  enqueueOutboundMessage: (content: string, queuedMessage?: QueuedOutboundMessage, alreadyAccepted?: boolean) => boolean
   /** Send all queued messages now that the WS is connected. */
   drainOutboundQueue: () => void
+  /** #1833: remove one queued message (by id) from both queue lists, e.g. a follow-up held because its chat was not saved. */
+  discardQueuedMessage: (id: string) => void
   /**
    * BUG FIX (2026-07): messages handed off from `outboundQueue` by
    * `drainOutboundQueue()`, sent ONE AT A TIME. `sendMessage` only allows one
@@ -1196,6 +1308,9 @@ export interface ChatStore extends HistorySlice {
   //   into the outbound message frame so the agent sees the attachment (#254).
   // opts.attachments: optional MediaAttachment[] rendered inline on the
   //   optimistic user bubble (display only — not sent on the wire).
+  // opts.provider / opts.reasoning_effort: effort levels FR-045/FR-055 — the
+  //   picked pair's provider and the chat's effort, sent with model_name as
+  //   metadata.provider / metadata.reasoning_effort.
   // opts.model_name: optional model slug for THIS turn only (Phase 1, FR-010).
   //   The composer model selector writes the picker's value here; sendMessage
   //   forwards it as `metadata.model_name` in the WS message frame. The
@@ -1206,7 +1321,7 @@ export interface ChatStore extends HistorySlice {
    * button attaches to its message into Omnipus's main (W1 create an agent,
    * W18 set up a team, for a named workspace). Never an instruction.
    */
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; queueSeq?: number; workflowStart?: WorkflowStart }) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED

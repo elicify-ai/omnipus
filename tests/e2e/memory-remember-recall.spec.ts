@@ -47,7 +47,10 @@
 import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { waitForConnected } from './fixtures/selectors';
+// assistantMessages is the shared locator: it excludes system rows such as the
+// provider-fallback note. A local copy without that filter made this test red
+// when the fallback note appeared (run 42969900253).
+import { assistantMessages, waitForConnected } from './fixtures/selectors';
 import { freshChat } from './fixtures/session-setup';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -109,13 +112,6 @@ async function apiHeaders(page: Page): Promise<Record<string, string>> {
 /** Chat input — same selector as fixtures/selectors.ts chatInput(). */
 const chatInput = (page: Page) =>
   page.locator('textarea[aria-label="Message input"]');
-
-/**
- * Completed assistant messages — excludes the in-progress streaming placeholder.
- * Mirrors fixtures/selectors.ts assistantMessages().
- */
-const assistantMessages = (page: Page) =>
-  page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])');
 
 // ── Turn completion helpers ───────────────────────────────────────────────────
 

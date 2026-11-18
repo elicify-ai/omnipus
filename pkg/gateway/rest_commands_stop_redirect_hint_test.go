@@ -48,9 +48,24 @@ func TestHandleListCommands_StopRedirectCarriesTheArgumentHintTheSPAInterceptsOn
 	}
 	// Only a command that takes an argument may carry a hint: a hint on a
 	// no-argument client command would make `/stop foo` match as `/stop`.
+	// The argument-taking client commands and their exact hints are pinned
+	// here; /effort takes a level (effort levels FR-023, S-41: the composer
+	// handles `/effort <level>` itself, so it must be intercepted with its
+	// argument just like /stop-redirect).
+	argumentTaking := map[string]string{
+		"stop-redirect": "<instruction>",
+		"effort":        "[level|on|off|default|reset]",
+	}
 	for _, c := range cmds {
-		if c.Name != "stop-redirect" && c.Delivery == gen.SlashCommandDeliveryClient && c.ArgumentHint != nil {
+		if c.Delivery != gen.SlashCommandDeliveryClient {
+			continue
+		}
+		want, takesArgument := argumentTaking[c.Name]
+		switch {
+		case !takesArgument && c.ArgumentHint != nil:
 			t.Errorf("/%s takes no argument but serves argument_hint %q", c.Name, *c.ArgumentHint)
+		case takesArgument && (c.ArgumentHint == nil || *c.ArgumentHint != want):
+			t.Errorf("/%s argument_hint = %v, want %q", c.Name, c.ArgumentHint, want)
 		}
 	}
 }

@@ -65,12 +65,27 @@ var ErrStreamStalled = errors.New("provider stream stalled: no data received for
 // arrived. Issue #1278.
 var ErrStreamProviderError = errors.New("provider ended the response with an error")
 
+// ErrEmptyStream is the sentinel for a streaming call whose provider ended the
+// stream (EOF or [DONE]) with no finish_reason, no content and no tool call
+// (issue #1664, founder decision 2026-11-07 Q3 A). Nothing arrived that could
+// be an answer, so it is a failed attempt, never a successful empty reply. It
+// is carried by a *StreamProviderError (Code StreamCodeEmptyStream, Cause
+// ErrEmptyStream) so the usage the attempt was billed for stays attached;
+// match with errors.Is(err, ErrEmptyStream).
+var ErrEmptyStream = errors.New("provider ended the stream without sending anything")
+
+// StreamCodeEmptyStream is the StreamProviderError code of an empty stream.
+const StreamCodeEmptyStream = "empty_stream"
+
 // StreamProviderError carries the provider's code and message and the usage the
 // failed attempt was billed for. match with errors.Is(err, ErrStreamProviderError).
 type StreamProviderError struct {
 	Code    string
 	Message string
 	Usage   *UsageInfo
+	// Cause, when set, is a more specific sentinel the error also matches
+	// with errors.Is (ErrEmptyStream). Nil for a provider-reported error.
+	Cause error
 }
 
 func (e *StreamProviderError) Error() string {
@@ -79,6 +94,22 @@ func (e *StreamProviderError) Error() string {
 
 // Unwrap makes errors.Is(err, ErrStreamProviderError) work through every wrap.
 func (e *StreamProviderError) Unwrap() error { return ErrStreamProviderError }
+
+// Is makes errors.Is(err, e.Cause) work through every wrap (ErrEmptyStream).
+func (e *StreamProviderError) Is(target error) bool {
+	return e.Cause != nil && target == e.Cause
+}
+
+// NewEmptyStreamError is the typed error of an empty stream, carrying the
+// usage seen on the stream (nil when the provider sent none).
+func NewEmptyStreamError(usage *UsageInfo) *StreamProviderError {
+	return &StreamProviderError{
+		Code:    StreamCodeEmptyStream,
+		Message: "the stream ended with no finish_reason, no content and no tool call",
+		Usage:   usage,
+		Cause:   ErrEmptyStream,
+	}
+}
 
 // StallError carries the sentinel together with how long the stream had been
 // silent when the monitor fired, so the operator-facing message can state the
@@ -257,6 +288,10 @@ func NewHTTPClient(proxy string) (*http.Client, error) {
 	// Age stale pooled connections out quickly (default is 90s).
 	transport.IdleConnTimeout = 30 * time.Second
 
+	// Hosted edition: dial only addresses the provider endpoint guard accepts
+	// (endpoint_guard.go). A no-op on every other edition.
+	GuardTransport(transport)
+
 	// Enable HTTP/1.1 and HTTP/2 explicitly — the modern replacement for the
 	// deprecated http2.ConfigureTransports — and configure HTTP/2 with
 	// health-check pings: if no frame is received on a pooled connection for
@@ -288,6 +323,8 @@ type openaiMessage struct {
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	// ReasoningDetails is set only by SerializeOpenRouterMessages (FR-013).
+	ReasoningDetails []ReasoningDetail `json:"reasoning_details,omitempty"`
 }
 
 // SerializeMessages converts internal Message structs to the OpenAI wire format.
@@ -295,6 +332,18 @@ type openaiMessage struct {
 //   - Converts messages with Media to multipart content format (text + image_url parts)
 //   - Preserves ToolCallID, ToolCalls, and ReasoningContent for all messages
 func SerializeMessages(messages []Message) []any {
+	return serializeMessages(messages, false)
+}
+
+// SerializeOpenRouterMessages is SerializeMessages plus each assistant
+// message's private reasoning_details carrier, unchanged (effort-levels spec
+// FR-013, S-30..S-32). Only the OpenRouter route calls it; every other route
+// uses SerializeMessages, which never emits the carrier (S-33).
+func SerializeOpenRouterMessages(messages []Message) []any {
+	return serializeMessages(messages, true)
+}
+
+func serializeMessages(messages []Message, withDetails bool) []any {
 	out := make([]any, 0, len(messages))
 	var pendingToolImages []any
 	for _, m := range messages {
@@ -315,6 +364,10 @@ func SerializeMessages(messages []Message) []any {
 			}
 			continue
 		}
+		var details []ReasoningDetail
+		if withDetails && m.Role == "assistant" {
+			details = m.ReasoningDetails
+		}
 		if len(m.Media) == 0 {
 			out = append(out, openaiMessage{
 				Role:             m.Role,
@@ -322,6 +375,7 @@ func SerializeMessages(messages []Message) []any {
 				ReasoningContent: m.ReasoningContent,
 				ToolCalls:        m.ToolCalls,
 				ToolCallID:       m.ToolCallID,
+				ReasoningDetails: details,
 			})
 			continue
 		}
@@ -383,6 +437,9 @@ func SerializeMessages(messages []Message) []any {
 		}
 		if m.ReasoningContent != "" {
 			msg["reasoning_content"] = m.ReasoningContent
+		}
+		if len(details) > 0 {
+			msg["reasoning_details"] = details
 		}
 		out = append(out, msg)
 	}

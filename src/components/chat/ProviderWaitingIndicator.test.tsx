@@ -30,11 +30,22 @@ const SILENT_SINCE = new Date(SENT_AT.getTime() - 45_000).toISOString()
 // The stream's silence limit would end the call 5 minutes after silence began.
 const STALL_AT = new Date(SENT_AT.getTime() - 45_000 + 300_000).toISOString()
 
-function renderIndicator(overrides: Partial<Parameters<typeof ProviderWaitingIndicator>[0]> = {}) {
+// Issue #1664 B3/B4 (founder Q1 A): the waiting frame carries attempt and
+// max_attempts from the contract wave on, so every render below happens in
+// the post-fix frame shape (attempt 1 of 3). The component's props do not
+// declare the fields yet, so they are passed shape-compatibly (a Record
+// spread) — the attempt clause's own expectations are the RED tests.
+const attemptProps = (attempt: number, maxAttempts: number): Record<string, unknown> => ({
+  attempt,
+  maxAttempts,
+})
+
+function renderIndicator(overrides: Record<string, unknown> = {}) {
   const props = {
     silentSince: SILENT_SINCE,
     sentAt: SENT_AT.toISOString(),
     receivedAt: SENT_AT.toISOString(), // live start: receipt == sent_at, elapsed 0
+    ...attemptProps(1, 3),
     ...overrides,
   }
   return render(<ProviderWaitingIndicator {...props} />)
@@ -72,12 +83,20 @@ describe('ProviderWaitingIndicator — waiting line (docs/troubleshooting.md, "T
     expect(container.textContent).toContain("The model hasn't responded for 45s — still waiting.")
   })
 
-  it('with a known silence limit it says when the call would end (local short time of stall_at)', () => {
+  // Issue #1664 B4 (founder Q2, 2026-11-07): the end-of-call clause names
+  // the ATTEMPT and the count — "this attempt ends (attempt 1 of 3)"; the
+  // whole-call wording ("the call ends (attempt 3 of 3)") belongs to the
+  // last attempt only. Reconciled from the pre-#1664 expectation ("the call
+  // ends.") — the founder approved the new wording, so the old oracle would
+  // have died on green for the wrong reason.
+  it('with a known silence limit it says when THIS attempt ends, with the count (local short time of stall_at)', () => {
     vi.useFakeTimers()
     vi.setSystemTime(SENT_AT)
     const { container } = renderIndicator({ stallAt: STALL_AT })
     const expected = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(new Date(STALL_AT))
-    expect(container.textContent).toContain(`If nothing arrives by ${expected}, the call ends.`)
+    expect(container.textContent).toContain(
+      `If nothing arrives by ${expected}, this attempt ends (attempt 1 of 3).`,
+    )
   })
 
   it('without a known silence limit it does not mention an end time', () => {

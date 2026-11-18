@@ -24,10 +24,10 @@
  * scrollTop assignments are captured. Installed BEFORE mounting, so the
  * open-time jump is observable.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { RoomHistoryResponse } from '@/lib/api/generated/openapi-types'
-import { Network, entry, openRoom, snapshot, stopHarness } from '../../../tests/l1-room-ui/harness'
+import { Network, entry, loadRoomScreen, openRoom, snapshot, stopHarness } from '../../../tests/l1-room-ui/harness'
 import { RoomTranscript } from './RoomTranscript'
 
 const fetchRoomHistory = vi.hoisted(() => vi.fn<(roomId: string, opts?: { beforeSeq?: number; limit?: number }) => Promise<RoomHistoryResponse>>())
@@ -114,6 +114,12 @@ function restoreScrollGeometry(): void {
 }
 
 let mounted: Awaited<ReturnType<typeof openRoom>> | undefined
+
+// #1572: module transformation uses the existing beforeAll hook budget — the
+// RoomScreen import must not run inside the first test's 30 s testTimeout,
+// where an abort would leak its late mount into the next case (K45 cascade);
+// same shape as RoomTranscript.anchor.test.tsx.
+beforeAll(async () => { await loadRoomScreen() })
 
 async function mountRoom() {
   mounted = await openRoom(new Network(), snapshot({

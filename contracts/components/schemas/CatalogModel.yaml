@@ -108,3 +108,9 @@ properties:
       SPA renders "No context length" with a link to Settings → Models →
       Model overrides. Never a Provider.status value.
     example: false
+  reasoning:
+    $ref: './CatalogModelReasoning.yaml'
+    description: >
+      Effort levels spec (FR-035). Optional served reasoning capability,
+      filtered by the gateway's encoder table (FR-049). Absent when the model
+      does not reason.

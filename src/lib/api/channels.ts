@@ -1,6 +1,6 @@
 // channels.ts: Channel enable/configure/route, channel instances, email mailboxes
 
-import { ApiError, isApiError as isApiErrorFn } from '../api-error'
+import { ApiError, isApiError as isApiErrorFn, parseServerErrorField } from '../api-error'
 import type { ZodType } from 'zod'
 import { z } from 'zod'
 import {
@@ -52,15 +52,33 @@ export function fetchChannels(): Promise<ChannelEntry[]> {
   return request<ChannelEntry[]>('/channels', undefined, z.array(ChannelEntrySchema) as ZodType<ChannelEntry[]>)
 }
 
-export function enableChannel(id: string, body?: ChannelEnableRequest): Promise<ChannelEnabledResponse> {
+export async function enableChannel(id: string, body?: ChannelEnableRequest): Promise<ChannelEnabledResponse> {
   // Backend returns ChannelEnabledResponse {id, enabled} — not a full ChannelEntry.
   // Only an explicit pairing_retry body claims chat ownership; ordinary enables
   // remain bodyless and grant no pairing ownership.
-  return request<ChannelEnabledResponse>(
-    `/channels/${encodeURIComponent(id)}/enable`,
-    { method: 'PUT', ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
-    ChannelEnabledResponseSchema as ZodType<ChannelEnabledResponse>,
-  )
+  // A 500 ErrorResponse names what was saved (a start that failed, a restart
+  // that was not confirmed). The generic 500 sentence must not replace it,
+  // the same way Configure keeps its own 500 text (#1568).
+  try {
+    return await request<ChannelEnabledResponse>(
+      `/channels/${encodeURIComponent(id)}/enable`,
+      { method: 'PUT', ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
+      ChannelEnabledResponseSchema as ZodType<ChannelEnabledResponse>,
+    )
+  } catch (error) {
+    throw withEnableErrorText(error)
+  }
+}
+
+function withEnableErrorText(error: unknown): unknown {
+  if (!isApiErrorFn(error) || error.status !== 500) return error
+  const text = parseServerErrorField(error.body)
+  if (!text) return error
+  return new ApiError(error.status, text, {
+    code: error.code,
+    body: error.body,
+    cause: error,
+  })
 }
 
 export function disableChannel(id: string): Promise<ChannelEnabledResponse> {

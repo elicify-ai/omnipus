@@ -186,6 +186,12 @@ type ApprovalOutcome struct {
 	// D7/D8 call sites no way to see which one the human actually clicked,
 	// so they recorded a persistent grant unconditionally on any approval.
 	RecordGrant bool
+
+	// ApproverUserID is the authenticated person who made an explicit
+	// decision (approve, deny, cancel through the decision route); empty for
+	// every system decision (timeout, restart, Stop, saturation, …). Used
+	// only for the consent audit record (channels security S3).
+	ApproverUserID string
 }
 
 // Denial-reason literals emitted by this file (ADR-058 spec §2.2, FR-058-04).
@@ -293,6 +299,11 @@ var allApprovalDenialReasons = []string{
 type approvalRegistryV2 struct {
 	mu      sync.Mutex
 	entries map[string]*approvalEntry // approval_id → entry
+
+	// approvedCalls correlates an approved always-ask call with its approval
+	// for the writer-outcome audit record (channels security S3). It has its
+	// own lock; see approvals_consent.go.
+	approvedCalls approvedCallIndex
 
 	// maxPending is the saturation cap (FR-016).  0 = unlimited (discouraged).
 	// Set once at construction; protected by maxPending atomic for fast reads.
@@ -614,6 +625,18 @@ func (r *approvalRegistryV2) resolve(
 	action ApprovalAction,
 	recordGrant bool,
 ) (resolveOK bool, gone bool) {
+	return r.resolveBy(approvalID, action, recordGrant, "")
+}
+
+// resolveBy is resolve with the deciding person's authenticated user id
+// (empty for a system decision), carried on the delivered outcome for the
+// consent audit record (channels security S3).
+func (r *approvalRegistryV2) resolveBy(
+	approvalID string,
+	action ApprovalAction,
+	recordGrant bool,
+	approverUserID string,
+) (resolveOK bool, gone bool) {
 	r.mu.Lock()
 	e, ok := r.entries[approvalID]
 	if !ok {
@@ -652,6 +675,10 @@ func (r *approvalRegistryV2) resolve(
 	listener := r.resolutionListener
 	r.mu.Unlock()
 
+	outcome.ApproverUserID = approverUserID
+	if outcome.Approved {
+		r.approvedCalls.record(e)
+	}
 	e.resultCh <- outcome
 	if listener != nil {
 		listener(e, newState)

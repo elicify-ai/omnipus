@@ -831,95 +831,79 @@ func restartServices(
 	return rs.applyMessagingCaps()
 }
 
-// restartCron recreates and starts the cron service, then refreshes its REST API reference.
+// restartCron applies the schedules.* settings to the live cron service. The
+// service is NOT stopped, rebuilt or restarted on reload (#1760): Stop cancels
+// the lane context, which ended every running heartbeat and scheduled turn and
+// dropped queued jobs. Only the two settings it reads from config are applied,
+// atomically, through ApplySchedulesConfig; a rejected value returns an error
+// and leaves the previous settings in force.
+//
+// Kept as at boot: the store path stays <agents.defaults.home>/cron/jobs.json,
+// resolved once when the service was built. Changing agents.defaults.home
+// therefore needs a restart.
 func (rs *restartServicesState) restartCron() (error, bool) {
 	rs.cfg = rs.al.GetConfig()
-
-	// FIX (14-reviewer sign-off, MEDIUM): this used to derive the home dir as
-	// filepath.Dir(cfg.AgentHomeBasePath()) — i.e. assuming
-	// cfg.Agents.Defaults.Home is always exactly "<OMNIPUS_HOME>/agents", so
-	// stepping one directory up recovers OMNIPUS_HOME. Boot
-	// (setupAndStartServices) never made that assumption: it takes homePath
-	// as an explicit parameter and joins directly off it, storing the same
-	// value in runningServices.homePath for exactly this reason (see that
-	// field's doc comment). Whenever an operator customizes
-	// agents.defaults.home to a path whose parent isn't OMNIPUS_HOME (or that
-	// doesn't even live under it), the two derivations diverge and a hot
-	// reload silently re-homes the notification store / task-trigger
-	// scheduler / loop scheduler onto a different, likely-empty directory —
-	// the operator's existing notifications/triggers/loop jobs would appear
-	// to vanish. Use the SAME field boot used, not a re-derivation, so the
-	// two paths are equal by construction rather than by convention.
+	// The SAME field boot used, not a re-derivation (see runningServices.homePath).
 	rs.homePath = rs.runningServices.homePath
 
 	if rs.runningServices.notifStore == nil {
-		// Derive the home dir from the workspace path (workspace == <home>/workspace).
 		rs.runningServices.notifStore = notifications.NewStore(
 			filepath.Join(rs.homePath, "notifications"),
 		)
 	}
 
-	rs.runningServices.CronService, rs.err = setupCronTool(
-		rs.al,
-		rs.msgBus,
-		rs.cfg.AgentHomeBasePath(),
-		rs.cfg,
-		rs.runningServices.notifStore,
-	)
-	if rs.err != nil {
-		return fmt.Errorf("error restarting cron service: %w", rs.err), true
+	cs := rs.runningServices.CronService
+	if cs == nil {
+		// No live service to keep (boot always sets one; this is a harness or an
+		// aborted boot): build and start one exactly as boot does. A live
+		// service is never rebuilt.
+		built, buildErr := setupCronTool(rs.al, rs.msgBus, rs.cfg.AgentHomeBasePath(), rs.cfg, rs.runningServices.notifStore)
+		if buildErr != nil {
+			return fmt.Errorf("error restarting cron service: %w", buildErr), true
+		}
+		// The same validation the live branch applies, before the service runs
+		// or is published: a rejected configuration leaves no service behind.
+		if applyErr := built.ApplySchedulesConfig(rs.cfg.Schedules.MaxConcurrentRuns, rs.cfg.Schedules.RetryBackoffMs); applyErr != nil {
+			return fmt.Errorf("error applying schedules config: %w", applyErr), true
+		}
+		if startErr := built.Start(); startErr != nil {
+			return fmt.Errorf("error restarting cron service: %w", startErr), true
+		}
+		rs.runningServices.CronService = built
+		if rs.runningServices.restAPIRef != nil {
+			rs.runningServices.restAPIRef.cronService.Store(built)
+		}
+		fmt.Println("  ✓ Cron service started (none was running)")
+		return nil, false
 	}
-	if rs.err = rs.runningServices.CronService.Start(); rs.err != nil {
-		return fmt.Errorf("error restarting cron service: %w", rs.err), true
+	if rs.err = cs.ApplySchedulesConfig(rs.cfg.Schedules.MaxConcurrentRuns, rs.cfg.Schedules.RetryBackoffMs); rs.err != nil {
+		return fmt.Errorf("error applying schedules config: %w", rs.err), true
 	}
-	// Re-point the restAPI's cronService field to the newly started instance.
-	// restAPI.cronService is assigned once at construction time
-	// (setupAndStartServices). On each reload, restartServices replaces
-	// runningServices.CronService with a new instance whose laneCtx is live;
-	// without this update the restAPI holds a stale pointer whose laneCtx was
-	// canceled by the previous Stop(), causing "turn not started: context
-	// canceled" on every RunNow call (#412).
-	if rs.runningServices.restAPIRef != nil {
-		rs.runningServices.restAPIRef.cronService.Store(rs.runningServices.CronService)
-	}
-	fmt.Println("  ✓ Cron service restarted")
+	fmt.Println("  ✓ Cron service kept running; schedules settings applied")
 	return nil, false
 }
 
-// restartSchedulersAndDrains restarts the plan engine, schedulers, and background task and mailbox drains.
+// restartSchedulersAndDrains restarts the background task and mailbox drains. The /loop scheduler is kept live across a reload (#1760).
 func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
-	// Restart the SAME plan-engine instance (ADR-049 D4) — unlike CronService,
-	// the engine is not reconstructed on reload: it was Stop()'d in
-	// stopAndCleanupServices(isReload=true) above, and Start() on an
-	// already-constructed *PlanEngine is safe to call again (fresh stopCh,
-	// re-subscribes to the event bus, re-runs boot reconciliation). taskStore/
-	// taskExecutor are themselves stable across a reload (owned by the SAME
-	// al, never recreated), so there is nothing to re-wire.
-	if rs.runningServices.PlanEngine != nil {
-		if startErr := rs.runningServices.PlanEngine.Start(context.Background()); startErr != nil {
-			return fmt.Errorf("error restarting plan engine: %w", startErr), true
-		}
-		fmt.Println("  ✓ Plan engine restarted")
-	}
+	// The plan engine is NOT restarted: a configuration reload keeps the one
+	// live instance (ADR-049 D4, #1725; stopAndCleanupServices skips it on
+	// reload), so its event subscription, tick loop and in-flight wake turns
+	// and Judge rounds carry on untouched. It reads planning config live off
+	// the same al, and its taskStore/taskExecutor are owned by that al and
+	// never recreated, so there is nothing to re-wire — on the success path
+	// and on handleConfigReload's rollback restarts alike.
 
 	// The task time-trigger scheduler is NOT restarted: a configuration reload
 	// keeps the one live instance (r17 TK-30, 18.40; stopAndCleanupServices
 	// skips it on reload), so ownership of an armed or queued occurrence never
 	// changes hands within a process.
 
-	// Restart the /loop scheduler on a fresh dedicated CronService (ADR-049
-	// D6/D7). The previous instance was already Stop()'d in
-	// stopAndCleanupServices(isReload) — mirrors the task trigger restart
-	// immediately above.
-	{
-		loopSchedStorePath := filepath.Join(rs.homePath, "loops", "jobs.json")
-		rs.runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, rs.al)
-		if startErr := rs.runningServices.LoopScheduler.Start(); startErr != nil {
-			return fmt.Errorf("error restarting loop scheduler: %w", startErr), true
-		}
-		rs.al.SetLoopScheduler(rs.runningServices.LoopScheduler)
-		fmt.Println("  ✓ Loop scheduler restarted")
-	}
+	// The /loop scheduler is NOT restarted either (#1760): a configuration
+	// reload keeps the one live instance (stopAndCleanupServices skips it on
+	// reload). Stopping it cancelled every running /loop turn, and it reads no
+	// config of its own, so rebuilding it applied nothing. The AgentLoop keeps
+	// publishing the same instance, so the plan engine's "loop" counter and the
+	// /loop command are unaffected.
 
 	// Queued-task draining is owned by the dedicated TaskDrainService, never the
 	// heartbeat path — restart it here so dispatch survives a reload regardless of
@@ -1079,8 +1063,8 @@ func (rs *restartServicesState) applyMessagingCaps() error {
 	// them. An operator editing session_messaging.* limits and reloading saw
 	// "Config reload completed successfully" while the inbox kept enforcing
 	// the ORIGINAL boot-time caps for the rest of the process's life. The
-	// store itself is process-lifetime (never reconstructed on reload, unlike
-	// CronService/MediaStore above), so re-fetch it via the agent loop and
+	// store itself is process-lifetime (never reconstructed on reload; the cron service is
+	// kept live too, #1760, unlike MediaStore above), so re-fetch it via the agent loop and
 	// overwrite its plain-field caps in place — the store's own doc comment
 	// on these fields (pkg/session/message_inbox.go) already documents them
 	// as "re-read per call", so this is safe to do without touching the
@@ -1167,12 +1151,22 @@ func setupConfigWatcherPolling(
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
+	// The baseline is taken before the goroutine starts, so a write made right
+	// after this function returns is always seen as a change (#1743 test).
+	lastModTime := getFileModTime(configPath)
+	lastSize := getFileSize(configPath)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		lastModTime := getFileModTime(configPath)
-		lastSize := getFileSize(configPath)
+		// offerOutstanding is true after a refused hand-off (#1743): the file on
+		// disk holds an external edit that no reload has been offered yet. The
+		// next detected change must then be offered even when its bytes match a
+		// self-write hash, because the poller's own load can rewrite the file
+		// (config.loadConfigInternal's CLI-token migration) and register THAT
+		// write; suppressing it would swallow the outstanding external edit.
+		offerOutstanding := false
 
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -1193,6 +1187,9 @@ func setupConfigWatcherPolling(
 					time.Sleep(500 * time.Millisecond)
 
 					// Re-stat after the debounce; the file may have changed again.
+					// prevModTime/prevSize are what to go back to if the hand-off
+					// below is refused (#1743).
+					prevModTime, prevSize := lastModTime, lastSize
 					lastModTime = getFileModTime(configPath)
 					lastSize = getFileSize(configPath)
 
@@ -1204,8 +1201,13 @@ func setupConfigWatcherPolling(
 					}
 					currentHash := sha256.Sum256(fileBytes)
 
-					// Suppress reload when the change was made by the app itself.
-					if selfWriteReg != nil && selfWriteReg.consume(currentHash) {
+					// Suppress reload when the change was made by the app itself,
+					// unless an external edit is still outstanding (#1743): the
+					// registry is then still consumed (a stale hash must not
+					// suppress a later edit) but the content is offered anyway.
+					outstanding := offerOutstanding
+					offerOutstanding = false
+					if selfWriteReg != nil && selfWriteReg.consume(currentHash) && !outstanding {
 						if debug {
 							logger.Debugf("Config file change is app-initiated — skipping reload")
 						}
@@ -1273,7 +1275,19 @@ func setupConfigWatcherPolling(
 					select {
 					case configChan <- change:
 					default:
-						logger.Warn("⚠ Previous config reload still in progress, skipping")
+						// The buffer already holds an earlier edit that no reload has
+						// taken yet. Do NOT mark this edit as seen: forget the stat
+						// recorded above, so the next tick finds the file changed
+						// again, re-reads it and offers its CURRENT content once the
+						// buffer is free (#1743). A file that failed to load or
+						// validate (the `continue`s above) stays marked as seen, so a
+						// broken file is reported once and does not loop.
+						lastModTime, lastSize = prevModTime, prevSize
+						offerOutstanding = true
+						if hook := configWatcherHandoffRefusedHook; hook != nil {
+							hook()
+						}
+						logger.Warn("⚠ Previous config reload still in progress; this edit will be offered again")
 					}
 				}
 			case <-stop:
@@ -1289,6 +1303,11 @@ func setupConfigWatcherPolling(
 
 	return configChan, stopFunc
 }
+
+// configWatcherHandoffRefusedHook is a test seam: called once each time the
+// poller's non-blocking hand-off is refused because the one-slot buffer is
+// full (#1743). Nil in production.
+var configWatcherHandoffRefusedHook func()
 
 func getFileModTime(path string) time.Time {
 	info, err := os.Stat(path)

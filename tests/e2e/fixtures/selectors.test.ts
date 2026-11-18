@@ -16,9 +16,12 @@
 // are specification, derived from
 // src/components/layout/sidebar/WorkspaceAgentList.tsx (NOT from the helper).
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
 import type { Page } from '@playwright/test'
 import {
+  ASSISTANT_MESSAGE_SELECTOR,
   waitForLiveSink,
   workspaceDisclosureButton,
   agentRowMenuButtonLabel,
@@ -250,5 +253,65 @@ describe('originOf — freshChat rides the PAGE’s gateway, never a module cons
   it('refuses to guess a server off about:blank — the caller must goto() first', () => {
     expect(() => originOf(pageAt('about:blank'))).toThrow(/not on an app origin/)
     expect(() => originOf(pageAt(''))).toThrow(/not on an app origin/)
+  })
+})
+
+// Oracle: the DOM captured in the trace of the failed memory-remember-recall
+// run 42969900253 (release 8f0ecbc49): one complete assistant ARTICLE plus a
+// system row holding the provider-fallback note. The real selector string is
+// run through a real selector engine (jsdom querySelectorAll).
+describe('ASSISTANT_MESSAGE_SELECTOR — counts real assistant replies, never system rows', () => {
+  const userRow =
+    '<div data-message-id="u1" data-message-role="user" class="flex flex-row-reverse">hi</div>'
+  const assistantRow = (id: string, status = 'complete') =>
+    `<article data-testid="assistant-message" data-message-role="assistant" data-message-id="${id}" data-status="${status}">reply</article>`
+  const fallbackNote =
+    '<div data-message-role="system" data-message-id="s1"><div data-testid="provider-fallback-note">Answered by the Fallback model</div></div>'
+  const count = (html: string) => {
+    document.body.innerHTML = html
+    return document.querySelectorAll(ASSISTANT_MESSAGE_SELECTOR).length
+  }
+
+  it('counts one reply when a provider-fallback note follows it (the run 42969900253 DOM)', () => {
+    expect(count(userRow + assistantRow('a1') + fallbackNote)).toBe(1)
+  })
+
+  it('positive control: a second real assistant reply is still counted', () => {
+    expect(count(userRow + assistantRow('a1') + fallbackNote + assistantRow('a2'))).toBe(2)
+  })
+
+  it('excludes the user bubble and the running placeholder', () => {
+    expect(count(userRow + assistantRow('a1', 'running'))).toBe(0)
+  })
+})
+
+// Guard: a spec that copies the assistant selector instead of importing
+// assistantMessages drifts when the shared one changes. That is how
+// memory-remember-recall kept counting system rows after the shared selector
+// gained its system-row filter.
+describe('specs use the shared assistantMessages locator, not a copy of its selector', () => {
+  const e2eDir = path.resolve(__dirname, '..')
+  const stale = '[data-message-id]:not(.flex-row-reverse):not([data-status="running"])'
+  const systemFilter = ':not([data-message-role="system"])'
+  const specFiles = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) return entry.name === 'node_modules' ? [] : specFiles(full)
+      return entry.name.endsWith('.spec.ts') ? [full] : []
+    })
+
+  it('finds the spec files it scans (the guard is not vacuous)', () => {
+    expect(specFiles(e2eDir).length).toBeGreaterThan(20)
+  })
+
+  it('no spec contains the assistant selector without its system-row filter', () => {
+    const offenders = specFiles(e2eDir).filter((file) => {
+      const text = fs.readFileSync(file, 'utf8')
+      for (let at = text.indexOf(stale); at !== -1; at = text.indexOf(stale, at + 1)) {
+        if (!text.startsWith(systemFilter, at + stale.length)) return true
+      }
+      return false
+    })
+    expect(offenders.map((file) => path.relative(e2eDir, file))).toEqual([])
   })
 })

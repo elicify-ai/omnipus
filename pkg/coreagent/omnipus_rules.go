@@ -12,8 +12,13 @@ import (
 // OmnipusPerAgentAskRefusal is the exact refusal text for a per-agent "ask"
 // policy on Omnipus (spec FR-022, §6.2: 422 on REST, an error result on the
 // agent tools). Omnipus never carries a per-agent ask: its ask list rides the
-// global ceiling, and "deny" stays accepted.
-const OmnipusPerAgentAskRefusal = "Omnipus takes no per-agent Ask; set Ask globally or use Deny"
+// global ceiling, and "deny" stays accepted. The second sentence is the
+// recovery guidance of channels-spec-r8 S-39 row 16 / T-10 row 9: clearing the
+// entry restores inheritance, which asks again for an always-ask tool only
+// while the global policy is not Deny.
+const OmnipusPerAgentAskRefusal = "Omnipus takes no per-agent Ask; set Ask globally or use Deny. " +
+	"To return to the inherited behaviour, clear the entry: Omnipus then inherits the global policy, " +
+	"and an always-ask tool asks again only while the global policy is not Deny"
 
 // OmnipusPerAgentAskViolation reports the first tool (sorted, so the message is
 // deterministic) whose per-agent policy is "ask" when agentID is Omnipus. For
@@ -39,7 +44,8 @@ func OmnipusPerAgentAskViolation(agentID string, policies map[string]config.Tool
 // workspace, skill, connector, provider, channel, permission, secret and
 // configuration change tools. create_agent refuses any non-deny grant of one
 // of them to a new agent (FR-025) — only Omnipus holds them, through the
-// ceiling.
+// ceiling. set_channel_outbound left this family with founder Q4
+// (2026-11-03): every chat-capable agent may use it with a fresh approval.
 var managementTools = map[string]bool{
 	"create_agent": true, "update_agent": true, "delete_agent": true,
 	"create_workspace": true, "update_workspace": true, "delete_workspace": true,

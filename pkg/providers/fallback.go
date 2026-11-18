@@ -480,6 +480,12 @@ func (fc *FallbackChain) Execute(
 		// attempt), and a candidate skipped by the C-9 ceiling or the D14
 		// cap is never marked (A-4).
 		candStart := fc.now()
+		// C-10 across candidates: a candidate that failed after its attempt
+		// already streamed visible bytes ends the chain. The next candidate
+		// would answer into the same live bubble and transcript entry after
+		// text the user has already seen, so the failure is concluded here
+		// exactly as for a single candidate.
+		streamedThenFailed := false
 
 		for attemptNo := 1; ; attemptNo++ {
 			// Fresh per-candidate budget per CALL — a retry is a new call
@@ -624,7 +630,11 @@ func (fc *FallbackChain) Execute(
 				Calls:     attemptNo,
 				RetryPlan: plan.planCandidate,
 			})
+			streamedThenFailed = c10Streamed
 			break
+		}
+		if streamedThenFailed {
+			return nil, &FallbackExhaustedError{Attempts: result.Attempts}
 		}
 
 		// Every candidate that reached the attempt loop consumes one slot

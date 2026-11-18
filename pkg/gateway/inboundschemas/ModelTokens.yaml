@@ -50,6 +50,15 @@ properties:
       which is not the same as a ratio of zero. A number from 0 to 1 inclusive.
       in is uncached input.
     example: 0.8
+  reasoning:
+    type: integer
+    minimum: 0
+    description: >
+      Effort levels spec (FR-024). Reasoning tokens reported by the provider for
+      this cell: the sum of the per-call counts of the entries that reported
+      one. A subset of out, never added to total. Absent when no entry reported
+      a count.
+    example: 120
   total:
     type: integer
     minimum: 0

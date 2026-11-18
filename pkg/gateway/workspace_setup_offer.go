@@ -16,6 +16,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -218,10 +219,14 @@ func (p restAPISetupOfferPoster) PostWorkspaceSetupOffer(ctx context.Context, wo
 	if store == nil {
 		return errNoSessionStore
 	}
-	if err := store.AppendTranscript(mainID, workspaceSetupOfferEntry(
-		fmt.Sprintf("Workspace setup offered for %s.", workspaceName))); err != nil {
+	entry := workspaceSetupOfferEntry(
+		fmt.Sprintf("Workspace setup offered for %s.", workspaceName))
+	if err := store.AppendTranscript(mainID, entry); err != nil {
 		return fmt.Errorf("record the setup offer in Omnipus's main: %w", err)
 	}
+	// The transcript line is the record. Publishing it is delivery: a
+	// failure is logged and does not undo the line or fail the offer.
+	a.publishSetupOfferLine(mainID, entry)
 	if err := a.agentLoop.PostWorkspaceSetupOffer(ctx, agent.WorkspaceSetupOffer{
 		MainSessionID:     mainID,
 		MainWorkspaceID:   defaultID,
@@ -235,10 +240,46 @@ func (p restAPISetupOfferPoster) PostWorkspaceSetupOffer(ctx context.Context, wo
 		if noteErr := store.AppendTranscript(mainID, note); noteErr != nil {
 			slog.Error("workspace setup offer: could not record that the offer did not start",
 				"workspace_id", workspaceID, "session_id", mainID, "error", noteErr)
+		} else {
+			a.publishSetupOfferLine(mainID, note)
 		}
 		return fmt.Errorf("publish the setup offer: %w", err)
 	}
 	return nil
+}
+
+// publishSetupOfferLine journals a replay_message for one offer line that is
+// already in the transcript and delivers it to every client attached to that
+// session. The frame is the one streamReplay emits for the same entry, so a
+// later snapshot replay carries the same id and the client drops the duplicate.
+// A marshal failure, or no hub in this process, is logged and left there: the
+// saved line stays, and the caller must not treat the miss as "not posted".
+func (a *restAPI) publishSetupOfferLine(sessionID string, entry session.TranscriptEntry) {
+	if a == nil || a.sessionHubs == nil {
+		logsafeError("workspace setup offer: saved the line but could not publish it; no session hub is wired",
+			"session_id", sessionID, "entry_id", entry.ID)
+		return
+	}
+	frame, err := marshalSetupOfferReplay(sessionID, entry)
+	if err != nil {
+		logsafeError("workspace setup offer: saved the line but could not publish it",
+			"session_id", sessionID, "entry_id", entry.ID, "error", err)
+		return
+	}
+	a.sessionHubs.getOrCreate(sessionID).publish(frame)
+}
+
+// marshalSetupOfferReplay builds the replay_message streamReplay emits for
+// entry. buildEntryMessage is that emitter; using it keeps the live frame and
+// the snapshot frame the same shape (role, id, content, agent).
+func marshalSetupOfferReplay(sessionID string, entry session.TranscriptEntry) ([]byte, error) {
+	sr := &streamReplayState{sessionID: sessionID}
+	sr.buildEntryMessage(entry)
+	data, err := json.Marshal(sr.msgFrame)
+	if err != nil {
+		return nil, fmt.Errorf("marshal the setup-offer replay frame: %w", err)
+	}
+	return data, nil
 }
 
 // workspaceSetupOfferEntry is a system-role entry in Omnipus's main, attributed

@@ -173,6 +173,10 @@ channels:
         $ref: '#/components/messages/RoomMemberStateFrame'
       RoomMetaFrame:
         $ref: '#/components/messages/RoomMetaFrame'
+      OpenInLibraryFrame:
+        $ref: '#/components/messages/OpenInLibraryFrame'
+      ChatPresenceFrame:
+        $ref: '#/components/messages/ChatPresenceFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -294,6 +298,18 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/PingFrame'
+  sendChatPresence:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Whether this tab is watching the chat of session_id (chat-links spec, "Watching"): sent with watching true
+      when the tab starts watching and periodically while it stays watching, and with watching false when it stops. Bound
+      to this connection, accepted only for a session the connection may attach to; in memory only, never journaled,
+      replayed or persisted.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ChatPresenceFrame'
   sendAttachSession:
     action: send
     channel:
@@ -612,6 +628,18 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/MediaFrame'
+  receiveOpenInLibrary:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Live-only request, after a successful show_to_user call, to open the workspace Library at a file (chat-links
+      spec, "Replay guarantee"). Delivered unsequenced to the connections bound to the session at that moment; never
+      journaled, persisted or replayed, so a reload or reconnect never receives it. Each tab decides once on arrival whether
+      to open the Library or show an "Open in Library" notice.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/OpenInLibraryFrame'
   receiveLibraryChanged:
     action: receive
     channel:
@@ -1102,6 +1130,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/PingFrame'
+    ChatPresenceFrame:
+      name: ChatPresenceFrame
+      title: chat_presence
+      summary: Whether this tab is watching a chat (client → server, chat-links spec).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ChatPresenceFrame'
     AttachSessionFrame:
       name: AttachSessionFrame
       title: attach_session
@@ -1261,14 +1296,14 @@ components:
     ProviderRetryFrame:
       name: ProviderRetryFrame
       title: provider_retry
-      summary: Automatic provider rate-limit retry scheduled (server → client).
+      summary: Automatic provider retry scheduled (server → client). A helper's retry is published to the helper's chat and, with child_session_id and agent_id, to the top chat (issue #1537).
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ProviderRetryFrame'
     ProviderStatusFrame:
       name: ProviderStatusFrame
       title: provider_status
-      summary: Provider-call state of a running turn — waiting, responding again, or recovered after retries (server → client).
+      summary: Provider-call state of a running turn — waiting, responding again, or recovered after retries (server → client). A helper's state is published to the helper's chat and, with child_session_id and agent_id, to the top chat; when that helper turn ends the top chat receives `ended` (issue #1537).
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ProviderStatusFrame'
@@ -1300,6 +1335,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/MediaFrame'
+    OpenInLibraryFrame:
+      name: OpenInLibraryFrame
+      title: open_in_library
+      summary: Live-only request to open the Library at a file (server → client, chat-links spec).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/OpenInLibraryFrame'
     ToolApprovalRequiredFrame:
       name: ToolApprovalRequiredFrame
       title: tool_approval_required
@@ -1773,6 +1815,35 @@ components:
             "This conversation's history could not be loaded."
             Other required storage/projection failures retain the fixed redacted session-storage
             error behavior in D11. Not a turn-ending ErrorFrame.
+    EffortRecord:
+      title: EffortRecord
+      description: >
+        Effort levels spec (FR-058). The per-turn effort record of the answering
+        candidate. Keep in sync by hand with
+        contracts/components/schemas/EffortRecord.yaml. Never carries reasoning
+        text or signature material.
+      type: object
+      additionalProperties: false
+      properties:
+        chosen:
+          type: string
+          maxLength: 32
+        sent:
+          type: string
+          maxLength: 32
+        reason:
+          type: string
+          enum:
+          - mapped
+          - not_supported
+          - continuation
+          - rejected
+          - rejected_earlier
+          - extra_body
+        provider:
+          type: string
+        model:
+          type: string
     RoomRef:
       title: RoomRef
       description: >
@@ -2235,6 +2306,32 @@ components:
           minLength: 1
           maxLength: 200
           description: Optional reason, e.g. `rate_limit` or `removed`.
+    LibraryRef:
+      title: LibraryRef
+      description: >
+        Address of a file in a workspace Library (chat-links spec, Contract
+        section). Navigation data only: it never grants access; opening the file
+        still goes through the viewer's own Library access. Mirrors
+        contracts/components/schemas/LibraryRef.yaml — keep both copies in sync
+        by hand. Declared before MediaPart because the generated Zod consts are
+        emitted in declaration order.
+      type: object
+      required:
+      - workspace_id
+      - path
+      additionalProperties: false
+      properties:
+        workspace_id:
+          type: string
+          minLength: 1
+          description: Workspace whose Library holds the file.
+        path:
+          type: string
+          minLength: 1
+          description: >
+            Library path of the file, relative to the workspace Library root. For a
+            file in a mounted folder the mount name comes first. Never empty: the
+            Library root is not a valid target.
     MediaPart:
       title: MediaPart
       description: One media attachment.
@@ -2264,6 +2361,15 @@ components:
           minLength: 1
         caption:
           type: string
+        library_ref:
+          $ref: '#/components/schemas/LibraryRef'
+          description: >
+            Library address of the sent file (chat-links spec, R5 and FR-021).
+            Present for a file in a workspace Library or one of its mounted
+            folders, for every media type; the web chat shows "Open in Library"
+            on non-image file cards only. Omitted for a file outside every Library
+            and when the session's workspace is unknown. Keep in sync by hand with
+            contracts/components/schemas/MediaPart.yaml.
     RoomEntry:
       title: RoomEntry
       description: >
@@ -2729,6 +2835,8 @@ components:
       - room_entry
       - room_member_state
       - room_meta
+      - open_in_library
+      - chat_presence
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -2865,6 +2973,25 @@ components:
 
                 '
               example: z-ai/glm-5-turbo
+            provider:
+              type: string
+              minLength: 1
+              maxLength: 64
+              description: 'Effort levels spec (FR-051). Provider id of the chosen (provider, model) pair. When present
+                the turn is routed to the exact pair; when absent today''s name resolution applies. An over-length or
+                wrongly-typed value is dropped on the existing malformed-frame path.
+
+                '
+              example: openrouter
+            reasoning_effort:
+              type: string
+              minLength: 1
+              maxLength: 32
+              description: 'Effort levels spec (FR-051). The chat''s per-conversation effort value, mapped against the
+                pair that serves the turn. No refusal path.
+
+                '
+              example: high
             workspace_id:
               type: string
               minLength: 1
@@ -2910,6 +3037,37 @@ components:
           - session
           - tree
           default: session
+        shown:
+          type: object
+          additionalProperties: false
+          required:
+          - code_points
+          description: >
+            #1534 (founder 2026-10-31, Q3 = A). What this client's screen showed of the
+            answer being stopped when Stop was pressed. The server saves the stopped
+            answer only up to this point. Sent only by a first Stop that froze a
+            streaming answer. Absent: the server cuts at the moment it receives Stop.
+          properties:
+            turn_id:
+              type: string
+              minLength: 1
+              maxLength: 1024
+              description: turn_id of the stopped answer's tokens, when the client knows it.
+            message_id:
+              type: string
+              minLength: 1
+              maxLength: 1024
+              description: >
+                Wire message_id of the last token frame the client applied to the
+                stopped answer. Absent when no token had been applied (nothing shown).
+            code_points:
+              type: integer
+              format: int64
+              minimum: 0
+              description: >
+                Unicode code points of token content applied for message_id (a
+                replace token resets the count). Client-inserted separators are not
+                counted. 0 with no message_id means nothing of this turn was shown.
     RedirectFrame:
       title: RedirectFrame
       description: 'Client → server redirect one chat, root or helper: stop its own in-progress turn, then continue that same chat with the instruction as its next user message (D2/D9; founder rule 2026-10-06). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.'
@@ -2958,6 +3116,37 @@ components:
         type:
           type: string
           const: pong
+    ChatPresenceFrame:
+      title: ChatPresenceFrame
+      description: >
+        Client → server (chat-links spec, "Watching"). Reports whether this tab is
+        watching the chat of session_id: the tab is visible and that chat's screen
+        is mounted. Sent with watching true when the tab starts watching and again
+        periodically while it stays watching, and with watching false when the tab
+        is hidden, the chat changes or the chat screen unmounts. The server keeps
+        the claim in memory only, bound to this connection, and accepts it only
+        for a session this connection may attach to; an unrefreshed claim expires
+        and a closed connection drops its claims. Not journaled, not replayed, not
+        persisted. Keep in sync by hand with
+        contracts/components/schemas/ChatPresenceFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - watching
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: chat_presence
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Chat session this tab is (or stopped) watching.
+        watching:
+          type: boolean
+          description: True while this tab is watching that chat; false when it stops.
     AttachSessionFrame:
       title: AttachSessionFrame
       description: >
@@ -3322,6 +3511,21 @@ components:
             frame: narrows why truncated is true — "cancelled" (the user canceled the turn
             mid-stream) or "max_output_tokens" (the provider's output-token limit cut the
             answer off before it finished). Absent on a normal turn.
+        effort:
+          $ref: '#/components/schemas/EffortRecord'
+          description: >
+            Effort levels spec (FR-058). The answering candidate's effort record.
+            Absent when nothing was chosen and nothing was sent. Live-turn field:
+            the replay-terminating done frame omits it.
+        reasoning_tokens:
+          type: integer
+          minimum: 0
+          description: >
+            Effort levels spec (FR-024). Display-only turn sum of the reasoning-token
+            counts reported by this turn's provider calls (a subset of output tokens,
+            never booked into any statistic). Absent = no call reported a count;
+            0 = reported zero. Live-turn field: the replay-terminating done frame
+            omits it.
     DoneFrame:
       title: DoneFrame
       description: >
@@ -3483,6 +3687,12 @@ components:
           # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
           message: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        provider_empty_reply:
+          # Issue #1664 (founder decision 2026-11-07 Q3 A): the provider ended a streaming
+          # answer with no finish_reason, no text and no tool call, on every attempt.
+          # Same attempt rule as a silent call. Retryable like `provider_stalled`.
+          message: "The model provider ended its answer without sending anything. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
         content_policy:
           message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
           attribution: provider
@@ -3575,6 +3785,7 @@ components:
             - quota_billing
             - network
             - provider_stalled
+            - provider_empty_reply
             - content_policy
             - context_too_long
             - tool_args
@@ -3753,6 +3964,12 @@ components:
           # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
           message: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        provider_empty_reply:
+          # Issue #1664 (founder decision 2026-11-07 Q3 A): the provider ended a streaming
+          # answer with no finish_reason, no text and no tool call, on every attempt.
+          # Same attempt rule as a silent call. Retryable like `provider_stalled`.
+          message: "The model provider ended its answer without sending anything. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
         content_policy:
           message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
           attribution: provider
@@ -3845,6 +4062,7 @@ components:
             - quota_billing
             - network
             - provider_stalled
+            - provider_empty_reply
             - content_policy
             - context_too_long
             - tool_args
@@ -5120,6 +5338,20 @@ components:
             such boundary, so the SPA must start a new message for this frame instead
             of merging it into the preceding same-turn assistant entry. Absent on
             every other frame, including entries written before this field existed.
+        effort:
+          $ref: '#/components/schemas/EffortRecord'
+          description: >
+            Effort levels spec (FR-058). Copied from this entry's own stored effort
+            record (answering assistant entries only). Absent when the entry has none.
+            Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
+        turn_reasoning_tokens:
+          type: integer
+          minimum: 0
+          description: >
+            Effort levels spec (FR-024). The stored display-only snapshot of the
+            turn's reported reasoning-token sum, copied from the answering entry;
+            never summed at read time. Absent = no call of the turn reported a
+            count; 0 = reported zero.
     ReplayErrorFrame:
       title: ReplayErrorFrame
       description: 'Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path
@@ -5309,12 +5541,18 @@ components:
       title: ProviderRetryFrame
       description: >
         Server → client (provider-messages spec §7.1 item 3). Announces an
-        automatic provider rate-limit retry inside the turn's fallback-chain
-        execution — the candidate about to be re-called, when it will be called
+        automatic provider retry inside the turn's fallback-chain execution,
+        or (issue #1664) the agent loop's own retry of a call that sent no
+        response — the candidate about to be re-called, when it will be called
         (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the
         #711 closure constraint) — built from NAMED FIELDS ONLY, never an
         `error` field or raw provider text; the countdown is computed from
-        retry_at and sent_at client-side (C-11). Keep in sync by hand with
+        retry_at and sent_at client-side (C-11). Issue #1537: a helper's
+        retry is published twice — to the helper's own chat without
+        identity fields, and to the top chat with child_session_id and
+        agent_id (both or neither, the anyOf below); a main-chat copy is
+        cleared by the helper's provider_status ended or responding, never
+        by the main chat's own turn end. Keep in sync by hand with
         contracts/components/schemas/ProviderRetryFrame.yaml.
       type: object
       required:
@@ -5330,6 +5568,13 @@ components:
       - max_attempts
       - error_code
       additionalProperties: false
+      anyOf:
+      - required:
+        - child_session_id
+        - agent_id
+      - properties:
+          child_session_id: false
+          agent_id: false
       properties:
         type:
           type: string
@@ -5338,6 +5583,21 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+        child_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Issue #1537. Top-chat copy of a helper's notice only — the
+            helper's own chat. Sent together with agent_id.
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Issue #1537. Top-chat copy of a helper's notice only — the
+            helper's agent (an id, never shown). Sent together with
+            child_session_id.
         turn_id:
           type: string
           minLength: 1
@@ -5368,6 +5628,11 @@ components:
         error_code:
           type: string
           maxLength: 64
+          description: >-
+            The classified provider condition that triggered the retry: the
+            fallback chain's retry causes (rate_limited and the #1280 causes),
+            `no_response` or `empty_reply` (issue #1664, the agent loop's own
+            retry). Plain string, not an enum.
         seq:
           type: integer
           format: int64
@@ -5381,11 +5646,18 @@ components:
       description: >
         Server → client (issues #1478 and #1280). The state of the
         model-provider call a running turn is waiting on: `waiting` (nothing
-        has arrived since silent_since; the silence limit ends the call at
-        stall_at when known), `responding` (data arrives again, or the call
+        has arrived since silent_since; this attempt ends at stall_at when
+        known — the request timeout before the first response byte, the
+        silence limit after it — and attempt/max_attempts count the agent
+        loop's calls, issue #1664), `responding` (data arrives again, or the call
         returned, after a `waiting` notice), `recovered` (the call succeeded
-        after `retries` automatic retries). Named fields only, never provider
-        text. Keep in sync by hand with
+        after `retries` automatic retries), `ended` (issue #1537, top-chat
+        copy only: that helper turn has ended; the main chat removes the
+        helper's named row). Issue #1537: a helper's status is published
+        twice — to the helper's own chat without identity fields, and to the
+        top chat with child_session_id and agent_id (both or neither, and
+        `ended` only with them — the anyOf below). Named fields only, never
+        provider text. Keep in sync by hand with
         contracts/components/schemas/ProviderStatusFrame.yaml.
       type: object
       required:
@@ -5395,6 +5667,18 @@ components:
       - state
       - sent_at
       additionalProperties: false
+      anyOf:
+      - required:
+        - child_session_id
+        - agent_id
+      - properties:
+          child_session_id: false
+          agent_id: false
+          state:
+            enum:
+            - waiting
+            - responding
+            - recovered
       properties:
         type:
           type: string
@@ -5403,6 +5687,21 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+        child_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Issue #1537. Top-chat copy of a helper's notice only — the
+            helper's own chat. Sent together with agent_id.
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Issue #1537. Top-chat copy of a helper's notice only — the
+            helper's agent (an id, never shown). Sent together with
+            child_session_id.
         turn_id:
           type: string
           minLength: 1
@@ -5413,6 +5712,7 @@ components:
           - waiting
           - responding
           - recovered
+          - ended
         sent_at:
           type: string
           format: date-time
@@ -5422,6 +5722,18 @@ components:
         stall_at:
           type: string
           format: date-time
+        attempt:
+          type: integer
+          minimum: 1
+          description: >-
+            State `waiting` only, when known — the 1-based number of the agent
+            loop's provider call (issue #1664). Sent together with max_attempts.
+        max_attempts:
+          type: integer
+          minimum: 1
+          description: >-
+            State `waiting` only, when known — the total provider calls the
+            agent loop makes before the turn ends with an error (today 3).
         retries:
           type: integer
           minimum: 1
@@ -5697,6 +6009,61 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/MediaFrame.yaml.
+    OpenInLibraryFrame:
+      title: OpenInLibraryFrame
+      description: >
+        Server → client, live only (chat-links spec, "Replay guarantee" and
+        "Tool-to-hub seam"). Sent after a successful show_to_user call to every
+        connection bound to the chat session at that moment, asking the tab to open
+        the workspace Library at a file. Delivered unsequenced: never numbered,
+        journaled, persisted or replayed, so it has no seq property and a reload or
+        reconnect never receives it. Each tab decides once, on arrival, whether to
+        open the Library or to show an "Open in Library" notice instead. Keep in
+        sync by hand with contracts/components/schemas/OpenInLibraryFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - call_id
+      - request_id
+      - workspace_id
+      - path
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: open_in_library
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Chat session the show_to_user call ran in.
+        call_id:
+          type: string
+          minLength: 1
+          description: >
+            Tool call id of the show_to_user call. Correlates the frame with its
+            tool card only; it is not unique and is never a de-duplication key.
+        request_id:
+          type: string
+          minLength: 32
+          maxLength: 32
+          pattern: '^[0-9a-f]{32}$'
+          description: >
+            Server-minted identity of this open request: 16 random bytes as 32
+            lowercase hex characters. The client de-duplicates on session_id plus
+            request_id.
+        workspace_id:
+          type: string
+          minLength: 1
+          description: Workspace whose Library should open.
+        path:
+          type: string
+          minLength: 1
+          description: >
+            Library path of the file, relative to the workspace Library root. For a
+            file in a mounted folder the mount name comes first. Never empty: the
+            Library root is not a valid target.
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >
@@ -6389,6 +6756,16 @@ components:
         emitted_at:
           type: string
           format: date-time
+        emitted_at_ms:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            #1537 FR-008. Unix epoch milliseconds of the same instant as emitted_at
+            (one server clock reading). The SPA prefers it as its server-clock sample
+            and falls back to emitted_at when absent. Optional: older gateways omit
+            it. Keep in sync by hand with
+            contracts/components/schemas/SessionStateFrame.yaml.
     SystemOverloadFrame:
       title: SystemOverloadFrame
       description: >

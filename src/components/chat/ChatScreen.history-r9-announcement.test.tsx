@@ -13,7 +13,7 @@ import { useChatStore } from '@/store/chat'
 import { VirtualizedMessageList } from './ChatMessageList'
 import { MAIN_ID, json } from '../../../tests/l1-room-ui/harness'
 import { Stage1Network, resetStage1App, stopStage1App } from '../../../tests/l1-room-ui/stage1-harness'
-import { entry, expectValidPage, page, STAMP, UNAVAILABLE } from '../../../tests/chat-history-paging/fixtures'
+import { drainVirtualScrollTimer, entry, expectValidPage, page, STAMP, UNAVAILABLE } from '../../../tests/chat-history-paging/fixtures'
 import { historyTransport } from '../../../tests/chat-history-paging/transport'
 import { installHistoryLayout } from '../../../tests/chat-history-paging/measurement-layout'
 
@@ -30,6 +30,7 @@ afterEach(async () => {
   observer?.disconnect(); observer = undefined
   wire?.connection.disconnect(); wire = undefined
   await stopStage1App()
+  await drainVirtualScrollTimer()
   layout.restore()
   expect(network.unexpected, 'all physical HTTP reads remain explicitly declared').toStrictEqual([])
 })

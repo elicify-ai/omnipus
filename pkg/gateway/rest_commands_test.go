@@ -77,10 +77,11 @@ func parseCommandsResponse(t *testing.T, w *httptest.ResponseRecorder) []gen.Sla
 	return cmds
 }
 
-// TestHandleListCommands_Web verifies surface=web returns exactly 12 commands.
+// TestHandleListCommands_Web verifies surface=web returns exactly 13 commands.
 // Post ADR-026 /skill+/use removed; ADR-049 added /goal, /loop; ADR-20260928 D9
 // added /stop, /stop-redirect; U10a (2026-10-09) removed /new and /agents from
-// the table entirely (FR-031); U10b restored /clear (FR-030/031), leaving 12
+// the table entirely (FR-031); U10b restored /clear (FR-030/031); effort
+// levels FR-023 added /effort (web + channel, client delivery), leaving 13
 // web-surface commands.
 func TestHandleListCommands_Web(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
@@ -91,13 +92,14 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 12 {
-		t.Errorf("web: expected 12 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 13 {
+		t.Errorf("web: expected 13 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	wantNames := map[string]bool{
 		"help":          true,
 		"model":         true,
+		"effort":        true, // effort levels FR-023: the composer handles /effort (client)
 		"clear":         true, // U10b (FR-030/031) restored /clear as a canonical command
 		"cancel":        true,
 		"stop":          true, // ADR-20260928 D9
@@ -165,8 +167,9 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_Channel verifies surface=channel returns all 16 commands
-// (U10b restored /clear, FR-030/031).
+// TestHandleListCommands_Channel verifies surface=channel returns 17 commands:
+// the 16 CLI commands (U10b restored /clear, FR-030/031) plus /effort, which
+// is conversation-scoped on messengers (effort levels FR-023) and not on the CLI.
 func TestHandleListCommands_Channel(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "channel", true)
@@ -176,8 +179,11 @@ func TestHandleListCommands_Channel(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 16 {
-		t.Errorf("channel: expected 16 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 17 {
+		t.Errorf("channel: expected 17 commands, got %d: %v", len(cmds), commandNames(cmds))
+	}
+	if !slicesContainsCommand(cmds, "effort") {
+		t.Errorf("channel: missing command %q: %v", "effort", commandNames(cmds))
 	}
 }
 
@@ -192,9 +198,9 @@ func TestHandleListCommands_DefaultSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 12 {
+	if len(cmds) != 13 {
 		t.Errorf(
-			"default surface (web): expected 12 commands, got %d: %v",
+			"default surface (web): expected 13 commands, got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -211,9 +217,9 @@ func TestHandleListCommands_UnknownSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 12 {
+	if len(cmds) != 13 {
 		t.Errorf(
-			"unknown surface should default to web (12 cmds), got %d: %v",
+			"unknown surface should default to web (13 cmds), got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -264,6 +270,7 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 	clientCmds := map[string]bool{
 		"help":          true,
 		"model":         true,
+		"effort":        true, // effort levels FR-023: handled by the composer, like /model
 		"cancel":        true,
 		"stop":          true, // ADR-20260928 D9
 		"stop-redirect": true, // ADR-20260928 D9
@@ -466,4 +473,14 @@ func commandNames(cmds []gen.SlashCommand) []string {
 		names[i] = c.Name
 	}
 	return names
+}
+
+// slicesContainsCommand reports whether the served list names the command.
+func slicesContainsCommand(cmds []gen.SlashCommand, name string) bool {
+	for _, c := range cmds {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
 }

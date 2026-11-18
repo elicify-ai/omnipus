@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -73,13 +74,15 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	case agent.EventKindLoopStatusChanged:
 		h.hubLoopStatusChanged(evt)
 	case agent.EventKindLLMRetry:
-		h.hubContextWindowNotice(evt)
+		h.hubLLMRetry(evt)
 	case agent.EventKindProviderRetry:
 		h.hubProviderRetry(evt)
 	case agent.EventKindProviderStatus:
 		h.hubProviderStatus(evt)
 	case agent.EventKindProviderFallback:
 		h.hubProviderFallback(evt)
+	case agent.EventKindUserMessagePersisted:
+		h.hubUserMessagePersisted(evt)
 	case agent.EventKindWhatsAppPairing:
 		h.hubWhatsAppPairing(evt)
 	}
@@ -314,6 +317,9 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 	}
 	h.hubPublishMetaAlsoTo(evtSID, string(generated.WsFrameTypeToolCallResult),
 		hubFrameMeta{kind: hubKindToolResult, key: string(p.ToolCallID), turnID: evt.Meta.TurnID}, data, nil)
+	// chat-links: a successful show_to_user call also sends the live-only
+	// open_in_library frame (unsequenced, unjournaled; ws_session_hub_live.go).
+	h.hubDeliverOpenInLibrary(evtSID, p)
 }
 
 // ---------------------------------------------------------------------
@@ -425,25 +431,19 @@ func (h *WSHandler) hubProviderRetry(evt agent.Event) {
 		return
 	}
 	frame := generated.ProviderRetryFrame{
-		Type:      string(generated.WsFrameTypeProviderRetry),
-		SessionId: sid,
-		TurnId:    evt.Meta.TurnID,
-		Provider:  p.Provider,
-		Model:     p.Model,
+		Type:     string(generated.WsFrameTypeProviderRetry),
+		TurnId:   evt.Meta.TurnID,
+		Provider: p.Provider,
+		Model:    p.Model,
 		// json.Marshal renders time.Time as RFC3339Nano in the time's own
 		// location — Format(RFC3339Nano) is byte-identical to that, so the
 		// frame strings match what a decoder of the marshaled payload sees.
 		SentAt:            p.SentAt.Format(time.RFC3339Nano),
 		RetryAt:           p.RetryAt.Format(time.RFC3339Nano),
-		RetryAfterSeconds: int(p.RetryAt.Sub(p.SentAt).Seconds()),
+		RetryAfterSeconds: retryAfterSeconds(p.SentAt, p.RetryAt),
 		Attempt:           p.Attempt,
 		MaxAttempts:       p.MaxAttempts,
 		ErrorCode:         providerRetryErrorCode(p.Reason),
-	}
-	data, err := json.Marshal(frame)
-	if err != nil {
-		logsafeError("ws: marshal provider_retry for hub failed", "session_id", sid, "error", err)
-		return
 	}
 	// Gate finding F3 / spec section 2 (MAJ-108): the retry frame registers
 	// as a projection item under a stable per-turn key - a newer retry for
@@ -451,22 +451,40 @@ func (h *WSHandler) hubProviderRetry(evt agent.Event) {
 	// pending attempt), and the item leaves with the turn (forgetTurn at
 	// TurnEnd). Empty-meta publishing never registered the retry with the
 	// projection, so a mid-retry snapshot/rebuild showed a turn with no
-	// visible retry.
-	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeProviderRetry), hubFrameMeta{
-		kind:   hubKindItem,
-		key:    "provider_retry:" + evt.Meta.TurnID,
-		turnID: evt.Meta.TurnID,
-	}, data, nil)
+	// visible retry. #1537: a helper turn's retry goes to the helper's chat
+	// and, named, to the top chat (ws_helper_notices.go).
+	h.hubPublishProviderNotice(string(generated.WsFrameTypeProviderRetry), evt, sid, p.ChildSessionID, false,
+		func(sessionID string, child, agentID *string) ([]byte, error) {
+			copyFrame := frame
+			copyFrame.SessionId, copyFrame.ChildSessionId, copyFrame.AgentId = sessionID, child, agentID
+			return json.Marshal(copyFrame)
+		})
 }
 
 // providerRetryErrorCode maps the retry payload's reason to the frame's
-// error_code (Finding 3): "rate_limit" → "rate_limited"; any other reason
-// passes through unchanged (presence-only oracle — no other mapping pinned).
+// error_code (Finding 3): "rate_limit" → "rate_limited"; the agent loop's
+// timeout retry "timeout" → "no_response" (issue #1664 B5: the call sent no
+// response in time); any other reason ("empty_reply" included) passes
+// through unchanged.
 func providerRetryErrorCode(reason string) string {
-	if reason == "rate_limit" {
+	switch reason {
+	case "rate_limit":
 		return "rate_limited"
+	case "timeout":
+		return "no_response"
 	}
 	return reason
+}
+
+// retryAfterSeconds is the frame's whole-second wait, at least 1 (the
+// contract's minimum): the loop's timeout backoff can be under a second
+// (500 ms floor), which truncation would send as 0.
+func retryAfterSeconds(sentAt, retryAt time.Time) int {
+	secs := int(retryAt.Sub(sentAt).Seconds())
+	if secs < 1 {
+		return 1
+	}
+	return secs
 }
 
 // hubProviderFallback forwards the fallback-answered event as one
@@ -511,6 +529,35 @@ func (h *WSHandler) hubProviderFallback(evt agent.Event) {
 		key:    "provider_fallback:" + turnID,
 		turnID: turnID,
 	}, data, nil)
+}
+
+// hubUserMessagePersisted forwards a scheduled/heartbeat run's persisted
+// prompt (#1442) as one user_message frame: the same frame shape, id and
+// echo semantics as the interactive publishUserMessage (both build through
+// buildUserMessageFrame), published after the transcript append (the emit
+// site's rule) and delivered only to the viewers bound to the payload's
+// session. There is no alsoTo connection: a scheduled run has no
+// originating tab. It deliberately skips rememberAcceptedMessage, which is
+// interactive client_message_id retry/dedupe state a scheduled prompt has
+// no part in.
+func (h *WSHandler) hubUserMessagePersisted(evt agent.Event) {
+	p, ok := evt.Payload.(agent.UserMessagePersistedPayload)
+	if !ok {
+		logsafeError("ws: user_message_persisted event with unexpected payload; prompt not shown live",
+			"session_key", evt.Meta.SessionKey, "payload_type", fmt.Sprintf("%T", evt.Payload))
+		return
+	}
+	if p.SessionID == "" {
+		logsafeError("ws: user_message_persisted event without a session id; prompt not shown live",
+			"session_key", evt.Meta.SessionKey, "entry_id", p.Entry.ID)
+		return
+	}
+	data, err := json.Marshal(buildUserMessageFrame(p.SessionID, p.Entry))
+	if err != nil {
+		logsafeError("ws: marshal user_message for hub failed", "session_id", p.SessionID, "error", err)
+		return
+	}
+	h.hubPublishAndDeliver(p.SessionID, string(generated.WsFrameTypeUserMessage), data)
 }
 
 // ---------------------------------------------------------------------
@@ -675,4 +722,7 @@ func (h *WSHandler) hubTurnEnd(evt agent.Event) {
 			hub.forgetTurn(turnID)
 		}
 	}
+	// #1537 FR-012: a helper turn that left a named notice in its top chat
+	// clears it there with exactly one sequenced provider_status `ended`.
+	h.hubHelperNoticeEnded(turnID)
 }

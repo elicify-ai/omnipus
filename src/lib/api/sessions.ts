@@ -399,6 +399,18 @@ export interface AssistantMessage extends MessageBase { // not-wire-format: SPA-
    * snapshot replay alike.
    */
   historySpanFrame?: HistorySpanFrame
+  /**
+   * Effort levels FR-058: the answering candidate's effort record (wire
+   * `Message.effort` / `ReplayMessageFrame.effort` / live `DoneStats.effort`),
+   * forwarded unchanged. The per-turn note is a pure function of it.
+   */
+  effort?: WireMessage['effort']
+  /**
+   * Effort levels FR-024/FR-036: the turn's reported thinking-token sum
+   * (wire `turn_reasoning_tokens`; live `DoneStats.reasoning_tokens`).
+   * Absent = not reported; 0 = reported zero.
+   */
+  turnReasoningTokens?: number
 }
 
 export interface SystemMessage extends MessageBase { // not-wire-format: SPA-internal system/banner message.
@@ -458,6 +470,11 @@ export interface ServeWorkspaceResult { // not-wire-format: parsed from ToolCall
   url: string
   /** ISO-8601 token expiry timestamp. */
   expires_at: string
+  /**
+   * ADR-094 FR-023: per-preview `*.localhost` URL (Mode 1) when minted.
+   * Optional — absent on pre-ADR-094 transcripts and Mode-2-only serving.
+   */
+  isolated_url?: string
 }
 
 /**
@@ -489,6 +506,11 @@ export interface RunInWorkspaceResult { // not-wire-format: parsed from ToolCall
   command: string
   /** Local port the dev server is listening on inside the workspace. */
   port: number
+  /**
+   * ADR-094 FR-023: per-preview `*.localhost` URL (Mode 1) when minted.
+   * Optional — absent on pre-ADR-094 transcripts and Mode-2-only serving.
+   */
+  isolated_url?: string
 }
 
 // ── Wire ToolCall / Message adapters ─────────────────────────────────────────
@@ -506,6 +528,7 @@ interface RawToolCall { // not-wire-format: adapter alias over the generated Too
   duration_ms?: number
   parameters?: Record<string, unknown>
   result?: unknown
+  error?: WireToolCall['error']
   parent_tool_call_id?: string
 }
 
@@ -563,6 +586,10 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * this field existed predates it and was always a cancel).
    */
   truncation_reason?: TruncationReason
+  /** Effort levels FR-058: the answering candidate's stored effort record. */
+  effort?: WireMessage['effort']
+  /** Effort levels FR-036: the turn's stored thinking-token snapshot (absent = not reported). */
+  turn_reasoning_tokens?: WireMessage['turn_reasoning_tokens']
   /**
    * Goal outcome line — present on a `type: system, system_subtype:
    * goal_outcome` entry (contracts/components/schemas/GoalOutcome.yaml).
@@ -646,7 +673,7 @@ function rawToToolCall(raw: RawToolCall): ToolCall {
     params: raw.parameters ?? {},
     result: raw.result,
     duration_ms: raw.duration_ms,
-    error: undefined,
+    error: raw.error,
   }
 }
 
@@ -834,6 +861,9 @@ function rawToMessage(raw: RawMessage): Message {
     ...(raw.reply_to_message_id ? { replyToMessageId: raw.reply_to_message_id } : {}),
     ...(raw.reply_to_participant ? { replyToParticipant: raw.reply_to_participant } : {}),
     ...(raw.room_ref ? { roomRef: raw.room_ref } : {}),
+    // Effort levels FR-058 / FR-036: the stored record and thinking snapshot, unchanged.
+    ...(raw.effort ? { effort: raw.effort } : {}),
+    ...(raw.turn_reasoning_tokens !== undefined ? { turnReasoningTokens: raw.turn_reasoning_tokens } : {}),
     ...boundary,
   } satisfies AssistantMessage
 }

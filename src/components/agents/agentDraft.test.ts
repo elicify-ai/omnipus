@@ -1,6 +1,57 @@
 import { describe, expect, it } from 'vitest'
-import type { Agent } from '@/lib/api'
-import { buildAgentUpdate, ProtectedAgentFieldChangeError } from './agentDraft'
+import type { Agent, ExecutorConfig, ExecutorConfigUpdate } from '@/lib/api/generated/openapi-types'
+import { buildAgentUpdate, buildExecutorUpdate, MaskedEnvValueError, ProtectedAgentFieldChangeError } from './agentDraft'
+
+// T11 FR-8 / ExecutorConfigUpdate: masks belong to READ, never WRITE.
+// Exact error copy is a characterization pin commissioned by this fix round;
+// rejection and the closed write delta are specified independently by the contract.
+const savedExecutor: ExecutorConfig = {
+  kind: 'external-cli', cli: 'codex', effective_cli_path: '/opt/codex',
+  env_overrides: { KEEP: '••••••', DROP: '••••••' }, cli_args: '--max-turns 5',
+}
+const executorCases: Array<{
+  name: string
+  draft: ExecutorConfig
+  update?: ExecutorConfigUpdate | null
+  rejectedName?: string
+}> = [
+  { name: 'omits untouched masks on an arguments edit', draft: { ...savedExecutor, cli_args: '--max-turns 7' }, update: { cli_args: '--max-turns 7' } },
+  { name: 'rejects a renamed masked row', draft: { ...savedExecutor, env_overrides: { KEEP: '••••••', RENAMED: '••••••' } }, rejectedName: 'RENAMED' },
+  { name: 'rejects the mask typed as a new value', draft: { ...savedExecutor, env_overrides: { ...savedExecutor.env_overrides, TYPED: '••••••' } }, rejectedName: 'TYPED' },
+  { name: 'skips an unfinished empty-name row', draft: { ...savedExecutor, env_overrides: { ...savedExecutor.env_overrides, '': 'unfinished' } }, update: null },
+  { name: 'lists removal explicitly without resending the kept mask', draft: { ...savedExecutor, env_overrides: { KEEP: '••••••' } }, update: { env_overrides_remove: ['DROP'] } },
+  { name: 'sends an explicit empty string to clear cli_args', draft: { ...savedExecutor, cli_args: '' }, update: { cli_args: '' } },
+  { name: 'returns null and no executor write when nothing changed', draft: { ...savedExecutor, env_overrides: { ...savedExecutor.env_overrides } }, update: null },
+]
+
+describe('buildExecutorUpdate — mask-safe closed WRITE deltas', () => {
+  it.each(executorCases)('$name', ({ draft, update, rejectedName }) => {
+    const agent: Agent = {
+      ...baseline, id: 'draft-worker', type: 'subagent_3p', locked: false,
+      executor: savedExecutor,
+      editable_fields: ['executor.env_overrides', 'executor.env_overrides_remove', 'executor.cli_args'].map(name => ({ name, editable: true })),
+    }
+    if (rejectedName) {
+      const message = `Enter the value for ${rejectedName} again: a hidden value cannot be saved under a new name.`
+      for (const build of [() => buildExecutorUpdate(savedExecutor, draft), () => buildAgentUpdate(agent, { executor: draft })]) {
+        try {
+          build()
+          expect.unreachable('a changed mask must stop the write, not disappear or reach the server')
+        } catch (error) {
+          expect(error).toBeInstanceOf(MaskedEnvValueError)
+          expect(error).toHaveProperty('name', 'MaskedEnvValueError')
+          expect(error).toHaveProperty('envName', rejectedName)
+          expect(error).toHaveProperty('message', message)
+        }
+      }
+      return
+    }
+    expect(buildExecutorUpdate(savedExecutor, draft)).toEqual(update)
+    expect(buildAgentUpdate(agent, { executor: draft })).toEqual(
+      update === null ? null : { revision: agent.revision, executor: update },
+    )
+  })
+})
 
 const baseline = {
   id: 'mia',

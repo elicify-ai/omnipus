@@ -44,6 +44,30 @@ describe('NotificationPanel (#264)', () => {
     expect(screen.getByText('No notifications yet')).toBeInTheDocument()
   })
 
+  // CHECK finding 3 (round 4): the sentence alone proves nothing about the
+  // kit Empty — a plain <p>No notifications yet</p> kept this whole file
+  // green in the CHECK probe. The call site must render the real Empty
+  // structure: the dashed-border root, the aria-hidden icon media, and the
+  // sentence in the description slot of that same Empty.
+  it('renders the empty state as the kit Empty structure, not just the sentence (CHECK F3)', () => {
+    render(<NotificationPanel />)
+    const sentence = screen.getByText('No notifications yet')
+    // The sentence is the EmptyDescription slot of a real kit Empty root.
+    const description = sentence.closest('[data-slot="empty-description"]')
+    expect(description).not.toBeNull()
+    const empty = description!.closest('[data-slot="empty"]')
+    expect(empty).not.toBeNull()
+    // The contract's Empty look survives at the call site: the dashed border
+    // is on the root (empty.tsx::Empty), not something the caller fakes.
+    expect(empty).toHaveClass('border-dashed')
+    // The media is the aria-hidden icon variant with its glyph inside.
+    const media = empty!.querySelector('[data-slot="empty-media"]')
+    expect(media).not.toBeNull()
+    expect(media).toHaveAttribute('aria-hidden', 'true')
+    expect(media).toHaveAttribute('data-variant', 'icon')
+    expect(media!.querySelector('svg')).not.toBeNull()
+  })
+
   it('renders items newest-first with title and body', () => {
     const store = useNotificationsStore.getState()
     store.apply(frame({ id: 'a', title: 'Older', created_at_ms: 1 }))

@@ -685,6 +685,9 @@ export function ChannelConfigPanel({
       setFieldErrors({})
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
+      // The Connectors list classifies a disabled bare stub from this read.
+      // Save must refresh that one stub, or a newly stored credential stays a tile.
+      queryClient.invalidateQueries({ queryKey: ['channel-stub-credentials', channelId] })
       // A first save creates the connection; Starting messages unlocks on re-read.
       queryClient.invalidateQueries({ queryKey: ['channel-outbound', channelId] })
       showConfigureOutcome(channelId, describeConfigureOutcome(response, 'save'))

@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -59,7 +58,30 @@ type cftManifestDownloadRef struct {
 	URL      string `json:"url"`
 }
 
-var installMu sync.Mutex
+// installSlot serializes managed-Chromium installs process-wide: a
+// one-element semaphore instead of a sync.Mutex, because a mutex wait cannot
+// be cancelled. The gateway's boot drain cancels the preprovision and then
+// waits for it under a shutdown budget (#1730); a preprovision parked behind
+// another install's multi-minute download would ignore that cancel, outlast
+// the budget, and could still be running when the caller removed the home.
+var installSlot = make(chan struct{}, 1)
+
+// acquireInstallSlot takes installSlot, or returns ctx's error if ctx is
+// done first. A ctx that is already done never takes the slot.
+func acquireInstallSlot(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("browser: managed Chromium install cancelled before it started: %w", err)
+	}
+	select {
+	case installSlot <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("browser: managed Chromium install cancelled while waiting for another install: %w", ctx.Err())
+	}
+}
+
+// releaseInstallSlot releases the slot acquireInstallSlot took.
+func releaseInstallSlot() { <-installSlot }
 
 // chromiumBuild is one of the two Chrome-for-Testing build flavors this
 // installer manages (dual-download): the full "chrome" build (the
@@ -137,10 +159,14 @@ func (b chromiumBuild) sha256Path(installRoot string) string {
 // Layout: <installRoot>/<version>/<downloadID>-<platform>/<binary-per-build-layout>
 //
 // Concurrent calls are serialized; the second caller observes the freshly
-// extracted binary and returns immediately.
+// extracted binary and returns immediately. A caller whose ctx is cancelled
+// while it waits for the earlier call returns ctx's error at once instead of
+// queueing behind a download it no longer wants (acquireInstallSlot).
 func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromiumBuild) (string, error) {
-	installMu.Lock()
-	defer installMu.Unlock()
+	if err := acquireInstallSlot(ctx); err != nil {
+		return "", err
+	}
+	defer releaseInstallSlot()
 
 	platform, err := cftPlatform()
 	if err != nil {
@@ -245,7 +271,7 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 		return "", fmt.Errorf("browser: download %s: %w", zipURL, dlErr)
 	}
 
-	if extractErr := extractZip(zipPath, versionDir); extractErr != nil {
+	if extractErr := extractZip(ctx, zipPath, versionDir); extractErr != nil {
 		// FIX-CRIT-001: a disk-full, killed-mid-extract, or otherwise
 		// partial extraction can leave the build's subdirectory containing
 		// a PARTIAL but already-executable binary — extractZip sets the
@@ -802,7 +828,7 @@ func verifyGoogHashMD5(header http.Header, got []byte) error {
 	return nil
 }
 
-func extractZip(zipPath, destDir string) error {
+func extractZip(ctx context.Context, zipPath, destDir string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
@@ -818,6 +844,14 @@ func extractZip(zipPath, destDir string) error {
 	absDestPrefix := absDest + string(os.PathSeparator)
 
 	for _, f := range r.File {
+		// #1730: stop at the next entry once the caller is cancelled. A
+		// Chrome archive holds hundreds of entries; an extraction that ran
+		// to completion after the boot drain's cancel could outlast the
+		// drain's budget and keep writing into a home being removed. The
+		// caller's extract-failure branch removes this build's partial tree.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("extraction cancelled: %w", err)
+		}
 		// First-pass: reject the obvious "../escape" patterns and absolute
 		// paths in the entry name before we touch the filesystem at all.
 		clean := filepath.Clean(f.Name)

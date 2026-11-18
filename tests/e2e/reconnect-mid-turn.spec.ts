@@ -4,20 +4,33 @@
  * Traces to: docs/internal/architecture/ADR-082-ui-independent-turns-and-session-bound-streaming.md,
  * docs/internal/specs/ui-independent-turns-spec.md.
  *
- * Drives the REAL embedded binary against a LIVE model, so it asserts only
- * structure, never content: after a reload / a second tab / an offline blip
+ * S-08/S-09 drive the REAL embedded binary against a LIVE model, so they
+ * assert only structure, never content: after a reload / a second tab
  * mid-turn, the streaming bubble is present, Stop is visible while the turn
  * runs, exactly one assistant message exists at the end, and its text is at
  * least as long as what was visible before the disconnect (catch-up + live
  * tail, no gap). Content equality across two tabs IS asserted — both views
  * of one session must converge on the same persisted text.
+ *
+ * S-10 (#1661) scripts ONLY the external provider behind its own
+ * GatewayProcess (fixtures/held-stream-provider.ts): the live CI model made
+ * answer text visible only at/near completion, so the mid-turn precondition
+ * and the delayed-answer state were unreachable. Browser, gateway, turn
+ * engine, WS reconnect and catch-up stay real.
  */
 
-import { expect, type Locator, type Page } from '@playwright/test'
+import { expect, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, assistantMessages } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
 import { normalizedAssistantText } from './fixtures/assistant-text'
+import { GatewayProcess } from './fixtures/gateway-process'
+import { E2E_FALLBACK } from './fixtures/e2e-model'
+import {
+  attachHeldStreamEvidence,
+  expectTurnHeldMidStream,
+  startHeldStreamProvider,
+} from './fixtures/held-stream-provider'
 
 // Plain prose, no tools: a single long streaming round with a stable shape.
 const LONG_PROMPT =
@@ -73,6 +86,8 @@ async function waitTurnDone(page: Page) {
 }
 
 test.describe('reconnect mid-turn (ADR-082)', () => {
+  // Shared-page scenarios only; the deterministic S-10 describe below has
+  // its own isolated gateway and no shared baseURL to navigate.
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
   })
@@ -160,55 +175,121 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     await page2.close()
   })
 
-  test('S-10 offline blip mid-turn: automatic re-attach, no user action', async ({ page, context }) => {
+})
+
+// S-10 — deterministic held-stream version (#1661). Moved out of the
+// live-model describe above: on the CI primary model (see
+// tests/e2e/e2e-model.json) answer text becomes visible only at/near
+// completion, so
+// startLongTurn's ">80 chars while running" gate was satisfied only at
+// completion and the "assistant is still working on this" state below was
+// unreachable. The gateway streams correctly; the model's emission profile
+// was the broken assumption. S-10 now scripts ONLY the external provider
+// (fixtures/held-stream-provider.ts) behind its own GatewayProcess: the turn
+// is PROVABLY still running when the outage starts (expectTurnHeldMidStream),
+// the release() below ends the SAME stream so the "rest" must genuinely
+// arrive over the reattached connection, and every original assertion still
+// decides the verdict.
+test.describe('reconnect mid-turn (ADR-082) — deterministic held stream (#1661)', () => {
+  // Zero retries: a broken reconnect is a property no retry establishes,
+  // and this acceptance is deterministic.
+  test.describe.configure({ retries: 0 })
+
+  test('S-10 offline blip mid-turn: automatic re-attach, no user action', async ({ browser }, info) => {
     test.setTimeout(420_000)
-    const before = await startLongTurn(page)
+    const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+    let gateway: GatewayProcess | undefined
+    let context: BrowserContext | undefined
+    try {
+      gateway = await GatewayProcess.start({ apiBase: provider.url, model: E2E_FALLBACK.model })
+      context = await browser.newContext({
+        baseURL: gateway.baseURL, storageState: await gateway.browserStorageState(),
+      })
+      const page = await context.newPage()
+      await page.goto('/')
 
-    // THE OUTAGE HAS TO ACTUALLY LAST: #823 keeps drops under 15 seconds quiet,
-    // then adds a calm continuation line to the interrupted assistant answer.
-    //
-    // This test used to call context.setOffline(true) and expect the banner
-    // within 10s. setOffline emulates network conditions over CDP; it does
-    // not fire the DOM `offline` event that ws.ts._onOffline listens for, and
-    // it does not reliably stop a loopback reconnect to the gateway running
-    // on this same machine. So the socket came straight back — ws.ts's
-    // _onOnline path resets backoff and redials after 250ms — and 250ms never
-    // clears a 2000ms debounce. No banner, and the product was RIGHT not to
-    // draw one.
-    //
-    // That is why it flip-flopped between the two CI workers on identical
-    // commits: on a loaded box the redial slipped past 2s and the banner
-    // appeared; on a fast one it did not. Three runs, three different
-    // pass/fail splits across ci-omnipus and ci-omnipus-2.
-    //
-    // So make the outage real: routeWebSocket closes every reconnect attempt,
-    // which keeps isConnected false well past the debounce. The route is
-    // installed AFTER the turn is already streaming, so the original socket
-    // is untouched — only the redials fail, exactly as a real outage behaves.
-    //
-    // Nothing is softened. Every assertion still runs the real path: a real
-    // close, real reconnect scheduling with real failures, the real delayed
-    // answer state, and real catch-up of a turn that kept running
-    // server-side the whole time.
-    await page.routeWebSocket(/\/api\/v1\/chat\/ws/, (ws) => ws.close())
-    await context.setOffline(true)
-    await page.evaluate(() => window.dispatchEvent(new Event('offline')))
-    await expect(page.getByTestId('assistant-connection-status')).toContainText(
-      'is still working on this — the rest appears when you\'re connected again.',
-      { timeout: 20_000 },
-    )
+      const before = await startLongTurn(page)
+      // MID-TURN SIGNAL (#1661): the turn is provably still streaming when
+      // the outage starts — stream open, deltas flowing, nothing released.
+      await expectTurnHeldMidStream(provider, 'S-10')
 
-    // Let the network back after the delayed state is genuinely visible.
-    await page.unrouteAll({ behavior: 'ignoreErrors' })
-    await context.setOffline(false)
-    await page.evaluate(() => window.dispatchEvent(new Event('online')))
-    await expect(page.getByTestId('connection-status-line')).toHaveText('Up to date', { timeout: 30_000 })
-    await expect(page.getByTestId('connection-status-line')).not.toBeVisible({ timeout: 5_000 })
+      // THE OUTAGE HAS TO ACTUALLY LAST: #823 keeps drops under 15 seconds quiet,
+      // then adds a calm continuation line to the interrupted assistant answer.
+      //
+      // This test used to call context.setOffline(true) and expect the banner
+      // within 10s. setOffline emulates network conditions over CDP; it does
+      // not fire the DOM `offline` event that ws.ts._onOffline listens for, and
+      // it does not reliably stop a loopback reconnect to the gateway running
+      // on this same machine. So the socket came straight back — ws.ts's
+      // _onOnline path resets backoff and redials after 250ms — and 250ms never
+      // clears a 2000ms debounce. No banner, and the product was RIGHT not to
+      // draw one.
+      //
+      // That is why it flip-flopped between the two CI workers on identical
+      // commits: on a loaded box the redial slipped past 2s and the banner
+      // appeared; on a fast one it did not. Three runs, three different
+      // pass/fail splits across ci-omnipus and ci-omnipus-2.
+      //
+      // So make the outage real: routeWebSocket closes every reconnect attempt,
+      // which keeps isConnected false well past the debounce. The route is
+      // installed AFTER the turn is already streaming, so the original socket
+      // is untouched — only the redials fail, exactly as a real outage behaves.
+      //
+      // Nothing is softened. Every assertion still runs the real path: a real
+      // close, real reconnect scheduling with real failures, the real delayed
+      // answer state, and real catch-up of a turn that kept running
+      // server-side the whole time (now provably so — the scripted provider
+      // stream stays open across the whole outage).
+      await page.routeWebSocket(/\/api\/v1\/chat\/ws/, (ws) => ws.close())
+      await context.setOffline(true)
+      await page.evaluate(() => window.dispatchEvent(new Event('offline')))
+      await expect(page.getByTestId('assistant-connection-status')).toContainText(
+        'is still working on this — the rest appears when you\'re connected again.',
+        { timeout: 20_000 },
+      )
 
-    await waitTurnDone(page)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = await normalizedAssistantText(assistantMessages(page).first())
-    expect(after.length).toBeGreaterThanOrEqual(before.length)
+      // Let the network back after the delayed state is genuinely visible.
+      await page.unrouteAll({ behavior: 'ignoreErrors' })
+      await context.setOffline(false)
+      await page.evaluate(() => window.dispatchEvent(new Event('online')))
+      await expect(page.getByTestId('connection-status-line')).toHaveText('Up to date', { timeout: 30_000 })
+      await expect(page.getByTestId('connection-status-line')).not.toBeVisible({ timeout: 5_000 })
+
+      // The turn is still live — the provider stream never ended during the
+      // outage. Release it so the remaining deltas and the completion must
+      // arrive over the reattached connection the assertions below verify;
+      // release() ends the SAME stream, so anything lost here is a real
+      // catch-up defect, not a fixture artifact.
+      provider.release()
+
+      await waitTurnDone(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      const after = await normalizedAssistantText(assistantMessages(page).first())
+      expect(after.length).toBeGreaterThanOrEqual(before.length)
+      // #1661 strengthening: every scripted delta is uniquely numbered, so the
+      // rendered answer must be EXACTLY the scripted sequence — a catch-up
+      // that drops (or duplicates) the deltas missed during the outage is now
+      // visible even though the prose itself is repetitive. The original
+      // length assertion above is unchanged; this pins byte-continuity of the
+      // incremental replay that reattached the live turn.
+      expect(after, 'S-10: the reattached answer must be the complete scripted sequence — no dropped or duplicated delta')
+        .toBe(provider.expectedHeldAnswer())
+
+      // The scripted stream ran to its released end over the reattached
+      // connection: exactly the scripted turn reached the provider, finished
+      // by the scripted release, nothing unexpected.
+      expect(provider.evidence.streamRequests, 'S-10: exactly the scripted turn reached the provider').toBe(1)
+      expect(provider.evidence.released, 'S-10: the finish came from the scripted release').toBe(1)
+      expect(provider.evidence.errors, 'S-10: no unexpected scripted-provider request').toEqual([])
+    } finally {
+      try {
+        await attachHeldStreamEvidence(info, 'S-10', provider)
+      } finally {
+        try { await context?.close() } finally {
+          try { await gateway?.stop() } finally { await provider.close() }
+        }
+      }
+    }
   })
 })
 

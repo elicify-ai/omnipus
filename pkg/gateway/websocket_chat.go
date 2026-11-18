@@ -57,14 +57,16 @@ func parseSetupKickoffMetadata(metadata map[string]any) (setupKickoff bool, malf
 
 // wsHandlerHandleChatMessage carries the shared state of handleChatMessage across its stages.
 type wsHandlerHandleChatMessage struct {
-	h               *WSHandler
-	ctx             context.Context
-	chatID          string
-	frameSessionID  string
-	content         string
-	agentID         string
-	mediaRefs       []string
-	modelName       string
+	h              *WSHandler
+	ctx            context.Context
+	chatID         string
+	frameSessionID string
+	content        string
+	agentID        string
+	mediaRefs      []string
+	modelName      string
+	// choice is the frame's per-turn provider and effort (S-15, S-75).
+	choice          frameEffortChoice
 	workspaceID     string
 	clientMessageID string
 	// autoApprove is MessageFrame.auto_approve (ADR-092, contracts/asyncapi.yaml):
@@ -175,6 +177,27 @@ func (h *WSHandler) handleChatMessageToRecipient(
 	recipient *addressing.Pair,
 	wc *wsConn,
 ) {
+	h.handleChatMessageWithChoice(ctx, chatID, frameSessionID, content, agentID, mediaRefs, modelName,
+		frameEffortChoice{}, workspaceID, clientMessageID, autoApprove, recipient, wc)
+}
+
+// handleChatMessageWithChoice is handleChatMessageToRecipient carrying the
+// frame's validated per-turn provider and effort.
+func (h *WSHandler) handleChatMessageWithChoice(
+	ctx context.Context,
+	chatID string,
+	frameSessionID string,
+	content string,
+	agentID string,
+	mediaRefs []string,
+	modelName string,
+	choice frameEffortChoice,
+	workspaceID string,
+	clientMessageID string,
+	autoApprove *bool,
+	recipient *addressing.Pair,
+	wc *wsConn,
+) {
 	// Schema validation is optional, but the client-id bound is not. Reject
 	// before resolution, persistence, or the deferred status/cache cleanup.
 	if utf8.RuneCountInString(clientMessageID) > maxClientMessageIDChars {
@@ -202,7 +225,7 @@ func (h *WSHandler) handleChatMessageToRecipient(
 			return
 		}
 	}
-	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc}
+	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, choice: choice, workspaceID: workspaceID, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc}
 	hcm.firstMessage = frameSessionID == "" &&
 		(clientMessageID != "" || agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound())
 	defer func() {
@@ -451,17 +474,14 @@ func (hcm *wsHandlerHandleChatMessage) sendMessageStatus(state string) {
 	}, hcm.wc)
 }
 
-// publishUserMessage echoes a just-persisted user message to every tab
-// bound to the session as a numbered user_message frame (#823 founder
-// decision Q1, BE-DESIGN.md §4.7). The sender's SPA moves its pending
-// bubble (matched by client_message_id) into history at this frame's
-// position; every other tab inserts it there. Published strictly AFTER the
-// transcript append succeeded, so a snapshot read taken after a later
-// attach can never miss a message whose frame it already consumed.
-func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.TranscriptEntry) {
+// buildUserMessageFrame is the ONE place a persisted user entry becomes a
+// user_message frame: the interactive echo (publishUserMessage) and the
+// scheduled/heartbeat live-view tap (websocket_forward_hub.go's
+// hubUserMessagePersisted, #1442) both go through it, so the two cannot drift.
+func buildUserMessageFrame(sessionID string, entry session.TranscriptEntry) generated.UserMessageFrame {
 	frame := generated.UserMessageFrame{
 		Type:      string(generated.WsFrameTypeUserMessage),
-		SessionId: hcm.sessionID,
+		SessionId: sessionID,
 		Id:        entry.ID,
 		Content:   entry.Content,
 		Timestamp: entry.Timestamp.UTC().Format(time.RFC3339Nano),
@@ -482,7 +502,18 @@ func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.Transcri
 			Type     string `json:"type"`
 		}{MimeType: a.MIMEType, Path: a.Path, Size: a.Size, Type: a.Type})
 	}
-	data, err := json.Marshal(frame)
+	return frame
+}
+
+// publishUserMessage echoes a just-persisted user message to every tab
+// bound to the session as a numbered user_message frame (#823 founder
+// decision Q1, BE-DESIGN.md §4.7). The sender's SPA moves its pending
+// bubble (matched by client_message_id) into history at this frame's
+// position; every other tab inserts it there. Published strictly AFTER the
+// transcript append succeeded, so a snapshot read taken after a later
+// attach can never miss a message whose frame it already consumed.
+func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.TranscriptEntry) {
+	data, err := json.Marshal(buildUserMessageFrame(hcm.sessionID, entry))
 	if err != nil {
 		logsafeError("ws: marshal user_message failed", "session_id", hcm.sessionID, "error", err)
 		return
@@ -1115,6 +1146,7 @@ func (hcm *wsHandlerHandleChatMessage) buildInboundMessage() {
 		}
 		hcm.msg.Metadata["model_name"] = trimmedModel
 	}
+	hcm.choice.apply(&hcm.msg.Metadata)
 }
 
 // buildTranscriptAttachments resolves each accepted media ref into a

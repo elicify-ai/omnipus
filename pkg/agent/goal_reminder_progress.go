@@ -66,6 +66,9 @@ type goalReminderWork struct {
 	checkIn             *goalBusyCheckIn
 	busyLabels          []string
 	busyLabelCount      int
+	// unavailableWarned holds helpers whose missing store this goal already
+	// logged; cleared with the goal's reminderWork (clearGoalTriggerState).
+	unavailableWarned map[string]bool
 }
 
 func goalReminderWorkFor(goalID string) *goalReminderWork {

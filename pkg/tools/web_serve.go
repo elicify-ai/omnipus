@@ -259,6 +259,39 @@ func previewOriginUnresolvedResult() *ToolResult {
 	}
 }
 
+// previewOriginRefusedResult builds the fail-closed IsError result returned
+// when the canonical gateway origin is one ADR-094 forbids minting from
+// (FR-003, DS-3 rows 6–7): a wildcard host or a trailing-dot host. The old
+// behaviour minted a URL from such an origin and reported SUCCESS — a policy
+// that names hosts we do not own. Deliberately distinct wording from
+// previewOriginUnresolvedResult (the origin IS resolvable; it is just not
+// one we will name in a URL).
+func previewOriginRefusedResult(origin string) *ToolResult {
+	return &ToolResult{
+		IsError: true,
+		ForLLM: "web_serve: refusing to mint a preview URL from the configured gateway origin " +
+			"(wildcard or trailing-dot hosts name hosts this gateway does not own); fix " +
+			"gateway.public_url / gateway.host to a single concrete origin — refused value: " + origin,
+		ForUser: "Preview cannot generate a working link because the gateway's public URL uses a wildcard " +
+			"or malformed host. Set Settings → Gateway → Public URL to one concrete address.",
+	}
+}
+
+// previewIsolatedURLFor is the shared Mode 1 isolated_url mint for both
+// execution paths (ADR-094 FR-001/FR-022): on a Mode 1 canonical origin it
+// returns http://<label>.localhost[:port]/ for the freshly minted token; on
+// a Mode 2 origin it returns "" and the result carries NO isolated_url key.
+// "" also covers the PreviewIsolatedURL refusal (fix6 SF-4): an unparseable
+// mode1Base mints NO URL — the result carries no key — never a silently wrong
+// portless-label URL. class must not be PreviewOriginRefuse — the callers
+// refuse before any registration side effect.
+func previewIsolatedURLFor(class middleware.PreviewOriginClass, mode1Base, token string) string {
+	if class != middleware.PreviewOriginMode1 {
+		return ""
+	}
+	return middleware.PreviewIsolatedURL(mode1Base, token)
+}
+
 // SetAuditLogger satisfies auditLoggerAware.
 func (t *WebServeTool) SetAuditLogger(logger *audit.Logger) {
 	t.auditLogger = logger
@@ -269,20 +302,44 @@ func (t *WebServeTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *WebServeTool) Category() ToolCategory { return CategoryWeb }
 
 func (t *WebServeTool) Description() string {
-	return "Serve a directory or run a dev server from the agent workspace and get back a " +
-		"/preview/<agent>/<token>/ URL.\n" +
-		"Static mode (no command): registers the directory as a static website. Re-serving the SAME " +
-		"directory renews the same URL; re-serving a DIFFERENT directory REPLACES the previous " +
-		"registration and invalidates any URL you already gave the user — tell the user the new URL " +
-		"if you change directories.\n" +
+	return "Serve a directory or run a dev server from the agent workspace and get back preview URLs.\n" +
+		"The result always includes path and url: the Mode 2 fallback, on the gateway's own origin, " +
+		"shaped {origin}/preview/<agent>/<token>/. On an http://localhost origin (with or without a " +
+		"port) the result also includes isolated_url — Mode 1, preferred when it is present. That " +
+		"URL gives the app its own browser origin, http://<label>.localhost[:port]/. Omnipus does " +
+		"not apply the Mode 2 resource-path restrictions there, so website-root asset URLs do not " +
+		"need that adjustment. Login and cookie behaviour still depend on the app and the browser. " +
+		"When isolated_url is absent (https, an IP address, or any other hostname), open url. " +
+		"These checks do not test whether the isolated address opens; if it does not, use url. If " +
+		"the built-in browser panel refuses the label URL, open url instead: that happens on a " +
+		"port-mapped install, where the label carries the canonical port rather than the panel's " +
+		"listener port.\n" +
+		"In Mode 2 (the url fallback) resource files fetched over HTTP or HTTPS must use URLs " +
+		"inside the preview's /preview/<agent>/<token>/ directory. A URL relative to the page " +
+		"(./app.js) is suitable if it stays inside that directory; ../ can leave it. A " +
+		"website-root URL such as /assets/app.js is outside it and is blocked, and an essential " +
+		"blocked file can leave the page blank. Embedded images and fonts (data: URLs) and " +
+		"browser-created workers (blob: URLs) have separate allowances and need no directory " +
+		"prefix. Configure the build so its resource URLs stay inside the preview directory. " +
+		"Mode 2 also refuses service-worker requests, and the preview does not get a separate " +
+		"browser-storage origin.\n" +
+		"A blank or broken preview needs checking: blocked resources or connections are one " +
+		"possible cause, and other app errors can also cause it. Check the browser's diagnostic " +
+		"console and failed network requests, and share the messages before choosing a fix.\n" +
+		"Static mode (no command): registers the directory as a static website and serves files " +
+		"only; it does not handle server-side form submissions. Re-serving the SAME directory " +
+		"renews the same URL only while that registration is still live and less than 24 hours " +
+		"old; otherwise a new URL is issued, so always give the user the URL the tool returns. " +
+		"Re-serving a DIFFERENT directory REPLACES the previous registration and invalidates any " +
+		"URL you already gave the user — tell the user the new URL if you change directories.\n" +
 		"Dev mode (with command): starts a dev server and proxies it. Dev mode is Linux only. The " +
 		"command is checked against an EXHAUSTIVE allow-list, not just examples — anything else is " +
 		"refused: 'next dev', 'vite dev', 'astro dev', 'sveltekit dev', 'npm run dev', 'pnpm dev', " +
 		"'yarn dev' (plus any operator-configured extensions). The command must start with exactly " +
 		"one of these; a path-prefixed binary (e.g. '/usr/bin/next dev') is always rejected.\n" +
 		"Both modes are refused (with an error, not a broken link) when gateway.preview_enabled is " +
-		"off, or when the gateway cannot resolve its own public URL (bound to a wildcard address " +
-		"with no gateway.public_url configured)."
+		"off, when the gateway cannot resolve its own public URL (bound to a wildcard address " +
+		"with no gateway.public_url configured), or when that origin is a wildcard or trailing-dot host."
 }
 
 func (t *WebServeTool) Parameters() map[string]any {
@@ -295,7 +352,7 @@ func (t *WebServeTool) Parameters() map[string]any {
 			},
 			"command": map[string]any{
 				"type":        "string",
-				"description": "Optional dev-server command (e.g. 'vite dev'). When set, serve_web runs as a dev server; when omitted, serves static files.",
+				"description": "Optional development-server command (e.g. 'vite dev'). A non-empty command after whitespace trimming selects development mode; omitted, empty or whitespace-only text selects finished-files mode.",
 			},
 			"port": map[string]any{
 				"type":        "integer",
@@ -303,10 +360,10 @@ func (t *WebServeTool) Parameters() map[string]any {
 			},
 			"duration_seconds": map[string]any{
 				"type": "integer",
-				"description": "Optional registration lifetime in seconds, static mode only. Default is " +
-					"24h (86400s), not 1h. Values outside [60s, 24h] are silently clamped to the nearest " +
-					"bound rather than rejected. Dev mode ignores this field — it is governed by the " +
-					"dev-server registry's own idle/hard timeouts instead.",
+				"description": "Optional lifetime for a finished-files registration, in seconds. If omitted, it uses the " +
+					"configured maximum. Values outside the configured minimum and maximum are clamped to the " +
+					"nearest bound. The shipped bounds are 60 and 86400 seconds. Development mode ignores this " +
+					"field and uses its registry's idle and total timeouts.",
 			},
 		},
 		"required": []string{"path"},
@@ -349,6 +406,14 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 	origin := middleware.CanonicalGatewayOrigin(cfg)
 	if origin == "" {
 		return previewOriginUnresolvedResult()
+	}
+	// ADR-094 FR-003: classify the origin BEFORE any registration side
+	// effect. A wildcard or trailing-dot host refuses to mint entirely —
+	// never a degraded URL, never a registered directory nobody can be told
+	// the URL for.
+	originClass, mode1Base := middleware.ClassifyPreviewOrigin(origin)
+	if originClass == middleware.PreviewOriginRefuse {
+		return previewOriginRefusedResult(origin)
 	}
 
 	// Resolve and validate the path within the workspace via ResolvePath
@@ -416,12 +481,21 @@ func (t *WebServeTool) executeStatic(ctx context.Context, rawPath string, args m
 	// above, before the registration side effect.
 	url := origin + path
 
-	return NewToolResult(fmt.Sprintf(
-		`{"kind":"static","path":%q,"url":%q,"expires_at":%q}`,
+	// ADR-094 FR-022/S-1.1: a Mode 1 mint carries BOTH urls — the /preview/
+	// fallback above plus the isolated <label>.localhost URL. Mode 2 mints
+	// carry no isolated_url key at all (fallback-only, S-1.2).
+	resultJSON := fmt.Sprintf(
+		`{"kind":"static","path":%q,"url":%q,"expires_at":%q`,
 		path,
 		url,
 		deadline.UTC().Format(time.RFC3339),
-	))
+	)
+	if iso := previewIsolatedURLFor(originClass, mode1Base, token); iso != "" {
+		resultJSON += fmt.Sprintf(`,"isolated_url":%q`, iso)
+	}
+	resultJSON += "}"
+
+	return NewToolResult(resultJSON)
 }
 
 // tier3BaselineAllowList is the hardcoded baseline of allowed Tier 3 dev-server
@@ -557,23 +631,21 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	if origin == "" {
 		return previewOriginUnresolvedResult()
 	}
+	// ADR-094 FR-003: classify before the port reservation / spawn — refusing
+	// here also avoids leaking a running dev-server process that no caller
+	// could ever be told the URL for. Same rationale as executeStatic.
+	originClass, mode1Base := middleware.ClassifyPreviewOrigin(origin)
+	if originClass == middleware.PreviewOriginRefuse {
+		return previewOriginRefusedResult(origin)
+	}
 
 	if t.devReg == nil {
 		return ErrorResult("web_serve: dev-server registry not configured")
 	}
 
 	// Validate command against Tier 3 allow-list BEFORE any other work.
-	if err := validateTier3Command(command, t.devCfg.Tier3Commands); err != nil {
-		agentID := t.agentID
-		if agentID == "" {
-			agentID = ToolAgentID(ctx)
-		}
-		if auditResult := t.auditDevDeny(agentID, command, err.Error()); auditResult != nil {
-			// AuditFailClosed=true and the audit write could not be recorded;
-			// surface the audit-failure error rather than the normal deny.
-			return auditResult
-		}
-		return ErrorResult(fmt.Sprintf("web_serve: command not permitted: %v", err))
+	if deny := t.checkTier3AllowList(ctx, command); deny != nil {
+		return deny
 	}
 
 	// Resolve the workspace subdirectory via ResolvePath (ADR-046 mandatory
@@ -724,14 +796,43 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	}
 	_ = probeConn.Close()
 
+	// ADR-094 FR-022: the dev result carries the same dual-URL contract as
+	// the static one — isolated_url on Mode 1 only (S-1.1), absent on Mode 2
+	// (S-1.2). One mint helper, both paths, so the two kinds cannot drift.
+	return mintDevResult(origin, agentID, token, command, exposePort, startedAt, originClass, mode1Base)
+}
+
+// checkTier3AllowList validates the requested dev command against the Tier 3
+// allow-list BEFORE any other dev-mode work and, on refusal, records the
+// audit-deny event (fail-closed when AuditFailClosed is set). A non-nil return
+// is the result to surface — the audit-failure error rather than the normal
+// deny when the audit write itself could not be recorded; nil means permitted.
+func (t *WebServeTool) checkTier3AllowList(ctx context.Context, command string) *ToolResult {
+	if err := validateTier3Command(command, t.devCfg.Tier3Commands); err != nil {
+		agentID := t.agentID
+		if agentID == "" {
+			agentID = ToolAgentID(ctx)
+		}
+		if auditResult := t.auditDevDeny(agentID, command, err.Error()); auditResult != nil {
+			// AuditFailClosed=true and the audit write could not be recorded;
+			// surface the audit-failure error rather than the normal deny.
+			return auditResult
+		}
+		return ErrorResult(fmt.Sprintf("web_serve: command not permitted: %v", err))
+	}
+	return nil
+}
+
+// mintDevResult builds the dev-mode tool-result JSON: the token URL under the
+// canonical gateway origin (US-3 AS-3 — the SAME origin CORS/CSP/WS CheckOrigin
+// use, resolved live from cfg but boot-stable because gateway.public_url is
+// restart-gated; sandbox.BuildDevURL is not used here — see its package doc
+// comment, unused in production, kept as reference + test fixture) with the
+// ADR-094 FR-022 dual-URL contract — isolated_url on Mode 1 only (S-1.1),
+// absent on Mode 2 (S-1.2). One mint helper, both paths, so the two kinds
+// cannot drift.
+func mintDevResult(origin, agentID, token, command string, exposePort int32, startedAt time.Time, originClass middleware.PreviewOriginClass, mode1Base string) *ToolResult {
 	path := fmt.Sprintf("/preview/%s/%s/", agentID, token)
-	// US-3 AS-3: host MUST equal the canonical gateway origin — the SAME
-	// origin CORS/CSP/WS CheckOrigin use (middleware.CanonicalGatewayOrigin),
-	// resolved live from cfg but boot-stable because gateway.public_url is
-	// restart-gated; origin was already resolved (and fail-closed-checked
-	// for emptiness) above, before the port reservation/spawn. sandbox.
-	// BuildDevURL is not used here — see its package doc comment (unused in
-	// production, kept as reference + test fixture).
 	url := origin + path
 
 	deadline := startedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339)
@@ -742,10 +843,16 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		exposePort,
 	)
 
-	return NewToolResult(fmt.Sprintf(
-		`{"kind":"dev","path":%q,"url":%q,"expires_at":%q,"command":%q,"port":%d,"_summary":%q}`,
+	resultJSON := fmt.Sprintf(
+		`{"kind":"dev","path":%q,"url":%q,"expires_at":%q,"command":%q,"port":%d,"_summary":%q`,
 		path, url, deadline, command, exposePort, summary,
-	))
+	)
+	if iso := previewIsolatedURLFor(originClass, mode1Base, token); iso != "" {
+		resultJSON += fmt.Sprintf(`,"isolated_url":%q`, iso)
+	}
+	resultJSON += "}"
+
+	return NewToolResult(resultJSON)
 }
 
 // parseDuration extracts duration_seconds from args, defaulting to maxDuration

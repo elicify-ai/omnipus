@@ -86,7 +86,7 @@ func loadGatewayConfigWithWorkspaceSeedDefaults(t *testing.T, excludeIDs []any) 
 // TestDefaultWorkspaceDelegationEdges_FrozenSelfEdgeOracle is the independent
 // oracle for the install/built-in seed writer: every ordinary built-in
 // (mia, jim, omnipus, planner, researcher, worker) carries exactly one
-// self-row with ordinary direct/task modes and a pinned depth of 3 — except
+// self-row with ordinary direct/task modes and a pinned depth of 10 — except
 // Omnipus, whose self-row depth is exactly 1 (omnipus-system-agent §6.2); the
 // two hidden type:system seed records (judge, plansupervisor) carry none.
 func TestDefaultWorkspaceDelegationEdges_FrozenSelfEdgeOracle(t *testing.T) {
@@ -109,9 +109,9 @@ func TestDefaultWorkspaceDelegationEdges_FrozenSelfEdgeOracle(t *testing.T) {
 			[]workspace.DelegationMode{workspace.ModeDirect, workspace.ModeTask}, e.Modes,
 			"self-row %s→%s must carry ordinary direct/task modes (C-DELEGATE ::Depth/editable policy)", id, id)
 		if e.Depth == nil {
-			t.Fatalf("self-row %s→%s must carry an explicit depth of min(3, ceiling), got nil (inherit)", id, id)
+			t.Fatalf("self-row %s→%s must carry an explicit depth of min(10, ceiling), got nil (inherit)", id, id)
 		}
-		wantDepth := 3
+		wantDepth := 10
 		if id == "omnipus" {
 			wantDepth = 1
 		}

@@ -24,6 +24,11 @@ import { useConnectionStore } from '@/store/connection'
 // ── Mock AssistantUI ───────────────────────────────────────────────────────────
 // Captured here so tests can assert autoScroll delegation without re-implementing scroll math.
 let lastViewportAutoScroll: boolean | undefined
+let lastViewportScrollTriggers: {
+  runStart: boolean | undefined
+  initialize: boolean | undefined
+  threadSwitch: boolean | undefined
+} | undefined
 let viewportAtBottom = true
 const viewportStore = { getState: () => ({ isAtBottom: viewportAtBottom }) }
 
@@ -44,17 +49,28 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
                   className,
                   style,
                   autoScroll,
+                  scrollToBottomOnRunStart,
+                  scrollToBottomOnInitialize,
+                  scrollToBottomOnThreadSwitch,
                   'data-testid': testId,
                 }: {
                   children?: React.ReactNode
                   className?: string
                   style?: React.CSSProperties
                   autoScroll?: boolean
+                  scrollToBottomOnRunStart?: boolean
+                  scrollToBottomOnInitialize?: boolean
+                  scrollToBottomOnThreadSwitch?: boolean
                   'data-testid'?: string
                 },
                 ref: React.Ref<HTMLDivElement>
               ) => {
                 lastViewportAutoScroll = autoScroll
+                lastViewportScrollTriggers = {
+                  runStart: scrollToBottomOnRunStart,
+                  initialize: scrollToBottomOnInitialize,
+                  threadSwitch: scrollToBottomOnThreadSwitch,
+                }
                 return React.createElement('div', { ref, className, style, 'data-testid': testId }, children)
               }
             ),
@@ -507,6 +523,25 @@ describe('VirtualizedMessageList', () => {
     const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]')
     expect(scrollEl).not.toBeNull()
     expect(lastViewportAutoScroll).toBe(true)
+  })
+
+  it('keeps history placement with its coordinator instead of queuing competing bottom scrolls (#1751)', async () => {
+    // D8 requires one scroll coordinator, including after a reload. The real
+    // AssistantUI engine is exercised by effort.spec.ts S-95; this boundary
+    // guard rejects each duplicate placement trigger without disabling normal
+    // at-bottom content following. Omitted props default to true upstream.
+    seedStore(makeMessages(5))
+    lastViewportAutoScroll = undefined
+    lastViewportScrollTriggers = undefined
+    const result = render(<ChatScreen />)
+    expect(result.getByTestId('virtualized-message-list')).toBeInTheDocument()
+    expect(lastViewportAutoScroll).toBe(true)
+    expect(lastViewportScrollTriggers).toEqual({
+      runStart: false,
+      initialize: false,
+      threadSwitch: false,
+    })
+    result.unmount()
   })
 
   it('renders the live streaming message anchor during streaming', async () => {

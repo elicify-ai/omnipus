@@ -646,8 +646,8 @@ func (d *ClaudeDriver) Input(_ string) error {
 
 // Resume continues the claude native conversation captured on the prior Run by
 // passing its announced session id via `--resume` (FR-043). It reuses the prior
-// Run's RunOptions (runtime/workspace/model/caps) so the resumed conversation
-// preserves them, and does NOT re-send the original prompt. When no native
+// Run's RunOptions (runtime/workspace/model/caps) and does NOT re-send the
+// original prompt; ResumeWith is the same continuation under new options. When no native
 // conversation id was captured it refuses VISIBLY rather than starting a fresh
 // conversation (BDD-05.6); with no prior Run at all it defers to Run's
 // ErrMaxTurnsRequired (no hidden default, FR-004).
@@ -658,21 +658,27 @@ func (d *ClaudeDriver) Input(_ string) error {
 // conversation. A bare continuation passes no instruction and delivers none.
 func (d *ClaudeDriver) Resume(ctx context.Context, runID string, instruction ...string) (<-chan RunEvent, error) {
 	d.mu.Lock()
-	last := d.lastOpts
-	maxTurns := d.runMaxTurns
-	nativeID := d.nativeID
+	opts := d.lastOpts
 	d.mu.Unlock()
 
-	opts := last
 	opts.RunID = runID
 	// A delivery resume carries the new instruction S (stdin); a bare resume
 	// delivers nothing and never replays the original prompt.
 	opts.Input = resumeInstruction(instruction)
-	opts.resumeNativeID = nativeID
+	return d.ResumeWith(ctx, opts)
+}
 
-	if nativeID == "" && maxTurns > 0 {
+// ResumeWith continues the same native conversation under opts, not the prior
+// Run's options (T11 FR-9/10): see CurrentOptionsResumer.
+func (d *ClaudeDriver) ResumeWith(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {
+	d.mu.Lock()
+	nativeID := d.nativeID
+	d.mu.Unlock()
+
+	if nativeID == "" && opts.MaxTurns > 0 {
 		return nil, fmt.Errorf("claude driver: cannot resume — no native conversation id was captured from the prior run; refusing rather than starting a fresh conversation (FR-043)")
 	}
+	opts.resumeNativeID = nativeID
 	return d.Run(ctx, opts)
 }
 
@@ -709,7 +715,10 @@ func (d *ClaudeDriver) logVersionCheck(binary, ver string) bool {
 }
 
 // compile-time interface assertion
-var _ ExternalAgentRunner = (*ClaudeDriver)(nil)
+var (
+	_ ExternalAgentRunner   = (*ClaudeDriver)(nil)
+	_ CurrentOptionsResumer = (*ClaudeDriver)(nil)
+)
 
 // newLineScanner is a thin wrapper around bufio.NewScanner for use in goroutines.
 func newLineScanner(r io.Reader) interface {

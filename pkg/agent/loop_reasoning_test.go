@@ -2,14 +2,14 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// loop_reasoning_test.go covers the reasoning-channel publish path: a turn that
-// produces reasoning content must publish it to the session's reasoning channel
-// rather than the chat channel. Extracted from loop_test.go, which sits at its
-// grandfathered size budget (scripts/budgets/files.txt) and may only shrink.
+// Effort-levels FR-017 retires the reasoning-channel path. Preserve this
+// test's delivery check at the real worker boundary: the ordinary answer must
+// reach the chat, and private reasoning must reach no outbound destination.
 package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
-func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T) {
+func TestProcessMessage_PublishesOnlyOrdinaryReplyWhenReasoningIsPresent(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -34,11 +34,13 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 	}
 
 	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
 	provider := &reasoningContentProvider{
 		response:         "final answer",
 		reasoningContent: "thinking trace",
 	}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	t.Cleanup(al.Close)
 
 	chManager, err := channels.NewManager(&config.Config{}, credentials.SecretBundle{}, msgBus, nil)
 	if err != nil {
@@ -47,50 +49,47 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 	chManager.RegisterChannel("telegram", &fakeChannel{id: "reason-chat"})
 	al.SetChannelManager(chManager)
 
-	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
+	worker := newSessionWorker("agent:mia:telegram:chat1", al, func() {})
+	t.Cleanup(worker.cancel)
+	worker.processTurn(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
-		Sender: bus.SenderInfo{
-			CanonicalID: "user1",
-		},
-		ChatID:  "chat1",
-		Content: "hello",
+		Sender:  bus.SenderInfo{CanonicalID: "user1"},
+		ChatID:  "chat1", Content: "hello",
+		Metadata: map[string]string{"agent_id": "mia"},
 	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "final answer" {
-		t.Fatalf("processMessage() response = %q, want %q", response, "final answer")
-	}
 
-	// Two faults lived in this wait. It asserted on whatever arrived FIRST, so any
-	// unrelated outbound publish ahead of the reasoning one failed the test with a
-	// misleading "reasoning channel = ..." message about the wrong frame. And its 3s
-	// budget is the short end of this package's range (2s-30s; 10s is used 24 times):
-	// it expired at 3.03s on CI run for release 7df13b436 while the publish itself was
-	// working -- the same test is green on fadf741ea and the only files that changed
-	// between those tips are two TEST files, neither in pkg/agent, so nothing could
-	// have stopped the publish happening. Late, not absent.
-	//
-	// Drain until the reasoning frame arrives, identified by its own chat id, and keep
-	// every assertion on the matched frame. A reasoning publish that never happens
-	// still fails; an unrelated frame no longer can.
+	ordinaryReplies := 0
+	check := func(outbound bus.OutboundMessage) {
+		if strings.Contains(outbound.Content, "thinking trace") {
+			t.Errorf("private reasoning reached outbound %s/%s: %q", outbound.Channel, outbound.ChatID, outbound.Content)
+		}
+		if outbound.Channel == "telegram" && outbound.ChatID == "chat1" {
+			ordinaryReplies++
+			if outbound.Content != "final answer" {
+				t.Errorf("ordinary reply = %q, want exactly %q", outbound.Content, "final answer")
+			}
+		}
+	}
 	deadline := time.After(10 * time.Second)
-	for {
-		var outbound bus.OutboundMessage
+	for ordinaryReplies == 0 {
 		select {
-		case outbound = <-msgBus.OutboundChan():
+		case outbound := <-msgBus.OutboundChan():
+			check(outbound)
 		case <-deadline:
-			t.Fatal("expected reasoning content to be published to reasoning channel")
+			t.Fatal("expected the ordinary final answer on telegram/chat1")
 		}
-		if outbound.ChatID != "reason-chat" {
-			continue
+	}
+	// processTurn has returned: inspect every remaining frame, not only a
+	// frame selected by destination, so a separate reasoning leak also fails.
+	for {
+		select {
+		case outbound := <-msgBus.OutboundChan():
+			check(outbound)
+		default:
+			if ordinaryReplies != 1 {
+				t.Fatalf("ordinary replies = %d, want exactly 1", ordinaryReplies)
+			}
+			return
 		}
-		if outbound.Channel != "telegram" {
-			t.Fatalf("reasoning channel = %q, want %q", outbound.Channel, "telegram")
-		}
-		if outbound.Content != "thinking trace" {
-			t.Fatalf("reasoning content = %q, want %q", outbound.Content, "thinking trace")
-		}
-		return
 	}
 }

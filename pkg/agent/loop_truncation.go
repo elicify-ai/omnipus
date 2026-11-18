@@ -236,8 +236,8 @@ type truncationSuccessVerdict struct {
 // answer-so-far (D6.7's "re-appended exactly once").
 //
 // The response's own CONTENT is read from response.Content deliberately, NOT
-// from the caller's `responseContent` local: that local carries the
-// ReasoningContent substitution the empty-response path applies, so passing
+// from the caller's `responseContent` local: that local once carried a
+// ReasoningContent substitution (removed by effort-levels FR-018), and passing
 // it fed a reasoning-only truncated response's chain-of-thought into the
 // accumulator, echoed it back to the model under "Continue from exactly
 // where it stopped", and persisted it as the answer. A reasoning-only
@@ -533,6 +533,8 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 		if shown := ts.takeStopShown(); shown != "" {
 			accumulated = ts.appendToAccumulator(shown)
 		}
+		// W4: keep only what the client's screen showed of this message.
+		accumulated = ts.cutStopAnswer(ts.getCurrentMessageID(), accumulated)
 	}
 	ts.SetFinalContent(accumulated)
 	ts.setTruncationReason(truncationReasonMaxOutputTokens)
@@ -552,5 +554,11 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 	// This replaces the former append-then-the former post-hoc truncation rewrite two-step,
 	// which reopened and rewrote the whole transcript.jsonl just to stamp
 	// two fields on the entry constructed one call earlier.
-	ts.appendAssistantTranscriptTruncated(accumulated, truncationReasonMaxOutputTokens)
+	// #1534: a stopped answer is saved under its live message id, like the
+	// streamed path (wsStreamerFinalize.persistTranscript).
+	entryID := ""
+	if ts.stopRequested.Load() {
+		entryID = ts.getCurrentMessageID()
+	}
+	ts.appendAssistantTranscriptTruncatedAs(entryID, accumulated, truncationReasonMaxOutputTokens)
 }

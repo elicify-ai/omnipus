@@ -91,6 +91,15 @@ func TestBootSkills_ActualStartupBeforeFirstLiveAgent(t *testing.T) {
 		t.Cleanup(rc.liveLimits.Close)
 		t.Cleanup(func() { agent.SetLiveWindowLookup(nil) })
 	}
+	// TempDir-cleanup family (#1644/#1695): initializeAgentLoop started the
+	// boot-stage writer goroutines (browser cache-trim schedule,
+	// managed-Chromium preprovision download, unknown-window primer) and
+	// nothing joined them — the preprovision download was measured still
+	// writing browser/chromium/*.zip.part-* into this test's home AFTER the
+	// whole cleanup sequence above had run. Registered LAST so LIFO runs it
+	// FIRST, before the agent-loop close and the TempDir removal bootFixture's
+	// t.TempDir registered.
+	stopBootWritersOnCleanup(t, rc)
 	require.NoError(t, err)
 	require.False(t, stop)
 	inst, ok := rc.agentLoop.GetRegistry().GetAgent("agent-a")

@@ -6,6 +6,7 @@ import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useConnectionStore } from '@/store/connection'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
 import { resolveWorkspaceSwitch } from '@/components/panel-shell/workspaceSwitch'
 import { getPanelDefinition } from '@/components/panel-shell/registry'
@@ -81,6 +82,21 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     staleTime: 30_000,
   })
 
+  // #1632: browser "online" is not this socket. React Query therefore does not
+  // refetch when the gateway socket comes back, and this shell stayed on the
+  // error until Retry. One refetch on a down-to-up edge, and only while the
+  // list is still in error: subscribe to the boolean so a repeat connected
+  // notification or any other store write does not start another request, and
+  // a screen that already loaded is left mounted (no loader flash).
+  const isConnected = useConnectionStore((s) => s.isConnected)
+  const wasConnectedRef = useRef(isConnected)
+  useEffect(() => {
+    const wasConnected = wasConnectedRef.current
+    wasConnectedRef.current = isConnected
+    if (wasConnected || !isConnected || !workspacesError) return
+    void refetchWorkspaces()
+  }, [isConnected, workspacesError, refetchWorkspaces])
+
   // Resolve 'inbox' alias to the real default workspace id.
   useEffect(() => {
     if (workspaceId !== 'inbox') return
@@ -145,8 +161,12 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
       if (latest !== activePanel) return
       if (!isWorkspaceScopedPanel(activePanel.id)) return
       const context = activePanel.context as WorkspacePanelContext
+      // The docked Library honours `path` (chat-links U6), and a path belongs
+      // to the workspace it was opened in: following to another workspace
+      // opens that workspace at its root, never the old workspace's file name.
       useUiStore.getState().openPanel(activePanel.id, {
         ...context,
+        path: undefined,
         workspaceId: decision.workspaceId,
       })
     })

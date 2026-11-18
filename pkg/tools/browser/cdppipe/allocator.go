@@ -125,6 +125,7 @@ func newPipeAllocator(parent, startup context.Context, execPath string, opts Pip
 	ctx, baseCancel := chromedp.NewContext(lifetime)
 
 	l := &launch{opts: opts, execPath: execPath, onExit: lifetimeCancel}
+	launchBegan := time.Now()
 	if err := l.start(ctx); err != nil {
 		if canceled := cancellationErr(); canceled != nil {
 			err = canceled
@@ -164,11 +165,15 @@ func newPipeAllocator(parent, startup context.Context, execPath string, opts Pip
 	// Liveness probe: prove CDP actually flows over the pipe end to end before
 	// handing the context back (fail closed on a dead / mis-launched Chrome).
 	// Target.getTargets is a cheap browser-level round trip over the pipe.
+	probeBegan := time.Now()
 	probeCtx, probeCancel := context.WithTimeout(ctx, dialTimeout)
 	_, err = target.GetTargets().Do(cdp.WithExecutor(probeCtx, b))
 	probeCancel()
 	if err != nil {
+		// Build the returned error BEFORE logging: a slow log sink must not let a
+		// later cancellation, exit or stderr line change what the caller sees.
 		err = l.startupError("CDP liveness probe failed over pipe", err, cancellationErr())
+		l.logProbeFailure(launchBegan, probeBegan, dialTimeout)
 		baseCancel()
 		lifetimeCancel(context.Canceled)
 		l.teardown()
@@ -500,6 +505,42 @@ func (l *launch) exitError() error {
 	return errors.New("cdppipe: Chrome process exited (exit status 0)")
 }
 
+// logProbeFailure writes ONE log line that says why a probe timeout happened
+// (#1132): how long the launch and the probe took, how loaded the machine was,
+// whether Chrome was still running, and the tail of what Chrome printed. It goes
+// to the log only; the returned error keeps its fixed classification because
+// Chrome stderr can carry profile paths and URLs.
+func (l *launch) logProbeFailure(launchBegan, probeBegan time.Time, probeTimeout time.Duration) {
+	if l.opts.Errf == nil {
+		return
+	}
+	exited := false
+	select {
+	case <-l.waitDone:
+		exited = true
+	default:
+	}
+	tail := l.stderr.snapshot() // one snapshot: the byte count and the text agree
+	now := time.Now()
+	l.opts.Errf("cdppipe: startup diagnostics: stage=cdp-liveness-probe probe_timeout=%s launch_elapsed=%s probe_elapsed=%s load_avg=%s cpus=%d chrome_exited=%t stderr_bytes=%d stderr_tail=%q",
+		probeTimeout, now.Sub(launchBegan).Round(time.Millisecond), now.Sub(probeBegan).Round(time.Millisecond),
+		loadAverage(), runtime.NumCPU(), exited, len(tail), tail)
+}
+
+// loadAverage is the 1/5/15-minute load average, or "n/a" where the platform
+// has no /proc/loadavg (macOS, Windows).
+func loadAverage() string {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return "n/a"
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 3 {
+		return "n/a"
+	}
+	return strings.Join(fields[:3], "/")
+}
+
 func (l *launch) startupError(stage string, err, parentErr error) error {
 	if parentErr != nil {
 		return fmt.Errorf("cdppipe: %s: %w", stage, parentErr)
@@ -537,6 +578,14 @@ func (d *diagnosticTail) append(p []byte) {
 	}
 	d.data = append(d.data, p...)
 }
+
+// snapshot returns a copy of the retained tail (at most 4 KiB), for the log only.
+func (d *diagnosticTail) snapshot() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return string(d.data)
+}
+
 func (d *diagnosticTail) hint() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()

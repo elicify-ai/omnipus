@@ -10,13 +10,12 @@
 // timeout/turn cap), so it must NEVER fire on its own — only when the
 // operator deliberately calls `run()` from a button click.
 //
-// Modeled on `useCliPathValidation`'s imperative `validate()` shape, but
-// simpler: a single deliberate click doesn't need the >=400ms debounce a
-// blur-driven field validator needs. Only an `AbortController` is used, so a
+// A single deliberate click doesn't need the >=400ms debounce that
+// `useCommandPreview` applies to typing. Only an `AbortController` is used, so a
 // rapid re-click (`run()` called again before the previous request settles)
 // or an unmount cancels whatever request is still in flight rather than
 // racing a stale response into a newer call's state — same cancel-in-flight
-// semantics as `useCliPathValidation`/`useCommandPreview`, minus the timer.
+// semantics as `useCommandPreview`, minus the timer.
 //
 // A domain-level failure (the CLI ran but the run didn't succeed —
 // `ExecutorSmokeTestResponse.ok === false`) is NOT the `error` state here —

@@ -117,6 +117,10 @@ func TestFreshHomeTwoBoots_SeededAgentsAreBoundToBuiltinStamps(t *testing.T) {
 	if rc2.liveLimits != nil {
 		t.Cleanup(rc2.liveLimits.Close)
 	}
+	// TempDir-cleanup family (#1644/#1695): this test drives the same
+	// initializeAgentLoop path that starts the boot-stage writer goroutines;
+	// register the join (LIFO: runs before the TempDir removal).
+	stopBootWritersOnCleanup(t, rc2)
 	require.NoError(t, err)
 	require.False(t, stop)
 	inst, ok := rc2.agentLoop.GetRegistry().GetAgent("mia")

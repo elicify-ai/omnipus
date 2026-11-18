@@ -752,6 +752,13 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 		// outcome) as blocking its parent's own completion forever.
 		return steer.OutcomeLifecycleNotice, session.LifecycleRunning,
 			session.LifecycleNoticeReasonPrefixToolIterations + " the session reached its tool-iteration limit without a final answer"
+	case result.finalContent == defaultResponse:
+		// Effort-levels FR-018 / S-04: an empty non-truncated answer that
+		// survived its one retry ends on the empty-response sentinel. The
+		// turn is marked failed, but the parent receives the ordinary
+		// hand-back carrying that same sentinel text — exactly what a
+		// messenger receives — not an error notice.
+		return "", "", ""
 	case result.turnFailed || result.status == TurnEndStatusError:
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: the turn ended with an error"
 	case result.status == TurnEndStatusParked:

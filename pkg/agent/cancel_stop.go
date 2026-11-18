@@ -62,7 +62,17 @@ func (rc *agentLoopRequestCancel) validateStopGeneration() (CancelOutcome, error
 	return CancelOutcome{}, nil, false
 }
 
+// claimCancel is the first-cancel-wins claim without a client screen
+// checkpoint: a user Stop then keeps the cut at server receipt.
 func (ts *turnState) claimCancel(stopOnly bool) bool {
+	return ts.claimCancelShown(stopOnly, nil)
+}
+
+// claimCancelShown is the first-cancel-wins claim. shown is the stopping
+// client's screen checkpoint (#1534); only a user Stop (stopOnly) stores it,
+// and only the winning claim, so a later Stop from another tab, /stop or REST
+// cannot replace it.
+func (ts *turnState) claimCancelShown(stopOnly bool, shown *StopShown) bool {
 	ts.cancelMu.Lock()
 	defer ts.cancelMu.Unlock()
 	if ts.cancelFired.Load() {
@@ -72,6 +82,9 @@ func (ts *turnState) claimCancel(stopOnly bool) bool {
 	// tail. Administrative cancellation continues to end session-owned goals.
 	if stopOnly {
 		ts.stopRequested.Store(true)
+		if shown != nil {
+			ts.stopCheckpoint = ts.resolveStopCheckpoint(*shown)
+		}
 		// #1534: the saved stopped answer ends where the screen stopped.
 		// Cut the turn's streamer off before providerCancel runs; deltas
 		// still in flight are published (the browser discards them) but not
@@ -138,7 +151,7 @@ func (rc *agentLoopRequestCancel) claimActiveTurn() bool {
 		rc.skippedNewerGeneration = true
 		return false
 	}
-	return ts.claimCancel(true)
+	return ts.claimCancelShown(true, rc.scope.Shown)
 }
 
 func (rc *agentLoopRequestCancel) cancelTurnIDs() []string {

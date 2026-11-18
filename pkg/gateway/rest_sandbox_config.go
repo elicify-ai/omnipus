@@ -7,11 +7,13 @@ package gateway
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	sandboxpkg "github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -389,6 +391,16 @@ func (ps *restAPIPutSandboxConfig) resolveAndValidate() bool {
 		ps.resolvedAllowInternal = ps.body.Ssrf.AllowInternal
 	}
 	ps.changedAllowInternal = ps.resolvedAllowInternal != nil
+	// Hosted edition: the SSRF allow list is also the provider endpoint
+	// guard's exemption list (providercommon.SetEndpointAllowlist), and
+	// platform mode has no password step-up on this route, so the tenant may
+	// resend the current list (the settings screen does with every paths
+	// save) but never change it. The hosting service seeds it in config.json.
+	if ps.changedAllowInternal && providercommon.EndpointGuardActive() &&
+		!sameEntrySet(ps.a.agentLoop.GetConfig().Sandbox.SSRF.AllowInternal, *ps.resolvedAllowInternal) {
+		jsonErrField(ps.w, http.StatusForbidden, sandboxAllowInternalManagedMsg, "ssrf.allow_internal")
+		return true
+	}
 	ps.changedFilesystemModel = ps.body.FilesystemModel != nil
 	ps.changedWorkspacePathGuard = ps.body.WorkspacePathGuard != nil
 	// ADR-092 D1/FR-045: routing the global Auto-approve default write
@@ -530,4 +542,33 @@ func actorUsername(r *http.Request) string {
 		return s
 	}
 	return ""
+}
+
+// sandboxAllowInternalManagedMsg refuses a change to sandbox.ssrf.allow_internal
+// on the hosted edition, where the hosting service sets that list.
+const sandboxAllowInternalManagedMsg = "The list of allowed internal addresses is set by the hosting service " +
+	"and cannot be changed here. Contact support to change it."
+
+// sameEntrySet reports whether a and b hold the same entries, ignoring order,
+// duplicates and surrounding spaces.
+func sameEntrySet(a, b []string) bool {
+	set := func(in []string) map[string]bool {
+		out := make(map[string]bool, len(in))
+		for _, e := range in {
+			if e = strings.TrimSpace(e); e != "" {
+				out[e] = true
+			}
+		}
+		return out
+	}
+	sa, sb := set(a), set(b)
+	if len(sa) != len(sb) {
+		return false
+	}
+	for e := range sa {
+		if !sb[e] {
+			return false
+		}
+	}
+	return true
 }

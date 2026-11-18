@@ -95,7 +95,7 @@ describe('seam U — historical cached reader receives unsolicited unavailable h
     await user.type(input, ' — still editable')
     expect(input).toHaveValue(`${DRAFT} — still editable`)
     await user.click(screen.getByRole('button', { name: /^Stop/ }))
-    expect(current.socket.sent.filter(frame => frame.type === 'cancel'), 'D7a actual current-chat Stop remains callable').toStrictEqual([{ type: 'cancel', session_id: MAIN_ID }])
+    expect(current.socket.sent.filter(frame => frame.type === 'cancel'), 'D7a actual current-chat Stop remains callable').toStrictEqual([{ type: 'cancel', session_id: MAIN_ID, shown: { code_points: 0, turn_id: 'unavailable-current-turn' } }])
     expect(sentMessages(current.socket)).toStrictEqual([])
   })
 

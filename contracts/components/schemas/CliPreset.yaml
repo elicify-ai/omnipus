@@ -13,11 +13,17 @@ properties:
     description: >
       Program path exactly as the person typed it ("" = no program saved for
       this CLI). Stored as entered, never the resolved target. A non-empty
-      value must pass thirdpartycli.ValidateProgramPath on save (absolute; every
-      symlink's folder and the final file and its folder not world-writable and
-      not inside an agent-writable location; the final file a regular,
-      executable file), otherwise the save is refused 400 with code
-      cli_path_invalid. Every run checks it again and execs the resolved file.
+      value must pass thirdpartycli.CheckProgramPath on save (absolute; the
+      final file, every symlink and every symlink's folder not inside a folder
+      agents can write to: the Omnipus home, an agent home, a workspace
+      folder, a workspace mount, an extra folder the sandbox lets agents
+      write (sandbox.allowed_paths) or the per-user temporary folder
+      (unless it is the shared /tmp), under any spelling the volume treats as
+      the same folder; the final file a regular, executable file), otherwise
+      the save is refused 400 with code cli_path_invalid. When the list of
+      folders agents can write to cannot be read in full, the location cannot
+      be checked and the path is refused with check location_unverifiable.
+      Every run checks it again and execs the resolved file.
     example: "/opt/homebrew/bin/claude"
   preset_args:
     type: string

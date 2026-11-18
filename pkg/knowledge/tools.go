@@ -1321,10 +1321,15 @@ func (t *DescribeTool) gather(
 		return nil, err
 	}
 
-	schemas, schemaReport, err := records.LoadSchemas(root.Path())
+	// The same checked, bounded load as the Library listing, the views
+	// endpoints and knowledge_find (#1017): only regular files inside the
+	// collection, within records.ListingLoadLimits, so the views described
+	// here are the views a listing shows and knowledge_find serves.
+	loaded, err := records.LoadControlCheckedAt(ctx, root.Path(), records.ListingLoadLimits())
 	if err != nil {
 		return nil, err
 	}
+	schemas, schemaReport := loaded.Schemas, loaded.SchemaReport
 	if opts.RecordType != "" {
 		if _, ok := schemas.Get(opts.RecordType); !ok {
 			// AC-D2 — an unknown record_type is REFUSED with the declared
@@ -1337,10 +1342,7 @@ func (t *DescribeTool) gather(
 		}
 	}
 
-	views, viewReport, err := records.LoadViews(root.Path(), schemas)
-	if err != nil {
-		return nil, err
-	}
+	views, viewReport := loaded.Views, loaded.ViewReport
 
 	data := &DescribeData{
 		Collection:         col.Name,
@@ -1655,7 +1657,16 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if rerr != nil {
 		return tools.ErrorResult("knowledge_read: " + rerr.Error())
 	}
-	return tools.NewToolResult(RenderRead(*data))
+	out := RenderRead(*data)
+	// chat-links FR-011 / BS-2.1: on web chat a note (or .base file) in a
+	// workspace Library gets the shared link line. data.Path is
+	// collection-relative and col.Root is the collection's real path, so the
+	// join is the note's host path; LinkLine maps it to the Library address
+	// (mount name first for a mounted collection, BS-2.3).
+	if line := tools.LinkLine(ctx, t.deps.Home, filepath.Join(col.Root, filepath.FromSlash(data.Path))); line != "" {
+		out = strings.TrimRight(out, "\n") + "\n" + line + "\n"
+	}
+	return tools.NewToolResult(out)
 }
 
 // gather does the reads: containment, the file itself, the section split, the

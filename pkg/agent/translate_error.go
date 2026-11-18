@@ -132,6 +132,14 @@ const (
 	// common.ErrStreamStalled. Attribution `provider`, retryable.
 	CodeProviderStalled LLMErrorCode = "provider_stalled"
 
+	// CodeProviderEmptyReply (issue #1664, founder decision 2026-11-07 Q3 A):
+	// a STREAMING provider call ended its stream with no finish_reason, no
+	// content and no tool call on every attempt the loop made (the silent-call
+	// attempt rule). Carried by common.ErrEmptyStream. Distinct from the
+	// FR-006 empty-response path (a stream that DID finish with "stop" but
+	// said nothing). Attribution `provider`, retryable.
+	CodeProviderEmptyReply LLMErrorCode = "provider_empty_reply"
+
 	// CodeContentPolicy: provider flagged content moderation / safety.
 	CodeContentPolicy LLMErrorCode = "content_policy"
 
@@ -963,6 +971,16 @@ func TranslateTurnError(err error) LLMError {
 		}
 		return typedExitError(code, err)
 	}
+	// Issue #1664: an empty stream is its own typed code, checked before the
+	// StreamProviderError branch that carries it.
+	if errors.Is(err, common.ErrEmptyStream) {
+		return LLMError{
+			Code:      CodeProviderEmptyReply,
+			Message:   defaultUserMessage(CodeProviderEmptyReply),
+			Retryable: isRetryable(CodeProviderEmptyReply),
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
 	// The provider ended its response with an error after the 200 (#1278): the
 	// partial text was discarded and nothing ran. Named for the person as a
 	// provider connection failure; the provider's own text stays in Detail.
@@ -1296,7 +1314,7 @@ func typedExitError(code LLMErrorCode, cause error) LLMError {
 // provider may answer next time); a cancelled one is not (the user stopped it).
 func isRetryable(code LLMErrorCode) bool {
 	switch code {
-	case CodeRateLimited, CodeNetwork, CodeProviderStalled, CodeTurnTimedOut:
+	case CodeRateLimited, CodeNetwork, CodeProviderStalled, CodeProviderEmptyReply, CodeTurnTimedOut:
 		return true
 	}
 	// CodeToolCallTruncated falls through to false with everything else:

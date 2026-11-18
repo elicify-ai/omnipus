@@ -27,6 +27,15 @@ type turnCallAccounting struct {
 	seen           bool
 	err            error
 	continuationID string
+	// effort is the effort plan of the provider call in flight (FR-058).
+	effort *effortAttempt
+	// rejectedPairs holds the (provider, model) pairs whose effort field was
+	// rejected during THIS turn: later calls of the turn still carry the
+	// `rejected` reason; only later turns say `rejected_earlier` (S-26).
+	rejectedPairs map[string]struct{}
+	// reasoningSum is the display-only sum of this turn's reported
+	// reasoning-token counts; nil until a call reports one (FR-024).
+	reasoningSum *int
 }
 
 // accountProviderAttempt owns accounting at the real call boundary, before a
@@ -69,6 +78,13 @@ func (ts *turnState) accountProviderCall(providerID, model string, usage *provid
 		CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens,
 		CacheWrite5mTokens: u.CacheWrite5mTokens, CacheWrite1hTokens: u.CacheWrite1hTokens,
 	}
+	if u.ReasoningTokens != nil {
+		n := *u.ReasoningTokens
+		entry.ReasoningTokens = &n
+	}
+	ts.mu.RLock()
+	entry.Effort = ts.callAccounting.effort.record()
+	ts.mu.RUnlock()
 	if usage != nil {
 		ts.SetLastUsage(usage)
 		ts.AddTurnStats(int64(u.TotalTokens), price.Cost)
@@ -81,8 +97,60 @@ func (ts *turnState) accountProviderCall(providerID, model string, usage *provid
 	ts.mu.Lock()
 	ts.callAccounting.pending = append(ts.callAccounting.pending, entry)
 	ts.callAccounting.seen = true
+	if entry.ReasoningTokens != nil {
+		sum := *entry.ReasoningTokens
+		if ts.callAccounting.reasoningSum != nil {
+			sum += *ts.callAccounting.reasoningSum
+		}
+		ts.callAccounting.reasoningSum = &sum
+	}
 	ts.mu.Unlock()
 	return entry, price
+}
+
+// setEffortAttempt records the effort plan of the provider call in flight;
+// nil clears it.
+func (ts *turnState) setEffortAttempt(a *effortAttempt) {
+	ts.mu.Lock()
+	ts.callAccounting.effort = a
+	ts.mu.Unlock()
+}
+
+// noteEffortRejected marks a pair as having rejected effort in this turn.
+func (ts *turnState) noteEffortRejected(provider, model string) {
+	ts.mu.Lock()
+	if ts.callAccounting.rejectedPairs == nil {
+		ts.callAccounting.rejectedPairs = map[string]struct{}{}
+	}
+	ts.callAccounting.rejectedPairs[effortPairKey(provider, model)] = struct{}{}
+	ts.mu.Unlock()
+}
+
+// effortRejectedThisTurn reports whether the pair rejected effort in this turn.
+func (ts *turnState) effortRejectedThisTurn(provider, model string) bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	_, ok := ts.callAccounting.rejectedPairs[effortPairKey(provider, model)]
+	return ok
+}
+
+// callAccountingCount returns how many calls this turn has booked so far.
+func (ts *turnState) callAccountingCount() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return len(ts.callAccounting.pending)
+}
+
+// turnReasoningTokens returns a copy of the turn's reported reasoning-token
+// sum, nil when no call reported a count.
+func (ts *turnState) turnReasoningTokens() *int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	if ts.callAccounting.reasoningSum == nil {
+		return nil
+	}
+	n := *ts.callAccounting.reasoningSum
+	return &n
 }
 
 // logCompletedCall captures price/classification once for both log and storage.
@@ -156,6 +224,9 @@ func (ts *turnState) persistAssistantAccounting(entry session.TranscriptEntry) e
 			}
 		}
 		session.SetEntryCallAccounting(&entry, pending[len(pending)-1])
+	}
+	if entry.Role == "assistant" && entry.TurnReasoningTokens == nil {
+		entry.TurnReasoningTokens = ts.turnReasoningTokens()
 	}
 	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
 		ts.setCallAccountingError(err)

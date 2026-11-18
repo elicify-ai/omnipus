@@ -66,7 +66,6 @@ func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 		RPM:            60,
 		MaxTokensField: "max_completion_tokens",
 		RequestTimeout: 30,
-		ThinkingLevel:  "high",
 		APIKeyRef:      keyRef,
 	}
 
@@ -90,9 +89,6 @@ func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 	}
 	if model.RequestTimeout != 30 {
 		t.Errorf("expected request_timeout preserved, got %d", model.RequestTimeout)
-	}
-	if model.ThinkingLevel != "high" {
-		t.Errorf("expected thinking_level preserved, got %q", model.ThinkingLevel)
 	}
 	if model.APIKeyRef != keyRef {
 		t.Errorf("expected api_key_ref preserved, got %q", model.APIKeyRef)

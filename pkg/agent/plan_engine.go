@@ -234,9 +234,9 @@ const (
 // IF they shared a mutex, which they do not across two instances — the
 // gateway boot path MUST only construct one instance; see gateway.go's
 // setupAndStartServices, the sole construction site of agent.NewPlanEngine.
-// Start is also called by restartServices (gateway.go) on that SAME
-// instance, on every reload, after stopAndCleanupServices Stop()'d it — see
-// restartServices' own comment on why the engine is not reconstructed there).
+// A configuration reload neither stops nor restarts that instance (#1725):
+// stopAndCleanupServices skips it on reload and restartSchedulersAndDrains
+// does not Start it, so it runs uninterrupted for the life of the process).
 type PlanEngine struct {
 	agentLoop  *AgentLoop
 	planStore  *plan.Store
@@ -262,9 +262,11 @@ type PlanEngine struct {
 	// struct-literal test engine and in any deployment that has not yet wired
 	// the store — Start's sweep step no-ops cleanly when it is absent.
 	lifecycleStore *session.LifecycleStore
-	// bootSweepOnce keeps crash recovery on the first Start only. Reload reuses
-	// this engine while task runs remain alive; sweeping again would finalize
-	// their sessions as interrupted before the executor records their outcome.
+	// bootSweepOnce keeps crash recovery on the first Start only. A second
+	// Start on the same instance (no production path does this since #1725 —
+	// reload keeps the engine running — but tests and defence in depth do)
+	// would otherwise finalize live task runs' sessions as interrupted before
+	// the executor records their outcome.
 	bootSweepOnce sync.Once
 	// bootSweepBudget bounds the wall-clock time the boot sweep may take
 	// (boot_sweep_budget_seconds, FR-118 "within N s"). Defaults to
@@ -712,9 +714,10 @@ func (pe *PlanEngine) Start(ctx context.Context) error {
 	// (N-15) into the same single boot pass. Runs AFTER bootReconcile so the
 	// durable F2 gate is already rehydrated (an awaiting-correction plan's
 	// owner session is then correctly EXEMPTED by exemption b). No-ops
-	// cleanly when no lifecycle store is wired. A same-instance restart is a
-	// configuration reload, not a crash: its existing task runs keep ownership
-	// of their terminal writes. A fresh engine still performs the boot sweep.
+	// cleanly when no lifecycle store is wired. A same-instance restart is not
+	// a crash (no production path restarts the engine since #1725 — reload
+	// keeps it running): its existing task runs keep ownership of their
+	// terminal writes. A fresh engine still performs the boot sweep.
 	pe.bootSweepOnce.Do(func() { pe.runBootSweep(ctx) })
 
 	pe.stoppedWG.Add(1)
@@ -1363,34 +1366,58 @@ func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, use
 // fan-out for the plan's other members — a single member's write failure
 // must not abort cancelling the rest).
 func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, error) {
-	failed := task.StatusFailed
-	cancelReason := task.CancelReasonStoppedByUser
-	result := fmt.Sprintf("%s Cancelled by %s via Stop.", memberCancelReasonMarker, userID)
-	now := time.Now().UTC().Format(time.RFC3339)
-	updated, err := pe.taskStore.Update(taskID, task.Patch{
-		Status:       &failed,
-		CancelReason: &cancelReason,
-		Result:       &result,
-		CompletedAt:  &now,
-	})
+	updated, err := writeTaskStoppedByPerson(pe.agentLoop, pe.taskStore, taskID, userID, nil)
 	if err != nil {
 		logger.WarnCF("plan_engine", "stop: could not mark member task cancelled",
 			map[string]any{"task_id": taskID, "error": err.Error()})
 		return nil, fmt.Errorf("plan_engine: cancel task %q: %w", taskID, err)
 	}
-	// MAJ-003 (sub-agent control plane): this user Stop keeps the member's
+	return updated, nil
+}
+
+// writeTaskStoppedByPerson is the one writer of a person's Stop outcome on a
+// task: `failed` with CancelReason stopped_by_user, the user-cancel marker
+// result and a completion time, followed by task_status_changed (so the
+// owning plan, if any, re-evaluates FR-041 on its next pass). Task cancel
+// (cancelMemberLocked) writes unconditionally under planDecisionMu; a
+// session Stop of a never-started queued task launch
+// (closeStoppedQueuedTaskLaunch) passes expected = in_progress so it never
+// overwrites an outcome another writer already landed — that case returns
+// task.ErrStatusConflict.
+func writeTaskStoppedByPerson(al *AgentLoop, store *task.Store, taskID, userID string, expected *task.Status) (*task.Task, error) {
+	failed := task.StatusFailed
+	cancelReason := task.CancelReasonStoppedByUser
+	result := fmt.Sprintf("%s Cancelled by %s via Stop.", memberCancelReasonMarker, userID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	patch := task.Patch{
+		Status:       &failed,
+		CancelReason: &cancelReason,
+		Result:       &result,
+		CompletedAt:  &now,
+	}
+	var updated *task.Task
+	var err error
+	if expected != nil {
+		updated, err = store.UpdateIfStatus(taskID, *expected, patch)
+	} else {
+		updated, err = store.Update(taskID, patch)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// MAJ-003 (sub-agent control plane): this user Stop keeps the task's
 	// paired goal record ACTIVE — a stop is not an adjudication, so no
 	// terminateTaskGoalRecord call sits here. Only the task's own met/
 	// exhaustion adjudication (tools.TerminateTaskGoalRecord from the genuine
 	// terminal writers) or an explicit clear ends a goal. Plan restart relies
 	// on the record surviving: goal id, active state and session binding all
 	// carry across (D8.10; W4 consumes this).
-	if pe.agentLoop != nil {
+	if al != nil {
 		sessionID := updated.SessionID
 		if sessionID == "" {
 			sessionID = "task:" + updated.ID
 		}
-		pe.agentLoop.EmitTaskStatusChanged(TaskStatusChangedPayload{
+		al.EmitTaskStatusChanged(TaskStatusChangedPayload{
 			TaskID:    updated.ID,
 			Status:    string(updated.Status),
 			SessionID: sessionID,

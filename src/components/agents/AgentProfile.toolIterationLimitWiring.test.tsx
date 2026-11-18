@@ -28,7 +28,16 @@ if (typeof Element !== 'undefined' && !Element.prototype.hasPointerCapture) {
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return { ...actual, useNavigate: () => vi.fn(), useParams: () => ({}) }
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+    useParams: () => ({}),
+    Link: ({ children, to, ...rest }: { children?: React.ReactNode; to?: string } & Record<string, unknown>) => (
+      <a href={typeof to === 'string' ? to : '#'} {...(rest as Record<string, unknown>)}>
+        {children}
+      </a>
+    ),
+  }
 })
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -200,13 +209,14 @@ describe('AgentProfile — Max tool calls per turn (#904)', () => {
       executor: { kind: 'external-cli', cli: 'claude-code', effective_cli_path: '/usr/bin/claude' },
     }
     vi.mocked(updateAgent).mockResolvedValue(worker)
-    // I12: an external-cli save runs the runner test first.
+    // FR-8: this external-cli save must not run a pre-save runner test.
     vi.mocked(testAgentRunner).mockResolvedValue({ ok: true, reason: '', message: '' } as Awaited<ReturnType<typeof testAgentRunner>>)
     const input = await openAdvanced(worker)
     expect(screen.getByText('Using the global limit (200)')).toBeInTheDocument()
     fireEvent.change(input, { target: { value: '30' } })
     await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 6000 })
     expect(lastPayload().max_tool_iterations).toBe(30)
+    expect(testAgentRunner).not.toHaveBeenCalled()
   })
 
   it('D4: the worker command preview omits max_tool_iterations when the agent has no own value (never 0)', async () => {

@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef } from 'react'
-import { createFileRoute, redirect, useNavigate, useRouteContext } from '@tanstack/react-router'
+import { createFileRoute, isRedirect, redirect, useNavigate, useRouteContext } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -20,13 +20,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { QuietEffortLine } from '@/components/ui/model-effort-picker'
 import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
 import { probeProvider, completeOnboardingTransaction } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 import { useUiStore } from '@/store/ui'
-import { useAuthStore, hasStoredSession } from '@/store/auth'
+import { useAuthStore } from '@/store/auth'
 import { queryClient } from '@/lib/queryClient'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
@@ -67,10 +68,10 @@ import {
 // indicator tracks only the numbered steps.
 //
 // Which mode applies is read off GET /state's `identity.mode` — see
-// readOnboardingAuthMode below. That field is being added to AppState by a
-// parallel lane and is NOT yet in the generated OpenAPI types this file
-// imports, so it is read defensively through a local type extension rather
-// than a generated property.
+// readOnboardingAuthMode below. `mode` and `signed_in` are generated fields
+// of AppState's identity (AppStateIdentity), so both are read off the
+// response itself; the only defensive case left is a missing state
+// altogether (the query has not answered yet).
 //
 // SECURITY / DEFAULT DIRECTION: local (upstream) is the fallback, platform
 // is the opt-in. A hosted or desktop server always answers an explicit
@@ -351,6 +352,9 @@ function OnboardingWizard() {
   // FR-029: no model is pre-selected, ever. This starts empty and only the
   // operator's own pick fills it.
   const [selectedModel, setSelectedModel] = useState('')
+  // Effort levels US-11 AS3 / FR-067: the first default's effort, stored by
+  // the completion transaction itself ('' = Provider default, field omitted).
+  const [selectedEffort, setSelectedEffort] = useState('')
   const [probeStatus, setProbeStatus] = useState<TestStatus>('idle')
   const [probeError, setProbeError] = useState('')
   // The model the LAST successful probe actually exercised (FR-036's
@@ -512,6 +516,8 @@ function OnboardingWizard() {
   // explicit *Check connection* button runs the probe.
   const handleSelectModel = (model: string, autoProbe: boolean) => {
     setSelectedModel(model)
+    // Effort levels FR-067: an effort belongs to the model it was chosen for.
+    setSelectedEffort('')
     resetProbe()
     if (autoProbe && model.trim()) void runProbe(model)
   }
@@ -582,6 +588,7 @@ function OnboardingWizard() {
               auth_method: 'sign_in',
               id: selection.providerId,
               model: selectedModel,
+              ...(selectedEffort ? { reasoning_effort: selectedEffort } : {}),
               ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
             }
           : {
@@ -589,8 +596,13 @@ function OnboardingWizard() {
               id: selection.providerId,
               api_key: selection.apiKey,
               model: selectedModel,
+              ...(selectedEffort ? { reasoning_effort: selectedEffort } : {}),
               ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
               ...(selection.awsRegion ? { region: selection.awsRegion } : {}),
+              // #1700: only the Custom endpoint path sets `protocol`; with it the
+              // server saves a custom row. A catalog row never carries one (the
+              // server refuses `protocol` on a catalog id).
+              ...(selection.protocol ? { protocol: selection.protocol } : {}),
             }
       const resp = await completeOnboardingTransaction({
         provider,
@@ -821,6 +833,8 @@ function OnboardingWizard() {
                 onChangeProvider={handleChangeProvider}
                 selectedModel={selectedModel}
                 onSelectModel={handleSelectModel}
+                selectedEffort={selectedEffort}
+                onSelectEffort={setSelectedEffort}
                 probeStatus={probeStatus}
                 probeError={probeError}
                 probedModel={probedModel}
@@ -1340,6 +1354,8 @@ function ProviderStep({
   onChangeProvider,
   selectedModel,
   onSelectModel,
+  selectedEffort,
+  onSelectEffort,
   probeStatus,
   probeError,
   probedModel,
@@ -1361,6 +1377,8 @@ function ProviderStep({
   onChangeProvider: () => void
   selectedModel: string
   onSelectModel: (model: string, autoProbe: boolean) => void
+  selectedEffort: string
+  onSelectEffort: (effort: string) => void
   probeStatus: TestStatus
   probeError: string
   probedModel: string
@@ -1543,6 +1561,13 @@ function ProviderStep({
                 ? 'Your first agent starts on this model. You can change it later.'
                 : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
             </p>
+            <QuietEffortLine
+              scope="onboarding"
+              catalog={catalog}
+              value={{ provider: selection.providerId, model: selectedModel, effort: selectedEffort }}
+              onChange={onSelectEffort}
+              data-testid="onboarding-effort"
+            />
           </div>
 
           {/* ── The probe of the chosen auth method ──────────────────────── */}
@@ -1798,13 +1823,13 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
 export const Route = createFileRoute('/onboarding')({
   beforeLoad: async () => {
     // FR-OB-001 / US-1: sign-in is a gate BEFORE onboarding — in PLATFORM
-    // mode (ADR-0008), where a browser with no session has nothing to
-    // onboard. In LOCAL mode (WP5, ADR-0010), or when the mode can't be
-    // determined at all, onboarding itself is what creates the first session
-    // — the two admin-account steps above are the whole point — so there is
-    // nothing to gate on there. That is also upstream's own behaviour at the
-    // merge base: upstream's beforeLoad has no sign-in gate whatsoever,
-    // because upstream has no other mode.
+    // mode (ADR-0008), where a browser the server does not report as signed
+    // in has nothing to onboard. In LOCAL mode (WP5, ADR-0010), or when the
+    // mode can't be determined at all, onboarding itself is what creates the
+    // first session — the two admin-account steps above are the whole point
+    // — so there is nothing to gate on there. That is also upstream's own
+    // behaviour at the merge base: upstream's beforeLoad has no sign-in gate
+    // whatsoever, because upstream has no other mode.
     //
     // Which mode applies is read off GET /state, so the fetch runs FIRST
     // (unlike this route's behaviour before WP5, which checked
@@ -1824,13 +1849,26 @@ export const Route = createFileRoute('/onboarding')({
       // SECURITY: gate on an EXPLICIT 'platform', never on "not local" — see
       // the SECURITY note above readOnboardingAuthMode. 'local', undefined,
       // and any other value all take upstream's own no-gate path.
-      if (onboardingAuthMode === 'platform' && !hasStoredSession()) {
+      //
+      // The sign-in decision comes from the SERVER's /state answer, not from
+      // this browser: platform mode passes only on a strict
+      // identity.signed_in === true. False, missing, null or a non-boolean
+      // all redirect to /login — a localStorage hasStoredSession() hint must
+      // never open the gate (hosted SSO owners carry a gateway cookie and
+      // have no stored hint at all — issue #1858).
+      if (onboardingAuthMode === 'platform' && state?.identity?.signed_in !== true) {
         throw redirect({ to: '/login' })
       }
       return { appStateBannerMessage: null as string | null, onboardingAuthMode }
     } catch (err) {
-      // Re-throw redirect so we don't swallow navigation errors.
-      if (err && typeof err === 'object' && 'to' in err) throw err
+      // Re-throw the router's OWN redirect Responses so navigation is never
+      // swallowed: @tanstack/router-core's redirect() returns a Response
+      // carrying the target under .options.to, which only isRedirect()
+      // recognises (issue #1858 — the old `'to' in err` check matched no
+      // real redirect, so the sign-in gate fell open into the wizard). A
+      // lookalike value that merely has a `to` property is data, not
+      // navigation, and takes the fetch-failure path below.
+      if (isRedirect(err)) throw err
       // Log non-redirect errors so operators can diagnose fetch failures.
       console.error('onboarding.app_state_fetch_failed', err)
       // The mode is unknown when the fetch itself failed — same rule as

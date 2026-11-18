@@ -8,6 +8,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // EventKind identifies a structured agent-loop event.
@@ -169,6 +170,16 @@ const (
 	// ProviderStatusPayload. The hub forwards it as a provider_status frame.
 	EventKindProviderStatus
 
+	// EventKindUserMessagePersisted (#1442) is emitted by ProcessScheduled
+	// immediately AFTER a scheduled/heartbeat prompt's transcript append
+	// succeeds. The gateway's session-hub sync tap translates it into exactly
+	// one user_message frame (id, content and attribution taken verbatim
+	// from the carried entry) for the viewers bound to that session, so the
+	// run's live view shows the prompt without a reload. Interactive turns
+	// never emit it: their echo stays websocket_chat.go's publishUserMessage,
+	// so no turn is echoed twice. Payload: UserMessagePersistedPayload.
+	EventKindUserMessagePersisted
+
 	eventKindCount
 )
 
@@ -215,6 +226,7 @@ var eventKindNames = [...]string{
 	"provider_fallback",
 	"helper_event",
 	"provider_status",
+	"user_message_persisted",
 }
 
 // String returns the stable string form of an EventKind.
@@ -389,6 +401,11 @@ type LLMRetryPayload struct {
 	SentAt      time.Time
 	MaxAttempts int
 	SessionID   string
+	// ChildSessionID (#1537 FR-001/002) is the helper's own chat when the
+	// retrying turn's own chat differs from its top chat (SessionID). The hub
+	// then publishes the retry twice: to this chat without identity fields,
+	// and to SessionID as the named copy. Empty for a chat's own turn.
+	ChildSessionID string
 
 	// ContextWindowNotice is the already-persisted context diagnostic. The hub
 	// publishes this generated frame once; no ordinary chat message is produced.
@@ -466,6 +483,11 @@ type ToolExecEndPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_result frames must carry agent_id to match replay frame parity.
 	AgentID string
+	// OpenInLibrary is show_to_user's open request (chat-links "Tool-to-hub
+	// seam"), copied from the tool result only on success. The gateway turns
+	// it into the live-only open_in_library frame; it is never persisted, so
+	// no replay can rebuild it. Nil for every other tool and every error.
+	OpenInLibrary *tools.LibraryOpenTarget
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.
@@ -991,6 +1013,16 @@ type SubagentMessagePayload struct {
 	MessageID string
 	// Frame is the wire shape itself, identical to the persisted entry's.
 	Frame generated.SubagentMessageFrame
+}
+
+// UserMessagePersistedPayload is EventKindUserMessagePersisted's payload
+// (#1442): the transcript entry ALREADY persisted for the scheduled prompt.
+// The entry is carried verbatim so the gateway frame's id, content, timestamp
+// and agent attribution ARE the persisted ones by construction, never
+// re-derived.
+type UserMessagePersistedPayload struct {
+	SessionID string
+	Entry     session.TranscriptEntry
 }
 
 // ProviderFallbackPayload is EventKindProviderFallback's payload

@@ -77,7 +77,7 @@ docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
 
 Run it from the repository root, not from `docker/` — the build context must include the whole tree.
 
-Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.27.3-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
+Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.27.4-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
 
 Both builder stages are pinned to the **build** platform and cross-compile, so a multi-architecture build does not run `npm ci` and `go build` under emulation:
 
@@ -354,7 +354,9 @@ docker rm omnipus-gateway
 # Re-run the original docker run command with the same volume mount.
 ```
 
-The data directory is never modified by the image pull. **Patch and minor releases require no migration step.** Major-version upgrades may require manual `~/.omnipus/` handling — the v0.1.1 workspaces redesign is a fresh-build line with **no migration path** (greenfield; founder ruling 2026-09-15). **Snapshot the data directory before pulling a new major tag.**
+The data directory is never modified by the image pull. **Patch and minor releases require no migration step** — with one exception, below. Major-version upgrades may require manual `~/.omnipus/` handling — the v0.1.1 workspaces redesign is a fresh-build line with **no migration path** (greenfield; founder ruling 2026-09-15). **Snapshot the data directory before pulling a new major tag.**
+
+**The one exception: the release that upgrades the libraries Omnipus uses to connect to WhatsApp and Matrix** (the WhatsApp pairing fix, issue #1871; the [changelog](../CHANGELOG.md) names the release). Before updating to that release, snapshot the whole data directory. On the first start after the upgrade, both channels update their stored data in place — the WhatsApp session store and the Matrix encryption store. An older release can still open the updated WhatsApp store, but not the updated Matrix store. Going back to the older release means restoring the snapshot taken before the upgrade; see [Backup and restore](#backup-and-restore) for what to copy and where the stores live.
 
 ---
 
@@ -376,6 +378,17 @@ docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
 Restore is the same in reverse: stop, extract the tarball into place, restart. **`master.key` must be restored alongside the data** — without it, `credentials.json` is unrecoverable. If you back up encrypted volumes with separate key management, store the master key in your secrets vault and inject it via `OMNIPUS_KEY_FILE` instead of restoring it onto disk.
+
+**Without Docker**, the same snapshot is three steps: stop Omnipus with `omnipus stop`, copy the data directory (`~/.omnipus/`, or the path set by `OMNIPUS_HOME`), and start it again with `omnipus start`.
+
+### The WhatsApp and Matrix stores
+
+Two files inside the data directory matter for the library-upgrade release described in [Updating](#updating):
+
+- **WhatsApp session store** — `workspace/whatsapp/<channel-name>/store.db`. With the default settings and a channel named `whatsapp`, that is `~/.omnipus/workspace/whatsapp/whatsapp/store.db`.
+- **Matrix encryption store** — `workspace/matrix/<channel-name>/store.db`, built the same way from the channel's name under `channels` in `config.json`.
+
+Both files are named `store.db`, and both sit inside the whole-directory snapshot above. On the first start after the upgrade, both stores are updated in place, and an older release cannot open the updated Matrix store again — so going back to an older release means restoring the snapshot taken before the upgrade. If you moved a store with `session_store_path` (WhatsApp) or `crypto_database_path` (Matrix) in `config.json`, it lives in the directory you set; snapshot that directory too.
 
 ---
 

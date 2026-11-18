@@ -260,6 +260,14 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// committed (OpenRouter's mid-stream error chunk, issue #1278) failed
 	// transiently: nothing it streamed is an answer, and no tool ran. Same
 	// class as a dropped connection, so the same inline retry applies.
+	// Issue #1664 (founder decision 2026-11-07 Q3 A): a stream that ended
+	// with nothing in it is a failed attempt of the same class as a call
+	// that never answered — FailoverTimeout, so a configured fallback model
+	// is tried and the agent loop's silent-call attempt rule applies.
+	// Checked before the StreamProviderError branch that carries it.
+	if errors.Is(err, common.ErrEmptyStream) {
+		return &FailoverError{Reason: FailoverTimeout, Provider: provider, Model: model, Wrapped: err}
+	}
 	var spe *common.StreamProviderError
 	if errors.As(err, &spe) {
 		reason := FailoverReason("")

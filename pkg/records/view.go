@@ -567,15 +567,18 @@ func LoadViews(vaultRoot string, schemas *SchemaSet) (*ViewSet, *ViewLoadReport,
 	}
 	sort.Strings(paths) // deterministic, so reports are reproducible
 
-	return loadViewPaths(paths, schemas)
+	return loadViewPaths(paths, schemas, os.ReadFile)
 }
 
-func loadViewPaths(paths []string, schemas *SchemaSet) (*ViewSet, *ViewLoadReport, error) {
+// loadViewPaths parses, de-duplicates and schema-checks the view files at
+// paths. read supplies each file's bytes: os.ReadFile for LoadViews, a
+// checked and bounded reader for LoadViewSetChecked.
+func loadViewPaths(paths []string, schemas *SchemaSet, read func(string) ([]byte, error)) (*ViewSet, *ViewLoadReport, error) {
 	report := &ViewLoadReport{ScannedFiles: append([]string(nil), paths...)}
 	parsed := make([]*SavedView, 0, len(paths))
 
 	for _, p := range paths {
-		data, err := os.ReadFile(p)
+		data, err := read(p)
 		if err != nil {
 			report.Rejections = append(report.Rejections, ViewRejection{
 				Paths:  []string{p},

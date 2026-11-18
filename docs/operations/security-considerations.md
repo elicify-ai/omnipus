@@ -104,7 +104,7 @@ For unattended deployments, provision `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE`
 
 ## Sensitive-value filtering
 
-Resolved credential values are registered at startup and again whenever the credential set changes (configuration reload, settings save, provider sign-in). Omnipus uses that complete current set to scrub tool results and other selected content before it reaches a model. It is not applied to the audit log; see "Audit log redaction" below, which matches credential formats, not your registered values.
+Resolved credential values are registered at startup and again whenever the credential set changes (configuration reload, settings save, provider sign-in). Omnipus uses that complete current set to scrub tool results and other selected content before it reaches a model. It is not applied to the audit log, with one exception: the standard parameters of third-party agents, in run entries and in Settings change entries, pass through it while `filter_sensitive_data` is on and are held as typed when it is off. See "Audit log redaction" below, which matches credential formats, not your registered values, and always runs.
 
 Filtering is best-effort and can be switched off. Configure it under `tools` in `config.json`:
 
@@ -117,7 +117,7 @@ Filtering is best-effort and can be switched off. Configure it under `tools` in 
 }
 ```
 
-`filter_sensitive_data` defaults to `true`. `filter_min_length` defaults to `8`; shorter content bypasses this filter. The matching environment variables are `OMNIPUS_TOOLS_FILTER_SENSITIVE_DATA` and `OMNIPUS_TOOLS_FILTER_MIN_LENGTH`.
+`filter_sensitive_data` defaults to `true`. `filter_min_length` defaults to `8`; shorter content bypasses this filter, except the audit copy of third-party agents' standard parameters, which has no minimum. The matching environment variables are `OMNIPUS_TOOLS_FILTER_SENSITIVE_DATA` and `OMNIPUS_TOOLS_FILTER_MIN_LENGTH`.
 
 This filter only covers credential values Omnipus has registered. It does not recognise credential formats, and it does not discover every secret in arbitrary text. Treat any suspected exposure as real and rotate the affected credential.
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -125,9 +126,27 @@ func (t *InstallSkillTool) Name() string {
 }
 
 func (t *InstallSkillTool) Description() string {
-	return "Install a skill from a registry by slug into the global skills directory. Installation does not assign it to agents; execution still requires an applicable skill assignment. Use find_skills for registry discovery and list_skills with scope=management to inspect installed packages and their revisions. " +
+	return "Install a skill from a registry by slug into the global skills directory. Installation does not assign it to agents; execution still requires an applicable skill assignment. Registries of type github are " + githubNotSupportedText + ". Use find_skills for registry discovery and list_skills with scope=management to inspect installed packages and their revisions. " +
 		"Replacing an installed package requires force=true and its exact reviewed revision. Replacement affects every agent assigned that shared package. The verified replacement is staged before publication; validation or download failures preserve the existing install. " +
 		"Malicious packages are refused. Read persistence, activation and warning fields in the result; after publication or cleanup errors, inspect installed state before retrying. A revision conflict requires a fresh read and renewed confirmation for material changes."
+}
+
+// githubNotSupportedText is the stable wording of the github refusal; the tool
+// description and the refusal both use it.
+const githubNotSupportedText = "not supported by install_skill"
+
+// isGitHubRegistry reports whether name selects a github registry: the
+// well-known name "github" (any case), or any configured registry that is a
+// GitHub registry under a custom marketplace name.
+func (t *InstallSkillTool) isGitHubRegistry(name string) bool {
+	if strings.EqualFold(strings.TrimSpace(name), "github") {
+		return true
+	}
+	if t.registryMgr == nil {
+		return false
+	}
+	marker, ok := t.registryMgr.GetRegistry(name).(interface{ IsGitHubRegistry() bool })
+	return ok && marker.IsGitHubRegistry()
 }
 
 func (t *InstallSkillTool) Scope() ToolScope       { return ScopeGeneral }
@@ -181,6 +200,17 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (re
 	// (single, global) skills-directory level.
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// A github registry is refused up front (#1574): it takes an owner/repo
+	// reference, which the slug rule below can never accept, and its installer
+	// bypasses the staging, scan and publish steps this tool relies on. Say so
+	// before the slug check, whose "invalid slug" message hides the real reason.
+	if name, _ := args["registry"].(string); t.isGitHubRegistry(name) {
+		return ErrorResult(fmt.Sprintf(
+			"registry %q is a github registry: installing from github is %s; install from a clawhub registry instead",
+			name, githubNotSupportedText,
+		))
+	}
 
 	// Validate slug
 	slug, _ := args["slug"].(string)

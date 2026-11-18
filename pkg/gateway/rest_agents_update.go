@@ -83,6 +83,7 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.Model != nil, "model")
 	add(req.Provider != nil, "provider")
 	add(req.FallbackModels != nil, "fallback_models")
+	add(req.ReasoningEffort != nil, "reasoning_effort")
 	add(req.ContextWindowOverride != nil, "context_window_override")
 	add(req.ModelParams != nil, "model_params")
 	add(req.MaxToolIterations != nil, "max_tool_iterations")
@@ -222,6 +223,11 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	if refuseForbiddenExecutorFields(uf.w, uf.rawBody, "kind", "cli", "cli_path") {
 		return true
 	}
+	// Effort members (primary and fallbacks) are checked on the raw body in
+	// both validation modes, before any decode or write (FR-060, S-94).
+	if refuseInvalidEffortBody(uf.w, uf.rawBody) {
+		return true
+	}
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
 	if validateEnabled && !validateAgentIdentitySchema(uf.w, "AgentUpdateRequest", uf.rawBody, false) {
 		return true
@@ -293,16 +299,23 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 // refuseOmnipusRules applies the Omnipus system agent's write rules before any
 // field is persisted: a rename to the reserved name is refused (FR-002), and a
 // per-agent "ask" for Omnipus in either capability form is refused (FR-022).
+// An always-ask tool set to allow is refused for every agent (channels FR-037).
 func (uf *restAPIUpdateAgentFlow) refuseOmnipusRules() bool {
 	if uf.ru.req.Name != nil && refuseReservedAgentName(uf.w, *uf.ru.req.Name) {
 		return true
 	}
 	if changes := uf.ru.req.ToolPolicyChanges; changes != nil && changes.Set != nil {
+		if refuseAlwaysAskAllow(uf.w, *changes.Set) {
+			return true
+		}
 		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(*changes.Set)) {
 			return true
 		}
 	}
 	if tc := uf.ru.req.ToolsCfg; tc != nil && tc.Builtin != nil {
+		if refuseAlwaysAskAllow(uf.w, tc.Builtin.Policies) {
+			return true
+		}
 		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(tc.Builtin.Policies)) {
 			return true
 		}
@@ -706,7 +719,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// fastAgentUpsert (issue #571), not a full config reload: a soul change is
 	// only real once a fresh AgentInstance/ContextBuilder picks up the new
 	// SOUL.md — but that does not require
-	// restarting channels/cron/schedulers/the plan engine or rebuilding
+	// restarting channels/cron/schedulers or rebuilding
 	// every OTHER agent's instance, only this one agent's. See
 	// AgentLoop.UpsertAgentFast for how the resolver/override/wiring parity
 	// is achieved without that cost; it falls back to the slow, hardened
@@ -766,9 +779,22 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// and the next tool resolution keep the old decision until a restart.
 	permissionsChanged := uf.ru.req.ToolPolicyChanges != nil || uf.ru.req.ToolsCfg != nil ||
 		uf.ru.req.McpServers != nil
+	// D-A (opencode-226 R5): the external-CLI executor settings are read by
+	// delegation from the LIVE registry — external_dispatch.go::
+	// prepareRunOptions takes EnvOverrides from the agent's construction-time
+	// Subagents snapshot (pkg/agent/instance.go), the same cached-shape case
+	// as MaxToolIterations and the tool policies above. mergeExecutorUpdate
+	// has already merged the executor-only body (cli_args, env_overrides,
+	// env_overrides_remove) into the stored record, so an executor write must
+	// take the same single-agent fastAgentUpsert path; without it the next
+	// delegation keeps launching the saved-before-PUT arguments and
+	// environment until a restart. Request-presence gating matches the
+	// Skills/ModelParams siblings — an executor body that changes nothing
+	// simply rebuilds the same settings.
+	executorChanged := uf.ru.req.Executor != nil
 	needsReload := uf.ru.req.Soul != nil || contextWindowOverrideChanged ||
 		uf.ru.req.Skills != nil || uf.ru.req.ModelParams != nil || uf.ru.modelIdentityChanged ||
-		maxToolIterationsChanged || permissionsChanged
+		maxToolIterationsChanged || permissionsChanged || executorChanged
 	if needsReload {
 		// fastAgentUpsert returns a non-empty message only when neither the
 		// single-agent swap nor its full-reload fallback could publish the
@@ -961,6 +987,10 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 		if errors.Is(updateErr, agentstore.ErrInvalidRevision) {
 			return fmt.Errorf("invalid revision: %w", updateErr)
 		}
+		var refusal *requestRefusalError
+		if errors.As(updateErr, &refusal) {
+			return refusal
+		}
 		// r17 FR-132 (#1295, D-10): a field error found inside the mutation
 		// (the tool-policy name rule) is a 400 naming the field; nothing was
 		// written. Only a real storage failure stays a 500.
@@ -981,7 +1011,12 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	// MutateState checks the reviewed revision under the entity lock before
 	// applying these fields. UpdatedAt is display metadata, never a precondition.
 	storedModelBefore, storedFallbacksBefore := agentModelIdentity(agentRec)
+	providerBefore, modelBefore := agentPrimaryPair(agentRec)
+	effortBefore := agentRec.ReasoningEffort
 	rp.updateIdentityAndModel(agentRec)
+	if err := rp.updateEffort(agentRec, providerBefore, modelBefore); err != nil {
+		return err
+	}
 	rp.updatePresentationAndFallbacks(agentRec)
 	rp.updateToolsConfig(agentRec)
 	if err := rp.updateMCPServers(agentRec); err != nil {
@@ -995,8 +1030,11 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	// Refresh the display timestamp with sub-second precision;
 	// the frontend compares it as an ordinal when incorporating autosaves.
 	storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
+	// The primary effort is read when the agent instance is built, so an
+	// effort change rebuilds it like a model change (FR-029).
 	rp.ru.modelIdentityChanged = !sameAgentModelIdentity(
-		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter)
+		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter) ||
+		effortBefore != agentRec.ReasoningEffort
 	agentRec.UpdatedAt = &rp.ru.now
 	return nil
 }
@@ -1103,20 +1141,23 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 		agentRec.MemoryEnabled = rp.ru.req.MemoryEnabled
 	}
 	if rp.ru.req.FallbackModels != nil {
-		agentRec.FallbackModels = fallbackModelsFromWire(*rp.ru.req.FallbackModels)
+		agentRec.FallbackModels = fallbackModelsFromWire(*rp.ru.req.FallbackModels, agentRec.FallbackModels)
 	}
 }
 
 // fallbackModelsFromWire converts validated wire fallback entries to the
 // stored form, in order (REST create and update share it, r17 §7.5 AG-03).
-func fallbackModelsFromWire(entries []gen.FallbackModel) config.FallbackModelSlice {
+// Each entry keeps its sent effort; an entry sent without one keeps the
+// effort stored for the same pair in stored (effort-levels FR-048). Create
+// passes nil: there is nothing stored yet.
+func fallbackModelsFromWire(entries []gen.FallbackModel, stored config.FallbackModelSlice) config.FallbackModelSlice {
 	fbs := make(config.FallbackModelSlice, 0, len(entries))
 	for _, fm := range entries {
 		provider := ""
 		if fm.Provider != nil {
 			provider = *fm.Provider
 		}
-		fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
+		fbs = append(fbs, fallbackWithEffort(fm.Model, provider, fm.ReasoningEffort, stored))
 	}
 	return fbs
 }

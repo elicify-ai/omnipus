@@ -71,6 +71,7 @@ var goldenAskList = []string{
 	// and secret-removal/selection tools join the ask-list — the deliberate
 	// two-place edit (this golden copy and pkg/tools/auto_approve.go).
 	"connect_channel",
+	"set_channel_outbound", // channels FR-032: explicit AutoAsks, never fallback-only.
 	"connect_mailbox",
 	"remove_secret",
 	"select_secret_version",
@@ -435,8 +436,8 @@ func checkAskListLock(table map[string]tools.AutoApproveClass, golden []string) 
 }
 
 func TestAutoApproveClassification_AskListMatchesGoldenCopy(t *testing.T) {
-	if len(goldenAskList) != 30 {
-		t.Fatalf("goldenAskList has %d names, want 30 (27 historical asks plus five FR-021, minus two r15 retired skill tools)", len(goldenAskList))
+	if len(goldenAskList) != 31 {
+		t.Fatalf("goldenAskList has %d names, want 31 (+1 set_channel_outbound; 27 historical asks plus five FR-021, minus two r15 retired skill tools)", len(goldenAskList))
 	}
 	table := tools.AutoApproveClassTable()
 	if errs := checkAskListLock(table, goldenAskList); len(errs) > 0 {

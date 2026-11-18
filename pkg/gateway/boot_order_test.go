@@ -319,9 +319,7 @@ func TestBootOrder_OldOrderWouldLoseDataModelInitLogs(t *testing.T) {
 // equivalent, operating on the same exported config.Edition var).
 func withEditionForBootTest(t *testing.T, e string) {
 	t.Helper()
-	prev := config.Edition
-	config.Edition = e
-	t.Cleanup(func() { config.Edition = prev })
+	t.Cleanup(config.SetEdition(e))
 }
 
 // TestGatewayBoot_EditionMisbuildRefusesToStart pins the ADR-0010 boot

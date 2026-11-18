@@ -19,7 +19,7 @@ func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) 
 	})
 	for _, name := range []string{
 		"delete_agent", "edit_skill", "add_mcp_server", "configure_provider", "enable_channel", "configure_channel",
-		"remove_mcp_server", "connect_channel", "connect_mailbox", "set_agent_permissions", "remove_secret",
+		"remove_mcp_server", "connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions", "remove_secret",
 		"select_secret_version", "environment_setup", "bash", "install_skill",
 	} {
 		t.Run(name, func(t *testing.T) {

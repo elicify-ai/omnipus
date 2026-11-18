@@ -232,4 +232,18 @@ type Model struct {
 	// published row has no cost object. A present object whose Input is
 	// nil is an unpriced model, not a zero price.
 	Cost *ModelCost
+	// Reasoning is the upstream reasoning control data (effort-levels spec
+	// FR-049). Nil when the row carries no reasoning object ("does not
+	// reason"). A present object with no levels and no switch means the
+	// model reasons but publishes no control Omnipus can send (for example
+	// a budget-only row); budget metadata itself is never kept.
+	Reasoning *ModelReasoning
+}
+
+// ModelReasoning is a model's published reasoning controls: the effort
+// levels in published order (may include "none") and whether an on/off
+// switch exists.
+type ModelReasoning struct {
+	Levels []string
+	Switch bool
 }

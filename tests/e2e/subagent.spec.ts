@@ -234,27 +234,55 @@ test.beforeEach(async ({ page }) => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────────
-// (a) grandchild refused — Scenario 10, US-3
-// BDD: Given a subagent sub-turn is running with a LEAF-ROLE target (Researcher:
-//      no delegate grant, no onward delegation edges — Jim → Researcher is legal)
-//      When the sub-turn's LLM attempts a tool call with name="delegate"
-//      Then the tool dispatcher refuses it by policy for that leaf role
+// (a) grandchild refused — Scenario 10, US-3 — RE-ANCHORED 2026-11-07 (#1661)
+// BDD: Given a subagent sub-turn is running on Researcher, which HOLDS the
+//      Worker core's delegate Allow (founder decision 2026-11-07 04:00Z
+//      "Researcher B": Researcher keeps the tools documented in docs/tools.md
+//      — "Delegate and inspect work … Allow | Allow"; "Planner, Researcher
+//      and General Purpose use the Worker core") and seeds exactly ONE
+//      delegation edge, its own self-edge (pkg/coreagent/seed.go
+//      ::coreAgentDelegation default arm; the operator exclusion list names
+//      only judge and plansupervisor)
+//      When the sub-turn calls delegate with agent_id "worker" — an agent
+//      that EXISTS but has NO delegation edge from researcher
+//      Then the per-workspace graph gate refuses the call (trust_set,
+//      pkg/agent/loop_delegation.go::findDelegationEdge) and the visible
+//      "Delegation refused" event line narrates it in Researcher's OWN
+//      session (delegationEvents.ts::runEvents derives a refused event from
+//      an errored delegate call with no child span; delegationEventLine.ts
+//      renders "Delegation refused · <reason>" — a refusal is a line, not a
+//      badge, toolVisibility.ts)
 //      And no subagent_start frame with a grandchild parent_call_id is emitted
-//      And the parent's transcript ToolCalls contains exactly one delegate entry
+//      And the parent's transcript holds exactly one delegate entry
 //
-// Traces to: sprint-h-subagent-block-spec.md TDD row 21, BDD Scenario 10, lines 304-313
+// Traces to: sprint-h-subagent-block-spec.md TDD row 21, BDD Scenario 10;
+// founder decision 2026-11-07 04:00Z ("Researcher B", #1661).
+//
+// WHY RE-ANCHORED: the old premise — "Researcher is a LEAF with NO delegate
+// grant, refused by policy at the ToolSearch LOAD step, surfaced by an
+// errored ToolSearch badge" — died on 2026-10-22 (a70730fb3 + f4f0d9365: the
+// Worker core reached Researcher) and was ratified by the founder on
+// 2026-11-07: the grant is intended. With delegate Allow, the ToolSearch load
+// SUCCEEDS (ToolSearch is hidden on success, toolVisibility.ts) and the
+// delegate badge is hidden in non-verbose threads for EVERY action (isError
+// never consulted) — no badge of either kind can ever render, so the old 90s
+// badge wait could only ever time out. The refusal SURFACE is the designed
+// narrator: the delegation event line. (A self-target would NOT refuse: the
+// seeded self-edge at ADR-090 FR-006 depth 10 makes a depth-capped self-fork
+// legal — the refusal under test needs a target OFF researcher's only edge.)
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(a) grandchild refused: leaf-role subagent (Researcher) attempting delegate is refused, no nested row',
+  '(a) grandchild refused: Researcher\'s onward delegate call to a non-edged target shows "Delegation refused", no nested row',
   async ({ page }) => {
     requireApiKey();
-    // 300s: one parent delegate call (fast) plus Researcher's own refused
-    // grandchild-delegate attempt, observed via Researcher's OWN session.
-    // The refusal itself is fast (a policy check, not a second real LLM
-    // round-trip past the tool call) — this is narrower than the old 420s
-    // because that budget was sized for "wait for a box that needed both
-    // round-trips AND client-side rendering to settle"; here the parent's
-    // delegated event line and the panel row resolve independently and early.
+    // 300s, unchanged: one parent delegate call plus Researcher's own refused
+    // onward-delegate attempt, observed via Researcher's OWN session. The
+    // refusal itself is still fast — a pure graph-state check, no LLM
+    // round-trip after the child emits the call. What the re-anchor bought:
+    // the child must actually EMIT the delegate call now (the load is no
+    // longer denied pre-call), so the same budget also covers the child's
+    // one LLM round-trip — the same round-trip count the old test's
+    // ToolSearch(load) denial path already needed.
     test.setTimeout(300_000);
 
     await startFreshChat(page);
@@ -273,21 +301,28 @@ test(
     await waitForConnected(page, { timeout: 15_000 });
 
     const label = `grandchild-test-${Date.now()}`;
+    // The child's OWN delegate attempt carries its own label — it travels in
+    // the child's call arguments and is never rendered on the refused line
+    // (whose text is "Delegation refused · <reason>").
+    const childLabel = `grandchild-onward-${Date.now()}`;
 
-    // Deterministic prompt: commanding, specific — exact tool name, exact target.
-    // Target pinned to Researcher: a LEAF in the delegation graph — Jim → Researcher
-    // is a legal edge (seed.go delegation graph), but the Researcher role holds NO
-    // delegate grant and no onward edges, so its delegate attempt is refused by
-    // policy. Grandchildren are not universally forbidden (Worker holds delegate
-    // with a Worker→Worker same-type helper edge); the refusal under test here is
-    // the LEAF-ROLE one. Keeping the target fixed removes the parent model's
-    // target choice as a variance source.
+    // Deterministic prompt: commanding, specific — exact tool name, exact
+    // target. Target pinned to "worker": an agent that EXISTS on every fresh
+    // roster but has NO delegation edge from researcher (researcher seeds
+    // exactly one edge — its self-edge; seed.go::coreAgentDelegation default
+    // arm). Researcher HOLDS delegate: allow (founder 2026-11-07, docs/tools.md
+    // Worker core), so the call dispatches and is refused at the workspace
+    // graph gate — the refusal is graph-STATE deterministic, not policy-load
+    // deterministic like the pre-2026-10-22 shape. A self-target would NOT
+    // refuse (the seeded self-edge makes a depth-capped self-fork legal).
+    // Keeping the target fixed removes the models' target choice as a
+    // variance source.
     await input.fill(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
         '  agent_id: "researcher"',
         `  label: "${label}"`,
-        '  task: "You are the subagent. Your one and only job is to call the `delegate` tool yourself to attempt to delegate to a grandchild subagent with task \\"hello\\". If delegate is not available to you, report the exact error you receive. Do not do anything else."',
+        '  task: "You are the subagent. Your one and only job is to call the `delegate` tool yourself, exactly once, with these arguments: agent_id \\"worker\\", label \\"' + childLabel + '\\", task \\"hello\\". If the call is refused, report the exact error you receive. Do not do anything else."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
@@ -311,19 +346,27 @@ test(
       )
       .filter({ hasText: label });
     await expect(delegateLine.first()).toBeVisible({ timeout: 60_000 });
+    // "… the parent's transcript holds exactly one delegate entry": the birth
+    // kinds are mutually exclusive (delegationEvents.ts::birthKind picks one
+    // of the two), and the terminal "… finished · <label>" line carries a
+    // different kind — so exactly ONE line matches the label + birth kinds.
+    await expect(
+      delegateLine,
+      'exactly one parent delegate entry in the transcript — the single delegate call this test drove',
+    ).toHaveCount(1);
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
     // (2) PANEL — exactly one row at the PARENT level (the direct analog of
-    // "exactly one parent-level collapsed block": the leaf subagent's
-    // refused delegate attempt must not create a second span up here, since
-    // a refused/never-dispatched grandchild never gets its own
-    // subagent_start in the parent's bucket either).
+    // "exactly one parent-level collapsed block": Researcher's refused onward
+    // delegate attempt must not create a second span up here, since a
+    // refused/never-dispatched grandchild never gets its own subagent_start
+    // in the parent's bucket either).
     await openActivityPanel(page);
     const parentRow = page.locator('[data-testid="activity-row"]', { hasText: label });
     await expect(parentRow).toBeVisible({ timeout: 60_000 });
     await expect(
       page.locator('[data-testid="activity-row"]'),
-      'exactly one Activity-panel row at the parent level — the leaf subagent\'s refused delegate attempt must not create a second row',
+      'exactly one Activity-panel row at the parent level — Researcher\'s refused onward delegate attempt must not create a second row',
     ).toHaveCount(1);
     const openControl = parentRow.locator('[data-testid="activity-row-open"]');
     await expect(openControl).toBeVisible({ timeout: 15_000 });
@@ -336,54 +379,62 @@ test(
     await openControl.click();
     await waitForBoundSession(page, [parentSessionID]);
 
-    // Researcher's OWN refused delegate attempt is visible in ITS OWN thread.
-    // CI run 36026415761 (gateway log, all four attempts of this test —
-    // 16:46:49 / 16:48:27 / 16:50:07): the leaf Researcher's policy denies
-    // `delegate` at the ToolSearch LOAD step — "ToolSearch(load): delegate —
-    // denied by this agent's policy" — so the delegate call itself NEVER
-    // happens (a denied load means the tool never becomes callable), and the
-    // bare `delegate` tool-call badge this test used to wait 90s for CANNOT
-    // exist. The refusal DOES have a visible surface, one layer up: the
-    // denied ToolSearch call renders as an errored tool-call badge
-    // (toolVisibility.ts's ToolSearch case forces visibility on error — a
-    // denied load has no other narrator), and GenericToolCall marks it
-    // "Failed" in the collapsed header (toolStatusConfig's error label).
-    // The BDD guarantee ("the tool dispatcher refuses a leaf's delegate
-    // attempt by policy") is intact — it is enforced one step EARLIER than
-    // the old assertion assumed (at load, not at dispatch) — and the
-    // zero-rows guard at the end of this test still proves no grandchild
-    // subagent_start ever fires. The assertion accepts BOTH refusal surfaces
-    // so the spec stays true if the backend ever moves the denial to
-    // dispatch time: a `delegate` badge (denied at dispatch — the old
-    // assertion's exact shape) OR the denied ToolSearch badge (denied at
-    // load — the gateway-log-verified shape today).
-    const refusedDelegateAttempt = page
-      .locator('[data-testid="tool-call-badge"][data-tool="delegate"]')
-      .or(page.locator('[data-testid="tool-call-badge"][data-tool="ToolSearch"]'))
-      .first()
+    // Researcher's OWN refused delegate attempt is visible in ITS OWN thread —
+    // as the "Delegation refused" EVENT LINE, not a badge. With delegate Allow
+    // (founder 2026-11-07), the ToolSearch load succeeds and stays hidden
+    // (visible only on error), and the delegate badge is hidden in
+    // non-verbose threads for every action — toolVisibility.ts's delegate
+    // case never consults isError. The designed narrator for a dispatch-time
+    // graph refusal is the grey event line: delegationEvents.ts::runEvents
+    // derives a `refused` event from an errored delegate call with no child
+    // span, and delegationEventLine.ts renders "Delegation refused ·
+    // <reason>". The reason pinned below is findDelegationEdge's exact
+    // no-edge text for an existing target
+    // (pkg/agent/loop_delegation.go::findDelegationEdge) — pinning it in
+    // full keeps the assertion honest about WHICH refusal fired (the no-edge
+    // trust_set one, not the depth cap or a mode refusal, whose texts
+    // differ).
+    const refusedLine = page
+      .locator('[data-testid="delegation-event-line"][data-event-kind="refused"]')
+      .filter({ hasText: 'Delegation refused' });
     await expect(
-      refusedDelegateAttempt,
-      'Researcher must show its own (refused) delegate attempt in its own session — ' +
-        'as a denied `delegate` badge if policy denies at dispatch, or as the denied ' +
-        'ToolSearch(load) badge if policy denies at load (the gateway-log-verified shape today)',
+      refusedLine.first(),
+      'Researcher must narrate its own refused delegate attempt in its own session ' +
+        'with the designed "Delegation refused" event line',
     ).toBeVisible({ timeout: 90_000 });
-    await expect(refusedDelegateAttempt).toContainText(/denied|failed/i, { timeout: 30_000 });
+    await expect(
+      refusedLine,
+      'exactly one refused delegation line — the child\'s single delegate attempt',
+    ).toHaveCount(1);
+    await expect(refusedLine).toContainText(
+      'delegation to agent "worker" is not permitted in this workspace',
+      { timeout: 15_000 },
+    );
 
-    // (4) CHILD SESSION — no grandchild ever spawned: Traces to BDD Scenario
-    // 10's actual invariant, "no subagent_start frame with a grandchild
-    // parent_call_id is emitted". Direct replacement for "no nested
-    // subagent-collapsed inside the expanded region" (FR-H-006): checked
-    // from INSIDE the child's own session (where a grandchild's row would
-    // live, if one existed) rather than as a nested element of a card that
-    // no longer exists.
+    // (4) WIRE + CHILD SESSION — no grandchild ever spawned: Traces to BDD
+    // Scenario 10's actual invariant, "no subagent_start frame with a
+    // grandchild parent_call_id is emitted". Two independent guards:
     //
-    // ActivityBar.tsx mounts NOTHING when there is no open/failed agent
-    // child (its own shouldMount gate) — a policy-refused delegate call
-    // never reaches Launch, so the bar most likely never mounts here at
-    // all. But Radix's Sheet unmounts its CONTENT while closed, so if the
-    // bar DID mount for some other reason, an unopened panel would hide a
-    // real row rather than proving its absence — open it first so a count
-    // of 0 is never a false negative from an unopened Sheet.
+    // WIRE: the per-page capture (beforeEach, registered before
+    // page.goto('/') so it sees every /chat/ws socket this page opens) must
+    // hold exactly ONE subagent_start — the parent Jim → Researcher launch
+    // this test drove. Any grandchild launch (researcher delegating onward)
+    // would deliver a SECOND subagent_start frame whatever it rendered on;
+    // counting the wire cannot be fooled by a hidden or unmounted row.
+    const frames = framesByPage.get(page) ?? [];
+    const startCount = () => frames.filter(frame => frame['type'] === 'subagent_start').length;
+    await expect
+      .poll(startCount, { timeout: 15_000 })
+      .toBe(1);
+    // CHILD SESSION: checked from INSIDE the child's own session (where a
+    // grandchild's row would live, if one existed). ActivityBar.tsx mounts
+    // NOTHING when there is no open/failed agent child (its own shouldMount
+    // gate) — a graph-refused delegate call never reaches Launch, so the bar
+    // most likely never mounts here at all. But Radix's Sheet unmounts its
+    // CONTENT while closed, so if the bar DID mount for some other reason, an
+    // unopened panel would hide a real row rather than proving its absence —
+    // open it first so a count of 0 is never a false negative from an
+    // unopened Sheet.
     const childActivityBar = page.locator('[data-testid="activity-bar"]');
     if ((await childActivityBar.count()) > 0) {
       await openActivityPanel(page);
@@ -392,6 +443,12 @@ test(
       page.locator('[data-testid="activity-row"]'),
       'Researcher must show zero Activity-panel rows of its own — the refused delegate call never produced a grandchild subagent_start (FR-H-006)',
     ).toHaveCount(0);
+    // Wire re-check AFTER the zero-rows guard: a grandchild subagent_start
+    // that slipped in late cannot hide from the frame count.
+    expect(
+      startCount(),
+      'exactly one subagent_start frame on the wire (Jim → Researcher) — a grandchild launch would have added a second',
+    ).toBe(1);
   },
 );
 

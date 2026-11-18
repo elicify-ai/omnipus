@@ -55,6 +55,37 @@ func TestRenderProvidersSaysWhenAuthenticationIsUnknown(t *testing.T) {
 	}
 }
 
+// TestRenderProvidersPointsUnsupportedDeploymentURLRowsAtCustomEndpoint: a
+// tier-unsupported row (azure is the live example) cannot be configured under
+// its catalog id, so the page must not list its models as if they worked.
+// A row whose reason is deployment-url points at Custom endpoint instead.
+func TestRenderProvidersPointsUnsupportedDeploymentURLRowsAtCustomEndpoint(t *testing.T) {
+	doc := &catalog.Document{Providers: []catalog.Provider{
+		{
+			ID: "azure", Name: "Azure", Tier: catalog.TierUnsupported, UnsupportedReason: "deployment-url",
+			Models: []catalog.Model{{ID: "gpt-unsupported-row", ToolCall: true}},
+		},
+		{
+			ID: "supported", Name: "Supported",
+			Models: []catalog.Model{{ID: "model-listed", ToolCall: true}},
+		},
+	}}
+
+	got := renderProviders(doc)
+	want := "### Azure (`azure`)\n\n" +
+		"Not available as a listed provider: each account has its own address. " +
+		"If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.\n"
+	if !strings.Contains(got, want) {
+		t.Errorf("renderProviders() missing the Custom endpoint note %q\noutput:\n%s", want, got)
+	}
+	if strings.Contains(got, "gpt-unsupported-row") {
+		t.Errorf("renderProviders() lists a model of an unsupported row:\n%s", got)
+	}
+	if !strings.Contains(got, "| `model-listed` | Yes |") {
+		t.Errorf("renderProviders() dropped a supported row's model:\n%s", got)
+	}
+}
+
 func TestRenderToolsGroupsAndSortsCatalogEntries(t *testing.T) {
 	groups := []toolGroup{
 		{Name: "General", Tools: []toolRow{{Name: "zeta", Description: "Last."}, {Name: "alpha", Description: "First | tool."}}},

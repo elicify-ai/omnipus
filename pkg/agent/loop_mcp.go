@@ -409,6 +409,11 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 		servers[name] = serverCfg
 	}
 	mcpCfg.Servers = servers
+	// Read the ingest bound in the same snapshot (#1626): reading al.cfg
+	// after RUnlock races MutateConfig/SwapConfig. Lock order relied on:
+	// al.mcp.initMu (held by our caller) -> al.mu. Config writers take al.mu
+	// only and never wait on initMu while holding it.
+	ingestBoundBytes := al.cfg.Context.IngestBoundBytes
 	al.mu.RUnlock()
 
 	registry := al.GetRegistry()
@@ -449,6 +454,20 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 			resolvedCfg, err = mcp.ResolveServerEnvRefs(resolvedCfg, al.mcp.getCredentialResolver())
 			if err != nil {
 				logger.WarnCF("agent", "Skipping MCP server: cannot resolve env credential reference(s)",
+					map[string]any{"server": name, "error": err.Error()})
+				al.mcp.setConnectErr(name, fmt.Errorf("server %s: %w", name, err))
+				skipped[name] = true
+				continue
+			}
+			// Issue #638: resolve credential-store header refs the same way —
+			// an sse/http server added via the gateway REST API carries its
+			// Authorization/Cookie/Proxy-Authorization values as HeaderRefs,
+			// never as literal Headers in config.json. Same skip-on-failure
+			// semantics: connecting without the secret the operator configured
+			// is worse than refusing to connect.
+			resolvedCfg, err = mcp.ResolveServerHeaderRefs(resolvedCfg, al.mcp.getCredentialResolver())
+			if err != nil {
+				logger.WarnCF("agent", "Skipping MCP server: cannot resolve header credential reference(s)",
 					map[string]any{"server": name, "error": err.Error()})
 				al.mcp.setConnectErr(name, fmt.Errorf("server %s: %w", name, err))
 				skipped[name] = true
@@ -521,7 +540,7 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 	}
 	// ADR-066 D10: the live ingest bound applies to every server connected
 	// in this pass (transports are built at connect time).
-	mgr.SetIngestBoundBytes(al.cfg.Context.IngestBoundBytes)
+	mgr.SetIngestBoundBytes(ingestBoundBytes)
 
 	// --- Connects: desired but not (still) live, including changed servers
 	// just disconnected above. Each server connects on its own goroutine

@@ -18,6 +18,7 @@ export const Queued: Story = {}
 export const Received: Story = { args: { state: 'received' } }
 export const Working: Story = { args: { state: 'working' } }
 export const Failed: Story = { args: { state: 'failed' } }
+export const UnsavedChat: Story = { args: { state: 'unsaved' } }
 
 export const PausedAnswer: Story = {
   render: () => <AssistantConnectionStatus state="paused" agentName="Mia" />,

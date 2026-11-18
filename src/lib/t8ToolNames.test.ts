@@ -32,6 +32,7 @@ describe('T8 canonical labels and existing Ask groups', () => {
     expect(AUTO_APPROVE_ASK_GROUPS.filter(g => g.tools.includes('update_plan') || g.tools.includes('create_plan'))).toHaveLength(0)
     // No new always-ask group: the label list is exactly the existing eight.
     expect(AUTO_APPROVE_ASK_GROUPS).toHaveLength(8)
-    expect(AUTO_APPROVE_ASK_GROUPS.flatMap(g => g.tools)).toHaveLength(29)
+    // Q7 adds set_channel_outbound to an existing Ask group: 29 + 1 = 30 tools.
+    expect(AUTO_APPROVE_ASK_GROUPS.flatMap(g => g.tools)).toHaveLength(30)
   })
 })

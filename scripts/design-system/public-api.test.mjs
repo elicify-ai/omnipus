@@ -100,6 +100,8 @@ const reviewedControls = new Set([
   'avatar-stack',
   // T7's founder-approved public composites: exact files, never a ui-folder admission.
   'filter-menu', 'view-switch', 'hover-card', 'word-boundary-text',
+  // W2-1 shared kit (kit-contract.md §2): exact files, never a ui-folder admission.
+  'search-field', 'list-group', 'page-header', 'empty', 'callout', 'spinner', 'copy-button',
 ].map((name) => `src/components/ui/${name}.tsx`))
 const reviewedFoundations = new Set([
   'src/index.ts', 'src/lib/utils.ts', 'src/lib/formatTokens.ts',
@@ -267,7 +269,9 @@ test('public controls use only approved external foundation dependencies', () =>
     'react', 'react-dom', '@phosphor-icons/react', 'react-day-picker', 'cmdk',
     'class-variance-authority', 'clsx', 'tailwind-merge',
     ...['accordion', 'alert-dialog', 'avatar', 'checkbox', 'dialog', 'dropdown-menu',
-      'label', 'popover', 'hover-card', 'progress', 'select', 'separator', 'slider', 'slot', 'switch', 'tabs']
+      'label', 'popover', 'hover-card', 'progress', 'select', 'separator', 'slider', 'slot', 'switch', 'tabs',
+      // W2-1 §2.9: direct dependency pinned at 1.2.14 (chief decision 2026-11-06).
+      'tooltip']
       .map((name) => `@radix-ui/react-${name}`),
   ])
   const metadata = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))

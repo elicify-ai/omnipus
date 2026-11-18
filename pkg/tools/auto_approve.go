@@ -165,8 +165,11 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	// admission, same authorization), so it classifies exactly as send_message.
 	"answer_request": AutoRuns,
 	"send_file":      AutoRunsIfArgs,
-	"send_email":     AutoAsks,
-	"reply":          AutoAsks,
+	// show_to_user opens a viewer on a file the agent can already read; it
+	// reads and sends nothing (chat-links FR-019).
+	"show_to_user": AutoRuns,
+	"send_email":   AutoAsks,
+	"reply":        AutoAsks,
 	// create_email_draft only appends to the mailbox's own Drafts folder and
 	// never sends, so it runs under Auto like the other non-sending email
 	// tools (founder ruling 2026-09-26, decision D45); D33: attachments add
@@ -295,7 +298,10 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	// listing secret names and mailboxes, and reading the agent's own
 	// conversations run like the other reads (the secret card is itself the
 	// person's step).
-	"connect_channel":       AutoAsks,
+	"connect_channel": AutoAsks,
+	// channels-spec-r8 FR-032/T-10 row 11: explicit entry, never the
+	// unknown-name fallback.
+	"set_channel_outbound":  AutoAsks,
 	"connect_mailbox":       AutoAsks,
 	"set_agent_permissions": AutoAsks,
 	"remove_secret":         AutoAsks,

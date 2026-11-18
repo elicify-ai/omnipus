@@ -1,0 +1,10 @@
+{
+  "$comment": "Odd-case stored values (effort-levels-spec-r10.md, 'Mapping table (DE-5)', row 'Unranked name': exact only, else Provider default with a note, never On). Level names and Off match exactly, so 'HIGH', 'High' and 'OFF' are unranked names. ONE shared fixture for the Go implementation (pkg/providers/effortdialect/mapping.go::MapEffort, read by pkg/providers/effortdialect/mapping_case_test.go) and the TypeScript implementation (src/lib/effort/mapEffort.ts, read by src/lib/effort/mapEffortCase.test.ts), so the twins cannot disagree on case (SC-002). Kept apart from effort-mapping-d2.json, whose 27 rows are dataset D2 exactly. Fields as in effort-mapping-d2.json.",
+  "cases": [
+    { "n": 1, "source": "HIGH", "target": { "levels": ["low", "medium", "high"], "switch": false, "reasons": true }, "value": "provider_default", "noteKind": "unranked_default", "blocked": false, "nearest": "", "providerDefaultEscape": false },
+    { "n": 2, "source": "HIGH", "target": { "levels": [],                        "switch": true,  "reasons": true }, "value": "provider_default", "noteKind": "unranked_default", "blocked": false, "nearest": "", "providerDefaultEscape": false },
+    { "n": 3, "source": "OFF",  "target": { "levels": ["none", "low"],           "switch": false, "reasons": true }, "value": "provider_default", "noteKind": "unranked_default", "blocked": false, "nearest": "", "providerDefaultEscape": false },
+    { "n": 4, "source": "OFF",  "target": { "levels": [],                        "switch": true,  "reasons": true }, "value": "provider_default", "noteKind": "unranked_default", "blocked": false, "nearest": "", "providerDefaultEscape": false },
+    { "n": 5, "source": "High", "target": { "levels": ["low", "High"],           "switch": false, "reasons": true }, "value": "High",             "noteKind": null,               "blocked": false, "nearest": "", "providerDefaultEscape": false }
+  ]
+}

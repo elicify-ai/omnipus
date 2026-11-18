@@ -37,7 +37,6 @@ Add this to `config.json`:
         "enabled": true,
         "text": ["Thinking...", "Processing...", "Typing..."]
       },
-      "reasoning_channel_id": "",
       "message_format": "richtext",
       "crypto_database_path": "",
       "crypto_passphrase_ref": "matrix_crypto_passphrase"
@@ -59,9 +58,8 @@ Credentials (`access_token_ref`, `crypto_passphrase_ref`) are resolved from the 
 | `allow_from` | []string | No | User allowlist (Matrix user IDs). Empty means all senders are allowed. |
 | `group_trigger` | object | No | Group-chat trigger rules — `mention_only` (bool) and/or `prefixes` ([]string). |
 | `placeholder` | object | No | Placeholder message config (see below). |
-| `reasoning_channel_id` | string | No | Room ID to route reasoning/thinking output to a separate conversation. |
 | `message_format` | string | No | Output format: `"richtext"` (default) renders markdown as HTML; `"plain"` sends plain text. |
-| `crypto_database_path` | string | No | Directory for the E2EE SQLite database. Defaults to `~/.omnipus/workspace/matrix` when empty. |
+| `crypto_database_path` | string | No | Directory for the E2EE SQLite database (`store.db`). Defaults to `<workspace>/matrix/<channel-name>` when empty (typically `~/.omnipus/workspace/matrix/matrix` for a channel named `matrix`). |
 | `crypto_passphrase_ref` | string | No | Credential store key for the E2EE session pickle passphrase. Must not change once set. Leave empty to disable E2EE. |
 
 ### Placeholder config
@@ -103,7 +101,7 @@ To place a quotation after the list instead, use a blank line and leave `>` unin
    ```bash
    omnipus credentials set matrix_crypto_passphrase <passphrase>
    ```
-   Set `crypto_passphrase_ref: "matrix_crypto_passphrase"`. The SQLite database will be created at `crypto_database_path` on first start.
+   Set `crypto_passphrase_ref: "matrix_crypto_passphrase"`. The SQLite database (`store.db`) is created in the `crypto_database_path` directory on first start.
 6. Build with `-tags goolm` and start the gateway.
 
 ## Capabilities

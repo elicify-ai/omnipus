@@ -194,7 +194,7 @@ const httpEdge = vi.fn<typeof fetch>(async (input, init) => {
       const plans: PlanListResponse = { plans: [], total: 0 }
       body = plans
     } else if (match[2] === 'delegation') {
-      const delegation: WorkspaceDelegation = { revision: '2'.repeat(64), workspace_id: match[1]!, team: [], edges: [], default_depth: 3 }
+      const delegation: WorkspaceDelegation = { revision: '2'.repeat(64), workspace_id: match[1]!, team: [], edges: [], default_depth: 10 }
       body = delegation
     } else {
       body = workspace(match[1]!)

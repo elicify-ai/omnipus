@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
@@ -140,9 +141,16 @@ func NewProviderWithMaxTokensFieldAndTimeout(
 func (p *Provider) buildRequestBody(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) map[string]any {
+	// Only the OpenRouter route replays the private reasoning_details
+	// carrier (effort-levels spec FR-013, S-33).
+	openRouter := strings.EqualFold(p.providerID, "openrouter")
+	serialize, serializeCached := common.SerializeMessages, common.SerializeCacheMessages
+	if openRouter {
+		serialize, serializeCached = common.SerializeOpenRouterMessages, common.SerializeOpenRouterCacheMessages
+	}
 	requestBody := map[string]any{
 		"model":    model,
-		"messages": common.SerializeMessages(messages),
+		"messages": serialize(messages),
 	}
 
 	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
@@ -182,7 +190,7 @@ func (p *Provider) buildRequestBody(
 
 	transport := p.cacheTransport(model)
 	if transport.SendEphemeralCacheControl {
-		requestBody["messages"] = common.SerializeCacheMessages(messages)
+		requestBody["messages"] = serializeCached(messages)
 	}
 	if sessionID, _ := options["prompt_cache_key"].(string); sessionID != "" {
 		if transport.SendPromptCacheKey {
@@ -193,11 +201,18 @@ func (p *Provider) buildRequestBody(
 		}
 	}
 
-	// Merge extra body fields configured per-provider/model.
-	// These are injected last so they take precedence over defaults.
-	for k, v := range p.extraBody {
+	// Effort (effort-levels spec FR-037, FR-037a): the resolved value in its
+	// route's own form; Provider default sends no effort key.
+	fields, sent := effortdialect.EncodeOpenAIChat(p.providerID, model, effortdialect.Requested(options))
+	for k, v := range fields {
 		requestBody[k] = v
 	}
+
+	// Merge extra body fields configured per-provider/model.
+	// These are injected last so they take precedence over defaults; an
+	// extra_body effort key overrides the chosen effort and is reported (S-20).
+	sent = effortdialect.ApplyExtraBody(requestBody, p.extraBody, sent)
+	effortdialect.Report(options, sent)
 
 	return requestBody
 }
@@ -404,6 +419,7 @@ func parseStreamResponse(
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
 	activeTools := map[int]*toolAccum{}
+	var details reasoningDetailsAccum
 
 	var malformedChunks int
 	var streamErr *common.StreamProviderError
@@ -437,9 +453,9 @@ func parseStreamResponse(
 					// Reasoning ("thinking") deltas — see
 					// reasoningDeltaBytes for the three spellings. Only
 					// their length is ever used.
-					Reasoning        string                  `json:"reasoning"`
-					ReasoningContent string                  `json:"reasoning_content"`
-					ReasoningDetails []streamReasoningDetail `json:"reasoning_details"`
+					Reasoning        string            `json:"reasoning"`
+					ReasoningContent string            `json:"reasoning_content"`
+					ReasoningDetails []json.RawMessage `json:"reasoning_details"`
 					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
@@ -499,8 +515,19 @@ func parseStreamResponse(
 		// its first content or tool-call byte, and ignoring these deltas made
 		// that indistinguishable from a hung call. The reasoning TEXT is not
 		// kept or forwarded — only its byte count reaches the callback.
+		streamDetails := make([]streamReasoningDetail, 0, len(choice.Delta.ReasoningDetails))
+		for _, raw := range choice.Delta.ReasoningDetails {
+			if err := details.add(raw); err != nil {
+				return nil, fmt.Errorf("stream %w", err)
+			}
+			var d streamReasoningDetail
+			if err := json.Unmarshal(raw, &d); err != nil {
+				return nil, fmt.Errorf("stream reasoning_details item: %w", err)
+			}
+			streamDetails = append(streamDetails, d)
+		}
 		if n := reasoningDeltaBytes(
-			choice.Delta.Reasoning, choice.Delta.ReasoningContent, choice.Delta.ReasoningDetails,
+			choice.Delta.Reasoning, choice.Delta.ReasoningContent, streamDetails,
 		); n > 0 {
 			totalReasoningBytes += n
 			protocoltypes.SafeInvoke(onProgress, protocoltypes.ToolCallProgress{
@@ -584,19 +611,35 @@ func parseStreamResponse(
 	}
 
 	if finishReason == "" {
-		if textContent.Len() > 0 || len(activeTools) > 0 {
-			logger.WarnCF("openai_compat", "stream ended without finish_reason; defaulting to \"unknown\"", nil)
-			finishReason = "unknown"
-		} else {
-			finishReason = "stop"
+		if textContent.Len() == 0 && len(activeTools) == 0 {
+			// A Stop that closed the body is a cancel, not an empty answer.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			// Issue #1664 (founder decision 2026-11-07 Q3 A): the stream ended
+			// (EOF or [DONE]) with no finish_reason, no content and no tool
+			// call. Nothing that could be an answer arrived, so the attempt
+			// failed — never a synthesized successful empty reply. The usage
+			// the attempt was billed for rides on the error.
+			logger.WarnCF("openai_compat", "provider ended the stream without sending anything; treated as a failed attempt",
+				map[string]any{"reasoning_bytes": totalReasoningBytes, "completion_tokens": completionTokens(usage)})
+			return nil, common.NewEmptyStreamError(usage)
 		}
+		logger.WarnCF("openai_compat", "stream ended without finish_reason; defaulting to \"unknown\"", nil)
+		finishReason = "unknown"
+	}
+
+	reasoningDetails, err := details.items()
+	if err != nil {
+		return nil, fmt.Errorf("stream %w", err)
 	}
 
 	return &LLMResponse{
-		Content:      textContent.String(),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
+		Content:          textContent.String(),
+		ToolCalls:        toolCalls,
+		FinishReason:     finishReason,
+		Usage:            usage,
+		ReasoningDetails: reasoningDetails,
 	}, nil
 }
 

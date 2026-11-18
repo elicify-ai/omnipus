@@ -34,8 +34,18 @@ export interface ProviderWaitingIndicatorProps {
   sentAt: string
   /** ISO timestamp — the client-clock reading at frame receipt. */
   receivedAt: string
-  /** ISO timestamp (server clock) — when the silence limit ends the call; absent when unknown. */
+  /** ISO timestamp (server clock) — when the silence limit ends this attempt; absent when unknown. */
   stallAt?: string
+  /** Issue #1664 B3/B4 — the 1-based attempt of the call (frame `attempt`); absent on frames that do not count it. */
+  attempt?: number
+  /** Issue #1664 B3/B4 — the attempts the loop makes in total (frame `max_attempts`). */
+  maxAttempts?: number
+  /** #1537 — named helper row: "{label}: " before the unchanged sentence. */
+  label?: string
+  /** #1537 FR-010 — false inside the named-row area (it owns the one live region). Default true. */
+  liveRegion?: boolean
+  /** Root test id; defaults to "provider-waiting-indicator". */
+  testId?: string
 }
 
 /**
@@ -69,22 +79,44 @@ function formatStallTime(stallAt: string | undefined): string {
   return new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(d)
 }
 
-/** The full line at a given instant — the frozen announcement's builder. */
-function buildWaitingText(
+function isCount(n: number | undefined): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1
+}
+
+/**
+ * The end-of-attempt clause (issue #1664 B4, founder Q2): with a known end
+ * time and an attempt count, an attempt that is not the last says "this
+ * attempt ends (attempt N of M)" and the last says "the call ends (attempt
+ * M of M)". Without a count (frames that do not carry it) the pre-#1664
+ * "the call ends." stays; without an end time there is no clause at all.
+ */
+function stallClauseText(stallAt: string | undefined, attempt: number | undefined, maxAttempts: number | undefined): string {
+  const stallTime = formatStallTime(stallAt)
+  if (stallTime === '') return ''
+  if (!isCount(attempt) || !isCount(maxAttempts)) return ` If nothing arrives by ${stallTime}, the call ends.`
+  const ending = attempt < maxAttempts ? 'this attempt ends' : 'the call ends'
+  return ` If nothing arrives by ${stallTime}, ${ending} (attempt ${attempt} of ${maxAttempts}).`
+}
+
+/**
+ * The full line at a given instant — the frozen announcement's builder.
+ * #1537: also the named-row area's announcement text.
+ */
+export function buildWaitingText(
   silentSince: string,
   sentAt: string,
   receivedAt: string,
   stallAt: string | undefined,
+  attempt: number | undefined,
+  maxAttempts: number | undefined,
   nowMs: number,
 ): string {
   const elapsed = waitingElapsedSeconds(silentSince, sentAt, receivedAt, nowMs)
-  const stallTime = formatStallTime(stallAt)
-  const stallClause = stallTime !== '' ? ` If nothing arrives by ${stallTime}, the call ends.` : ''
-  return `The model hasn't responded for ${elapsed}s — still waiting.${stallClause}`
+  return `The model hasn't responded for ${elapsed}s — still waiting.${stallClauseText(stallAt, attempt, maxAttempts)}`
 }
 
 export function ProviderWaitingIndicator(props: ProviderWaitingIndicatorProps) {
-  const { silentSince, sentAt, receivedAt, stallAt } = props
+  const { silentSince, sentAt, receivedAt, stallAt, attempt, maxAttempts, label, liveRegion = true, testId = 'provider-waiting-indicator' } = props
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
@@ -101,28 +133,34 @@ export function ProviderWaitingIndicator(props: ProviderWaitingIndicatorProps) {
   // new waiting frame replaces it): memoized on the FRAME facts only, never
   // recomputed by the 1-second tick, so a ticking "Ns" never re-announces.
   const announcement = useMemo(
-    () => buildWaitingText(silentSince, sentAt, receivedAt, stallAt, Date.now()),
-    [silentSince, sentAt, receivedAt, stallAt],
+    () => buildWaitingText(silentSince, sentAt, receivedAt, stallAt, attempt, maxAttempts, Date.now()),
+    [silentSince, sentAt, receivedAt, stallAt, attempt, maxAttempts],
   )
 
   const elapsedSeconds = waitingElapsedSeconds(silentSince, sentAt, receivedAt, nowMs)
   const visibleText = `The model hasn't responded for ${elapsedSeconds}s — still waiting.`
-  const stallTime = formatStallTime(stallAt)
-  const stallClause = stallTime !== '' ? ` If nothing arrives by ${stallTime}, the call ends.` : ''
+  const stallClause = stallClauseText(stallAt, attempt, maxAttempts)
 
   return (
     <div
-      data-testid="provider-waiting-indicator"
+      data-testid={testId}
       data-state="waiting"
       className="flex min-w-0 items-center gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-0-5)]"
     >
       <span aria-hidden className="size-2 shrink-0 rounded-full bg-[var(--color-info)]" />
       {/* MAJ-016 — the frozen full line is announced once per waiting frame;
-          the ticking seconds span below sits OUTSIDE this live region. */}
-      <div role="status" aria-live="polite" className="sr-only">
-        {announcement}
-      </div>
-      <span className="min-w-0 truncate font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+          the ticking seconds span below sits OUTSIDE this live region.
+          #1537: a named helper row leaves announcing to the named-row area. */}
+      {liveRegion && (
+        <div role="status" aria-live="polite" className="sr-only">
+          {announcement}
+        </div>
+      )}
+      {/* Issue #1664 B3/B4 — wraps, never truncates (same rule as
+          ProviderRetryIndicator): at a narrow chat width the end time and
+          "(attempt N of M)" at the end of the sentence stay readable. */}
+      <span className="min-w-0 break-words font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        {label !== undefined && `${label}: `}
         {visibleText}
         {stallClause}
       </span>

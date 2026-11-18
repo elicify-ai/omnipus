@@ -65,11 +65,11 @@ type countingTrimPool struct {
 
 func (c *countingTrimPool) CacheTrimInterval() time.Duration { return c.inner.CacheTrimInterval() }
 
-func (c *countingTrimPool) TrimAllEligible() []browser.TrimResult {
+func (c *countingTrimPool) TrimAllEligibleContext(ctx context.Context) []browser.TrimResult {
 	c.mu.Lock()
 	c.sweeps++
 	c.mu.Unlock()
-	return c.inner.TrimAllEligible()
+	return c.inner.TrimAllEligibleContext(ctx)
 }
 
 func (c *countingTrimPool) sweepCount() int {

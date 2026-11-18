@@ -130,7 +130,7 @@ func (f *t8SettingsFixture) expectRejected(t *testing.T, body any, cli, field, c
 	assert.Equal(t, cli, details["cli"])
 	assert.Equal(t, check, details["check"])
 	if at != "" {
-		assert.Equal(t, at, details["at"])
+		t8AssertNoProgramPath(t, w.Body.Bytes(), at)
 	}
 	assert.Equal(t, before, f.disk(t), "no valid row or invalid row is written on refusal")
 }

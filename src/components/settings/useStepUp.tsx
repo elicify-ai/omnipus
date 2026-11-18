@@ -172,17 +172,23 @@ export function useStepUp(): StepUpResult {
   const handleConfirmAccept = useCallback(() => {
     const pending = pendingRef.current
     if (!pending) return
+    // #1468: once the operator has confirmed, the change is no longer
+    // cancellable — take it out of pendingRef before it runs. ConfirmDialog
+    // still lets Escape close the dialog while the save is in flight (its
+    // tested "permits Escape while pending" contract); with nothing left in
+    // pendingRef, that close only hides the dialog, and the caller's promise
+    // settles with the run's REAL outcome (saved value or real error) —
+    // never the cancel sentinel for a change that actually landed.
+    pendingRef.current = null
     setBusy(true)
     pending
       .run(undefined)
       .then((result) => {
-        pendingRef.current = null
         setBusy(false)
         setConfirmOpen(false)
         pending.resolve(result)
       })
       .catch((err: unknown) => {
-        pendingRef.current = null
         setBusy(false)
         setConfirmOpen(false)
         pending.reject(err)

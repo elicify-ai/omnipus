@@ -114,6 +114,15 @@ properties:
       and never infers one. Empty/absent for agents that predate the migration or
       whose model resolves via the default provider.
     example: "openrouter"
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Stored effort for the primary model (effort-levels spec FR-029):
+      "" clears it (Not set; an agent riding the default model then inherits the
+      default's effort), "provider_default", a catalog level name, "on" or "off".
+      Omitted keeps the stored value. null is refused. Not checked against the
+      catalog (FR-048).
   description:
     type: string
     description: Short description of the agent's purpose.

@@ -71,7 +71,7 @@
       "css": "--font-size-page-title",
       "layer": "primitive",
       "kind": "dimension",
-      "value": "1.875rem",
+      "value": "1.5rem",
       "description": "Current product page-title size at the adjustable root.",
       "responsive": true
     },

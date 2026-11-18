@@ -25,6 +25,8 @@ import { AgentMark } from '@/components/agents/AgentMark'
 import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
 import { ChatScreen } from './ChatScreen'
+import { LibraryOpenNotice } from './LibraryOpenNotice'
+import { useChatPresence } from '@/hooks/useChatPresence'
 
 export function OmnipusChatScreen() {
   const navigate = useNavigate()
@@ -39,6 +41,9 @@ export function OmnipusChatScreen() {
   const mainId = omnipusMainSessionId(workspacesQuery.data ?? [])
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const attached = !!mainId && activeSessionId === mainId
+  // chat-links "Watching": Omnipus's chat reports presence too, and records no
+  // workspace for bare links (Omnipus works across every workspace).
+  useChatPresence(attached ? mainId : null, null)
   // The id this screen last tried to attach, so a refused attach shows Retry
   // instead of retrying in a loop.
   const [attemptedId, setAttemptedId] = useState<string | null>(null)
@@ -78,8 +83,11 @@ export function OmnipusChatScreen() {
         }
       />
       <div className="relative flex-1 min-h-0">
-        {attached ? (
-          <ChatScreen />
+        {attached && mainId ? (
+          <>
+            <ChatScreen />
+            <LibraryOpenNotice sessionId={mainId} />
+          </>
         ) : unavailable ? (
           <div className="flex h-full items-center justify-center px-[var(--space-3)]">
             <ErrorState message="Omnipus unavailable" onRetry={retry} />

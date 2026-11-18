@@ -72,7 +72,16 @@ import type { CliDetect, CliValidateResponse, ExecutorCommandPreviewResponse } f
 
 const mockExternalAgent: Agent = {
   revision: '0'.repeat(64),
-  editable_fields: [{ name: 'executor', editable: true }, { name: 'model', editable: true }, { name: 'name', editable: true }],
+  editable_fields: [
+    { name: 'executor.env_overrides', editable: true },
+    { name: 'executor.env_overrides_remove', editable: true },
+    { name: 'executor.cli_args', editable: true },
+    { name: 'executor.cli', editable: false, reason: 'Locked after create; create a new agent to switch CLIs.' },
+    { name: 'executor.effective_cli_path', editable: false, reason: 'Set in Settings -> Third-party agents.' },
+    { name: 'executor.kind', editable: false, reason: 'Derived from the agent type.' },
+    { name: 'model', editable: true },
+    { name: 'name', editable: true },
+  ],
   id: 'external-worker',
   name: 'External Worker',
   type: 'subagent_3p',

@@ -175,22 +175,44 @@ With known geometry, the browser estimates roughly three screens for opening and
 
 ### `cancel`
 
-Cancels an in-progress streaming response or tool execution for the given session.
+Stops the turn that is running in the given session. With `scope: "tree"` it also stops the helper sessions started from it (down only, never a parent or a sibling).
 
 ```json
 {
   "type": "cancel",
-  "session_id": "sess_abc123"
+  "session_id": "sess_abc123",
+  "shown": {
+    "turn_id": "turn_42",
+    "message_id": "msg_7",
+    "code_points": 128
+  }
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"cancel"` |
-| session_id | string | yes | The session whose active turn is to be cancelled |
+| session_id | string | yes | The session whose running turn is stopped |
+| scope | string | no | `"session"` (default when absent) stops this session only. `"tree"` also stops the helper sessions below it |
+| shown | object | no | Checkpoint of token text this client had applied to the requested session's answer when Stop froze it. For a native turn, a usable checkpoint limits text not already saved; it does not rewrite saved text |
+| shown.turn_id | string | no | The `turn_id` of the stopped answer's tokens, when the client knows it. 1 to 1024 characters |
+| shown.message_id | string | no | The wire `message_id` of the last `token` frame the client applied to the stopped answer. Absent when no token had been applied. 1 to 1024 characters |
+| shown.code_points | integer | yes (inside `shown`) | Unicode code points of token `content` the client applied for `message_id`, 0 or more |
 
-**Producer**: Stop button in chat input (`src/components/chat/`)
-**Consumer**: Gateway WebSocket handler — cancels the LLM call and saves partial response
+**When `shown` is sent.** A Stop that freezes a streaming answer sends `shown` when the client can identify the applied token text, or when no text has been applied yet. This is independent of `scope`: it applies to a first Stop or Escape, `/stop`, and a typed `/cancel` (which requests a tree Stop in one activation). The client reads the checkpoint from the answer it freezes, in the same synchronous step, before sending the frame. The checkpoint describes text applied to the client's state, not the part already revealed by the typing animation.
+
+- **Counting.** `code_points` counts Unicode code points (a single-code-point emoji is 1, a letter followed by a combining mark is 2, and an emoji sequence may contain several code points), not bytes or UTF-16 units. It counts token text per wire `message_id`: a `token` with `replace: true` resets the count for its `message_id` to that frame's text, and other tokens add to it. Text the client inserts itself, such as the blank line between two steps of one answer, is not counted. Frames received but not yet applied to the client's state are not counted.
+- **Nothing shown yet.** When the answer is still an empty placeholder, the client sends `{ "code_points": 0 }`, plus `turn_id` when it is known. It never sends a local placeholder id as `message_id`.
+- **No `shown`.** The client omits it for a confirming second Stop (the first press already sent it, and the answer is no longer streaming), for a Stop while nothing streams (for example between two rounds of a goal), and for an answer whose text came only from tokens without a `message_id`.
+
+Without a usable `shown` (also from an older client), a native turn keeps the server-side text up to the moment the turn claims the Stop. A checkpoint naming a different turn or a message that turn never minted falls back to that cutoff. For a usable checkpoint, the named message is kept through `code_points`; earlier messages are unchanged, and later still-unsaved messages keep no text. A usable checkpoint without `message_id` keeps no still-unsaved answer text. A count greater than the available text keeps only the available text.
+
+When several Stops reach the same turn, the first winning cancellation claim decides; a later `shown` cannot replace it. Text already saved before that claim, such as narration saved before a tool call, stays whole.
+
+With `scope: "tree"`, helper sessions are also stopped, but their saved answers are not cut to the requesting session's `shown` checkpoint. External command-line helper output does not use the native checkpoint cut.
+
+**Producer**: Stop button, Escape, `/stop` and `/cancel` in the chat composer (`src/store/chat/slices/outbound-lifecycle.ts::cancelStream`)
+**Consumer**: Gateway WebSocket handler. It requests the turn's Stop; for a native turn, the winning Stop claim and answer writers apply a usable `shown` checkpoint to still-unsaved answer text
 
 ---
 
@@ -258,7 +280,9 @@ History Retry sends `attach_session` **without** `since_seq`/`boot_id`, preservi
 
 Each entry-derived historical frame has generated `history_origin={position, entry_id?, turn_id?}`. The opaque 47-character position names its actual persisted source occurrence; the optional entry ID is that occurrence's recorded nonempty ID. The optional `turn_id` is that saved record's own recorded turn, on every origin-stamped frame including `tool_call_start` and `tool_call_result`; it is omitted when the record has no recorded turn, which means the turn is unknown, and it is never filled in from the active turn or a neighbouring record. The `history_origin` object is closed, so a gateway that sends `turn_id` needs the matching web app: an older cached web app rejects the snapshot until it reloads. It is not an ordering number, transport sequence, model position or permission grant. A tool-only entry can own tool frames without a preceding prose bubble. Every source group the page counts carries at least one frame with its origin: a record that has nothing of its own to replay (for example the content-less assistant record that starts an agent turn) is sent as one empty `replay_message` with that origin, so `source_group_count`, the first/last positions and `row_count` always match the frames. The web client hides such a record when it is a blank, otherwise-successful assistant record with no tools, media, status explanation or other visible content; this is not a guarantee for every empty system or special record, and a system-role carrier can still draw an empty container. Reserving that source's recorded ID for an early tool does not count as already-applied narration: later prose for the same source is retained once, with its tool rows. Finished start/result frames share their owning source; relevant span dependencies are bounded public facts, not a child's full history. For a legacy delegation with no saved task or label, its span uses the recorded tool name as a display label rather than inventing task text.
 
-Tool-derived media is deduplicated across the selected page by its resolved underlying file, not merely by reference string or source group. If two distinct references name the same file, the earliest selected occurrence keeps the media frame and its original `history_origin`; a genuinely different file still appears. Tool rows and their saved results remain intact. Selection reuses prepared media and resolved references rather than resolving or replaying each cumulative candidate again.
+Tool-derived media is deduplicated across the selected page by its resolved underlying file, not merely by reference string or source group. If two distinct references name the same file, the earliest selected occurrence keeps the media frame and its original `history_origin`; a different file keeps its own media frame. Tool rows and their saved results remain intact. Selection reuses prepared media and resolved references rather than resolving or replaying each cumulative candidate again. An unknown sent-file reference (`media.ErrNotFound`) produces no media part, and a frame left with no parts is not sent; the group's other frames stay, the `tool_call_result` keeps its saved `result` unchanged, and the gateway logs a warning with the session and reference. When preparing a history page or snapshot, any other media-store error fails that preparation. Incremental catch-up reuses journal frames without resolving their media again.
+
+A history snapshot can still carry a sent file's `media` frame, subject to the unknown-reference rule above. The web app does not currently show the sent-file card from that frame after a reload. Earlier-page requests return saved messages rather than separate `media` frames, and do not restore the card either. A sent file does not expire: reloading or restarting does not remove it from the server or invalidate its reference. A download URL that was already opened or saved keeps working after a reload, in another tab and after a restart, while the file still exists and can be read. This version provides no sent-file card, link or download button after a reload.
 
 Ownership applies to replay messages, tool starts/results, replay errors, provider-fallback and context-window notices, judge verdicts, handover/helper/goal events, persisted subagent lifecycle frames, tool-derived media and source-positioned historical question cards. Session-only replay warnings, replay done and terminal-card rehydration have no chronological source origin. Current session state, active projection and held live output retain their separate current/live authority.
 
@@ -509,6 +533,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | C→S | `attach_session` | Attach to an authorized session. Use `since_seq` and `boot_id` for servable incremental catch-up; otherwise receive a bounded recent snapshot or an unavailable-history live/control result. |
 | C→S | `device_pairing_response` | Admin approval/rejection of a pending device pairing request |
 | C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
+| C→S | `chat_presence` | This tab is (`watching: true`) or stopped being (`watching: false`) on screen showing the chat `session_id`. Re-sent every 15 seconds while watching; a report expires after 45 seconds and is dropped when the connection closes. Not journaled, not replayed, not persisted. Accepted for any existing chat the connection may attach to. |
 | S→C | `session_started` | New session ID minted by the server (response to a `message` without `session_id`) |
 | S→C | `session_mode_updated` | Acknowledge a per-chat mode change with the resolved Auto-approve setting |
 | S→C | `token` | LLM response token chunk |
@@ -523,6 +548,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | S→C | `replay_message` | One replayed transcript entry during an `attach_session` |
 | S→C | `rate_limit` | Rate-limit denial applied to an agent action (SEC-26) |
 | S→C | `media` | One or more media attachments from a tool (parts array, never null) |
+| S→C | `open_in_library` | A request from `show_to_user` to open the Library at `workspace_id`/`path`. Live only: no `seq`, not in the journal, never replayed on reconnect or reload; sent only to connections attached to that session when the call succeeds. The client de-duplicates on `session_id` + `request_id` (32 lowercase hex characters) and decides once, on arrival, whether to open the Library or show a notice. |
 | S→C | `tool_approval_required` | Tool call paused for ask-policy approval (FR-011, FR-082); `args` always an object, never null |
 | S→C | `tool_approval_resolved` | A pending tool approval was resolved (approved, denied, or expired) — sent to every connected tab so all of them drop the request together |
 | S→C | `session_state` | One-shot approval-state snapshot on every WS reconnect (FR-052, FR-073, FR-081) |

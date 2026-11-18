@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "component": "Callout",
+  "exports": [
+    "Callout",
+    "CalloutTitle",
+    "CalloutDescription",
+    "CalloutActions",
+    "calloutVariants"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/callout.tsx",
+  "documentation": "docs/internal/design/components/callout.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "info",
+    "warning",
+    "error",
+    "success"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "informational",
+    "alert"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/callout.stories.tsx",
+      "exports": [
+        "Info",
+        "Warning",
+        "Error",
+        "Success"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "callout-unit",
+      "kind": "unit",
+      "file": "src/components/ui/callout.test.tsx",
+      "test": "Callout — role per variant (§2.6) error is role=\"alert\"",
+      "applicable": true
+    },
+    {
+      "id": "callout-interaction",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "Callout is presentational; actions placed inside it are covered by their own Button contract."
+    },
+    {
+      "id": "callout-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Callout [check:callout-axe] axe",
+      "story": "Info",
+      "applicable": true
+    },
+    {
+      "id": "callout-keyboard",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Callout creates no focus target or keyboard operation."
+    },
+    {
+      "id": "callout-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Callout [check:callout-browser] browser",
+      "story": "Info",
+      "applicable": true,
+      "requiredTargets": [
+        {
+          "selector": "[data-slot=\"callout\"]",
+          "attribute": "role",
+          "value": "status"
+        }
+      ]
+    },
+    {
+      "id": "callout-pointer",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Callout is not a hit target."
+    },
+    {
+      "id": "callout-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Callout has no animation or transition."
+    },
+    {
+      "id": "callout-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Callout [check:callout-forced-colors] forced-colors",
+      "story": "Info",
+      "applicable": true
+    },
+    {
+      "id": "callout-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Callout [check:callout-root-size] root-size",
+      "story": "Info",
+      "applicable": true
+    },
+    {
+      "id": "callout-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Callout [check:callout-zoom] zoom",
+      "story": "Info",
+      "applicable": true
+    },
+    {
+      "id": "callout-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Callout [check:callout-reflow] reflow",
+      "story": "Info",
+      "applicable": true
+    }
+  ]
+}

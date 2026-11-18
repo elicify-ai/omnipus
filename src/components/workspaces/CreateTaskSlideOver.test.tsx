@@ -496,7 +496,7 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
       workspace_id: 'proj-test',
       edges: [],
       team: ['mia', 'ext'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
     Element.prototype.scrollIntoView = vi.fn()
 
@@ -529,7 +529,7 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
       workspace_id: 'proj-test',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
     Element.prototype.scrollIntoView = vi.fn()
 
@@ -597,7 +597,7 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
       workspace_id: 'proj-test',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
 
     renderSlideOver()
@@ -626,7 +626,7 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
     expect(agentTrigger).toBeDisabled()
 
     // Resolve so the pending promise doesn't leak into the next test.
-    resolveDelegation({ workspace_id: 'proj-test', edges: [], team: ['mia'], default_depth: 3 })
+    resolveDelegation({ workspace_id: 'proj-test', edges: [], team: ['mia'], default_depth: 10 })
     await waitFor(() => expect(agentTrigger).not.toBeDisabled())
   })
 })

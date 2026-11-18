@@ -11,6 +11,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -42,11 +43,16 @@ type lifecycleRecordLoader interface {
 
 // streamReplayState carries the shared state of streamReplay across its stages.
 type streamReplayState struct {
-	sessionID                   string
-	entries                     []session.TranscriptEntry
-	toolStore                   *toolResultStore
-	terminalAsk                 *askuser.PendingSet
-	terminalAskEmitted          bool
+	sessionID          string
+	entries            []session.TranscriptEntry
+	toolStore          *toolResultStore
+	terminalAsk        *askuser.PendingSet
+	terminalAskEmitted bool
+	// libraryWorkspaceID is the session's workspace for MediaPart.library_ref
+	// (chat-links FR-021, reload half). Set only by the history-page
+	// preparation; "" omits the field.
+	libraryWorkspaceID          string
+	libraryHome                 string
 	seenPaths                   map[string]struct{}
 	spawnIDsWithChildren        map[string]bool
 	spanRealAgentIDs            map[string]string
@@ -333,7 +339,7 @@ func (sr *streamReplayState) emitSpawnParentToolCall(
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, "")); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths); ok {
+	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths, sr.libraryHome, sr.libraryWorkspaceID); ok {
 		if err2 := emitFrame(mf); err2 != nil {
 			return streamReplayStateReturn, err2
 		}
@@ -377,7 +383,7 @@ func (sr *streamReplayState) emitFlatToolCall(
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths); ok {
+	if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths, sr.libraryHome, sr.libraryWorkspaceID); ok {
 		if err2 := emitFrame(mf); err2 != nil {
 			return streamReplayStateReturn, err2
 		}
@@ -906,6 +912,10 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		agentIDCopy := entry.AgentID
 		sr.msgFrame.AgentId = &agentIDCopy
 	}
+	// Effort levels (FR-058, FR-024): the entry's own stored record and turn
+	// reasoning snapshot, copied unchanged (REST Message carries the same).
+	sr.msgFrame.Effort = entry.Effort
+	sr.msgFrame.TurnReasoningTokens = entry.TurnReasoningTokens
 	// FR-027: a guest reply names the admitted request it answers, the same
 	// value the live frames carry.
 	if entry.ReplyToMessageID != "" {
@@ -1172,6 +1182,7 @@ func buildMediaFrame(
 	tc session.ToolCall,
 	mediaStore media.MediaStore,
 	seenPaths map[string]struct{},
+	libraryHome, libraryWorkspaceID string,
 ) (generated.MediaFrame, bool) {
 	raw, ok := historyToolCallMedia(tc)
 	if !ok {
@@ -1205,7 +1216,15 @@ func buildMediaFrame(
 		// send_file). Replaying both produces a duplicate image in the
 		// SPA. Skip refs whose path was already emitted in this replay.
 		if mediaStore != nil && seenPaths != nil {
-			if path, err := mediaStore.ResolveWithOpts(refStr, media.ResolveOpts{}); err == nil && path != "" {
+			path, err := mediaStore.ResolveWithOpts(refStr, media.ResolveOpts{})
+			if errors.Is(err, media.ErrNotFound) {
+				// The store no longer knows this ref, so its card could only be
+				// dead. Keep the rest of the group and tell the operator.
+				logsafeWarn("replay: skipped file card, media ref unknown to the store",
+					"session_id", sessionID, "ref", refStr)
+				continue
+			}
+			if err == nil && path != "" {
 				if _, dup := seenPaths[path]; dup {
 					continue
 				}
@@ -1217,6 +1236,7 @@ func buildMediaFrame(
 			Url:         mediaRefURL(refStr),
 			Filename:    filename,
 			ContentType: contentType,
+			LibraryRef:  libraryRefForMedia(mediaStore, libraryHome, refStr, libraryWorkspaceID),
 		})
 	}
 	if len(parts) == 0 {

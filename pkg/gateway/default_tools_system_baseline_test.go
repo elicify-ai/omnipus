@@ -12,10 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// SPEC.md Founder exclusion: the three system identities keep exactly their
-// c90310f1f stored role policies. This is a baseline-preservation oracle,
-// derived from that frozen commit's literals, not from running the new seed.
-// Global ceiling changes are intentionally NOT frozen by this assertion.
+// SPEC.md Founder exclusion: the three system identities keep their c90310f1f
+// stored role policies, plus show_to_user deny. Chat-links D-F2 / BS-6.14:
+// Omnipus does not hold this tool, and Judge and Plan Supervisor stay deny.
+// The c90310f1f literals are unchanged; show_to_user is the one addition.
+// This is not derived by copying a fresh seed run. Global ceiling changes
+// are intentionally NOT frozen by this assertion.
 func defaultToolsAssertSystemBaseline(t *testing.T) {
 	t.Helper()
 	path := filepath.Join("..", "..", "tests", "default-tools", "system-policy-baseline-c90310f1f.json")
@@ -41,7 +43,7 @@ func defaultToolsAssertSystemBaseline(t *testing.T) {
 			require.NotNil(t, actual.Tools)
 			want, ok := expected[id]
 			require.True(t, ok, "frozen baseline must cover every excluded identity")
-			assert.Equal(t, want, actual.Tools.Builtin.Policies, "SPEC.md Founder exclusion: %s policy must equal c90310f1f", id)
+			assert.Equal(t, want, actual.Tools.Builtin.Policies, "SPEC.md Founder exclusion: %s policy must equal the frozen baseline (c90310f1f plus show_to_user deny)", id)
 		})
 	}
 }

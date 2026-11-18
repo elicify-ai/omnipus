@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import type { Session as SessionType } from '../../../src/lib/api/generated/openapi-types';
-import { Agent, AppState, GodModeStatus, Room, SandboxStatus, Session, SessionDetail, SessionPage, Workspace } from '../../../src/lib/api/generated/schemas';
+import { Agent, AppState, GodModeStatus, PlanListResponse, Room, SandboxStatus, Session, SessionDetail, SessionPage, Workspace, WorkspaceDelegation } from '../../../src/lib/api/generated/schemas';
 import { WsFrame } from '../../../src/lib/api/generated/ws-schemas';
 import { wireAvailableDetail, wireHistoryPage, wireHistorySnapshot } from '../../chat-history-paging/legacy-wire';
 
@@ -37,6 +38,7 @@ export const backdropTarget = Session.parse({
 export const backdropInitial = Session.parse({
   ...backdropTarget, id: 'q81-initial', title: 'Q81 initial unfiled chat', workspace_id: undefined,
 });
+const providersCatalog = JSON.parse(readFileSync(new URL('../../../src/test/fixtures/providers-catalog.json', import.meta.url), 'utf8')) as unknown;
 const state = AppState.parse({
   onboarding_complete: true, identity: { mode: 'local', edition: 'core', signed_in: true }, dev_mode_bypass: false,
 });
@@ -82,6 +84,13 @@ export async function installSidebarBackdropEdges(page: Page, options: { extraSe
     if (endpoint === '/workspaces') return json(url.searchParams.get('status') === 'archived' ? [] : [backdropWorkspace]);
     if (endpoint === `/workspaces/${backdropWorkspace.id}`) return json(backdropWorkspace);
     if (endpoint === `/workspaces/${backdropWorkspace.id}/rooms`) return json(Room.array().parse([]));
+    // The Tasks panel fetches the workspace's plans and delegation graph as
+    // soon as it opens (the R45 icons-strip setup in tooltip-visibility.spec.ts
+    // opens it the CR-1 way to drag the divider). Empty list, empty graph.
+    if (endpoint === `/workspaces/${backdropWorkspace.id}/plans`) return json(PlanListResponse.parse({ plans: [], total: 0 }));
+    if (endpoint === `/workspaces/${backdropWorkspace.id}/delegation`) return json(WorkspaceDelegation.parse({
+      revision: '0'.repeat(64), workspace_id: backdropWorkspace.id, edges: [], default_depth: 0,
+    }));
     if (endpoint === '/agents') return options.agentsError
       ? route.fulfill({ status: 500, json: { error: 'roster unavailable' } })
       : json([agent]);
@@ -103,6 +112,8 @@ export async function installSidebarBackdropEdges(page: Page, options: { extraSe
     if (endpoint === '/notifications') return json({ notifications: [], unread_count: 0 });
     if (endpoint === '/version') return json({ version: '0.1.1', build_sha: 'q81-layout-fixture' });
     if (endpoint === '/config') return json({ gateway: {}, sandbox: {}, agents: { defaults: {} } });
+    // The composer's effort chip reads the served levels (effort-levels FR-019).
+    if (endpoint === '/providers/catalog') return json(providersCatalog);
     traffic.unknown.push(endpoint);
     return route.fulfill({ status: 404, json: { error: `Undeclared Q81 fixture endpoint ${endpoint}` } });
   });

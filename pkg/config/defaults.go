@@ -277,6 +277,11 @@ func defaultToolPoliciesGeneral() map[string]string {
 		// human-facing agent allow; Judge/PlanSupervisor explicit deny
 		// via their denyAllThenOverride stamps.
 		"AskUserQuestion": "allow",
+		// show_to_user (chat-links spec, founder Q1): ceiling "allow". It
+		// only opens a viewer on a file the agent can already read, in its
+		// own workspace, rate-limited. Main agents allow and workers deny
+		// through pkg/coreagent/seed.go; Omnipus does not hold it (D-F2).
+		"show_to_user": "allow",
 		// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004): the
 		// validated write-path over the goal record. Ceiling "allow"
 		// for the same reason AskUserQuestion's is — writing your own
@@ -458,7 +463,10 @@ func defaultToolPoliciesSysagent() map[string]string {
 		// asking for, listing and reading secrets, mailboxes and own
 		// conversations is allowed (each is also explicitly denied per agent
 		// wherever §6.5 says so).
-		"connect_channel":       "ask",
+		"connect_channel": "ask",
+		// channels-spec-r8 FR-032: the outbound-list writer ships ask and is
+		// always-ask besides (FR-036: God Mode never lifts it).
+		"set_channel_outbound":  "ask",
 		"connect_mailbox":       "ask",
 		"set_agent_permissions": "ask",
 		"remove_secret":         "ask",

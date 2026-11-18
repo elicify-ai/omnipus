@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useWorkspaceHeaderMode } from './useWorkspaceHeaderMode'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
@@ -219,7 +219,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           </Button>
         )
         return iconsOnly && !measuring ? (
-          <Tooltip key={segment} content={label} side="bottom" className="w-max" interactive>{button}</Tooltip>
+          <Tooltip key={segment}><TooltipTrigger asChild>{button}</TooltipTrigger><TooltipContent side="bottom">{label}</TooltipContent></Tooltip>
         ) : button
       })}
     </>

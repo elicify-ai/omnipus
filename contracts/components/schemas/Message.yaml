@@ -388,3 +388,17 @@ properties:
       main-session entry is a room request to this agent or this agent's
       answer into a room, so live, history and replay render the same
       collapsed entry.
+  effort:
+    $ref: './EffortRecord.yaml'
+    description: >
+      Effort levels spec (FR-058). Copied from this entry's own stored effort
+      record (answering assistant entries only). Absent when the entry has none.
+  turn_reasoning_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Effort levels spec (FR-024). The stored display-only snapshot of the
+      turn's reported reasoning-token sum, copied from the answering entry; never
+      summed at read time. Absent = no call of the turn reported a count; 0 =
+      reported zero.
+    example: 120

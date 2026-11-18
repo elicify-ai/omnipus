@@ -39,7 +39,7 @@ describe('cancelStream delivery report (W2)', () => {
     let delivered: boolean | undefined
     act(() => { delivered = useChatStore.getState().cancelStream() })
     expect(delivered).toBe(true)
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID }]])
+    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID, shown: { code_points: 0 } }]])
     expect(useUiStore.getState().toasts).toEqual([])
   })
 
@@ -86,14 +86,14 @@ describe('second cancel after the first one ended the turn locally', () => {
   it('a second session-scoped cancel sends no frame (completed-turn no-op)', () => {
     act(() => { useChatStore.getState().cancelStream() })
     act(() => { useChatStore.getState().cancelStream() })
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID }]])
+    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID, shown: { code_points: 0 } }]])
   })
 
   it('a confirmed tree cancel still sends after the turn ended locally', () => {
     act(() => { useChatStore.getState().cancelStream() })
     act(() => { useChatStore.getState().cancelStream(undefined, 'tree') })
     expect(sender.send.mock.calls).toEqual([
-      [{ type: 'cancel', session_id: SID }],
+      [{ type: 'cancel', session_id: SID, shown: { code_points: 0 } }],
       [{ type: 'cancel', session_id: SID, scope: 'tree' }],
     ])
   })

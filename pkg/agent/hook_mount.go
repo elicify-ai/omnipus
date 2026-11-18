@@ -111,7 +111,7 @@ func hookTimeoutFromMS(ms int) time.Duration {
 }
 
 func (al *AgentLoop) ensureHooksInitialized(ctx context.Context) error {
-	if al == nil || al.cfg == nil || al.hooks == nil {
+	if al == nil || al.GetConfig() == nil || al.hooks == nil {
 		return nil
 	}
 
@@ -123,7 +123,15 @@ func (al *AgentLoop) ensureHooksInitialized(ctx context.Context) error {
 }
 
 func (al *AgentLoop) loadConfiguredHooks(ctx context.Context) (err error) {
-	if al == nil || al.cfg == nil || !al.cfg.Hooks.Enabled {
+	if al == nil {
+		return nil
+	}
+	// One locked snapshot for the whole load: MutateConfig and SwapConfig
+	// publish a new al.cfg pointer under al.mu (they replace the pointer
+	// rather than edit the live config), so reading al.cfg directly here
+	// races them (#1626).
+	cfg := al.GetConfig()
+	if cfg == nil || !cfg.Hooks.Enabled {
 		return nil
 	}
 
@@ -138,9 +146,9 @@ func (al *AgentLoop) loadConfiguredHooks(ctx context.Context) (err error) {
 		al.hookRuntime.setMounted(mounted)
 	}()
 
-	builtinNames := enabledBuiltinHookNames(al.cfg.Hooks.Builtins)
+	builtinNames := enabledBuiltinHookNames(cfg.Hooks.Builtins)
 	for _, name := range builtinNames {
-		spec := al.cfg.Hooks.Builtins[name]
+		spec := cfg.Hooks.Builtins[name]
 		factory, ok := lookupBuiltinHook(name)
 		if !ok {
 			return fmt.Errorf("builtin hook %q is not registered", name)
@@ -161,9 +169,9 @@ func (al *AgentLoop) loadConfiguredHooks(ctx context.Context) (err error) {
 		mounted = append(mounted, name)
 	}
 
-	processNames := enabledProcessHookNames(al.cfg.Hooks.Processes)
+	processNames := enabledProcessHookNames(cfg.Hooks.Processes)
 	for _, name := range processNames {
-		spec := al.cfg.Hooks.Processes[name]
+		spec := cfg.Hooks.Processes[name]
 		opts, buildErr := processHookOptionsFromConfig(spec)
 		if buildErr != nil {
 			return fmt.Errorf("configure process hook %q: %w", name, buildErr)

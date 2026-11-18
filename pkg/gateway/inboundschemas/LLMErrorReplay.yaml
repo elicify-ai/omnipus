@@ -103,6 +103,12 @@ x-user-messages:
     # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
     message: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details."
     attribution: provider
+  provider_empty_reply:
+    # Issue #1664 (founder decision 2026-11-07 Q3 A): the provider ended a streaming
+    # answer with no finish_reason, no text and no tool call, on every attempt.
+    # Same attempt rule as a silent call. Retryable like `provider_stalled`.
+    message: "The model provider ended its answer without sending anything. Retry — if it keeps happening, open Verbose chat for details."
+    attribution: provider
   content_policy:
     message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
     attribution: provider
@@ -192,6 +198,7 @@ properties:
       - quota_billing
       - network
       - provider_stalled
+      - provider_empty_reply
       - content_policy
       - context_too_long
       - tool_args

@@ -16,6 +16,7 @@ import {
   setFirstSendStatus,
   type FirstSendContext,
 } from '../first-send'
+import { bindUnboundQueueItems } from '../queue-target'
 import type { ChatStore, PendingFirstSend } from '../types'
 
 type Frame = Parameters<ChatStore['handleFrame']>[0]
@@ -63,6 +64,7 @@ function confirmFirstSend(context: FirstSendFrameContext, pending: PendingFirstS
     if (sourceSid !== sid) delete sessionsById[sourceSid]
     return {
       sessionsById,
+      ...bindUnboundQueueItems(state, sid, pending.clientMessageId),
       pendingFirstSend: recovered ? { ...pending, sessionId: sid, status: 'checking_chat' } : null,
       ...(foreground ? { pendingAutoApproveChoice: null } : {}),
     }
@@ -114,7 +116,9 @@ function handleFirstSendError(context: FirstSendFrameContext, frame: Extract<Fra
   }
   const bucket = context.get().sessionsById[frame.session_id]
   const user = findFirstSendMessage(bucket, frame.client_message_id)
-  if (user?.firstSendStatus) {
+  // A repeated error for a message already settled as answer_not_started must not clear or
+  // drain again: by then a queued follow-up may be running in this chat (CHECK #1834 F1).
+  if (user?.firstSendStatus && user.firstSendStatus !== 'answer_not_started') {
     context.withBucket(frame.session_id, (current) => produce(current, (draft) => {
       draft.messagesById[user.id].firstSendStatus = 'answer_not_started'
       draft.messagesById[user.id].deliveryStatus = 'received'
@@ -136,6 +140,15 @@ function handleFirstSendError(context: FirstSendFrameContext, frame: Extract<Fra
       draft.recoveredFirstSend = undefined
     }))
     if (pending?.clientMessageId === frame.client_message_id) context.set({ pendingFirstSend: null })
+    // The chat is now open, idle and connected, and no reply is running, so no later
+    // terminal frame will release a follow-up queued under the first message (#1834). The
+    // drain in confirmFirstSend ran while the bucket was still streaming and did nothing.
+    // A delayed old error must not release a queued turn while a newer turn exists in this chat
+    // (Generate again, or a follow-up already sent): only a message that is still the last user
+    // turn may drain (CHECK #1834 r2 F1).
+    const settled = context.get().sessionsById[frame.session_id]
+    const lastUserId = [...(settled?.messageOrder ?? [])].reverse().find((id) => settled?.messagesById[id]?.role === 'user')
+    if (lastUserId === user.id && useSessionStore.getState().activeSessionId === frame.session_id) context.get().drainOutboundQueue()
   }
   queryClient.invalidateQueries({ queryKey: ['sessions'] })
   return true

@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "component": "SearchField",
+  "exports": [
+    "SearchField",
+    "SearchToolbar"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/search-field.tsx",
+  "documentation": "docs/internal/design/components/search-field.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "field",
+    "toolbar"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "empty",
+    "with-value",
+    "disabled",
+    "focus-visible"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/search-field.stories.tsx",
+      "exports": [
+        "Default",
+        "WithValue",
+        "Toolbar"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "search-field-unit",
+      "kind": "unit",
+      "file": "src/components/ui/search-field.test.tsx",
+      "test": "SearchField — identity and controlled value renders a searchbox whose accessible name is exactly the required aria-label",
+      "applicable": true
+    },
+    {
+      "id": "search-field-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/search-field.stories.tsx",
+      "test": "With Value",
+      "story": "WithValue",
+      "applicable": true
+    },
+    {
+      "id": "search-field-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SearchField [check:search-field-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "search-field-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SearchField [check:search-field-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "search-field-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SearchField [check:search-field-browser] browser",
+      "story": "Default",
+      "applicable": true,
+      "requiredTargets": [
+        {
+          "selector": "[data-testid=\"search-field-story\"] input[type=\"search\"]",
+          "attribute": "aria-label",
+          "value": "Search connectors"
+        }
+      ]
+    },
+    {
+      "id": "search-field-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SearchField [check:search-field-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "search-field-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "SearchField adds no motion; Input's colour transition is already motion-reduce:transition-none in the Input contract."
+    },
+    {
+      "id": "search-field-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SearchField [check:search-field-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "search-field-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SearchField [check:search-field-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "search-field-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SearchField [check:search-field-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "search-field-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SearchField [check:search-field-reflow] reflow",
+      "story": "Toolbar",
+      "applicable": true
+    }
+  ]
+}

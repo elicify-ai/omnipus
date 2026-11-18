@@ -7,6 +7,8 @@ export const TERMINAL_NARRATION = 'I will load the acceptance probe tool.';
 export interface TerminalOutcomeProvider {
   url: string;
   finishToolRound: () => void;
+  /** Replace the narration before the chat request. Read when that request arrives, so a workspace id minted after startup can be named in the link. */
+  setNarration: (text: string) => void;
   calls: () => number;
   failures: () => string[];
   close: () => Promise<void>;
@@ -18,7 +20,8 @@ export interface TerminalOutcomeProvider {
  * ToolSearch is real infrastructure; loading read_file is harmless and does
  * not actually read a file. Assertions in the caller prove it executed.
  */
-export async function startTerminalOutcomeProvider(): Promise<TerminalOutcomeProvider> {
+export async function startTerminalOutcomeProvider(opts?: { narration?: string }): Promise<TerminalOutcomeProvider> {
+  let narration = opts?.narration && opts.narration.length > 0 ? opts.narration : TERMINAL_NARRATION;
   let calls = 0;
   const failures: string[] = [];
   let release!: () => void;
@@ -69,7 +72,7 @@ export async function startTerminalOutcomeProvider(): Promise<TerminalOutcomePro
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.write(chunk({ role: 'assistant', content: TERMINAL_NARRATION }, null));
+      res.write(chunk({ role: 'assistant', content: narration }, null));
       void finish.then(() => {
         res.end(
           chunk({ tool_calls: [{ index: 0, id: 'terminal-acceptance-call', type: 'function',
@@ -93,6 +96,7 @@ export async function startTerminalOutcomeProvider(): Promise<TerminalOutcomePro
   return {
     url,
     finishToolRound: release,
+    setNarration: (text: string) => { narration = text; },
     calls: () => calls,
     failures: () => [...failures],
     close: async () => {

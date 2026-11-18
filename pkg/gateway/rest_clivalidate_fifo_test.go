@@ -1,11 +1,10 @@
 //go:build !windows
 
-// Unix-only coverage for the MAJ-004 pre-spawn guard: a target that
-// exec.LookPath ACCEPTS (it reports X_OK) but is NOT a regular file — a FIFO
-// with the execute bit set — must still be rejected missing-binary WITHOUT a
-// spawn. This exercises the guard's second condition (resolved target is not a
-// regular file), which LookPath alone does not catch. Guarded off Windows
-// because syscall.Mkfifo is unix-only.
+// Unix-only coverage: a target that is NOT a regular file — a FIFO with the
+// execute bit set — is path-not-allowed WITHOUT a spawn (T11 spec §3.2: the
+// final file must be a regular executable; a refusal is path-not-allowed).
+// An empty path stays missing-binary; a FIFO is not empty. Guarded off
+// Windows because syscall.Mkfifo is unix-only.
 
 package gateway
 
@@ -22,9 +21,8 @@ import (
 )
 
 // TestValidateCLI_NonRegularExecutableRejected: a FIFO with the exec bit set is
-// resolvable by exec.LookPath (X_OK succeeds, it is not a directory) yet is not a
-// regular file, so the pre-spawn guard MUST classify missing-binary and never
-// attempt to exec it (execing a FIFO would block on open).
+// not a regular file. Spec §3.2 classifies that path-not-allowed and never
+// starts it (execing a FIFO would block on open).
 func TestValidateCLI_NonRegularExecutableRejected(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "claudefifo")
@@ -34,7 +32,7 @@ func TestValidateCLI_NonRegularExecutableRejected(t *testing.T) {
 	defer cleanup()
 
 	resp := api.validateCLI(context.Background(), "claude-code", fifo)
-	assert.Equal(t, gen.CliValidateResponseReasonMissingBinary, resp.Reason,
-		"a non-regular executable (FIFO) must be rejected missing-binary without a spawn")
-	assert.Nil(t, resp.ResolvedPath, "no resolved path on a no-spawn rejection")
+	assert.Equal(t, gen.CliValidateResponseReason("path-not-allowed"), resp.Reason,
+		"spec §3.2: a non-regular file is path-not-allowed, not missing-binary")
+	assert.Nil(t, resp.ResolvedPath, "no resolved path when nothing is launched")
 }

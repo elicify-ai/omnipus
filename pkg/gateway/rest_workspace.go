@@ -83,20 +83,24 @@ func buildWorkspaceCSP(mainOrigin string) string {
 // workspaceContentType maps lowercase file extensions to MIME types per
 // FR-020a. Keys include the leading dot.
 var workspaceContentType = map[string]string{
-	".html": "text/html; charset=utf-8",
-	".htm":  "text/html; charset=utf-8",
-	".css":  "text/css",
-	".js":   "application/javascript",
-	".png":  "image/png",
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif":  "image/gif",
-	".svg":  "image/svg+xml",
-	".webp": "image/webp",
-	".json": "application/json",
-	".txt":  "text/plain; charset=utf-8",
-	".md":   "text/plain; charset=utf-8",
-	".pdf":  "application/pdf",
+	".html":  "text/html; charset=utf-8",
+	".htm":   "text/html; charset=utf-8",
+	".css":   "text/css",
+	".js":    "application/javascript",
+	".mjs":   "application/javascript",
+	".woff":  "font/woff",
+	".woff2": "font/woff2",
+	".wasm":  "application/wasm",
+	".png":   "image/png",
+	".jpg":   "image/jpeg",
+	".jpeg":  "image/jpeg",
+	".gif":   "image/gif",
+	".svg":   "image/svg+xml",
+	".webp":  "image/webp",
+	".json":  "application/json",
+	".txt":   "text/plain; charset=utf-8",
+	".md":    "text/plain; charset=utf-8",
+	".pdf":   "application/pdf",
 }
 
 // contentTypeForPath resolves the Content-Type for the given file path
@@ -154,7 +158,7 @@ func resolveMainOrigin(cfg *config.Config) string {
 		scheme = "https"
 	}
 	if port > 0 && port != 80 && port != 443 {
-		return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+		return fmt.Sprintf("%s://%s:%d", scheme, config.URLHost(host), port)
 	}
-	return fmt.Sprintf("%s://%s", scheme, host)
+	return fmt.Sprintf("%s://%s", scheme, config.URLHost(host))
 }

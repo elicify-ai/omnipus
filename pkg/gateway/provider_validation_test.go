@@ -401,12 +401,12 @@ func TestPutProvider_SSRFPersistedApiBase(t *testing.T) {
 	// SSRF rejection returns 422 (the persisted api_base is loopback — blocked pre-probe).
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
 		"loopback persisted api_base must be SSRF-blocked; body=%s", w.Body.String())
-	// Assert the response body names the SSRF cause, not a generic validation error.
+	// Assert the response body names the address cause, not a generic validation error.
 	var errResp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
 	errMsg, _ := errResp["error"].(string)
-	assert.Contains(t, strings.ToLower(errMsg), "ssrf",
-		"SSRF-rejected 422 body must contain 'ssrf' to distinguish it from a key-invalid 422; got: %q", errMsg)
+	assert.Contains(t, strings.ToLower(errMsg), "internal network",
+		"address-rejected 422 body must say the address is internal to distinguish it from a key-invalid 422; got: %q", errMsg)
 }
 
 // --- Test #16: Settings Test returns classified outcome ---

@@ -96,6 +96,21 @@ properties:
       not a guarantee — GET .../content's is_text/too_large fields are the
       authoritative check at read time.
     example: true
+  is_view:
+    type: boolean
+    description: >
+      True when this entry is a saved view (#1017): a file the knowledge
+      base's view loader accepted from
+      `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by
+      GET .../entries called with include_views=true; there it is true on a
+      view entry and absent on every other entry. On any other response that
+      returns a LibraryEntry (write, rename, move, copy, upload), and on a
+      listing made without include_views, it is absent and states nothing.
+      `view` is present exactly when this is true.
+    example: true
+  view:
+    $ref: "./LibraryEntryView.yaml"
+    x-go-type: LibraryEntryView
   preview_profile:
     type: string
     enum:

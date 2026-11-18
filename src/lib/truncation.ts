@@ -45,19 +45,30 @@ export const INTERRUPTED_SUFFIX_TEXT = '(interrupted)'
 export const CUT_OFF_SUFFIX_TEXT = '(cut off at the output limit)'
 
 /**
+ * True when a message records a cancelled (stopped) turn. `status ===
+ * 'interrupted'` is the pre-existing (FR-21) signal; `truncationReason ===
+ * 'cancelled'` is the ADR-087 signal for the same outcome arriving via the
+ * `truncated`/`truncation_reason` fields instead of (or in addition to)
+ * `status` — a reloaded or replayed cancelled turn carries only the latter.
+ * Either one alone is sufficient. The single rule shared by the suffix below
+ * and the row status (`omnipus-runtime.ts::buildTerminalMessageStatus`), so
+ * a row can never show "(interrupted)" while reporting itself complete (#1671).
+ */
+export function isCancelledTurn(message: Pick<StatusSuffixInput, 'status' | 'truncationReason'>): boolean {
+  return message.status === 'interrupted' || message.truncationReason === 'cancelled'
+}
+
+/**
  * ADR-087 D1 — the muted-footer status suffix for an assistant message, or
  * `null` when neither applies.
  *
  * Precedence is fixed and load-bearing: an interrupted/cancelled turn ALWAYS
  * wins over an output-token-limit cutoff — render exactly one suffix, never
- * both. `status === 'interrupted'` is the pre-existing (FR-21) signal;
- * `truncationReason === 'cancelled'` is the new ADR-087 signal for the same
- * outcome arriving via the `truncated`/`truncation_reason` fields instead of
- * (or in addition to) `status`. Either one alone is sufficient.
+ * both. What counts as cancelled is {@link isCancelledTurn}.
  */
 export function getMessageStatusSuffix(message: StatusSuffixInput): string | null {
   if (message.role !== 'assistant') return null
-  if (message.status === 'interrupted' || message.truncationReason === 'cancelled') {
+  if (isCancelledTurn(message)) {
     return INTERRUPTED_SUFFIX_TEXT
   }
   if (message.truncationReason === 'max_output_tokens') {

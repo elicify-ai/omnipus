@@ -52,6 +52,11 @@ const BARE_UNRELATED_ERROR: ErrorFrame = { type: 'error', message: 'session not 
 const QUEUED_ID = 'combo-sf1-queued-client'
 const QUEUED_TEXT = 'Send this follow-up only after this chat is checked.'
 const QUEUED = { id: QUEUED_ID, content: QUEUED_TEXT, timestamp: NOW }
+// #1428 step 1: a queued item also records its acceptance number (`seq`) and, while the first send is
+// unconfirmed, that first send as its owner (`firstSendOwner`). Both are intended fields.
+const QUEUED_OWNED = { ...QUEUED, firstSendOwner: ORIGINAL_ID, seq: expect.any(Number) }
+// After the save acknowledgement binds it, the item also names its chat (`targetSessionId`).
+const QUEUED_BOUND = { ...QUEUED_OWNED, targetSessionId: SESSION_ID }
 const QUEUED_FRAME: MessageFrame = {
   type: 'message', session_id: SESSION_ID, client_message_id: QUEUED_ID,
   content: QUEUED_TEXT, agent_id: 'mia', metadata: { workspace_id: WORKSPACE },
@@ -126,7 +131,7 @@ function beginKnownChatCheck() {
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: first send plus a queued follow-up, not two appends')
     .toStrictEqual([ORIGINAL_FRAME])
   expect(useChatStore.getState().outboundQueue, 'fixture: the unacknowledged first send owns the follow-up')
-    .toStrictEqual([QUEUED])
+    .toStrictEqual([QUEUED_OWNED])
 
   // The save acknowledgement was lost. Reconnect cannot resend it; explicit
   // same-ID Retry receives an authoritative recovered acknowledgement/receipt.
@@ -157,7 +162,7 @@ function beginKnownChatCheck() {
   expect(useChatStore.getState().messagesById[ORIGINAL_ID].deliveryStatus, 'fixture: the genuine saved receipt is retained')
     .toBe('received')
   expect(useChatStore.getState().pendingDrainQueue, 'fixture: recovery has not drained the owned follow-up')
-    .toStrictEqual([QUEUED])
+    .toStrictEqual([QUEUED_BOUND])
   expect(users(), 'fixture: no reconnect, Retry or receipt creates a duplicate original bubble')
     .toStrictEqual([{ id: ORIGINAL_ID, clientMessageId: ORIGINAL_ID, content: ORIGINAL_TEXT }])
   return sender
@@ -224,7 +229,7 @@ describe('#1090 COMBO-SF-1 — early attach refusal ownership controls', () => {
     expect(screen.queryByRole('button', { name: /Generate again/ }), 'COMBO-SF-1: failed checking cannot authorize a second answer')
       .not.toBeInTheDocument()
     act(() => useChatStore.getState().drainOutboundQueue())
-    expect(useChatStore.getState().pendingDrainQueue, 'D7: a failed check still owns queued messages').toStrictEqual([QUEUED])
+    expect(useChatStore.getState().pendingDrainQueue, 'D7: a failed check still owns queued messages').toStrictEqual([QUEUED_BOUND])
     expect(sender.send.mock.calls.map(([frame]) => frame), 'COMBO-SF-1: refusal neither resends nor drains into the deleted chat')
       .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_FRAME, ATTACH_FRAME])
 
@@ -238,7 +243,7 @@ describe('#1090 COMBO-SF-1 — early attach refusal ownership controls', () => {
       .toBe('checking_chat')
     expect(useChatStore.getState().pendingFirstSend?.payload, 'COMBO-SF-1: attach Retry still retains the original request')
       .toStrictEqual(ORIGINAL_FRAME)
-    expect(useChatStore.getState().pendingDrainQueue, 'D7: queued messages cannot overtake the check').toStrictEqual([QUEUED])
+    expect(useChatStore.getState().pendingDrainQueue, 'D7: queued messages cannot overtake the check').toStrictEqual([QUEUED_BOUND])
 
     completeAuthoritativeCheck()
 
@@ -283,7 +288,7 @@ describe('#1090 COMBO-SF-1 — early attach refusal ownership controls', () => {
       .toStrictEqual(originalBubble)
     expect(after.pendingFirstSend?.status, 'COMBO-SF-1 control: unrelated error does not settle the in-flight first-send check')
       .toBe('checking_chat')
-    expect(after.pendingDrainQueue, 'COMBO-SF-1 control: unrelated error cannot free the owned queue').toStrictEqual([QUEUED])
+    expect(after.pendingDrainQueue, 'COMBO-SF-1 control: unrelated error cannot free the owned queue').toStrictEqual([QUEUED_BOUND])
     expect(within(screen.getByTestId('user-message')).getByRole('status').textContent, 'COMBO-SF-1 control: no unrelated failed-check action appears')
       .toBe('Checking chat…')
     expect(screen.queryByRole('button', { name: /^Retry$/ }), 'COMBO-SF-1 control: unrelated bare error must not authorize Retry')

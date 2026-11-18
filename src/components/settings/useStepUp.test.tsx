@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 
@@ -31,6 +31,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { fetchAppState, reAuth } from '@/lib/api'
 import type { AppState } from '@/lib/api'
 import { useStepUp } from './useStepUp'
+import { REAUTH_CANCELLED_MESSAGE } from './useReAuthGate'
 
 const LOCAL_APP_STATE = {
   onboarding_complete: true,
@@ -165,5 +166,135 @@ describe('useStepUp', () => {
       expect(run.mock.calls[0][0]).toBeUndefined()
       expect(screen.getByTestId('result')).toHaveTextContent('ran-with-undefined')
     })
+  })
+})
+
+// ── #1468 — Escape while a confirmed save is in flight ──────────────────────
+//
+// Contract §3 rider row: pressing Escape while a confirmed save is in flight
+// must CLOSE the dialog WITHOUT cancelling. The gate promise settles with the
+// run's real result (resolve or reject), so the page shows the true outcome —
+// saved, or the real error — never "cancelled". Escape BEFORE Confirm still
+// cancels with REAUTH_CANCELLED_MESSAGE. ConfirmDialog itself is unchanged
+// (its tested "permits Escape while pending" contract is an existing kit
+// decision); the fix lives in useStepUp.tsx alone.
+//
+// RED on 69aa07d9a: handleConfirmAccept keeps `pendingRef` set while `run()`
+// is in flight, so Escape → handleConfirmOpenChange rejects the gate with the
+// cancel sentinel; the run's later settle then lands on an already-rejected
+// promise and the real outcome is lost. Cases 1 and 2 fail on today's code
+// with the sentinel in place of the expected value; case 3 is the control
+// (passes today and must keep passing).
+describe('useStepUp — Escape while a confirmed save is in flight (#1468)', () => {
+  // Harness that exposes the raw gate promise (the existing Harness above
+  // only shows a boolean errored flag, which cannot tell the cancel sentinel
+  // from a real error).
+  function PromiseHarness({
+    run,
+    gate,
+  }: {
+    run: (token?: string) => Promise<string>
+    gate: { promise?: Promise<string> }
+  }) {
+    const stepUp = useStepUp()
+    return (
+      <div>
+        <div data-testid="mode">{stepUp.mode}</div>
+        <Button
+          type="button"
+          data-testid="trigger"
+          onClick={() => {
+            gate.promise = stepUp.gate(run, {
+              title: 'Change the thing?',
+              body: 'This changes the thing.',
+              confirmLabel: 'Change it',
+            })
+          }}
+        >
+          Trigger
+        </Button>
+        {stepUp.dialogs}
+      </div>
+    )
+  }
+
+  async function renderConfirmMode(run: (token?: string) => Promise<string>) {
+    vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
+    const gate: { promise?: Promise<string> } = {}
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <PromiseHarness run={run} gate={gate} />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('mode')).toHaveTextContent('confirm')
+    })
+    fireEvent.click(screen.getByTestId('trigger'))
+    // Consume the rejection (if any) at the environment level so a today-red
+    // run fails on the ASSERTION below — named expected-vs-actual — and not
+    // on an unhandledRejection report. Later `.resolves`/`.rejects`
+    // expectations still see the true outcome.
+    gate.promise?.catch(() => {})
+    const dialog = await screen.findByRole('alertdialog')
+    return { gate, dialog }
+  }
+
+  it('Escape during an in-flight confirmed save closes the dialog without cancelling: the gate resolves with the run’s value', async () => {
+    let resolveRun!: (value: string) => void
+    const run = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRun = resolve
+        }),
+    )
+    const { gate, dialog } = await renderConfirmMode(run)
+
+    // Accept: the run starts and stays in flight (pending).
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }))
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
+
+    // Escape while the run is in flight — the dialog closes...
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+
+    // ...and the run still lands: the gate must resolve with its REAL value.
+    await act(async () => {
+      resolveRun('saved-value')
+    })
+    await expect(gate.promise).resolves.toBe('saved-value')
+  })
+
+  it('Escape during an in-flight confirmed save surfaces the run’s REAL error, not the cancel sentinel', async () => {
+    let rejectRun!: (err: unknown) => void
+    const run = vi.fn(
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectRun = reject
+        }),
+    )
+    const { gate, dialog } = await renderConfirmMode(run)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }))
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
+
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+
+    await act(async () => {
+      rejectRun(new Error('disk full'))
+    })
+    // The specific real error, not REAUTH_CANCELLED_MESSAGE.
+    await expect(gate.promise).rejects.toThrow('disk full')
+  })
+
+  it('Escape BEFORE confirming still cancels with the sentinel and never calls run (control — green today)', async () => {
+    const run = vi.fn(async (token?: string) => `ran-with-${String(token)}`)
+    const { gate } = await renderConfirmMode(run)
+
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+
+    await expect(gate.promise).rejects.toThrow(REAUTH_CANCELLED_MESSAGE)
+    expect(run).not.toHaveBeenCalled()
   })
 })

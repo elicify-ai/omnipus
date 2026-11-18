@@ -45,7 +45,8 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors'
+import { chatInput, waitForConnected } from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
 import { apiFetch } from './fixtures/conformance-helpers'
 
 interface AgentSummary {
@@ -183,9 +184,9 @@ test(
       await expect(input).toBeEnabled({ timeout: 20_000 })
       await waitForConnected(page, { timeout: 20_000 })
 
-      // Sidebar row click is the only agent switch since the composer
-      // AgentPicker was removed (nav commit e84ac0532; FR-029 no in-chat handover).
-      await selectAgent(page, /Jim/i)
+      // #1769: a fresh Jim chat, not Jim's shared main session (selectAgent),
+      // so an AskUserQuestion left open by an earlier test cannot lock it.
+      await freshChat(page, /Jim/i)
 
       await input.fill(LONG_PROSE_PROMPT)
       await input.press('Enter')

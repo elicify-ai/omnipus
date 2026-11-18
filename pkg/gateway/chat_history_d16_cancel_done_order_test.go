@@ -2,10 +2,13 @@ package gateway
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -28,6 +31,11 @@ type historyD16DoneProbe struct {
 	seen    chan struct{}
 	markers int
 	readErr error
+	// readPage invokes the real REST handler synchronously inside enqueue.
+	// No polling or later settlement can retroactively repair this snapshot.
+	readPage   func() (int, []byte)
+	pageStatus int
+	pageBody   []byte
 }
 
 func (p *historyD16DoneProbe) enqueue(frame []byte) bool {
@@ -45,6 +53,7 @@ func (p *historyD16DoneProbe) enqueue(frame []byte) bool {
 				p.markers++
 			}
 		}
+		p.pageStatus, p.pageBody = p.readPage()
 		close(p.seen)
 	})
 	return true
@@ -54,7 +63,6 @@ func (p *historyD16DoneProbe) enqueue(frame []byte) bool {
 // client that receives the Stop-all turn's "done" frame and reloads at once
 // must read that turn's turn_canceled record.
 func TestCancelledTool_DoneFrameAfterCancelRecord(t *testing.T) {
-	t.Skip("known gap #1524: done frame is sent before turn_canceled is saved; remove this skip with the fix")
 	home, cfg := historyD16Config(t)
 	cfg.Tools.Manifest.Compressed = false
 	cfg.Sandbox.ToolPolicies[historyD16ToolName] = "allow"
@@ -75,7 +83,12 @@ func TestCancelledTool_DoneFrameAfterCancelRecord(t *testing.T) {
 	var turnMu sync.Mutex
 	turnID := ""
 	probe := &historyD16DoneProbe{store: h.store, sid: sid, seen: make(chan struct{}),
-		turn: func() string { turnMu.Lock(); defer turnMu.Unlock(); return turnID }}
+		turn: func() string { turnMu.Lock(); defer turnMu.Unlock(); return turnID },
+		readPage: func() (int, []byte) {
+			response := httptest.NewRecorder()
+			h.api.HandleSessions(response, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sid+"/messages", nil))
+			return response.Code, append([]byte(nil), response.Body.Bytes()...)
+		}}
 	t.Cleanup(func() { h.cancel(); tool.unblock() })
 	_, bound := h.handler.hubs.getOrCreate(sid).bindLive(probe)
 	require.True(t, bound)
@@ -104,4 +117,16 @@ func TestCancelledTool_DoneFrameAfterCancelRecord(t *testing.T) {
 	}
 	require.Equal(t, 1, joined, "the stopped turn still saves exactly one cancel record")
 	assert.Equal(t, 1, probe.markers, "a reload taken when done reaches the client shows the turn as stopped")
+	require.Equal(t, http.StatusOK, probe.pageStatus, "real immediate REST readback is available")
+	var page generated.SessionHistoryResponse
+	require.NoError(t, json.Unmarshal(probe.pageBody, &page))
+	require.Equal(t, sid, page.SessionId)
+	immediate := 0
+	for _, entry := range page.Entries {
+		if entry.Type != nil && string(*entry.Type) == string(session.EntryTypeTurnCancelled) && entry.TurnId != nil && *entry.TurnId == started.Meta.TurnID {
+			immediate++
+		}
+	}
+	t.Logf("#1524 exact done boundary: canonical_cancel_records=%d REST_cancel_records=%d; after_settlement=%d", probe.markers, immediate, joined)
+	assert.Equal(t, 1, immediate, "closes #1524: REST reload right at done must already include the stopped turn fact; a later test wait is not a product fix")
 }

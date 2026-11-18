@@ -15,7 +15,7 @@ import {
   mountStage1App, resetStage1App, settledMainChat, Stage1Network, stopStage1App,
 } from '../../../tests/l1-room-ui/stage1-harness'
 import {
-  deferred, entry, expectValidPage, page, replay, snapshot, STAMP, UNAVAILABLE,
+  deferred, drainVirtualScrollTimer, entry, expectValidPage, page, replay, snapshot, STAMP, UNAVAILABLE,
 } from '../../../tests/chat-history-paging/fixtures'
 import { sendFrames } from '../../../tests/chat-history-paging/application'
 import { installHistoryLayout } from '../../../tests/chat-history-paging/measurement-layout'
@@ -26,6 +26,7 @@ const observers: MutationObserver[] = []
 afterEach(async () => {
   observers.splice(0).forEach(observer => observer.disconnect())
   await stopStage1App()
+  await drainVirtualScrollTimer()
   layout?.restore()
   layout = undefined
   expect(network?.unexpected, 'all physical HTTP reads stay at declared process edges').toStrictEqual([])

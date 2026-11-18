@@ -330,12 +330,15 @@ export const AGENT_ROW_MENU_ITEMS = [
  * message roots. User messages have flex-row-reverse (right-aligned bubbles);
  * assistant messages do not.
  */
-export const assistantMessages = (page: Page) =>
-  page.locator(
-    // System rows (helper hand-back, restart notice, clear-context divider)
-    // also carry data-message-id but are not assistant replies.
-    '[data-message-id]:not(.flex-row-reverse):not([data-status="running"]):not([data-message-role="system"])',
-  );
+export const ASSISTANT_MESSAGE_SELECTOR =
+  // System rows (helper hand-back, restart notice, clear-context divider,
+  // provider-fallback note) also carry data-message-id but are not assistant
+  // replies. Specs must import assistantMessages rather than copy this string:
+  // a stale copy without the system-row filter counted the provider-fallback
+  // note as a second reply (memory-remember-recall, run 42969900253).
+  '[data-message-id]:not(.flex-row-reverse):not([data-status="running"]):not([data-message-role="system"])';
+
+export const assistantMessages = (page: Page) => page.locator(ASSISTANT_MESSAGE_SELECTOR);
 
 /**
  * User messages — complement of assistantMessages; row uses `flex-row-reverse`.

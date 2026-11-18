@@ -13,7 +13,7 @@
 // Harness copied from FeedKindLabel.main-title.test.tsx.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -128,7 +128,9 @@ describe('FeedKindLabel — an id-fallback line is marked as such (R2-S4-03)', (
 // The warning's EXPLANATION has to reach a sighted keyboard user (review
 // round 2, C6/R2-1). The compact glyph stays compact — the explanation is
 // the catalogued Tooltip's job (design-system rule 14): a NAMED, focusable
-// trigger that reveals on focus and on a tap, and that Escape dismisses.
+// trigger that reveals on focus, and that Escape dismisses. Touch does NOT
+// open a tooltip (founder answer Q2 = A, 2026-11-06) — the named trigger
+// carries the warning to assistive tech instead.
 //
 // The words a screen reader gets (the status region's own accessible name)
 // are unchanged by any of this — the trigger is a SIBLING of the labelled
@@ -158,10 +160,27 @@ describe('FeedKindLabel — the compact warning explains itself (review round 2)
     expect(screen.getByRole('tooltip')).toHaveTextContent(EXPLANATION)
   })
 
-  it('a tap reveals the explanation', async () => {
+  // Founder answer Q2 = A (2026-11-06): touch does NOT open a tooltip — a
+  // tap activates the control instead, and the meaning must reach the user
+  // another way. Here that way is: the trigger's accessible NAME carries the
+  // warning, and keyboard focus still reveals the full explanation through
+  // the tooltip's aria-describedby description. (Round 2, K4: replaces the
+  // contradicting "a tap reveals the explanation".)
+  it('a tap does not open the tooltip; the explanation still reaches assistive tech through the named trigger and keyboard focus', async () => {
     const trigger = await renderFailedRoster()
+    // Q2 = A: a tap must not reveal the bubble (Radix ignores touch, and a
+    // click on the trigger never opens it).
     fireEvent.click(trigger)
-    expect(screen.getByRole('tooltip')).toHaveTextContent(EXPLANATION)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    // The explanation is not lost: the trigger carries an accessible name
+    // with the warning's meaning...
+    expect(screen.getByRole('button', { name: 'Agent names unavailable' })).toBe(trigger)
+    // ...and keyboard focus opens the tooltip with the full text, wired as
+    // the trigger's accessible description while it is open.
+    act(() => trigger.focus())
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip).toHaveTextContent(EXPLANATION)
+    expect(trigger).toHaveAttribute('aria-describedby', tooltip.id)
   })
 
   it('the trigger is a real control with a coarse-pointer touch box', async () => {

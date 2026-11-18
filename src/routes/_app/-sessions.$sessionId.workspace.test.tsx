@@ -317,7 +317,9 @@ describe('SessionRoute — standalone attach deduplication', () => {
       if (!Route) throw new Error('SessionRoute not loaded')
       await act(async () => { render(<Route />) })
 
-      expect(mockConn.send).not.toHaveBeenCalled()
+      // FR-026: the session route reports chat_presence. That is not a second attach.
+      const sent = mockConn.send.mock.calls.map((call) => call[0] as { type?: string })
+      expect(sent.filter((frame) => frame?.type !== 'chat_presence')).toEqual([])
       expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
     },
   )
@@ -341,7 +343,9 @@ describe('SessionRoute — standalone attach deduplication', () => {
         useConnectionStore.setState({ isConnected: true })
       })
 
-      expect(mockConn.send).not.toHaveBeenCalled()
+      // FR-026: the session route reports chat_presence. That is not a second attach.
+      const sent = mockConn.send.mock.calls.map((call) => call[0] as { type?: string })
+      expect(sent.filter((frame) => frame?.type !== 'chat_presence')).toEqual([])
       expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
     },
   )

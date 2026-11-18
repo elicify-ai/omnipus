@@ -55,8 +55,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -716,21 +718,42 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	}
 }
 
+// e2eOfferResponseFrame is the subset of a browser websocket frame
+// readE2EOfferResponse needs. ReasonDetail is the existing
+// browser_webrtc_state.reason_detail wire field: handleWebRTCOffer's sendState
+// already fills it from the underlying error via webrtcReasonDetail. This is
+// not a new product field.
+type e2eOfferResponseFrame struct {
+	Type         string `json:"type"`
+	OfferID      int    `json:"offer_id"`
+	Available    bool   `json:"available"`
+	Active       bool   `json:"active"`
+	Reason       string `json:"reason"`
+	ReasonDetail string `json:"reason_detail"`
+}
+
+// e2eOfferFailureText names the closed reason and, when the frame carries it,
+// the underlying error already sent as reason_detail. An empty detail is
+// reported as absent rather than invented. available distinguishes a start
+// failure (false) from an offer failure (true) without a product change.
+func e2eOfferFailureText(reason, detail string, available bool) string {
+	if detail == "" {
+		return fmt.Sprintf("offer failed: %s (reason_detail absent, available=%t)", reason, available)
+	}
+	return fmt.Sprintf("offer failed: %s: %s (available=%t)", reason, detail, available)
+}
+
 // readE2EOfferResponse permits attachment health and availability to interleave,
 // while preserving explicit failure detection and the request's positive ID.
+// A browser_webrtc_state frame with a reason fails the test and names
+// reason_detail, which is the underlying error the handler already sends.
 func readE2EOfferResponse(t *testing.T, conn *websocket.Conn, want string) []byte {
 	t.Helper()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(e2eWait)))
 	for {
 		_, data, err := conn.ReadMessage()
 		require.NoError(t, err)
-		var frame struct {
-			Type      string `json:"type"`
-			OfferID   int    `json:"offer_id"`
-			Available bool   `json:"available"`
-			Active    bool   `json:"active"`
-			Reason    string `json:"reason"`
-		}
+		var frame e2eOfferResponseFrame
 		require.NoError(t, json.Unmarshal(data, &frame))
 		switch frame.Type {
 		case "browser_webrtc_answer":
@@ -739,7 +762,7 @@ func readE2EOfferResponse(t *testing.T, conn *websocket.Conn, want string) []byt
 			}
 		case "browser_webrtc_state":
 			if frame.Reason != "" {
-				t.Fatalf("offer failed: %s", frame.Reason)
+				t.Fatalf("%s", e2eOfferFailureText(frame.Reason, frame.ReasonDetail, frame.Available))
 			}
 			// State frames carry no offer ID. Initial attach availability is inactive.
 			if frame.Type == want && frame.Available && frame.Active {
@@ -747,4 +770,87 @@ func readE2EOfferResponse(t *testing.T, conn *websocket.Conn, want string) []byt
 			}
 		}
 	}
+}
+
+// TestReadE2EOfferResponseNamesReasonDetail proves readE2EOfferResponse puts
+// the existing reason_detail wire field into its failure message. The child
+// process is the real reader: t.Fatalf cannot be intercepted in-process.
+// Each case asserts the exact formatted line, so a raw-frame dump cannot pass.
+func TestReadE2EOfferResponseNamesReasonDetail(t *testing.T) {
+	const detail = "capture session: stopped while starting"
+	cases := []struct {
+		name      string
+		available bool
+		detail    string
+		want      string
+	}{
+		{
+			name:      "available_false",
+			available: false,
+			detail:    detail,
+			want:      "offer failed: error: " + detail + " (available=false)",
+		},
+		{
+			name:      "available_true",
+			available: true,
+			detail:    detail,
+			want:      "offer failed: error: " + detail + " (available=true)",
+		},
+		{
+			name:      "reason_detail_absent",
+			available: false,
+			want:      "offer failed: error (reason_detail absent, available=false)",
+		},
+	}
+
+	if os.Getenv("E2E_OFFER_FAIL_CHILD") != "1" {
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				cmd := exec.Command(os.Args[0], "-test.run=^TestReadE2EOfferResponseNamesReasonDetail$", "-test.count=1", "-test.v")
+				cmd.Env = append(os.Environ(),
+					"E2E_OFFER_FAIL_CHILD=1",
+					"E2E_OFFER_FAIL_AVAILABLE="+fmt.Sprintf("%t", tc.available),
+					"E2E_OFFER_FAIL_DETAIL="+tc.detail,
+				)
+				out, err := cmd.CombinedOutput()
+				require.Error(t, err, "child must fail on a reason=error state frame; output:\n%s", out)
+				require.Contains(t, string(out), tc.want)
+			})
+		}
+		return
+	}
+
+	available := os.Getenv("E2E_OFFER_FAIL_AVAILABLE") == "true"
+	detailEnv := os.Getenv("E2E_OFFER_FAIL_DETAIL")
+	body := map[string]any{
+		"type":      "browser_webrtc_state",
+		"available": available,
+		"reason":    "error",
+	}
+	if detailEnv != "" {
+		body["reason_detail"] = detailEnv
+	}
+	payload, err := json.Marshal(body)
+	require.NoError(t, err)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, upgradeErr := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
+		if upgradeErr != nil {
+			return
+		}
+		defer conn.Close()
+		if writeErr := conn.WriteMessage(websocket.TextMessage, payload); writeErr != nil {
+			panic(writeErr)
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	conn, resp, dialErr := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	require.NoError(t, dialErr)
+	defer conn.Close()
+	readE2EOfferResponse(t, conn, string(generated.WsFrameTypeBrowserWebrtcAnswer))
+	t.Fatal("readE2EOfferResponse returned on an error state frame")
 }

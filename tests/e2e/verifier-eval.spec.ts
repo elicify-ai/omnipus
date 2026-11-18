@@ -219,7 +219,7 @@
 
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
-import { blockedMarker, stubCliExecutor } from './fixtures/stub-external-cli';
+import { blockedMarker, saveStubCliProgram, stubCliExecutor } from './fixtures/stub-external-cli';
 import { randomUUID } from 'crypto';
 import { requireLiveModelKeys } from './fixtures/e2e-model-keys';
 
@@ -344,12 +344,23 @@ async function createWorkspace(page: Page, name: string, teamAgentId: string): P
  * surface (a single "result" event, see fixtures/stub-external-cli.ts).
  */
 async function createStubWorkerAgent(page: Page, name: string, claimText: string): Promise<string> {
+  // The program path is Settings-owned (r17 §3.11): save the stub as the
+  // person-chosen claude-code program BEFORE the agent body — an agent request
+  // carrying executor.cli_path is refused 400 ("cli_path cannot be set on an
+  // agent"), and without a saved path the worker is created unable to run.
+  await saveStubCliProgram(page);
   const res = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/agents', {
     type: 'subagent_3p',
     name,
     description:
       'Stub external-CLI worker for ADR-052 Test 32 e2e eval — ignores its prompt and prints a pre-loaded claim, then gives up. See tests/e2e/verifier-eval.spec.ts.',
-    soul: 'You are a stub. Your CLI process ignores this prompt entirely and prints a fixed claim regardless of input.',
+    // No `soul` key: AgentCreateRequestSubagent3p has additionalProperties:false
+    // and no soul field ("There is no soul: a third-party agent has no SOUL.md"),
+    // and the create handler decodes variant bodies with
+    // json.Decoder.DisallowUnknownFields (pkg/gateway/rest_agents_create.go), so
+    // a soul key is refused 400 "unknown field \"soul\"" (#1661, CI run
+    // 42279413808). The claim text and give-up marker already ride
+    // executor.env_overrides (stubCliExecutor below) — nothing needs a soul.
     executor: stubCliExecutor({ firstTry: claimText, laterTry: blockedMarker(STUB_GIVE_UP_SUMMARY) }),
   });
   if (!res.ok) {

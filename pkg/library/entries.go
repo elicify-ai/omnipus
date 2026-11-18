@@ -58,13 +58,21 @@ func (r *Root) List(rel string, includeHidden bool) ([]gen.LibraryEntry, error) 
 		out = append(out, entry)
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].IsDir != out[j].IsDir {
-			return out[i].IsDir
-		}
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
-	})
+	SortEntries(out)
 	return out, nil
+}
+
+// SortEntries puts entries in the Library listing order: directories first,
+// then files, each by case-insensitive name. Exported so a handler that adds
+// rows to a listing (the saved-view rows of #1017) keeps List's one order
+// instead of restating it.
+func SortEntries(entries []gen.LibraryEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].IsDir != entries[j].IsDir {
+			return entries[i].IsDir
+		}
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
 }
 
 // annotateMount marks entry as a mounted folder when rel names one, and

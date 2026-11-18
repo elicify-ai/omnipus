@@ -63,6 +63,10 @@ type CancelScope struct {
 	// Generation fences a durable Stop against a newer instruction. Zero means
 	// no lifecycle record was present (ordinary legacy chat).
 	Generation int
+	// Shown is the stopping client's screen checkpoint (#1534). Only a
+	// TurnOnly Stop of the requested session carries it; nil keeps the cut
+	// at the moment the server received the Stop.
+	Shown *StopShown
 }
 
 // CancelCanceller is the identity of who issued the cancel. Used for audit

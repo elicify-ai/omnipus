@@ -29,6 +29,7 @@ import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { useNotificationsStore } from '@/store/notifications'
 import { reconcileSecretRequests } from './secret-request-frames'
+import { beginHelperAttach, noteServerClock, sessionStateClockSample } from '../provider-helper-rows'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -50,7 +51,8 @@ import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
 import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import { insertHistoryMessageId } from '../cursor'
-import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, RateLimitEventData, SessionChatState } from '../types'
+import { applyMediaFrame } from './media-frames'
+import type { ChatMessage, ChatStore, PositionedToolCall, RateLimitEventData, SessionChatState } from '../types'
 import { recordCombinedPart } from '../history-parts'
 
 
@@ -174,7 +176,17 @@ function handleSessionStateFrame(
   // acknowledgement; unscoped connection-open state must never replace it.
   if (frame.session_id) {
     noteServerAttentionFrame(targetSid, frame)
-    withBucket(targetSid, b => ({ sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, frame.session_tokens_total) }))
+    const receivedMs = Date.now()
+    withBucket(targetSid, b => ({
+      sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, frame.session_tokens_total),
+      // #1537 FR-008: emitted_at_ms when it agrees with emitted_at (else the
+      // whole-second emitted_at; Q12 A S1) is the server's current time on attach — a
+      // server-clock sample for the reload countdown. FR-014: this attach's
+      // session_state opens the window that records which named helper rows
+      // its projection delivers (reconciled at catch_up_complete).
+      providerServerClock: noteServerClock(b.providerServerClock, sessionStateClockSample(frame.emitted_at, frame.emitted_at_ms), receivedMs),
+      ...beginHelperAttach(),
+    }))
   }
   // ADR-092 review finding D: a page reload or gateway reconnect re-fetches
   // this frame, but a plain WS reconnect never replays a fresh
@@ -283,9 +295,11 @@ function applyAssistantReplayCoalesce(
     replayTerminalOutcome: boolean
     replayTruncated: boolean
     replayTruncationReason: ChatMessage['truncationReason']
+    replayEffort: ReplayMessageFrame['effort']
+    replayTurnReasoningTokens: ReplayMessageFrame['turn_reasoning_tokens']
   },
 ): boolean {
-  const { text, messageId, replayAgentId, replayModel, replayTurnId, replayTerminalOutcome, replayTruncated, replayTruncationReason } = ctx
+  const { text, messageId, replayAgentId, replayModel, replayTurnId, replayTerminalOutcome, replayTruncated, replayTruncationReason, replayEffort, replayTurnReasoningTokens } = ctx
   const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
   // ADR-070 §2.2: a candidate is only eligible to receive more
   // replayed content — coalesce OR the same-turn merge below —
@@ -338,6 +352,8 @@ function applyAssistantReplayCoalesce(
       m.truncated = true
       m.truncationReason = replayTruncationReason
     }
+    // Effort levels FR-058 / FR-036: the answering entry's stored record and thinking snapshot.
+    stampReplayEffort(m, replayEffort, replayTurnReasoningTokens)
     // Coalesce path: this empty placeholder was created by the
     // turn's own tool_call_start frames, so any pending live tool
     // calls belong to THIS assistant. Bake them in before the early
@@ -469,6 +485,8 @@ function applyAssistantReplayCoalesce(
         candidate.truncated = true
         candidate.truncationReason = replayTruncationReason
       }
+      // Effort levels FR-058: the segment that carries the record is the answering entry.
+      stampReplayEffort(candidate, replayEffort, replayTurnReasoningTokens)
       // Stamp agentId when previously unknown (mirrors the
       // 'token' case). compatibleProducer already guarantees
       // this never overwrites a genuinely different producer.
@@ -600,6 +618,8 @@ interface ReplayMessageFrameFields {
   replayTerminalOutcome: boolean
   replayTruncated: boolean
   replayTruncationReason: ChatMessage['truncationReason']
+  replayEffort: ReplayMessageFrame['effort']
+  replayTurnReasoningTokens: ReplayMessageFrame['turn_reasoning_tokens']
   replayInputDiscarded: boolean
   replayParticipant: ReplayMessageFrame['participant']
   replayReplyToMessageId: string | undefined
@@ -676,6 +696,8 @@ function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayM
     replayTerminalOutcome,
     replayTruncated,
     replayTruncationReason,
+    replayEffort: replayFrame.effort,
+    replayTurnReasoningTokens: replayFrame.turn_reasoning_tokens,
     replayInputDiscarded,
     replayParticipant,
     replayReplyToMessageId,
@@ -839,7 +861,21 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     ...(replayReplyToParticipant && role === 'assistant' ? { replyToParticipant: replayReplyToParticipant } : {}),
     // K33 / FR-202: group-chat traffic (request or answer) renders collapsed.
     ...(replayRoomRef ? { roomRef: replayRoomRef } : {}),
+    // Effort levels FR-058 / FR-036: the stored record and thinking snapshot, assistant entries only.
+    ...(fields.replayEffort && role === 'assistant' ? { effort: fields.replayEffort } : {}),
+    ...(fields.replayTurnReasoningTokens !== undefined && role === 'assistant' ? { turnReasoningTokens: fields.replayTurnReasoningTokens } : {}),
   }
+}
+
+/** Effort levels FR-058 / FR-036: stamp a replayed answering entry's effort record and thinking snapshot (both history transports carry the same stored values). */
+function stampReplayEffort(
+  message: ChatMessage,
+  effort: ReplayMessageFrame['effort'],
+  turnReasoningTokens: ReplayMessageFrame['turn_reasoning_tokens'],
+): void {
+  if (message.role !== 'assistant') return
+  if (effort) message.effort = effort
+  if (turnReasoningTokens !== undefined) message.turnReasoningTokens = turnReasoningTokens
 }
 
 // ADR-051/Fix 5c/ADR-070/ADR-087 (function-budget extraction, function-size
@@ -905,6 +941,8 @@ function handleReplayMessageFrame({
           replayTerminalOutcome: fields.replayTerminalOutcome,
           replayTruncated: fields.replayTruncated,
           replayTruncationReason: fields.replayTruncationReason,
+          replayEffort: fields.replayEffort,
+          replayTurnReasoningTokens: fields.replayTurnReasoningTokens,
         })
       ) {
         return
@@ -943,6 +981,25 @@ function handleReplayMessageFrame({
     }) as Partial<SessionChatState>
   })
 }
+/**
+ * #1789: the agent a live error bubble belongs to. The live frame carries none, so read it
+ * from the nearest earlier message in the same session that has one. The foreground agent
+ * is never used: this session may be a background one.
+ */
+function ownerAgentOf(msgs: ChatMessage[], m: ChatMessage): string | undefined {
+  if (m.agentId) return m.agentId
+  const at = msgs.indexOf(m)
+  for (let i = at - 1; i >= 0; i--) if (msgs[i].agentId) return msgs[i].agentId
+  return undefined
+}
+/** #1789: a live bubble and a saved entry describe one event only if their times are close. */
+const SAME_EVENT_WINDOW_MS = 15_000
+function isSameMoment(a: string | undefined, b: string | undefined): boolean {
+  const ta = a ? Date.parse(a) : NaN
+  const tb = b ? Date.parse(b) : NaN
+  return Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(ta - tb) <= SAME_EVENT_WINDOW_MS
+}
+
 export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear }: ReplayAndStatusFrameContext): boolean {
   switch (frame.type) {
         case 'replay_error': {
@@ -976,6 +1033,26 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
                 (m) => m.errorEntryId === replayEntryId,
               )
               if (alreadyRendered) return {}
+              // #1789: the live error frame carries no entry id, so the bubble
+              // it made cannot match above. Adopt it instead of adding a second
+              // copy: same code and text, in the current turn (after the last
+              // user message), same agent, within a few seconds of the saved
+              // entry, and not yet stamped with an id. An older replayed error
+              // with identical text stays a separate row.
+              const msgs = getMessages(b)
+              let lastUser = -1
+              for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'user') { lastUser = i; break }
+              const live = msgs.slice(lastUser + 1).find((m) =>
+                m.status === 'error' && !m.errorEntryId && !!replayLlmError
+                && m.errorCode === replayLlmError.code && m.content === replayDisplay
+                && (!frame.agent_id || ownerAgentOf(msgs, m) === frame.agent_id)
+                && isSameMoment(m.timestamp, frame.timestamp))
+              if (live) {
+                return produce(b, (draft) => {
+                  const m = draft.messagesById[live.id]
+                  if (m) m.errorEntryId = replayEntryId
+                }) as Partial<SessionChatState>
+              }
             }
             // Coalesce into the trailing streaming assistant bubble when
             // one exists. The live path closes the bubble via the C8 union
@@ -1039,103 +1116,8 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
         }
 
         case 'media': {
-          if (!targetSid) break
-          if (!Array.isArray(frame.parts) || frame.parts.length === 0) {
-            console.warn('[chat] Received media frame with empty or invalid parts — appending notice')
-            logDiagnostic('chatMediaFrameInvalidParts', { sessionId: targetSid })
-            withBucket(targetSid, (b) => {
-              return produce(b, (draft) => {
-                // ADR-070 §2.1/F2 (code review): a bare scan would append
-                // this notice to a closed, closedBySteer bubble if this
-                // frame is the first to arrive after a mid-turn steer.
-                // Mint a fresh bubble when there is no eligible open one —
-                // matching the real-attachment branch below — rather than
-                // silently dropping a failure notice the user should see.
-                const lastMsgId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
-                if (lastMsgId) {
-                  const msg = draft.messagesById[lastMsgId]
-                  msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') + '_1 attachment could not be displayed._'
-                } else {
-                  const newMsg: ChatMessage = {
-                    id: generateId(),
-                    role: 'assistant',
-                    content: '_1 attachment could not be displayed._',
-                    timestamp: new Date().toISOString(),
-                  }
-                  draft.messagesById[newMsg.id] = newMsg
-                  draft.messageOrder.push(newMsg.id)
-                }
-              }) as Partial<SessionChatState>
-            })
-            break
-          }
-          const attachments: MediaAttachment[] = frame.parts
-            .filter((p) => p.url && p.type)
-            .map((p) => ({
-              type: p.type,
-              url: p.url,
-              filename: p.filename,
-              contentType: p.content_type,
-              caption: p.caption,
-            }))
-          if (attachments.length === 0) {
-            withBucket(targetSid, (b) => {
-              return produce(b, (draft) => {
-                // ADR-070 §2.1/F2 — same reasoning as the invalid-parts
-                // branch above.
-                const lastMsgId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
-                const notice = `_${frame.parts.length} attachment${frame.parts.length > 1 ? 's' : ''} could not be displayed._`
-                if (lastMsgId) {
-                  const msg = draft.messagesById[lastMsgId]
-                  msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') + notice
-                } else {
-                  const newMsg: ChatMessage = {
-                    id: generateId(),
-                    role: 'assistant',
-                    content: notice,
-                    timestamp: new Date().toISOString(),
-                  }
-                  draft.messagesById[newMsg.id] = newMsg
-                  draft.messageOrder.push(newMsg.id)
-                }
-              }) as Partial<SessionChatState>
-            })
-            break
-          }
-          withBucket(targetSid, (b) => {
-            return produce(b, (draft) => {
-              // ADR-070 §2.1/F2: resolve the candidate through the
-              // eligibility helper so a closed, closedBySteer bubble can
-              // never be considered — the downstream `canAttach` refinement
-              // (isStreaming OR empty-content) is unrelated to steering (it
-              // exists for a freshly-created, not-yet-streaming placeholder)
-              // and is kept as-is, now only ever evaluated against a
-              // candidate that already passed the "still open" gate.
-              const lastMsgId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
-              const dedupe = (existing: MediaAttachment[] | undefined, incoming: MediaAttachment[]) => {
-                const seen = new Set((existing ?? []).map((a) => a.url))
-                const fresh = incoming.filter((a) => !seen.has(a.url))
-                return [...(existing ?? []), ...fresh]
-              }
-              if (lastMsgId) {
-                const msg = draft.messagesById[lastMsgId]
-                const canAttach = msg.isStreaming || (msg.content ?? '') === ''
-                if (canAttach) {
-                  msg.media = dedupe(msg.media, attachments)
-                  return
-                }
-              }
-              const newMsg: ChatMessage = {
-                id: generateId(),
-                role: 'assistant',
-                content: '',
-                timestamp: new Date().toISOString(),
-                media: attachments,
-              }
-              draft.messagesById[newMsg.id] = newMsg
-              draft.messageOrder.push(newMsg.id)
-            }) as Partial<SessionChatState>
-          })
+          // Body lives in media-frames.ts (chat-links U8) so this pinned function does not grow.
+          applyMediaFrame(frame, targetSid, withBucket)
           break
         }
 

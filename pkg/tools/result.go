@@ -157,6 +157,27 @@ type ToolResult struct {
 	// notifier round-trip) has crossed a serialisation boundary that
 	// json:"-" deliberately strips.
 	Deferred *ToolDeferral `json:"-"`
+
+	// OpenInLibrary, when non-nil, asks the gateway to send the live-only
+	// open_in_library frame for this call (chat-links spec, "Tool-to-hub
+	// seam"). Engine-internal like Deferred: json:"-", never a wire field,
+	// never persisted, so no replay can rebuild it. Set only by show_to_user
+	// on success, on the same value as its success text — a hook that
+	// replaces the result drops both together. Nil on every other tool and on
+	// every error.
+	OpenInLibrary *LibraryOpenTarget `json:"-"`
+}
+
+// LibraryOpenTarget is the open request show_to_user hands the gateway. Not
+// a wire type: the gateway builds the generated OpenInLibraryFrame from it.
+type LibraryOpenTarget struct { // not-wire-format
+	// RequestID is 16 crypto/rand bytes as 32 lowercase hex characters, minted
+	// per call (D-dedupe). Never the provider's call id.
+	RequestID string
+	// WorkspaceID is the turn's own workspace (D-Q5).
+	WorkspaceID string
+	// Path is the Library path of the file, mount name first for a mount.
+	Path string
 }
 
 // InspectionImage carries an authorized snapshot for the current turn only.

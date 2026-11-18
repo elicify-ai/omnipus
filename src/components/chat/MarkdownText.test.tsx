@@ -3,7 +3,8 @@
  *
  * Covers the scheme allow-list introduced in V2.C (FE H1 + FE H8):
  *   - javascript:, data:, vbscript: → rejected
- *   - http:, https:, mailto:, tel: → allowed
+ *   - http:, https:, mailto: → allowed
+ *   - tel: → rejected (chat-links follow-up 4; the default transform already blanks it)
  *
  * The REAL renderer behavior (createLinkRenderer / MarkdownImage) is tested in
  * markdown-shared.test.tsx, which imports the actual exports from markdown-shared
@@ -60,8 +61,9 @@ describe('isSafeHref — scheme allow-list', () => {
     expect(isSafeHref('mailto:user@example.com')).toBe(true)
   })
 
-  it('allows tel:', () => {
-    expect(isSafeHref('tel:+1234567890')).toBe(true)
+  it('rejects tel: (follow-up 4)', () => {
+    // Spec replacement (team-lead ruling, follow-up 4): tel: was on the allow-list; the founder removed it, so this expects false.
+    expect(isSafeHref('tel:+1234567890')).toBe(false)
   })
 
   // Disallowed schemes

@@ -69,15 +69,16 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 		return FindEnv{}, closeAll, err
 	}
 
-	schemas, schemaReport, err := records.LoadSchemas(root.Path())
+	// Schemas and saved views load through the same checked, bounded load as
+	// the Library listing and the views endpoints (#1017): only regular files
+	// inside the collection, within records.ListingLoadLimits. A view the
+	// listing does not show is therefore never opened or searched here either.
+	loaded, err := records.LoadControlCheckedAt(ctx, root.Path(), records.ListingLoadLimits())
 	if err != nil {
-		return FindEnv{}, closeAll, fmt.Errorf("loading record schemas: %w", err)
+		return FindEnv{}, closeAll, err
 	}
-
-	views, viewReport, err := records.LoadViews(root.Path(), schemas)
-	if err != nil {
-		return FindEnv{}, closeAll, fmt.Errorf("loading saved views: %w", err)
-	}
+	schemas, schemaReport := loaded.Schemas, loaded.SchemaReport
+	views, viewReport := loaded.Views, loaded.ViewReport
 
 	// index_epoch, read BEFORE anything else opens: a cursor check is
 	// meaningless against an epoch this call could not honestly read, and

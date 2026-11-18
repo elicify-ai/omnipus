@@ -34,6 +34,17 @@ type GitHubRegistry struct {
 	installer *SkillInstaller
 }
 
+// IsGitHubRegistry marks this registry (and any type that embeds it) as a
+// GitHub registry. install_skill uses it to refuse github installs (#1574)
+// without depending on the concrete type, so a wrapper still counts.
+//
+// It reports type identity, not state: it returns true even when promoted
+// through a wrapper whose embedded pointer is nil (it never dereferences g).
+// A wrapper that hides the method (for example by embedding the
+// SkillRegistry interface instead of the concrete type) cannot be recognised
+// by any in-process check; no such wrapper exists in the codebase.
+func (g *GitHubRegistry) IsGitHubRegistry() bool { return true }
+
 // NewGitHubRegistry creates a GitHubRegistry from GitHubRegistryConfig.
 // Returns an error if the SkillInstaller cannot be initialized (e.g., bad
 // proxy URL or empty workspace).

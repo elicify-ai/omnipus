@@ -1,6 +1,6 @@
 import { TextToggle } from '@/components/ui/text-toggle'
 import { Label } from '@/components/ui/label'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useResolvedAutoApprove } from '@/hooks/useResolvedAutoApprove'
@@ -132,10 +132,9 @@ export function AutoApprovePicker({
     : autoTooltipContent
 
   return (
-    <Tooltip
-      content={tooltipContent}
-      data-testid="composer-auto-approve-tooltip-trigger"
-    >
+    <Tooltip>
+      <TooltipTrigger asChild>
+      <span tabIndex={0} data-testid="composer-auto-approve-tooltip-trigger" className="inline-flex">
       <Label
         className={cn(
           'flex items-center gap-[var(--space-1)] shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]',
@@ -153,6 +152,9 @@ export function AutoApprovePicker({
           Auto
         </TextToggle>
       </Label>
+      </span>
+      </TooltipTrigger>
+      <TooltipContent>{tooltipContent}</TooltipContent>
     </Tooltip>
   )
 }

@@ -1020,13 +1020,15 @@ func BashPrefixGrantCheck(grants *security.ApprovalGrantStore, sessionID, agentI
 // later command run through that wrapper — so the approval is recorded as
 // exact instead. Reuses shellrule.IsWrapperCommand — the R3 fix's single
 // canonical wrapper list — rather than a second, independently maintained
-// map; "sh" is checked separately because it is an INTERPRETER in R3's
-// taxonomy (its own real command is invisible to the rule engine, handled
-// by R3's interpreter fail-closed path), not a "command wrapper", but
-// SuggestedPrefix still special-cases "sh -c" into a two-word prefix that
-// must be excluded here the same way.
+// map; "sh" (in any letter case, shellrule.IsShHead) is checked separately
+// because it is an INTERPRETER in R3's taxonomy (its own real command is
+// invisible to the rule engine, handled by R3's interpreter fail-closed
+// path), not a "command wrapper". It is excluded for every argument shape:
+// SuggestedPrefix special-cases "sh -c" into a two-word prefix, and a
+// script-file call such as "sh build.sh" would otherwise be offered a prefix
+// that ignores which folder the script is read from.
 func isPrefixGrantWrapperHead(word string) bool {
-	return shellrule.IsWrapperCommand(word) || word == "sh"
+	return shellrule.IsWrapperCommand(word) || shellrule.IsShHead(word)
 }
 
 // BashPrefixGrantFor derives the D4 "prefix" scope grant for a bash call a

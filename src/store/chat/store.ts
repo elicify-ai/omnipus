@@ -5,6 +5,7 @@ import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { firstDrainableIndex } from './queue-target'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { recipientAddressHoldsQueue, setRosterReleaseDrain } from './recipientSend'
 import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
@@ -15,6 +16,7 @@ import { EMPTY_BUCKET, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClear
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
 import { flushHeldClearProjection, retryClearTranscriptRead } from './clear-refetch'
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState } from './types'
+import type { SessionModelChoice } from './model-choice'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
 import { createFirstSendActions, firstSendBlocksQueue, getPendingFirstSend } from './first-send'
@@ -24,7 +26,8 @@ import { createHistoryFrameOwner } from './history-replay'
 import { applyHistoryPageToBucket } from './history-merge'
 import { advanceHistoryEntryGenerations } from '@/lib/historyEntryReads'
 import { mergeRecordedSessionTokens } from './session-usage'
-import { currentHistoryState, liveProjectionBucket, withLiveHistoryBucket } from './history-live'
+import { currentHistoryState, withLiveHistoryBucket } from './history-live'
+import { armStopGuard, interruptStreamingInOtherBucket, shownCheckpointFor, type CancelShown } from './stop-checkpoint'
 
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
 // On threshold (5), promotes to a user-visible warning toast.
@@ -36,6 +39,7 @@ function pendingModelChoicePatch(
   state: ChatStore,
   model: string | null,
   provider: string | null | undefined,
+  effort?: Pick<SessionModelChoice, 'effort' | 'effortByCommand'>,
 ): Partial<Pick<ChatStore, 'pendingFirstSend'>> {
   const pending = getPendingFirstSend(state)
   if (!pending || pending.sessionId !== null
@@ -44,7 +48,7 @@ function pendingModelChoicePatch(
   return {
     pendingFirstSend: {
       ...pending,
-      modelChoice: model ? { model, provider: provider ?? null } : undefined,
+      modelChoice: model ? { model, provider: provider ?? null, ...(effort?.effort ? { effort: effort.effort, ...(effort.effortByCommand ? { effortByCommand: true } : {}) } : {}) } : undefined,
     },
   }
 }
@@ -57,7 +61,7 @@ function drainQueuedMessage(get: () => ChatStore, next: OutboundQueueItem): void
   if (typeof next === 'string') {
     get().sendMessage(next)
   } else {
-    get().sendMessage(next.content, { clientMessageId: next.id, queuedAt: next.timestamp })
+    get().sendMessage(next.content, { clientMessageId: next.id, queuedAt: next.timestamp, queueSeq: next.seq ?? 0 })
   }
 }
 
@@ -259,9 +263,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // send (recipient is valid only together with session_id, and dropping
     // the addressing silently is forbidden). The hold releases as soon as a
     // session exists, and the message then drains WITH its recipient.
-    if (recipientAddressHoldsQueue(typeof pendingDrainQueue[0] === 'string' ? pendingDrainQueue[0] : pendingDrainQueue[0]?.content)) return
-    const [next, ...rest] = pendingDrainQueue
-    set({ pendingDrainQueue: rest })
+    const head = pendingDrainQueue[firstDrainableIndex(pendingDrainQueue, useSessionStore.getState().activeSessionId)]
+    if (head === undefined) return
+    if (recipientAddressHoldsQueue(typeof head === 'string' ? head : head.content)) return
+    // #1428: only a message written in the open chat (or a first message with
+    // no chat yet) may go now; the others wait until their chat is opened.
+    const index = firstDrainableIndex(pendingDrainQueue, useSessionStore.getState().activeSessionId)
+    if (index < 0) return
+    const next = pendingDrainQueue[index]
+    set({ pendingDrainQueue: pendingDrainQueue.filter((_, i) => i !== index) })
     drainQueuedMessage(get, next)
   }
 
@@ -326,9 +336,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
     explicitNextModelChoice: null,
     setNextModel: (model, provider, source) => set((state) => ({
       nextModel: model, nextModelProvider: provider ?? null,
-      explicitNextModelChoice: source === 'user' && model ? { model, provider: provider ?? null } : null,
-      ...(source === 'user' ? pendingModelChoicePatch(state, model, provider) : {}),
+      explicitNextModelChoice: source === 'user' && model
+        ? { model, provider: provider ?? null, ...(state.nextEffort ? { effort: state.nextEffort, ...(state.nextEffortByCommand ? { effortByCommand: true } : {}) } : {}) }
+        : null,
+      ...(source === 'user' ? pendingModelChoicePatch(state, model, provider, { effort: state.nextEffort, effortByCommand: state.nextEffortByCommand }) : {}),
     })),
+    nextEffort: '',
+    nextEffortByCommand: false,
+    setNextEffort: (effort, byCommand, source) => set((state) => {
+      // Not set stores nothing extra: a choice without effort keeps its pre-effort shape.
+      const effortFields = effort ? { effort, ...(byCommand ? { effortByCommand: true } : {}) } : {}
+      if (source !== 'user' || !state.nextModel) return { nextEffort: effort, nextEffortByCommand: byCommand }
+      return {
+        nextEffort: effort,
+        nextEffortByCommand: byCommand,
+        explicitNextModelChoice: { model: state.nextModel, provider: state.nextModelProvider, ...effortFields },
+        ...pendingModelChoicePatch(state, state.nextModel, state.nextModelProvider, effortFields),
+      }
+    }),
 
     setReplaying: (value) => {
       const sid = getActiveSid()
@@ -508,6 +533,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     markLastMessageInterrupted: (sessionId) => {
       const sid = sessionId ?? getActiveSid()
+      // #1534: the checkpoint is read from the very bubble this call freezes,
+      // in the same synchronous step (stop-checkpoint.ts).
+      let shown: CancelShown | undefined
+      let frozen: ChatMessage | undefined
       withLiveHistoryBucket(withBucket, sid, (b) => {
         // ADR-070 §2.7 (grill-spec round 2, NEW-001): a bare
         // findLastAssistantMessageId scan would resolve to an already-closed
@@ -522,6 +551,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // broader, not the branch itself.
         const candidate = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
         const lastMsgId = b.history.viewMode === 'historical' && candidate && !b.messagesById[candidate]?.isStreaming ? null : candidate
+        frozen = lastMsgId ? b.messagesById[lastMsgId] : undefined
+        shown = shownCheckpointFor(b, frozen)
         if (!lastMsgId) {
           // FR-21 / T21–T23: No assistant message exists yet (cancel fired between
           // session_started and the first token frame). The server may still send
@@ -566,6 +597,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
         return produce(b, (draft) => {
           const m = draft.messagesById[lastMsgId!]
           if (m) { m.isStreaming = false; m.status = 'interrupted'; m.pendingTextBoundary = false }
+          // #1787: keep the stopped turn's agent on the row before endTurnState clears it,
+          // so a stop notice made from an empty row still names its owner.
+          if (m && !m.agentId && draft.activeTurnAgentId) m.agentId = draft.activeTurnAgentId
           // T24b fix: bucket-level isStreaming must ALSO clear immediately
           // here, exactly like the no-message placeholder branch above does —
           // clearing only the message's own isStreaming left the BUCKET (and
@@ -599,52 +633,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // site, where a message can land in a bucket other than the one
       // `getActiveSid()` currently names (e.g. a race in test scaffolding).
       // Skip it whenever the caller named a specific target.
+      if (sid) armStopGuard(sid, shown, frozen)
       if (sessionId !== undefined) {
         maybeDrainNext()
-        return
+        return shown
       }
       // If no streaming assistant message was found in the active bucket, search
       // all buckets. This handles scenarios where a message was appended to a
       // different bucket before the active session was set (e.g. in test scaffolding).
-      const state = get()
-      const activeBucket = sid ? state.sessionsById[sid] : undefined
-      const hasInterruptedInActive = activeBucket && getMessages(liveProjectionBucket(activeBucket)).some(
-        (m: ChatMessage) => m.role === 'assistant' && m.status === 'interrupted'
-      )
-      if (!hasInterruptedInActive) {
-        for (const [bucketSid, bucket] of Object.entries(state.sessionsById)) {
-          if (bucketSid === sid) continue
-          const lastMsgId = findLastAssistantMessageId(bucket.messageOrder, bucket.messagesById)
-          if (lastMsgId && bucket.messagesById[lastMsgId].isStreaming) {
-            // Update the background bucket AND sync the updated messages to the foreground
-            // flat field so callers reading get().messages can see the change.
-            useChatStore.setState((s) => {
-              const b = s.sessionsById[bucketSid]
-              if (!b) return {}
-              const updatedById = { ...b.messagesById }
-              const target = updatedById[lastMsgId!]
-              if (target && target.role === 'assistant') {
-                // #3: role guard ensures status:'interrupted' is only stamped onto
-                // AssistantMessage where that status is legal per the discriminated union.
-                // The outer loop already restricts lastMsgId to role:'assistant' entries,
-                // so this guard is defence-in-depth against future refactors that could
-                // break that invariant.
-                updatedById[lastMsgId!] = { ...target, isStreaming: false, status: 'interrupted', pendingTextBoundary: false } as ChatMessage
-              }
-              const updated: SessionChatState = { ...b, messagesById: updatedById }
-              const updatedSessions = { ...s.sessionsById, [bucketSid]: updated }
-              // Propagate to flat foreground so observers see the interrupted message.
-              return {
-                sessionsById: updatedSessions,
-                messages: getMessages(updated),
-              }
-            })
-            break
-          }
-        }
-      }
+      interruptStreamingInOtherBucket(get(), sid, useChatStore.setState)
       // This turn is over (interrupted) — send the next drained message, if any.
       maybeDrainNext()
+      return shown
     },
 
     startToolCall: (callId, tool, params) => {

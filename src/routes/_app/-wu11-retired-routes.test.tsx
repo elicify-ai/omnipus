@@ -128,7 +128,7 @@ function mockFreshInstall(adminResolvable = false) {
     workspace_id: 'ws-default',
     team: [],
     edges: [],
-    default_depth: 3,
+    default_depth: 10,
   })
   apiEdges.fetchTasks.mockResolvedValue([])
   apiEdges.fetchPlans.mockResolvedValue([])

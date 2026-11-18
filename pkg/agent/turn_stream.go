@@ -157,6 +157,7 @@ func (ts *turnState) nextRoundMessageID() string {
 		return ts.currentMessageID
 	}
 	ts.currentMessageID = uuid.New().String()
+	ts.recordMintedMessageIDLocked(ts.currentMessageID)
 	return ts.currentMessageID
 }
 
@@ -283,6 +284,24 @@ type streamerContinuationSetter interface {
 	SetContinuationContent(full string)
 }
 
+// streamerStopLimitSetter is an optional interface a Streamer may implement
+// to receive a user Stop's screen checkpoint (#1534): the number of Unicode
+// code points of this message's whole text the saved stopped answer keeps.
+// Called by finalizeStreamer before Finalize, only when the checkpoint limits
+// the streamer's message.
+type streamerStopLimitSetter interface {
+	SetStopLimit(keep int)
+}
+
+// streamerBeforeDoneSetter is an optional interface a Streamer may implement
+// to run one callback after Finalize saved the answer and before it publishes
+// the done frame (#1524). finalizeStreamer passes
+// turnState.persistCancelBeforeDone, so a reload taken when done arrives
+// already shows the turn as stopped.
+type streamerBeforeDoneSetter interface {
+	SetBeforeDone(fn func())
+}
+
 // streamerTruncationSetter is an optional interface a Streamer may implement
 // to receive ADR-087 D2's truncation reason before Finalize is called,
 // mirroring streamerContinuationSetter's calling convention exactly.
@@ -335,6 +354,16 @@ type CallAccountingStreamer interface {
 	SetCallAccounting(entries []session.TranscriptEntry)
 }
 
+// TurnReasoningStreamer receives the turn's reasoning-token sum over EVERY
+// provider call of the turn (nil when no call reported a count). The calls
+// handed to SetCallAccounting are only the ones still pending at the end: a
+// no-text call (a tool-call response) books its accounting the moment it
+// completes, so a sum over the pending calls alone undercounts the turn
+// (effort-levels S-95, FR-058).
+type TurnReasoningStreamer interface {
+	SetTurnReasoningTokens(n *int)
+}
+
 func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 	accountingErr := ts.callAccountingError()
 	// B4: if the turn has been abandoned, suppress the final "done" frame so
@@ -376,6 +405,9 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 			pending, seen := ts.takeCallAccounting()
 			if seen {
 				setter.SetCallAccounting(pending)
+			}
+			if rs, ok := s.(TurnReasoningStreamer); ok {
+				rs.SetTurnReasoningTokens(ts.turnReasoningTokens())
 			}
 		} else {
 			accountingErr = errors.Join(accountingErr, ts.flushPendingCallAccounting())
@@ -425,6 +457,26 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 			if tset, ok := s.(streamerTruncationSetter); ok {
 				tset.SetTruncation(truncReason)
 			}
+		}
+		// #1534 W2: hand the client's screen checkpoint to the streamer that
+		// saves the stopped answer, BEFORE Finalize, mirroring the
+		// continuation probe above. The streamer cuts the whole message text
+		// it persists (W1). The last streamer always carries the turn's
+		// current message id (stamped right after nextRoundMessageID).
+		if ls, ok := s.(streamerStopLimitSetter); ok {
+			if keep, limited := ts.stopKeepFor(ts.getCurrentMessageID()); limited {
+				ls.SetStopLimit(keep)
+			}
+		}
+		// #1524: a stopped turn's turn_canceled record must be readable when
+		// its done frame is published. Finish (which writes it through the
+		// cancel callback) runs only after this Finalize, so hand the streamer
+		// the same once-only write to run between saving the answer and
+		// publishing done. The record still lands after the assistant entry.
+		if bd, ok := s.(streamerBeforeDoneSetter); ok {
+			// #1775: a typed exit's stop notice is saved here too, between
+			// the answer and the marker, so it is readable at done.
+			bd.SetBeforeDone(ts.persistExitNoticeThenCancel)
 		}
 		// Pass finalContent so the streamer can persist the assistant message
 		// even when its own accumulated-from-token buffer is empty — happens

@@ -34,7 +34,9 @@ func (m *historyReadOnlyMedia) ResolveWithOpts(ref string, opts media.ResolveOpt
 		}
 		m.urls[mediaRefURL(ref)] = path
 	}
-	if err != nil {
+	// An unknown ref is routine: buildMediaFrame skips that card and keeps the
+	// page. Any other store error fails the page.
+	if err != nil && !errors.Is(err, media.ErrNotFound) {
 		m.failure = err
 	}
 	return path, err
@@ -246,7 +248,7 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 			}
 		}
 	}
-	sr := &streamReplayState{sessionID: r.sessionID, entries: entries, toolStore: r.deps.ToolStore, terminalAsk: r.deps.TerminalAsk, preparedResults: map[session.ToolCallID]any{}}
+	sr := &streamReplayState{sessionID: r.sessionID, entries: entries, toolStore: r.deps.ToolStore, terminalAsk: r.deps.TerminalAsk, preparedResults: map[session.ToolCallID]any{}, libraryWorkspaceID: r.libraryWorkspaceID, libraryHome: r.deps.Home}
 	if r.lifecycle != nil {
 		sr.lifecycle = r.lifecycle
 	}

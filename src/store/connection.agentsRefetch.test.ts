@@ -18,12 +18,12 @@ function seedFreshAgents() {
 describe('connection store -> agents query (connect / reconnect)', () => {
   beforeEach(() => {
     queryClient.clear()
-    useConnectionStore.setState({ isConnected: false, disconnectedAt: null })
+    useConnectionStore.setState({ isConnected: false, disconnectedAt: null, reconnectedAt: null })
   })
   afterEach(() => {
     vi.restoreAllMocks()
     queryClient.clear()
-    useConnectionStore.setState({ isConnected: false, disconnectedAt: null })
+    useConnectionStore.setState({ isConnected: false, disconnectedAt: null, reconnectedAt: null })
   })
 
   it('invalidates the agents query when the socket first connects, with no picker mounted', () => {

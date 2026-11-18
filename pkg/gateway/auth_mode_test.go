@@ -29,9 +29,7 @@ import (
 // rest_integrations_auth_test.go.
 func withEdition(t *testing.T, e string) {
 	t.Helper()
-	prev := config.Edition
-	config.Edition = e
-	t.Cleanup(func() { config.Edition = prev })
+	t.Cleanup(config.SetEdition(e))
 }
 
 // newAuthModeTestAPI builds a minimal restAPI with no users configured and no

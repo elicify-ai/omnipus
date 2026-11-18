@@ -13,6 +13,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // Machine-readable codes for the refusals below (ErrorResponse.code).
@@ -49,6 +50,20 @@ func refuseOmnipusPerAgentAsk(w http.ResponseWriter, agentID string, policies ma
 		return false
 	}
 	jsonErrCode(w, http.StatusUnprocessableEntity, coreagent.OmnipusPerAgentAskRefusal, codeOmnipusPerAgentAsk)
+	return true
+}
+
+// refuseAlwaysAskAllow answers 400 with the always-ask text when policies —
+// the policy values this request would store, global or per agent — set an
+// always-ask tool to allow (channels-spec-r8 FR-037, T-10 rows 15–16), and
+// reports whether it did. ask and deny pass; for Omnipus the per-agent ask
+// refusal (refuseOmnipusPerAgentAsk) still applies after this check.
+func refuseAlwaysAskAllow[V ~string](w http.ResponseWriter, policies map[string]V) bool {
+	name, bad := tools.AlwaysAskAllowViolation(policies)
+	if !bad {
+		return false
+	}
+	jsonErr(w, http.StatusBadRequest, tools.AlwaysAskAllowRefusal(name))
 	return true
 }
 

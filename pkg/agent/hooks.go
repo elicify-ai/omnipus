@@ -871,7 +871,7 @@ func cloneStringAnyMap(src map[string]any) map[string]any {
 // keys only) — unlike cloneStringAnyMap (used for genuinely JSON-shaped tool
 // call arguments/parameters, which really do arrive as arbitrary nested
 // JSON), an LLM options map's values are typed Go scalars and small value
-// structs (max_tokens int, temperature float64, thinking_level string, and
+// structs (max_tokens int, temperature float64, reasoning_effort string, and
 // any future typed option value) that a JSON marshal/unmarshal round-trip
 // silently type-erases into a generic map[string]any — a struct value such
 // as T{Mode:"required"} comes back as map[string]any{"Mode":"required"},

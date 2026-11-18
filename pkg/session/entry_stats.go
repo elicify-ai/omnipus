@@ -107,5 +107,12 @@ func addEntryTokens(cells *map[string]ModelTokens, key string, entry TranscriptE
 	mt.CacheRead += entry.CacheReadTokens
 	mt.CacheWrite += entry.CacheWriteTokens
 	mt.Total += entry.Tokens
+	if entry.ReasoningTokens != nil {
+		sum := *entry.ReasoningTokens
+		if mt.Reasoning != nil {
+			sum += *mt.Reasoning
+		}
+		mt.Reasoning = &sum
+	}
 	(*cells)[key] = mt
 }

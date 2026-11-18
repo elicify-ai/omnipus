@@ -6,7 +6,8 @@
 // Wire states (message_status): received, working, held, failed, discarded.
 // 'held' is an @-request waiting for a stopped recipient (delivered when it
 // runs again). The rest are SPA-only: 'queued' / 'sending' (not acknowledged
-// yet).
+// yet). 'unsaved' is SPA-only too (#1833): a follow-up whose new chat was
+// abandoned before it was saved; it is held, never sent, until discarded.
 //
 // Ruling S3-02 (2026-10-12): /clear outcomes are wire states. The former
 // /clear-only 'not-performed' and 'unconfirmed' states are deleted: a refusal
@@ -15,7 +16,7 @@
 // while the server holds the clear).
 
 export const USER_DELIVERY_STATES = [
-  'queued', 'sending', 'received', 'working', 'held', 'failed', 'discarded',
+  'queued', 'sending', 'received', 'working', 'held', 'failed', 'discarded', 'unsaved',
 ] as const
 
 export type UserDeliveryState = (typeof USER_DELIVERY_STATES)[number]

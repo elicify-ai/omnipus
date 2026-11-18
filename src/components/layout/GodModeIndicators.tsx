@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router'
 import { ShieldWarning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { useGodModeOn } from '@/hooks/useGodModeLiveStatus'
@@ -86,7 +86,7 @@ export function GodModeCornerDot() {
   const { visible } = useSidebarLayout()
   if (!on || visible) return null
   return (
-    // Anchored wrapper (the Tooltip's own root span is inline-flex and
+    // Anchored wrapper (the Tooltip adds no wrapper element, so it
     // cannot carry the placement), mounted by AppShell at the SHELL ROOT —
     // see the call site in AppShell.tsx for why not inside <main>. Two
     // geometry decisions live here (review round 2, findings 3–4):
@@ -107,12 +107,9 @@ export function GodModeCornerDot() {
       data-testid="god-mode-corner-dot-anchor"
       className="absolute left-0 top-[var(--spacing-chrome-header)] z-40"
     >
-      <Tooltip
-        interactive
-        side="bottom"
-        content="God Mode is on — open settings to turn it off"
-      >
-        {/* The Link is the sole tab stop (Tooltip interactive mode): a 24px
+      <Tooltip>
+        <TooltipTrigger asChild>
+        {/* The Link is the sole tab stop (the TooltipTrigger asChild target): a 24px
             hit area (= --target-pointer-minimum, WCAG 2.5.8) with the 8px
             visual dot centered in it. Below the chrome-header band nothing
             else owns this corner, so the full pointer minimum is safe —
@@ -131,6 +128,8 @@ export function GodModeCornerDot() {
             className="block h-2 w-2 rounded-full bg-[var(--color-error)]"
           />
         </Link>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">God Mode is on — open settings to turn it off</TooltipContent>
       </Tooltip>
     </span>
   )
