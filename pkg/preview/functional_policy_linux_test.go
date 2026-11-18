@@ -5,6 +5,7 @@ package preview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,7 +73,7 @@ func functionalAssertVariantCPolicy(t *testing.T, policy sandbox.SandboxPolicy, 
 		{Path: "/etc/nsswitch.conf", Access: sandbox.AccessRead},
 	}
 	for _, path := range []string{"/lib", "/lib64", "/usr/lib", "/usr/lib64", "/etc/ld.so.cache"} {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 			continue // D8c explicitly omits absent system folders; the test is NOT skipped.
 		} else {
 			require.NoError(t, err)
@@ -80,7 +81,7 @@ func functionalAssertVariantCPolicy(t *testing.T, policy sandbox.SandboxPolicy, 
 		wanted = append(wanted, sandbox.PathRule{Path: path, Access: sandbox.AccessRead | sandbox.AccessExecute})
 	}
 	for _, path := range []string{"/usr/share/fonts", "/usr/local/share/fonts", "/etc/fonts"} {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else {
 			require.NoError(t, err)

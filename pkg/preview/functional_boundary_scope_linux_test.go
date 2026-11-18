@@ -5,6 +5,7 @@ package preview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,7 +49,7 @@ func functionalScopePeer() int {
 	for _, path := range []string{"/dev/urandom", "/etc/passwd", "/etc/nsswitch.conf"} {
 		file, openErr := os.Open(path)
 		if openErr != nil {
-			if os.IsPermission(openErr) {
+			if errors.Is(openErr, os.ErrPermission) {
 				receipt.Reads[path] = "permission"
 			} else {
 				receipt.Reads[path] = openErr.Error()
