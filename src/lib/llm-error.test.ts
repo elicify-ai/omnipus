@@ -75,6 +75,22 @@ const ALL_CODES: LLMErrorCode[] = [
   'bad_model',
   'provider_request_rejected',
   'model_route_unavailable',
+  // #1857 (R3 / design-note C2): the 13 codes the backend round added. Listed
+  // explicitly so the bijection assertion above and every per-code loop below
+  // (copy rules, attribution, display copy) cover them.
+  'external_cli_invalid_args',
+  'external_cli_model_unavailable',
+  'external_cli_needs_signin',
+  'external_cli_failed',
+  'external_cli_turn_limit',
+  'external_cli_upstream_refused',
+  'provider_error',
+  'agent_request_limit',
+  'tool_assembly_duplicate',
+  'transcript_save_failed',
+  'goal_state_unavailable',
+  'external_cli_not_found',
+  'external_cli_invalid_config',
   'unknown',
 ]
 
