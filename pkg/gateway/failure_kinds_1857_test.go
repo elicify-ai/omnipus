@@ -24,9 +24,11 @@ package gateway
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -99,19 +101,35 @@ func TestCLIFailureAdaptersEndToEnd(t *testing.T) {
 			"T-56(g) Settings: the diagnostic's raw text must not reach the serialized Settings result")
 	})
 
-	t.Run("cli_relayed_limit_never_gets_the_provider_rate_limited_copy", func(t *testing.T) {
-		// B18 (§13.8.2): the Settings paths go through "the same CLI-only
-		// classifier as the run path" — R-2 forbids provider codes on the
-		// CLI path, so a CLI-relayed rate-limit refusal must never surface
-		// the provider-overloaded rate_limited catalogue copy (the wrong
-		// remedy: it points at Omnipus's provider settings). Today the
-		// shared translator answers exactly that copy — the RED half.
+	t.Run("cli_relayed_limit_gets_the_cli_classifier_answer", func(t *testing.T) {
+		// B18 (§13.8.2, R-2): the Settings paths go through "the same CLI-only
+		// classifier as the run path" — a CLI-relayed rate-limit refusal must
+		// surface the external_cli_upstream_refused answer (C9; W13's
+		// already-neutral sentence is both voices, so the code's catalogue
+		// copy IS the Settings sentence, {cli} substituted at render time),
+		// never the provider rate_limited catalogue copy and never the
+		// generic unknown fallback. Today the shared status-0 translator
+		// answers exactly the provider copy — the RED half. The classifier's
+		// catalogue entry is contract data WP-0 adds; it is referenced by
+		// key, never spelled out here.
 		_, ok, errMsg := drain(t, []runner.RunEvent{
 			{Kind: runner.EventKindError, Err: &runner.ErrorEvent{Message: "API Error: 429 rate limit exceeded, please retry later", Fatal: true}},
 		})
 		assert.False(t, ok, "T-56/B18 Settings: the CLI-relayed refusal is a failed test")
+		classifierCopy := generated.LLMErrorUserMessages["external_cli_upstream_refused"]
+		require.NotEmpty(t, classifierCopy,
+			"T-56/B18 (§13.8.2 B18/C9): the external_cli_upstream_refused catalogue entry must exist (contract data WP-0 adds) — absent today, the shared status-0 translator answers instead of the CLI-only classifier, and its provider rate_limited copy is what surfaces")
+		for i, segment := range strings.Split(classifierCopy, "{cli}") {
+			if segment == "" {
+				continue
+			}
+			assert.Contains(t, errMsg, segment,
+				"T-56/B18 (§13.8.2 B18/C9): the Settings result must carry the CLI-only classifier's external_cli_upstream_refused sentence (segment %d) — the same classifier as the run path must answer, got %q", i, errMsg)
+		}
+		assert.NotEqual(t, generated.LLMErrorUserMessages["unknown"], errMsg,
+			"T-56/B18 (§13.8.2 B18): the generic unknown fallback must fail this subtest — a CLI-relayed refusal has a known safe reason (the classifier's own answer)")
 		assert.NotEqual(t, generated.LLMErrorUserMessages["rate_limited"], errMsg,
-			"T-56/B18 (§13.8.2 B18, R-2): the Settings result for a CLI-relayed rate-limit refusal must not be the provider rate_limited catalogue copy — the same CLI-only classifier as the run path must answer (today the shared status-0 translator answers)")
+			"T-56/B18 (§13.8.2 B18, R-2): the provider rate_limited catalogue copy must never surface for a CLI-relayed refusal — the wrong remedy points at Omnipus's provider settings")
 		assert.NotContains(t, errMsg, "rate limit exceeded, please retry later",
 			"T-56/B18 Settings: the raw relayed refusal text must not reach the serialized result")
 	})

@@ -41,6 +41,7 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -365,6 +366,122 @@ func TestTurnFailureKindClassification(t *testing.T) {
 				"T-52 (FR-092): a distinct typed code must keep its own label — the relabel must not override it")
 		})
 	})
+
+	// FR-092/T-52: the promotion ordering is asserted on the strip-retry
+	// sequence's live and persisted outcomes, not on unchanged function
+	// bodies — the function-body input pins above stay as the inputs.
+	t.Run("strip_retry_then_residual_live_and_persisted_keep_the_media_label", func(t *testing.T) {
+		live, persisted := test1857DriveStripRetryThenLaterFailure(t,
+			&common.ProviderError{Status: 418, Body: "endpoint retired without a pinned phrase"})
+		assert.Equal(t, string(CodeMediaUnsupported), live.Code,
+			"T-52 (FR-092, live): a residual dispatch-provider failure (A4) arriving after a successful strip-retry stays relabeled media on the emitted frame — a provider_error promoted before the relabel predicate would suppress the media label here")
+		assert.Equal(t, string(CodeMediaUnsupported), persisted.ErrorCode,
+			"T-52 (FR-092, reloaded transcript): the media label must survive reload, not just the live frame")
+	})
+	t.Run("distinct_later_typed_failure_keeps_its_code_live_and_persisted", func(t *testing.T) {
+		live, persisted := test1857DriveStripRetryThenLaterFailure(t,
+			&common.ProviderError{Status: 400, Body: "content policy violation"})
+		assert.Equal(t, string(CodeContentPolicy), live.Code,
+			"T-52 (FR-092, live): a later distinct classified failure keeps its own code on the emitted frame — the relabel must never overwrite it")
+		assert.Equal(t, string(CodeContentPolicy), persisted.ErrorCode,
+			"T-52 (FR-092, reloaded transcript): the distinct code survives reload")
+	})
+}
+
+// test1857StripSeqProvider scripts the strip-retry-then-later-failure
+// sequence for the T-52/FR-092 live drive: attempt 1 fails with a residual
+// 400 whose body matches nothing (the FR-017 outcome fallback strips the
+// image and retries), attempt 2 succeeds (the FR-017a relabel stamp is
+// written by the real loop path), attempt 3 fails with the caller's later
+// error.
+type test1857StripSeqProvider struct {
+	calls     int
+	third     error
+	mediaSeen [][]int
+}
+
+func (*test1857StripSeqProvider) GetDefaultModel() string { return "m" }
+
+func (p *test1857StripSeqProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	counts := make([]int, len(messages))
+	for i := range messages {
+		counts[i] = len(messages[i].Media)
+	}
+	p.mediaSeen = append(p.mediaSeen, counts)
+	p.calls++
+	switch p.calls {
+	case 1:
+		return nil, &common.ProviderError{Status: 400, Body: `{"error":{"message":"upstream capacity pool exhausted for this request shape 1857"}}`}
+	case 2:
+		return &providers.LLMResponse{Content: "recovered answer 1857"}, nil
+	default:
+		return nil, p.third
+	}
+}
+
+// test1857DriveStripRetryThenLaterFailure drives the real loop path with the
+// routing-1340 fixture (only the external provider is substituted; selection,
+// recovery, error emission and durable transcript handling remain real): the
+// outcome-based strip-retry recovers (attempt 1 → strip → attempt 2 succeeds,
+// relabel stamped), then a later provider failure is classified and consumed
+// at the real persist/emit point (handleProviderResponse). Returns the live
+// error frame and the persisted classified entry — the sequence's live and
+// reloaded-transcript outcomes.
+func test1857DriveStripRetryThenLaterFailure(t *testing.T, later error) (ErrorPayload, *session.TranscriptEntry) {
+	t.Helper()
+	client := &test1857StripSeqProvider{third: later}
+	a := &AgentInstance{ID: "1857-media-seq", Model: "m", Candidates: []providers.FallbackCandidate{{Provider: "openrouter", Model: "m"}}}
+	a.StoreProviderPool(map[string]providers.LLMProvider{"openrouter": client})
+	f := newRouting1340ReviewFixture(t, nil, a)
+	f.selectProvider(t)
+	f.rf.callMessages = []providers.Message{{Role: "user", Content: "inspect this 1857", Media: []string{"data:image/png;base64,iVBORw0KGgo="}}}
+	f.ri.messages = f.rf.callMessages
+
+	// Pass 1: residual 400 with media → strip → pass 2 succeeds → stamp.
+	if flow := f.rr.callLLMWithRetries(); flow != agentLoopRunTurnResponseNext {
+		t.Fatalf("SETUP: the strip-retry pass must recover (flow=%v err=%v)", flow, f.rf.err)
+	}
+	require.Len(t, client.mediaSeen, 2, "SETUP: the recovery pass consumes exactly two provider calls")
+	require.Equal(t, []int{1}, client.mediaSeen[0], "SETUP: the refused attempt carries the image block")
+	require.Equal(t, []int{0}, client.mediaSeen[1], "SETUP: the recovered attempt carries no image (FR-017 outcome fallback stripped it)")
+	require.Equal(t, string(CodeMediaUnsupported), string(f.rt.ts.outcomeRelabel),
+		"SETUP: the successful strip-retry must stamp the FR-017a relabel")
+
+	// The later failure: the next provider call fails; the real response
+	// stage classifies it, consults the relabel gate at the persist/emit
+	// point, emits the live frame and persists the classified entry.
+	f.rr.callLLMWithRetries()
+	require.Error(t, f.rf.err, "SETUP: the scripted later failure must reach the response stage")
+	if flow := f.rr.handleProviderResponse(); flow != agentLoopRunTurnResponseReturn {
+		t.Fatalf("SETUP: the failed response stage must end the response (flow=%v)", flow)
+	}
+
+	var live ErrorPayload
+	liveFound := false
+	f.mu.Lock()
+	for _, evt := range f.events {
+		if evt.Kind != EventKindError {
+			continue
+		}
+		payload, ok := evt.Payload.(ErrorPayload)
+		if !ok || payload.Stage != "llm" {
+			continue
+		}
+		live, liveFound = payload, true
+	}
+	f.mu.Unlock()
+	require.True(t, liveFound, "SETUP: the later failure must emit the llm error frame")
+
+	entries, readErr := f.store.ReadTranscript(f.sessionID)
+	require.NoError(t, readErr, "SETUP: reading back the persisted transcript")
+	var persisted *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].Status == "error" && entries[i].ErrorCode != "" {
+			persisted = &entries[i]
+		}
+	}
+	require.NotNil(t, persisted, "SETUP: the classified error entry must persist for reload")
+	return live, persisted
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -479,53 +596,132 @@ func TestCodeUnknownPayloadGuard(t *testing.T) {
 			"T-54 (2) (FR-092 allow-list, A4/A5 non-promoted): the residual payload carries the catalogue fallback, never authored text")
 	})
 
-	t.Run("converted_b10_duplicate_site_leaves_the_generic_result", func(t *testing.T) {
-		// The B10 duplicate site is REMOVED from the T-54 allow-list: it
-		// carries tool_assembly_duplicate with two MCP-keyed catalogue
-		// variants (§13.8.5 B10, §13.8.2 B10 — "loop_run_turn.go:965 is
-		// hard-coded CodeUnknown today"; "WP-0 must add the structured
-		// MCP/non-MCP fact at the emit site").
-		//
-		// The emit branch's duplicate arrival is the FR-066 race the
-		// detector exists for: every ToolRegistry registration path
-		// rejects a same-name collision (registerToolLocked's collision
-		// guard), so a deterministic fixture cannot put two same-named
-		// tools into an agent's registry, and prepareToolSurface computes
-		// policyFilteredTools from that registry alone. What IS drivable is
-		// the detector the branch consumes — pinned here for both source
-		// classes, the only fact the conversion keys its variants on.
-		al, _ := newGoalLoopTestLoop(t, &noCallProvider{t: t}, func(cfg *config.Config) {
-			cfg.Sandbox.AuditLog = true // checkToolDedupInvariant emits a HIGH audit row
-		})
-		ts := &turnState{
-			agentID:    "native-agent",
-			sessionKey: "1857-b10-session",
-			turnID:     "1857-b10-turn",
+	// B10 (§13.8.2 B10, §13.8.5 B10, FR-092/T-54): the tool-assembly
+	// duplicate emit is CONVERTED off the generic result — it carries
+	// tool_assembly_duplicate for both source classes, keyed on the only
+	// fact the detector records (CategoryMCP → mcp:unknown, everything
+	// else → builtin). Driven deterministically the way wu22DuplicateSurface
+	// drives it (pkg/agent/wu22_turn_archive_failure_test.go): two distinct
+	// names registered — the registry's collision guard only sees
+	// Register-time names — then the second renamed onto the first, so the
+	// real prepareToolSurface assembles a same-name pair. Neither the
+	// registry nor prepareToolSurface is mocked.
+	drive1857DuplicateSurface := func(t *testing.T, mcpInvolved bool) (ErrorPayload, *session.TranscriptEntry, error) {
+		t.Helper()
+		h := wu22NewHarness(t, wu22HealthyProvider())
+		a := &test1857DupTool{name: "1857_dup_base", scopeVal: tools.ScopeCore}
+		b := &test1857DupTool{name: "1857_dup_other", scopeVal: tools.ScopeCore}
+		var registered tools.Tool = b
+		if mcpInvolved {
+			// The MCP-involved side is a real connector tool (MCPSource +
+			// server binding): the assignment gate would otherwise filter it
+			// out before the dedup check ever sees the pair.
+			wrapper := &test1857MCPDupTool{test1857DupTool{name: "1857_dup_other", scopeVal: tools.ScopeCore, mcp: true}}
+			b = &wrapper.test1857DupTool
+			registered = wrapper
 		}
-
-		mcpCollide := al.checkToolDedupInvariant(ts, []tools.Tool{
-			&dupTool{name: "fetch_url", scopeVal: tools.ScopeGeneral, sourceTag: "builtin"},
-			&dupTool{name: "fetch_url", scopeVal: tools.ScopeGeneral, sourceTag: "mcp:srv-A"},
+		h.agent.Tools = tools.NewToolRegistry()
+		h.agent.Tools.Register(a)
+		h.agent.Tools.Register(registered)
+		b.name = a.name
+		h.agent.StoreToolPolicy(&tools.ToolPolicyCfg{
+			GlobalPolicies: map[string]config.ToolPolicy{"1857_dup_base": config.ToolPolicyAllow},
+			MCPServers:     []config.AgentMCPServerBinding{{ID: "1857-srv"}},
 		})
-		require.Error(t, mcpCollide, "T-54 (2) (§13.8.5 B10): the detector must fire on an MCP-involved duplicate")
-		assert.Contains(t, mcpCollide.Error(), "mcp",
-			"T-54 (2) (§13.8.5 B10): the MCP-involved class must carry the mcp tag — the only source fact the converted emit keys its catalogue variant on")
+		rq := h.responseStage().rq
+		if flow := rq.prepareToolSurface(); flow != agentLoopRunTurnRequestReturn {
+			t.Fatalf("SETUP: the duplicate tool surface must end the request at the dedup branch (flow=%v)", flow)
+		}
+		require.Error(t, rq.ret1, "SETUP: the FR-066 detector must fire on the assembled duplicate")
+		h.mu.Lock()
+		var payload *ErrorPayload
+		for _, evt := range h.events {
+			if evt.Kind != EventKindError {
+				continue
+			}
+			p, ok := evt.Payload.(ErrorPayload)
+			if !ok || p.Stage != "tool_assembly" {
+				continue
+			}
+			payload = &p
+		}
+		h.mu.Unlock()
+		require.NotNil(t, payload,
+			"T-54/B10 (§13.8.5 B10): the tool_assembly error event must be emitted — a missing event fails here, the code assertion is never vacuous")
+		entries, readErr := h.store.ReadTranscript(h.sid)
+		require.NoError(t, readErr, "SETUP: reading back the persisted transcript")
+		var persisted *session.TranscriptEntry
+		for i := range entries {
+			if entries[i].Status == "error" && entries[i].ErrorCode != "" {
+				persisted = &entries[i]
+			}
+		}
+		require.NotNil(t, persisted, "SETUP: the classified error entry must persist for reload")
+		return *payload, persisted, rq.ret1
+	}
 
-		noMCPCollide := al.checkToolDedupInvariant(ts, []tools.Tool{
-			&dupTool{name: "read_file", scopeVal: tools.ScopeGeneral, sourceTag: "builtin"},
-			&dupTool{name: "read_file", scopeVal: tools.ScopeGeneral, sourceTag: "builtin"},
-		})
-		require.Error(t, noMCPCollide, "T-54 (2) (§13.8.5 B10): the detector must fire on a no-MCP duplicate")
-		assert.NotContains(t, noMCPCollide.Error(), "mcp",
-			"T-54 (2) (§13.8.5 B10): the no-MCP class must carry the builtin tag — the fail-closed fallback variant's key (exemption stays removed)")
-
-		// The converted emit block itself: BLOCKED — no deterministic seam
-		// exists on this tree. WP-0 must convert the hard-coded-CodeUnknown
-		// emit and expose the structured MCP/non-MCP fact; until then this
-		// assertion cannot observe the site's payload.
-		t.Fatalf("BLOCKED: no deterministic seam drives loop_run_turn.go::prepareToolSurface's duplicate emit — the ToolRegistry collision guard prevents constructing a same-name duplicate, so the T-54/FR-092 converted-site assertion (the B10 site must carry tool_assembly_duplicate, never the generic result) cannot be observed until WP-0 converts the emit site (§13.8.5 B10, FR-092)")
+	t.Run("converted_b10_mcp_involved_duplicate_carries_tool_assembly_duplicate", func(t *testing.T) {
+		// The MCP-involved class is expressed through Category() — the only
+		// fact the detector reads (dupTool's category is hard-wired
+		// CategoryCore and cannot express this class; hence the local double).
+		mcp := &test1857MCPDupTool{test1857DupTool{name: "1857_dup_probe", scopeVal: tools.ScopeCore, mcp: true}}
+		require.Equal(t, tools.CategoryMCP, mcp.Category(),
+			"SETUP: the fixture must express the MCP class through Category()")
+		live, persisted, detectorErr := drive1857DuplicateSurface(t, true)
+		assert.Contains(t, detectorErr.Error(), "mcp",
+			"T-54/B10 (§13.8.2 B10): the MCP-involved class must carry the mcp tag — the only source fact the converted emit keys its catalogue variant on")
+		assert.Equal(t, "tool_assembly_duplicate", live.Code,
+			"T-54/B10 (§13.8.2/§13.8.5 B10): the MCP-involved duplicate must carry tool_assembly_duplicate on the emitted frame, got %q (today the emit block is hard-coded CodeUnknown — the generic result this conversion leaves)", live.Code)
+		assert.Equal(t, "tool_assembly_duplicate", persisted.ErrorCode,
+			"T-54/B10 (§13.8.5 B10, reloaded transcript): the same code persists for reload")
+	})
+	t.Run("converted_b10_no_mcp_duplicate_carries_tool_assembly_duplicate", func(t *testing.T) {
+		live, persisted, detectorErr := drive1857DuplicateSurface(t, false)
+		assert.NotContains(t, detectorErr.Error(), "mcp",
+			"T-54/B10 (§13.8.2 B10): the no-MCP class must carry the builtin tag — the fail-closed fallback variant's key (the round-1 builtin-only exemption stays removed)")
+		assert.Equal(t, "tool_assembly_duplicate", live.Code,
+			"T-54/B10 (§13.8.5 B10): the no-MCP duplicate must carry the same tool_assembly_duplicate code (fail-closed fallback variant), got %q", live.Code)
+		assert.Equal(t, "tool_assembly_duplicate", persisted.ErrorCode,
+			"T-54/B10 (§13.8.5 B10, reloaded transcript): the same code persists for reload")
 	})
 }
+
+// test1857DupTool is the B10 fixture double with a real category: the dedup
+// detector reads only Category() (CategoryMCP → mcp:unknown, anything else →
+// builtin), so the MCP-involved class is expressed through the category, not
+// through a sourceTag string.
+type test1857DupTool struct {
+	name     string
+	scopeVal tools.ToolScope
+	mcp      bool
+}
+
+func (d *test1857DupTool) Name() string               { return d.name }
+func (d *test1857DupTool) Description() string        { return "1857 dedup fixture" }
+func (d *test1857DupTool) Parameters() map[string]any { return map[string]any{} }
+func (d *test1857DupTool) Scope() tools.ToolScope     { return d.scopeVal }
+
+func (d *test1857DupTool) Category() tools.ToolCategory {
+	if d.mcp {
+		return tools.CategoryMCP
+	}
+	return tools.CategoryCore
+}
+
+func (d *test1857DupTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+	return &tools.ToolResult{ForLLM: "1857 dedup fixture result"}
+}
+
+// test1857MCPDupTool is the MCP-involved side of the colliding pair: a real
+// connector tool, so it survives the assignment gate
+// (pkg/tools::mcpAssignmentAllows — a CategoryMCP tool without an MCPSource
+// binding is filtered out before the dedup check ever sees it) while still
+// reporting CategoryMCP to the detector.
+type test1857MCPDupTool struct {
+	test1857DupTool
+}
+
+func (*test1857MCPDupTool) MCPSource() (string, string) { return "1857-srv", "1857_remote_dup" }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // T-55 — pkg/agent::TestKnownCauseKindsProduceTypedOutcomes (code and
@@ -620,6 +816,13 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 		al.SetEventSyncTap(collector.tap)
 		t.Cleanup(func() { al.SetEventSyncTap(nil) })
 
+		// The raw text's one permitted surface is the server log (§13.8.5 B25
+		// oracle: "the log call keeps it") — captured through the real
+		// logger.EnableFileLogging sink, the gateway.log writer.
+		logFile := filepath.Join(t.TempDir(), "1857-b25-serverlog.log")
+		require.NoError(t, logger.EnableFileLogging(logFile))
+		t.Cleanup(func() { logger.DisableFileLogging() })
+
 		msg := bus.InboundMessage{
 			SessionID:  "1857-b25-session",
 			SessionKey: "1857-b25-key",
@@ -657,6 +860,14 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 			assert.NotContains(t, *wire.Detail, test1857UniqueRawError.Error(),
 				"T-55/B25 (§13.8.2 B25): raw error text reached the rendered frame detail (technical details)")
 		}
+
+		// And the one permitted surface still has it: the server log keeps
+		// the raw error (a fix that deletes the log line alongside the frame
+		// text fails here).
+		logBytes, logErr := os.ReadFile(logFile)
+		require.NoError(t, logErr, "SETUP: reading the captured server log")
+		assert.Contains(t, string(logBytes), test1857UniqueRawError.Error(),
+			"T-55/B25 (§13.8.5 B25 oracle): the raw error must still reach the server log — the fixed sentence replaces it only on user surfaces (raw text in the server log only)")
 	})
 
 	t.Run("B26_goal_read_failure_goal_state_unavailable_no_raw_text", func(t *testing.T) {
@@ -664,6 +875,13 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 		collector := &test1857ErrorEvents{}
 		al.SetEventSyncTap(collector.tap)
 		t.Cleanup(func() { al.SetEventSyncTap(nil) })
+
+		// The server log is the raw text's one permitted surface here too
+		// (§13.8.5 B26 oracle: "the log keeps it") — captured through the
+		// real logger.EnableFileLogging sink, the gateway.log writer.
+		logFile := filepath.Join(t.TempDir(), "1857-b26-serverlog.log")
+		require.NoError(t, logger.EnableFileLogging(logFile))
+		t.Cleanup(func() { logger.DisableFileLogging() })
 
 		// The transcript write is AppendTranscriptStrict — the session must
 		// exist, or the write is silently dropped and the guard would pass
@@ -691,17 +909,31 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 				"T-55/B26 (§13.8.2 B26, sec2 A): raw error text persisted in the chat transcript (entry %s) — today writeGoalSystemTranscript stores the raw %%v message", entry.ID)
 		}
 
-		// The live error event (when an audience is wired): no raw text, and
-		// the goal_state_unavailable code.
-		for _, p := range collector.errorPayloads() {
-			if p.Stage != "goal_record_read" {
-				continue
+		// The live error event: no raw text, and the goal_state_unavailable
+		// code. A missing event FAILS here — the code assertion is never
+		// vacuously skipped by a later change that stops emitting.
+		payloads := collector.errorPayloads()
+		var goalPayload *ErrorPayload
+		for i := range payloads {
+			if payloads[i].Stage == "goal_record_read" {
+				goalPayload = &payloads[i]
+				break
 			}
-			assert.NotContains(t, p.Message, test1857UniqueRawError.Error(),
-				"T-55/B26 (§13.8.2 B26): raw error text reached the emitted frame message")
-			assert.Equal(t, "goal_state_unavailable", p.Code,
-				"T-55/B26 (§13.8.5 B26): the goal-read failure must carry goal_state_unavailable, got %q (today CodeUnknown)", p.Code)
 		}
+		require.NotNil(t, goalPayload,
+			"T-55/B26 (§13.8.5 B26): the goal_record_read error event must be emitted — a missing event fails, the code assertion is never skipped")
+		assert.NotContains(t, goalPayload.Message, test1857UniqueRawError.Error(),
+			"T-55/B26 (§13.8.2 B26): raw error text reached the emitted frame message")
+		assert.Equal(t, "goal_state_unavailable", goalPayload.Code,
+			"T-55/B26 (§13.8.5 B26): the goal-read failure must carry goal_state_unavailable, got %q (today CodeUnknown)", goalPayload.Code)
+
+		// And the one permitted surface still has it: the server log keeps
+		// the raw error (a fix that deletes the log line alongside the
+		// message fails here).
+		logBytes, logErr := os.ReadFile(logFile)
+		require.NoError(t, logErr, "SETUP: reading the captured server log")
+		assert.Contains(t, string(logBytes), test1857UniqueRawError.Error(),
+			"T-55/B26 (§13.8.5 B26 oracle): the raw error must still reach the server log — the fixed sentence replaces it only on user surfaces (raw text in the server log only)")
 	})
 
 	t.Run("B26_refusal_carrier_fixed", func(t *testing.T) {
@@ -746,20 +978,39 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 // W1 and Settings W1-neutral forms, (b)'s W2 forms, (e)'s task/centre neutral
 // copy and (g)'s pinned Settings copy are asserted after the E4 review; only
 // the no-raw-text and code halves are in scope now.
+// test1857TranscriptBody concatenates every persisted entry's content for a
+// whole-transcript never-leak scan.
+func test1857TranscriptBody(entries []session.TranscriptEntry) string {
+	var sb strings.Builder
+	for _, e := range entries {
+		sb.WriteString(e.Content)
+	}
+	return sb.String()
+}
+
+// new1857ExternalStore builds the real UnifiedStore the T-56 drives attach to
+// the sub-turn's turnState, so the persisted half reads a disk-backed
+// transcript.
+func new1857ExternalStore(t *testing.T, home string) (*session.UnifiedStore, string) {
+	t.Helper()
+	dir := filepath.Join(home, "sessions")
+	st, err := session.NewUnifiedStore(dir)
+	require.NoError(t, err)
+	meta, err := st.NewSession(session.SessionTypeChat, "", "ext-agent")
+	require.NoError(t, err)
+	return st, meta.ID
+}
+
 func TestCLIFailureAdaptersEndToEnd(t *testing.T) {
-	driveFatal := func(t *testing.T, rawMessage string) (res *tools.ToolResult, payloads []ErrorPayload, entries []session.TranscriptEntry, store *session.UnifiedStore, sessionID string) {
+	driveFatal := func(t *testing.T, rawMessage string) (res *tools.ToolResult, payloads []ErrorPayload, entries []session.TranscriptEntry, store *session.UnifiedStore, sessionID string, fatalErr error) {
 		t.Helper()
 		home := t.TempDir()
 		t.Setenv(config.EnvHome, home)
 		al, ts := newExternalTestLoop(t, "codex", "")
 
-		dir := filepath.Join(home, "sessions")
-		st, err := session.NewUnifiedStore(dir)
-		require.NoError(t, err)
-		meta, err := st.NewSession(session.SessionTypeChat, "", "ext-agent")
-		require.NoError(t, err)
+		st, sessionID := new1857ExternalStore(t, home)
 		ts.transcriptStore = st
-		ts.transcriptSessionID = meta.ID
+		ts.transcriptSessionID = sessionID
 
 		collector := &test1857ErrorEvents{}
 		al.SetEventSyncTap(collector.tap)
@@ -775,25 +1026,28 @@ func TestCLIFailureAdaptersEndToEnd(t *testing.T) {
 			fr.Cancel()
 		}()
 
-		res, err = runExternalCLISubTurn(context.Background(), al, ts, "task")
+		res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 		require.Error(t, err, "SETUP: a fatal CLI error must fail the run")
+		fatalErr = err
 		require.NoError(t, st.Close())
-		entries, err = st.ReadTranscript(meta.ID)
+		entries, err = st.ReadTranscript(sessionID)
 		require.NoError(t, err, "SETUP: reading back the persisted transcript")
-		return res, collector.errorPayloads(), entries, st, meta.ID
+		return res, collector.errorPayloads(), entries, st, sessionID, fatalErr
 	}
 
 	t.Run("a_duplicated_flag_rejection_wire_history_parent_no_raw_correct_code", func(t *testing.T) {
 		row := "T-56(a) (§13.8.2 C1 / §13.8.5 B16cfg surfaces; FR-092, FR-093)"
-		res, payloads, entries, _, _ := driveFatal(t, test1857C1DuplicateFlag)
+		res, payloads, entries, _, _, _ := driveFatal(t, test1857C1DuplicateFlag)
 
 		// Parent tool result: the failure is reported, never the raw text.
 		require.NotNil(t, res, "SETUP: the dispatcher must return a tool result")
 		require.NotNil(t, res.Err, "T-56(a): the fatal CLI error must fail the parent tool result")
-		assert.Contains(t, res.Err.Error(), "external-cli run failed",
-			"T-56(a): the parent tool result must report the CLI failure")
 		assert.NotContains(t, res.Err.Error(), "cannot be used multiple times",
 			"T-56(a): raw stderr text reached the parent tool result error")
+		assert.NotContains(t, res.ForLLM, "external-cli run failed",
+			"T-56(a) (§13.8.4 rule 3): the \"external-cli run failed: \" prefix never reaches a user surface — the parent tool result included; post-fix it survives only in gateway.log (today the tool result carries it, doubled with the curated turn error)")
+		assert.Contains(t, res.ForLLM, "external_cli_invalid_args",
+			"T-56(a) (§13.8.4 tool-result row): the typed code and its sentence reach the parent tool result (today ForLLM carries neither — the sanitized copy only)")
 		requireNoRawSegment(t, row, "the parent tool result (ForLLM)", res.ForLLM)
 
 		// Wire event: correct code, no raw text.
@@ -829,17 +1083,11 @@ func TestCLIFailureAdaptersEndToEnd(t *testing.T) {
 			"T-56(a): the persisted error record must carry external_cli_invalid_args, got %q", errEntry.ErrorCode)
 		assert.NotContains(t, errEntry.Content, "cannot be used multiple times",
 			"T-56(a): raw stderr text persisted in the chat history")
-		requireNoRawSegment(t, row, "the persisted transcript", func() string {
-			var sb strings.Builder
-			for _, e := range entries {
-				sb.WriteString(e.Content)
-			}
-			return sb.String()
-		}())
+		requireNoRawSegment(t, row, "the persisted transcript", test1857TranscriptBody(entries))
 	})
 
 	t.Run("b_nested_envelope_no_raw_correct_code", func(t *testing.T) {
-		res, payloads, entries, _, _ := driveFatal(t, test1857C2Envelope)
+		res, payloads, entries, _, _, _ := driveFatal(t, test1857C2Envelope)
 
 		require.NotNil(t, res)
 		requireNoRawSegment(t, "T-56(b) (§13.8.2 C2; FR-092/FR-093)", "the parent tool result", res.ForLLM)
@@ -896,24 +1144,31 @@ func TestCLIFailureAdaptersEndToEnd(t *testing.T) {
 			"T-56(c) (§13.8.5 B16-config): the pre-run driver-construction refusal must classify external_cli_invalid_config, got %q (today a plain fmt.Errorf → unknown)", string(got.Code))
 	})
 
-	t.Run("d_parent_completion_route_carries_sanitized_cause_no_raw", func(t *testing.T) {
-		// MAJ-003: the parent completion message is its own surface — the
-		// no-raw-text rule is asserted on this route too. The route carries
-		// failureReason text (SessionMessageError.Text); the typed-cause
-		// copy is E4-pending.
+	t.Run("d_parent_completion_route_real_failure_path_no_prefix_typed_cause", func(t *testing.T) {
+		// MAJ-003: the parent completion message is its own surface, driven
+		// here on the REAL failure route — completionDisposition consumes the
+		// sub-turn's actual fatal error and completionMessage builds the
+		// SessionMessageError — never a prefix inserted by the test.
 		// TODO(#1857 E4): exact copy after founder wording review (row d /
 		// W-forms for the completion route).
+		_, _, _, _, _, runErr := driveFatal(t, test1857C1DuplicateFlag)
+		require.Error(t, runErr, "SETUP: the fatal CLI error must fail the run")
+		outcome, _, failureReason := completionDisposition(turnResult{status: TurnEndStatusError}, runErr, "partial answer 1857")
+		require.Equal(t, steer.OutcomeFailed, outcome, "SETUP: the failed sub-turn lands on the failed outcome")
 		al, _ := newGoalLoopTestLoop(t, &noCallProvider{t: t}, nil)
 		rec := &session.LifecycleRecord{SessionID: "1857-d-session", AgentID: "ext-agent", Generation: 1}
-		msg, err := al.completionMessage(rec, steer.OutcomeFailed, "partial answer", "external-cli run failed: "+SanitizeRunnerError(test1857C1DuplicateFlag).AssistantText)
-		require.NoError(t, err, "SETUP: the completion message must build")
+		msg, msgErr := al.completionMessage(rec, outcome, "partial answer 1857", failureReason)
+		require.NoError(t, msgErr, "SETUP: the completion message must build")
 		errVariant, asErr := msg.AsSessionMessageError()
 		require.NoError(t, asErr, "SETUP: the failed completion must be a SessionMessageError variant")
 		text := errVariant.Text
-		assert.Contains(t, text, "external-cli run failed",
-			"T-56(d) (§13.8.4 parent completion row, MAJ-003): the completion route must carry the failure cause, not drop it")
+		assert.NotContains(t, text, "external-cli run failed",
+			"T-56(d) (§13.8.4 rule 3): the \"external-cli run failed: \" prefix never reaches the parent completion message — the typed cause replaces it (today the real route carries the prefix via the curated turn error)")
 		assert.NotContains(t, text, "cannot be used multiple times",
 			"T-56(d): raw stderr text reached the parent completion message")
+		assert.Contains(t, text, "external_cli_invalid_args",
+			"T-56(d) (§13.8.4 parent completion row, MAJ-003): the failure text must carry the typed cause to the parent agent on this route — today it carries the untyped prefix form instead")
+		requireNoRawSegment(t, "T-56(d) (§13.8.4 parent completion row)", "the parent completion message", text)
 	})
 
 	t.Run("g_nonfatal_diagnostic_no_terminal_line_no_persisted_line", func(t *testing.T) {
@@ -925,13 +1180,9 @@ func TestCLIFailureAdaptersEndToEnd(t *testing.T) {
 		t.Setenv(config.EnvHome, home)
 		al, ts := newExternalTestLoop(t, "codex", "")
 
-		dir := filepath.Join(home, "sessions")
-		st, err := session.NewUnifiedStore(dir)
-		require.NoError(t, err)
-		meta, err := st.NewSession(session.SessionTypeChat, "", "ext-agent")
-		require.NoError(t, err)
+		st, sessionID := new1857ExternalStore(t, home)
 		ts.transcriptStore = st
-		ts.transcriptSessionID = meta.ID
+		ts.transcriptSessionID = sessionID
 
 		collector := &test1857ErrorEvents{}
 		al.SetEventSyncTap(collector.tap)
@@ -955,7 +1206,7 @@ func TestCLIFailureAdaptersEndToEnd(t *testing.T) {
 		res, runErr := runExternalCLISubTurn(context.Background(), al, ts, "task")
 		require.NoError(t, runErr, "T-56(g): the run must succeed — the diagnostic is nonfatal")
 		require.NoError(t, st.Close())
-		entries, err := st.ReadTranscript(meta.ID)
+		entries, err := st.ReadTranscript(sessionID)
 		require.NoError(t, err)
 
 		assert.NotContains(t, res.ForLLM, "malformed JSON",
