@@ -23,7 +23,7 @@ import type {
   SendOrigin,
   ServerFrame,
 } from '@/lib/api/generated/asyncapi-types'
-import { createSession, uploadFiles } from '@/lib/api'
+import { uploadFiles } from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
 import { generateId } from '@/lib/constants'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -37,10 +37,10 @@ import type { MediaAttachment } from '@/store/chat/types'
 import { isImageAttachment } from '@/components/chat/AttachmentCard'
 import { mediaRefURL } from '@/lib/library-attachment'
 import { registerOwningChatCapture } from '@/lib/owning-chat-capture'
+import { createForNewChat, resetNewChatCreations } from '@/lib/new-chat-creation'
 import {
   NO_CHAT_KEY,
   addUnsentItem,
-  aliasNewChat,
   canonical,
   clearNotStopped,
   currentAuthGeneration,
@@ -245,8 +245,6 @@ function keepInDraft(key: string, text: string, files: DraftFile[] = [], picks: 
 
 /** Submissions from one origin key go out in the order they were taken (BR-6). */
 const chains = new Map<string, Promise<void>>()
-/** One creation per logical chat (4.4.2). */
-const creationByKey = new Map<string, Promise<string | null>>()
 /** Handed-over messages by client_message_id, for refusals (4.8). */
 const sentMessages = new Map<string, { submission: Submission; files: DraftFile[] }>()
 
@@ -333,32 +331,8 @@ function eligible(sub: Submission): boolean {
   return !sub.navigationSensitive || openDraftKey() === keyOfOrigin(sub.origin)
 }
 
-async function createForKey(sub: Submission): Promise<string | null> {
-  const key = sub.origin.new_chat_key ?? ''
-  const existing = creationByKey.get(key)
-  if (existing) return existing
-  const creation = (async () => {
-    try {
-      const created = await createSession({
-        agent_id: sub.agentId ?? '',
-        ...(sub.workspaceId ? { workspace_id: sub.workspaceId } : {}),
-        new_chat_key: key,
-      })
-      if (sub.authGeneration !== currentAuthGeneration()) return null
-      aliasNewChat(key, created.id)
-      // Activation rule (4.4.1): S becomes the open chat only if K still is.
-      if (useSessionStore.getState().newChatKey === key && useSessionStore.getState().activeSessionId === null) {
-        useSessionStore.getState().setActiveSession(created.id, sub.agentId ?? undefined)
-      }
-      return created.id
-    } catch (err) {
-      logDiagnostic('boundSendCreateFailed', { message: err instanceof Error ? err.message : String(err) })
-      creationByKey.delete(key)
-      return null
-    }
-  })()
-  creationByKey.set(key, creation)
-  return creation
+function createForKey(sub: Submission): Promise<string | null> {
+  return createForNewChat(sub.origin.new_chat_key ?? '', sub.agentId ?? '', sub.workspaceId)
 }
 
 function uploadReason(err: unknown): string {
@@ -701,7 +675,7 @@ onSignOut(() => {
 /** Sign-out (4.4.3): pending creations and handed-over messages are forgotten. */
 export function resetBoundSendForSignOut(): void {
   chains.clear()
-  creationByKey.clear()
+  resetNewChatCreations()
   sentMessages.clear()
 }
 
