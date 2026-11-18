@@ -399,10 +399,16 @@ func (e *agentRequestLimitError) Error() string {
 // waitMinutes is the {minutes} fact: the limiter's wait rounded up to whole
 // minutes, or 0 (absent) when the limiter reported no wait.
 func (e *agentRequestLimitError) waitMinutes() int {
-	if e.retryAfterSeconds <= 0 {
+	return waitMinutesFor(e.retryAfterSeconds)
+}
+
+// waitMinutesFor rounds a limiter wait in seconds up to whole minutes; a wait
+// of zero or less is 0 (absent fact).
+func waitMinutesFor(retryAfterSeconds float64) int {
+	if retryAfterSeconds <= 0 {
 		return 0
 	}
-	return int(math.Ceil(e.retryAfterSeconds / 60))
+	return int(math.Ceil(retryAfterSeconds / 60))
 }
 
 // toolDedupError is the FR-066 detector's verdict on an assembled tool list
@@ -491,22 +497,33 @@ func translateKnownCauseError(err error) (LLMError, bool) {
 	}
 	var limitErr *agentRequestLimitError
 	if errors.As(err, &limitErr) {
-		chat, neutral := renderMessageVoices(CodeAgentRequestLimit,
-			defaultUserMessage(CodeAgentRequestLimit), neutralCatalogueSentence(CodeAgentRequestLimit, ""),
-			messageSlotFacts{minutes: limitErr.waitMinutes()})
-		return LLMError{
-			Code:           CodeAgentRequestLimit,
-			Message:        chat,
-			NeutralMessage: neutral,
-			Retryable:      isRetryable(CodeAgentRequestLimit),
-			Detail:         buildDetail(nil, err.Error()),
-		}, true
+		llm := agentRequestLimitLLMError(limitErr.waitMinutes())
+		llm.Detail = buildDetail(nil, err.Error())
+		return llm, true
 	}
 	var dupErr *toolDedupError
 	if errors.As(err, &dupErr) {
 		return toolDedupLLMErrorFor(dupErr.mcpInvolved), true
 	}
 	return LLMError{}, false
+}
+
+// agentRequestLimitLLMError is agent_request_limit's LLMError in both voices
+// (W11 and its neutral twin) with {minutes} filled from the limiter's wait in
+// whole minutes. The live reply (translateKnownCauseError) and the saved
+// record (loop.go::recordRateLimitDenial) both build it here, so live and
+// saved say the same. A wait of 0 is an absent fact: both voices fall back to
+// the generic sentence together (renderMessageVoices).
+func agentRequestLimitLLMError(minutes int) LLMError {
+	chat, neutral := renderMessageVoices(CodeAgentRequestLimit,
+		defaultUserMessage(CodeAgentRequestLimit), neutralCatalogueSentence(CodeAgentRequestLimit, ""),
+		messageSlotFacts{minutes: minutes})
+	return LLMError{
+		Code:           CodeAgentRequestLimit,
+		Message:        chat,
+		NeutralMessage: neutral,
+		Retryable:      isRetryable(CodeAgentRequestLimit),
+	}
 }
 
 // toolDedupLLMErrorFor is tool_assembly_duplicate's LLMError in both voices:

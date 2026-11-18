@@ -853,6 +853,15 @@ func (al *AgentLoop) recordRateLimitDenial(
 	}
 	rlMsg := fmt.Sprintf("rate limit: %s (%s)", payload.PolicyRule, retryHint)
 	code := rateLimitDenialCode(payload)
+	if code == CodeAgentRequestLimit {
+		// #1857 X1 fix A (§13.8.5 B3): the saved record holds W11 with
+		// {minutes} filled, the same sentence the live reply shows — not
+		// the internal text, which the D-A guard would replace with the
+		// generic sentence.
+		ts.appendClassifiedError(EventKindRateLimit.String(), "rate_limit",
+			agentRequestLimitLLMError(waitMinutesFor(payload.RetryAfterSeconds)))
+		return
+	}
 	ts.appendClassifiedError(EventKindRateLimit.String(), "rate_limit", LLMError{
 		Code:      code,
 		Message:   rlMsg,
