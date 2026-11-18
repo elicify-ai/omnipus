@@ -590,8 +590,15 @@ func TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed(t *testing.T) {
 		t.Errorf("run result = %q must NOT contain the raw driver stderr (ADR-051 sanitization)",
 			run.Result)
 	}
-	if !strings.Contains(run.Result, "external-cli run failed") {
-		t.Errorf("run result = %q, want it to mention the generic failure wrapper", run.Result)
+	// #1857 §13.8.4 rule 3: run history carries C4's complete safe cause
+	// sentence, without the internal CLI wrapper (fixture: Claude Code).
+	expectedCause := strings.ReplaceAll(UserMessageForCode(CodeExternalCLIFailed), "{cli}", "Claude Code")
+	if !strings.Contains(run.Result, expectedCause) {
+		t.Errorf("run result = %q, want the complete external_cli_failed catalogue sentence %q",
+			run.Result, expectedCause)
+	}
+	if strings.Contains(run.Result, "external-cli run failed") {
+		t.Errorf("run result = %q must NOT contain the internal CLI failure wrapper (§13.8.4 rule 3)", run.Result)
 	}
 
 	final, err := al.taskStore.Get(tk.ID)

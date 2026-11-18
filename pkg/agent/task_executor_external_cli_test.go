@@ -188,8 +188,15 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 		t.Errorf("task Result = %q must NOT contain the raw driver stderr (ADR-051 sanitization)",
 			final.Result)
 	}
-	if !strings.Contains(final.Result, "external-cli run failed") {
-		t.Errorf("task Result = %q, want it to mention the generic failure wrapper",
+	// #1857 §13.8.4 rule 3: the task carries C4's catalogue sentence,
+	// never the internal CLI wrapper. The fixture configures Claude Code.
+	expectedCause := strings.ReplaceAll(UserMessageForCode(CodeExternalCLIFailed), "{cli}", "Claude Code")
+	if !strings.Contains(final.Result, expectedCause) {
+		t.Errorf("task Result = %q, want the complete external_cli_failed catalogue sentence %q",
+			final.Result, expectedCause)
+	}
+	if strings.Contains(final.Result, "external-cli run failed") {
+		t.Errorf("task Result = %q must NOT contain the internal CLI failure wrapper (§13.8.4 rule 3)",
 			final.Result)
 	}
 	if final.AttemptCount != 1 {

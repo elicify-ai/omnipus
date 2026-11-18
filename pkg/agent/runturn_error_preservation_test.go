@@ -247,12 +247,12 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 		"EventKindRateLimit with RateLimitPayload must still be emitted (no regression on the WS frame side)")
 
 	// ---------------------------------------------------------------------
-	// Assert (D): the transcript entry carries the typed LLMError code
-	// (BLOCK 2 / FR-008). The persisted ErrorCode must equal "rate_limited"
-	// so the replay path can render the same banner.
+	// Assert (D): #1857 §13.8.5 B3 / T-55 requires the own limiter's
+	// config-attributed agent_request_limit code in the saved chat record,
+	// never the provider's rate_limited code (BLOCK 2 / FR-008 replay).
 	// ---------------------------------------------------------------------
-	assert.Equal(t, "rate_limited", rlEntry.ErrorCode,
-		"transcript entry must carry the typed rate_limited code")
+	assert.Equal(t, "agent_request_limit", rlEntry.ErrorCode,
+		"B3/T-55: transcript must identify the agent's configured request limit, not a provider rate limit")
 	assert.True(t, rlEntry.ErrorRetryable,
 		"rate-limit entries must mark ErrorRetryable=true")
 	expectedRateLimitCopy := fmt.Sprintf("rate limit: %s (retry after %.0fs)",
