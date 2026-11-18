@@ -32,7 +32,29 @@ properties:
     description: >
       The session to redirect: the chat the command was typed in, root chat or
       helper. Its own current turn is stopped and the chat continues with the
-      instruction; no other session is affected.
+      instruction; no other session is affected. This is the frame's target;
+      compare `origin`.
+  origin:
+    $ref: ./SendOrigin.yaml
+    description: >
+      #1428 step 2. The chat the command was typed in (see SendOrigin). The
+      gateway checks it against the target before any side effect and refuses
+      a mismatch with send_refused; nothing is redirected. A consistency
+      control, not authorization. Optional on the wire: on a browser
+      connection (WebSocket upgrade with an Origin header, not the CLI token)
+      a redirect without the origin key is refused with an out-of-date reply;
+      on other connections it is accepted as before. `origin: null` is
+      malformed, not absent.
+  client_frame_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      #1428 step 2. Client-generated correlation id for this command. When it
+      is present and valid, the server answers with exactly one
+      command_received (accepted and handed to the redirect handler) or one
+      send_refused carrying it. Optional for compatibility with older clients;
+      a current client sets it on every redirect it sends.
   instruction:
     type: string
     minLength: 1

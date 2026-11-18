@@ -428,10 +428,15 @@ type BrowserWebRTCStateFrame struct {
 	Type      string  `json:"type"`
 }
 
-// CancelFrame — Client → server cancel in-progress turn.
+// CancelFrame — Client → server cancel in-progress turn. A cancel that finds nothing to stop is answered with cancel_idle (#1841) to the sending connection only.
 type CancelFrame struct {
-	Scope     *string `json:"scope,omitempty"`
-	SessionId string  `json:"session_id"`
+	// #1428 step 2. Correlation id; when present and valid the server answers with exactly one command_received (before any cancel_stage or cancel_idle for it) or one send_refused carrying it. Optional for older clients; a current client sets it on every cancel.
+	ClientFrameId *string `json:"client_frame_id,omitempty"`
+	// #1428 step 2. The chat the Stop or typed /cancel came from. Checked against the target before any side effect; a mismatch is refused with send_refused and nothing is cancelled. A consistency control, not authorization. A browser connection must send it (an origin-less cancel there gets an out-of-date reply); other connections may omit it. `origin: null` is malformed, not absent.
+	Origin *SendOrigin `json:"origin,omitempty"`
+	Scope  *string     `json:"scope,omitempty"`
+	// The frame's target; compare origin.
+	SessionId string `json:"session_id"`
 	// #1534 (founder 2026-10-31, Q3 = A). What this client's screen showed of the answer being stopped when Stop was pressed. The server saves the stopped answer only up to this point. Sent only by a first Stop that froze a streaming answer. Absent: the server cuts at the moment it receives Stop.
 	Shown *struct {
 		CodePoints int64   `json:"code_points"`
@@ -439,6 +444,13 @@ type CancelFrame struct {
 		TurnId     *string `json:"turn_id,omitempty"`
 	} `json:"shown,omitempty"`
 	Type string `json:"type"`
+}
+
+// CancelIdleFrame — Server → client. #1841. Answer to an accepted cancel that found nothing to stop in its scope (no turn running or latched, no session stopped, no background shell killed, no queued input discarded). Sent only to the requesting connection, unsequenced; never journaled or replayed, and it changes no cancel_stage frame. After command_received when the cancel carried client_frame_id. Never for a refused cancel or an armed pre-registration latch. Mirrors contracts/components/schemas/CancelIdleFrame.yaml.
+type CancelIdleFrame struct {
+	// The cancel's target, in which nothing was running.
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
@@ -496,6 +508,14 @@ type ChatPresenceFrame struct {
 	Type      string `json:"type"`
 	// True while this tab is watching that chat; false when it stops.
 	Watching bool `json:"watching"`
+}
+
+// CommandReceivedFrame — Server → client. #1428 step 2. Receipt for a redirect or cancel carrying a valid client_frame_id: it passed the origin check and was handed to its handler (not "applied"). Enqueued before the handler acts. Sender only, unsequenced. Never for refused frames or a missing/malformed client_frame_id. Mirrors contracts/components/schemas/CommandReceivedFrame.yaml.
+type CommandReceivedFrame struct {
+	ClientFrameId string `json:"client_frame_id"`
+	Command       string `json:"command"`
+	SessionId     string `json:"session_id"`
+	Type          string `json:"type"`
 }
 
 // CommandSegmentInfo — ADR-092 D3/D4. One segment of the bash command awaiting approval, split with the same splitter and program resolution the bash tool itself uses (splitShellSegments / shellCommandHeadDetailed, through the tool's own D3 evaluator), listed inside ToolApprovalRequiredFrame.segments. Every segment of the command is listed, in order, because one decision approves or denies the whole call; the server records no per-segment grant for a chained command. On Windows the whole command is one segment (FR-041).
@@ -976,11 +996,14 @@ type MessageFrame struct {
 	Media []string `json:"media,omitempty"`
 	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a retired client kickoff marker that the server refuses (see the property below).
 	Metadata map[string]any `json:"metadata,omitempty"`
+	// #1428 step 2. The chat the message was written in. Checked against the target before any side effect; a mismatch is refused with send_refused. A consistency control, not authorization. A browser connection must send it (an origin-less message there gets an out-of-date reply); other connections may omit it. `origin: null` is malformed, not absent. Part of the first-message retry identity.
+	Origin *SendOrigin `json:"origin,omitempty"`
 	// Optional request to a peer agent: the {workspace_id, agent_id} pair the user @-addressed from the chat named by session_id. Valid only together with session_id; the server refuses it otherwise. Mirrors contracts/components/schemas/AgentAddress.yaml.
 	Recipient *struct {
 		AgentId     string `json:"agent_id"`
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"recipient,omitempty"`
+	// The frame's target (absent = create a new chat); compare origin.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 	// Spec omnipus-system-agent K8 (FR-012). Optional target data naming the workflow (W1 / W18) and the target workspace the user picked on a screen. Data only, never an instruction.
@@ -1151,9 +1174,14 @@ type RateLimitFrame struct {
 
 // RedirectFrame — Client → server redirect one chat, root or helper: stop its own in-progress turn, then continue that same chat with the instruction as its next user message (D2/D9; founder rule 2026-10-06). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.
 type RedirectFrame struct {
-	Instruction string `json:"instruction"`
-	SessionId   string `json:"session_id"`
-	Type        string `json:"type"`
+	// #1428 step 2. Correlation id; when present and valid the server answers with exactly one command_received or one send_refused carrying it. Optional for older clients; a current client sets it on every redirect.
+	ClientFrameId *string `json:"client_frame_id,omitempty"`
+	Instruction   string  `json:"instruction"`
+	// #1428 step 2. The chat the command was typed in. Checked against the target before any side effect; a mismatch is refused with send_refused and nothing is redirected. A consistency control, not authorization. A browser connection must send it (an origin-less redirect there gets an out-of-date reply); other connections may omit it. `origin: null` is malformed, not absent.
+	Origin *SendOrigin `json:"origin,omitempty"`
+	// The frame's target; compare origin.
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path when the server encounters a TranscriptEntry with Type=system AND Status="error" — produced by appendErrorTranscript for rate-limit denials (kind=rate_limit) and provider LLM call failures (kind=error). The SPA uses this frame's `kind` discriminant to render the rate-limit-denial component or the generic error component instead of falling back to the default "assistant" bubble render path. Without this typed frame, replay treats the entry as a normal assistant message (the previous bug — empty Role falls back to "assistant" via ReplayMessageFrame.Role, so the SPA renders rate-limit text as a regular assistant message).
@@ -1403,6 +1431,38 @@ type SecretRequestResolvedFrame struct {
 	// The terminal state the request reached.
 	State string `json:"state"`
 	Type  string `json:"type"`
+}
+
+// SendOrigin — #1428 step 2 (option C). The chat the input was written in, carried next to the frame's target (session_id) on message, redirect and cancel. A consistency control, not proof of authorship and not an access check. Exactly the field of its kind must be present (session_id for chat, new_chat_key for new_chat); the server enforces that rule (no oneOf) and answers any other shape with send_refused origin_malformed. The new_chat_key is saved in the created chat's metadata and never returned. Mirrors contracts/components/schemas/SendOrigin.yaml.
+type SendOrigin struct {
+	Kind string `json:"kind"`
+	// Browser-minted key of the "no chat yet" screen (kind new_chat only).
+	NewChatKey *string `json:"new_chat_key,omitempty"`
+	// The existing chat the input was written in (kind chat only).
+	SessionId *string `json:"session_id,omitempty"`
+}
+
+// SendRefusedFrame — Server → client. #1428 step 2. A message, redirect or cancel that carried an origin key was refused before any side effect. Sent only to the sending connection, unsequenced. Echo rule: each optional field is echoed only when the refused frame carried a valid value for it. Never an error frame; never ends a turn. Mirrors contracts/components/schemas/SendRefusedFrame.yaml.
+type SendRefusedFrame struct {
+	// The refused redirect's or cancel's correlation id, echoed only when valid.
+	ClientFrameId *string `json:"client_frame_id,omitempty"`
+	// The refused message's correlation id, echoed only when valid.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	// The refused frame's origin, echoed only when it passed validation.
+	Origin *SendOrigin `json:"origin,omitempty"`
+	// wrong_chat — origin and target name different chats. origin_malformed — origin present (including null) but invalid. origin_unverified — the target's saved new-chat key could not be read. frame_malformed — origin valid, but a present target or correlation field broke its bounds.
+	Reason       string `json:"reason"`
+	RefusedFrame string `json:"refused_frame"`
+	// The refused frame's target, echoed only when valid.
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+}
+
+// ServerCapabilitiesFrame — Server → client. #1428 step 2. First frame on every connection, enqueued right after authentication succeeds and before any other frame; not sent when authentication fails. Obligation: a server that sends send_origin true MUST answer every accepted redirect and cancel carrying a valid client_frame_id with exactly one command_received, and every refused one with send_refused. Mirrors contracts/components/schemas/ServerCapabilitiesFrame.yaml.
+type ServerCapabilitiesFrame struct {
+	// The server checks origin on message, redirect and cancel and accepts new_chat_key on creation.
+	SendOrigin bool   `json:"send_origin"`
+	Type       string `json:"type"`
 }
 
 // SessionHistoryContext — Bounded public dependencies of selected history groups (chat history paging D4/D10). Resolve only selected/current relevant spans and duplicate identities, never all session spans. Each optional lifecycle payload is the actual recorded generated public frame, not a fabricated start, running state or success. No competing cancellation/disposition value, private archive mark or copied content store.
@@ -2041,4 +2101,8 @@ const (
 	WsFrameTypeRoomMeta                 WsFrameType = "room_meta"
 	WsFrameTypeOpenInLibrary            WsFrameType = "open_in_library"
 	WsFrameTypeChatPresence             WsFrameType = "chat_presence"
+	WsFrameTypeCancelIdle               WsFrameType = "cancel_idle"
+	WsFrameTypeSendRefused              WsFrameType = "send_refused"
+	WsFrameTypeServerCapabilities       WsFrameType = "server_capabilities"
+	WsFrameTypeCommandReceived          WsFrameType = "command_received"
 )
