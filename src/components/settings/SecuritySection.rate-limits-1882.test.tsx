@@ -282,6 +282,19 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
       alertsBefore,
       '#1882: no error alert may be on the screen before the save is attempted',
     ).toEqual([])
+    // T3: the rate-limit save status is the AutoSaveIndicator that the section
+    // renders right after its title block. It is found by its place, not by
+    // text, and kept as one DOM node so the same node is checked after the save.
+    const titleBlock = screen.getByRole('heading', { name: 'Security & Policy' }).parentElement
+    const indicatorBefore = titleBlock?.nextElementSibling ?? null
+    expect(
+      indicatorBefore,
+      '#1882: the rate-limit save-status indicator (the region after the section title) must be mounted before the save',
+    ).not.toBeNull()
+    expect(
+      indicatorBefore?.getAttribute('role'),
+      '#1882: the save-status indicator must not already be an alert before the save',
+    ).not.toBe('alert')
     await editAndSave(llm, tool)
 
     expect(
@@ -296,15 +309,21 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
       `#1882: every recorded rate-limit PUT must have been answered 400 by the stub, saw ${JSON.stringify(rateLimitPuts().map((r) => r.status))}`,
     ).toEqual(rateLimitPuts().map(() => 400))
 
-    // AutoSaveIndicator's error branch is the screen's existing error state
-    // (role="alert"). The alert is tied to this failed save by sequence (none
-    // before, one after the 400), not by its wording: the real client shows
-    // its own sentence, not the stub's.
-    const alertsAfter = screen.queryAllByRole('alert').map((el) => (el.textContent ?? '').trim())
+    // AutoSaveIndicator error branch is the existing error state
+    // (role="alert"). The alert must be the rate-limit save own indicator:
+    // the same node that was mounted before the save, now in its error state
+    // with a message. Its wording is not pinned (the real client shows its
+    // own sentence, not the stub one); an alert elsewhere on the screen does not count.
+    const indicatorAfter = screen.getByRole('heading', { name: 'Security & Policy' }).parentElement?.nextElementSibling ?? null
+    expect(indicatorAfter, '#1882: the rate-limit save-status indicator must still be mounted after the save').toBe(indicatorBefore)
     expect(
-      alertsAfter.filter((text) => text !== '').length,
-      `#1882: a failed rate-limit save must show the existing error alert with a message, saw alerts ${JSON.stringify(alertsAfter)}`,
-    ).toBeGreaterThanOrEqual(1)
+      indicatorAfter?.getAttribute('role'),
+      `#1882: a failed rate-limit save must put the rate-limit save-status indicator in its error state (role="alert"); it showed "${indicatorAfter?.textContent ?? ''}", other alerts: ${JSON.stringify(screen.queryAllByRole('alert').map((el) => (el.textContent ?? '').trim()))}`,
+    ).toBe('alert')
+    expect(
+      (indicatorAfter?.textContent ?? '').trim(),
+      '#1882: the rate-limit error indicator must carry a message',
+    ).not.toBe('')
 
     // T1-5 b: the success state must be absent after the failed save. The
     // AutoSaveIndicator's saved text starts with "Saved"; no element on the
