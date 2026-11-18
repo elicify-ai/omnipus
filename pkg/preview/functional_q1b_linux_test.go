@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,6 +115,7 @@ func q1bAssertOpenControl(t *testing.T, facts q1bFacts) {
 	for _, doc := range facts.Docs {
 		require.Empty(t, doc.Err, "open-mode %s failed: %s", doc.Ext, doc.Err)
 		require.True(t, doc.PDF, "open-mode %s produced no PDF", doc.Ext)
+		require.NotEmpty(t, doc.PDFText, "open-mode %s independent PDF text is empty; a failed parse must not pass", doc.Ext)
 		for _, source := range []string{q1bLatin, q1bHan, q1bKana} {
 			require.Contains(t, doc.GatewayText, source, "open-mode control %s lost source text %q; fixture or image is wrong", doc.Ext, source)
 		}
@@ -133,6 +135,8 @@ func q1bAssertConfinedMatches(t *testing.T, openFacts, confined q1bFacts) {
 		assert.True(t, doc.PDF, "Q1 B: confined boot must still produce a PDF for %s", doc.Ext)
 		q1bAssertSockets(t, "Q1 B confined "+doc.Ext, confined.UID, doc.Sockets)
 		assert.Equal(t, open.GatewayText, doc.GatewayText, "Q1 B: confined extracted text must equal open mode for %s (missing /usr/share/fonts read garbles CJK)", doc.Ext)
+		require.NotEmpty(t, open.PDFText, "Q1 B open %s independent PDF text is empty; two failed parses must not compare equal", open.Ext)
+		require.NotEmpty(t, doc.PDFText, "Q1 B confined %s independent PDF text is empty; two failed parses must not compare equal", doc.Ext)
 		assert.Equal(t, open.PDFText, doc.PDFText, "Q1 B: confined PDF text must equal open mode for %s", doc.Ext)
 		assert.Equal(t, open.Fonts, doc.Fonts, "Q1 B: confined embedded fonts must equal open mode for %s (missing font reads substitute %s)", doc.Ext, q1bFontLatin)
 		for _, source := range []string{q1bLatin, q1bHan, q1bKana} {
@@ -282,7 +286,16 @@ func q1bOneCall(t *testing.T, svc *Service, root string, doc functionalDocument)
 	if result != nil && bytes.HasPrefix(result.PDF, []byte("%PDF-")) {
 		fact.PDF = true
 		fact.GatewayText = q1bJoinPages(result.Text)
-		fact.PDFText = q1bIndependentPDFText(result.PDF)
+		pdfText, pdfErr := q1bIndependentPDFText(result.PDF)
+		if pdfErr != nil {
+			msg := "independent PDF text: " + pdfErr.Error()
+			if fact.Err != "" {
+				fact.Err += "; " + msg
+			} else {
+				fact.Err = msg
+			}
+		}
+		fact.PDFText = pdfText
 		fact.Fonts = q1bPDFFonts(result.PDF)
 	}
 	fact.Sockets = q1bCollectSockets(obs)
@@ -298,21 +311,25 @@ func q1bJoinPages(pages []protocol.TextPage) string {
 	return strings.Join(strings.Fields(text.String()), " ")
 }
 
-func q1bIndependentPDFText(data []byte) string {
+func q1bIndependentPDFText(data []byte) (string, error) {
 	reader, err := pdfreader.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var text strings.Builder
 	for page := 1; page <= reader.NumPage(); page++ {
 		plain, readErr := reader.Page(page).GetPlainText(nil)
 		if readErr != nil {
-			return ""
+			return "", readErr
 		}
 		text.WriteString(plain)
 		text.WriteByte(' ')
 	}
-	return strings.Join(strings.Fields(text.String()), " ")
+	joined := strings.Join(strings.Fields(text.String()), " ")
+	if joined == "" {
+		return "", errors.New("independent PDF text is empty")
+	}
+	return joined, nil
 }
 
 func q1bCollectSockets(obs functionalObservation) []q1bSocketFact {

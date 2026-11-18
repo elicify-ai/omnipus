@@ -41,12 +41,33 @@ func TestOfficeVariantC_T118_TurnAndToolPoliciesDoNotGainConverterAdditions(t *t
 	}
 }
 
+// q1bConverterOnlyReads are the founder Q1 B paths (OFFICE-Q1B-READS.md,
+// "The three extra reads"). They belong to the Linux confined boot set for
+// the converter child, not to a per-turn or tool policy. Hardcoded from that
+// decision, not read from confinedBootExtraReads.
+var q1bConverterOnlyReads = []string{
+	"/etc/passwd",
+	"/usr/share/fonts",
+	"/usr/local/share/fonts",
+}
+
+func officePathIsQ1BConverterRead(path string) bool {
+	clean := filepath.Clean(path)
+	for _, banned := range q1bConverterOnlyReads {
+		if clean == banned || strings.HasPrefix(clean, banned+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func officeAssertNoConverterAdditions(t *testing.T, policy SandboxPolicy) {
 	t.Helper()
 	for _, rules := range [][]PathRule{policy.FilesystemRules, policy.AllowedBranches} {
 		for _, rule := range rules {
 			assert.Zero(t, rule.Access & ^(AccessRead|AccessWrite|AccessExecute), "T-118: new converter-only access leaked into turn/tool rule %s", rule.Path)
-			assert.NotEqual(t, "/etc/passwd", rule.Path, "T-118: converter-only explicit account-list grant leaked into turn/tool policy")
+			assert.False(t, officePathIsQ1BConverterRead(rule.Path),
+				"T-118: Q1 B converter-only read %s leaked into turn/tool policy; none of /etc/passwd, /usr/share/fonts, /usr/local/share/fonts (or a path under them) is allowed", rule.Path)
 		}
 	}
 }
