@@ -57,7 +57,7 @@ var (
 	soMaskSeq       = regexp.MustCompile(`"seq":\d+`)
 	soMaskSessionID = regexp.MustCompile(`session_[0-9A-Za-z]{10,}`)
 	soMaskUUID      = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
-	soMaskOutdated  = regexp.MustCompile(`outdated-[0-9A-Za-z]{12}`)
+	soMaskOutdated  = regexp.MustCompile(`outdated-[0-9A-Za-z_-]{12}`)
 )
 
 func soNormalize(raw []byte) string {
@@ -238,7 +238,28 @@ func TestCheckSendOriginValidationModes(t *testing.T) {
 	mediaTrue := soUploadMediaRefAPI(t, sTrue.al, sTrue.home, "sv12-media-ws")
 	mediaFalse := soUploadMediaRefAPI(t, sFalse.al, sFalse.home, "sv12-media-ws")
 
-	rows := []soRowFrames{
+	rows := append(soOriginShapeRows(), soMalformedFieldRows()...)
+	rows = append(rows, soOldTabRows()...)
+
+	for i, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			framesTrue, _, _ := soRunRow(t, sTrue, row, i)
+			framesFalse, _, _ := soRunRow(t, sFalse, row, i)
+			if !row.bytes {
+				return
+			}
+			require.Equal(t, soJoinFrames(framesTrue), soJoinFrames(framesFalse),
+				"SV-12: the replies must be byte-identical across validate_inbound modes "+
+					"(masked volatile values only); true-mode: %v false-mode: %v",
+				soTypes(framesTrue), soTypes(framesFalse))
+		})
+	}
+
+	soValidationPositiveControls(t, sTrue, sFalse, mediaTrue, mediaFalse)
+}
+
+func soOriginShapeRows() []soRowFrames {
+	return []soRowFrames{
 		{
 			// M-1: origin null. Both content variants (§4.3.2).
 			name: "M-1-null-origin",
@@ -284,6 +305,11 @@ func TestCheckSendOriginValidationModes(t *testing.T) {
 			},
 			bytes: true,
 		},
+	}
+}
+
+func soMalformedFieldRows() []soRowFrames {
+	return []soRowFrames{
 		{
 			// M-3 + M-4: valid matching origin and target, malformed
 			// correlation id (number / "" / 129 chars / null). Required by
@@ -337,7 +363,7 @@ func TestCheckSendOriginValidationModes(t *testing.T) {
 			// no redirect/cancel effect, no transcript write.
 			name: "M-6-bad-command-id",
 			build: func(sid string) [][]byte {
-				frames := [][]byte{}
+				frames := make([][]byte, 0, 6) // three id shapes × redirect/cancel
 				for _, id := range []string{`5`, `null`, soValidJSON("")} {
 					frames = append(frames, soRawRedirect(soValidJSON(sid), soOriginChat(sid), id))
 					frames = append(frames, soRawCancel(soValidJSON(sid), soOriginChat(sid), id))
@@ -378,6 +404,11 @@ func TestCheckSendOriginValidationModes(t *testing.T) {
 			},
 			bytes: true,
 		},
+	}
+}
+
+func soOldTabRows() []soRowFrames {
+	return []soRowFrames{
 		{
 			// M-8: origin absent, browser, valid target, numeric id — the
 			// old-tab "message, valid target, no valid id" row of 4.3.4.
@@ -490,22 +521,9 @@ func TestCheckSendOriginValidationModes(t *testing.T) {
 			bytes: true,
 		},
 	}
+}
 
-	for i, row := range rows {
-		row := row
-		t.Run(row.name, func(t *testing.T) {
-			framesTrue, _, _ := soRunRow(t, sTrue, row, i)
-			framesFalse, _, _ := soRunRow(t, sFalse, row, i)
-			if !row.bytes {
-				return
-			}
-			require.Equal(t, soJoinFrames(framesTrue), soJoinFrames(framesFalse),
-				"SV-12: the replies must be byte-identical across validate_inbound modes "+
-					"(masked volatile values only); true-mode: %v false-mode: %v",
-				soTypes(framesTrue), soTypes(framesFalse))
-		})
-	}
-
+func soValidationPositiveControls(t *testing.T, sTrue, sFalse *sendOriginSrv, mediaTrue, mediaFalse string) {
 	// ---- Positive controls (SV-12: accepted identically in both modes) ----
 	// M-11: origin absent, non-browser, valid target, valid id. Content
 	// "hello" AND the empty-content variant whose validity comes from one

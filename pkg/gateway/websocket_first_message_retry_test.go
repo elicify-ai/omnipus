@@ -297,6 +297,13 @@ func TestFirstUserMessage_RetrySameIDDifferentOriginConflicts(t *testing.T) {
 	retryConn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = retryConn.Close() })
 	sendWSAuthFrameDevMode(t, retryConn)
+	// Spec r9 S-11/§4.3.6/§4.10: capabilities is FIRST on every new
+	// connection, including retries. Assert it, then finish admission before
+	// observing the retry's own reply; do not mistake capability for conflict.
+	frameType, capabilityRaw := readFirstApplicationFrame(t, retryConn)
+	require.Equal(t, "server_capabilities", frameType)
+	requireServerCapabilitiesFirst(t, capabilityRaw, "SV-11b retry connection")
+	drainAdmissionOneShot(t, retryConn)
 	retry := generated.MessageFrame{
 		Type:            "message",
 		AgentId:         strPtr("mia"),
@@ -308,30 +315,21 @@ func TestFirstUserMessage_RetrySameIDDifferentOriginConflicts(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, retryConn.WriteMessage(websocket.TextMessage, retryRaw))
 
-	// The next application frame must be the conflict error, not a
-	// session_started carrying a session (recovered or minted). Discard the
-	// connection's own session_state frames (F-aa: today's first frame after
-	// auth) so the assertion names the actual reply.
-	retryConn.SetReadDeadline(time.Now().Add(10 * time.Second)) // test-only read deadline; timing not correctness
-	var reply replayFrameDecoder
-	for {
-		_, rawFrame, readErr := retryConn.ReadMessage()
-		require.NoError(t, readErr, "the different-origin retry must be answered")
-		var probe replayFrameDecoder
-		require.NoError(t, json.Unmarshal(rawFrame, &probe))
-		if probe.Type == "session_state" {
-			continue // the connection's own state frame, not the retry's reply
-		}
-		reply = probe
-		break
-	}
+	// Admission is settled: the very next frame must now be the existing
+	// conflict, not a recovered/minted session or another capability frame.
+	require.NoError(t, retryConn.SetReadDeadline(time.Now().Add(10*time.Second)))
+	_, rawFrame, readErr := retryConn.ReadMessage()
+	require.NoError(t, readErr, "the different-origin retry must be answered")
+	var reply generated.ErrorFrame
+	require.NoError(t, json.Unmarshal(rawFrame, &reply))
 	require.Equal(t, "error", reply.Type,
 		"S-6 violated: the same id + same body + different origin retry was answered with %q "+
 			"(message=%q), want the existing conflict error — the digest ignored the origin (F-p)",
 		reply.Type, reply.Message)
 	require.Contains(t, reply.Message, "client_message_id conflict",
 		"the conflict reply must be the existing dedupe conflict reply")
-	require.Equal(t, clientID, reply.ID,
+	require.NotNil(t, reply.ClientMessageId, "C-4/ErrorFrame: the conflict reply must carry client_message_id")
+	require.Equal(t, clientID, *reply.ClientMessageId,
 		"the conflict reply must correlate the retried client_message_id")
 
 	// No second chat may exist for the retry, and the original admission

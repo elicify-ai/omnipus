@@ -86,10 +86,8 @@ func failSV9bMetaRead(t *testing.T, store *session.UnifiedStore, sessionID strin
 
 func requireSV9bToken(t *testing.T, conn *websocket.Conn, sessionID, content string) {
 	t.Helper()
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(lifecycleEW)))
 	for {
-		_, raw, err := conn.ReadMessage()
-		require.NoError(t, err, "SV-9b: the unrelated turn must keep streaming: %s", content)
+		raw := soReadNext(t, conn, lifecycleEW)
 		var peek wsTypeOnly
 		require.NoError(t, json.Unmarshal(raw, &peek))
 		require.NotEqual(t, "done", peek.Type, "SV-9b: unrelated turn must not end at refusal")
@@ -109,7 +107,7 @@ func testSV9bMetaReadError(t *testing.T) {
 	t.Cleanup(provider.shutdown)
 	conn := s.dialBrowserConn(t)
 	drainAdmissionOneShot(t, conn)
-	unrelated := s.mintChat(t, conn, soKeyA, "SV9b unrelated streaming turn")
+	unrelated := s.mintLiveChat(t, conn, soKeyA, "SV9b unrelated streaming turn")
 	requireSV9bToken(t, conn, unrelated, "SV9b before refusal")
 	turnID, _, _, active := s.al.ActiveForegroundTurnInfo(unrelated)
 	require.True(t, active, "instrument: unrelated foreground turn is genuinely live")

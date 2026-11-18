@@ -52,7 +52,7 @@ func TestSendOriginRegressions(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		sid := s.mintChat(t, conn, soRowKey("sv16-ask", 1), "sv16 ask setup")
 		soSend(t, conn, generated.AskUserAnswerFrame{
-			Type: "ask_user_answer", SessionId: sid, CardId: "sv16-no-such-card", Cancel: boolPtr(true),
+			Type: "ask_user_answer", SessionId: sid, CardId: "sv16-no-such-card", Cancel: soBoolPtr(true),
 		})
 		frames := soWindow(t, conn, soRefusalWindow)
 		soNoSendRefused(t, frames, "ask_user_answer")

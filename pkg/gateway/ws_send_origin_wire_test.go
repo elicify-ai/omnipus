@@ -19,10 +19,10 @@ func soMalformedOriginFrames(sid string) []struct {
 	name string
 	raw  []byte
 } {
-	var frames []struct {
+	frames := make([]struct {
 		name string
 		raw  []byte
-	}
+	}, 0, 6) // the six P1a equivalence classes below
 	for _, row := range []struct{ name, origin string }{
 		{"null origin", `null`},
 		{"unknown kind", `{"kind":"room","session_id":"` + sid + `"}`},
@@ -63,8 +63,8 @@ func TestSendOriginRawFramesOnWire(t *testing.T) {
 					return
 				}
 				defer conn.Close()
-				if err := conn.SetReadDeadline(time.Now().Add(lifecycleEW)); err != nil {
-					received <- capture{err: err}
+				if deadlineErr := conn.SetReadDeadline(time.Now().Add(lifecycleEW)); deadlineErr != nil {
+					received <- capture{err: deadlineErr}
 					return
 				}
 				messageType, raw, err := conn.ReadMessage()

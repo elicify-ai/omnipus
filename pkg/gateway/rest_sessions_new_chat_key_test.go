@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -80,8 +79,11 @@ func assertSessionMetaCarriesKey(t *testing.T, api *restAPI, sessionID, wantKey,
 // that chat is accepted (the borrow-control of SV-9 must refuse a DIFFERENT
 // key — SV-9 is the unit table's row in ws_send_origin_test.go).
 func TestNewChatKey_SV8_RESTCreatePersistsKey(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
+	// SV-8 needs one ready install for both creators. newTestRestAPI has no
+	// configured auth and no WS dev-mode bypass; a REST-only success there
+	// does not make its unauthenticated WebSocket ready for a follow-up.
+	s := newSendOriginSrv(t, &restMockProvider{})
+	api := &restAPI{agentLoop: s.al, homePath: s.home}
 
 	body := `{"agent_id": "mia", "workspace_id": "", "new_chat_key": "` + newChatKeyRestKey + `"}`
 	w := createSessionWithKey(t, api, body)
@@ -96,6 +98,11 @@ func TestNewChatKey_SV8_RESTCreatePersistsKey(t *testing.T) {
 	// §4.3.3 Proof, cold-open leg: the key is on disk, in the identity group.
 	assertSessionMetaCarriesKey(t, api, created.ID, newChatKeyRestKey, "SV-8 cold open")
 
+	// SV-8 requires the same unrelated-identity-update proof as SV-6.
+	title := "REST keyed chat renamed"
+	require.NoError(t, api.agentLoop.GetSessionStore().SetMeta(created.ID, session.MetaPatch{Title: &title}))
+	assertSessionMetaCarriesKey(t, api, created.ID, newChatKeyRestKey, "SV-8 cold open after unrelated identity update")
+
 	// C-6: the generated Session wire shape never carries the key.
 	getW := httptest.NewRecorder()
 	getR := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+created.ID, nil)
@@ -109,29 +116,46 @@ func TestNewChatKey_SV8_RESTCreatePersistsKey(t *testing.T) {
 	// is accepted once the chat exists (GREEN: metaKey(S) == K1; today the
 	// origin is ignored and the message is accepted anyway — this leg is the
 	// paired positive control and must keep passing).
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(msgBus.Close)
-	handler := newWSHandler(msgBus, api.agentLoop, "")
-	t.Cleanup(handler.Wait)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-	sendWSAuthFrameDevMode(t, conn)
+	conn := s.dialBrowserConn(t)
+	drainAdmissionOneShot(t, conn) // exact ready/authenticated transport, same REST store
 
 	originSessionID := newChatKeyRestKey
 	followUp := generated.MessageFrame{
-		Type:      "message",
-		AgentId:   strPtr("mia"),
-		SessionId: &created.ID,
-		Origin:    &generated.SendOrigin{Kind: "new_chat", NewChatKey: &originSessionID},
-		Content:   "follow-up for the keyed chat",
+		Type:            "message",
+		AgentId:         strPtr("mia"),
+		SessionId:       &created.ID,
+		Origin:          &generated.SendOrigin{Kind: "new_chat", NewChatKey: &originSessionID},
+		ClientMessageId: strPtr("sv8-keyed-followup"),
+		Content:         "follow-up for the keyed chat",
 	}
 	raw, err := json.Marshal(followUp)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
-	msg := awaitInboundMessage(t, msgBus, "SV-8 control: the keyed-chat follow-up must be accepted")
-	require.Equal(t, "follow-up for the keyed chat", msg.Content)
+	frames := soWindow(t, conn, lifecycleEW, "done")
+	require.Contains(t, soTypes(frames), "done", "SV-8 control: the keyed-chat follow-up must start and finish a real turn")
+	require.NotContains(t, soTypes(frames), "send_refused", "SV-8: the matching saved key must be accepted")
+	var received []generated.MessageStatusFrame
+	var echoes []generated.UserMessageFrame
+	for _, frame := range frames {
+		switch frame.Type {
+		case "message_status":
+			var status generated.MessageStatusFrame
+			require.NoError(t, json.Unmarshal(frame.Raw, &status))
+			if status.State == "received" {
+				received = append(received, status)
+			}
+		case "user_message":
+			var echo generated.UserMessageFrame
+			require.NoError(t, json.Unmarshal(frame.Raw, &echo))
+			echoes = append(echoes, echo)
+		}
+	}
+	require.Len(t, received, 1, "SV-8: exactly one received for this input")
+	require.Equal(t, "sv8-keyed-followup", received[0].ClientMessageId)
+	require.Equal(t, created.ID, received[0].SessionId)
+	require.Len(t, echoes, 1, "SV-8: the exact accepted user input must reach the real chat")
+	require.Equal(t, "follow-up for the keyed chat", echoes[0].Content)
+	require.Equal(t, created.ID, echoes[0].SessionId)
 }
 
 // TestNewChatKey_SV6_FirstMessageMintPersistsKey covers SV-6 (F2 A): the WS

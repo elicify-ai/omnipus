@@ -2,8 +2,9 @@ package gateway
 
 // ws_send_origin_handler_test.go — RED (#1428 step 2 option C, qa-lead): the
 // handler-level scenarios SV-1..SV-5, SV-13, SV-17, SV-17b, SV-18 and the
-// refusal-snapshot family SV-19 (a)-(d), (g), (h) + control + the cleanup
+// refusal-snapshot family SV-19 (a)-(h), (j), (k) + control + the cleanup
 // postcondition, on the REAL WS wire with the shared sendOriginSrv harness.
+// SV-19's helpers live in ws_send_origin_snapshot_test.go; SV-19i is in pkg/agent.
 //
 // SPEC SOURCES (expected values derive from these, never from the
 // implementation): §6.1 SV-1..SV-5, SV-13, SV-17, SV-17b, SV-18, SV-19;
@@ -11,14 +12,11 @@ package gateway
 // §4.3.1. Contract commit 32802e2a6: SendRefusedFrame, CommandReceivedFrame,
 // ErrorFrame.
 //
-// RED STATE: no origin pre-check and no receipts exist (F-h as-is), so every
-// refusal/receipt assertion fails naming the frames that arrived instead.
-// SV-19's decisive-ordering legs (e)/(f) need the R4/R5 test hook the spec
-// itself defines as a GREEN-side deliverable ("same pattern as
-// attachAfterBindHook"); (j)/(k) need the builder-forced-nil and
-// connection-closing seams — written as loud BLOCKED failures, never skips.
-// The control (an accepted cancel gets no snapshot) passes today BY DESIGN
-// and is a guard.
+// Original RED: pre-check, receipts and ordering seams were absent. Fix round 4
+// wires the delivered R3/R4 hooks, nil builder and real closing-queue failure;
+// no BLOCKED leg is skipped or deleted. The accepted-cancel control remains a
+// guard. Saved failing runs establish the fixture repairs; implementation
+// mutation and product GREEN remain the independent CHECK instance's duties.
 
 import (
 	"encoding/json"
@@ -27,7 +25,6 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -71,34 +68,41 @@ func soLastSessionState(t *testing.T, frames []soFrame) map[string]any {
 
 // soHolding reads the connection's holding flag under qmu — the SV-19
 // cleanup postcondition oracle (a queuedFrames()==0 read is NOT accepted).
-func soHolding(t *testing.T, s *sendOriginSrv) bool {
+func soHolding(t *testing.T, s *sendOriginSrv, conn *websocket.Conn) bool {
 	t.Helper()
-	s.handler.mu.Lock()
-	var found *wsConn
-	for _, wc := range s.handler.sessions {
-		found = wc // the fixture has exactly one live browser conn at a time
-	}
-	s.handler.mu.Unlock()
-	require.NotNil(t, found, "cleanup probe: the connection must still be registered")
+	found := soServerConn(t, s, conn)
 	found.qmu.Lock()
 	defer found.qmu.Unlock()
 	return found.holding
 }
 
-// soLiveFrameDelivered publishes one live frame to the bound chat from a
-// SECOND connection and proves it reached this conn's outbound queue (not
-// held): the user_message echo arrives in the reply window.
+// soLiveFrameDelivered injects one uniquely identifiable live user-message
+// frame at the real hub input (SV-19 cleanup), then reads it on the socket.
+// No second turn/binding/map entry can stand in for this connection's queue.
 func soLiveFrameDelivered(t *testing.T, s *sendOriginSrv, conn *websocket.Conn, chatID, phase string) {
 	t.Helper()
-	other := s.dialBrowserConn(t)
-	drainAdmissionOneShot(t, other)
-	soSend(t, other, soMessage(&chatID, soChatOrigin(chatID), "so-live-"+phase, "live frame for "+phase))
+	wc := soRequireBound(t, s, conn, chatID)
+	require.False(t, soHolding(t, s, conn), "%s: holding must be false under qmu after refusal handling", phase)
+	marker := "live frame for " + phase
+	raw, err := json.Marshal(generated.UserMessageFrame{Type: "user_message", SessionId: chatID, Content: marker, Id: "so-live-" + phase})
+	require.NoError(t, err)
+	s.handler.hubs.getOrCreate(chatID).publish(raw)
 	frames := soWindow(t, conn, soRequesterWindow)
-	require.Contains(t, soTypes(frames), "user_message",
-		"%s: a live frame published through the bound chat must be DELIVERED to the connection's "+
-			"outbound queue, never left held (window: %v)", phase, soTypes(frames))
-	require.False(t, soHolding(t, s),
-		"%s: cleanup postcondition violated: holding is true under qmu after the refusal handling returned", phase)
+	var observed []generated.UserMessageFrame
+	for _, frame := range frames {
+		if frame.Type == "user_message" {
+			var echo generated.UserMessageFrame
+			require.NoError(t, json.Unmarshal(frame.Raw, &echo))
+			if echo.Id == "so-live-"+phase {
+				observed = append(observed, echo)
+			}
+		}
+	}
+	require.Len(t, observed, 1, "%s: the exact live hub frame must be delivered, never left held (window: %v)", phase, soTypes(frames))
+	require.Equal(t, marker, observed[0].Content)
+	require.Equal(t, chatID, observed[0].SessionId)
+	require.True(t, s.handler.connBoundToSession(wc, chatID), "%s: binding must remain unchanged", phase)
+	require.False(t, soHolding(t, s, conn), "%s: cleanup must not leave holding set", phase)
 }
 
 // TestSendOriginHandler_SV1_MismatchRefused_NoSideEffects is SV-1: browser
@@ -106,9 +110,17 @@ func soLiveFrameDelivered(t *testing.T, s *sendOriginSrv, conn *websocket.Conn, 
 // echoes and zero side effects. Control: origin B is accepted.
 func TestSendOriginHandler_SV1_MismatchRefused_NoSideEffects(t *testing.T) {
 	s := newSendOriginSrv(t, &restMockProvider{})
+	mintConn := s.dialBrowserConn(t)
+	drainAdmissionOneShot(t, mintConn)
+	b := s.mintChat(t, mintConn, soKeyB, "SV-1 mint")
+	// SV-1 explicitly starts unbound (MU-13 must catch an early adopt).
 	conn := s.dialBrowserConn(t)
 	drainAdmissionOneShot(t, conn)
-	b := s.mintChat(t, conn, soKeyB, "SV-1 mint")
+	wc := soServerConn(t, s, conn)
+	s.handler.mu.Lock()
+	initialBinding := wc.boundHub
+	s.handler.mu.Unlock()
+	require.Nil(t, initialBinding, "SV-1 SETUP: requester has no hub binding")
 	before := s.transcriptLen(t, b)
 
 	soSend(t, conn, soMessage(&b, soChatOrigin(soKeyA[len(soKeyA)-4:]), "so-sv1-m1", "borrowed chat origin"))
@@ -123,6 +135,10 @@ func TestSendOriginHandler_SV1_MismatchRefused_NoSideEffects(t *testing.T) {
 	require.Equal(t, 0, s.transcriptLen(t, b)-before, "SV-1: B's transcript unchanged")
 	require.NotContains(t, soTypes(frames), "message_status", "SV-1: no message_status for the refusal")
 	require.NotContains(t, soTypes(frames), "user_message", "SV-1: no echo for the refusal")
+	s.handler.mu.Lock()
+	afterBinding := wc.boundHub
+	s.handler.mu.Unlock()
+	require.Nil(t, afterBinding, "SV-1/MU-13: refused input must not adopt the target's hub")
 
 	// Control (performs the action): origin B on the same connection.
 	soSend(t, conn, soMessage(&b, soChatOrigin(b), "so-sv1-ctrl", "matching origin control"))
@@ -156,12 +172,7 @@ func TestSendOriginHandler_SV2_RedirectRefused_ThenControlledReceipt(t *testing.
 	soSend(t, conn, generated.RedirectFrame{Type: "redirect", SessionId: b, Instruction: "sv2 matching instruction",
 		Origin: soChatOrigin(b), ClientFrameId: strPtr("so-r2")})
 	frames = soWindow(t, conn, soRequesterWindow)
-	idxReceipt := -1
-	for i, f := range frames {
-		if f.Type == "command_received" && idxReceipt < 0 {
-			idxReceipt = i
-		}
-	}
+	idxReceipt := indexOf(soTypes(frames), "command_received")
 	require.Greater(t, idxReceipt, -1, "SV-2 control: the accepted redirect must get command_received (window: %v)", soTypes(frames))
 	var receipt generated.CommandReceivedFrame
 	require.NoError(t, json.Unmarshal(frames[idxReceipt].Raw, &receipt))
@@ -215,7 +226,8 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		frames := soWindow(t, conn, soRequesterWindow)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab message must get the OUTDATED error (window: %v)", soTypes(frames))
-		require.Equal(t, b, errs[0].SessionId, "SV-4: the error must carry session_id")
+		require.NotNil(t, errs[0].SessionId, "old-tab refusal must name its exact target")
+		require.Equal(t, b, *errs[0].SessionId, "SV-4: the error must carry session_id")
 		require.NotNil(t, errs[0].ClientMessageId)
 		require.Equal(t, "so-sv4-m1", *errs[0].ClientMessageId)
 		require.Equal(t, soOutdated, errs[0].Message, "SV-4: the OUTDATED text is exact")
@@ -248,7 +260,8 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		frames := soWindow(t, conn, soRequesterWindow)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab redirect must get its error (window: %v)", soTypes(frames))
-		require.Equal(t, b, errs[0].SessionId)
+		require.NotNil(t, errs[0].SessionId, "old-tab refusal must name its exact target")
+		require.Equal(t, b, *errs[0].SessionId)
 		require.NotNil(t, errs[0].ClientMessageId)
 		require.True(t, strings.HasPrefix(*errs[0].ClientMessageId, soOldTabIDPrefix) && len(*errs[0].ClientMessageId) == len(soOldTabIDPrefix)+12,
 			"SV-4: the redirect's synthetic id is \"outdated-\" + 12 chars, got %q", *errs[0].ClientMessageId)
@@ -307,9 +320,7 @@ func TestSendOriginHandler_SV13_RecipientMismatchRefusedBeforeRequest(t *testing
 	s := newSendOriginSrv(t, &restMockProvider{})
 	conn := s.dialBrowserConn(t)
 	drainAdmissionOneShot(t, conn)
-	b := s.mintChat(t, conn, soKeyB, "SV-13 mint")
-	mintDone := readFrameOfType(t, conn, "done", lifecycleEW)
-	require.Equal(t, b, mintDone.SessionID, "SV-13 SETUP: drain the mint turn before observing the recipient frame")
+	b := s.mintChat(t, conn, soKeyB, "SV-13 mint") // drains its own done before the refusal interval
 	before := s.transcriptLen(t, b)
 	raw := []byte(`{"type":"message","agent_id":"mia","session_id":"` + b +
 		`","client_message_id":"so-sv13","origin":{"kind":"chat","session_id":"so-other-chat"},"content":"x",` +
@@ -422,171 +433,17 @@ func TestSendOriginHandler_SV18_ReceiptObligationTable(t *testing.T) {
 // + control + cleanup; (e)/(f)/(j)/(k) are the seam legs the GREEN hook must
 // unlock.
 func TestSendOriginHandler_SV19_RefusalSnapshot(t *testing.T) {
-	t.Run("a old-tab cancel snapshot keeps active_turn", func(t *testing.T) {
-		iron := newIronProvider(30 * time.Second)
-		s := newSendOriginSrv(t, iron)
-		t.Cleanup(iron.Shutdown) // after the server's cleanups (LIFO)
-		conn := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		b := s.mintChat(t, conn, soKeyB, "SV-19a live turn")
-		waitForLifecycleState(t, s.lc, b, session.LifecycleRunning)
-		_, _, _, ok := s.al.ActiveForegroundTurnInfo(b)
-		require.True(t, ok, "SETUP: the live turn must be observable")
-
-		soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b})
-		frames := soWindow(t, conn, soRequesterWindow)
-		errs := soErrors(t, frames)
-		require.NotEmpty(t, errs, "SV-19a: the refusal error must come first (window: %v)", soTypes(frames))
-		require.Equal(t, soOutdatedStop, errs[0].Message)
-		require.Equal(t, b, errs[0].SessionId)
-		st := soLastSessionState(t, frames)
-		require.NotNil(t, st, "SV-19a: the snapshot must follow the refusal")
-		require.NotNil(t, st["active_turn"], "SV-19a: the snapshot must carry active_turn (the turn is live)")
-		require.Contains(t, soTypes(frames), "cancel_stage",
-			"SV-19a: the turn keeps running on the server (its stage frames still flow)")
-		soLiveFrameDelivered(t, s, conn, b, "SV-19a cleanup")
-	})
-
-	t.Run("b old-tab redirect text", func(t *testing.T) {
-		iron := newIronProvider(30 * time.Second)
-		s := newSendOriginSrv(t, iron)
-		t.Cleanup(iron.Shutdown)
-		conn := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		b := s.mintChat(t, conn, soKeyB, "SV-19b live turn")
-		waitForLifecycleState(t, s.lc, b, session.LifecycleRunning)
-		soSend(t, conn, generated.RedirectFrame{Type: "redirect", SessionId: b, Instruction: "old tab redirect"})
-		frames := soWindow(t, conn, soRequesterWindow)
-		errs := soErrors(t, frames)
-		require.NotEmpty(t, errs, "SV-19b: the refusal error must come first (window: %v)", soTypes(frames))
-		require.Equal(t, soOutdatedRedir, errs[0].Message, "SV-19b: OUTDATED_REDIRECT is exact")
-		st := soLastSessionState(t, frames)
-		require.NotNil(t, st, "SV-19b: the snapshot must follow")
-		require.NotNil(t, st["active_turn"], "SV-19b: active_turn present while the turn runs")
-		soLiveFrameDelivered(t, s, conn, b, "SV-19b cleanup")
-	})
-
-	t.Run("c new-tab wrong_chat cancel gets receipt then snapshot", func(t *testing.T) {
-		iron := newIronProvider(30 * time.Second)
-		s := newSendOriginSrv(t, iron)
-		t.Cleanup(iron.Shutdown)
-		conn := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		b := s.mintChat(t, conn, soKeyB, "SV-19c live turn")
-		a := s.mintChat(t, conn, soKeyA, "SV-19c other")
-		waitForLifecycleState(t, s.lc, b, session.LifecycleRunning)
-
-		soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b, Origin: soChatOrigin(a), ClientFrameId: strPtr("so-19c1")})
-		frames := soWindow(t, conn, soRequesterWindow)
-		refused := soRefusedFrame(t, frames, "SV-19c")
-		require.Equal(t, "so-19c1", *refused.ClientFrameId)
-		st := soLastSessionState(t, frames)
-		require.NotNil(t, st, "SV-19c: the snapshot must follow the send_refused")
-		require.NotNil(t, st["active_turn"], "SV-19c: active_turn present")
-		soLiveFrameDelivered(t, s, conn, b, "SV-19c cleanup")
-	})
-
-	t.Run("d finished turn snapshot without active_turn", func(t *testing.T) {
-		s := newSendOriginSrv(t, &restMockProvider{})
-		conn := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		b := s.mintChat(t, conn, soKeyB, "SV-19d finished turn")
-		readFrameOfType(t, conn, "done", lifecycleEW)
-		waitForLifecycleState(t, s.lc, b, session.LifecycleCompleted)
-		a := s.mintChat(t, conn, soKeyA, "SV-19d other")
-
-		soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b, Origin: soChatOrigin(a), ClientFrameId: strPtr("so-19d1")})
-		frames := soWindow(t, conn, soRequesterWindow)
-		soRefusedFrame(t, frames, "SV-19d")
-		st := soLastSessionState(t, frames)
-		require.NotNil(t, st, "SV-19d: the snapshot must follow")
-		require.Nil(t, st["active_turn"], "SV-19d: a finished turn must NOT appear as active_turn (snapshot: %v)", st)
-		soLiveFrameDelivered(t, s, conn, b, "SV-19d cleanup")
-	})
-
-	t.Run("g unbound connection gets refusal only", func(t *testing.T) {
-		iron := newIronProvider(30 * time.Second)
-		s := newSendOriginSrv(t, iron)
-		t.Cleanup(iron.Shutdown)
-		// B exists with a live turn, but THIS connection never binds to it.
-		binder := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, binder)
-		b := s.mintChat(t, binder, soKeyB, "SV-19g live turn on another conn")
-		waitForLifecycleState(t, s.lc, b, session.LifecycleRunning)
-
-		conn := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b, Origin: soChatOrigin(b), ClientFrameId: strPtr("so-19g1")})
-		frames := soWindow(t, conn, soRequesterWindow)
-		refused := soRefusedFrame(t, frames, "SV-19g")
-		require.Equal(t, "so-19g1", *refused.ClientFrameId)
-		for _, f := range frames {
-			require.NotEqual(t, "session_state", f.Type,
-				"SV-19g: an unbound connection gets NO snapshot (got %s)", f.Raw)
-		}
-	})
-
-	t.Run("h P1a and P1b get zero snapshots", func(t *testing.T) {
-		iron := newIronProvider(30 * time.Second)
-		s := newSendOriginSrv(t, iron)
-		t.Cleanup(iron.Shutdown)
-		conn := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		b := s.mintChat(t, conn, soKeyB, "SV-19h live turn")
-		waitForLifecycleState(t, s.lc, b, session.LifecycleRunning)
-
-		// P1a: null origin on cancel.
-		soSend(t, conn, []byte(`{"type":"cancel","session_id":"`+b+`","client_frame_id":"so-19h1","origin":null}`))
-		frames := soWindow(t, conn, soRequesterWindow)
-		refused := soRefusedFrame(t, frames, "SV-19h P1a")
-		require.Equal(t, "origin_malformed", refused.Reason)
-		for _, f := range frames {
-			require.NotEqual(t, "session_state", f.Type, "SV-19h: P1a gets zero session_state (got %s)", f.Raw)
-		}
-		// P1b: valid origin, malformed correlation id.
-		soSend(t, conn, []byte(`{"type":"cancel","session_id":"`+b+`","client_frame_id":"","origin":{"kind":"chat","session_id":"so-other"}}`))
-		frames = soWindow(t, conn, soRequesterWindow)
-		refused = soRefusedFrame(t, frames, "SV-19h P1b")
-		require.Equal(t, "frame_malformed", refused.Reason)
-		for _, f := range frames {
-			require.NotEqual(t, "session_state", f.Type, "SV-19h: P1b gets zero session_state (got %s)", f.Raw)
-		}
-		require.False(t, soHolding(t, s), "SV-19h cleanup: holding must be false under qmu")
-	})
-
-	t.Run("control accepted cancel gets no snapshot from this rule", func(t *testing.T) {
-		s := newSendOriginSrv(t, &restMockProvider{})
-		conn := s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		b := s.mintChat(t, conn, soKeyB, "SV-19 control idle chat")
-		soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b, Origin: soChatOrigin(b), ClientFrameId: strPtr("so-19ctl")})
-		frames := soWindow(t, conn, soRequesterWindow)
-		for _, f := range frames {
-			require.NotEqual(t, "session_state", f.Type,
-				"SV-19 control: an ACCEPTED cancel gets no refusal snapshot (got %s)", f.Raw)
-		}
-	})
-
-	t.Run("e decisive ordering hook after R4", func(t *testing.T) {
-		t.Fatal("BLOCKED: the R4/R5 decisive-ordering hook (same pattern as attachAfterBindHook) is not " +
-			"implemented — required by SV-19e (spec 4.3.4 boundary R1-R6); the recorded byte-sequence " +
-			"fixture for T-OLD-4b is a GREEN-side deliverable")
-	})
-
-	t.Run("f decisive ordering hook before R3", func(t *testing.T) {
-		t.Fatal("BLOCKED: the R4/R5 decisive-ordering hook (same pattern as attachAfterBindHook) is not " +
-			"implemented — required by SV-19f (spec 4.3.4 boundary R1-R6)")
-	})
-
-	t.Run("j builder forced nil", func(t *testing.T) {
-		t.Fatal("BLOCKED: the sessionStateBytes builder-forcing seam (R4 returns nil) is not implemented — " +
-			"required by SV-19j's cleanup proof")
-	})
-
-	t.Run("k direct failing on closing connection", func(t *testing.T) {
-		t.Fatal("BLOCKED: the R5 direct-failure seam (connection closing mid-snapshot) is not drivable " +
-			"without the R4/R5 hook — required by SV-19k's cleanup proof")
-	})
+	t.Run("a old-tab cancel snapshot keeps active_turn", soSV19A)
+	t.Run("b old-tab redirect text", soSV19B)
+	t.Run("c new-tab wrong_chat cancel gets receipt then snapshot", soSV19C)
+	t.Run("d finished turn snapshot without active_turn", soSV19D)
+	t.Run("g unbound connection gets refusal only", soSV19G)
+	t.Run("h P1a and P1b get zero snapshots", soSV19H)
+	t.Run("control accepted cancel gets no snapshot from this rule", soSV19Control)
+	t.Run("e decisive ordering hook after R4", soSV19E)
+	t.Run("f decisive ordering hook before R3", soSV19F)
+	t.Run("j builder forced nil", soSV19J)
+	t.Run("k direct failing on closing connection", soSV19K)
 }
 
 func indexOf(haystack []string, needle string) int {

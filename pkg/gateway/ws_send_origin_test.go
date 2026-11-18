@@ -226,28 +226,31 @@ type soFrame struct {
 	Raw  []byte
 }
 
-// soWindow reads the connection's frames for a bounded window (or until one
-// of stopTypes arrives) and returns them in order.
+// soWindow observes a bounded interval without expiring the socket's read.
+// A single reader survives quiet intervals; Gorilla documents that a timed-out
+// socket read permanently corrupts all subsequent reads on that connection.
 func soWindow(t *testing.T, conn *websocket.Conn, window time.Duration, stopTypes ...string) []soFrame {
 	t.Helper()
-	deadline := time.Now().Add(window)
+	reader := soReaderFor(t, conn)
+	timer := time.NewTimer(window)
+	defer timer.Stop()
 	var out []soFrame
-	for time.Now().Before(deadline) {
-		require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Until(deadline))))
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
+	for {
+		select {
+		case result := <-reader.frames:
+			require.NoError(t, result.err, "observation reader must remain live")
+			var peek wsTypeOnly
+			require.NoError(t, json.Unmarshal(result.raw, &peek), "every frame must decode")
+			out = append(out, soFrame{Type: peek.Type, Raw: result.raw})
+			for _, stop := range stopTypes {
+				if peek.Type == stop {
+					return out
+				}
+			}
+		case <-timer.C:
 			return out
 		}
-		var peek wsTypeOnly
-		require.NoError(t, json.Unmarshal(raw, &peek), "every frame must decode")
-		out = append(out, soFrame{Type: peek.Type, Raw: raw})
-		for _, stop := range stopTypes {
-			if peek.Type == stop {
-				return out
-			}
-		}
 	}
-	return out
 }
 
 func soTypes(frames []soFrame) []string {
@@ -312,8 +315,6 @@ func TestCheckSendOrigin(t *testing.T) {
 		mintConn := s.dialBrowserConn(t)
 		drainAdmissionOneShot(t, mintConn)
 		b := s.mintChat(t, mintConn, soKeyB, "check-malformed mint")
-		readFrameOfType(t, mintConn, "done", lifecycleEW)
-		waitForLifecycleState(t, s.lc, b, session.LifecycleCompleted)
 		// Spec r9 §4.3.2 P1a/M-1/M-2: present-but-malformed origin gets
 		// send_refused{origin_malformed}, never the §4.3.4 old-tab error.
 		// The live wire control uses this same dataset and sender.
@@ -394,21 +395,24 @@ func TestCheckSendOrigin(t *testing.T) {
 		conn := s.dialCLIConn(t)
 		drainAdmissionOneShot(t, conn)
 		b := s.mintChat(t, conn, soKeyB, "P2 mint")
+		acceptedBefore := WSOriginLessAcceptedCount()
 		soSend(t, conn, soMessage(&b, nil, "so-p2-1", "legacy origin-less send"))
 		frames := soWindow(t, conn, 4*time.Second, "message_status")
 		require.Contains(t, soTypes(frames), "message_status",
 			"P2 acceptance row (origin absent, non-browser): processed as today; window: %v", soTypes(frames))
+		require.Equal(t, acceptedBefore+1, WSOriginLessAcceptedCount(), "SV-5/§4.3.8: accepted origin-less programmatic frame increments counter exactly once")
 	})
 }
 
-// mintChat creates a keyed chat through the production mint path on the
-// given connection and returns its id.
+// mintChat returns only after the setup turn's own done and lifecycle settle.
+// Refusal tests take their transcript baseline AFTER this boundary, never while
+// the mint can still append its assistant response. Live fixtures explicitly
+// use mintLiveChat instead (their provider is intentionally paused).
 func (s *sendOriginSrv) mintChat(t *testing.T, conn *websocket.Conn, key, content string) string {
 	t.Helper()
-	soSend(t, conn, soMessage(nil, soNewChatOrigin(key), "so-mint-"+key[len(key)-4:], content))
-	started := readFrameOfType(t, conn, "session_started", lifecycleEW)
-	require.NotEmpty(t, started.SessionID, "SETUP: the keyed mint must acknowledge")
-	return started.SessionID
+	sid := s.mintLiveChat(t, conn, key, content)
+	soRequireCompletedMint(t, s, conn, sid)
+	return sid
 }
 
 // transcriptLen counts the target chat's transcript entries (the
