@@ -282,18 +282,27 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
       alertsBefore,
       '#1882: no error alert may be on the screen before the save is attempted',
     ).toEqual([])
-    // T3: the rate-limit save status is the AutoSaveIndicator that the section
-    // renders right after its title block. It is found by its place, not by
-    // text, and kept as one DOM node so the same node is checked after the save.
-    const titleBlock = screen.getByRole('heading', { name: 'Security & Policy' }).parentElement
-    const indicatorBefore = titleBlock?.nextElementSibling ?? null
+    // T4: the rate-limit save status is found through the inputs own
+    // aria-describedby, never by position or text. Both inputs must point at
+    // the same node, and it is the same node checked after the save.
+    const describedByLlm = llm.getAttribute('aria-describedby')
+    const describedByTool = tool.getAttribute('aria-describedby')
+    expect(
+      describedByLlm,
+      '#1882: the "LLM calls / hour" input must have aria-describedby naming its save-status region',
+    ).toBeTruthy()
+    expect(
+      describedByTool,
+      '#1882: the "Tool calls / minute" input must have aria-describedby naming the same save-status region',
+    ).toBe(describedByLlm)
+    const indicatorBefore = document.getElementById(describedByLlm as string)
     expect(
       indicatorBefore,
-      '#1882: the rate-limit save-status indicator (the region after the section title) must be mounted before the save',
+      `#1882: the save-status region named by aria-describedby "${describedByLlm}" must be mounted before the save`,
     ).not.toBeNull()
     expect(
       indicatorBefore?.getAttribute('role'),
-      '#1882: the save-status indicator must not already be an alert before the save',
+      '#1882: the save-status region must not already be an alert before the save',
     ).not.toBe('alert')
     await editAndSave(llm, tool)
 
@@ -310,11 +319,11 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
     ).toEqual(rateLimitPuts().map(() => 400))
 
     // AutoSaveIndicator error branch is the existing error state
-    // (role="alert"). The alert must be the rate-limit save own indicator:
-    // the same node that was mounted before the save, now in its error state
+    // (role="alert"). The alert must be the rate-limit save own indicator
+    // (named by the inputs aria-describedby): the same node that was mounted before the save, now in its error state
     // with a message. Its wording is not pinned (the real client shows its
     // own sentence, not the stub one); an alert elsewhere on the screen does not count.
-    const indicatorAfter = screen.getByRole('heading', { name: 'Security & Policy' }).parentElement?.nextElementSibling ?? null
+    const indicatorAfter = document.getElementById(describedByLlm as string)
     expect(indicatorAfter, '#1882: the rate-limit save-status indicator must still be mounted after the save').toBe(indicatorBefore)
     expect(
       indicatorAfter?.getAttribute('role'),
