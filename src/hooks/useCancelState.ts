@@ -319,7 +319,7 @@ export function useCancelState(
   const cancelAllTreeScoped = useCallback((typed?: TypedCommand) => {
     disarmStopAll()
     stoppingStartedAt.current = Date.now()
-    if (cancelStream(undefined, 'tree', typed && { kind: 'cancel', ...typed }) === false) return
+    if ((typed ? cancelStream(undefined, 'tree', { kind: 'cancel', ...typed }) : cancelStream(undefined, 'tree')) === false) return
     setStopLabel('stopping')
   }, [cancelStream, disarmStopAll])
 
@@ -329,7 +329,7 @@ export function useCancelState(
   // socket; an undelivered press leaves the next press a first press (W2).
   const activateFirstPress = useCallback((showStopping: boolean, typed?: TypedCommand) => {
     stoppingStartedAt.current = Date.now()
-    if (cancelStream(undefined, undefined, typed && { kind: 'stop', ...typed }) === false) return
+    if ((typed ? cancelStream(undefined, undefined, { kind: 'stop', ...typed }) : cancelStream()) === false) return
     if (showStopping) setStopLabel('stopping')
     armStopAll()
   }, [cancelStream, armStopAll])
