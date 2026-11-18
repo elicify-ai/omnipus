@@ -554,7 +554,7 @@ func (ts *turnState) writeErrorTranscriptCore(
 		if allowAbandoned || trustedMessage {
 			llm.Message = message
 		} else {
-			llm.Message = defaultUserMessage(code)
+			llm.Message = persistedCatalogueMessage(code, message)
 		}
 	}
 	// Belt for the one uncoded producer that is unambiguous: an internal

@@ -86,6 +86,8 @@ var LLMErrorCodes = []string{
 	"tool_assembly_duplicate",
 	"transcript_save_failed",
 	"goal_state_unavailable",
+	"external_cli_not_found",
+	"external_cli_invalid_config",
 	"unknown",
 }
 
@@ -133,6 +135,8 @@ var LLMErrorUserMessages = map[string]string{
 	"tool_assembly_duplicate":        "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 	"transcript_save_failed":         "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 	"goal_state_unavailable":         "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
+	"external_cli_not_found":         "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
+	"external_cli_invalid_config":    "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
 	"unknown":                        "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
@@ -180,6 +184,8 @@ var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"tool_assembly_duplicate":        LLMErrorAttributionAmbiguous,
 	"transcript_save_failed":         LLMErrorAttributionAmbiguous,
 	"goal_state_unavailable":         LLMErrorAttributionAmbiguous,
+	"external_cli_not_found":         LLMErrorAttributionConfig,
+	"external_cli_invalid_config":    LLMErrorAttributionConfig,
 	"unknown":                        LLMErrorAttributionUnknown,
 }
 

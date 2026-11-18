@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -82,6 +82,8 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   tool_assembly_duplicate: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
   transcript_save_failed: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
   goal_state_unavailable: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
+  external_cli_not_found: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
+  external_cli_invalid_config: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
   unknown: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
@@ -128,6 +130,8 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   tool_assembly_duplicate: "ambiguous",
   transcript_save_failed: "ambiguous",
   goal_state_unavailable: "ambiguous",
+  external_cli_not_found: "config",
+  external_cli_invalid_config: "config",
   unknown: "unknown",
 }
 

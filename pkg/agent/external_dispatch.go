@@ -209,11 +209,14 @@ func runExternalCLISubTurn(
 
 	ed.agent = ed.childTS.agent
 	if ed.agent == nil || ed.agent.Subagents == nil || ed.agent.Subagents.Executor == nil {
-		return nil, fmt.Errorf("external-cli dispatch: missing executor config")
+		// #1857 B16-config: typed; the text is unchanged.
+		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, "", "",
+			fmt.Errorf("external-cli dispatch: missing executor config"))
 	}
 	cli := ed.agent.Subagents.Executor.CLI
 	if cli == "" {
-		return nil, fmt.Errorf("external-cli dispatch: executor.cli is empty (set claude-code, codex, or opencode)")
+		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, "", "",
+			fmt.Errorf("external-cli dispatch: executor.cli is empty (set claude-code, codex, or opencode)"))
 	}
 
 	ed.runID = ed.childTS.turnID
@@ -428,7 +431,14 @@ func runExternalCLISubTurn(
 	}
 	driver, driverErr := sess.driverForRun(cli, consent, resume)
 	if driverErr != nil {
-		return nil, fmt.Errorf("external-cli dispatch: %w", driverErr)
+		wrapped := fmt.Errorf("external-cli dispatch: %w", driverErr)
+		if errors.Is(driverErr, errExternalResumeUnavailable) {
+			// B16a (resume unavailable) is a separate class, not this round.
+			return nil, wrapped
+		}
+		// #1857 B16-config: the driver could not be built (selected by error
+		// identity, not call site — §13.8.5).
+		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, "", cli, wrapped)
 	}
 
 	return ed.startAndDrain(runCtx, driver, consent, cli, resolvedWorkDir, task, resume)
@@ -482,7 +492,9 @@ func (ed *runExternalCLISubTurnState) startAndDrain(
 	} else {
 		evCh, err = driver.Run(runCtx, runOpts)
 		if err != nil {
-			return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
+			// #1857 C7 / B17b: typed start failure; the text is unchanged.
+			return nil, classifyDriverStartError(cli,
+				fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err))
 		}
 	}
 

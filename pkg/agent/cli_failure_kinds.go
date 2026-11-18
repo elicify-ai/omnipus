@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
@@ -187,6 +188,11 @@ func classifyCLIFailure(message, structuredType string) cliFailure {
 	case strings.HasPrefix(message, "run exceeded timeout"):
 		// The driver's own run timeout: R-2's typed-exit pass-through (C10/B17a).
 		out.code = CodeTurnTimedOut
+	case strings.Contains(message, runner.ErrMaxTurnsRequired.Error()):
+		// B17b: Omnipus's own refusal of an unusable resolved turn cap
+		// (runner/parse.go::invalidMaxTurnsEvent, validateMaxTurns) — a
+		// config gap, never the CLI's own wording.
+		out.code = CodeExternalCLIInvalidConfig
 	case cliModelUnavailableTypes[structuredType]:
 		out.code = CodeExternalCLIModelUnavailable
 	case cliTurnCapPattern.MatchString(message):
@@ -319,9 +325,55 @@ func (e *toolDedupError) Error() string {
 	return fmt.Sprintf("tools[] dedup invariant violated: tool %q appears from sources %v", e.name, e.sources)
 }
 
+// externalCLIRefusalError is an external-CLI dispatch refused before the run
+// started, whose cause Omnipus itself knows (§13.8.5): C8 the program-path
+// refusal (external_cli_not_found), B16-config a missing executor config or a
+// driver that could not be built, B17b an unusable turn cap
+// (external_cli_invalid_config), C7 a start failure (external_cli_failed,
+// variant start). Error() and Unwrap() are the cause's, unchanged — the
+// refusal texts and errors.Is checks callers already rely on keep working —
+// while every user surface reads code and sentence (§13.8.4 rule 2).
+type externalCLIRefusalError struct {
+	code  LLMErrorCode
+	text  string
+	cause error
+}
+
+func (e *externalCLIRefusalError) Error() string { return e.cause.Error() }
+func (e *externalCLIRefusalError) Unwrap() error { return e.cause }
+
+// newExternalCLIRefusal builds the typed pre-run refusal: the catalogue
+// sentence (or its variant) with {cli} filled from the closed display-name
+// map. An unknown or empty CLI leaves the slot without a fact, so the
+// generic sentence is used (renderMessageSlots) — never a literal slot.
+func newExternalCLIRefusal(code LLMErrorCode, variant, cli string, cause error) *externalCLIRefusalError {
+	return &externalCLIRefusalError{
+		code:  code,
+		text:  renderMessageSlots(catalogueSentence(code, variant), messageSlotFacts{cli: CLIDisplayName(cli)}),
+		cause: cause,
+	}
+}
+
+// classifyDriverStartError types a driver Run (start) failure: an unusable
+// turn cap is the B17b config gap, anything else the C7 start failure.
+func classifyDriverStartError(cli string, err error) error {
+	if errors.Is(err, runner.ErrMaxTurnsRequired) {
+		return newExternalCLIRefusal(CodeExternalCLIInvalidConfig, "", cli, err)
+	}
+	return newExternalCLIRefusal(CodeExternalCLIFailed, cliVariantStart, cli, err)
+}
+
 // translateKnownCauseError maps a typed known-cause error to its LLMError, or
 // reports false when err carries none.
 func translateKnownCauseError(err error) (LLMError, bool) {
+	var refusalErr *externalCLIRefusalError
+	if errors.As(err, &refusalErr) {
+		return LLMError{
+			Code:      refusalErr.code,
+			Message:   refusalErr.text,
+			Retryable: isRetryable(refusalErr.code),
+		}, true
+	}
 	var cliErr *externalCLIRunError
 	if errors.As(err, &cliErr) {
 		return LLMError{
@@ -369,4 +421,48 @@ func toolDedupLLMError(err error) LLMError {
 		Message:   defaultUserMessage(CodeToolAssemblyDuplicate),
 		Retryable: isRetryable(CodeToolAssemblyDuplicate),
 	}
+}
+
+// persistedCatalogueMessage is the sentence an untrusted-stage error record
+// stores for an already-classified code. A code whose catalogue sentence has
+// no slots stores that sentence, as before. A slotted sentence (#1857) keeps
+// the caller's message only when it IS that sentence (or one of its
+// variants) with every slot filled, proven by matching the template, so no
+// other text can ride the record; otherwise the generic sentence is stored,
+// never a literal slot.
+func persistedCatalogueMessage(code LLMErrorCode, message string) string {
+	template := defaultUserMessage(code)
+	if !messageHasSlots(template) {
+		return template
+	}
+	candidates := []string{template}
+	for _, variant := range generated.LLMErrorMessageVariants[string(code)] {
+		candidates = append(candidates, variant)
+	}
+	for _, candidate := range candidates {
+		if renderedFromTemplate(message, candidate) {
+			return message
+		}
+	}
+	return defaultUserMessage(CodeUnknown)
+}
+
+// renderedFromTemplate reports whether text is template with each slot
+// replaced by a non-empty, brace-free value.
+func renderedFromTemplate(text, template string) bool {
+	if messageHasSlots(text) {
+		return false
+	}
+	var pattern strings.Builder
+	pattern.WriteString("^")
+	last := 0
+	for _, loc := range messageSlotPattern.FindAllStringIndex(template, -1) {
+		pattern.WriteString(regexp.QuoteMeta(template[last:loc[0]]))
+		pattern.WriteString(`[^{}]+`)
+		last = loc[1]
+	}
+	pattern.WriteString(regexp.QuoteMeta(template[last:]))
+	pattern.WriteString("$")
+	matched, err := regexp.MatchString(pattern.String(), text)
+	return err == nil && matched
 }

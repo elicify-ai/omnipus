@@ -254,6 +254,14 @@ x-user-messages:
     # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. no W row (B26/B22, manifests M-1857-B26/B22) — existing generic sentence.
     message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
     attribution: ambiguous
+  external_cli_not_found:
+    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give this code its own sentence (C8 program-path refusal).
+    message: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+    attribution: config
+  external_cli_invalid_config:
+    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give this code its own sentence (B16 config gap, B17b invalid turn cap).
+    message: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+    attribution: config
   unknown:
     message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
     attribution: unknown
@@ -304,6 +312,8 @@ properties:
       - tool_assembly_duplicate
       - transcript_save_failed
       - goal_state_unavailable
+      - external_cli_not_found
+      - external_cli_invalid_config
       - unknown
   message:
     type: string

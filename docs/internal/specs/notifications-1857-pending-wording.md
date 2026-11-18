@@ -23,6 +23,8 @@ the generic `unknown` sentence, never shown with a literal slot.
 
 ## Rows
 
+16 rows: 13 codes, 3 variants.
+
 | # | Code (variant) | Source | Form used | Sentence | Tag |
 |---|---|---|---|---|---|
 | 1 | `external_cli_invalid_args` | W1 | chat | I couldn't start {cli}: it rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting. | proposed, founder review pending |
@@ -39,13 +41,18 @@ the generic `unknown` sentence, never shown with a literal slot.
 | 12 | `tool_assembly_duplicate` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | proposed, founder review pending |
 | 13 | `transcript_save_failed` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | proposed, founder review pending |
 | 14 | `goal_state_unavailable` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | proposed, founder review pending |
+| 15 | `external_cli_not_found` (C8 program-path refusal) | W7 (reused) | chat | I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings. | proposed, founder review pending. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give these codes their own sentences. |
+| 16 | `external_cli_invalid_config` (B16 config gap, B17b invalid turn cap) | W7 (reused) | chat | I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings. | proposed, founder review pending. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give these codes their own sentences. |
 
-## Codes not added (blocked, reported to team-lead)
+## Codes added by chief ruling Q1 A (2026-11-18)
 
-| Code | Why it is not in the catalogue |
-|---|---|
-| `external_cli_not_found` | Attribution `config`, no W row. Rule D1 A gives it the generic `unknown` sentence, but the existing copy guard `TestUserMessages_OurFaultsDoNotSendUsersModelShopping` forbids "Retry" and "try a different model" on a config-attributed code. Needs a founder or chief decision (for example: reuse W7, which the spec calls the same remedy family). |
-| `external_cli_invalid_config` | Same conflict as above. RED test T-56(c) (`TestCLIFailureAdaptersEndToEnd/c_pre_run_start_refusal_correct_code`) stays red until it is decided. |
+`external_cli_not_found` and `external_cli_invalid_config` are attributed `config`, and neither has a W row. Under rule D1 A they would get the generic `unknown` sentence. The existing copy guard `TestUserMessages_OurFaultsDoNotSendUsersModelShopping` forbids that sentence ("Retry", "try a different model") on a config code, so the chief ruled Q1 A: both codes reuse W7 verbatim.
+
+Two cases still fall back to the generic sentence:
+- **No executor config.** The two B16 pre-checks ("missing executor config" and an empty `executor.cli`) refuse before any CLI is known, so `{cli}` has no fact.
+- **CLI not in the display-name map.** The same fallback applies to any CLI outside the closed map.
+
+The spec's "no-fact form drops the CLI clause" needs a sentence that does not exist yet.
 
 ## Open points for the founder review
 

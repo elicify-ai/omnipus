@@ -77,6 +77,13 @@ const (
 	CodeTranscriptSaveFailed LLMErrorCode = "transcript_save_failed"
 	// CodeGoalStateUnavailable: the goal state could not be read (B26).
 	CodeGoalStateUnavailable LLMErrorCode = "goal_state_unavailable"
+	// CodeExternalCLINotFound: the configured CLI program path is missing or
+	// fails its check, so the run was refused (C8).
+	CodeExternalCLINotFound LLMErrorCode = "external_cli_not_found"
+	// CodeExternalCLIInvalidConfig: the CLI worker's executor settings cannot
+	// be used — no executor config, no CLI, a driver that could not be built
+	// (B16-config) or an unusable turn cap (B17b).
+	CodeExternalCLIInvalidConfig LLMErrorCode = "external_cli_invalid_config"
 )
 
 const (
@@ -1266,7 +1273,11 @@ func (e *authoredRefusalError) RefusalText() string { return e.text }
 func turnErrorUserText(err error) string {
 	llm := TranslateTurnError(err)
 	var curated *curatedTurnError
-	if errors.As(err, &curated) && llm.Code == CodeUnknown {
+	if errors.As(err, &curated) && (llm.Code == CodeUnknown || errors.As(err, new(*externalCLIRefusalError))) {
+		// #1857 C8: a typed pre-run refusal that carries Omnipus's own
+		// curated refusal (the program-path check) keeps showing that text
+		// on task surfaces as written (r17 §3.6 step 5); its code still
+		// travels on the frame and the persisted record.
 		return curated.Error()
 	}
 	// Task surfaces carry the PLAIN catalogue message for the typed code —
