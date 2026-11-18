@@ -323,7 +323,20 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
     // (named by the inputs aria-describedby): the same node that was mounted before the save, now in its error state
     // with a message. Its wording is not pinned (the real client shows its
     // own sentence, not the stub one); an alert elsewhere on the screen does not count.
-    const indicatorAfter = document.getElementById(describedByLlm as string)
+    // T5: re-read the LIVE links after the failed save, from both inputs, so a
+    // build that drops the links only in the error state cannot pass on the
+    // pre-save cached id.
+    const liveLlmLink = llm.getAttribute('aria-describedby')
+    const liveToolLink = tool.getAttribute('aria-describedby')
+    expect(
+      liveLlmLink,
+      '#1882: after the failed save the "LLM calls / hour" input must still have aria-describedby pointing at the save-status region',
+    ).toBe(describedByLlm)
+    expect(
+      liveToolLink,
+      '#1882: after the failed save the "Tool calls / minute" input must still have aria-describedby pointing at the same save-status region',
+    ).toBe(liveLlmLink)
+    const indicatorAfter = document.getElementById(liveLlmLink as string)
     expect(indicatorAfter, '#1882: the rate-limit save-status indicator must still be mounted after the save').toBe(indicatorBefore)
     expect(
       indicatorAfter?.getAttribute('role'),
