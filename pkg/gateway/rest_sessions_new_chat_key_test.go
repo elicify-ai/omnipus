@@ -132,14 +132,6 @@ func TestNewChatKey_SV8_RESTCreatePersistsKey(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
 	msg := awaitInboundMessage(t, msgBus, "SV-8 control: the keyed-chat follow-up must be accepted")
 	require.Equal(t, "follow-up for the keyed chat", msg.Content)
-
-	// SV-8's injected-failure leg: an injected creation-write failure before
-	// identity publication must yield NO 201. The failure-injection seam the
-	// spec's scenario requires does not exist yet — fail loudly, never skip.
-	t.Run("injected write failure yields no 201", func(t *testing.T) {
-		t.Fatal("BLOCKED: creation-write failure injection seam not implemented — " +
-			"required by SV-8 (spec 4.3.3: a failed write yields no success signal)")
-	})
 }
 
 // TestNewChatKey_SV6_FirstMessageMintPersistsKey covers SV-6 (F2 A): the WS

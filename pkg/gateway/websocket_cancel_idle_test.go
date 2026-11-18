@@ -32,11 +32,11 @@ package gateway
 // today. On the lifecycle-backed idle path handleCancelShown today sends the
 // detached report (cancel_stage, empty reached); on the record-less path it
 // sends nothing. Every RED test below fails on the missing receipt/reply —
-// naming the frames that actually arrived — never on a fixture error. The
-// GUARD tests (armed, fired, record-running, queued-discarded,
-// requester-only) are green today BY DESIGN and die at GREEN only if the
-// idle reply is ever sent where #1841 forbids it; their failability proof is
-// CHECK's mutation run.
+// naming the frames that actually arrived. Armed, fired, record-running and
+// requester-only are existing-behaviour guards; their failability proof belongs
+// to CHECK. The strengthened queued-discarded row additionally requires a REAL
+// discard of that exact input; it now fails loudly when this prerequisite is
+// absent, instead of letting a timer and zero cancel_idle manufacture a pass.
 //
 // NOT TESTABLE HERE (reported, N-1/N-7/N-8 are process items): the branch
 // table's "cascaded with reached" and "background kill" rows need real
@@ -62,6 +62,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -194,6 +195,23 @@ func drainAdmissionOneShot(t *testing.T, conn *websocket.Conn) {
 	}
 }
 
+// bindIdleCancelFixture drains the legitimate attach snapshot before cancel.
+func bindIdleCancelFixture(t *testing.T, conn *websocket.Conn, sessionID string) {
+	t.Helper()
+	require.NoError(t, conn.SetWriteDeadline(time.Now().Add(lifecycleEW)))
+	require.NoError(t, conn.WriteJSON(generated.AttachSessionFrame{Type: "attach_session", SessionId: sessionID}))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(lifecycleEW)))
+	for {
+		_, raw, err := conn.ReadMessage()
+		require.NoError(t, err, "SETUP: the idle chat's attach must finish")
+		var peek wsTypeOnly
+		require.NoError(t, json.Unmarshal(raw, &peek))
+		if peek.Type == "catch_up_complete" {
+			return
+		}
+	}
+}
+
 // seedFixtureRecord hand-seeds a lifecycle record the way production's
 // initializeOrdinaryRootRecord shapes an ordinary root (OwnerScopeKind human,
 // origin chat), so the server reads a record indistinguishable from one its
@@ -245,39 +263,27 @@ type idleReply struct {
 	Raw  []byte
 }
 
-// collectCancelReplies reads the connection's frames after a cancel until the
-// reply window is exhausted (record-less silence today) or the path's
-// terminal frame arrives: cancel_stage (today's terminal on both the
-// detached and graceful paths) or the spec's command_received+cancel_idle
-// pair (GREEN). Returns the frames in arrival order.
+// collectCancelReplies observes the whole synchronous cancel-handling interval.
+// The application ping is dispatched by the SAME read loop after cancel returns;
+// its pong is a queue barrier, not a product reply. Do not stop at cancel_stage or
+// cancel_idle: a forbidden refusal snapshot can be queued AFTER either one.
+// Each caller uses this barrier only once per connection (pong is debounced).
 func collectCancelReplies(t *testing.T, conn *websocket.Conn, window time.Duration) []idleReply {
 	t.Helper()
-	deadline := time.Now().Add(window)
+	require.NoError(t, conn.SetWriteDeadline(time.Now().Add(window)))
+	require.NoError(t, conn.WriteJSON(generated.PingFrame{Type: "ping"}))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(window)))
 	var out []idleReply
-	var gotReceipt, gotIdle bool
-	for time.Now().Before(deadline) {
-		require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Until(deadline))),
-			"SETUP: arm the read failsafe")
+	for {
 		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			return out // window exhausted (the read deadline) — silence is a result
-		}
+		require.NoError(t, err, "instrument: cancel's read-loop barrier must arrive; collected %v", replyTypes(out))
 		var peek wsTypeOnly
 		require.NoError(t, json.Unmarshal(raw, &peek), "every reply frame must be valid JSON")
-		out = append(out, idleReply{Type: peek.Type, Raw: raw})
-		switch peek.Type {
-		case "command_received":
-			gotReceipt = true
-		case "cancel_idle":
-			gotIdle = true
-		case "cancel_stage":
-			return out // today's terminal frame for both cancel paths
-		}
-		if gotReceipt && gotIdle {
+		if peek.Type == "pong" {
 			return out
 		}
+		out = append(out, idleReply{Type: peek.Type, Raw: raw})
 	}
-	return out
 }
 
 // requireIdleReceiptSequence asserts the N-3 order and the N-2/N-4 negatives
@@ -286,8 +292,11 @@ func collectCancelReplies(t *testing.T, conn *websocket.Conn, window time.Durati
 // acts) and cancel_idle follows it. Other frames may legitimately follow
 // (1841-DESIGN.md: the reply is sent IN ADDITION to whatever handleCancelShown
 // sends today — on the lifecycle-backed idle path that is still the detached
-// report) — so exclusivity is NOT asserted; the negatives (zero send_refused,
-// zero session_state) are.
+// report) — so exclusivity is NOT asserted. SV-22 bans session_state FROM THE
+// REFUSAL-SNAPSHOT RULE, not unrelated admission/attach or live state frames.
+// Callers first drain admission/attach and settle the idle fixture; the pong
+// barrier then isolates this cancel's synchronous output, with no live producer.
+// Only in that isolated interval does zero session_state identify no snapshot.
 func requireIdleReceiptSequence(t *testing.T, replies []idleReply, sessionID, clientFrameID, phase string) {
 	t.Helper()
 	types := make([]string, len(replies))
@@ -325,8 +334,8 @@ func requireIdleReceiptSequence(t *testing.T, replies []idleReply, sessionID, cl
 			"%s: N-2 violated: an idle cancel passed the origin check and was accepted — it must never "+
 				"be answered with send_refused (%s)", phase, r.Raw)
 		require.NotEqual(t, "session_state", r.Type,
-			"%s: N-4 violated: an accepted idle cancel gets no refusal snapshot — no session_state may "+
-				"follow it (%s)", phase, r.Raw)
+			"%s: N-4 violated: an accepted idle cancel must not get a refusal snapshot in"+
+				" this isolated interval (admission/attach drained, idle fixture, through pong barrier): %s", phase, r.Raw)
 	}
 }
 
@@ -403,6 +412,10 @@ func TestCancelIdle_LifecycleBackedStopped(t *testing.T) {
 	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err, "SETUP: stopped-fixture session")
 	seedFixtureRecord(t, lc, meta.ID, session.LifecycleStopped)
+	// Admission and attach are allowed to send session_state. Drain both before
+	// the accepted-cancel interval; bind to the target so a snapshot mutant is visible.
+	drainAdmissionOneShot(t, conn)
+	bindIdleCancelFixture(t, conn, meta.ID)
 
 	cancelFrame := generated.CancelFrame{
 		Type:          "cancel",
@@ -435,6 +448,7 @@ func TestCancelIdle_RecordLessIdle(t *testing.T) {
 	require.NoError(t, err, "SETUP: record-less fixture session")
 	_, loadErr := lc.Load(meta.ID)
 	require.Error(t, loadErr, "SETUP: the fixture session must have NO lifecycle record")
+	bindIdleCancelFixture(t, conn, meta.ID)
 
 	cancelFrame := generated.CancelFrame{
 		Type:          "cancel",
@@ -522,30 +536,105 @@ func TestCancelIdle_NeverIdle_BranchGuards(t *testing.T) {
 
 	t.Run("queued input discarded", func(t *testing.T) {
 		iron := newIronProvider(30 * time.Second)
-		srv, cookie, _, lc := newIdleCancelServer(t, iron)
+		srv, cookie, al, lc := newIdleCancelServer(t, iron)
 		t.Cleanup(iron.Shutdown) // after the server's cleanups (LIFO): unblock the provider first
 		conn := dialIdleCancelBrowser(t, srv, cookie)
 		t.Cleanup(func() { _ = conn.Close() })
 		sid := mintIdleFixtureChat(t, conn, "queued-guard: the running turn")
 		waitForLifecycleState(t, lc, sid, session.LifecycleRunning)
-		// Queue a follow-up while the turn is live: the stop will discard it.
+		select {
+		case <-iron.ready:
+		case <-time.After(lifecycleEW):
+			t.Fatal("SETUP: provider must be blocked before queuing the follow-up")
+		}
+		turnID, _, _, live := al.ActiveForegroundTurnInfo(sid)
+		require.True(t, live, "SETUP: a real foreground turn owns this queue")
+		sub := al.SubscribeEvents(64)
+		t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
+		// Queue exactly one follow-up while the provider cannot consume it.
 		queued := generated.MessageFrame{
 			Type: "message", AgentId: strPtr("mia"), SessionId: &sid,
 			ClientMessageId: strPtr("guard-queued-msg"), Content: "queued while the turn runs",
+			Origin: &generated.SendOrigin{Kind: "chat", SessionId: &sid},
 		}
 		require.NoError(t, conn.SetWriteDeadline(time.Now().Add(10*time.Second)))
 		queuedRaw, marshalErr := json.Marshal(queued)
 		require.NoError(t, marshalErr)
 		require.NoError(t, conn.WriteMessage(websocket.TextMessage, queuedRaw))
-		time.Sleep(100 * time.Millisecond) // let the handler accept the follow-up (bounded failsafe)
+		waitForIdleGuardQueue(t, sub, turnID, len(queued.Content))
 		require.NoError(t, conn.WriteJSON(generated.CancelFrame{
 			Type: "cancel", SessionId: sid, Scope: strPtr("tree"),
 			ClientFrameId: strPtr("guard-queued-cancel"), Origin: &generated.SendOrigin{Kind: "chat", SessionId: &sid},
 		}))
 		replies := collectCancelReplies(t, conn, idleWindow)
+		var discarded []generated.MessageStatusFrame
+		for _, reply := range replies {
+			if reply.Type != "message_status" {
+				continue
+			}
+			var status generated.MessageStatusFrame
+			require.NoError(t, json.Unmarshal(reply.Raw, &status))
+			if status.ClientMessageId == "guard-queued-msg" && status.State == "discarded" {
+				discarded = append(discarded, status)
+			}
+		}
+		if assert.Len(t, discarded, 1, "#1841 queued-discard prerequisite: Stop must discard the EXACT queued client message; frames=%v", replyTypes(replies)) {
+			assert.Equal(t, sid, discarded[0].SessionId)
+			assert.Equal(t, strPtr("stopped_before_delivery"), discarded[0].Reason)
+			t.Log("instrument: guard-queued-msg discarded / stopped_before_delivery before the read-loop barrier")
+		}
+		queuedEntryID := ""
+		for _, reply := range replies {
+			if reply.Type != "user_message" {
+				continue
+			}
+			var echo generated.UserMessageFrame
+			require.NoError(t, json.Unmarshal(reply.Raw, &echo))
+			if echo.ClientMessageId != nil && *echo.ClientMessageId == "guard-queued-msg" {
+				require.Equal(t, sid, echo.SessionId)
+				require.Equal(t, queued.Content, echo.Content)
+				queuedEntryID = echo.Id
+			}
+		}
+		require.NotEmpty(t, queuedEntryID, "instrument: observe the exact follow-up's persisted archive id")
+		dispositions, err := al.GetSessionStore().InputDispositions(sid)
+		require.NoError(t, err)
+		disposition, found := dispositions[queuedEntryID]
+		assert.True(t, found, "#1841 queued-discard prerequisite: Stop must durably discard this archived input, not merely send a frame")
+		assert.Equal(t, queuedEntryID, disposition.MessageID)
+		assert.Equal(t, "discarded", disposition.State)
+		assert.Equal(t, "stopped_before_delivery", disposition.Reason)
 		requireNoIdleReply(t, replies,
 			"branch 'queued input discarded': a stop that discards queued input is not idle")
 	})
+}
+
+// waitForIdleGuardQueue observes the real queue-admission event, not a delay.
+// This fixture has one live turn and sends exactly one follow-up after subscribing.
+func waitForIdleGuardQueue(t *testing.T, sub agent.EventSubscription, turnID string, contentLen int) {
+	t.Helper()
+	timer := time.NewTimer(lifecycleEW)
+	defer timer.Stop()
+	for {
+		select {
+		case event, open := <-sub.C:
+			require.True(t, open, "SETUP: queue event subscription must stay open")
+			if event.Kind != agent.EventKindInterruptReceived || event.Meta.TurnID != turnID {
+				continue
+			}
+			payload, ok := event.Payload.(agent.InterruptReceivedPayload)
+			require.True(t, ok, "instrument: real interrupt event must carry its typed payload")
+			if payload.Kind != agent.InterruptKindSteering {
+				continue
+			}
+			require.Equal(t, "user", payload.Role)
+			require.Equal(t, contentLen, payload.ContentLen)
+			require.Equal(t, 1, payload.QueueDepth, "SETUP: exactly the follow-up is queued behind the blocked provider")
+			return
+		case <-timer.C:
+			t.Fatal("SETUP: the follow-up never reached the real steering queue; a no-idle verdict would prove the wrong branch")
+		}
+	}
 }
 
 // TestCancelIdle_ReplyIsRequesterOnly is N-6's first old-tab case, server

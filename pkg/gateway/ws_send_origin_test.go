@@ -371,6 +371,8 @@ func TestCheckSendOrigin(t *testing.T) {
 		require.Equal(t, "wrong_chat", refused.Reason)
 	})
 
+	t.Run("SV9b metadata read error refused origin_unverified without stopping unrelated stream", testSV9bMetaReadError)
+
 	t.Run("origin absent non-browser accepted legacy", func(t *testing.T) {
 		s := newSendOriginSrv(t, &restMockProvider{})
 		conn := s.dialCLIConn(t)
