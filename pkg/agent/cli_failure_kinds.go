@@ -363,6 +363,18 @@ func classifyDriverStartError(cli string, err error) error {
 	return newExternalCLIRefusal(CodeExternalCLIFailed, cliVariantStart, cli, err)
 }
 
+// rateLimitDenialCode is the code a SEC-26 denial is recorded under
+// (loop.go::recordRateLimitDenial). #1857 §13.8.5 B3: the agent's own hourly
+// model-request limit (resource llm_call) is agent_request_limit
+// (attribution config), never the provider's rate_limited. Other SEC-26
+// denials (tool calls) have no §13.8 row yet and keep rate_limited.
+func rateLimitDenialCode(payload RateLimitPayload) LLMErrorCode {
+	if payload.Resource == "llm_call" {
+		return CodeAgentRequestLimit
+	}
+	return CodeRateLimited
+}
+
 // translateKnownCauseError maps a typed known-cause error to its LLMError, or
 // reports false when err carries none.
 func translateKnownCauseError(err error) (LLMError, bool) {

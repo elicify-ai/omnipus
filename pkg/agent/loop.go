@@ -796,7 +796,7 @@ func NewAgentLoop(
 // shape into every subscriber). The transcript write now goes through
 // appendErrorTranscript's classifier with pe=nil; the classifier
 // recognizes the "rate limit: …" shape via the message substring and
-// emits CodeRateLimited, but the friendly caller-supplied message is
+// emits the rateLimitDenialCode code, but the friendly caller-supplied message is
 // preserved verbatim (ADR-051 §RD5 MAJ-001/004 carve-out — rate-limit
 // messages are already user-safe and don't need a second translation
 // pass).
@@ -852,10 +852,11 @@ func (al *AgentLoop) recordRateLimitDenial(
 		retryHint = "retry shortly"
 	}
 	rlMsg := fmt.Sprintf("rate limit: %s (%s)", payload.PolicyRule, retryHint)
+	code := rateLimitDenialCode(payload)
 	ts.appendClassifiedError(EventKindRateLimit.String(), "rate_limit", LLMError{
-		Code:      CodeRateLimited,
+		Code:      code,
 		Message:   rlMsg,
-		Retryable: isRetryable(CodeRateLimited),
+		Retryable: isRetryable(code),
 	})
 }
 

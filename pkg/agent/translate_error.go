@@ -1392,6 +1392,11 @@ func isRetryable(code LLMErrorCode) bool {
 	switch code {
 	case CodeRateLimited, CodeNetwork, CodeProviderStalled, CodeProviderEmptyReply, CodeTurnTimedOut:
 		return true
+	case CodeAgentRequestLimit:
+		// #1857 B3: the agent's own hourly request limit clears by itself
+		// once the wait passes (W11 "I can continue in {minutes} minutes"),
+		// exactly like the rate_limited denial it replaces.
+		return true
 	}
 	// CodeToolCallTruncated falls through to false with everything else:
 	// the same request truncates identically on retry (ADR-087 D1's
