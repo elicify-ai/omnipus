@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -131,6 +132,26 @@ func (r *soSnapshotRig) requireFreshToken(t *testing.T) {
 	require.Contains(t, soTypes(frames), "done", "instrument: resumed real provider must complete")
 }
 
+// C-4 / SV-3 / SV-19: a refused cancel is not acted on. A graceful stop
+// can leave the same turn active and still emit tokens and done; inspect the
+// settled lifecycle and durable stop ledger, not just those wire frames.
+func (r *soSnapshotRig) requireCompletedWithoutStop(t *testing.T) {
+	t.Helper()
+	var rec *session.LifecycleRecord
+	var err error
+	require.Eventually(t, func() bool {
+		rec, err = r.s.lc.Load(r.sid)
+		return err != nil || (rec != nil && (rec.Terminal() || rec.State == session.LifecycleStopped))
+	}, lifecycleEW, 20*time.Millisecond, "SV-19: released turn must settle after done publication")
+	require.NoError(t, err, "SV-19: read the refused cancel's session lifecycle")
+	require.NotNil(t, rec, "SV-19: completed turn must have a lifecycle record")
+	assert.Equal(t, session.LifecycleCompleted, rec.State, "SV-19: refused cancel must let the live turn complete, not stop")
+	assert.Nil(t, rec.StopNote, "SV-19: refused cancel must not record a stop note")
+	effects, err := r.s.lc.AcceptedStopEffects(r.sid)
+	require.NoError(t, err, "SV-19: read accepted stop controls for the refused cancel's session")
+	assert.Len(t, effects, 0, "SV-19: refused cancel must not record an accepted stop control")
+}
+
 func soSV19A(t *testing.T) {
 	r := soPausedSnapshotRig(t, true)
 	soSend(t, r.conn, generated.CancelFrame{Type: "cancel", SessionId: r.sid})
@@ -145,6 +166,7 @@ func soSV19A(t *testing.T) {
 	require.Regexp(t, `^outdated-[A-Za-z0-9_-]{12}$`, *errs[0].ClientMessageId)
 	r.requireSnapshotTurn(t, frames)
 	r.requireFreshToken(t)
+	r.requireCompletedWithoutStop(t)
 	soLiveFrameDelivered(t, r.s, r.conn, r.sid, "SV-19a cleanup")
 }
 
@@ -175,6 +197,7 @@ func soSV19C(t *testing.T) {
 	require.Equal(t, strPtr("so-19c1"), refused.ClientFrameId)
 	r.requireSnapshotTurn(t, frames)
 	r.requireFreshToken(t)
+	r.requireCompletedWithoutStop(t)
 	soLiveFrameDelivered(t, r.s, r.conn, r.sid, "SV-19c cleanup")
 }
 
@@ -219,6 +242,7 @@ func soSV19G(t *testing.T) {
 	// B's own connection is the live-positive control; the unbound requester
 	// cannot receive B's hub frames without violating the binding invariant.
 	r.requireFreshToken(t)
+	r.requireCompletedWithoutStop(t)
 	soLiveFrameDelivered(t, r.s, r.conn, r.sid, "SV-19g bound control cleanup")
 	probe := []byte(`{"type":"pong"}`)
 	require.True(t, wc.enqueue(probe), "SV-19g: requester outbound queue remains usable")
@@ -245,6 +269,7 @@ func soSV19H(t *testing.T) {
 	}
 	require.False(t, soHolding(t, r.s, r.conn), "SV-19h cleanup: holding must be false under qmu")
 	r.requireFreshToken(t)
+	r.requireCompletedWithoutStop(t)
 	soLiveFrameDelivered(t, r.s, r.conn, r.sid, "SV-19h cleanup")
 }
 
@@ -341,6 +366,7 @@ func soDecisiveSnapshotOrder(t *testing.T, beforeHold bool) {
 			require.Equal(t, &r.turnID, done.TurnId)
 		}
 	}
+	r.requireCompletedWithoutStop(t)
 	soSaveSnapshotFixture(t, frames, beforeHold)
 	soLiveFrameDelivered(t, r.s, r.conn, r.sid, "SV-19 decisive cleanup")
 }
@@ -393,6 +419,7 @@ func soSV19J(t *testing.T) {
 	require.Equal(t, soOutdatedStop, soErrors(t, frames)[0].Message)
 	require.False(t, soHolding(t, r.s, r.conn), "SV-19j: holding false under qmu after nil builder")
 	r.requireFreshToken(t)
+	r.requireCompletedWithoutStop(t)
 	soLiveFrameDelivered(t, r.s, r.conn, r.sid, "SV-19j cleanup")
 }
 
@@ -428,4 +455,8 @@ func soSV19K(t *testing.T) {
 	r.wc.qmu.Unlock()
 	require.True(t, closed, "instrument: R5's real queue failure was forced")
 	require.False(t, holding, "SV-19k: holding false under qmu, not inferred from empty held bytes")
+	// This queue is deliberately closed, so observe production Finalize/done
+	// publication returning instead of trying to read done on the dead socket.
+	soCompletePausedTurn(t, r)
+	r.requireCompletedWithoutStop(t)
 }
