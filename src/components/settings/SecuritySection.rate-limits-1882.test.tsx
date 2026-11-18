@@ -74,6 +74,7 @@ import { useUiStore } from '@/store/ui'
 import { SecuritySection } from './SecuritySection'
 
 const RATE_LIMITS_PATH = '/api/v1/security/rate-limits'
+const PUT_ERROR_TEXT = 'rate limits could not be saved'
 
 // Distinct, recognisable values: what config.security.rate_limits holds, what
 // the dedicated route holds, and what the person types.
@@ -116,10 +117,22 @@ function stubFetch() {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      // Normalise every legal fetch call shape (T1-5 a): fetch(url, init),
+      // fetch(URL, init) and fetch(new Request(...), init?), where init
+      // overrides the Request. The generated client's fetch adapter sends a
+      // Request object, so the method and body must be read from it too.
+      const isRequest = typeof Request !== 'undefined' && input instanceof Request
       const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
       const path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0]
-      const method = (init?.method ?? 'GET').toUpperCase()
-      recorded.push({ method, path, body: typeof init?.body === 'string' ? init.body : null })
+      const method = (init?.method ?? (isRequest ? input.method : 'GET')).toUpperCase()
+      let body: string | null = null
+      if (typeof init?.body === 'string') {
+        body = init.body
+      } else if (init?.body == null && isRequest) {
+        const text = await input.clone().text()
+        body = text === '' ? null : text
+      }
+      recorded.push({ method, path, body })
       if (path === RATE_LIMITS_PATH && method === 'GET') {
         return jsonResponse(200, {
           enabled: true,
@@ -128,7 +141,7 @@ function stubFetch() {
         })
       }
       if (path === RATE_LIMITS_PATH && method === 'PUT') {
-        if (putStatus !== 200) return jsonResponse(putStatus, { error: 'rate limits could not be saved' })
+        if (putStatus !== 200) return jsonResponse(putStatus, { error: PUT_ERROR_TEXT })
         return jsonResponse(200, { saved: true, requires_restart: false })
       }
       return jsonResponse(404, { error: 'not stubbed' })
@@ -156,9 +169,12 @@ async function openAdvanced() {
   return { llm, tool }
 }
 
-/** Wait (bounded) for an input to show a value; never throws, so the caller asserts with a #1882 message. */
+/** Wait (bounded) for an input to show a value; a miss fails the test with a #1882 message (T1-5, F3). */
 async function settleTo(input: HTMLInputElement, want: string) {
-  await waitFor(() => expect(input.value).toBe(want), { timeout: 1500 }).catch(() => undefined)
+  await waitFor(
+    () => expect(input.value, `#1882: the field must settle to the GET ${RATE_LIMITS_PATH} value "${want}", saw "${input.value}"`).toBe(want),
+    { timeout: 1500 },
+  )
 }
 
 async function editAndSave(llm: HTMLInputElement, tool: HTMLInputElement) {
@@ -260,12 +276,21 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
     ).toBeGreaterThanOrEqual(1)
 
     // AutoSaveIndicator's error branch is the screen's existing error state
-    // (role="alert"); it is exclusive with the saved state.
-    const alerts = screen.queryAllByRole('alert').filter((el) => (el.textContent ?? '').trim() !== '')
+    // (role="alert"). The alert must be the one for THIS failed save: it
+    // carries the server's refusal text, so an unrelated alert cannot satisfy it.
+    const alerts = screen.queryAllByRole('alert').map((el) => (el.textContent ?? '').trim())
     expect(
-      alerts.length,
-      `#1882: a failed rate-limit save must show the existing error alert, saw ${alerts.length} alerts (the save was reported as success)`,
-    ).toBeGreaterThanOrEqual(1)
+      alerts.some((text) => text.includes(PUT_ERROR_TEXT)),
+      `#1882: a failed rate-limit save must show the existing error alert carrying "${PUT_ERROR_TEXT}", saw alerts ${JSON.stringify(alerts)}`,
+    ).toBe(true)
+
+    // T1-5 b: the success state must be absent after the failed save. The
+    // AutoSaveIndicator's saved text starts with "Saved"; no element on the
+    // whole screen may show it, and no live region may announce it.
+    expect(
+      screen.queryAllByText(/^Saved\b/).map((el) => el.textContent),
+      '#1882: a failed rate-limit save must not report success; expected no "Saved" text on the screen',
+    ).toEqual([])
   })
 })
 

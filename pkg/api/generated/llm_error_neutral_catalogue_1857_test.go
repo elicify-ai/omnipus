@@ -67,7 +67,6 @@ func parseGeneratedStringMaps(t *testing.T, path, name string) (flat map[string]
 			}
 			lit, ok := vs.Values[0].(*ast.CompositeLit)
 			require.True(t, ok, "%s must be initialised with a map literal", name)
-			found = true
 			flat = map[string]string{}
 			nested = map[string]map[string]string{}
 			for _, elt := range lit.Elts {
@@ -75,7 +74,7 @@ func parseGeneratedStringMaps(t *testing.T, path, name string) (flat map[string]
 				require.True(t, ok, "%s: entries must be key: value", name)
 				key, ok := unquote(kv.Key)
 				require.True(t, ok, "%s: keys must be string literals", name)
-				if value, ok := unquote(kv.Value); ok {
+				if value, isString := unquote(kv.Value); isString {
 					flat[key] = value
 					continue
 				}

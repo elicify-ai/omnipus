@@ -34,7 +34,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +44,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -187,23 +187,42 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 		"transcript must contain at least one EntryTypeSystem entry describing the rate-limit denial; "+
 			"all entries: %+v", entries)
 
-	// At least one system entry must reference the rate-limit policy. We
-	// search by substring because the wire format of the payload is part of
-	// the contract under design review — we want a stable assertion that
-	// catches "payload not written" AND "wrong entry type".
+	// #1857 D-A (design-note-frontend-round.md): the saved record no longer
+	// holds the internal "rate limit: ... retry after ..." text. It holds the
+	// error code agent_request_limit with either the catalogue sentence for
+	// that code (every slot filled) or, when a fact is missing (known limit
+	// F4), the generic unknown sentence. The entry being written is this
+	// test's original purpose (FR-001).
 	var rlEntry *session.TranscriptEntry
 	for i := range systemEntries {
-		c := systemEntries[i]
-		if strings.Contains(strings.ToLower(c.Content), "rate limit") ||
-			strings.Contains(strings.ToLower(c.Content), "rate_limit") {
-			cp := c
+		if systemEntries[i].ErrorCode == string(CodeAgentRequestLimit) {
+			cp := systemEntries[i]
 			rlEntry = &cp
 			break
 		}
 	}
 	require.NotNil(t, rlEntry,
-		"transcript must contain a system entry referencing the rate-limit; "+
-			"system entries found: %+v", systemEntries)
+		"transcript must contain a system entry with error_code %q; system entries found: %+v",
+		CodeAgentRequestLimit, systemEntries)
+
+	variants := generated.LLMErrorMessageVariants[string(CodeAgentRequestLimit)]
+	templates := make([]string, 0, 1+len(variants))
+	templates = append(templates, generated.LLMErrorUserMessages[string(CodeAgentRequestLimit)])
+	for _, v := range variants {
+		templates = append(templates, v)
+	}
+	isCatalogue := rlEntry.Content == generated.LLMErrorUserMessages[string(CodeUnknown)]
+	for _, tmpl := range templates {
+		if tmpl != "" && renderedFromTemplate(rlEntry.Content, tmpl) {
+			isCatalogue = true
+		}
+	}
+	assert.True(t, isCatalogue,
+		"the saved content must be the agent_request_limit catalogue sentence with every slot filled, or the generic unknown sentence; got %q", rlEntry.Content)
+	lowered := strings.ToLower(rlEntry.Content)
+	assert.NotContains(t, lowered, "rate limit:", "the saved content must not carry the internal rate-limit text")
+	assert.NotContains(t, lowered, "retry after", "the saved content must not carry the internal retry-after text")
+	assert.False(t, messageHasSlots(rlEntry.Content), "the saved content must never carry a raw {slot}: %q", rlEntry.Content)
 
 	// The entry must carry the agent ID so the replay path can attribute it.
 	assert.Equal(t, customAgentID, rlEntry.AgentID,
@@ -255,10 +274,14 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 		"B3/T-55: transcript must identify the agent's configured request limit, not a provider rate limit")
 	assert.True(t, rlEntry.ErrorRetryable,
 		"rate-limit entries must mark ErrorRetryable=true")
-	expectedRateLimitCopy := fmt.Sprintf("rate limit: %s (retry after %.0fs)",
-		rateLimitPayload.PolicyRule, rateLimitPayload.RetryAfterSeconds)
-	assert.Equal(t, expectedRateLimitCopy, rlEntry.Content,
-		"transcript must preserve the friendly rate-limit copy")
+	// #1857 D-A (T1-3): the saved content is no longer the internal
+	// "rate limit: <rule> (retry after Ns)" text; it is the catalogue sentence
+	// or the generic sentence, asserted above on the same entry. The policy
+	// rule and retry delay stay on the EventKindRateLimit payload.
+	assert.NotEmpty(t, rateLimitPayload.PolicyRule,
+		"the EventKindRateLimit payload must still carry the policy rule")
+	assert.Positive(t, rateLimitPayload.RetryAfterSeconds,
+		"the EventKindRateLimit payload must still carry the retry delay")
 
 	// ---------------------------------------------------------------------
 	// Assert (D): audit row was written (regression on the existing test).

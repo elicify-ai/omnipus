@@ -42,6 +42,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSandboxConfig: vi.fn(),
     updateSandboxConfig: vi.fn(),
     fetchSandboxStatus: vi.fn(),
+    // #1882: the per-agent rate limits are read and saved through their own route.
+    fetchRateLimits: vi.fn(),
+    updateRateLimits: vi.fn(),
   }
 })
 
@@ -74,6 +77,8 @@ import {
   fetchSandboxConfig,
   updateSandboxConfig,
   fetchSandboxStatus,
+  fetchRateLimits,
+  updateRateLimits,
 } from '@/lib/api'
 import type { AppState } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -187,6 +192,7 @@ beforeEach(() => {
   vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
   vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
   vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+  vi.mocked(fetchRateLimits).mockResolvedValue({ enabled: true, max_agent_llm_calls_per_hour: 0, max_agent_tool_calls_per_minute: 0 } as never)
   // Default: a kernel sandbox IS enforcing, so the platform caveat renders
   // muted, not as a caution — individual tests override this to exercise
   // the no-sandbox caution path.
@@ -969,27 +975,30 @@ describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
 
 // D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
 //
-// Root cause: the security fields (execTimeoutSecs and siblings) start at hardcoded
-// useState defaults (''). Before this fix, useAutoSave's `disabled` option
-// here was `!config` — but `config` turns truthy in the SAME commit the
-// hydration effect is SCHEDULED, one render before the effect's own
-// setState calls actually land. So `disabled` flipped false one render too
-// early, useAutoSave captured the hardcoded '' default as its baseline,
-// and the LATER commit where the real persisted value hydrates (45, per
-// this test's exec_timeout_seconds override) looked like a genuine edit —
-// (probe retargeted from daily_cost_cap after ADR-053 D12 retired it) —
-// firing a spurious `updateConfig` that echoes the fetched value straight
-// back. This does NOT cover `GlobalToolPoliciesSection`'s own separate
-// useAutoSave (already gated correctly via `isDraftReady` before this fix
-// — confirmed safe, untouched).
+// Root cause: the security fields start at hardcoded useState defaults ('').
+// Before this fix, useAutoSave's `disabled` option was `!config` — but
+// `config` turns truthy in the SAME commit the hydration effect is SCHEDULED,
+// one render before the effect's own setState calls actually land. So
+// `disabled` flipped false one render too early, useAutoSave captured the
+// hardcoded '' default as its baseline, and the LATER commit where the real
+// persisted value hydrates looked like a genuine edit — firing a spurious
+// save that echoes the fetched value straight back. This does NOT cover
+// `GlobalToolPoliciesSection`'s own separate useAutoSave (already gated
+// correctly via `isDraftReady` before this fix — confirmed safe, untouched).
+//
+// #1882 (chief ruling Q1 A, 2026-11-18): the exec-timeout field this probe
+// used no longer exists, and the per-agent rate limits are read from
+// GET /api/v1/security/rate-limits. The hydration probe is now a distinctive
+// pair of values from that route; hydration must send neither a rate-limit
+// PUT nor an updateConfig call.
 describe('SecuritySection — D3: hydration must not trigger a spurious PUT', () => {
-  it('loading an exec timeout that differs from the hardcoded "" default never calls updateConfig, even after the debounce window elapses (REVERT-PROOF: fails without the securityHydrated gate)', async () => {
-    // Local override: a distinctive hydrating value on a SURVIVING field
-    // (daily_cost_cap was retired by ADR-053 D12 — the component no longer
-    // renders it, so it can no longer serve as the hydration probe).
-    vi.mocked(fetchConfig).mockResolvedValue({
-      ...MINIMAL_CONFIG,
-      security: { ...MINIMAL_CONFIG.security, exec_timeout_seconds: 45 },
+  it('loading rate limits that differ from the hardcoded "" default never saves, even after the debounce window elapses (REVERT-PROOF: fails without the securityHydrated gate)', async () => {
+    const HYDRATED_LLM = 37
+    const HYDRATED_TOOL = 53
+    vi.mocked(fetchRateLimits).mockResolvedValue({
+      enabled: true,
+      max_agent_llm_calls_per_hour: HYDRATED_LLM,
+      max_agent_tool_calls_per_minute: HYDRATED_TOOL,
     } as never)
     renderSection()
 
@@ -998,16 +1007,18 @@ describe('SecuritySection — D3: hydration must not trigger a spurious PUT', ()
       expect(screen.getByTestId('security-health-header')).toBeInTheDocument()
     })
     // The numeric security fields render inside the collapsed
-    // AdvancedDisclosure — expand it so the hydrated value is in the DOM.
+    // AdvancedDisclosure — expand it so the hydrated values are in the DOM.
     fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue('45')).toBeInTheDocument()
+      expect(screen.getByDisplayValue(String(HYDRATED_LLM))).toBeInTheDocument()
+      expect(screen.getByDisplayValue(String(HYDRATED_TOOL))).toBeInTheDocument()
     })
 
     // PASSIVE idle wait — no interaction at all — comfortably past the
     // 500ms default debounce.
     await new Promise((resolve) => setTimeout(resolve, 900))
-    expect(updateConfig).not.toHaveBeenCalled()
+    expect(updateRateLimits, 'hydration must not PUT the rate-limit route').not.toHaveBeenCalled()
+    expect(updateConfig, 'hydration must not call updateConfig').not.toHaveBeenCalled()
   })
 })

@@ -603,10 +603,33 @@ func TestSanitizeRunnerErrorSafeFacts(t *testing.T) {
 			if wire.Detail != nil {
 				requireNoRawSegment(t, tc.row, "the wire frame Detail (technical details)", *wire.Detail)
 			}
-			// F-1 trust rule: a frame whose message is not a provider-message
-			// template must never flag itself provider_message.
-			assert.NotEqual(t, true, wire.ProviderMessage != nil && *wire.ProviderMessage,
-				"%s: the CLI error frame must not set provider_message (the SPA would then show the frame message raw; FR-092/F-1)", tc.row)
+			// D-A option 1 (design-note-frontend-round.md, supersedes the older
+			// "CLI frames never set provider_message"): the server sets
+			// provider_message exactly when the frame message is a catalogue
+			// sentence of the code with every slot filled, and a fallback to
+			// the generic sentence sets it too. The expected sentences come
+			// from the generated catalogue, never from the implementation.
+			templates := []string{generated.LLMErrorUserMessages[tc.wantCode]}
+			for _, v := range generated.LLMErrorMessageVariants[tc.wantCode] {
+				templates = append(templates, v)
+			}
+			slotted := false
+			filled := wire.Message == generated.LLMErrorUserMessages["unknown"]
+			for _, tmpl := range templates {
+				if strings.Contains(tmpl, "{") {
+					slotted = true
+				}
+				if tmpl != "" && renderedFromTemplate(wire.Message, tmpl) {
+					filled = true
+				}
+			}
+			assert.False(t, messageHasSlots(wire.Message),
+				"%s: the wire message must never carry a raw {slot}: %q", tc.row, wire.Message)
+			assert.True(t, filled,
+				"%s: the wire message must be the %q catalogue sentence with every slot filled, or the generic sentence; got %q", tc.row, tc.wantCode, wire.Message)
+			flagSet := wire.ProviderMessage != nil && *wire.ProviderMessage
+			assert.Equal(t, slotted, flagSet,
+				"%s: D-A option 1: provider_message must be %v for a code with slotted sentences (filled sentence or generic fallback); got %v", tc.row, slotted, flagSet)
 		})
 	}
 }

@@ -84,8 +84,9 @@ func am1857Fill(t *testing.T, template string, facts map[string]string) string {
 }
 
 func am1857SlotNames(template string) []string {
-	var names []string
-	for _, m := range am1857Slot.FindAllStringSubmatch(template, -1) {
+	matches := am1857Slot.FindAllStringSubmatch(template, -1)
+	names := make([]string, 0, len(matches))
+	for _, m := range matches {
 		names = append(names, m[1])
 	}
 	return names
