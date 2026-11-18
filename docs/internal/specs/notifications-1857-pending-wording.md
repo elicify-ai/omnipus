@@ -1,15 +1,19 @@
-# #1857 failure kinds: pending wording (proposed, founder review pending)
+# #1857 failure kinds: wording (founder-approved 2026-11-18)
 
 Last reviewed: 2026-11-18
 
-Status: **proposed, founder review pending** (chief ruling D1 A, founder decision E4 A).
+Status: **founder-approved 2026-11-18** (chief ruling D1 A, founder decision E4 A). The founder
+approved all 21 W rows in #team-b ("the messages look good, go ahead", 11:02Z) and chose W11 A
+(11:06Z): the W11 sentence stays as written and the Settings rate-limit field is repaired in the
+same work package (#1882). The wording gate is closed. W17 to W21 replace the generic sentence
+for rows 12 to 14 and the W7 reuse in rows 15 and 16 in the frontend-round build.
 
 This file lists every user-facing sentence the #1857 developer round (notifications spec §13.8,
 WP-0 contract and the wording-independent behaviour) put into the LLMError catalogue. No sentence
 here is new wording: each one is copied verbatim from the founder review page
 (`/workspace/logs/1857/founder-examples.md`, rows W1 to W16), or is the existing generic `unknown`
-sentence for a code that has no W row. Every row stays **proposed, founder review pending** until
-the founder answers the E4 review; exact-copy tests are written only after that (the
+sentence for a code that has no W row. The rows below were **proposed, founder review pending** until
+the founder answered the E4 review (approved 2026-11-18); exact-copy tests follow from now on (the
 `TODO(#1857 E4)` markers in the test files).
 
 Where the catalogue holds the sentence: `contracts/components/schemas/LLMError.yaml` (and its three
@@ -27,22 +31,22 @@ the generic `unknown` sentence, never shown with a literal slot.
 
 | # | Code (variant) | Source | Form used | Sentence | Tag |
 |---|---|---|---|---|---|
-| 1 | `external_cli_invalid_args` | W1 | chat | I couldn't start {cli}: it rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting. | proposed, founder review pending |
-| 2 | `external_cli_model_unavailable` | W2 | chat | I couldn't run the task in {cli}: it couldn't use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings. | proposed, founder review pending |
-| 3 | `external_cli_needs_signin` | W3 | chat (= neutral) | {cli} is not signed in on the machine it runs on, so the run stopped. Sign in to {cli} there, then retry the task. | proposed, founder review pending |
-| 4 | `external_cli_failed` | W4 | chat | I couldn't finish the run in {cli}: it stopped with an error I couldn't identify. Retry the task; if it keeps happening, check that {cli} works on its own. | proposed, founder review pending |
-| 5 | `external_cli_failed` (`stream_read`) | W6 | chat | I couldn't finish the run in {cli}: reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own. | proposed, founder review pending |
-| 6 | `external_cli_failed` (`start`) | W7 | chat | I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings. | proposed, founder review pending |
-| 7 | `external_cli_turn_limit` | W5 | chat | I stopped the run in {cli}: it reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings. | proposed, founder review pending |
-| 8 | `external_cli_upstream_refused` | W13 (limit form) | chat (= neutral) | The model {cli} uses is limiting requests right now. Try the task again in a moment. | proposed, founder review pending |
-| 9 | `external_cli_upstream_refused` (`out_of_credit`) | W13 (out-of-credit form) | chat (= neutral) | {cli}'s model provider account is out of credit. Top up that account to run tasks with {cli}. | proposed, founder review pending |
-| 10 | `agent_request_limit` | W11 | chat | I've reached my limit of model requests for this hour. I can continue in {minutes} minutes, or you can raise the limit in Settings. | proposed, founder review pending |
-| 11 | `provider_error` | generic (W12 not wired) | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | proposed, founder review pending |
-| 12 | `tool_assembly_duplicate` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | proposed, founder review pending |
-| 13 | `transcript_save_failed` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | proposed, founder review pending |
-| 14 | `goal_state_unavailable` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | proposed, founder review pending |
-| 15 | `external_cli_not_found` (C8 program-path refusal) | W7 (reused) | chat | I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings. | proposed, founder review pending. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give these codes their own sentences. |
-| 16 | `external_cli_invalid_config` (B16 config gap, B17b invalid turn cap) | W7 (reused) | chat | I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings. | proposed, founder review pending. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give these codes their own sentences. |
+| 1 | `external_cli_invalid_args` | W1 | chat | I couldn't start {cli}: it rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting. | founder-approved 2026-11-18 |
+| 2 | `external_cli_model_unavailable` | W2 | chat | I couldn't run the task in {cli}: it couldn't use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings. | founder-approved 2026-11-18 |
+| 3 | `external_cli_needs_signin` | W3 | chat (= neutral) | {cli} is not signed in on the machine it runs on, so the run stopped. Sign in to {cli} there, then retry the task. | founder-approved 2026-11-18 |
+| 4 | `external_cli_failed` | W4 | chat | I couldn't finish the run in {cli}: it stopped with an error I couldn't identify. Retry the task; if it keeps happening, check that {cli} works on its own. | founder-approved 2026-11-18 |
+| 5 | `external_cli_failed` (`stream_read`) | W6 | chat | I couldn't finish the run in {cli}: reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own. | founder-approved 2026-11-18 |
+| 6 | `external_cli_failed` (`start`) | W7 | chat | I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings. | founder-approved 2026-11-18 |
+| 7 | `external_cli_turn_limit` | W5 | chat | I stopped the run in {cli}: it reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings. | founder-approved 2026-11-18 |
+| 8 | `external_cli_upstream_refused` | W13 (limit form) | chat (= neutral) | The model {cli} uses is limiting requests right now. Try the task again in a moment. | founder-approved 2026-11-18 |
+| 9 | `external_cli_upstream_refused` (`out_of_credit`) | W13 (out-of-credit form) | chat (= neutral) | {cli}'s model provider account is out of credit. Top up that account to run tasks with {cli}. | founder-approved 2026-11-18 |
+| 10 | `agent_request_limit` | W11 | chat | I've reached my limit of model requests for this hour. I can continue in {minutes} minutes, or you can raise the limit in Settings. | founder-approved 2026-11-18 |
+| 11 | `provider_error` | generic (W12 not wired) | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | founder-approved 2026-11-18 |
+| 12 | `tool_assembly_duplicate` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | founder-approved 2026-11-18; W17-W21 assignment replaces this in the build round |
+| 13 | `transcript_save_failed` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | founder-approved 2026-11-18; W17-W21 assignment replaces this in the build round |
+| 14 | `goal_state_unavailable` | generic | existing `unknown` sentence | This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model. | founder-approved 2026-11-18; W17-W21 assignment replaces this in the build round |
+| 15 | `external_cli_not_found` (C8 program-path refusal) | W7 (reused) | chat | I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings. | founder-approved 2026-11-18; W17-W21 assignment replaces this in the build round. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give these codes their own sentences. |
+| 16 | `external_cli_invalid_config` (B16 config gap, B17b invalid turn cap) | W7 (reused) | chat | I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings. | founder-approved 2026-11-18; W17-W21 assignment replaces this in the build round. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give these codes their own sentences. |
 
 ## Codes added by chief ruling Q1 A (2026-11-18)
 
@@ -68,7 +72,7 @@ The spec's "no-fact form drops the CLI clause" needs a sentence that does not ex
 
 ## Known limits (chief, 2026-11-18; not lost, revisited after the founder's W answer)
 
-- **`agent_request_limit` is retryable (proposed, founder review pending).** It follows W11 ("I can continue in {minutes} minutes"). If the founder picks the other W11 option, the retryable flag changes with the sentence.
+- **`agent_request_limit` is retryable (founder chose W11 A, 2026-11-18).** It follows W11 ("I can continue in {minutes} minutes").
 - **Live rate-limit frame carries no code.** `RateLimitFrame` has no code field, so the live frame does not say `agent_request_limit`; a contract change is needed. The error frame and the saved chat record carry the code. An issue is filed only if the founder's W11 answer makes the live frame matter.
 - **F4 — B3 saved record text.** The saved record's code is `agent_request_limit`, but its content is still the internal "rate limit: ... (retry after Ns)" text (pinned by `TestRunTurn_RateLimit_WritesErrorEntryToTranscript`).
 - **F6 — W7 reused for an invalid turn cap and a missing executor config.** "The program could not be launched ... program path" is misleading for those two cases (chief ruling Q1 A; the founder may give them W19 or own sentences).
