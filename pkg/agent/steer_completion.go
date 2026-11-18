@@ -727,6 +727,14 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 		var cliErr *externalCLIRunError
 		errors.As(runErr, &cliErr)
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + cliErr.agentText()
+	case errors.As(runErr, new(*externalCLIRefusalError)) && !errors.As(runErr, new(*curatedTurnError)):
+		// #1857 (design note D-B B1): a typed pre-run CLI refusal reaches the
+		// parent agent, a surface outside the chat, in the neutral voice. A
+		// refusal carrying Omnipus's own curated text (C8) keeps that text
+		// through userVisibleTurnError below.
+		var refusal *externalCLIRefusalError
+		errors.As(runErr, &refusal)
+		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + refusal.neutral
 	case runErr != nil:
 		// Every untrusted failure can echo request data, including an unknown
 		// stream code with no HTTP facts. Only curated Omnipus text bypasses

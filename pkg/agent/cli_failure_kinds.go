@@ -64,8 +64,58 @@ type messageSlotFacts struct {
 
 // renderMessageSlots fills a catalogue sentence's slots from facts. It fails
 // closed: a sentence whose slot has no fact never renders an empty or literal
-// slot (§13.2) — the generic catalogue sentence is returned instead.
-func renderMessageSlots(text string, facts messageSlotFacts) string {
+// slot (§13.2) — the generic catalogue sentence is returned instead, and one
+// warning names the code and the missing slot names, never their values (F7).
+func renderMessageSlots(code LLMErrorCode, text string, facts messageSlotFacts) string {
+	rendered := fillMessageSlots(text, facts)
+	if missing := unfilledSlotNames(rendered); len(missing) > 0 {
+		warnMissingSlotFacts(code, missing)
+		return defaultUserMessage(CodeUnknown)
+	}
+	return rendered
+}
+
+// renderMessageVoices renders a code's chat sentence and its neutral twin
+// once, from the same facts (#1857 design note D-B B1). A missing fact sends
+// BOTH voices to the generic sentence together, with one warning (F7).
+func renderMessageVoices(code LLMErrorCode, chat, neutral string, facts messageSlotFacts) (string, string) {
+	renderedChat := fillMessageSlots(chat, facts)
+	renderedNeutral := fillMessageSlots(neutral, facts)
+	missing := unfilledSlotNames(renderedChat + " " + renderedNeutral)
+	if len(missing) > 0 {
+		warnMissingSlotFacts(code, missing)
+		generic := defaultUserMessage(CodeUnknown)
+		return generic, generic
+	}
+	return renderedChat, renderedNeutral
+}
+
+// unfilledSlotNames returns the distinct slot names (without braces) still
+// literal in text, in order of first appearance.
+func unfilledSlotNames(text string) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, slot := range messageSlotPattern.FindAllString(text, -1) {
+		name := slot[1 : len(slot)-1]
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// warnMissingSlotFacts is the one diagnostic for a catalogue sentence that
+// could not be shown because a slot had no fact (#1857 F7): the code and the
+// slot NAMES only — never a slot value or the sentence.
+func warnMissingSlotFacts(code LLMErrorCode, missing []string) {
+	logger.WarnCF("agent", "catalogue sentence has a slot without a fact; the generic sentence is used",
+		map[string]any{"code": string(code), "missing_slots": missing})
+}
+
+// fillMessageSlots substitutes every slot that has a fact and leaves the
+// others literal for the caller's fail-closed check.
+func fillMessageSlots(text string, facts messageSlotFacts) string {
 	replacements := make([]string, 0, 8)
 	if facts.cli != "" {
 		replacements = append(replacements, "{cli}", facts.cli)
@@ -82,9 +132,6 @@ func renderMessageSlots(text string, facts messageSlotFacts) string {
 	if len(replacements) > 0 {
 		text = strings.NewReplacer(replacements...).Replace(text)
 	}
-	if messageHasSlots(text) {
-		return defaultUserMessage(CodeUnknown)
-	}
 	return text
 }
 
@@ -97,7 +144,25 @@ func RenderCLIMessage(text, cli, model string) string {
 	if !messageHasSlots(text) {
 		return text
 	}
-	return renderMessageSlots(text, messageSlotFacts{cli: CLIDisplayName(cli), model: strings.TrimSpace(model)})
+	return renderMessageSlots(catalogueCodeOfSentence(text), text,
+		messageSlotFacts{cli: CLIDisplayName(cli), model: strings.TrimSpace(model)})
+}
+
+// catalogueCodeOfSentence names the code whose catalogue sentence (chat or
+// neutral, message or variant) is text, for the missing-fact diagnostic of a
+// caller that holds only the sentence; unknown when none matches.
+func catalogueCodeOfSentence(text string) LLMErrorCode {
+	for _, code := range generated.LLMErrorCodes {
+		if generated.LLMErrorUserMessages[code] == text || generated.LLMErrorNeutralMessages[code] == text {
+			return LLMErrorCode(code)
+		}
+		for key, sentence := range generated.LLMErrorMessageVariants[code] {
+			if sentence == text || generated.LLMErrorNeutralVariants[code][key] == text {
+				return LLMErrorCode(code)
+			}
+		}
+	}
+	return CodeUnknown
 }
 
 // catalogueSentence returns a code's catalogue sentence, or its named
@@ -109,6 +174,25 @@ func catalogueSentence(code LLMErrorCode, variant string) string {
 		}
 		logger.WarnCF("agent", "catalogue variant missing — using the code's message",
 			map[string]any{"code": string(code), "variant": variant})
+	}
+	return defaultUserMessage(code)
+}
+
+// neutralCatalogueSentence is catalogueSentence in the neutral voice (#1857
+// design note D-B B1): the contract's neutral twin of the code's sentence or
+// of its named variant. A sentence without a twin has no first person and
+// serves both voices, so the chat sentence is returned.
+func neutralCatalogueSentence(code LLMErrorCode, variant string) string {
+	if variant != "" {
+		if _, ok := generated.LLMErrorMessageVariants[string(code)][variant]; ok {
+			if twin := generated.LLMErrorNeutralVariants[string(code)][variant]; twin != "" {
+				return twin
+			}
+			return catalogueSentence(code, variant)
+		}
+	}
+	if twin := generated.LLMErrorNeutralMessages[string(code)]; twin != "" {
+		return twin
 	}
 	return defaultUserMessage(code)
 }
@@ -128,6 +212,13 @@ const (
 	cliVariantStreamRead  = "stream_read"
 	cliVariantStart       = "start"
 	cliVariantOutOfCredit = "out_of_credit"
+	// cliVariantNoProgram is external_cli_invalid_config's sentence for the
+	// B16 pre-checks that refuse before any program is known (W19).
+	cliVariantNoProgram = "no_program"
+	// toolDedupVariantMCP is tool_assembly_duplicate's sentence for a
+	// collision with an MCP tool among the pair (W20); the code's own
+	// sentence (W21) is the no-MCP, fail-closed class.
+	toolDedupVariantMCP = "mcp"
 )
 
 // cliModelUnavailableTypes are the structured error types a CLI reports when
@@ -268,21 +359,24 @@ func cliTechnicalDetail(cliName string, f cliFailure) string {
 
 // externalCLIRunError is a fatal external-CLI run failure whose cause the
 // CLI-only classifier already named. It carries the code and the rendered
-// catalogue sentence to every surface (§13.8.4 rule 2). Error() is the
-// internal, logged form; it keeps the "external-cli run failed: " prefix,
+// catalogue sentence in both voices to every surface (§13.8.4 rule 2): text
+// is the chat form, neutral the form for surfaces outside a chat. Error() is
+// the internal, logged form; it keeps the "external-cli run failed: " prefix,
 // which reaches gateway.log only — every user and agent surface reads the
 // code and sentence instead (rule 3).
 type externalCLIRunError struct {
-	code LLMErrorCode
-	text string
+	code    LLMErrorCode
+	text    string
+	neutral string
 }
 
 func (e *externalCLIRunError) Error() string { return "external-cli run failed: " + e.text }
 
 // agentText is the agent-readable failure for the parent's tool result and
-// completion message: the typed code and its sentence (§13.8.4).
+// completion message: the typed code and its NEUTRAL sentence (§13.8.4,
+// design note D-B B1 — these surfaces are outside the chat).
 func (e *externalCLIRunError) agentText() string {
-	return "(" + string(e.code) + ") " + e.text
+	return "(" + string(e.code) + ") " + e.neutral
 }
 
 // RefusalText is what the delegate tool may show the calling agent as written
@@ -334,9 +428,10 @@ func (e *toolDedupError) Error() string {
 // refusal texts and errors.Is checks callers already rely on keep working —
 // while every user surface reads code and sentence (§13.8.4 rule 2).
 type externalCLIRefusalError struct {
-	code  LLMErrorCode
-	text  string
-	cause error
+	code    LLMErrorCode
+	text    string // chat form
+	neutral string // neutral form (design note D-B B1)
+	cause   error
 }
 
 func (e *externalCLIRefusalError) Error() string { return e.cause.Error() }
@@ -347,11 +442,9 @@ func (e *externalCLIRefusalError) Unwrap() error { return e.cause }
 // map. An unknown or empty CLI leaves the slot without a fact, so the
 // generic sentence is used (renderMessageSlots) — never a literal slot.
 func newExternalCLIRefusal(code LLMErrorCode, variant, cli string, cause error) *externalCLIRefusalError {
-	return &externalCLIRefusalError{
-		code:  code,
-		text:  renderMessageSlots(catalogueSentence(code, variant), messageSlotFacts{cli: CLIDisplayName(cli)}),
-		cause: cause,
-	}
+	text, neutral := renderMessageVoices(code, catalogueSentence(code, variant),
+		neutralCatalogueSentence(code, variant), messageSlotFacts{cli: CLIDisplayName(cli)})
+	return &externalCLIRefusalError{code: code, text: text, neutral: neutral, cause: cause}
 }
 
 // classifyDriverStartError types a driver Run (start) failure: an unusable
@@ -381,45 +474,62 @@ func translateKnownCauseError(err error) (LLMError, bool) {
 	var refusalErr *externalCLIRefusalError
 	if errors.As(err, &refusalErr) {
 		return LLMError{
-			Code:      refusalErr.code,
-			Message:   refusalErr.text,
-			Retryable: isRetryable(refusalErr.code),
+			Code:           refusalErr.code,
+			Message:        refusalErr.text,
+			NeutralMessage: refusalErr.neutral,
+			Retryable:      isRetryable(refusalErr.code),
 		}, true
 	}
 	var cliErr *externalCLIRunError
 	if errors.As(err, &cliErr) {
 		return LLMError{
-			Code:      cliErr.code,
-			Message:   cliErr.text,
-			Retryable: isRetryable(cliErr.code),
+			Code:           cliErr.code,
+			Message:        cliErr.text,
+			NeutralMessage: cliErr.neutral,
+			Retryable:      isRetryable(cliErr.code),
 		}, true
 	}
 	var limitErr *agentRequestLimitError
 	if errors.As(err, &limitErr) {
+		chat, neutral := renderMessageVoices(CodeAgentRequestLimit,
+			defaultUserMessage(CodeAgentRequestLimit), neutralCatalogueSentence(CodeAgentRequestLimit, ""),
+			messageSlotFacts{minutes: limitErr.waitMinutes()})
 		return LLMError{
-			Code: CodeAgentRequestLimit,
-			Message: renderMessageSlots(defaultUserMessage(CodeAgentRequestLimit),
-				messageSlotFacts{minutes: limitErr.waitMinutes()}),
-			Retryable: isRetryable(CodeAgentRequestLimit),
-			Detail:    buildDetail(nil, err.Error()),
+			Code:           CodeAgentRequestLimit,
+			Message:        chat,
+			NeutralMessage: neutral,
+			Retryable:      isRetryable(CodeAgentRequestLimit),
+			Detail:         buildDetail(nil, err.Error()),
 		}, true
 	}
 	var dupErr *toolDedupError
 	if errors.As(err, &dupErr) {
-		return LLMError{
-			Code:      CodeToolAssemblyDuplicate,
-			Message:   defaultUserMessage(CodeToolAssemblyDuplicate),
-			Retryable: isRetryable(CodeToolAssemblyDuplicate),
-		}, true
+		return toolDedupLLMErrorFor(dupErr.mcpInvolved), true
 	}
 	return LLMError{}, false
 }
 
+// toolDedupLLMErrorFor is tool_assembly_duplicate's LLMError in both voices:
+// the MCP variant (W20) when an MCP tool is among the colliding pair,
+// otherwise the code's own no-MCP sentence (W21).
+func toolDedupLLMErrorFor(mcpInvolved bool) LLMError {
+	variant := ""
+	if mcpInvolved {
+		variant = toolDedupVariantMCP
+	}
+	return LLMError{
+		Code:           CodeToolAssemblyDuplicate,
+		Message:        catalogueSentence(CodeToolAssemblyDuplicate, variant),
+		NeutralMessage: neutralCatalogueSentence(CodeToolAssemblyDuplicate, variant),
+		Retryable:      isRetryable(CodeToolAssemblyDuplicate),
+	}
+}
+
 // toolDedupLLMError is the B10 emit's LLMError for the FR-066 detector's
-// verdict: always tool_assembly_duplicate. The MCP-involved fact selects no
-// separate sentence yet (the catalogue carries one generic sentence for the
-// code); it is logged so the operator sees which class fired, and an
-// untyped error fails closed to the no-MCP class.
+// verdict: always tool_assembly_duplicate. The MCP-involved fact selects the
+// catalogue variant (W20 with an MCP tool, W21 without); it is also logged so
+// the operator sees which class fired, and an untyped error fails closed to
+// the no-MCP class.
 func toolDedupLLMError(err error) LLMError {
 	mcpInvolved := false
 	var dupErr *toolDedupError
@@ -428,35 +538,94 @@ func toolDedupLLMError(err error) LLMError {
 	}
 	logger.WarnCF("agent", "tool assembly duplicate classified",
 		map[string]any{"code": string(CodeToolAssemblyDuplicate), "mcp_involved": mcpInvolved})
-	return LLMError{
-		Code:      CodeToolAssemblyDuplicate,
-		Message:   defaultUserMessage(CodeToolAssemblyDuplicate),
-		Retryable: isRetryable(CodeToolAssemblyDuplicate),
-	}
+	return toolDedupLLMErrorFor(mcpInvolved)
 }
 
 // persistedCatalogueMessage is the sentence an untrusted-stage error record
-// stores for an already-classified code. A code whose catalogue sentence has
-// no slots stores that sentence, as before. A slotted sentence (#1857) keeps
-// the caller's message only when it IS that sentence (or one of its
-// variants) with every slot filled, proven by matching the template, so no
-// other text can ride the record; otherwise the generic sentence is stored,
-// never a literal slot.
+// stores for an already-classified code. A code whose catalogue sentences
+// have no slots stores the caller's message when it is exactly one of the
+// code's variants (#1857: the selected variant survives), otherwise the
+// code's sentence, as before. A slotted code (#1857) keeps the caller's
+// message only when it IS one of its sentences with every slot filled,
+// proven by matching the template, so no other text can ride the record;
+// otherwise the generic sentence is stored, never a literal slot.
 func persistedCatalogueMessage(code LLMErrorCode, message string) string {
-	template := defaultUserMessage(code)
-	if !messageHasSlots(template) {
-		return template
-	}
-	candidates := []string{template}
-	for _, variant := range generated.LLMErrorMessageVariants[string(code)] {
-		candidates = append(candidates, variant)
-	}
-	for _, candidate := range candidates {
-		if renderedFromTemplate(message, candidate) {
-			return message
+	if !catalogueCodeHasSlots(code) {
+		for _, variant := range generated.LLMErrorMessageVariants[string(code)] {
+			if message == variant {
+				return message
+			}
 		}
+		return defaultUserMessage(code)
+	}
+	if matchesCatalogueSentence(code, message) {
+		return message
 	}
 	return defaultUserMessage(CodeUnknown)
+}
+
+// catalogueSentences lists a code's chat sentences: its message, then its
+// variants.
+func catalogueSentences(code LLMErrorCode) []string {
+	variants := generated.LLMErrorMessageVariants[string(code)]
+	candidates := make([]string, 0, 1+len(variants))
+	candidates = append(candidates, defaultUserMessage(code))
+	for _, variant := range variants {
+		candidates = append(candidates, variant)
+	}
+	return candidates
+}
+
+// catalogueCodeHasSlots reports whether any of a code's chat sentences
+// (message or variant) carries a message slot.
+func catalogueCodeHasSlots(code LLMErrorCode) bool {
+	for _, sentence := range catalogueSentences(code) {
+		if messageHasSlots(sentence) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesCatalogueSentence reports whether message is one of the code's chat
+// sentences with every slot filled.
+func matchesCatalogueSentence(code LLMErrorCode, message string) bool {
+	for _, candidate := range catalogueSentences(code) {
+		if renderedFromTemplate(message, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// assembledCatalogueSentence is the server layer of design note D-A
+// (option 1): the trust decision for a message carried by a code, applied
+// at the live frame (WireLLMError) and at the persisted record
+// (persistErrorTranscript).
+//
+//   - A code whose sentences have no slots: message unchanged, not assembled
+//     (today's behaviour; provider-message trust is decided elsewhere).
+//   - A slotted code whose message is one of its sentences with every slot
+//     filled: that message, assembled.
+//   - Any other text on a slotted code (a literal slot, a missing fact, a
+//     foreign text): the generic sentence, assembled — a full sentence is
+//     safe to show as sent — and one warning naming the code and the slot
+//     names that had no fact, never their values (F7). Never a raw slot.
+func assembledCatalogueSentence(code LLMErrorCode, message string) (string, bool) {
+	if !catalogueCodeHasSlots(code) {
+		return message, false
+	}
+	if matchesCatalogueSentence(code, message) {
+		return message, true
+	}
+	missing := unfilledSlotNames(message)
+	if len(missing) == 0 {
+		// No literal slot in the text (a foreign or already-generic text):
+		// name the slots the code's own sentence needed.
+		missing = unfilledSlotNames(defaultUserMessage(code))
+	}
+	warnMissingSlotFacts(code, missing)
+	return defaultUserMessage(CodeUnknown), true
 }
 
 // renderedFromTemplate reports whether text is template with each slot

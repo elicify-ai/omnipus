@@ -15,14 +15,15 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 )
 
-// renderForRun fills the sanitized sentence's slots with the facts the
-// dispatch site knows — the CLI's display name and the model Omnipus passed —
-// and computes the technical-details text (cli display name · exit status ·
-// kind). A slot with no fact falls back to the generic catalogue sentence
-// (renderMessageSlots), never a literal slot.
+// renderForRun fills the sanitized sentence's slots — chat and neutral
+// voice, once, from the same facts (design note D-B B1) — with the facts the
+// dispatch site knows: the CLI's display name and the model Omnipus passed.
+// It also computes the technical-details text (cli display name · exit
+// status · kind). A slot with no fact sends both voices to the generic
+// catalogue sentence (renderMessageVoices), never a literal slot.
 func (s SanitizedRunnerError) renderForRun(cli, model string) SanitizedRunnerError {
 	cliName := CLIDisplayName(cli)
-	s.AssistantText = renderMessageSlots(s.AssistantText, messageSlotFacts{
+	s.AssistantText, s.NeutralText = renderMessageVoices(s.Code, s.AssistantText, s.NeutralText, messageSlotFacts{
 		cli:   cliName,
 		model: model,
 		n:     s.failure.maxTurns,
@@ -80,5 +81,5 @@ func handleExternalRunError(
 		"code", string(sanitized.Code),
 		"variant", sanitized.failure.variant,
 		"retryable", sanitized.Retryable)
-	return &externalCLIRunError{code: sanitized.Code, text: sanitized.AssistantText}
+	return &externalCLIRunError{code: sanitized.Code, text: sanitized.AssistantText, neutral: sanitized.NeutralText}
 }

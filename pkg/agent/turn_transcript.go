@@ -626,6 +626,12 @@ func (ts *turnState) canWriteErrorTranscript(kind, stage, message string, allowA
 }
 
 func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, content string, providerMessage bool) {
+	// #1857 design note D-A option 1 (server layer, persisted record): the
+	// same trust decision as the live frame (WireLLMError), so a reload
+	// shows the same text and flag. A slotted code keeps only its filled
+	// catalogue sentence; anything else becomes the generic sentence.
+	content, assembled := assembledCatalogueSentence(llm.Code, content)
+	providerMessage = providerMessage || assembled
 	entry := session.TranscriptEntry{
 		ID:             uuid.New().String(),
 		Type:           session.EntryTypeSystem,

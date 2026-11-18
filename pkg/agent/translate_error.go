@@ -386,6 +386,12 @@ type LLMError struct {
 	Model           string
 	RequestID       string
 	ProviderMessage bool
+
+	// NeutralMessage is Message in the neutral voice (#1857 design note
+	// D-B B1), Go-only and never on the wire: set by a known-cause producer
+	// that rendered both voices from the same facts, for surfaces outside a
+	// chat (turnErrorUserText). "" when the producer rendered only Message.
+	NeutralMessage string
 }
 
 // userMessages maps each code to its generic user-facing message. Generic
@@ -1287,14 +1293,17 @@ func turnErrorUserText(err error) string {
 	// is the chat-surface text delivered through WireLLMError, never this
 	// function's.
 	//
-	// #1857: a catalogue sentence with message slots ({cli}, {n}, …) cannot
-	// be shown as stored; its known-cause producer already rendered it from
-	// observed facts (never provider text), so that rendering is the plain
-	// message here.
+	// #1857 (design note D-B B1): task surfaces are outside the chat, so they
+	// carry the NEUTRAL form. A known-cause producer rendered it from the same
+	// observed facts as the chat form (never provider text), so that
+	// rendering is the plain message here.
+	if llm.NeutralMessage != "" {
+		return llm.NeutralMessage
+	}
 	if messageHasSlots(defaultUserMessage(llm.Code)) {
 		return llm.Message
 	}
-	return defaultUserMessage(llm.Code)
+	return neutralCatalogueSentence(llm.Code, "")
 }
 
 // userVisibleTurnError is what the session worker publishes as a failed

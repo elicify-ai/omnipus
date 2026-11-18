@@ -614,8 +614,9 @@ func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestRes
 	if ra.ok {
 		resp = smokeTestOK(ra.responseText, ra.durationMs(), ra.usedAgentWorkspace)
 	} else {
-		// #1857: fill the CLI sentence's {cli}/{model} slots from the facts
-		// this handler knows; a slot with no fact falls back to the generic
+		// #1857: fill the CLI sentence's {cli}/{model} slots (errMsg is the
+		// neutral form, sanitizeSmokeTestRunnerError) from the facts this
+		// handler knows; a slot with no fact falls back to the generic
 		// sentence, never a literal slot.
 		resp = smokeTestFail(agent.RenderCLIMessage(ra.errMsg, ra.cli, ra.model), ra.durationMs(), ra.usedAgentWorkspace)
 	}
@@ -697,6 +698,12 @@ func sanitizeSmokeTestRunnerError(rawMessage, structuredType string) string {
 	}
 	if sanitized.AssistantText == agent.UserMessageForCode(agent.CodeExternalCLIFailed) {
 		return agent.UserMessageForCode(agent.CodeUnknown)
+	}
+	// #1857 (design note D-B B1): the Settings test is outside a chat, so it
+	// shows the neutral form of the catalogue sentence; buildResponse fills
+	// its slots.
+	if sanitized.NeutralText != "" {
+		return sanitized.NeutralText
 	}
 	return sanitized.AssistantText
 }
