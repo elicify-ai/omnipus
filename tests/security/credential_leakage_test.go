@@ -323,21 +323,28 @@ func auditOnForLeakScan() testutil.Option {
 }
 
 // startNoCreditProviderUpstream starts a stand-in provider whose key probe
-// answers 402: the key authenticates but the account has no credit —
-// pkg/providers/validate.go::classify maps status 402 to OutcomeNoCredit.
-// Onboarding and PUT /providers/{id} both proceed on that warning outcome
-// (ValidationResult.Blocks is true only for invalid_key) and each write a
-// provider_key_validated audit entry
+// answers 402: the key authenticates but the account has no credit.
+// pkg/providers/validate.go::probeCompletion probes POST {base}/chat/completions
+// (validate.go:897-898) for every non-Bedrock provider — that is the one route
+// BOTH audited flows hit: onboarding
+// (pkg/gateway/rest_onboarding.go::validateAndStoreOnboardingKey → ValidateKey)
+// and PUT /providers/{id}
+// (pkg/gateway/rest_providers.go::providerPutValidateKey → ValidateKey). A
+// catalog provider runs NO /models pre-fetch first (FR-022,
+// pkg/providers/validate.go:712-723), so anything else arriving here is not
+// the probe and gets a 404 — which validates to unreachable and fails the
+// outcome assertion in requireKeyFlowAuditEntries. pkg/providers/validate.go::
+// classify maps status 402 to OutcomeNoCredit; both flows proceed on that
+// warning outcome (ValidationResult.Blocks is true only for invalid_key) and
+// each write a provider_key_validated audit entry
 // (pkg/gateway/rest_onboarding.go::validateAndStoreOnboardingKey,
 // pkg/gateway/rest_providers.go::providerPutRespond). A probe that answers
 // 200 classifies the key valid and writes NO entry, which would leave the
-// audit checks here nothing to require — hence 402, not 200. The anthropic
-// probe is a GET {base}/v1/models (pkg/providers/validate.go), so any /models
-// path gets the 402.
+// audit checks here nothing to require — hence 402, not 200.
 func startNoCreditProviderUpstream(t *testing.T) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/models") {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 			http.NotFound(w, r)
 			return
 		}
@@ -386,7 +393,11 @@ type keyFlowAuditEntries struct {
 // or by the first matching entry: onboarding stamps source "onboarding"
 // (pkg/gateway/rest_onboarding.go::validateAndStoreOnboardingKey), the
 // provider update writes outcome without a source
-// (pkg/gateway/rest_providers.go::providerPutRespond). A missing log, a
+// (pkg/gateway/rest_providers.go::providerPutRespond). Every entry of either
+// flow must also record details.outcome "no_credit" — the 402 stand-in's
+// classification (pkg/providers/validate.go::classify: 402 → OutcomeNoCredit,
+// 404 → OutcomeUnreachable) — so a stand-in answering the wrong route fails
+// here even though entries still get written. A missing log, a
 // malformed line, or a missing entry FAILS here — an audit-leak scan of
 // nothing proves nothing, so it is never skipped.
 func requireKeyFlowAuditEntries(t *testing.T, path, providerID string) keyFlowAuditEntries {
@@ -410,12 +421,25 @@ func requireKeyFlowAuditEntries(t *testing.T, path, providerID string) keyFlowAu
 		}
 		e := providerKeyValidatedEntry{line: line, details: entry.Details}
 		source, hasSource := entry.Details["source"].(string)
+		outcome, _ := entry.Details["outcome"].(string)
+		// Both key-flow entries must record no_credit: the stand-in answers
+		// 402 on the one probe route (startNoCreditProviderUpstream), and
+		// pkg/providers/validate.go::classify maps status 402 to
+		// OutcomeNoCredit (404 would classify as unreachable). Asserting the
+		// outcome is what pins the stand-in to the real probe route — entries
+		// would still be written if the probe hit a 404, only with the wrong
+		// outcome, and this require fails on that.
+		if (hasSource && source == "onboarding") || (!hasSource && outcome != "") {
+			require.Equal(t, "no_credit", outcome,
+				"provider_key_validated entry for %s must record the no_credit outcome the 402 stand-in produces (pkg/providers/validate.go::classify); got %q in line: %s",
+				providerID, outcome, truncate(line, 200))
+		}
 		switch {
 		case hasSource && source == "onboarding":
 			flows.onboarding = append(flows.onboarding, e)
 		case !hasSource:
 			// The provider-update entry, matched by its outcome field.
-			if outcome, _ := entry.Details["outcome"].(string); outcome != "" {
+			if outcome != "" {
 				flows.update = append(flows.update, e)
 			}
 		}
