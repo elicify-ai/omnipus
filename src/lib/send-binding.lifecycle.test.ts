@@ -1,7 +1,7 @@
 // #1428 step 2 RED. Spec BR-13, BR-13b, BR-18, BR-21. B-13, B-14, B-15, B-17.
 import { describe, expect, it } from 'vitest'
 import { act } from 'react'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
@@ -18,6 +18,12 @@ import {
   sent,
   typeIntoComposer,
 } from '@/test/sendBinding1428'
+
+function dropFile(name: string): void {
+  const zone = screen.getByTestId('composer-card').parentElement
+  if (!zone) throw new Error('drop zone missing')
+  fireEvent.drop(zone, { dataTransfer: { files: [new File(['x'], name, { type: 'text/plain' })] } })
+}
 
 describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', () => {
   it('BR-13 a queued send waits until its own chat is open, and Retry keeps the id', async () => {
@@ -109,47 +115,70 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
   })
 
   it('BR-21 a restored upload still sends its original ref after 60 other uploads', async () => {
+    // Spec BR-21 / 4.6.1 "Restore, then Send": the restored draft keeps the
+    // uploaded ref. Sixty later uploads go through the composer, not the mock.
+    // A second upload of orig.txt returns a different ref, so a re-upload cannot
+    // impersonate the stored one.
     resetBindingWorld()
     mountComposer()
     const original = 'media://workspace/w1/original'
+    const reupload = 'media://workspace/w1/orig-again'
+    let origUploads = 0
+    apiMocks.uploadFiles.mockImplementation(async (_sessionId: unknown, files: unknown) => {
+      const list = Array.isArray(files) ? files as { name?: string }[] : []
+      const name = list[0]?.name ?? 'file'
+      const ref = name === 'orig.txt'
+        ? (origUploads += 1) === 1 ? original : reupload
+        : `media://workspace/w1/${name.replace(/\.txt$/, '')}`
+      return { files: [{ ref, path: name, name, content_type: 'text/plain' }] }
+    })
+    dropFile('orig.txt')
+    const user = userEvent.setup()
+    await typeIntoComposer('resend me')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => {
+      expect(framesOf('message', sent()).some((frame) => (frame as { content?: string }).content === 'resend me')).toBe(true)
+    })
+    const firstId = (framesOf('message', sent())[0] as { client_message_id?: string }).client_message_id
+    const { deliverFrame } = await import('@/test/sendBinding1428')
+    deliverFrame({
+      type: 'send_refused',
+      reason: 'wrong_chat',
+      refused_frame: 'message',
+      session_id: 'chat-b',
+      origin: { kind: 'chat', session_id: 'chat-a' },
+      client_message_id: firstId,
+    })
+    expect(screen.getByTestId('chat-input'), 'BR-21: the refusal restores the text').toHaveValue('resend me')
+    expect(screen.getByText('orig.txt'), 'BR-21: the uploaded file is restored with the draft').toBeTruthy()
+    act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
     for (let i = 0; i < 60; i++) {
-      apiMocks.uploadFiles.mockResolvedValueOnce({
-        files: [{ ref: `media://workspace/w1/other-${i}`, name: `o${i}.txt`, content_type: 'text/plain' }],
+      dropFile(`other-${i}.txt`)
+      const box = screen.getByTestId('chat-input')
+      fireEvent.change(box, { target: { value: `other ${i}` } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => {
+        expect(
+          framesOf('message', sent()).some((frame) => (frame as { content?: string }).content === `other ${i}`),
+          `BR-21: other ${i} was sent through the composer`,
+        ).toBe(true)
       })
     }
-    for (let i = 0; i < 60; i++) {
-      await apiMocks.uploadFiles('chat-a', [new File(['o'], `o${i}.txt`, { type: 'text/plain' })], 'w1')
-    }
-    expect(apiMocks.uploadFiles.mock.calls, 'BR-21: the 60 other uploads ran').toHaveLength(60)
-    expect(
-      apiMocks.uploadFiles.mock.calls.some((call) => JSON.stringify(call).includes(original)),
-      'BR-21: none of those uploads is the restored ref',
-    ).toBe(false)
-    const { requireFn } = await import('@/test/send-binding.module')
-    // Path column of spec 4.6.1 ("Restore, then Send"), not an invented slug.
-    const capture = await requireFn('../lib/bound-send', 'captureSubmission', 'spec 4.6.1 / BR-21')
-    const frozen = capture('Restore, then Send', {
-      text: 'resend me',
-      files: [{ kind: 'uploaded', id: 'f1', ref: original, workspaceId: 'w1', name: 'orig.txt', mime: 'text/plain' }],
-      libraryPicks: [],
-      workspaceId: 'w1',
-      agentId: 'mia',
-      origin: { kind: 'chat', session_id: 'chat-a' },
-      target: 'chat-a',
-    })
-    const sendBound = await requireFn('../lib/bound-send', 'sendBound', 'spec 4.6.1 / BR-21')
-    sendBound(frozen)
-    expect(framesOf('message', sent()), 'BR-21: the original ref is sent, not a later upload').toEqual([
+    const later = framesOf('message', sent()).filter((frame) => (frame as { content?: string }).content === 'other 59')
+    expect(JSON.stringify(later), 'BR-21: a later upload really carries other-59').toContain('other-59')
+    act(() => { useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core') })
+    expect(screen.getByTestId('chat-input'), 'BR-21: A still holds the restored text').toHaveValue('resend me')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    const restored = framesOf('message', sent()).filter((frame) => (frame as { content?: string }).content === 'resend me')
+    expect(restored.at(-1), 'BR-21: the restored send carries the original ref').toEqual(
       expect.objectContaining({
         content: 'resend me',
         media: [original],
         origin: { kind: 'chat', session_id: 'chat-a' },
       }),
-    ])
-    expect(
-      JSON.stringify(framesOf('message', sent())),
-      'BR-21: a later upload ref is not on the frame',
-    ).not.toContain('other-59')
+    )
+    expect(JSON.stringify(restored.at(-1)), 'BR-21: a later upload ref is not on the restored frame').not.toContain('other-59')
+    expect(JSON.stringify(restored.at(-1)), 'BR-21: a re-upload is not the stored ref').not.toContain(reupload)
   })
 
   it('BR-18 sign-out drops an in-flight upload, and completing it changes nothing', async () => {

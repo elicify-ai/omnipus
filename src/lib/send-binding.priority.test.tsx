@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { act } from 'react'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { ApiError } from '@/lib/api-error'
 import { addLibraryAttachment } from '@/lib/library-attachment'
 import { useChatStore } from '@/store/chat'
 import { emptySessionState } from '@/store/chat/session'
@@ -144,10 +145,8 @@ describe('refusal, restore and remount (spec 4.8 / 4.9)', () => {
   })
 
   it('BR-12 a confirmed 404 is a deleted chat; a 500 is not', async () => {
-    // F7 (chief 2026-11-18, option 1): this error{code:not_found} frame IS the
-    // confirmed-404 signal (spec r9 BR-12). Kept as written. A REST 404 alone
-    // must not mark the chat deleted; that case is recorded in RED-FE-GAPS.md
-    // and is not added here — the lead is asking the chief before that edit.
+    // Live-positive control for the REST-404 test below (spec r9 BR-12).
+    // The confirmed-404 signal is this error frame, not an HTTP status.
     resetBindingWorld()
     mountComposer()
     await typeIntoComposer('gone')
@@ -174,6 +173,30 @@ describe('refusal, restore and remount (spec 4.8 / 4.9)', () => {
     } as never)
     expect(screen.getAllByText('Deleted chat'), 'BR-12: a 500 does not add a deleted item').toHaveLength(1)
     expect(screen.getByText(UPLOAD_404)).toBeTruthy()
+  })
+
+  it('BR-12 a REST 404 alone does not mark the chat deleted', async () => {
+    // Spec r9 BR-12: a REST 404 is not the confirmed-404 signal. Spec 4.6.3:
+    // an upload HTTP 404 restores the draft with "This chat no longer exists"
+    // and sends no message. The error{code:not_found} frame is the signal that
+    // does mark "Deleted chat"; that control is the previous test in this file.
+    resetBindingWorld()
+    mountComposer()
+    drop('gone.txt')
+    apiMocks.uploadFiles.mockRejectedValueOnce(new ApiError(404, 'missing'))
+    const user = userEvent.setup()
+    await typeIntoComposer('still here')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    expect(apiMocks.uploadFiles, 'BR-12: the file is a REST upload').toHaveBeenCalled()
+    const upload = apiMocks.uploadFiles.mock.results.at(-1)?.value as Promise<unknown>
+    await expect(upload, 'BR-12: the upload answer is HTTP 404').rejects.toMatchObject({ status: 404 })
+    expect(
+      screen.queryByText('Deleted chat'),
+      'BR-12: a REST 404 alone does not mark the chat deleted',
+    ).toBeNull()
+    expect(framesOf('message', sent()), 'BR-12: an upload 404 sends no message').toEqual([])
+    expect(screen.getByText(UPLOAD_404), 'BR-12: the upload 404 uses the class reason').toBeTruthy()
+    expect(screen.getByTestId('chat-input'), 'BR-12: the text stays in the draft').toHaveValue('still here')
   })
 })
 

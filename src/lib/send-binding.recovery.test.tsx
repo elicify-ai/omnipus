@@ -33,22 +33,34 @@ describe('recovery UI and the leave warning (spec 4.9 / B-23)', () => {
     resetBindingWorld()
     mountComposer()
     const user = userEvent.setup()
+    // Spec 4.8: the first terminal outcome for a client_message_id wins.
+    // A refusal and a confirmed 404 are two messages, not two frames for one id.
     await typeIntoComposer('left behind')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
-    const id = (framesOf('message', sent())[0] as { client_message_id?: string } | undefined)?.client_message_id ?? 'm-left'
+    const refusedId = (framesOf('message', sent())[0] as { client_message_id?: string } | undefined)?.client_message_id
+    expect(refusedId, 'BR-19: the refusal has its own client_message_id').toEqual(expect.any(String))
     deliverFrame({
       type: 'send_refused',
       reason: 'wrong_chat',
       refused_frame: 'message',
       session_id: 'chat-b',
       origin: { kind: 'chat', session_id: 'chat-a' },
-      client_message_id: id,
+      client_message_id: refusedId,
     })
+    // The first send starts a turn, which replaces Send with Stop. Ending that
+    // turn is not a second outcome for refusedId (the done names no message id).
+    deliverFrame({ type: 'done', session_id: 'chat-a' } as never)
+    await user.clear(screen.getByTestId('chat-input'))
+    await typeIntoComposer('deleted origin')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    const deletedId = (framesOf('message', sent()).at(-1) as { client_message_id?: string } | undefined)?.client_message_id
+    expect(deletedId, 'BR-19: the deleted origin has its own client_message_id').toEqual(expect.any(String))
+    expect(deletedId, 'BR-19: the two outcomes are different messages').not.toBe(refusedId)
     deliverFrame({
       type: 'error',
       code: 'not_found',
       message: '404',
-      client_message_id: id,
+      client_message_id: deletedId,
       session_id: 'chat-a',
     } as never)
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })

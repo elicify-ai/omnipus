@@ -28,6 +28,14 @@ function dropFile(name: string): void {
   fireEvent.drop(zone, { dataTransfer: { files: [new File(['x'], name, { type: 'text/plain' })] } })
 }
 
+/** uploadFiles(sessionId, File[], workspaceId). File does not JSON-serialize its name. */
+function uploadedFileName(call: readonly unknown[]): string {
+  const files = call[1]
+  if (!Array.isArray(files)) return ''
+  const file = files[0] as { name?: unknown } | undefined
+  return typeof file?.name === 'string' ? file.name : ''
+}
+
 async function reachNewChat(session: ReturnType<typeof makeSession>): Promise<void> {
   seedSavedChat(session)
   apiMocks.fetchSessions.mockResolvedValue([session])
@@ -66,14 +74,14 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     await act(async () => { pendingCreates[0]!({ id: 's1', agent_id: 'mia', workspace_id: 'w1' }) })
     expect(useSessionStore.getState().activeSessionId, 'BR-5: S1 is not activated while K2 is open').toBeNull()
     expect(screen.getByText(SWITCHED), 'BR-5: K1 is ineligible and says switched chats').toBeTruthy()
-    const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => JSON.stringify(call).includes('k1.txt'))
+    const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => uploadedFileName(call) === 'k1.txt')
     expect(k1Uploads, 'BR-5: K1\'s file is uploaded').not.toEqual([])
     expect(
-      k1Uploads.every((call) => call[2] === 'w1' || JSON.stringify(call).includes('w1')),
+      k1Uploads.every((call) => call[2] === 'w1'),
       'BR-5: K1\'s file is uploaded to W1',
     ).toBe(true)
     expect(
-      k1Uploads.some((call) => call[2] === 'w2' || (JSON.stringify(call).includes('w2') && JSON.stringify(call).includes('k1.txt'))),
+      k1Uploads.some((call) => call[2] === 'w2'),
       'BR-5: K1\'s file is not uploaded to W2',
     ).toBe(false)
     expect(framesOf('message', sent()).some((frame) => (frame as { content?: string }).content === 'private K2'), 'BR-5: K2\'s text is its own send').toBe(true)
@@ -118,13 +126,14 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     })
     expect(useSessionStore.getState().activeSessionId, 'BR-5 upload: S1 is not activated while K2 is open').not.toBe('s1')
     expect(screen.getByText(SWITCHED), 'BR-5 upload: K1 says switched chats').toBeTruthy()
-    const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => JSON.stringify(call).includes('k1.txt'))
+    const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => uploadedFileName(call) === 'k1.txt')
+    expect(k1Uploads, 'BR-5 upload: K1\'s file is uploaded').not.toEqual([])
     expect(
-      k1Uploads.some((call) => String(call[2]) === 'w2'),
+      k1Uploads.some((call) => call[2] === 'w2'),
       'BR-5 upload: K1\'s file is not uploaded to W2',
     ).toBe(false)
     expect(
-      k1Uploads.some((call) => String(call[2]) === 'w1'),
+      k1Uploads.every((call) => call[2] === 'w1'),
       'BR-5 upload: K1\'s file is uploaded to W1',
     ).toBe(true)
   })

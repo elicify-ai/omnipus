@@ -1,7 +1,7 @@
 // #1428 step 2 RED. Spec 4.7 BR-23, BR-23e, BR-23f.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
@@ -12,6 +12,7 @@ import {
   NOT_STOPPED,
   UNCERTAIN_LINE,
   FakeSocket,
+  apiMocks,
   deliverFrame,
   framesOf,
   flushInbound,
@@ -123,6 +124,25 @@ async function typeRedirect(text: string): Promise<void> {
   await user.keyboard('{Enter}')
 }
 
+/** One change plus Enter. Not one keystroke per character — sixty of those blow the file timeout. */
+async function submitTypedCommand(text: string): Promise<void> {
+  const box = screen.getByTestId('chat-input')
+  await act(async () => {
+    fireEvent.change(box, { target: { value: text } })
+    fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' })
+  })
+}
+
+async function waitForCommandList(): Promise<void> {
+  await waitFor(() => {
+    expect(apiMocks.fetchCommands.mock.calls.length, 'the command list was requested').toBeGreaterThan(0)
+  })
+  await act(async () => {
+    const pending = apiMocks.fetchCommands.mock.results[0]?.value as Promise<unknown> | undefined
+    if (pending && typeof pending.then === 'function') await pending
+  })
+}
+
 describe('command records (spec 4.7)', () => {
   it('BR-23a command_received drops the record and leaves nothing unsent', async () => {
     resetBindingWorld()
@@ -186,10 +206,16 @@ describe('command records (spec 4.7)', () => {
     resetBindingWorld()
     const socket = openLive()
     mountComposer()
+    await waitForCommandList()
     for (let i = 0; i < 60; i++) {
-      await typeRedirect(`/stop-redirect n${i}`)
+      await submitTypedCommand(`/stop-redirect n${i}`)
     }
-    expect(socket.sent.filter((frame) => frame.type === 'redirect'), 'BR-23d: all sixty were handed over').toHaveLength(60)
+    const handed = socket.sent.filter((frame) => frame.type === 'redirect') as { instruction?: string }[]
+    expect(handed, 'BR-23d: all sixty were handed over').toHaveLength(60)
+    expect(
+      handed.map((frame) => frame.instruction),
+      'BR-23d: the sixty commands are sixty different instructions',
+    ).toEqual(Array.from({ length: 60 }, (_, i) => `n${i}`))
     await closeThenSnapshot(socket, sessionSnapshot('chat-a'))
     expectSnapshotApplied('chat-a')
     expect(screen.getByText('60 not sent'), 'BR-23d: none of the sixty is dropped').toBeTruthy()
