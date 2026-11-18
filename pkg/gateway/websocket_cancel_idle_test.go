@@ -1,0 +1,636 @@
+package gateway
+
+// websocket_cancel_idle_test.go — RED (#1428 step 2 option C + #1841,
+// qa-lead): the idle-cancel reply `cancel_idle {type, session_id}` (C-11,
+// spec §4.14 + 1841-DESIGN.md) and its interaction rules N-2..N-6.
+//
+// SPEC SOURCES (expected values derive from these, never from the
+// implementation — oracle independence):
+//   - SPEC-C-server-binds-send-to-chat-r8.md §4.14 N-2..N-6: the idle reply
+//     is NOT send_refused (N-2); order on the connection is command_received
+//     FIRST (S-12), then the idle reply (N-3); an idle reply never produces a
+//     refusal snapshot (N-4); never in the armed pre-registration window
+//     (N-5); old tabs per N-6 as two separate cases.
+//   - §6.1 SV-22 (lifecycle-backed fixture ONLY — the r8 prerequisite: an
+//     idle verdict on a record-less fixture alone does not count): browser
+//     connection bound to an idle chat A, cancel{A, origin {chat, A},
+//     client_frame_id c9, scope tree} → frames in order command_received{
+//     cancel, c9, A}, then cancel_idle{A}; ZERO send_refused; ZERO
+//     session_state from the refusal-snapshot rule.
+//   - 1841-DESIGN.md §1: the idle predicate (!Fired && !Armed && no
+//     background kills && Reached/Unreachable/SkippedNewerGeneration empty &&
+//     discarded == 0 && !staged) with BOTH fixtures (lifecycle-backed
+//     completed and stopped; record-less) and the armed negative; the branch
+//     table (fired; cascaded with reached; background kill; armed; idle
+//     completed; idle stopped; idle record-less; record running with no live
+//     turn; queued input discarded).
+//   - Contract commit 32802e2a6: CancelIdleFrame = exactly
+//     {type: "cancel_idle", session_id}; CommandReceivedFrame =
+//     {command, client_frame_id, session_id, type}.
+//
+// RED STATE: neither command_received nor cancel_idle exists on the wire
+// today. On the lifecycle-backed idle path handleCancelShown today sends the
+// detached report (cancel_stage, empty reached); on the record-less path it
+// sends nothing. Every RED test below fails on the missing receipt/reply —
+// naming the frames that actually arrived — never on a fixture error. The
+// GUARD tests (armed, fired, record-running, queued-discarded,
+// requester-only) are green today BY DESIGN and die at GREEN only if the
+// idle reply is ever sent where #1841 forbids it; their failability proof is
+// CHECK's mutation run.
+//
+// NOT TESTABLE HERE (reported, N-1/N-7/N-8 are process items): the branch
+// table's "cascaded with reached" and "background kill" rows need real
+// helper-tree / background-shell fixtures no gateway harness builds; they are
+// recorded as gaps in the test plan, not silently dropped.
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
+)
+
+// sv22Key follows the CONTRACT bounds (SendOrigin.yaml: 16..128 chars of
+// ^[A-Za-z0-9_-]+$).
+const sv22Key = "K-sv22-idle-origin1"
+
+const (
+	sv22User    = "sv22-browser-user"
+	sv22C9      = "sv22-c9"
+	idleWindow  = 4 * time.Second // bounded reply-collect window (failsafe, not a latency assertion)
+	lifecycleEW = 20 * time.Second
+)
+
+// newIdleCancelServer is the production wiring a real install has: agent
+// loop running (al.Run), lifecycle store + boot epoch + steer canceller,
+// stream delegate, and a single human account for cookie auth.
+func newIdleCancelServer(t *testing.T, provider providers.LLMProvider) (*httptest.Server, string, *agent.AgentLoop, *session.LifecycleStore) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	cookie, hash, err := middleware.MintSessionToken()
+	require.NoError(t, err, "SETUP: mint cookie + hash pair")
+	workspaceDir := filepath.Join(home, "workspace")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Host: "127.0.0.1", Port: 0,
+			Users: []config.UserConfig{{Username: sv22User, SessionTokenHash: config.BcryptHash(hash)}},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: workspaceDir, DefaultModel: config.DefaultModel{Model: "idle-cancel"}, MaxTokens: 4096},
+			List:     []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
+		},
+		Sandbox: config.OmnipusSandboxConfig{Mode: config.SandboxModeOff},
+	}
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	al := mustAgentLoop(t, cfg, msgBus, provider)
+
+	// Production steering wiring (gateway_boot.go::wireSteerDeps), the same
+	// shape newRedirectStreamServer uses.
+	boot := session.NewBootEpochStore(home)
+	_, err = boot.Mint()
+	require.NoError(t, err)
+	al.SetBootEpochStore(boot)
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	setGatewaySteerCanceller(al, agent.NewSteerCanceller(lifecycle, al.SteerGenerationCancel).
+		SetRevivalStateWriter(al.WriteSteerRevivalState))
+	t.Cleanup(func() { gatewaySteerCancellers.Delete(al) })
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		_ = al.Run(runCtx)
+	}()
+	t.Cleanup(func() {
+		cancelRun()
+		select {
+		case <-runDone:
+		case <-time.After(30 * time.Second):
+			t.Log("agent loop Run did not exit within 30s")
+		}
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	handler := newWSHandler(msgBus, al, "")
+	msgBus.SetStreamDelegate(handler)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	t.Cleanup(handler.Wait)
+
+	// The minted cookie travels with the server: dial with
+	// dialIdleCancelBrowser(t, srv, cookie).
+	return srv, cookie, al, lifecycle
+}
+
+// dialIdleCancelBrowser dials the server as the SV-22 browser connection.
+func dialIdleCancelBrowser(t *testing.T, srv *httptest.Server, cookie string) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/chat/ws"
+	header := http.Header{}
+	header.Set("Origin", srv.URL)
+	header.Set("Cookie", middleware.SessionCookieName+"="+cookie)
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	conn, httpResp, err := dialer.Dial(wsURL, header)
+	if httpResp != nil {
+		httpResp.Body.Close()
+	}
+	require.NoError(t, err, "SETUP: browser-kind dial must upgrade")
+	return conn
+}
+
+// mintIdleFixtureChat sends the browser chat's first message (carrying the
+// new_chat origin, valid at GREEN too) and returns the minted session id.
+func mintIdleFixtureChat(t *testing.T, conn *websocket.Conn, content string) string {
+	t.Helper()
+	frame := generated.MessageFrame{
+		Type:    "message",
+		AgentId: strPtr("mia"),
+		Origin:  &generated.SendOrigin{Kind: "new_chat", NewChatKey: strPtr(sv22Key)},
+		Content: content,
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetWriteDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw), "SETUP: first message write")
+	started := readFrameOfType(t, conn, "session_started", lifecycleEW)
+	require.NotEmpty(t, started.SessionID, "SETUP: the fixture chat must mint and acknowledge")
+	return started.SessionID
+}
+
+// drainAdmissionOneShot reads the connection's post-auth admission frames
+// (today the session_state one-shot, F-aa) so a later cancel-reply window
+// observes only the cancel's own replies.
+func drainAdmissionOneShot(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(lifecycleEW)))
+	for {
+		_, raw, err := conn.ReadMessage()
+		require.NoError(t, err, "SETUP: the admission frame must arrive")
+		var peek wsTypeOnly
+		require.NoError(t, json.Unmarshal(raw, &peek))
+		if peek.Type == "session_state" {
+			return
+		}
+	}
+}
+
+// seedFixtureRecord hand-seeds a lifecycle record the way production's
+// initializeOrdinaryRootRecord shapes an ordinary root (OwnerScopeKind human,
+// origin chat), so the server reads a record indistinguishable from one its
+// own admission wrote. stopped additionally requires a StopNote
+// (persistLocked's rule for LifecycleStopped).
+func seedFixtureRecord(t *testing.T, lc *session.LifecycleStore, sessionID string, state session.LifecycleState) {
+	t.Helper()
+	rec := &session.LifecycleRecord{
+		SessionID:      sessionID,
+		Generation:     1,
+		State:          state,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		AgentID:        "mia",
+		Origin:         &session.Origin{Kind: session.OriginKind(session.SessionTypeChat)},
+	}
+	if state == session.LifecycleStopped {
+		rec.StopNote = &session.StopNote{At: time.Now(), By: sv22User, Cause: session.StopCauseStop}
+	}
+	require.NoError(t, lc.Persist(rec), "SETUP: seed the %s record", state)
+}
+
+// waitForLifecycleState polls the lifecycle store until the session's record
+// reaches the wanted state — the FIXTURE guard proving the idle precondition
+// (a terminal record, or stopped after a real stop) actually holds. A fixture
+// that never gets there fails loudly, never silently tests the wrong branch.
+func waitForLifecycleState(t *testing.T, lc *session.LifecycleStore, sessionID string, want session.LifecycleState) {
+	t.Helper()
+	deadline := time.Now().Add(lifecycleEW)
+	var last, lastErr string
+	for time.Now().Before(deadline) {
+		rec, err := lc.Load(sessionID)
+		if err != nil {
+			lastErr = err.Error()
+		} else if rec != nil {
+			last = string(rec.State)
+			if rec.State == want {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("SETUP: lifecycle record for %s never reached %q within the failsafe (last state=%q err=%q) — "+
+		"the idle fixture precondition does not hold", sessionID, want, last, lastErr)
+}
+
+// idleReply is one frame observed in the cancel-reply window.
+type idleReply struct {
+	Type string
+	Raw  []byte
+}
+
+// collectCancelReplies reads the connection's frames after a cancel until the
+// reply window is exhausted (record-less silence today) or the path's
+// terminal frame arrives: cancel_stage (today's terminal on both the
+// detached and graceful paths) or the spec's command_received+cancel_idle
+// pair (GREEN). Returns the frames in arrival order.
+func collectCancelReplies(t *testing.T, conn *websocket.Conn, window time.Duration) []idleReply {
+	t.Helper()
+	deadline := time.Now().Add(window)
+	var out []idleReply
+	var gotReceipt, gotIdle bool
+	for time.Now().Before(deadline) {
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Until(deadline))),
+			"SETUP: arm the read failsafe")
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return out // window exhausted (the read deadline) — silence is a result
+		}
+		var peek wsTypeOnly
+		require.NoError(t, json.Unmarshal(raw, &peek), "every reply frame must be valid JSON")
+		out = append(out, idleReply{Type: peek.Type, Raw: raw})
+		switch peek.Type {
+		case "command_received":
+			gotReceipt = true
+		case "cancel_idle":
+			gotIdle = true
+		case "cancel_stage":
+			return out // today's terminal frame for both cancel paths
+		}
+		if gotReceipt && gotIdle {
+			return out
+		}
+	}
+	return out
+}
+
+// requireIdleReceiptSequence asserts the N-3 order and the N-2/N-4 negatives
+// on a collected reply window. The pair's POSITION is the oracle: the receipt
+// is the connection's FIRST reply frame (S-12: enqueued before the handler
+// acts) and cancel_idle follows it. Other frames may legitimately follow
+// (1841-DESIGN.md: the reply is sent IN ADDITION to whatever handleCancelShown
+// sends today — on the lifecycle-backed idle path that is still the detached
+// report) — so exclusivity is NOT asserted; the negatives (zero send_refused,
+// zero session_state) are.
+func requireIdleReceiptSequence(t *testing.T, replies []idleReply, sessionID, clientFrameID, phase string) {
+	t.Helper()
+	types := make([]string, len(replies))
+	for i, r := range replies {
+		types[i] = r.Type
+	}
+	require.NotEmpty(t, replies,
+		"%s: N-3 violated: an accepted idle cancel carrying client_frame_id must be answered; "+
+			"the reply window holds nothing (%v)", phase, types)
+	require.Equal(t, "command_received", replies[0].Type,
+		"%s: N-3/S-12 violated: the FIRST reply must be command_received (enqueued before the handler acts), "+
+			"got %q (window: %v)", phase, replies[0].Type, types)
+	var receipt generated.CommandReceivedFrame
+	require.NoError(t, json.Unmarshal(replies[0].Raw, &receipt), "%s: receipt must decode", phase)
+	require.Equal(t, "cancel", receipt.Command, "%s: receipt.command must name the cancel", phase)
+	require.Equal(t, clientFrameID, receipt.ClientFrameId, "%s: receipt must correlate the client_frame_id", phase)
+	require.Equal(t, sessionID, receipt.SessionId, "%s: receipt must name the target", phase)
+
+	idleIdx := -1
+	for i, r := range replies[1:] {
+		if r.Type == "cancel_idle" {
+			idleIdx = i + 1
+			break
+		}
+	}
+	require.Greater(t, idleIdx, 0,
+		"%s: #1841 violated: cancel_idle must follow command_received on the same connection; "+
+			"window: %v", phase, types)
+	var idle generated.CancelIdleFrame
+	require.NoError(t, json.Unmarshal(replies[idleIdx].Raw, &idle), "%s: idle reply must decode", phase)
+	require.Equal(t, sessionID, idle.SessionId,
+		"%s: cancel_idle.session_id must name the target in which nothing was running", phase)
+	for _, r := range replies {
+		require.NotEqual(t, "send_refused", r.Type,
+			"%s: N-2 violated: an idle cancel passed the origin check and was accepted — it must never "+
+				"be answered with send_refused (%s)", phase, r.Raw)
+		require.NotEqual(t, "session_state", r.Type,
+			"%s: N-4 violated: an accepted idle cancel gets no refusal snapshot — no session_state may "+
+				"follow it (%s)", phase, r.Raw)
+	}
+}
+
+// requireNoIdleReply asserts a reply window stays free of cancel_idle — the
+// GUARD oracle for every branch where #1841 forbids the reply.
+func requireNoIdleReply(t *testing.T, replies []idleReply, phase string) {
+	t.Helper()
+	for _, r := range replies {
+		require.NotEqual(t, "cancel_idle", r.Type,
+			"%s: violated: cancel_idle must never be sent on this branch (observed: %s)", phase, r.Raw)
+	}
+}
+
+// TestCancelIdle_SV22_LifecycleBackedCompleted is SV-22 on the r8-pinned
+// fixture: an ordinary web chat whose last turn COMPLETED (lifecycle-backed).
+// The browser connection binds to it, then cancels it with origin +
+// client_frame_id. Expected per N-2..N-4: command_received{cancel, c9, A}
+// first, then cancel_idle{A}; zero send_refused; zero session_state.
+func TestCancelIdle_SV22_LifecycleBackedCompleted(t *testing.T) {
+	srv, cookie, _, lc := newIdleCancelServer(t, &restMockProvider{})
+	conn := dialIdleCancelBrowser(t, srv, cookie)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// Fixture: chat A exists, its turn completed, the record is terminal.
+	sid := mintIdleFixtureChat(t, conn, "SV-22 fixture: an ordinary turn that completes")
+	waitDone := readFrameOfType(t, conn, "done", lifecycleEW)
+	require.NotEmpty(t, waitDone.SessionID, "SETUP: the fixture turn must complete with done")
+	waitForLifecycleState(t, lc, sid, session.LifecycleCompleted)
+
+	// Bind the browser connection to A (SV-22: bound to the idle chat).
+	require.NoError(t, conn.SetWriteDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, conn.WriteJSON(generated.AttachSessionFrame{Type: "attach_session", SessionId: sid}))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(lifecycleEW)))
+	for {
+		_, raw, err := conn.ReadMessage()
+		require.NoError(t, err, "SETUP: the attach must answer")
+		var peek wsTypeOnly
+		require.NoError(t, json.Unmarshal(raw, &peek))
+		if peek.Type == "catch_up_complete" {
+			break
+		}
+	}
+
+	// SV-22: cancel{A, origin {chat, A}, client_frame_id c9, scope tree}.
+	scope := "tree"
+	cancelFrame := generated.CancelFrame{
+		Type:          "cancel",
+		SessionId:     sid,
+		Scope:         &scope,
+		ClientFrameId: strPtr(sv22C9),
+		Origin:        &generated.SendOrigin{Kind: "chat", SessionId: &sid},
+	}
+	require.NoError(t, conn.SetWriteDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, conn.WriteJSON(cancelFrame))
+
+	replies := collectCancelReplies(t, conn, idleWindow)
+	requireIdleReceiptSequence(t, replies, sid, sv22C9, "SV-22 lifecycle-backed completed")
+}
+
+// TestCancelIdle_LifecycleBackedStopped is the second lifecycle-backed idle
+// fixture (1841-DESIGN.md §1): a chat whose record is STOPPED ("a chat whose
+// last turn was stopped is stopped"). The server's verdict is read off the
+// record (StopAcceptAlreadyLanded → the root lands in NO list → idle), so the
+// fixture hand-seeds that record the way production's own settle path leaves
+// it; driving a real live-stop to get there would only re-test today's stop
+// machinery, which is not this spec's scope.
+func TestCancelIdle_LifecycleBackedStopped(t *testing.T) {
+	srv, cookie, al, lc := newIdleCancelServer(t, &restMockProvider{})
+	conn := dialIdleCancelBrowser(t, srv, cookie)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err, "SETUP: stopped-fixture session")
+	seedFixtureRecord(t, lc, meta.ID, session.LifecycleStopped)
+
+	cancelFrame := generated.CancelFrame{
+		Type:          "cancel",
+		SessionId:     meta.ID,
+		Scope:         strPtr("tree"),
+		ClientFrameId: strPtr("sv22-idle-after-stop"),
+		Origin:        &generated.SendOrigin{Kind: "chat", SessionId: &meta.ID},
+	}
+	require.NoError(t, conn.SetWriteDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, conn.WriteJSON(cancelFrame))
+	replies := collectCancelReplies(t, conn, idleWindow)
+	requireIdleReceiptSequence(t, replies, meta.ID, "sv22-idle-after-stop", "lifecycle-backed stopped")
+}
+
+// TestCancelIdle_RecordLessIdle is the record-less idle fixture: a session
+// with metadata but NO lifecycle record and no live turn. StopSession's
+// record-less path finds nothing running and nothing imminent — the reply
+// pair must still be command_received then cancel_idle (the design's
+// record-less proof leg).
+func TestCancelIdle_RecordLessIdle(t *testing.T) {
+	srv, cookie, al, lc := newIdleCancelServer(t, &restMockProvider{})
+	conn := dialIdleCancelBrowser(t, srv, cookie)
+	t.Cleanup(func() { _ = conn.Close() })
+	drainAdmissionOneShot(t, conn)
+
+	// Fixture: session in the store, never admitted — no lifecycle record.
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err, "SETUP: record-less fixture session")
+	_, loadErr := lc.Load(meta.ID)
+	require.Error(t, loadErr, "SETUP: the fixture session must have NO lifecycle record")
+
+	cancelFrame := generated.CancelFrame{
+		Type:          "cancel",
+		SessionId:     meta.ID,
+		Scope:         strPtr("tree"),
+		ClientFrameId: strPtr("sv22-idle-recordless"),
+		Origin:        &generated.SendOrigin{Kind: "chat", SessionId: &meta.ID},
+	}
+	require.NoError(t, conn.SetWriteDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, conn.WriteJSON(cancelFrame))
+
+	replies := collectCancelReplies(t, conn, idleWindow)
+	requireIdleReceiptSequence(t, replies, meta.ID, "sv22-idle-recordless", "record-less idle")
+}
+
+// TestCancelIdle_ArmedPrearmNeverIdle is N-5's guard: in the pre-arm window
+// (the Armed latch on the record-less path) the idle reply is NEVER sent —
+// today's graceful frame stays.
+func TestCancelIdle_ArmedPrearmNeverIdle(t *testing.T) {
+	srv, cookie, al, lc := newIdleCancelServer(t, &restMockProvider{})
+	conn := dialIdleCancelBrowser(t, srv, cookie)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err, "SETUP: armed-fixture session")
+	_, loadErr := lc.Load(meta.ID)
+	require.Error(t, loadErr, "SETUP: the armed fixture needs a record-less session")
+	require.NoError(t, al.PrimeSessionImminentForTest(meta.ID),
+		"SETUP: arm the pre-registration latch for the imminent turn")
+
+	cancelFrame := generated.CancelFrame{
+		Type:          "cancel",
+		SessionId:     meta.ID,
+		Scope:         strPtr("tree"),
+		ClientFrameId: strPtr("sv22-armed"),
+		Origin:        &generated.SendOrigin{Kind: "chat", SessionId: &meta.ID},
+	}
+	require.NoError(t, conn.WriteJSON(cancelFrame))
+	replies := collectCancelReplies(t, conn, idleWindow)
+	requireNoIdleReply(t, replies, "N-5: the armed pre-registration window must never answer cancel_idle")
+}
+
+// TestCancelIdle_NeverIdle_BranchGuards covers the branch table's not-idle
+// rows that are drivable without helper-tree/background fixtures: fired
+// (live turn), record running with NO live turn, queued input discarded.
+// Each asserts the window stays free of cancel_idle (green by design; the
+// mutation that sends an idle reply on any of them dies here).
+func TestCancelIdle_NeverIdle_BranchGuards(t *testing.T) {
+	t.Run("fired live turn", func(t *testing.T) {
+		iron := newIronProvider(30 * time.Second)
+		srv, cookie, _, lc := newIdleCancelServer(t, iron)
+		t.Cleanup(iron.Shutdown) // after the server's cleanups (LIFO): unblock the provider first
+		conn := dialIdleCancelBrowser(t, srv, cookie)
+		t.Cleanup(func() { _ = conn.Close() })
+		sid := mintIdleFixtureChat(t, conn, "fired-guard: a live turn")
+		waitForLifecycleState(t, lc, sid, session.LifecycleRunning)
+		require.NoError(t, conn.WriteJSON(generated.CancelFrame{
+			Type: "cancel", SessionId: sid, Scope: strPtr("tree"),
+			ClientFrameId: strPtr("guard-fired"), Origin: &generated.SendOrigin{Kind: "chat", SessionId: &sid},
+		}))
+		replies := collectCancelReplies(t, conn, idleWindow)
+		requireNoIdleReply(t, replies, "branch 'fired': a cancel that fires the turn is not idle")
+	})
+
+	t.Run("record running with no live turn", func(t *testing.T) {
+		srv, cookie, al, lc := newIdleCancelServer(t, &restMockProvider{})
+		conn := dialIdleCancelBrowser(t, srv, cookie)
+		t.Cleanup(func() { _ = conn.Close() })
+		store := al.GetSessionStore()
+		require.NotNil(t, store)
+		meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+		require.NoError(t, err, "SETUP: running-record fixture session")
+		seedFixtureRecord(t, lc, meta.ID, session.LifecycleRunning)
+
+		require.NoError(t, conn.WriteJSON(generated.CancelFrame{
+			Type: "cancel", SessionId: meta.ID, Scope: strPtr("tree"),
+			ClientFrameId: strPtr("guard-running"), Origin: &generated.SendOrigin{Kind: "chat", SessionId: &meta.ID},
+		}))
+		replies := collectCancelReplies(t, conn, idleWindow)
+		requireNoIdleReply(t, replies,
+			"branch 'record running with no live turn': a granted durable stop is not idle")
+	})
+
+	t.Run("queued input discarded", func(t *testing.T) {
+		iron := newIronProvider(30 * time.Second)
+		srv, cookie, _, lc := newIdleCancelServer(t, iron)
+		t.Cleanup(iron.Shutdown) // after the server's cleanups (LIFO): unblock the provider first
+		conn := dialIdleCancelBrowser(t, srv, cookie)
+		t.Cleanup(func() { _ = conn.Close() })
+		sid := mintIdleFixtureChat(t, conn, "queued-guard: the running turn")
+		waitForLifecycleState(t, lc, sid, session.LifecycleRunning)
+		// Queue a follow-up while the turn is live: the stop will discard it.
+		queued := generated.MessageFrame{
+			Type: "message", AgentId: strPtr("mia"), SessionId: &sid,
+			ClientMessageId: strPtr("guard-queued-msg"), Content: "queued while the turn runs",
+		}
+		require.NoError(t, conn.SetWriteDeadline(time.Now().Add(10*time.Second)))
+		queuedRaw, marshalErr := json.Marshal(queued)
+		require.NoError(t, marshalErr)
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, queuedRaw))
+		time.Sleep(100 * time.Millisecond) // let the handler accept the follow-up (bounded failsafe)
+		require.NoError(t, conn.WriteJSON(generated.CancelFrame{
+			Type: "cancel", SessionId: sid, Scope: strPtr("tree"),
+			ClientFrameId: strPtr("guard-queued-cancel"), Origin: &generated.SendOrigin{Kind: "chat", SessionId: &sid},
+		}))
+		replies := collectCancelReplies(t, conn, idleWindow)
+		requireNoIdleReply(t, replies,
+			"branch 'queued input discarded': a stop that discards queued input is not idle")
+	})
+}
+
+// TestCancelIdle_ReplyIsRequesterOnly is N-6's first old-tab case, server
+// leg: cancel_idle goes to the requesting connection ONLY — a second bound
+// tab (an old parser would drop the unknown type) never receives it.
+func TestCancelIdle_ReplyIsRequesterOnly(t *testing.T) {
+	srv, cookie, _, lc := newIdleCancelServer(t, &restMockProvider{})
+	conn := dialIdleCancelBrowser(t, srv, cookie)
+	t.Cleanup(func() { _ = conn.Close() })
+	sid := mintIdleFixtureChat(t, conn, "requester-only: the idle chat")
+	readFrameOfType(t, conn, "done", lifecycleEW)
+	waitForLifecycleState(t, lc, sid, session.LifecycleCompleted)
+
+	// A second browser tab bound to the same chat.
+	other := dialIdleCancelBrowser(t, srv, cookie)
+	t.Cleanup(func() { _ = other.Close() })
+	require.NoError(t, other.WriteJSON(generated.AttachSessionFrame{Type: "attach_session", SessionId: sid}))
+	require.NoError(t, other.SetReadDeadline(time.Now().Add(lifecycleEW)))
+	for {
+		_, raw, err := other.ReadMessage()
+		require.NoError(t, err, "SETUP: the second tab's attach must answer")
+		var peek wsTypeOnly
+		require.NoError(t, json.Unmarshal(raw, &peek))
+		if peek.Type == "catch_up_complete" {
+			break
+		}
+	}
+
+	require.NoError(t, conn.WriteJSON(generated.CancelFrame{
+		Type: "cancel", SessionId: sid, Scope: strPtr("tree"),
+		ClientFrameId: strPtr("sv22-requester-only"), Origin: &generated.SendOrigin{Kind: "chat", SessionId: &sid},
+	}))
+	_ = collectCancelReplies(t, conn, idleWindow) // the requester's window; its shape is SV-22's claim
+
+	// The other tab must not see the reply: drain briefly and assert.
+	deadline := time.Now().Add(idleWindow)
+	for time.Now().Before(deadline) {
+		require.NoError(t, other.SetReadDeadline(time.Now().Add(time.Until(deadline))))
+		_, raw, err := other.ReadMessage()
+		if err != nil {
+			break // window exhausted with nothing received — the wanted shape
+		}
+		var peek wsTypeOnly
+		require.NoError(t, json.Unmarshal(raw, &peek))
+		require.NotEqual(t, "cancel_idle", peek.Type,
+			"N-6(i): cancel_idle is requester-only — a second bound tab must never receive it (got %s)", raw)
+	}
+}
+
+// TestCancelIdle_OldTabOriginLessCancelRefusedNotIdle is N-6's second old-tab
+// case, on the idle chat (the handler the origin-less cancel must never
+// reach): an old tab's OWN origin-less cancel takes the 4.3.4 refusal path
+// (send_refused + the out-of-date snapshot replies; their exact shape is
+// SV-4's oracle in ws_send_origin_handler_test.go). Here the #1841-side
+// claims: a refusal happens, and no cancel_idle.
+func TestCancelIdle_OldTabOriginLessCancelRefusedNotIdle(t *testing.T) {
+	srv, cookie, _, lc := newIdleCancelServer(t, &restMockProvider{})
+	conn := dialIdleCancelBrowser(t, srv, cookie)
+	t.Cleanup(func() { _ = conn.Close() })
+	sid := mintIdleFixtureChat(t, conn, "old-tab: the idle chat cancelled origin-less")
+	readFrameOfType(t, conn, "done", lifecycleEW)
+	waitForLifecycleState(t, lc, sid, session.LifecycleCompleted)
+
+	// The old tab's shape: NO origin, NO client_frame_id.
+	require.NoError(t, conn.WriteJSON(generated.CancelFrame{Type: "cancel", SessionId: sid, Scope: strPtr("tree")}))
+	replies := collectCancelReplies(t, conn, idleWindow)
+
+	sawRefusal := false
+	for _, r := range replies {
+		if r.Type == "send_refused" {
+			sawRefusal = true
+		}
+		require.NotEqual(t, "cancel_idle", r.Type,
+			"N-6(ii): a refused origin-less cancel never reaches the idle handler — no cancel_idle (got %s)", r.Raw)
+	}
+	require.True(t, sawRefusal,
+		"N-6(ii) violated (F-h as-is): the browser connection's origin-less cancel is EXECUTED today "+
+			"(frames: %v) — the 4.3.4 refusal path must take it instead, so the origin-less Stop never runs",
+		replyTypes(replies))
+}
+
+func replyTypes(replies []idleReply) []string {
+	types := make([]string, len(replies))
+	for i, r := range replies {
+		types[i] = r.Type
+	}
+	return types
+}
