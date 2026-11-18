@@ -158,6 +158,18 @@ func TestRendererWarnsOnMissingFact1857(t *testing.T) {
 		// such line must be safe.
 		lines := rw1857Lines(log, code)
 		assert.NotEmpty(t, lines, "D-A renderer (F7) whole run: a missing-fact run must log a diagnostic naming %s", code)
+		// At least ONE diagnostic from the actual run names the code AND the
+		// missing slot. Any number of further safe lines from the layered
+		// steps is fine: this is an existence check, not a count.
+		namesSlot := false
+		for _, line := range lines {
+			if regexp.MustCompile(`\{model\}|\bmodel\b`).MatchString(strings.ReplaceAll(line, code, "")) {
+				namesSlot = true
+				break
+			}
+		}
+		assert.True(t, namesSlot,
+			"D-A renderer (F7) whole run: at least one diagnostic from the real run must name %s and the missing slot %q; lines: %q", code, "model", lines)
 		rw1857AssertBoundaryLinesSafe(t, "whole run", log, code,
 			[]string{CLIDisplayName("codex"), template, generic})
 
