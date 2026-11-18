@@ -31,7 +31,8 @@ describe('#1857 RateLimitIndicator shows whole seconds', () => {
     const banner = renderBanner(3591.75184)
     const text = banner.textContent ?? ''
     expect(text, `banner text must carry no decimal point, saw "${text}"`).not.toContain('.')
-    // 3591.75 s is 59 minutes and 51.75 s: whole seconds, rounded either way.
-    expect(text, `banner must show the wait as whole minutes and seconds, saw "${text}"`).toMatch(/59m 5[12]s/)
+    // 3591.75184 s rounds UP to 3592 s = 59 min 52 s (never 51 s: the banner
+    // must not read shorter than the wait that remains).
+    expect(text, `banner must show exactly 59m 52s, saw "${text}"`).toContain('Retry in 59m 52s')
   })
 })
