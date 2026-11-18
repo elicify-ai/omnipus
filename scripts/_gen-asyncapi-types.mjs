@@ -741,6 +741,61 @@ function validateMessageSlots(where, text) {
 }
 
 /**
+ * First-person tokens of a chat-voice sentence (#1857 design note D-B B1):
+ * "I" as a word (covering the I' and I’ contractions) and "me" / "my" in any
+ * case. Mirrored in scripts/gen-asyncapi-go/usermessages.go
+ * (firstPersonPattern) — keep the two identical.
+ */
+const FIRST_PERSON = /\bI\b|\b[Mm][EeYy]\b/
+
+/** Throw unless `text` is a valid neutral twin: non-empty, no first person, MESSAGE_SLOTS only. */
+function validateNeutralSentence(where, text) {
+  if (typeof text !== "string" || text.trim() === "") {
+    throw new Error(`${where} must be a non-empty string when present`)
+  }
+  if (FIRST_PERSON.test(text)) {
+    throw new Error(`${where} is itself first person: a neutral twin must not use I, me or my`)
+  }
+  validateMessageSlots(where, text)
+}
+
+/**
+ * Validate an entry's optional neutral twins (#1857 D-B B1). The TS generator
+ * validates only and emits nothing: no SPA surface renders the neutral form.
+ * Fatal: a first-person chat message or variant without its twin,
+ * neutral_variants keys that differ from the variants keys, or a twin that is
+ * empty, first person, or uses a slot outside MESSAGE_SLOTS.
+ */
+function validateNeutralForms(where, entry, variants) {
+  const hasNeutral = entry.neutral !== undefined && entry.neutral !== null
+  if (hasNeutral) validateNeutralSentence(`${where}.neutral`, entry.neutral)
+  if (!hasNeutral && FIRST_PERSON.test(entry.message)) {
+    throw new Error(`${where}: message is first person but has no "neutral" twin`)
+  }
+  const neutralVariants = {}
+  if (entry.neutral_variants !== undefined && entry.neutral_variants !== null) {
+    const raw = entry.neutral_variants
+    if (typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`${where}.neutral_variants: must be a mapping of variant key → sentence`)
+    }
+    const got = Object.keys(raw).sort()
+    const want = Object.keys(variants).sort()
+    if (got.length === 0 || got.length !== want.length || got.some((k, i) => k !== want[i])) {
+      throw new Error(`${where}.neutral_variants: keys [${got.join(", ")}] must equal the variants keys [${want.join(", ")}]`)
+    }
+    for (const key of got) {
+      validateNeutralSentence(`${where}.neutral_variants: variant ${key}`, raw[key])
+      neutralVariants[key] = raw[key]
+    }
+  }
+  for (const [key, sentence] of Object.entries(variants)) {
+    if (!(key in neutralVariants) && FIRST_PERSON.test(sentence)) {
+      throw new Error(`${where}.variants: variant ${key} is first person but has no neutral_variants twin`)
+    }
+  }
+}
+
+/**
  * Read and validate the LLMError copy catalogue out of the parsed contract.
  * Returns { attributions, entries } with entries in contract (enum) order.
  */
@@ -828,6 +883,7 @@ function extractUserMessageCatalogue(allSchemas, schemaName) {
         variants[key] = sentence;
       }
     }
+    validateNeutralForms(`${schemaName}.x-user-messages.${code}`, entry, variants);
     entries.push({ code, message: entry.message, attribution: entry.attribution, providerMessage, variants });
     seen.add(code);
   }

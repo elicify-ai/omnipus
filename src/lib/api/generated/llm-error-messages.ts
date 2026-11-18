@@ -79,9 +79,9 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   external_cli_upstream_refused: "The model {cli} uses is limiting requests right now. Try the task again in a moment.",
   provider_error: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
   agent_request_limit: "I've reached my limit of model requests for this hour. I can continue in {minutes} minutes, or you can raise the limit in Settings.",
-  tool_assembly_duplicate: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
-  transcript_save_failed: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
-  goal_state_unavailable: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
+  tool_assembly_duplicate: "I couldn't get my tools ready because two of them have the same name, so this turn didn't run. We don't know why this happened; if it keeps happening, please report it to the Omnipus.ai team.",
+  transcript_save_failed: "This turn finished, but I couldn't save its final state. Recent messages may be missing from your history; check the answer above before repeating anything.",
+  goal_state_unavailable: "I couldn't read the goal for this conversation, so I didn't continue working on it. Try again in a moment.",
   external_cli_not_found: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
   external_cli_invalid_config: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
   unknown: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
@@ -166,5 +166,11 @@ export const llmErrorMessageVariants: Partial<Record<LLMErrorCode, Record<string
   },
   external_cli_upstream_refused: {
     out_of_credit: "{cli}'s model provider account is out of credit. Top up that account to run tasks with {cli}.",
+  },
+  tool_assembly_duplicate: {
+    mcp: "I couldn't get my tools ready: two tools have the same name, and one comes from a connected MCP server. Check this agent's tools and MCP servers.",
+  },
+  external_cli_invalid_config: {
+    no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings.",
   },
 }

@@ -70,6 +70,19 @@ x-user-message-attributions:
 # classes need different sentences (e.g. external_cli_failed's stream_read and
 # start forms). Both generators hard-fail on any other slot. Variants are
 # emitted as LLMErrorMessageVariants (Go) / llmErrorMessageVariants (TS).
+#
+# ── Neutral twins (#1857 frontend round, design note D-B B1) ──────────────────
+# `message` and `variants` are the CHAT form (the agent speaks, "I…"). An entry
+# MAY carry `neutral` (and `neutral_variants`, with exactly the `variants` keys):
+# the same cause in the neutral voice for surfaces outside a chat (task centre,
+# parent tool result, completion message, Settings test). Both generators
+# hard-fail when a chat form with a first-person token (I, I', I’, me, my) has
+# no neutral twin, when a twin is itself first person, when the
+# neutral_variants keys differ from the variants keys, or when a twin uses a
+# slot outside the message vocabulary. A chat form with no first person needs
+# no twin: one sentence serves both voices. The Go generator emits
+# LLMErrorNeutralMessages / LLMErrorNeutralVariants; the TS generator only
+# validates (no SPA surface renders the neutral form).
 x-user-messages:
   media_unsupported:
     message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
@@ -206,62 +219,83 @@ x-user-messages:
     attribution: config
     provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
   external_cli_invalid_args:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W1 (C1).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W1 (C1).
     message: "I couldn't start {cli}: it rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting."
     attribution: config
+    neutral: "{cli} rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting."
   external_cli_model_unavailable:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W2 (C2).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W2 (C2).
     message: "I couldn't run the task in {cli}: it couldn't use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings."
     attribution: config
+    neutral: "The run in {cli} could not use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings."
   external_cli_needs_signin:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W3 (C3).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W3 (C3); one sentence serves both voices.
     message: "{cli} is not signed in on the machine it runs on, so the run stopped. Sign in to {cli} there, then retry the task."
     attribution: user
   external_cli_failed:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W4 (C4); variants W6 (C6 stream_read), W7 (C7 start).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W4 (C4); variants W6 (C6 stream_read), W7 (C7 start).
     message: "I couldn't finish the run in {cli}: it stopped with an error I couldn't identify. Retry the task; if it keeps happening, check that {cli} works on its own."
     attribution: ambiguous
+    neutral: "The run in {cli} stopped with an error that could not be identified. Retry the task; if it keeps happening, check that {cli} works on its own."
     variants:
       stream_read: "I couldn't finish the run in {cli}: reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own."
       start: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+    neutral_variants:
+      stream_read: "The run in {cli} ended because reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own."
+      start: "{cli} could not be launched. Check the CLI worker's program path in Settings."
   external_cli_turn_limit:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W5 (C5).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W5 (C5).
     message: "I stopped the run in {cli}: it reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings."
     attribution: config
+    neutral: "The run in {cli} reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings."
   external_cli_upstream_refused:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W13 limit form (C9); variant W13 out-of-credit form.
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W13 limit form (C9); variant W13 out-of-credit form; one sentence serves both voices.
     message: "The model {cli} uses is limiting requests right now. Try the task again in a moment."
     attribution: ambiguous
     variants:
       out_of_credit: "{cli}'s model provider account is out of credit. Top up that account to run tasks with {cli}."
   provider_error:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. no facts-absent W form (W12 needs {provider} and {host}) — existing generic sentence (A4/A5, R-4).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. no facts-absent W form (W12 needs {provider} and {host}) — existing generic sentence (A4/A5, R-4).
     message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
     attribution: provider
   agent_request_limit:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W11 (B3, founder E2).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W11 (B3, founder E2; W11 A).
     message: "I've reached my limit of model requests for this hour. I can continue in {minutes} minutes, or you can raise the limit in Settings."
     attribution: config
+    neutral: "This agent reached its limit of model requests for this hour. It can continue in {minutes} minutes, or the limit can be raised in Settings."
   tool_assembly_duplicate:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. no W row (B10, manifest M-1857-B10) — existing generic sentence.
-    message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W21 (B10, no MCP tool involved — the fail-closed class); variant mcp W20 (B10, an MCP tool involved).
+    message: "I couldn't get my tools ready because two of them have the same name, so this turn didn't run. We don't know why this happened; if it keeps happening, please report it to the Omnipus.ai team."
     attribution: ambiguous
+    neutral: "The agent's tools could not be made ready because two of them have the same name, so the turn didn't run. Why this happened is not known; if it keeps happening, please report it to the Omnipus.ai team."
+    variants:
+      mcp: "I couldn't get my tools ready: two tools have the same name, and one comes from a connected MCP server. Check this agent's tools and MCP servers."
+    neutral_variants:
+      mcp: "The agent's tools could not be made ready: two tools have the same name, and one comes from a connected MCP server. Check the agent's tools and MCP servers."
   transcript_save_failed:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. no W row (B25 settlement, manifest M-1857-B25) — existing generic sentence.
-    message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W17 (B25 settlement).
+    message: "This turn finished, but I couldn't save its final state. Recent messages may be missing from your history; check the answer above before repeating anything."
     attribution: ambiguous
+    neutral: "The run finished, but its final state could not be saved. Recent messages may be missing from the history; check the result before repeating any part of the task."
   goal_state_unavailable:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. no W row (B26/B22, manifests M-1857-B26/B22) — existing generic sentence.
-    message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W18 (B26/B22).
+    message: "I couldn't read the goal for this conversation, so I didn't continue working on it. Try again in a moment."
     attribution: ambiguous
+    neutral: "The goal for this conversation could not be read, so the work did not continue. Try again in a moment."
   external_cli_not_found:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give this code its own sentence (C8 program-path refusal).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18) (C8 program-path refusal).
     message: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
     attribution: config
+    neutral: "{cli} could not be launched. Check the CLI worker's program path in Settings."
   external_cli_invalid_config:
-    # #1857 (§13.8): proposed, founder review pending (E4) — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18); the founder may give this code its own sentence (B16 config gap, B17b invalid turn cap).
+    # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18) (B16 config gap with a known program, B17b invalid turn cap); variant no_program W19 (B16 pre-checks, no program known).
     message: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
     attribution: config
+    neutral: "{cli} could not be launched. Check the CLI worker's program path in Settings."
+    variants:
+      no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings."
+    neutral_variants:
+      no_program: "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings."
   unknown:
     message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
     attribution: unknown
@@ -357,8 +391,8 @@ properties:
     type: boolean
     description: >-
       Server-authored subtype/trust flag (MAJ-104, C-14): when true, `message`
-      carries the server-assembled provider-message sentence and the SPA renders
-      it; when absent or false, the SPA keeps today's catalogue-copy rendering
+      carries the server-assembled catalogue sentence, every slot filled (any code),
+      and the SPA renders it; when absent or false, the SPA keeps today's catalogue-copy rendering
       keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2).
       Set at write time by the agent's assembly path; the replay shape carries
       the same flag so a reloaded session renders identically.
