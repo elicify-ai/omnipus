@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // knownCredentialTokens contains real-shaped credential prefixes + the exact
@@ -67,17 +69,24 @@ func TestCredentialLeakage(t *testing.T) {
 	// we can match it through request/response churn.
 	injectedAPIKey := "sk-ant-api03-" + randSuffix() + "-testleakscan"
 	bearerSentinel := "Bearer omnipus_" + randSuffix() + "leakscan"
+	// The provider this test onboards and updates; requireKeyFlowAuditEntries
+	// matches audit entries by it.
+	providerID := "anthropic"
 
-	gw := testutil.StartTestGateway(t)
+	// Audit logging must be ON for this gateway: the audit subtests below read
+	// the real audit log, and the harness default leaves sandbox.audit_log off
+	// (the harness config is a bare literal whose Sandbox carries only
+	// Mode "off" — pkg/agent/testutil/gateway_harness.go::buildConfig).
+	gw := testutil.StartTestGateway(t, auditOnForLeakScan())
 
 	// --- Stage 1: onboard (creates admin, stores API key) ---
 	onboardBody := map[string]any{
 		"provider": map[string]any{
 			"auth_method": "api_key",
-			"id":          "anthropic",
+			"id":          providerID,
 			"api_key":     injectedAPIKey,
 			"model":       "claude-sonnet-4-6",
-			"endpoint":    startFakeProviderUpstream(t),
+			"endpoint":    startNoCreditProviderUpstream(t),
 		},
 		"admin": map[string]any{
 			"username": "leakadmin",
@@ -166,19 +175,21 @@ func TestCredentialLeakage(t *testing.T) {
 	// replay it so the key actually flows through the handler under test.
 	{
 		rt := mintReAuthToken(t, gw.HTTPClient, gw.URL, gw.URL, token, "securepass123")
-		r, rerr := http.NewRequest(http.MethodPut, gw.URL+"/api/v1/providers/anthropic",
+		r, rerr := http.NewRequest(http.MethodPut, gw.URL+"/api/v1/providers/"+providerID,
 			bytes.NewReader(updateBody))
 		require.NoError(t, rerr)
 		r.Header.Set("Origin", gw.URL)
 		r.Header.Set("Authorization", "Bearer "+token)
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set(reAuthHeader, rt)
-		if rp, derr := gw.HTTPClient.Do(r); derr == nil {
-			pbuf := new(bytes.Buffer)
-			_, _ = pbuf.ReadFrom(rp.Body)
-			collectedResponses = append(collectedResponses, pbuf.Bytes())
-			_ = rp.Body.Close()
-		}
+		rp, derr := gw.HTTPClient.Do(r)
+		require.NoError(t, derr)
+		pbuf := new(bytes.Buffer)
+		_, _ = pbuf.ReadFrom(rp.Body)
+		_ = rp.Body.Close()
+		collectedResponses = append(collectedResponses, pbuf.Bytes())
+		require.Equal(t, http.StatusOK, rp.StatusCode,
+			"the provider update must succeed, or the audit checks below cover no update; body=%s", pbuf.String())
 	}
 	// Churn via a deliberately-rejected auth request carrying the bearer
 	// sentinel — if anything echoes the Authorization header verbatim, this
@@ -197,28 +208,34 @@ func TestCredentialLeakage(t *testing.T) {
 	scanTokens := buildScanTokens(injectedAPIKey, bearerSentinel)
 
 	t.Run("audit_log_no_credential_leaks", func(t *testing.T) {
-		auditPath := filepath.Join(gw.HomeDir(), "system", "audit.jsonl")
+		auditPath := auditLogPathForTest(gw)
+		requireKeyFlowAuditEntries(t, auditPath, providerID)
 		assertNoLeaksInFile(t, auditPath, scanTokens, gw.Token(), token)
 	})
 
 	t.Run("gateway_logs_no_credential_leaks", func(t *testing.T) {
 		logDir := filepath.Join(gw.HomeDir(), "logs")
+		// A missing logs directory fails: the datamodel boot creates it
+		// (pkg/datamodel/init.go omnipusDirs), so absence means something is
+		// broken, not that there is nothing to scan.
 		entries, err := os.ReadDir(logDir)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				t.Skip("no $OMNIPUS_HOME/logs directory — nothing to scan")
-			}
-			require.NoError(t, err)
-		}
+		require.NoError(t, err,
+			"$OMNIPUS_HOME/logs must exist — the datamodel boot creates it; a leak scan of no directory proves nothing")
 		scanned := 0
 		for _, e := range entries {
 			if e.IsDir() {
 				continue
 			}
-			assertNoLeaksInFile(t, filepath.Join(logDir, e.Name()),
-				scanTokens, gw.Token(), token)
+			p := filepath.Join(logDir, e.Name())
+			if _, statErr := os.Stat(p); errors.Is(statErr, os.ErrNotExist) {
+				continue // rotated away after ReadDir
+			}
+			assertNoLeaksInFile(t, p, scanTokens, gw.Token(), token)
 			scanned++
 		}
+		// Empty set = silent pass on nothing. At least one log file must have
+		// been scanned for this subtest to mean anything.
+		require.NotZero(t, scanned, "no log files found in %s — the leak scan covered nothing", logDir)
 		t.Logf("scanned %d log files", scanned)
 	})
 
@@ -237,18 +254,29 @@ func TestCredentialLeakage(t *testing.T) {
 		}
 	})
 
-	t.Run("audit_entry_for_provider_update_redacts_api_key", func(t *testing.T) {
-		// After the provider update above, the audit log (if it recorded the
-		// PUT /providers/anthropic call) must redact the api_key. Read the
-		// audit log and look for the literal injected key.
-		auditPath := filepath.Join(gw.HomeDir(), "system", "audit.jsonl")
-		f, err := os.Open(auditPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				t.Skip("no audit.jsonl written — skipping provider-update redaction check")
-			}
-			require.NoError(t, err)
+	t.Run("audit_entry_for_provider_update_has_no_api_key", func(t *testing.T) {
+		// The provider update above must have written its audit entry, and
+		// that entry must not hold the literal injected api_key. A missing log
+		// or a missing entry fails (requireKeyFlowAuditEntries): skipping would
+		// prove nothing. Despite the historical name, this asserts the key is
+		// ABSENT from the entry — not that a redactor ran: the audited flows
+		// carry no api_key field at all (the write sites stamp only provider,
+		// outcome, action — plus source on onboarding). The redactor itself is
+		// unit-tested in pkg/audit. The update entries are matched by their
+		// own outcome field, never by position or by the first matching entry.
+		flows := requireKeyFlowAuditEntries(t, auditLogPathForTest(gw), providerID)
+		for _, entry := range flows.update {
+			assert.NotContains(t, entry.line, injectedAPIKey,
+				"the provider-update audit entry carries the literal API key: %s",
+				truncate(entry.line, 200))
+			assert.NotContains(t, entry.details, "api_key",
+				"the provider-update audit entry carries an api_key field: %s",
+				truncate(entry.line, 200))
 		}
+		// Whole-log sweep at unchanged strength: no line of the audit log may
+		// carry the literal key, whatever flow wrote it.
+		f, err := os.Open(auditLogPathForTest(gw))
+		require.NoError(t, err, "audit log must exist")
 		defer f.Close()
 
 		scanner := bufio.NewScanner(f)
@@ -272,6 +300,133 @@ func TestCredentialLeakage(t *testing.T) {
 	})
 }
 
+// auditOnForLeakScan returns the sandbox config option for THIS test's
+// gateway: the harness default restated (sandbox off) plus audit logging on,
+// so the audit subtests below scan a real log. The harness config is a bare
+// literal, so its Sandbox carries only Mode "off" and AuditLog stays the zero
+// value (pkg/agent/testutil/gateway_harness.go::buildConfig); with a zero
+// AuditLog the loop never builds the audit logger
+// (pkg/agent/loop_construct.go::initializeAudit) and no log is written.
+// WithSandboxConfig replaces the whole sandbox block, so the option restates
+// what the default carried. AllowInternal admits the loopback stand-in
+// provider: PUT /providers/{id} SSRF-checks the persisted api_base before
+// probing and refuses loopback otherwise
+// (pkg/gateway/rest_providers.go::providerPutValidateKey), and an unallowed
+// onboarding probe is skipped rather than run
+// (pkg/gateway/rest_onboarding.go::validateAndStoreOnboardingKey).
+func auditOnForLeakScan() testutil.Option {
+	return testutil.WithSandboxConfig(config.OmnipusSandboxConfig{
+		Mode:     "off",
+		AuditLog: true,
+		SSRF:     config.OmnipusSSRFConfig{AllowInternal: []string{"127.0.0.1"}},
+	})
+}
+
+// startNoCreditProviderUpstream starts a stand-in provider whose key probe
+// answers 402: the key authenticates but the account has no credit —
+// pkg/providers/validate.go::classify maps status 402 to OutcomeNoCredit.
+// Onboarding and PUT /providers/{id} both proceed on that warning outcome
+// (ValidationResult.Blocks is true only for invalid_key) and each write a
+// provider_key_validated audit entry
+// (pkg/gateway/rest_onboarding.go::validateAndStoreOnboardingKey,
+// pkg/gateway/rest_providers.go::providerPutRespond). A probe that answers
+// 200 classifies the key valid and writes NO entry, which would leave the
+// audit checks here nothing to require — hence 402, not 200. The anthropic
+// probe is a GET {base}/v1/models (pkg/providers/validate.go), so any /models
+// path gets the 402.
+func startNoCreditProviderUpstream(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/models") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write([]byte(`{"error":{"message":"insufficient credit"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// auditLogPathForTest is where the gateway under test writes its audit log.
+// The loop derives its home from the config's agent home base —
+// homePath = filepath.Dir(cfg.AgentHomeBasePath())
+// (pkg/agent/loop_construct.go::newAgentLoop) — and builds the audit logger
+// on filepath.Join(homePath, "system") when Sandbox.AuditLog is on
+// (pkg/agent/loop_construct.go::initializeAudit); the file itself is the
+// audit package's "audit.jsonl" literal. The harness sets
+// Agents.Defaults.Home to the gateway home itself
+// (pkg/agent/testutil/gateway_harness.go::buildConfig), so here the log
+// lands one directory ABOVE gw.HomeDir() — not under it, where this test
+// used to read and found nothing.
+func auditLogPathForTest(gw *testutil.TestGateway) string {
+	return filepath.Join(filepath.Dir(gw.HomeDir()), "system", "audit.jsonl")
+}
+
+// providerKeyValidatedEntry is one provider_key_validated line of the audit
+// log: the raw line (for literal leak checks) and its details map.
+type providerKeyValidatedEntry struct {
+	line    string
+	details map[string]any
+}
+
+// keyFlowAuditEntries holds the provider_key_validated entries of the two
+// flows that handled the injected key, separated by flow.
+type keyFlowAuditEntries struct {
+	onboarding []providerKeyValidatedEntry
+	update     []providerKeyValidatedEntry
+}
+
+// requireKeyFlowAuditEntries fails unless the audit log at path holds a
+// provider_key_validated entry for providerID from each flow that handled
+// the injected key: onboarding (details.source "onboarding") and the
+// PUT /providers/{id} update. The update entries are matched by their own
+// outcome field — details.outcome set, no details.source — never by position
+// or by the first matching entry: onboarding stamps source "onboarding"
+// (pkg/gateway/rest_onboarding.go::validateAndStoreOnboardingKey), the
+// provider update writes outcome without a source
+// (pkg/gateway/rest_providers.go::providerPutRespond). A missing log, a
+// malformed line, or a missing entry FAILS here — an audit-leak scan of
+// nothing proves nothing, so it is never skipped.
+func requireKeyFlowAuditEntries(t *testing.T, path, providerID string) keyFlowAuditEntries {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err,
+		"audit log must exist at %s — audit logging is on for this gateway and both key flows must have audited", path)
+	var flows keyFlowAuditEntries
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var entry struct {
+			Event   string         `json:"event"`
+			Details map[string]any `json:"details"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &entry),
+			"audit log %s holds a line that is not a JSON audit entry — the log is machine-written JSONL", path)
+		if entry.Event != "provider_key_validated" || entry.Details["provider"] != providerID {
+			continue
+		}
+		e := providerKeyValidatedEntry{line: line, details: entry.Details}
+		source, hasSource := entry.Details["source"].(string)
+		switch {
+		case hasSource && source == "onboarding":
+			flows.onboarding = append(flows.onboarding, e)
+		case !hasSource:
+			// The provider-update entry, matched by its outcome field.
+			if outcome, _ := entry.Details["outcome"].(string); outcome != "" {
+				flows.update = append(flows.update, e)
+			}
+		}
+	}
+	require.NotEmpty(t, flows.onboarding,
+		"no provider_key_validated entry from onboarding (details.source=onboarding) in %s", path)
+	require.NotEmpty(t, flows.update,
+		"no provider_key_validated entry from the provider update (details.outcome set, no source) in %s", path)
+	return flows
+}
+
 // assertNoLeaksInFile scans the named file (line-by-line using bufio.Scanner
 // so we never load the whole thing into memory) for any occurrence of the
 // scanTokens that should not appear. excludeTokens is the set of legitimate
@@ -282,12 +437,9 @@ func assertNoLeaksInFile(t *testing.T, path string, tokens []leakScanToken,
 	excludeTokens ...string,
 ) {
 	t.Helper()
+	// A missing file FAILS: a scan of nothing proves nothing.
 	f, err := os.Open(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			t.Logf("skipping %s (does not exist)", path)
-			return
-		}
 		t.Fatalf("open %s: %v", path, err)
 	}
 	defer f.Close()
