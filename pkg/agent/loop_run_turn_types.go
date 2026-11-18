@@ -41,6 +41,12 @@ type agentLoopRunTurn struct {
 	// goroutine.
 	providerAttempt     int
 	providerMaxAttempts int
+	// namedRetryPending (#1537 FR-006): a helper turn announced a retry whose
+	// named top-chat row no responding/recovered state has cleared yet. Set
+	// by the retry producers, cleared by emitProviderStatus; read when the
+	// model answers (noteProviderAnswered). Atomic: the silence watch emits
+	// from its own goroutine.
+	namedRetryPending atomic.Bool
 	// A streaming-capable provider already tried this channel. Do not retry
 	// a declined factory merely to finalize the plain fallback response.
 	streamerLookupDeclined bool

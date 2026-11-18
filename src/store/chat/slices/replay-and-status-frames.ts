@@ -29,6 +29,7 @@ import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { useNotificationsStore } from '@/store/notifications'
 import { reconcileSecretRequests } from './secret-request-frames'
+import { beginHelperAttach, noteServerClock, sessionStateClockSample } from '../provider-helper-rows'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -175,7 +176,17 @@ function handleSessionStateFrame(
   // acknowledgement; unscoped connection-open state must never replace it.
   if (frame.session_id) {
     noteServerAttentionFrame(targetSid, frame)
-    withBucket(targetSid, b => ({ sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, frame.session_tokens_total) }))
+    const receivedMs = Date.now()
+    withBucket(targetSid, b => ({
+      sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, frame.session_tokens_total),
+      // #1537 FR-008: emitted_at_ms when it agrees with emitted_at (else the
+      // whole-second emitted_at; Q12 A S1) is the server's current time on attach — a
+      // server-clock sample for the reload countdown. FR-014: this attach's
+      // session_state opens the window that records which named helper rows
+      // its projection delivers (reconciled at catch_up_complete).
+      providerServerClock: noteServerClock(b.providerServerClock, sessionStateClockSample(frame.emitted_at, frame.emitted_at_ms), receivedMs),
+      ...beginHelperAttach(),
+    }))
   }
   // ADR-092 review finding D: a page reload or gateway reconnect re-fetches
   // this frame, but a plain WS reconnect never replays a fresh

@@ -26,6 +26,8 @@ import { classifySetGoalCall } from './tools/SetGoalToolUI'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
 import { ProviderWaitingIndicator } from './ProviderWaitingIndicator'
+import { ProviderHelperRows } from './ProviderHelperRows'
+import { useNoticeClock } from './useNoticeClock'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
@@ -1662,6 +1664,12 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   // model has gone quiet). Cleared by the frame handler on responding/
   // recovered; like the retry line it renders only while the turn streams.
   const providerStatusEvent = useChatStore((s) => s.providerStatusEvent)
+  // #1537 — the main chat's named helper rows (shown idle or writing) and
+  // the chat's server-clock estimate (FR-008 reload clock, own notices too).
+  const providerHelperRows = useChatStore((s) => s.providerHelperRows)
+  const providerServerClock = useChatStore((s) => s.providerServerClock)
+  const ownRetryClock = useNoticeClock(providerRetryEvent, providerServerClock, providerRetryEvent ?? null)
+  const ownWaitingClock = useNoticeClock(providerStatusEvent, providerServerClock, providerStatusEvent ?? null)
   const isStreaming = useChatStore((s) => s.isStreaming)
   // ADR-049 D6/US-12/SD-C9: loop indicator state, same session-scoped
   // foreground field as rateLimitEvent above. (Goal pill state is read
@@ -1812,8 +1820,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 provider={providerRetryEvent.provider}
                 model={providerRetryEvent.model}
                 retryAt={providerRetryEvent.retryAt}
-                sentAt={providerRetryEvent.sentAt}
-                receivedAt={providerRetryEvent.receivedAt}
+                sentAt={ownRetryClock?.sentAt ?? providerRetryEvent.sentAt}
+                receivedAt={ownRetryClock?.receivedAt ?? providerRetryEvent.receivedAt}
                 attempt={providerRetryEvent.attempt}
                 maxAttempts={providerRetryEvent.maxAttempts}
                 errorCode={providerRetryEvent.errorCode}
@@ -1832,14 +1840,21 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             <div className="px-[var(--space-3)] pb-[var(--space-2)]">
               <ProviderWaitingIndicator
                 silentSince={providerStatusEvent.silentSince}
-                sentAt={providerStatusEvent.sentAt}
-                receivedAt={providerStatusEvent.receivedAt}
+                sentAt={ownWaitingClock?.sentAt ?? providerStatusEvent.sentAt}
+                receivedAt={ownWaitingClock?.receivedAt ?? providerStatusEvent.receivedAt}
                 stallAt={providerStatusEvent.stallAt}
                 attempt={providerStatusEvent.attempt}
                 maxAttempts={providerStatusEvent.maxAttempts}
               />
             </div>
           )}
+
+          {/* #1537 — named helper rows: one per helper turn whose model is
+              retrying, silent or just recovered, below the chat's own
+              notices. NOT gated on isStreaming: the main chat shows them
+              while idle too (FR-005). One polite live region (FR-010). */}
+          <ProviderHelperRows rows={providerHelperRows} clock={providerServerClock} />
+
 
           {/* Goal/loop indicator — ADR-049 D6/US-12/SD-C9: the goal pill was
               RELOCATED to the bottom-right GoalPillTray (FE-1, ADR-053 US-14);

@@ -378,9 +378,23 @@ func (a *restAPI) runExecutorSmokeTest(
 	var (
 		workDir              string
 		isEphemeralWorkspace bool
+		// workerEnvOverrides holds the saved worker's executor
+		// env_overrides (D-B, opencode-226 R5): Send a test message must run
+		// through this worker's saved environment exactly as a delegated run
+		// would. Captured here while the agent branch resolves the workDir;
+		// applied below through the ONE merge the delegated dispatch path
+		// uses (runner.MergeEnvOverrides, executor_opts.go's
+		// mergeEnvOverrides) — never a second, gateway-local copy of the
+		// merge rules. Stays nil for the agentless path and for agents
+		// without an external-CLI executor, which keep the plain scrubbed
+		// gateway environment.
+		workerEnvOverrides map[string]string
 	)
 	cfg := a.agentLoop.GetConfig()
 	if agentCfg := findAgentConfig(cfg, agentID); agentCfg != nil {
+		if agentCfg.Subagents != nil && agentCfg.Subagents.Executor != nil {
+			workerEnvOverrides = agentCfg.Subagents.Executor.EnvOverrides
+		}
 		resolved := agent.ResolveAgentHome(agentCfg, &cfg.Agents.Defaults)
 		// CoreTeam override: an agent that belongs to a Workspace's team runs
 		// in the Workspace's dedicated project-work subdirectory
@@ -490,11 +504,26 @@ func (a *restAPI) runExecutorSmokeTest(
 		), ra.resolvedBinary, ra.presetApplied
 	}
 
+	// D-B (opencode-226 R5): apply the saved worker's env_overrides over the
+	// scrubbed gateway env through the same ONE merge a delegated run gets
+	// at driver level. Every driver's Run calls the unexported
+	// mergeEnvOverrides over the dispatcher-provided child env; the smoke
+	// test builds RunOptions.Env directly, so it performs the merge itself
+	// via the exported wrapper rather than reimplementing the rules
+	// (protected OMNIPUS_* keys skipped, same-named entries replaced in
+	// place, new names appended). Placed after ra.prepareArguments so the
+	// run label matches what a driver would log for this run. With no saved
+	// overrides — and on the agentless path — childEnv is exactly the plain
+	// scrubbed gateway environment, unchanged from before this fix.
+	childEnv := sandbox.ScrubGatewayEnvForRunner()
+	if len(workerEnvOverrides) > 0 {
+		childEnv = runner.MergeEnvOverrides(childEnv, workerEnvOverrides, ra.runID)
+	}
 	evCh, runErr := driver.Run(runCtx, runner.RunOptions{
 		RunID:          ra.runID,
 		WorkDir:        workDir,
 		Input:          smokeTestPrompt,
-		Env:            sandbox.ScrubGatewayEnvForRunner(),
+		Env:            childEnv,
 		TimeoutSeconds: smokeTestTimeoutSeconds,
 		MaxTurns:       smokeTestMaxTurns,
 		CLIPath:        ra.resolvedBinary,

@@ -6809,6 +6809,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ProviderHelperRows.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ProviderRetryIndicator.tsx",
       "lane": 3
     },
@@ -6990,6 +6994,10 @@
     },
     {
       "source": "src/components/chat/useChatDelegationEvents.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useNoticeClock.ts",
       "lane": 3
     },
     {

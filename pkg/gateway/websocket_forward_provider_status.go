@@ -34,11 +34,10 @@ func (h *WSHandler) hubProviderStatus(evt agent.Event) {
 		return
 	}
 	frame := generated.ProviderStatusFrame{
-		Type:      string(generated.WsFrameTypeProviderStatus),
-		SessionId: sid,
-		TurnId:    evt.Meta.TurnID,
-		State:     p.State,
-		SentAt:    p.SentAt.Format(time.RFC3339Nano),
+		Type:   string(generated.WsFrameTypeProviderStatus),
+		TurnId: evt.Meta.TurnID,
+		State:  p.State,
+		SentAt: p.SentAt.Format(time.RFC3339Nano),
 	}
 	if p.State == agent.ProviderStatusWaiting {
 		since := p.SilentSince.Format(time.RFC3339Nano)
@@ -58,14 +57,12 @@ func (h *WSHandler) hubProviderStatus(evt agent.Event) {
 		retries := p.Retries
 		frame.Retries = &retries
 	}
-	data, err := json.Marshal(frame)
-	if err != nil {
-		logsafeError("ws: marshal provider_status for hub failed", "session_id", sid, "error", err)
-		return
-	}
-	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeProviderStatus), hubFrameMeta{
-		kind:   hubKindItem,
-		key:    "provider_status:" + evt.Meta.TurnID,
-		turnID: evt.Meta.TurnID,
-	}, data, nil)
+	// #1537: a helper turn's status goes to the helper's chat and, named, to
+	// the top chat; NamedCopyOnly reaches the top chat alone (FR-006).
+	h.hubPublishProviderNotice(string(generated.WsFrameTypeProviderStatus), evt, sid, p.ChildSessionID, p.NamedCopyOnly,
+		func(sessionID string, child, agentID *string) ([]byte, error) {
+			copyFrame := frame
+			copyFrame.SessionId, copyFrame.ChildSessionId, copyFrame.AgentId = sessionID, child, agentID
+			return json.Marshal(copyFrame)
+		})
 }

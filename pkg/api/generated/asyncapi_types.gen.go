@@ -1115,9 +1115,13 @@ type ProviderFallbackNote struct {
 	UnavailableModel *string             `json:"unavailable_model,omitempty"`
 }
 
-// ProviderRetryFrame — Server → client (provider-messages spec §7.1 item 3). Announces an automatic provider retry inside the turn's fallback-chain execution, or (issue #1664) the agent loop's own retry of a call that sent no response — the candidate about to be re-called, when it will be called (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the #711 closure constraint) — built from NAMED FIELDS ONLY, never an `error` field or raw provider text; the countdown is computed from retry_at and sent_at client-side (C-11). Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
+// ProviderRetryFrame — Server → client (provider-messages spec §7.1 item 3). Announces an automatic provider retry inside the turn's fallback-chain execution, or (issue #1664) the agent loop's own retry of a call that sent no response — the candidate about to be re-called, when it will be called (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the #711 closure constraint) — built from NAMED FIELDS ONLY, never an `error` field or raw provider text; the countdown is computed from retry_at and sent_at client-side (C-11). Issue #1537: a helper's retry is published twice — to the helper's own chat without identity fields, and to the top chat with child_session_id and agent_id (both or neither, the anyOf below); a main-chat copy is cleared by the helper's provider_status ended or responding, never by the main chat's own turn end. Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
 type ProviderRetryFrame struct {
-	Attempt int `json:"attempt"`
+	// Issue #1537. Top-chat copy of a helper's notice only — the helper's agent (an id, never shown). Sent together with child_session_id.
+	AgentId *string `json:"agent_id,omitempty"`
+	Attempt int     `json:"attempt"`
+	// Issue #1537. Top-chat copy of a helper's notice only — the helper's own chat. Sent together with agent_id.
+	ChildSessionId *string `json:"child_session_id,omitempty"`
 	// The classified provider condition that triggered the retry: the fallback chain's retry causes (rate_limited and the #1280 causes), `no_response` or `empty_reply` (issue #1664, the agent loop's own retry). Plain string, not an enum.
 	ErrorCode         string `json:"error_code"`
 	MaxAttempts       int    `json:"max_attempts"`
@@ -1133,10 +1137,14 @@ type ProviderRetryFrame struct {
 	Type      string `json:"type"`
 }
 
-// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; this attempt ends at stall_at when known — the request timeout before the first response byte, the silence limit after it — and attempt/max_attempts count the agent loop's calls, issue #1664), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; this attempt ends at stall_at when known — the request timeout before the first response byte, the silence limit after it — and attempt/max_attempts count the agent loop's calls, issue #1664), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries), `ended` (issue #1537, top-chat copy only: that helper turn has ended; the main chat removes the helper's named row). Issue #1537: a helper's status is published twice — to the helper's own chat without identity fields, and to the top chat with child_session_id and agent_id (both or neither, and `ended` only with them — the anyOf below). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
 type ProviderStatusFrame struct {
+	// Issue #1537. Top-chat copy of a helper's notice only — the helper's agent (an id, never shown). Sent together with child_session_id.
+	AgentId *string `json:"agent_id,omitempty"`
 	// State `waiting` only, when known — the 1-based number of the agent loop's provider call (issue #1664). Sent together with max_attempts.
 	Attempt *int `json:"attempt,omitempty"`
+	// Issue #1537. Top-chat copy of a helper's notice only — the helper's own chat. Sent together with agent_id.
+	ChildSessionId *string `json:"child_session_id,omitempty"`
 	// State `waiting` only, when known — the total provider calls the agent loop makes before the turn ends with an error (today 3).
 	MaxAttempts *int   `json:"max_attempts,omitempty"`
 	Retries     *int   `json:"retries,omitempty"`
@@ -1566,6 +1574,8 @@ type SessionStateFrame struct {
 	// #823 review finding 7. Stable identifier for this gateway process, minted once at startup. Keep in sync by hand with contracts/components/schemas/SessionStateFrame.yaml.
 	BootId    *string `json:"boot_id,omitempty"`
 	EmittedAt string  `json:"emitted_at"`
+	// #1537 FR-008. Unix epoch milliseconds of the same instant as emitted_at (one server clock reading). The SPA prefers it as its server-clock sample and falls back to emitted_at when absent. Optional: older gateways omit it. Keep in sync by hand with contracts/components/schemas/SessionStateFrame.yaml.
+	EmittedAtMs *int64 `json:"emitted_at_ms,omitempty"`
 	// Required on attach's session-scoped emit; absent on the unscoped connection-open emit. Describes server readiness, never proof that the client loaded a page. Unavailable history leaves authorized current controls independent.
 	HistoryState *SessionHistoryState `json:"history_state,omitempty"`
 	// Always array, never null. Capped at 1000.

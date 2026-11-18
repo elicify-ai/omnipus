@@ -3,7 +3,9 @@
 // Drives `opencode run --format json` (net-new per Spec-4).
 // opencode is the user's installed binary; it is not a Go dependency.
 //
-// opencode stream-json event shapes (opencode ≥ 0.1.0):
+// opencode stream-json event shapes — two vocabularies are read:
+//
+// ≥ 0.1.0 (legacy, kept working):
 //
 //	{"type":"message.start","message":{"id":"...","role":"assistant",...}}
 //	{"type":"content.delta","delta":{"type":"text_delta","text":"..."}}
@@ -12,6 +14,20 @@
 //	{"type":"tool.done","tool":{"id":"...","name":"...","output":"..."},"exitCode":0}
 //	{"type":"session.complete","session_id":"...","usage":{...}}
 //	{"type":"error","message":"...","code":"..."}
+//
+// ≥ 2.x (recorded from a real `opencode run --format json`, v2.2.6):
+//
+//	{"type":"step_start","part":{...,"type":"step-start",...}}
+//	{"type":"text","part":{...,"type":"text","text":"..."}}
+//	{"type":"tool_use","part":{...,"type":"tool","id":"...","tool":"write",
+//	          "state":{"status":"completed","input":{...},"output":"..."}}}
+//	{"type":"step_finish","part":{...,"type":"step-finish","reason":"stop"|"tool-calls",...}}
+//	{"type":"error","error":{"type":"...","message":"..."}}
+//
+// One COMPLETED tool_use line carries both the call and its result, so it
+// yields two public events (tool-call, then tool-result). step_finish never
+// ends the run — reason "tool-calls" closes a mid-run step and "stop" the
+// final one; the single End is emitted when the run (stream/process) ends.
 //
 // The driver gracefully skips any unknown event types (FR-5.6).
 
@@ -31,8 +47,9 @@ import (
 )
 
 // knownOpencodeVersionPrefixes lists version-string prefixes validated against
-// this driver (FR-5.6).
-var knownOpencodeVersionPrefixes = []string{"0.", "1."}
+// this driver (FR-5.6). "2." covers the installed CLI (v2.2.6), whose stream
+// vocabulary this driver reads.
+var knownOpencodeVersionPrefixes = []string{"0.", "1.", "2."}
 
 // opencodeBinName is the executable name invoked by the opencode driver. It is a
 // package var only so in-package tests can point at a stub process; production
@@ -200,9 +217,32 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		maxTurns := opts.MaxTurns
 		turnCount := 0
 
-		emittedFatal := streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
-			return d.parseLine(raw, runID, &turnCount, maxTurns)
+		// endEmitted tracks whether the stream itself announced the terminal
+		// End (≥ 0.1.0 session.complete); the run-end synthesis below must
+		// then stay silent so the consumer sees exactly one terminal outcome.
+		endEmitted := false
+		emittedFatal := streamParserMulti(runCtx, pr, runID, func(raw []byte) ([]RunEvent, bool) {
+			events, ok := d.parseLine(raw, runID, &turnCount, maxTurns)
+			if ok {
+				for _, ev := range events {
+					if ev.Kind == EventKindEnd {
+						endEmitted = true
+					}
+				}
+			}
+			return events, ok
 		}, ch)
+
+		// Liveness: the scanner may have stopped early (e.g. an oversized
+		// token) while stdout still has unread data. exec's stdout copier is
+		// then blocked writing into this pipe and Cmd.Wait waits for that
+		// copy — waiting on waitErr here would deadlock until the context is
+		// canceled. Close the read end NOW: the blocked write fails, the
+		// copier finishes, and Wait can return. Scanning has already stopped,
+		// so the unread remainder is unusable regardless. Harmless on the
+		// normal EOF path (the copier has already finished); the deferred
+		// close below becomes a no-op.
+		_ = pr.Close()
 
 		err := <-waitErr
 		if err != nil && runCtx.Err() == nil {
@@ -232,6 +272,17 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 				RunID:     runID,
 				Timestamp: time.Now().UTC(),
 				Err:       &ErrorEvent{Message: "run exceeded timeout (FR-5.4)", Fatal: true},
+			}
+		} else if err == nil && runCtx.Err() == nil && !emittedFatal && !endEmitted {
+			// The run ended cleanly with NO inline terminal event — the ≥ 2.x
+			// vocabulary has no session.complete; its stream just stops after
+			// the final step_finish. Emit the single End here, when the run
+			// actually ended, so the consumer still sees exactly one terminal
+			// outcome (an inline End sets endEmitted and skips this branch).
+			ch <- RunEvent{
+				Kind:      EventKindEnd,
+				RunID:     runID,
+				Timestamp: time.Now().UTC(),
 			}
 		}
 	}()
@@ -328,17 +379,18 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 }
 
 // looksLikeProviderModel reports whether model is shaped like opencode's
-// expected "provider/model" form: exactly one '/' separator with non-empty
-// content on both sides. Used to guard the --model flag (ADR-032 fix C) so a
-// bare model name from an agent configured for a different CLI (claude/codex
-// use bare model names) is never passed to opencode as garbage.
+// expected "provider/model" form: a non-empty provider prefix, one '/', then
+// a non-empty rest that may itself contain further '/' — nested model names
+// such as openrouter/deepseek/deepseek-v4.1-flash (a provider, then the
+// provider's own model path) are valid and passed whole. Used to guard the
+// --model flag (ADR-032 fix C) so a bare model name from an agent configured
+// for a different CLI (claude/codex use bare model names) is never passed to
+// opencode as garbage.
 func looksLikeProviderModel(model string) bool {
 	idx := strings.IndexByte(model, '/')
-	if idx <= 0 || idx == len(model)-1 {
-		return false
-	}
-	// Reject a second '/' — "provider/model" is exactly two segments.
-	return strings.IndexByte(model[idx+1:], '/') == -1
+	// A provider prefix before the FIRST '/' and a non-empty rest after it;
+	// the rest may hold any number of further '/' segments.
+	return idx > 0 && idx < len(model)-1
 }
 
 // buildEnv builds the environment for the child process. See buildChildEnv:
@@ -351,47 +403,76 @@ func (d *OpencodeDriver) buildEnv(opts RunOptions) []string {
 	return mergeEnvOverrides(buildChildEnv(opts.Env), opts.EnvOverrides, opts.RunID)
 }
 
-// parseLine maps a single NDJSON line from `opencode run --format json` to a RunEvent.
+// parseLine maps a single NDJSON line from `opencode run --format json` to the
+// RunEvents that line yields, in stream order. Most lines yield one event; a
+// COMPLETED ≥ 2.x tool_use line carries both the call and its result, so it
+// yields two (tool-call, then tool-result). ok=false skips the line.
 func (d *OpencodeDriver) parseLine(
 	raw []byte,
 	runID string,
 	turnCount *int,
 	maxTurns int,
-) (RunEvent, bool) {
+) ([]RunEvent, bool) {
 	typ, ok := rawJSONField(raw, "type")
 	if !ok {
 		slog.Debug("runner/opencode: malformed JSON line", "run_id", runID, "raw", string(raw))
-		return RunEvent{
+		return []RunEvent{{
 			Kind:  EventKindError,
 			RunID: runID,
 			Err:   &ErrorEvent{Message: fmt.Sprintf("malformed JSON: %s", raw), Fatal: false},
-		}, true
+		}}, true
+	}
+
+	// ≥ 2.x announces the native conversation as a top-level sessionID on
+	// every event line. Capture it so Resume/ResumeWith continue THIS
+	// conversation via -s/--session (FR-043); the ≥ 0.1.0 vocabulary announces
+	// it as session.start/session.complete session_id, handled in their
+	// branches below. A legacy line has no top-level sessionID field.
+	if sessionID, ok := rawJSONField(raw, "sessionID"); ok && sessionID != "" {
+		storeNativeID(&d.mu, &d.nativeID, sessionID)
 	}
 
 	switch typ {
 	case "content.delta":
-		return d.parseContentDelta(raw, runID)
+		if ev, emitted := d.parseContentDelta(raw, runID); emitted {
+			return []RunEvent{ev}, true
+		}
+		return nil, false
 
 	case "tool.start":
-		return d.parseToolStart(raw, runID)
+		if ev, emitted := d.parseToolStart(raw, runID); emitted {
+			return []RunEvent{ev}, true
+		}
+		return nil, false
 
 	case "message.start":
 		// Track turns on message.start.
-		*turnCount++
-		if maxTurns > 0 && *turnCount > maxTurns {
-			slog.Warn("runner/opencode: turn cap exceeded — terminating", "run_id", runID,
-				"turn_count", *turnCount, "max_turns", maxTurns)
-			d.Cancel()
-			return RunEvent{
-				Kind:  EventKindError,
-				RunID: runID,
-				Err: &ErrorEvent{
-					Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns),
-					Fatal:   true,
-				},
-			}, true
+		if ev, capExceeded := d.bumpTurnCap(runID, turnCount, maxTurns); capExceeded {
+			return []RunEvent{ev}, true
 		}
-		return RunEvent{}, false
+		return nil, false
+
+	case "step_start":
+		// ≥ 2.x: opens one agent step of the run's loop — the analogue of
+		// message.start, so it counts toward the same turn cap (FR-5.4).
+		if ev, capExceeded := d.bumpTurnCap(runID, turnCount, maxTurns); capExceeded {
+			return []RunEvent{ev}, true
+		}
+		return nil, false
+
+	case "text":
+		// ≥ 2.x: the assistant's answer text lives in part.text.
+		return parseOpencodeTextPart(raw, runID)
+
+	case "tool_use":
+		// ≥ 2.x: one COMPLETED line carries both the call and its result.
+		return parseOpencodeToolUse(raw, runID)
+
+	case "step_finish":
+		// ≥ 2.x: part.reason is "tool-calls" between steps and "stop" at the
+		// final one. Neither ends the RUN — no End is emitted per step; the
+		// single End is synthesized when the run (stream/process) ends.
+		return nil, false
 
 	case "session.start":
 		// Session bootstrap event — carries the native session id (captured
@@ -399,7 +480,7 @@ func (d *OpencodeDriver) parseLine(
 		if sessionID, ok := rawJSONField(raw, "session_id"); ok && sessionID != "" {
 			storeNativeID(&d.mu, &d.nativeID, sessionID)
 		}
-		return RunEvent{}, false
+		return nil, false
 
 	case "session.complete":
 		if sessionID, _ := rawJSONField(raw, "session_id"); sessionID != "" {
@@ -408,23 +489,38 @@ func (d *OpencodeDriver) parseLine(
 			storeNativeID(&d.mu, &d.nativeID, sessionID)
 			slog.Info("runner/opencode: session complete", "run_id", runID, "session_id", sessionID)
 		}
-		return RunEvent{Kind: EventKindEnd, RunID: runID}, true
+		return []RunEvent{{Kind: EventKindEnd, RunID: runID}}, true
 
 	case "error":
-		msg, _ := rawJSONField(raw, "message")
-		if msg == "" {
-			msg = "unknown opencode error"
-		}
-		return RunEvent{
-			Kind:  EventKindError,
-			RunID: runID,
-			Err:   &ErrorEvent{Message: msg, Fatal: true},
-		}, true
+		return parseOpencodeError(raw, runID), true
 
 	default:
 		slog.Debug("runner/opencode: unknown event type", "run_id", runID, "type", typ)
-		return RunEvent{}, false
+		return nil, false
 	}
+}
+
+// bumpTurnCap counts one agent step against the run's turn cap (FR-5.4,
+// #904 FR-004 — no hidden default). It returns the fatal turn-cap event with
+// capExceeded=true after cancelling the run, and a zero event with false when
+// the step is admitted. Shared by the message.start (≥ 0.1.0) and step_start
+// (≥ 2.x) turn branches.
+func (d *OpencodeDriver) bumpTurnCap(runID string, turnCount *int, maxTurns int) (ev RunEvent, capExceeded bool) {
+	*turnCount++
+	if maxTurns > 0 && *turnCount > maxTurns {
+		slog.Warn("runner/opencode: turn cap exceeded — terminating", "run_id", runID,
+			"turn_count", *turnCount, "max_turns", maxTurns)
+		d.Cancel()
+		return RunEvent{
+			Kind:  EventKindError,
+			RunID: runID,
+			Err: &ErrorEvent{
+				Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns),
+				Fatal:   true,
+			},
+		}, true
+	}
+	return RunEvent{}, false
 }
 
 // parseContentDelta handles the "content.delta" event.
@@ -474,6 +570,156 @@ func (d *OpencodeDriver) parseToolStart(raw []byte, runID string) (RunEvent, boo
 			RawInput:    safeMarshal(ev.Tool.Input),
 		},
 	}, true
+}
+
+// parseOpencodeTextPart handles the "text" event (opencode ≥ 2.x): the
+// assistant's answer text lives in part.text. An empty text emits nothing.
+func parseOpencodeTextPart(raw []byte, runID string) ([]RunEvent, bool) {
+	var ev struct {
+		Part struct {
+			Text string `json:"text"`
+		} `json:"part"`
+	}
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		// The line was recognized as a text event, so losing its payload to a
+		// decode failure is not an ignorable unknown type (F3): surface it.
+		return []RunEvent{undecodableOpencodeEvent(runID, "text", err)}, true
+	}
+	if ev.Part.Text == "" {
+		return nil, false
+	}
+	return []RunEvent{{
+		Kind:   EventKindOutput,
+		RunID:  runID,
+		Output: &OutputEvent{Text: ev.Part.Text},
+	}}, true
+}
+
+// parseOpencodeToolUse handles the "tool_use" event (opencode ≥ 2.x). One
+// COMPLETED line carries both the call and its result in part.state, so it
+// yields two public events in stream order: the ToolCall, then the correlated
+// ToolResult. status "completed" yields a successful result; status "error"
+// yields the FAILED result with part.state.error's diagnostic and IsError set
+// — the same public result path a success takes, so the live tool-start gets
+// its matching failure outcome. The failed status prevails over any stale
+// success-shaped output field, and the failure is a tool outcome, not a
+// run-fatal one: the agent may recover (later records still stream). A part
+// still pending/running yields the ToolCall only: no result is asserted for
+// a call that has not finished.
+func parseOpencodeToolUse(raw []byte, runID string) ([]RunEvent, bool) {
+	var ev struct {
+		Part struct {
+			ID    string `json:"id"`
+			Tool  string `json:"tool"`
+			State struct {
+				Status string          `json:"status"`
+				Input  json.RawMessage `json:"input"`
+				Output json.RawMessage `json:"output"`
+				Error  string          `json:"error"`
+			} `json:"state"`
+		} `json:"part"`
+	}
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		// Recognized tool event with an undecodable payload — never silence
+		// it (F3); the call record would otherwise vanish without a trace.
+		return []RunEvent{undecodableOpencodeEvent(runID, "tool_use", err)}, true
+	}
+	if ev.Part.ID == "" && ev.Part.Tool == "" {
+		return nil, false
+	}
+	events := []RunEvent{{
+		Kind:  EventKindToolCall,
+		RunID: runID,
+		ToolCall: &ToolCallEvent{
+			CallID:    ev.Part.ID,
+			ToolName:  ev.Part.Tool,
+			ToolInput: safeCopyRaw(ev.Part.State.Input),
+		},
+	}}
+	switch {
+	case ev.Part.State.Status == "completed" && len(ev.Part.State.Output) > 0:
+		events = append(events, RunEvent{
+			Kind:  EventKindToolResult,
+			RunID: runID,
+			ToolResult: &ToolResultEvent{
+				CallID:   ev.Part.ID,
+				ToolName: ev.Part.Tool,
+				Output:   safeCopyRaw(ev.Part.State.Output),
+			},
+		})
+	case ev.Part.State.Status == "error":
+		// Terminal failed tool (the installed 2.2.6 emitter's
+		// session.tool.failed branch sends status:"error" with
+		// error:state.error.message). The diagnostic is the output, IsError
+		// marks the outcome; nothing is treated as a run-fatal condition.
+		events = append(events, RunEvent{
+			Kind:  EventKindToolResult,
+			RunID: runID,
+			ToolResult: &ToolResultEvent{
+				CallID:   ev.Part.ID,
+				ToolName: ev.Part.Tool,
+				Output:   safeMarshal(ev.Part.State.Error),
+				IsError:  true,
+			},
+		})
+	}
+	return events, true
+}
+
+// undecodableOpencodeEvent builds the visible fatal error for a recognized
+// event line whose typed payload cannot be decoded (F3). The content is
+// lost, so the failure must be public, name the event kind for diagnosis,
+// and — being fatal — prevent a later successful completion.
+func undecodableOpencodeEvent(runID, kind string, err error) RunEvent {
+	slog.Warn("runner/opencode: undecodable event payload", "run_id", runID, "event", kind, "err", err)
+	return RunEvent{
+		Kind:  EventKindError,
+		RunID: runID,
+		Err: &ErrorEvent{
+			Message: fmt.Sprintf("opencode returned an undecodable %s event: %v", kind, err),
+			Fatal:   true,
+		},
+	}
+}
+
+// parseOpencodeError handles the "error" event. opencode ≥ 2.x nests the
+// payload: error.message carries the diagnostic and error.type its kind; the
+// ≥ 0.1.0 vocabulary carried the message at the top level, and that shape
+// stays supported. The provider's own diagnostic is surfaced VERBATIM as a
+// fatal error — it must reach the user, never collapse into a generic
+// message — and the kind is logged so it is not silently dropped.
+func parseOpencodeError(raw []byte, runID string) []RunEvent {
+	var ev struct {
+		Message string `json:"message"`
+		Error   struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	var msg, errType string
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		// Shape mismatch (the line is valid JSON — rawJSONField already matched
+		// its "type" — but error is not the expected object): fall back to the
+		// ≥ 0.1.0 top-level extraction rather than dropping the event.
+		msg, _ = rawJSONField(raw, "message")
+	} else {
+		msg = ev.Error.Message
+		if msg == "" {
+			msg = ev.Message
+		}
+		errType = ev.Error.Type
+	}
+	if msg == "" {
+		msg = "unknown opencode error"
+	}
+	if errType != "" {
+		slog.Warn("runner/opencode: stream error", "run_id", runID, "error_type", errType, "message", msg)
+	}
+	return []RunEvent{{
+		Kind:  EventKindError,
+		RunID: runID,
+		Err:   &ErrorEvent{Message: msg, Fatal: true},
+	}}
 }
 
 // Decide routes a permission decision (FR-5.1).

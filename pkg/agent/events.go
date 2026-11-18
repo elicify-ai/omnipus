@@ -401,6 +401,11 @@ type LLMRetryPayload struct {
 	SentAt      time.Time
 	MaxAttempts int
 	SessionID   string
+	// ChildSessionID (#1537 FR-001/002) is the helper's own chat when the
+	// retrying turn's own chat differs from its top chat (SessionID). The hub
+	// then publishes the retry twice: to this chat without identity fields,
+	// and to SessionID as the named copy. Empty for a chat's own turn.
+	ChildSessionID string
 
 	// ContextWindowNotice is the already-persisted context diagnostic. The hub
 	// publishes this generated frame once; no ordinary chat message is produced.

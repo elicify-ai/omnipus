@@ -4,8 +4,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...actual,
+    // createFileRoute is stubbed so beforeLoad can run without a router.
+    // redirect and isRedirect stay the real exports (issue #1858): a lookalike
+    // that merely has an own `to` is what the gate must refuse.
     createFileRoute: () => (options: unknown) => options,
-    redirect: (options: { to: string }) => Object.assign(new Error('redirect'), options),
   }
 })
 
@@ -14,6 +16,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, fetchAppState: vi.fn() }
 })
 
+import { isRedirect } from '@tanstack/react-router'
 import { ApiError, fetchAppState } from '@/lib/api'
 import { Route } from './onboarding'
 
@@ -32,10 +35,27 @@ describe('onboarding route guard', () => {
   it('redirects an unsigned platform user before showing onboarding', async () => {
     vi.mocked(fetchAppState).mockResolvedValue({
       onboarding_complete: false,
-      identity: { mode: 'platform' },
+      identity: { mode: 'platform', signed_in: false },
     } as Awaited<ReturnType<typeof fetchAppState>>)
 
-    await expect(beforeLoad()).rejects.toMatchObject({ to: '/login' })
+    // Issue #1858: signed_in false in platform mode leaves onboarding via a
+    // real router redirect to /login. The target lives at options.to. A
+    // rejection that merely has an own `to` is not that redirect.
+    const settled = await beforeLoad().then(
+      (value) => ({ kind: 'resolved' as const, value }),
+      (err: unknown) => ({ kind: 'rejected' as const, err }),
+    )
+    expect(settled.kind).toBe('rejected')
+    if (settled.kind !== 'rejected') {
+      throw new Error('expected beforeLoad to reject with a real redirect to /login')
+    }
+    expect(isRedirect(settled.err)).toBe(true)
+    if (!isRedirect(settled.err)) {
+      throw new Error('expected the rejection to be a real router redirect, not a lookalike')
+    }
+    expect(settled.err).toBeInstanceOf(Response)
+    expect(settled.err.options.to).toBe('/login')
+    expect('to' in settled.err).toBe(false)
     expect(fetchAppState).toHaveBeenCalledOnce()
   })
 

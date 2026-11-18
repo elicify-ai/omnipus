@@ -57,23 +57,23 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/teambition/rrule-go v1.8.2
 	github.com/tencent-connect/botgo v0.2.1
-	github.com/yuin/goldmark v1.8.6
-	go.mau.fi/libsignal v0.2.2
-	go.mau.fi/util v0.9.10
-	go.mau.fi/whatsmeow v0.0.0-20260713112832-d8960d9575d2
+	github.com/yuin/goldmark v1.8.7
+	go.mau.fi/libsignal v0.2.3
+	go.mau.fi/util v0.11.1
+	go.mau.fi/whatsmeow v0.0.0-20261116172437-19d61352436f
 	go.uber.org/goleak v1.3.0
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/image v0.45.0
 	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sync v0.24.0
-	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.47.0
-	golang.org/x/text v0.43.0
+	golang.org/x/sync v0.25.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
+	golang.org/x/text v0.44.0
 	golang.org/x/time v0.15.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
-	maunium.net/go/mautrix v0.28.0
+	maunium.net/go/mautrix v0.33.0
 	modernc.org/sqlite v1.46.1
 )
 
@@ -139,13 +139,13 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-sqlite3 v1.14.45 // indirect
+	github.com/mattn/go-sqlite3 v1.14.53 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
-	github.com/petermattis/goid v0.0.0-20260330135022-df67b199bc81 // indirect
+	github.com/petermattis/goid v0.0.0-20261109124353-7cfa343ad0ab // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.4 // indirect
 	github.com/pion/mdns/v2 v2.1.0 // indirect
@@ -163,9 +163,9 @@ require (
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
-	github.com/tidwall/gjson v1.19.0 // indirect
+	github.com/tidwall/gjson v1.20.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
-	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/pretty v1.3.0 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
@@ -179,7 +179,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/arch v0.24.0 // indirect
-	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
+	golang.org/x/exp v0.0.0-20261113113407-e3970619a1a4 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

@@ -770,11 +770,18 @@ func drainExternalRun(
 
 done:
 	output := strings.TrimSpace(sb.String())
-	// Persist the aggregated final content as the assistant transcript entry so a
-	// replay reconstructs the run's result (mirrors the native finalContent path).
-	if output != "" {
-		childTS.appendAssistantTranscript(output, transcriptModelFor(childTS.agent))
-	}
+	// D-C (opencode-226 R5): every Output event is ALREADY persisted as it
+	// streams — appendIntermediateAssistantTranscript above is the run's
+	// assistant transcript record, exactly mirroring the native finalContent
+	// path, where the final content is persisted once. This loop used to
+	// ALSO append the whole aggregated text again here, storing every
+	// captured answer twice in the helper transcript. The duplicate write was
+	// removed at its source (never de-duplicated after the fact), and the
+	// path is driver-agnostic: claude, codex and opencode all drain through
+	// this one drainExternalRun, so the one fix covers all three. The
+	// aggregate survives only in the returned ToolResult (ForLLM/ForUser,
+	// and the steered hand-back composed from it) — it is deliberately not
+	// persisted a second time here.
 
 	slog.Info("external-cli dispatch: run finished",
 		"run_id", runID, "cli", cli, "ended", ended,

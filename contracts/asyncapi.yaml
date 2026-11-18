@@ -1296,14 +1296,14 @@ components:
     ProviderRetryFrame:
       name: ProviderRetryFrame
       title: provider_retry
-      summary: Automatic provider rate-limit retry scheduled (server → client).
+      summary: Automatic provider retry scheduled (server → client). A helper's retry is published to the helper's chat and, with child_session_id and agent_id, to the top chat (issue #1537).
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ProviderRetryFrame'
     ProviderStatusFrame:
       name: ProviderStatusFrame
       title: provider_status
-      summary: Provider-call state of a running turn — waiting, responding again, or recovered after retries (server → client).
+      summary: Provider-call state of a running turn — waiting, responding again, or recovered after retries (server → client). A helper's state is published to the helper's chat and, with child_session_id and agent_id, to the top chat; when that helper turn ends the top chat receives `ended` (issue #1537).
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ProviderStatusFrame'
@@ -5607,7 +5607,12 @@ components:
         (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the
         #711 closure constraint) — built from NAMED FIELDS ONLY, never an
         `error` field or raw provider text; the countdown is computed from
-        retry_at and sent_at client-side (C-11). Keep in sync by hand with
+        retry_at and sent_at client-side (C-11). Issue #1537: a helper's
+        retry is published twice — to the helper's own chat without
+        identity fields, and to the top chat with child_session_id and
+        agent_id (both or neither, the anyOf below); a main-chat copy is
+        cleared by the helper's provider_status ended or responding, never
+        by the main chat's own turn end. Keep in sync by hand with
         contracts/components/schemas/ProviderRetryFrame.yaml.
       type: object
       required:
@@ -5623,6 +5628,13 @@ components:
       - max_attempts
       - error_code
       additionalProperties: false
+      anyOf:
+      - required:
+        - child_session_id
+        - agent_id
+      - properties:
+          child_session_id: false
+          agent_id: false
       properties:
         type:
           type: string
@@ -5631,6 +5643,21 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+        child_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Issue #1537. Top-chat copy of a helper's notice only — the
+            helper's own chat. Sent together with agent_id.
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Issue #1537. Top-chat copy of a helper's notice only — the
+            helper's agent (an id, never shown). Sent together with
+            child_session_id.
         turn_id:
           type: string
           minLength: 1
@@ -5684,8 +5711,13 @@ components:
         silence limit after it — and attempt/max_attempts count the agent
         loop's calls, issue #1664), `responding` (data arrives again, or the call
         returned, after a `waiting` notice), `recovered` (the call succeeded
-        after `retries` automatic retries). Named fields only, never provider
-        text. Keep in sync by hand with
+        after `retries` automatic retries), `ended` (issue #1537, top-chat
+        copy only: that helper turn has ended; the main chat removes the
+        helper's named row). Issue #1537: a helper's status is published
+        twice — to the helper's own chat without identity fields, and to the
+        top chat with child_session_id and agent_id (both or neither, and
+        `ended` only with them — the anyOf below). Named fields only, never
+        provider text. Keep in sync by hand with
         contracts/components/schemas/ProviderStatusFrame.yaml.
       type: object
       required:
@@ -5695,6 +5727,18 @@ components:
       - state
       - sent_at
       additionalProperties: false
+      anyOf:
+      - required:
+        - child_session_id
+        - agent_id
+      - properties:
+          child_session_id: false
+          agent_id: false
+          state:
+            enum:
+            - waiting
+            - responding
+            - recovered
       properties:
         type:
           type: string
@@ -5703,6 +5747,21 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+        child_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Issue #1537. Top-chat copy of a helper's notice only — the
+            helper's own chat. Sent together with agent_id.
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Issue #1537. Top-chat copy of a helper's notice only — the
+            helper's agent (an id, never shown). Sent together with
+            child_session_id.
         turn_id:
           type: string
           minLength: 1
@@ -5713,6 +5772,7 @@ components:
           - waiting
           - responding
           - recovered
+          - ended
         sent_at:
           type: string
           format: date-time
@@ -6783,6 +6843,16 @@ components:
         emitted_at:
           type: string
           format: date-time
+        emitted_at_ms:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            #1537 FR-008. Unix epoch milliseconds of the same instant as emitted_at
+            (one server clock reading). The SPA prefers it as its server-clock sample
+            and falls back to emitted_at when absent. Optional: older gateways omit
+            it. Keep in sync by hand with
+            contracts/components/schemas/SessionStateFrame.yaml.
     SystemOverloadFrame:
       title: SystemOverloadFrame
       description: >

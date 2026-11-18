@@ -353,34 +353,125 @@ func TestBashBackgroundChildEnvStaysScrubbed(t *testing.T) {
 		t.Fatalf("background start must succeed: %s", result.ForLLM)
 	}
 
+	// Wait for a COMPLETE report, not a merely-existing file (issue #1868):
+	// the shell creates the redirect target before printf writes, so the
+	// file can exist while still empty or partial, and asserting on it then
+	// misreads an incomplete report as an R1 leak. The report is complete
+	// once the FINAL `path=` line is present and newline-terminated.
+	// (S1) A leak must not WAIT for that completeness: on every successful
+	// read, fail at once on a newline-terminated sentinel line with a
+	// non-empty value, so a child that leaks and then stalls (never writing
+	// `path=`) fails with the leak message instead of timing out.
 	report := filepath.Join(ws, "env-report.txt")
 	deadline := time.Now().Add(10 * time.Second)
+	var data []byte
 	for {
-		if _, statErr := os.Stat(report); statErr == nil {
-			break
+		read, readErr := os.ReadFile(report)
+		if readErr == nil {
+			sentinelLeakFatal(t, read)
+			if childEnvReportComplete(read) {
+				data = read
+				break
+			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("background child never wrote its env report")
+			// Timeout diagnostics carry counts only — never report values.
+			if readErr != nil {
+				t.Fatalf("background child never wrote a complete env report (last read error: %v; bytes=0, lines=0)", readErr)
+			}
+			t.Fatalf("background child never wrote a complete env report (bytes=%d, lines=%d)", len(read), strings.Count(string(read), "\n"))
 		}
 		time.Sleep(20 * time.Millisecond)
-	}
-	data, err := os.ReadFile(report)
-	if err != nil {
-		t.Fatal(err)
 	}
 	assertChildEnvReport(t, string(data), wsBin)
 }
 
+// childEnvReportComplete reports whether the env report is complete: the
+// final `path=` line is present and newline-terminated — the last bytes the
+// child's printf writes, in one flush. An existing-but-partial file (the
+// redirect creates the target before the write lands) stays incomplete.
+func childEnvReportComplete(data []byte) bool {
+	s := string(data)
+	if !strings.HasSuffix(s, "\n") {
+		return false
+	}
+	body := strings.TrimSuffix(s, "\n")
+	if idx := strings.LastIndexByte(body, '\n'); idx >= 0 {
+		body = body[idx+1:]
+	}
+	return strings.HasPrefix(body, "path=")
+}
+
+// sentinelLeakFatal fails the test with the R1 leak message when a COMPLETE
+// (newline-terminated) sentinelA=/sentinelB= line carries a non-empty value.
+// Safe to call on a report that is still being written: it never fires on a
+// torn line and never prints the value. (S1 finding on #1868: a leak must
+// fail fast even while the report is still incomplete.)
+func sentinelLeakFatal(t *testing.T, report []byte) {
+	t.Helper()
+	if terminatedSentinelLeak(report) {
+		t.Fatalf("child env report shows a non-empty sentinel line — R1 leak through the real child")
+	}
+}
+
+// terminatedSentinelLeak judges a sentinel value only from a COMPLETE line.
+// Splitting the report on "\n", every element is a newline-terminated line
+// except a trailing unterminated one, which is TORN (still being written)
+// and is skipped: a value is trusted only once its line is provably
+// finished, so the leak verdict never rests on partial evidence. A torn
+// non-empty prefix would in practice already imply a leak (written bytes
+// never shrink and the value cannot become empty later), but the check does
+// not rely on that; if a real leak is caught torn, the next poll — 20 ms
+// later — sees the terminated line and fires, so fail-fast costs at most
+// one poll cycle.
+func terminatedSentinelLeak(report []byte) bool {
+	s := string(report)
+	lines := strings.Split(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		lines = lines[:len(lines)-1]
+	}
+	for _, line := range lines {
+		if after, ok := strings.CutPrefix(line, "sentinelA="); ok && after != "" {
+			return true
+		}
+		if after, ok := strings.CutPrefix(line, "sentinelB="); ok && after != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // assertChildEnvReport checks a child-printed env report: sentinels UNSET,
 // workspace bin present on the child PATH, host PATH tail intact. Values are
-// fake sentinels; the failure path never prints the whole report.
+// fake sentinels; the failure path never prints the whole report or any
+// sentinel value.
+//
+// Two failures are told apart (issue #1868):
+//   - LEAK: a sentinel line is present but non-empty — the host sentinel
+//     reached the real child. Keeps the loud R1 message; this is a leak
+//     verdict even in a truncated report, because a non-empty sentinel value
+//     can only come from the host environ.
+//   - INCOMPLETE: a sentinelA/sentinelB/path line is missing entirely — the
+//     child had not finished writing or died mid-report. Never a leak
+//     verdict.
 func assertChildEnvReport(t *testing.T, output, wsBin string) {
 	t.Helper()
 	// The child prints `sentinelA=%s` with plain `$VAR` expansion: unset
-	// expands EMPTY, so a leak shows up as a non-empty value. The prefix
-	// check requires both lines present AND empty.
-	if !strings.HasPrefix(output, "sentinelA=\nsentinelB=\n") {
-		t.Fatalf("child env report shows a non-empty sentinel line — R1 leak through the real child")
+	// expands EMPTY, so a leak shows up as a non-empty value. The guard
+	// requires both lines present AND empty (leak judgment here, presence
+	// below) — through the SAME terminated-line judgment the wait loop uses
+	// (S1: one authority for the leak verdict). A complete report's sentinel
+	// lines are all newline-terminated, so this is equivalent for the
+	// completed reports and foreground outputs asserted here.
+	sentinelLeakFatal(t, []byte(output))
+	var missing []string
+	for _, prefix := range []string{"sentinelA=", "sentinelB=", "path="} {
+		if !hasReportLine(output, prefix) {
+			missing = append(missing, prefix)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("child env report is incomplete (missing line prefix(es): %s) — the child had not finished writing or died mid-report; not a leak verdict", strings.Join(missing, ", "))
 	}
 	pathValue := extractEnvVar(output, "path=")
 	if !strings.Contains(pathValue, wsBin) {
@@ -389,6 +480,18 @@ func assertChildEnvReport(t *testing.T, output, wsBin string) {
 	if hostPATH := os.Getenv("PATH"); hostPATH != "" && !strings.HasSuffix(pathValue, hostPATH) {
 		t.Fatalf("child PATH must keep the host PATH tail intact")
 	}
+}
+
+// hasReportLine reports whether output carries a line starting with prefix.
+// extractEnvVar alone cannot do this: a missing line and an empty value both
+// come back "".
+func hasReportLine(output, prefix string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestScrubbedEnvGodModeCrossCheckAgainstChildAllowlist is the R4 disposition

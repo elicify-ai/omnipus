@@ -40,6 +40,12 @@ export interface ProviderWaitingIndicatorProps {
   attempt?: number
   /** Issue #1664 B3/B4 — the attempts the loop makes in total (frame `max_attempts`). */
   maxAttempts?: number
+  /** #1537 — named helper row: "{label}: " before the unchanged sentence. */
+  label?: string
+  /** #1537 FR-010 — false inside the named-row area (it owns the one live region). Default true. */
+  liveRegion?: boolean
+  /** Root test id; defaults to "provider-waiting-indicator". */
+  testId?: string
 }
 
 /**
@@ -92,8 +98,11 @@ function stallClauseText(stallAt: string | undefined, attempt: number | undefine
   return ` If nothing arrives by ${stallTime}, ${ending} (attempt ${attempt} of ${maxAttempts}).`
 }
 
-/** The full line at a given instant — the frozen announcement's builder. */
-function buildWaitingText(
+/**
+ * The full line at a given instant — the frozen announcement's builder.
+ * #1537: also the named-row area's announcement text.
+ */
+export function buildWaitingText(
   silentSince: string,
   sentAt: string,
   receivedAt: string,
@@ -107,7 +116,7 @@ function buildWaitingText(
 }
 
 export function ProviderWaitingIndicator(props: ProviderWaitingIndicatorProps) {
-  const { silentSince, sentAt, receivedAt, stallAt, attempt, maxAttempts } = props
+  const { silentSince, sentAt, receivedAt, stallAt, attempt, maxAttempts, label, liveRegion = true, testId = 'provider-waiting-indicator' } = props
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
@@ -134,20 +143,24 @@ export function ProviderWaitingIndicator(props: ProviderWaitingIndicatorProps) {
 
   return (
     <div
-      data-testid="provider-waiting-indicator"
+      data-testid={testId}
       data-state="waiting"
       className="flex min-w-0 items-center gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-0-5)]"
     >
       <span aria-hidden className="size-2 shrink-0 rounded-full bg-[var(--color-info)]" />
       {/* MAJ-016 — the frozen full line is announced once per waiting frame;
-          the ticking seconds span below sits OUTSIDE this live region. */}
-      <div role="status" aria-live="polite" className="sr-only">
-        {announcement}
-      </div>
+          the ticking seconds span below sits OUTSIDE this live region.
+          #1537: a named helper row leaves announcing to the named-row area. */}
+      {liveRegion && (
+        <div role="status" aria-live="polite" className="sr-only">
+          {announcement}
+        </div>
+      )}
       {/* Issue #1664 B3/B4 — wraps, never truncates (same rule as
           ProviderRetryIndicator): at a narrow chat width the end time and
           "(attempt N of M)" at the end of the sentence stay readable. */}
       <span className="min-w-0 break-words font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        {label !== undefined && `${label}: `}
         {visibleText}
         {stallClause}
       </span>

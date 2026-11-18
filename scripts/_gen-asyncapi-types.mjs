@@ -325,7 +325,8 @@ function schemaToZod(schema, indent = 0) {
 /**
  * Translate one JSON Schema `anyOf` branch (a partial object schema with
  * `required` and/or `properties` carrying minLength/minItems/maxLength/
- * maxItems) into a JS boolean expression string testing a runtime value
+ * maxItems, an `enum`, or a boolean `false` subschema meaning "absent") into
+ * a JS boolean expression string testing a runtime value
  * `v`. This is intentionally narrow — it covers exactly the constraint
  * keywords schemaToZod itself understands for primitives, not general JSON
  * Schema — but is not tied to any specific schema's field names, so it
@@ -338,6 +339,17 @@ function anyOfBranchPredicate(branch) {
 
   for (const [key, propSchema] of Object.entries(props)) {
     const accessor = `v[${JSON.stringify(key)}]`;
+    // Boolean `false` subschema: the property must be absent (JSON Schema
+    // "no value is valid"). Used for a both-or-neither field pair (#1537).
+    if (propSchema === false) {
+      conditions.push(`(${accessor} === undefined)`);
+      continue;
+    }
+    // enum: when present, the value must be one of the listed values (a
+    // value-dependent rule, e.g. a state allowed only with other fields).
+    if (Array.isArray(propSchema.enum)) {
+      conditions.push(`(${accessor} === undefined || ${JSON.stringify(propSchema.enum)}.includes(${accessor}))`);
+    }
     if (propSchema.minLength !== undefined) {
       conditions.push(`(typeof ${accessor} === "string" && ${accessor}.length >= ${propSchema.minLength})`);
     }
@@ -613,7 +625,28 @@ frameNames.forEach((name) => {
   const memberName = discriminatedUnionBaseNames.get(name) ?? name;
   zodLines.push(`  ${memberName},`);
 });
-zodLines.push("]);");
+// z.discriminatedUnion needs plain ZodObject members, so a member's anyOf
+// cross-field refinement (its exported `<Name>`) is not applied by the union
+// itself. Re-apply it per discriminator value, so the runtime frame parser
+// enforces exactly what the member's own exported schema enforces (#1537:
+// a provider frame's both-or-neither identity pair and `ended` rule).
+const refinedFrames = frameNames
+  .filter((name) => discriminatedUnionBaseNames.has(name))
+  .map((name) => [schemas[name].properties.type.const, name]);
+if (refinedFrames.length === 0) {
+  zodLines.push("]);");
+} else {
+  zodLines.push("]).superRefine((v, ctx) => {");
+  zodLines.push("  const refined = ({");
+  refinedFrames.forEach(([type, name]) => {
+    zodLines.push(`    ${JSON.stringify(type)}: ${name},`);
+  });
+  zodLines.push("  } as Record<string, z.ZodTypeAny>)[v.type];");
+  zodLines.push("  if (!refined) return;");
+  zodLines.push("  const result = refined.safeParse(v);");
+  zodLines.push("  if (!result.success) for (const issue of result.error.issues) ctx.addIssue(issue);");
+  zodLines.push("});");
+}
 zodLines.push("");
 zodLines.push("export type WsFrameType = z.infer<typeof WsFrameType>;");
 zodLines.push("export type WsFrame = z.infer<typeof WsFrame>;");

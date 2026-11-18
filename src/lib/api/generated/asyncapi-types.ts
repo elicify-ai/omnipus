@@ -726,6 +726,8 @@ export interface RateLimitFrame {
 export interface ProviderRetryFrame {
   type: "provider_retry";
   session_id: string;
+  child_session_id?: string;
+  agent_id?: string;
   turn_id: string;
   provider: string;
   model: string;
@@ -741,8 +743,10 @@ export interface ProviderRetryFrame {
 export interface ProviderStatusFrame {
   type: "provider_status";
   session_id: string;
+  child_session_id?: string;
+  agent_id?: string;
   turn_id: string;
-  state: "waiting" | "responding" | "recovered";
+  state: "waiting" | "responding" | "recovered" | "ended";
   sent_at: string;
   silent_since?: string;
   stall_at?: string;
@@ -947,6 +951,7 @@ export interface SessionStateFrame {
   active_turn?: SessionStateActiveTurn;
   boot_id?: string;
   emitted_at: string;
+  emitted_at_ms?: number;
 }
 
 export interface SystemOverloadFrame {

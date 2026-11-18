@@ -779,9 +779,22 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// and the next tool resolution keep the old decision until a restart.
 	permissionsChanged := uf.ru.req.ToolPolicyChanges != nil || uf.ru.req.ToolsCfg != nil ||
 		uf.ru.req.McpServers != nil
+	// D-A (opencode-226 R5): the external-CLI executor settings are read by
+	// delegation from the LIVE registry — external_dispatch.go::
+	// prepareRunOptions takes EnvOverrides from the agent's construction-time
+	// Subagents snapshot (pkg/agent/instance.go), the same cached-shape case
+	// as MaxToolIterations and the tool policies above. mergeExecutorUpdate
+	// has already merged the executor-only body (cli_args, env_overrides,
+	// env_overrides_remove) into the stored record, so an executor write must
+	// take the same single-agent fastAgentUpsert path; without it the next
+	// delegation keeps launching the saved-before-PUT arguments and
+	// environment until a restart. Request-presence gating matches the
+	// Skills/ModelParams siblings — an executor body that changes nothing
+	// simply rebuilds the same settings.
+	executorChanged := uf.ru.req.Executor != nil
 	needsReload := uf.ru.req.Soul != nil || contextWindowOverrideChanged ||
 		uf.ru.req.Skills != nil || uf.ru.req.ModelParams != nil || uf.ru.modelIdentityChanged ||
-		maxToolIterationsChanged || permissionsChanged
+		maxToolIterationsChanged || permissionsChanged || executorChanged
 	if needsReload {
 		// fastAgentUpsert returns a non-empty message only when neither the
 		// single-agent swap nor its full-reload fallback could publish the

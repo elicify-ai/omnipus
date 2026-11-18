@@ -514,6 +514,47 @@ export interface ProviderStatusEventData {
   receivedAt: string
 }
 
+/**
+ * #1537 (helper-model-notices spec FR-005/006) — the one notice a main-chat
+ * named helper row currently shows. A row shows the latest notice of its
+ * helper turn: a retry countdown, a silence notice or the recovered line.
+ */
+export type ProviderHelperNotice =
+  | { kind: 'retry'; retry: ProviderRetryEventData }
+  | { kind: 'waiting'; waiting: ProviderStatusEventData }
+  | { kind: 'recovered'; retries: number }
+
+/**
+ * #1537 — one named helper row of the main (top) chat, built only from
+ * `provider_retry` / `provider_status` frames that carry BOTH
+ * `child_session_id` and `agent_id` (the top-chat copy of a helper's
+ * notice). Keyed by helper chat + helper turn (FR-007), never by agent or
+ * name, so two copies of one agent keep separate rows. Array position in
+ * `SessionChatState.providerHelperRows` is the turn's first-notice order
+ * (FR-009). `notice: null` is a row a `responding` copy cleared: hidden and
+ * uncounted, but it keeps its first-notice position until the turn's
+ * `ended`, so a later notice of the same turn returns to the same place.
+ */
+export interface ProviderHelperRow {
+  key: string
+  childSessionId: string
+  agentId: string
+  turnId: string
+  notice: ProviderHelperNotice | null
+}
+
+/**
+ * #1537 FR-008 — the chat's server-clock estimate on this connection: the
+ * largest (server time − client receipt time) seen over the frames received
+ * for the chat (`provider_retry` / `provider_status` `sent_at` and
+ * `session_state.emitted_at`). Server now = serverMs + (clientNow − clientMs).
+ * It only ever moves forward, so an older sample cannot pull it back.
+ */
+export interface ProviderServerClock {
+  serverMs: number
+  clientMs: number
+}
+
 /** All per-session chat state for one concurrent session. */
 /** #1534: see SessionChatState.appliedTokenPoints. */
 export interface AppliedTokenPoints { // not-wire-format: client-side counter of applied token text, never sent as-is
@@ -671,6 +712,20 @@ export interface SessionChatState {
    * indicator. Optional — see the fixture-compat note on goalStatus.
    */
   providerStatusEvent?: ProviderStatusEventData | null
+  /**
+   * #1537 — the chat's named helper rows (see ProviderHelperRow), in
+   * first-notice order. Written only by slices/provider-frames.ts for frames
+   * with helper identity, and replaced by a successful full-snapshot or
+   * `live_only` attach (FR-014). Never touched by this chat's own turn end.
+   */
+  providerHelperRows?: ProviderHelperRow[]
+  /**
+   * #1537 FR-014 — the helper-row keys the current attach delivered, from its
+   * `session_state` to its `catch_up_complete`; null outside an attach.
+   */
+  providerHelperAttachKeys?: string[] | null
+  /** #1537 FR-008 — see ProviderServerClock. */
+  providerServerClock?: ProviderServerClock | null
   /**
    * provider-messages §7.4/D17 — the (unavailable, answered) model pairs for
    * which a fallback note is already visible in THIS chat (live-appended by
@@ -1102,6 +1157,12 @@ export interface ChatStore extends HistorySlice {
   providerRetryEvent?: ProviderRetryEventData | null
   /** Issues #1478/#1280 — foreground projection of the session's `provider_status` waiting slot. Optional — see the SessionChatState field's doc comment. */
   providerStatusEvent?: ProviderStatusEventData | null
+  /** #1537 — foreground projection of the session's named helper rows. */
+  providerHelperRows?: ProviderHelperRow[]
+  /** #1537 — foreground projection of the session's attach key window. */
+  providerHelperAttachKeys?: string[] | null
+  /** #1537 FR-008 — foreground projection of the session's server-clock estimate. */
+  providerServerClock?: ProviderServerClock | null
   /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
   goalStatus?: GoalStatusFrame | null
   /**
