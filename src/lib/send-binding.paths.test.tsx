@@ -150,19 +150,18 @@ describe('capture and non-navigation paths (spec 4.6.1)', () => {
     ])
   })
 
-  it('BR-15 Mermaid fix clicked in A still targets A after a switch during the import', async () => {
+  it('BR-15 Mermaid fix clicked in A still targets A when the chat switches before the send settles', async () => {
     resetBindingWorld()
     mountComposer()
     const { render } = await import('@testing-library/react')
     render(<MermaidDiagram code={'not mermaid [[['} />)
     const fix = await screen.findByRole('button', { name: /fix/i })
-    const user = userEvent.setup()
-    const click = user.click(fix)
+    fireEvent.click(fix)
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
-    await click
+    await new Promise((r) => setTimeout(r, 50))
     const messages = framesOf('message', connection().sent)
     expect(messages, 'BR-15: the fix is one message').toHaveLength(1)
-    expect(messages[0], 'BR-15: navigation during the import does not retarget the fix').toEqual(
+    expect(messages[0], 'BR-15: the fix was captured at the click, so a later switch does not retarget it').toEqual(
       expect.objectContaining({
         session_id: 'chat-a',
         origin: { kind: 'chat', session_id: 'chat-a' },

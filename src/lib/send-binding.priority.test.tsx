@@ -1,13 +1,5 @@
 // #1428 step 2 RED. Spec BR-3c, BR-7, BR-7b, BR-9, BR-11, BR-12. B-8, B-10.
 import { describe, expect, it } from 'vitest'
-import { act } from 'react'
-import { fireEvent, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { ApiError } from '@/lib/api-error'
-import { addLibraryAttachment } from '@/lib/library-attachment'
-import { useChatStore } from '@/store/chat'
-import { emptySessionState } from '@/store/chat/session'
-import { useSessionStore } from '@/store/session'
 import {
   SWITCHED,
   UPLOAD_404,
@@ -19,6 +11,14 @@ import {
   sent,
   typeIntoComposer,
 } from '@/test/sendBinding1428'
+import { act } from 'react'
+import { fireEvent, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { ApiError } from '@/lib/api-error'
+import { addLibraryAttachment } from '@/lib/library-attachment'
+import { useChatStore } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
+import { useSessionStore } from '@/store/session'
 
 const LIB = 'media://workspace/w1/lib-next'
 
@@ -86,14 +86,14 @@ describe('refusal, restore and remount (spec 4.8 / 4.9)', () => {
     resetBindingWorld()
     mountComposer()
     drop('once.txt')
-    let release: (value: unknown) => void = () => {}
-    apiMocks.uploadFiles.mockImplementation(() => new Promise((resolve) => { release = resolve }))
+    let fail: (e: unknown) => void = () => {}
+    apiMocks.uploadFiles.mockImplementation(() => new Promise((_r, reject) => { fail = reject }))
     const user = userEvent.setup()
     await typeIntoComposer('one')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
     await typeIntoComposer('two')
     await act(async () => {
-      release({ files: [{ ref: 'media://workspace/w1/once', name: 'once.txt', content_type: 'text/plain' }] })
+      fail(new ApiError(503, 'down'))
     })
     expect(screen.getByTestId('chat-input'), 'BR-7b: one then the newer two').toHaveValue('one\ntwo')
     expect(screen.getAllByText('once.txt'), 'BR-7b: the file appears once').toHaveLength(1)

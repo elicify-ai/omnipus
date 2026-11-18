@@ -1,7 +1,7 @@
 // #1428 step 2 RED. Spec 4.9 BR-19, B-23 beforeunload, Unsent list.
 import { describe, expect, it } from 'vitest'
 import { act } from 'react'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -47,6 +47,7 @@ describe('recovery UI and the leave warning (spec 4.9 / B-23)', () => {
       origin: { kind: 'chat', session_id: 'chat-a' },
       client_message_id: refusedId,
     })
+    expect(screen.getByText(RESTORED_LINE), 'BR-19 (fix): A is open, so its own box carries the restored line').toBeTruthy()
     // The first send starts a turn, which replaces Send with Stop. Ending that
     // turn is not a second outcome for refusedId (the done names no message id).
     deliverFrame({ type: 'done', session_id: 'chat-a' } as never)
@@ -72,18 +73,17 @@ describe('recovery UI and the leave warning (spec 4.9 / B-23)', () => {
     discard[0].focus()
     await user.click(discard[0])
     await user.click(screen.getByRole('button', { name: 'Discard' }))
-    expect(document.activeElement, 'BR-19: discarding a middle item focuses the next action').toBe(
+    await waitFor(() => expect(document.activeElement, 'BR-19: discarding a middle item focuses the next action').toBe(
       screen.getAllByRole('button', { name: /Open|Copy/ })[0],
-    )
+    ))
     const last = screen.getAllByRole('button', { name: 'Discard' }).at(-1)
     expect(last, 'BR-19: a last item remains').toBeTruthy()
     last?.focus()
     await user.click(last!)
     await user.click(screen.getByRole('button', { name: 'Discard' }))
-    expect(document.activeElement, 'BR-19: discarding the last item focuses the composer').toBe(
+    await waitFor(() => expect(document.activeElement, 'BR-19: discarding the last item focuses the composer').toBe(
       screen.getByTestId('chat-input'),
-    )
-    expect(screen.getByText(RESTORED_LINE), 'BR-19: an open chat says the text was restored, not sent').toBeTruthy()
+    ))
   })
 
   it('BR-19 a close before receipt lists the uncertain command', async () => {
@@ -143,6 +143,7 @@ describe('recovery UI and the leave warning (spec 4.9 / B-23)', () => {
     window.dispatchEvent(new Event('resize'))
     const line = screen.getByRole('button', { name: /not sent/ })
     expect(line.textContent ?? '', 'BR-19: below 640px the notice is one disclosure line').toMatch(/not sent/)
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
   })
 
   it('BR-19 an uncreated chat is named from the offline first send', async () => {

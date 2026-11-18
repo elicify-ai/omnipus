@@ -144,6 +144,11 @@ async function waitForCommandList(): Promise<void> {
 }
 
 describe('command records (spec 4.7)', () => {
+  registerCommandReceiptCases()
+  registerCommandFailureCases()
+})
+
+function registerCommandReceiptCases(): void {
   it('BR-23a command_received drops the record and leaves nothing unsent', async () => {
     resetBindingWorld()
     seedStreamingAnswer('chat-a', 'running')
@@ -318,6 +323,9 @@ describe('command records (spec 4.7)', () => {
     ).toEqual([])
   })
 
+}
+
+function registerCommandFailureCases(): void {
   it('BR-23e an OPEN socket that throws restores the text once and does not wait for a close', async () => {
     resetBindingWorld()
     installFakeWebSocket()
@@ -331,6 +339,7 @@ describe('command records (spec 4.7)', () => {
     const socket = FakeSocket.instances.at(-1)
     if (!socket) throw new Error('socket missing')
     act(() => { socket.open() })
+    act(() => { socket.receive({ type: 'server_capabilities', send_origin: true }) })
     socket.send = () => { throw new Error('OPEN socket send threw') }
     useConnectionStore.setState({ connection: conn as never, isConnected: true })
     mountComposer()
@@ -412,6 +421,7 @@ describe('command records (spec 4.7)', () => {
     act(() => {
       next.receive({ type: 'done', session_id: 'chat-a', turn_id: 'T' })
     })
+    await flushInbound()
     expect(screen.queryByText(NOT_STOPPED), 'BR-23f d: that turn\'s done removes the notice').toBeNull()
     expect(screen.queryByTestId('stop-btn'), 'BR-23f d: Stop is not rendered').toBeNull()
     const auto = next.sent.slice(before).filter((frame) => frame.type === 'cancel' || frame.type === 'redirect' || frame.type === 'message')
@@ -496,4 +506,5 @@ describe('command records (spec 4.7)', () => {
       'BR-23f e: nothing is sent automatically',
     ).toEqual([])
   })
-})
+}
+

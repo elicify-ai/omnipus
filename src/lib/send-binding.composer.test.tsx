@@ -1,6 +1,17 @@
 // #1428 step 2 RED. Spec 4.4.3, 4.5 rules 1-7, B-1, B-2, B-3, B-12, B-19, B-28.
 // Oracles: SPEC-C r9. Not the spike, not observed output.
 import { afterEach, describe, expect, it } from 'vitest'
+import {
+  apiMocks,
+  composerProbe,
+  framesOf,
+  input,
+  mountComposer,
+  resetBindingWorld,
+  runtimeProbe,
+  sent,
+  typeIntoComposer,
+} from '@/test/sendBinding1428'
 import { act } from 'react'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -14,16 +25,6 @@ import { addLibraryAttachment, clearLibraryAttachments } from '@/lib/library-att
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import {
-  composerProbe,
-  framesOf,
-  input,
-  mountComposer,
-  resetBindingWorld,
-  runtimeProbe,
-  sent,
-  typeIntoComposer,
-} from '@/test/sendBinding1428'
 import { requireFn } from '@/test/send-binding.module'
 
 const LIB_REF = 'media://workspace/w1/lib-file-1'
@@ -146,6 +147,11 @@ async function openDraftText(): Promise<string | undefined> {
 }
 
 describe('session composer binding (spec 4.5)', () => {
+  registerComposerDraftCases()
+  registerComposerFileCases()
+})
+
+function registerComposerDraftCases(): void {
   it('BR-1 per-chat box: W2 shows none of A, and A is intact on return, with no frame', async () => {
     // Spec BR-1 / B-1. "hello A" + a file in W1 must not appear in a W2 chat,
     // including during opening, and must still be there when A is open again.
@@ -308,6 +314,9 @@ describe('session composer binding (spec 4.5)', () => {
     )
   })
 
+}
+
+function registerComposerFileCases(): void {
   it('BR-17 drop keeps the file on the chat that received it', async () => {
     // Images render as a thumbnail: the name is the alt and the Remove label,
     // not a text node. queryByText cannot see it even when the chip is there.
@@ -386,6 +395,7 @@ describe('session composer binding (spec 4.5)', () => {
     await waitStaged('only.txt', 'BR-17 file-only: the file is staged')
     const send = screen.getByRole('button', { name: 'Send message' })
     expect(send, 'BR-17 file-only: Send is eligible with a file and no text').toBeEnabled()
+    apiMocks.uploadFiles.mockResolvedValue({ files: [{ ref: 'media://workspace/w1/only', path: 'only.txt', name: 'only.txt', content_type: 'text/plain' }] })
     const user = userEvent.setup()
     await user.click(send)
     expect(implSends, 'BR-17 file-only: composer.send is not called').toEqual([])
@@ -468,4 +478,5 @@ describe('session composer binding (spec 4.5)', () => {
     switchTo('chat-a')
     expect(screen.getByText('a-picked.txt'), 'BR-17: A keeps the file picked while A was open').toBeTruthy()
   })
-})
+}
+

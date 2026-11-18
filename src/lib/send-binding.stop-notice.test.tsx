@@ -38,6 +38,52 @@ function stopButton(): HTMLElement {
   return screen.getByTestId('stop-btn')
 }
 
+async function pressStopOnLiveSocket(): Promise<FakeSocket> {
+  installFakeWebSocket()
+  live = new WsConnection({
+    onFrames: (frames) => {
+      for (const frame of frames) deliverFrame(frame as never)
+    },
+    onConnected: () => {},
+    onDisconnected: () => {},
+    onError: () => {},
+  })
+  live.connect()
+  const socket = FakeSocket.instances.at(-1)
+  if (!socket) throw new Error('socket was not created')
+  act(() => { socket.open() })
+  act(() => { socket.receive({ type: 'server_capabilities', send_origin: true }) })
+  useConnectionStore.setState({ connection: live, isConnected: true, reconnectPhase: null })
+  mountComposer()
+  // Click stays off userEvent: the 1006 case runs under fake timers.
+  fireEvent.click(stopButton())
+  return socket
+}
+
+async function reattachSameTurn(socket: FakeSocket): Promise<void> {
+  act(() => { socket.open() })
+  act(() => { socket.receive({ type: 'server_capabilities', send_origin: true }) })
+  act(() => {
+    socket.receive({
+      type: 'session_state',
+      user_id: 'ada',
+      pending_approvals: [],
+      session_id: 'chat-a',
+      emitted_at: '2026-11-18T00:00:00Z',
+      auto_approve_modifier: true,
+      active_turn: { turn_id: 'T', agent_id: 'mia', started_at: '2026-11-18T00:00:00Z' },
+    })
+  })
+  act(() => {
+    socket.receive({ type: 'catch_up_complete', session_id: 'chat-a', seq: 1, mode: 'snapshot' })
+  })
+  await flushInbound()
+  expect(
+    useChatStore.getState().sessionsById['chat-a']?.autoApproveEffective,
+    'BR-25g e: the reattach snapshot reached the reducer',
+  ).toBe(true)
+}
+
 function assertNoticeInThisChat(): void {
   const node = screen.getByText(NOTICE)
   expect(node.textContent, 'BR-25: full string, not a substring').toBe(NOTICE)
@@ -47,6 +93,12 @@ function assertNoticeInThisChat(): void {
 }
 
 describe('current-tab not-stopped notice (spec 4.7)', () => {
+  registerNotStoppedNoticeCases()
+  registerStopAllArmingCases()
+  registerStopAllCloseCases()
+})
+
+function registerNotStoppedNoticeCases(): void {
   it('BR-25a a refused Stop shows the persistent notice and leaves Stop enabled', async () => {
     resetBindingWorld()
     seedStreamingAnswer('chat-a')
@@ -262,6 +314,9 @@ describe('current-tab not-stopped notice (spec 4.7)', () => {
     expect(bubble?.status, 'BR-25e: the answer is frozen').toBe('interrupted')
   })
 
+}
+
+function registerStopAllArmingCases(): void {
   it('BR-25g a a failed Stop does not arm Stop all', async () => {
     resetBindingWorld()
     seedStreamingAnswer('chat-a')
@@ -430,51 +485,10 @@ describe('current-tab not-stopped notice (spec 4.7)', () => {
     expect(screen.getByText(NOTICE), 'BR-25g g: the background snapshot established A\'s notice').toBeTruthy()
   })
 
-  async function pressStopOnLiveSocket(): Promise<FakeSocket> {
-    installFakeWebSocket()
-    live = new WsConnection({
-      onFrames: (frames) => {
-        for (const frame of frames) deliverFrame(frame as never)
-      },
-      onConnected: () => {},
-      onDisconnected: () => {},
-      onError: () => {},
-    })
-    live.connect()
-    const socket = FakeSocket.instances.at(-1)
-    if (!socket) throw new Error('socket was not created')
-    act(() => { socket.open() })
-    useConnectionStore.setState({ connection: live, isConnected: true, reconnectPhase: null })
-    mountComposer()
-    // Click stays off userEvent: the 1006 case runs under fake timers.
-    fireEvent.click(stopButton())
-    return socket
-  }
 
-  async function reattachSameTurn(socket: FakeSocket): Promise<void> {
-    act(() => { socket.open() })
-    act(() => { socket.receive({ type: 'server_capabilities', send_origin: true }) })
-    act(() => {
-      socket.receive({
-        type: 'session_state',
-        user_id: 'ada',
-        pending_approvals: [],
-        session_id: 'chat-a',
-        emitted_at: '2026-11-18T00:00:00Z',
-        auto_approve_modifier: true,
-        active_turn: { turn_id: 'T', agent_id: 'mia', started_at: '2026-11-18T00:00:00Z' },
-      })
-    })
-    act(() => {
-      socket.receive({ type: 'catch_up_complete', session_id: 'chat-a', seq: 1, mode: 'snapshot' })
-    })
-    await flushInbound()
-    expect(
-      useChatStore.getState().sessionsById['chat-a']?.autoApproveEffective,
-      'BR-25g e: the reattach snapshot reached the reducer',
-    ).toBe(true)
-  }
+}
 
+function registerStopAllCloseCases(): void {
   it('BR-25g e a 4008 close before receipt disarms Stop all when the same turn is still running', async () => {
     resetBindingWorld()
     seedStreamingAnswer('chat-a')
@@ -574,4 +588,5 @@ describe('current-tab not-stopped notice (spec 4.7)', () => {
     expect(added).toEqual([expect.objectContaining({ type: 'cancel', session_id: 'chat-a' })])
     expect(added[0]).not.toHaveProperty('scope')
   })
-})
+}
+

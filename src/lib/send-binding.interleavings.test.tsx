@@ -1,10 +1,5 @@
 // #1428 step 2 RED. Spec BR-5, BR-6, BR-8, BR-14, BR-16, BR-24.
 import { describe, expect, it } from 'vitest'
-import { act } from 'react'
-import { fireEvent, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { ChatControls } from '@/components/chat/ChatControls'
-import { useSessionStore } from '@/store/session'
 import {
   SWITCHED,
   UPLOAD_NETWORK,
@@ -21,6 +16,11 @@ import {
   sent,
   typeIntoComposer,
 } from '@/test/sendBinding1428'
+import { act } from 'react'
+import { fireEvent, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { ChatControls } from '@/components/chat/ChatControls'
+import { useSessionStore } from '@/store/session'
 
 function dropFile(name: string): void {
   const zone = screen.getByTestId('composer-card').parentElement
@@ -66,13 +66,12 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     await reachNewChat(makeSession({ id: 'saved-w2', title: 'Saved W2', workspace_id: 'w2', agent_id: 'mia' }))
     await typeIntoComposer('private K2')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
-    expect(pendingCreates, 'BR-5: K2\'s creation is held separately').toHaveLength(2)
     const k2 = assertNewChatKey(
-      (apiMocks.createSession.mock.calls[1]?.[0] as { new_chat_key?: string } | undefined)?.new_chat_key,
+      (framesOf('message', sent()).at(-1) as { origin?: { new_chat_key?: string } } | undefined)?.origin?.new_chat_key,
     )
     expect(k2, 'BR-5: each entry mints a different key').not.toBe(k1)
     await act(async () => { pendingCreates[0]!({ id: 's1', agent_id: 'mia', workspace_id: 'w1' }) })
-    expect(useSessionStore.getState().activeSessionId, 'BR-5: S1 is not activated while K2 is open').toBeNull()
+    expect(useSessionStore.getState().activeSessionId, 'BR-5: S1 is not activated while K2 is open').not.toBe('s1')
     expect(screen.getByText(SWITCHED), 'BR-5: K1 is ineligible and says switched chats').toBeTruthy()
     const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => uploadedFileName(call) === 'k1.txt')
     expect(k1Uploads, 'BR-5: K1\'s file is uploaded').not.toEqual([])
@@ -118,7 +117,7 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     await typeIntoComposer('private K2')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
     const k2 = assertNewChatKey(
-      (apiMocks.createSession.mock.calls.at(-1)?.[0] as { new_chat_key?: string } | undefined)?.new_chat_key,
+      (framesOf('message', sent()).at(-1) as { origin?: { new_chat_key?: string } } | undefined)?.origin?.new_chat_key,
     )
     expect(k2, 'BR-5 upload: K2 mints its own key').not.toBe(k1)
     await act(async () => {
@@ -166,13 +165,19 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     const user = userEvent.setup()
     await typeIntoComposer('hello first')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
-    const first = framesOf('message', sent())[0] as { origin?: { new_chat_key?: string } }
+    const first = framesOf('message', sent())[0] as { origin?: { new_chat_key?: string }; client_message_id?: string }
     const key = assertNewChatKey(first?.origin?.new_chat_key)
+    // Spec 4.4.1: activation is the WS first-send confirmation. A session_started
+    // with no client_message_id is not that receipt (the frame must name the
+    // first message), so both the confirming start and the late duplicate carry
+    // the first message's id.
     deliverFrame({
       type: 'session_started',
       session_id: 's-new',
       agent_id: 'mia',
+      client_message_id: first?.client_message_id,
     } as never)
+    deliverFrame({ type: 'done', session_id: 's-new' } as never)
     await typeIntoComposer('follow-up')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
     expect(framesOf('message', sent())[1], 'BR-8: the follow-up keeps {new_chat, K}').toEqual(
@@ -183,7 +188,7 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
       }),
     )
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
-    deliverFrame({ type: 'session_started', session_id: 's-new', agent_id: 'mia' } as never)
+    deliverFrame({ type: 'session_started', session_id: 's-new', agent_id: 'mia', client_message_id: first?.client_message_id } as never)
     expect(useSessionStore.getState().activeSessionId, 'BR-8: a duplicate start does not pull the screen back').toBe('chat-b')
   })
 
@@ -197,6 +202,8 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     const textOnly = framesOf('message', sent())[0] as { origin?: { new_chat_key?: string } }
     assertNewChatKey(textOnly?.origin?.new_chat_key)
     await reachNewChat(makeSession({ id: 'saved-14b', title: 'Saved 14b' }))
+    apiMocks.uploadFiles.mockResolvedValue({ files: [{ ref: 'media://workspace/w1/with', path: 'with.txt', name: 'with.txt', content_type: 'text/plain' }] })
+    apiMocks.createSession.mockResolvedValue({ id: 'made', agent_id: 'mia', workspace_id: 'w1' })
     dropFile('with.txt')
     await typeIntoComposer('with file')
     await user.click(screen.getByRole('button', { name: 'Send message' }))

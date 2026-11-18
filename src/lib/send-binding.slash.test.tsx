@@ -56,7 +56,7 @@ describe('slash capture (spec 4.6.1 / 4.6.2)', () => {
       release([
         { name: 'stop-redirect', label: '/stop-redirect', delivery: 'client', available_while_streaming: true, argument_hint: '<instruction>' },
       ])
-      await Promise.resolve()
+      await new Promise((r) => setTimeout(r, 50))
     })
     expect(framesOf('redirect', sent()), 'BR-4: flush after leaving A sends nothing').toEqual([])
     act(() => { useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core') })
@@ -76,7 +76,7 @@ describe('slash capture (spec 4.6.1 / 4.6.2)', () => {
       release([
         { name: 'stop-redirect', label: '/stop-redirect', delivery: 'client', available_while_streaming: true, argument_hint: '<instruction>' },
       ])
-      await Promise.resolve()
+      await new Promise((r) => setTimeout(r, 50))
     })
     expect(framesOf('redirect', sent()), 'BR-4 control: no navigation sends the captured redirect to A').toEqual([
       expect.objectContaining({

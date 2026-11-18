@@ -1,10 +1,5 @@
 // #1428 step 2 RED. Spec BR-13, BR-13b, BR-18, BR-21. B-13, B-14, B-15, B-17.
 import { describe, expect, it } from 'vitest'
-import { act } from 'react'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { useChatStore } from '@/store/chat'
-import { useSessionStore } from '@/store/session'
 import {
   apiMocks,
   assertNewChatKey,
@@ -18,6 +13,12 @@ import {
   sent,
   typeIntoComposer,
 } from '@/test/sendBinding1428'
+import { act } from 'react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { useChatStore } from '@/store/chat'
+import { useSessionStore } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
 
 function dropFile(name: string): void {
   const zone = screen.getByTestId('composer-card').parentElement
@@ -28,15 +29,15 @@ function dropFile(name: string): void {
 describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', () => {
   it('BR-13 a queued send waits until its own chat is open, and Retry keeps the id', async () => {
     resetBindingWorld()
-    connection().fail = true
+    act(() => { useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting' }) })
     mountComposer()
     const user = userEvent.setup()
     await typeIntoComposer('queued in A')
-    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    await user.click(screen.getByRole('button', { name: 'Queue message (will send on reconnect)' }))
     const queued = framesOf('message', sent())
     expect(queued, 'BR-13: offline send does not hit the socket').toEqual([])
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
-    connection().fail = false
+    act(() => { useConnectionStore.setState({ isConnected: true, reconnectPhase: null }) })
     act(() => { useChatStore.getState().drainOutboundQueue() })
     expect(framesOf('message', sent()), 'BR-13: nothing is sent while B is open').toEqual([])
     act(() => { useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core') })
@@ -163,6 +164,7 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
           `BR-21: other ${i} was sent through the composer`,
         ).toBe(true)
       })
+      deliverFrame({ type: 'done', session_id: 'chat-b' } as never)
     }
     const later = framesOf('message', sent()).filter((frame) => (frame as { content?: string }).content === 'other 59')
     expect(JSON.stringify(later), 'BR-21: a later upload really carries other-59').toContain('other-59')
@@ -183,10 +185,11 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
 
   it('BR-18 sign-out drops an in-flight upload, and completing it changes nothing', async () => {
     resetBindingWorld()
-    mountComposer({ sidebar: true })
+    const first = mountComposer({ sidebar: true })
     let release: (value: unknown) => void = () => {}
     apiMocks.uploadFiles.mockImplementation(() => new Promise((resolve) => { release = resolve }))
     const user = userEvent.setup()
+    dropFile('late.txt')
     await typeIntoComposer('in flight')
     await user.click(screen.getByRole('button', { name: 'Send message' }))
     await user.click(screen.getByRole('button', { name: 'Open user menu' }))
@@ -196,6 +199,7 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
       await Promise.resolve()
     })
     expect(framesOf('message', sent()), 'BR-18: the late completion sends nothing').toEqual([])
+    first.unmount()
     mountComposer()
     expect(screen.getByTestId('chat-input'), 'BR-18: nothing reappears').toHaveValue('')
     expect(screen.queryByText('1 not sent'), 'BR-18: the Unsent list is gone').toBeNull()
