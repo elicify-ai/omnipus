@@ -1,4 +1,5 @@
 import { produce } from 'immer'
+import { aliasNewChat } from '@/store/chat/drafts'
 import type { SessionStartedFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from '@/store/session'
@@ -70,6 +71,11 @@ function confirmFirstSend(context: FirstSendFrameContext, pending: PendingFirstS
     }
   })
   context.runtime.agentIdAtLastMintSend = null
+  // #1428 step 2 (spec 4.4.1): the confirmed chat S takes over K's draft and
+  // items (write-once alias), wherever the person is. S is activated below only
+  // while K is still the open chat.
+  const newChatKey = pending.payload.origin?.new_chat_key
+  if (newChatKey) aliasNewChat(newChatKey, sid)
   if (foreground) {
     const currentAgent = useSessionStore.getState().activeAgentId
     const reselected = !!pending.payload.agent_id && currentAgent !== pending.payload.agent_id
