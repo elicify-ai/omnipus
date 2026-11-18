@@ -1,5 +1,5 @@
 import { produce } from 'immer'
-import { aliasNewChat } from '@/store/chat/drafts'
+import { aliasNewChat, originForKey } from '@/store/chat/drafts'
 import type { SessionStartedFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from '@/store/session'
@@ -211,6 +211,14 @@ export function handleFirstSendFrame(context: FirstSendFrameContext): boolean {
   }
   if (frame.type === 'session_started') {
     const clientId = frame.client_message_id
+    // #1428 step 2 (spec 4.4.1, BR-8): a late or duplicate start for a chat this
+    // tab already confirmed from new chat K (the K→S alias) is consumed and never
+    // activates S. The alias, not the bucket, is the record: leaving S may
+    // release its older messages (history.ts::releaseSessionHistory).
+    if (originForKey(frame.session_id).kind === 'new_chat' && !(pending && pending.clientMessageId === clientId)) {
+      queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      return true
+    }
     if (!clientId) {
       // DEL-F21/F22: a `session_started` without `client_message_id` is not a
       // correlated receipt, so it must NOT bind/save an ordinary pending first
