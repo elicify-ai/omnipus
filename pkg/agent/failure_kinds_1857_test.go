@@ -26,12 +26,14 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"unicode"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -118,9 +120,9 @@ const test1857StderrTail = "codex exited: exit status 2\nstderr:\nerror: the arg
 // never-leak segments.
 const test1857EnvelopeRaw = `{"type":"error","error":{"type":"provider.no-route","message":"Model unavailable: no route found for the requested model","detail":"config read from /Users/dani/omnipus-debug/secret-config.json (invoked with --timeout 47) failed: sk-proj-Ab3dEf7Gh9Jk2Lm4"}}`
 
-// test1857UniqueRawError is B25/B26's distinctive raw cause: its tokens appear
+// errUniqueRaw1857 is B25/B26's distinctive raw cause: its tokens appear
 // in no fixed sentence, so a substring hit proves raw text reached a surface.
-var test1857UniqueRawError = errors.New("dial tcp 10.1.2.3:5432: connect: permission denied on /var/lib/postgresql/1857")
+var errUniqueRaw1857 = errors.New("dial tcp 10.1.2.3:5432: connect: permission denied on /var/lib/postgresql/1857")
 
 // test1857ErrorEvents collects every emitted event synchronously (the bus tap
 // runs on the emitting goroutine).
@@ -351,6 +353,24 @@ func TestTurnFailureKindClassification(t *testing.T) {
 			got := TranslateTurnError(pe)
 			assert.Equal(t, string(CodeProviderRequestRejected), string(got.Code),
 				"T-52/A4 control (§13.8.2 A4): the residual-400 promotion must stay provider_request_rejected")
+		})
+		t.Run("provider_error_status_boundaries", func(t *testing.T) {
+			// R-4 distinguishes a ProviderError with no received status from
+			// a pinned response. The existing 400/418 cases above stay intact.
+			for _, tc := range []struct {
+				name   string
+				status int
+				code   string
+			}{
+				{"status_0_no_response_stays_unknown", 0, "unknown"},
+				{"status_401_keeps_auth_failure", 401, "provider_auth_failed"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					got := TranslateTurnError(&common.ProviderError{Status: tc.status, Body: "nothing pinned in this body"})
+					assert.Equal(t, tc.code, string(got.Code),
+						"T-52/A1/A4 (R-4): ProviderError status %d must keep %q at terminal presentation", tc.status, tc.code)
+				})
+			}
 		})
 		t.Run("pre_send_or_no_status_attempt_not_promoted", func(t *testing.T) {
 			got := TranslateTurnError(errors.New("a pre-send failure with no status and no provider shape"))
@@ -867,7 +887,7 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 			SessionKey: "1857-b25-key",
 			ChatID:     "1857-b25-chat",
 		}
-		al.reportOrdinarySettlementFailure(msg, test1857UniqueRawError)
+		al.reportOrdinarySettlementFailure(msg, errUniqueRaw1857)
 
 		payloads := collector.errorPayloads()
 		require.NotEmpty(t, payloads,
@@ -889,21 +909,21 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 
 		// The frame as the hub renders it: the fixed safe sentence — the raw
 		// err.Error() reaches no user-facing field.
-		assert.NotContains(t, settlementPayload.Message, test1857UniqueRawError.Error(),
+		assert.NotContains(t, settlementPayload.Message, errUniqueRaw1857.Error(),
 			"T-55/B25 (§13.8.2 B25, sec2 A): raw error text reached the frame message — the fail-closed copy rule forbids it (today the reporter appends err.Error())")
 		requireNoRawSegment(t, "T-55/B25 (§13.8.2 B25)", "the settlement frame message", settlementPayload.Message)
 		wire := WireLLMError(*settlementPayload)
-		assert.NotContains(t, wire.Message, test1857UniqueRawError.Error(),
+		assert.NotContains(t, wire.Message, errUniqueRaw1857.Error(),
 			"T-55/B25 (§13.8.2 B25): raw error text reached the rendered wire frame")
 		if wire.Detail != nil {
-			assert.NotContains(t, *wire.Detail, test1857UniqueRawError.Error(),
+			assert.NotContains(t, *wire.Detail, errUniqueRaw1857.Error(),
 				"T-55/B25 (§13.8.2 B25): raw error text reached the rendered frame detail (technical details)")
 		}
 
 		// And the one permitted surface still has it: the DEDICATED ErrorCF
 		// line keeps the raw error — identified by its marker so the event
 		// logger's copy of a still-raw frame cannot satisfy this in its place.
-		test1857RequireRawOnDedicatedLogLine(t, logFile, test1857B25SettlementLogMarker, test1857UniqueRawError.Error(),
+		test1857RequireRawOnDedicatedLogLine(t, logFile, test1857B25SettlementLogMarker, errUniqueRaw1857.Error(),
 			"T-55/B25 (§13.8.5 B25 oracle)")
 	})
 
@@ -928,12 +948,12 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 		meta, err := store.NewSession(session.SessionTypeChat, "", "native-agent")
 		require.NoError(t, err, "SETUP: creating the transcript session")
 
-		message := al.reportGoalReadError(meta.ID, "background reminder sweep", test1857UniqueRawError)
+		message := al.reportGoalReadError(meta.ID, "background reminder sweep", errUniqueRaw1857)
 
 		// The returned message (the fixed safe sentence post-fix) carries no
 		// raw text — today it is fmt.Sprintf("Goal state could not be read;
 		// %s deferred: %v", operation, err).
-		assert.NotContains(t, message, test1857UniqueRawError.Error(),
+		assert.NotContains(t, message, errUniqueRaw1857.Error(),
 			"T-55/B26 (§13.8.2 B26, sec2 A): raw error text reached the goal-read message — the fail-closed copy rule forbids the raw %v (today the reporter embeds it)")
 
 		// The persisted chat transcript line is a rendered surface: no raw
@@ -942,7 +962,7 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 		require.NoError(t, readErr, "SETUP: reading back the persisted transcript")
 		require.NotEmpty(t, entries, "SETUP: the transcript write must have persisted at least one entry (AppendTranscriptStrict is strict — an empty read proves the instrument, not the fix)")
 		for _, entry := range entries {
-			assert.NotContains(t, entry.Content, test1857UniqueRawError.Error(),
+			assert.NotContains(t, entry.Content, errUniqueRaw1857.Error(),
 				"T-55/B26 (§13.8.2 B26, sec2 A): raw error text persisted in the chat transcript (entry %s) — today writeGoalSystemTranscript stores the raw %%v message", entry.ID)
 		}
 
@@ -959,7 +979,7 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 		}
 		require.NotNil(t, goalPayload,
 			"T-55/B26 (§13.8.5 B26): the goal_record_read error event must be emitted — a missing event fails, the code assertion is never skipped")
-		assert.NotContains(t, goalPayload.Message, test1857UniqueRawError.Error(),
+		assert.NotContains(t, goalPayload.Message, errUniqueRaw1857.Error(),
 			"T-55/B26 (§13.8.2 B26): raw error text reached the emitted frame message")
 		assert.Equal(t, "goal_state_unavailable", goalPayload.Code,
 			"T-55/B26 (§13.8.5 B26): the goal-read failure must carry goal_state_unavailable, got %q (today CodeUnknown)", goalPayload.Code)
@@ -967,7 +987,7 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 		// And the one permitted surface still has it: the DEDICATED ErrorCF
 		// line keeps the raw error — identified by its marker so the event
 		// logger's copy of a still-raw frame cannot satisfy this in its place.
-		test1857RequireRawOnDedicatedLogLine(t, logFile, test1857B26GoalReadLogMarker, test1857UniqueRawError.Error(),
+		test1857RequireRawOnDedicatedLogLine(t, logFile, test1857B26GoalReadLogMarker, errUniqueRaw1857.Error(),
 			"T-55/B26 (§13.8.5 B26 oracle)")
 	})
 
@@ -987,11 +1007,11 @@ func TestKnownCauseKindsProduceTypedOutcomes(t *testing.T) {
 		ri := &agentLoopRunTurnIteration{rf: rf}
 		rq := &agentLoopRunTurnRequest{ri: ri}
 
-		rq.refuseUnreadGoalState(test1857UniqueRawError)
+		rq.refuseUnreadGoalState(errUniqueRaw1857)
 
 		require.Equal(t, TurnEndStatusError, ri.turnStatus,
 			"T-55/B26 (§13.8.5 B22 binding): the refusal stays terminal for the active request")
-		assert.NotContains(t, rq.ret0.finalContent, test1857UniqueRawError.Error(),
+		assert.NotContains(t, rq.ret0.finalContent, errUniqueRaw1857.Error(),
 			"T-55/B26 (§13.8.2 B26, sec2 A): raw error text reached the failed turn's final content — both carriers of the raw %v are fixed by this row (today refuseUnreadGoalState sets the raw-text message as finalContent)")
 	})
 }
@@ -1267,4 +1287,116 @@ func TestCLIFailureAdaptersEndToEnd(t *testing.T) {
 		assert.Contains(t, sanitized.LogText, "cannot be used multiple times",
 			"T-56(h) (§13.8.4 gateway.log row): gateway.log keeps the raw text")
 	})
+	t.Run("i_real_emit_technical_details_only_safe_facts", test1857RealCLITechnicalDetails)
+}
+
+// test1857RequireCLIDetailFacts enforces E3 A / FR-093 without pinning a
+// separator or field order the spec does not define. Only labels for the
+// approved facts are ignored; all value tokens must match the spec's closed
+// fact set exactly, so additional raw or even masked program text fails.
+func test1857RequireCLIDetailFacts(t *testing.T, row, surface, detail string, wantFacts []string) {
+	t.Helper()
+	require.NotEmpty(t, detail, "%s: %s must positively carry the observed safe facts", row, surface)
+	requireNoRawSegment(t, row, surface, detail)
+	tokens := strings.FieldsFunc(detail, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+	})
+	var facts []string
+	for _, token := range tokens {
+		switch strings.ToLower(token) {
+		case "cli", "program", "display", "name", "exit", "status", "kind", "failure", "matched",
+			"exit_status", "failure_kind", "matched_kind", "program_name":
+			// Presentation labels are not additional facts.
+		default:
+			facts = append(facts, token)
+		}
+	}
+	assert.ElementsMatch(t, wantFacts, facts,
+		"%s: %s may contain only the program display name, observed exit status and matched kind (E3 A / FR-093), got %q", row, surface, detail)
+}
+
+// test1857RealCLITechnicalDetails starts at the fake process boundary, never
+// at a hand-constructed ErrorPayload. Both raw inputs actually contain every
+// forbidden segment; the real dispatcher must keep them out of Detail live,
+// on the rendered wire, and anywhere in the raw persisted JSONL record.
+func test1857RealCLITechnicalDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name, cli, raw, code string
+		facts                []string
+	}{
+		{"stderr_tail", "codex", test1857StderrTail, "external_cli_invalid_args", []string{"Codex", "2", "external_cli_invalid_args"}},
+		{"stdout_error_envelope", "opencode", test1857EnvelopeRaw, "external_cli_model_unavailable", []string{"OpenCode", "external_cli_model_unavailable"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const row = "T-56(i) (§13.8.4 technical details; E3 A / FR-093; CHECK F2)"
+			for _, segment := range test1857RawSegments {
+				require.Contains(t, tc.raw, segment, "SETUP: the real-emitter input must contain every never-leak segment")
+			}
+			home := t.TempDir()
+			t.Setenv(config.EnvHome, home)
+			al, ts := newExternalTestLoop(t, tc.cli, "")
+			t.Cleanup(al.Close)
+			store, sessionID := new1857ExternalStore(t, home)
+			closed := false
+			t.Cleanup(func() {
+				if !closed {
+					require.NoError(t, store.Close())
+				}
+			})
+			ts.transcriptStore, ts.transcriptSessionID = store, sessionID
+			collector := &test1857ErrorEvents{}
+			al.SetEventSyncTap(collector.tap)
+			t.Cleanup(func() { al.SetEventSyncTap(nil) })
+			fr, restore := withFakeDriver(t)
+			defer restore()
+			go func() {
+				require.NoError(t, fr.InjectEvent(runner.RunEvent{
+					Kind: runner.EventKindError,
+					Err:  &runner.ErrorEvent{Message: tc.raw, Fatal: true},
+				}))
+				fr.Cancel()
+			}()
+			_, runErr := runExternalCLISubTurn(context.Background(), al, ts, "task")
+			require.Error(t, runErr, "SETUP: the fatal process error must fail the actual dispatch")
+			require.NoError(t, store.Close())
+			closed = true
+
+			var emitted []ErrorPayload
+			for _, payload := range collector.errorPayloads() {
+				if payload.Stage == "external_cli" {
+					emitted = append(emitted, payload)
+				}
+			}
+			require.Len(t, emitted, 1, "%s: exactly one actual external_cli error event is required", row)
+			assert.Equal(t, tc.code, emitted[0].Code, "%s: the event must keep the matched kind", row)
+			test1857RequireCLIDetailFacts(t, row, "the actual emitted event Detail", emitted[0].Detail, tc.facts)
+			wire := WireLLMError(emitted[0])
+			require.NotNil(t, wire.Detail, "%s: the real event must render technical details", row)
+			test1857RequireCLIDetailFacts(t, row, "the rendered wire Detail", *wire.Detail, tc.facts)
+			requireNoRawSegment(t, row, "the rendered wire Message", wire.Message)
+
+			entries, readErr := store.ReadTranscript(sessionID)
+			require.NoError(t, readErr)
+			var codes []string
+			for _, entry := range entries {
+				if entry.ErrorCode != "" {
+					codes = append(codes, entry.ErrorCode)
+				}
+			}
+			require.Equal(t, []string{tc.code}, codes, "%s: one classified error must survive disk reload", row)
+			// Detail is live-only today. Inspect the raw record too: decoding
+			// into TranscriptEntry alone could silently drop a leaked new field.
+			rawRecord, readErr := os.ReadFile(filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl"))
+			require.NoError(t, readErr)
+			require.NotEmpty(t, strings.TrimSpace(string(rawRecord)), "SETUP: the persisted record must exist")
+			requireNoRawSegment(t, row, "the entire persisted record, including any detail", string(rawRecord))
+			for _, line := range strings.Split(strings.TrimSpace(string(rawRecord)), "\n") {
+				var record map[string]any
+				require.NoError(t, json.Unmarshal([]byte(line), &record))
+				decoded, marshalErr := json.Marshal(record)
+				require.NoError(t, marshalErr)
+				requireNoRawSegment(t, row, "all decoded persisted fields, including any detail", string(decoded))
+			}
+		})
+	}
 }
