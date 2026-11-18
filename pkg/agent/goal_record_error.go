@@ -22,8 +22,10 @@ func (err *goalRecordReadError) Error() string { return err.cause.Error() }
 func (err *goalRecordReadError) Unwrap() error { return err.cause }
 
 // reportGoalReadError accompanies a conservative refusal, never a goal-less
-// fallback. Keep the cause in the session transcript as well as the live error
-// surface: an unattended operation must remain explainable after reconnect.
+// fallback. The raw cause goes to gateway.log only (the error log line below);
+// the session transcript, the live error frame and the returned content carry
+// the fixed goal_state_unavailable sentence (#1857 B26), so an unattended
+// operation stays explainable after reconnect without showing internal text.
 func (al *AgentLoop) reportGoalReadError(sessionID, operation string, err error) string {
 	logMessage := fmt.Sprintf("Goal state could not be read; %s deferred: %v", operation, err)
 	logger.ErrorCF("agent", "goal_read_error: "+logMessage,
