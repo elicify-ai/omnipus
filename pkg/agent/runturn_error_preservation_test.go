@@ -287,16 +287,20 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 	// Assert (D): audit row was written (regression on the existing test).
 	// ---------------------------------------------------------------------
 	auditPath := filepath.Join(tmpHome, "system", "audit.jsonl")
-	if entries, err := readAuditEntries(auditPath); err == nil {
-		var saw bool
-		for _, e := range entries {
-			if e["event"] == audit.EventRateLimit {
-				saw = true
-				break
-			}
+	// T2-5 (CHECK N1): the setup turns the audit log on (Sandbox.AuditLog:
+	// true), so the audit file must exist and be readable. A read error is a
+	// failure, never a silent skip.
+	auditEntries, auditErr := readAuditEntries(auditPath)
+	require.NoError(t, auditErr,
+		"audit.jsonl must be readable: the setup enables Sandbox.AuditLog, so a missing or unreadable audit file is a regression")
+	var saw bool
+	for _, e := range auditEntries {
+		if e["event"] == audit.EventRateLimit {
+			saw = true
+			break
 		}
-		assert.True(t, saw, "audit.jsonl must still contain a rate_limit event (no regression)")
 	}
+	assert.True(t, saw, "audit.jsonl must still contain a rate_limit event (no regression)")
 }
 
 // TestRunTurn_ProviderError_WritesErrorEntryToTranscript is the FIX-1 /

@@ -102,6 +102,8 @@ interface Recorded {
   method: string
   path: string
   body: string | null
+  /** HTTP status the stub answered with. */
+  status: number
 }
 
 let recorded: Recorded[] = []
@@ -132,19 +134,24 @@ function stubFetch() {
         const text = await input.clone().text()
         body = text === '' ? null : text
       }
-      recorded.push({ method, path, body })
+      const entry: Recorded = { method, path, body, status: 404 }
+      recorded.push(entry)
+      const answer = (status: number, payload: unknown) => {
+        entry.status = status
+        return jsonResponse(status, payload)
+      }
       if (path === RATE_LIMITS_PATH && method === 'GET') {
-        return jsonResponse(200, {
+        return answer(200, {
           enabled: true,
           max_agent_llm_calls_per_hour: ROUTE_LLM,
           max_agent_tool_calls_per_minute: ROUTE_TOOL,
         })
       }
       if (path === RATE_LIMITS_PATH && method === 'PUT') {
-        if (putStatus !== 200) return jsonResponse(putStatus, { error: PUT_ERROR_TEXT })
-        return jsonResponse(200, { saved: true, requires_restart: false })
+        if (putStatus !== 200) return answer(putStatus, { error: PUT_ERROR_TEXT })
+        return answer(200, { saved: true, requires_restart: false })
       }
-      return jsonResponse(404, { error: 'not stubbed' })
+      return answer(404, { error: 'not stubbed' })
     }),
   )
 }
@@ -268,6 +275,13 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
     const { llm, tool } = await openAdvanced()
     await settleTo(llm, String(ROUTE_LLM))
     putStatus = 400
+    // T2-1: before the save, no error alert is on the screen, so an alert
+    // seen afterwards cannot be a leftover or an unrelated one.
+    const alertsBefore = screen.queryAllByRole('alert').map((el) => (el.textContent ?? '').trim())
+    expect(
+      alertsBefore,
+      '#1882: no error alert may be on the screen before the save is attempted',
+    ).toEqual([])
     await editAndSave(llm, tool)
 
     expect(
@@ -275,14 +289,22 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
       `#1882: the save must be attempted on ${RATE_LIMITS_PATH} (expected >= 1 PUT, saw ${rateLimitPuts().length})`,
     ).toBeGreaterThanOrEqual(1)
 
-    // AutoSaveIndicator's error branch is the screen's existing error state
-    // (role="alert"). The alert must be the one for THIS failed save: it
-    // carries the server's refusal text, so an unrelated alert cannot satisfy it.
-    const alerts = screen.queryAllByRole('alert').map((el) => (el.textContent ?? '').trim())
+    // The 400 was the answer to the recorded rate-limit PUT, so the failure
+    // being shown belongs to THIS save.
     expect(
-      alerts.some((text) => text.includes(PUT_ERROR_TEXT)),
-      `#1882: a failed rate-limit save must show the existing error alert carrying "${PUT_ERROR_TEXT}", saw alerts ${JSON.stringify(alerts)}`,
-    ).toBe(true)
+      rateLimitPuts().map((r) => r.status),
+      `#1882: every recorded rate-limit PUT must have been answered 400 by the stub, saw ${JSON.stringify(rateLimitPuts().map((r) => r.status))}`,
+    ).toEqual(rateLimitPuts().map(() => 400))
+
+    // AutoSaveIndicator's error branch is the screen's existing error state
+    // (role="alert"). The alert is tied to this failed save by sequence (none
+    // before, one after the 400), not by its wording: the real client shows
+    // its own sentence, not the stub's.
+    const alertsAfter = screen.queryAllByRole('alert').map((el) => (el.textContent ?? '').trim())
+    expect(
+      alertsAfter.filter((text) => text !== '').length,
+      `#1882: a failed rate-limit save must show the existing error alert with a message, saw alerts ${JSON.stringify(alertsAfter)}`,
+    ).toBeGreaterThanOrEqual(1)
 
     // T1-5 b: the success state must be absent after the failed save. The
     // AutoSaveIndicator's saved text starts with "Saved"; no element on the

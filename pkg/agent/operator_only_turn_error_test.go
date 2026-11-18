@@ -99,7 +99,7 @@ func TestOperatorOnly_BillingAndRetiredAreOperatorOnly(t *testing.T) {
 		{
 			name:       "410 decommissioned stays temporary (C-24 defers 410)",
 			err:        opOnlyBoundary(t, 410, `{"error":{"message":"This model has been decommissioned"}}`),
-			wantCode:   CodeUnknown,
+			wantCode:   "provider_error", // #1857 R-4 / Q2 A: a residual 4xx is named provider_error, not unknown; 410 stays temporary
 			wantOpOnly: false,
 		},
 	}

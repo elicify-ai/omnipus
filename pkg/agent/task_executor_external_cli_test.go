@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -190,9 +191,19 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 	}
 	// #1857 §13.8.4 rule 3: the task carries C4's catalogue sentence,
 	// never the internal CLI wrapper. The fixture configures Claude Code.
-	expectedCause := strings.ReplaceAll(UserMessageForCode(CodeExternalCLIFailed), "{cli}", "Claude Code")
+	// #1857 D-B: task surfaces use the neutral voice (no first person), taken
+	// from the generated neutral catalogue, never the chat-voice sentence.
+	neutralTemplate := generated.LLMErrorNeutralMessages[string(CodeExternalCLIFailed)]
+	if neutralTemplate == "" {
+		t.Fatal("SETUP: the generated catalogue must carry a neutral twin for external_cli_failed")
+	}
+	expectedCause := strings.ReplaceAll(neutralTemplate, "{cli}", "Claude Code")
+	chatCause := strings.ReplaceAll(UserMessageForCode(CodeExternalCLIFailed), "{cli}", "Claude Code")
+	if strings.Contains(final.Result, chatCause) {
+		t.Errorf("final Result = %q carries the chat-voice sentence; task surfaces use the neutral voice (D-B)", final.Result)
+	}
 	if !strings.Contains(final.Result, expectedCause) {
-		t.Errorf("task Result = %q, want the complete external_cli_failed catalogue sentence %q",
+		t.Errorf("task Result = %q, want the complete external_cli_failed neutral sentence %q",
 			final.Result, expectedCause)
 	}
 	if strings.Contains(final.Result, "external-cli run failed") {
