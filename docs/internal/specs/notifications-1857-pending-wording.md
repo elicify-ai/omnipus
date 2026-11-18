@@ -65,3 +65,13 @@ The spec's "no-fact form drops the CLI clause" needs a sentence that does not ex
 - **W12 is not wired.** `provider_error` uses the generic sentence; W12 needs `{provider}` and
   `{host}` facts that are a later work package.
 - **W8, W9, W10, W14, W15, W16** belong to later work packages; nothing here uses them.
+
+## Known limits (chief, 2026-11-18; not lost, revisited after the founder's W answer)
+
+- **`agent_request_limit` is retryable (proposed, founder review pending).** It follows W11 ("I can continue in {minutes} minutes"). If the founder picks the other W11 option, the retryable flag changes with the sentence.
+- **Live rate-limit frame carries no code.** `RateLimitFrame` has no code field, so the live frame does not say `agent_request_limit`; a contract change is needed. The error frame and the saved chat record carry the code. An issue is filed only if the founder's W11 answer makes the live frame matter.
+- **F4 — B3 saved record text.** The saved record's code is `agent_request_limit`, but its content is still the internal "rate limit: ... (retry after Ns)" text (pinned by `TestRunTurn_RateLimit_WritesErrorEntryToTranscript`).
+- **F6 — W7 reused for an invalid turn cap and a missing executor config.** "The program could not be launched ... program path" is misleading for those two cases (chief ruling Q1 A; the founder may give them W19 or own sentences).
+- **F8 — unchecked `fmt.Sscan`** for the turn cap in `cli_failure_kinds.go::classifyCLIFailure`. The regex guarantees digits; worst case a 0 that falls back to the generic sentence.
+- **F9 — C8 on task surfaces** still shows the curated refusal text (Omnipus's own text, existing r17 behaviour) rather than the catalogue sentence; a slight break of §13.8.4 rule 1.
+- **New proposals on the founder page (W17–W21):** W17 `transcript_save_failed`, W18 `goal_state_unavailable`, W19 config fault without a program name, W20/W21 the two `tool_assembly_duplicate` variants. Until the founder answers, these codes keep the sentences listed in the rows above.
