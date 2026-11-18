@@ -23,6 +23,9 @@ import {
   GodModeUpdateResponse as GodModeUpdateResponseSchema,
   // WP4: local backup — off in platform mode (contract-first #8):
   BackupCreateResponse as BackupCreateResponseSchema,
+  // #1882: per-agent rate limits through their own route (contract-first #8):
+  RateLimitsResponse as RateLimitsResponseSchema,
+  RateLimitsUpdateResponse as RateLimitsUpdateResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   SandboxConfig,
@@ -47,6 +50,10 @@ import type {
   GodModeUpdateResponse,
   // WP4: local backup — off in platform mode (contract-first #8):
   BackupCreateResponse,
+  // #1882: per-agent rate limits through their own route (contract-first #8):
+  RateLimitsResponse,
+  RateLimitsUpdateRequest,
+  RateLimitsUpdateResponse,
 } from '@/lib/api/generated/openapi-types'
 import { REAUTH_HEADER } from './auth'
 import { ApiSchemaError, _recordApiSchemaError, request } from './http'
@@ -359,6 +366,22 @@ export function updateSandboxConfig(
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, SandboxConfigSchema)
+}
+
+// ── Per-agent rate limits ─────────────────────────────────────────────────────
+// #1882: the two per-agent limits are read from and saved through their own
+// route. PUT /config refuses `security.*` by design, so the Settings screen
+// never sends them there. Wire types are the generated RateLimits* types.
+
+export function fetchRateLimits(): Promise<RateLimitsResponse> {
+  return request<RateLimitsResponse>('/security/rate-limits', undefined, RateLimitsResponseSchema)
+}
+
+export function updateRateLimits(body: RateLimitsUpdateRequest): Promise<RateLimitsUpdateResponse> {
+  return request<RateLimitsUpdateResponse>('/security/rate-limits', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  }, RateLimitsUpdateResponseSchema)
 }
 
 // ── Exec Proxy ────────────────────────────────────────────────────────────────

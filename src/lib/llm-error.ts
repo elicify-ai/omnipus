@@ -77,15 +77,50 @@ export const codeToAttribution: Record<LLMErrorCode, LLMErrorAttribution> =
   llmErrorUserAttributions
 
 /**
+ * #1857 D-A SPA layer — a literal catalogue slot (`{cli}`, `{model}`, `{n}`,
+ * `{minutes}`, …). Only the server fills slots; the browser never composes
+ * wording from facts (notifications spec §11.4), so any text still matching
+ * this pattern must never reach the screen (§13.2).
+ */
+const SLOT_PATTERN = /\{[a-z_]+\}/
+
+/** Tag of the one warning line the slot guard writes (code only, never text). */
+const SLOT_GUARD_TAG = 'llm_error.slot_guard'
+
+function warnSlotGuard(code: string): void {
+  // The line names the code only: the rejected text may carry provider or
+  // user content, so it is never logged.
+  console.warn(SLOT_GUARD_TAG, { code })
+}
+
+/**
+ * The catalogue copy for a code, without the guard's warning. `guarded` is
+ * true when the code's own sentence carries a slot and the generic `unknown`
+ * sentence was returned instead.
+ */
+function catalogueMessage(code: string | undefined): { text: string; guarded: boolean } {
+  if (code && code in codeToDisplay) {
+    const text = codeToDisplay[code as LLMErrorCode]
+    if (SLOT_PATTERN.test(text)) return { text: codeToDisplay.unknown, guarded: true }
+    return { text, guarded: false }
+  }
+  return { text: codeToDisplay.unknown, guarded: false }
+}
+
+/**
  * Resolve the user-facing copy for a code, with a safe fallback for an
  * unrecognized code (forward-compat: a newer backend may emit a code this
  * SPA build doesn't know yet — never throw, never render blank).
+ *
+ * #1857 D-A (chief ruling B): a code whose catalogue sentence carries a slot
+ * returns the generic `unknown` sentence instead, because only the server can
+ * fill the slots, and writes one `llm_error.slot_guard` warning naming the
+ * code. Slot-free codes keep their own sentence.
  */
 export function codeToMessage(code: string | undefined): string {
-  if (code && code in codeToDisplay) {
-    return codeToDisplay[code as LLMErrorCode]
-  }
-  return codeToDisplay.unknown
+  const { text, guarded } = catalogueMessage(code)
+  if (guarded) warnSlotGuard(code as string)
+  return text
 }
 
 /**
@@ -130,8 +165,20 @@ export function getLLMErrorDisplay(
     le.code !== 'judge_conclusion_failed' && le.provider_message === true && delegatedLimitMessage.length > 0
   const delegatedLimitTrusted =
     le.code === 'delegated_task_limit' && delegatedLimitMessage.length > 0
-  const message =
-    providerMessageTrusted || delegatedLimitTrusted ? le.message : codeToMessage(le.code)
+  const trusted = providerMessageTrusted || delegatedLimitTrusted
+  // #1857 D-A (chief ruling B): a trusted message that still carries a
+  // literal slot was not filled by the server. It is rejected and takes the
+  // untrusted path. Live and replay share this function, so both are guarded.
+  // At most one guard line is written per call, however many checks fire.
+  const trustedHasSlot = trusted && SLOT_PATTERN.test(le.message)
+  let message: string
+  if (trusted && !trustedHasSlot) {
+    message = le.message
+  } else {
+    const fallback = catalogueMessage(le.code)
+    if (trustedHasSlot || fallback.guarded) warnSlotGuard(le.code)
+    message = fallback.text
+  }
   // Trim before the emptiness check — a whitespace-only detail carries no
   // information and would render as a blank "Technical details" disclosure.
   // Mirrors the renderer's own trim guard on `message.errorDetail`.
