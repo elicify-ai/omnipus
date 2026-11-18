@@ -40,6 +40,11 @@ import { useSessionStore } from '@/store/session'
 import { isSidebarOverlayOpen } from '@/store/sidebar'
 import { isGoalRunning } from '@/lib/goalActivity'
 import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
+import { onNotStoppedEstablished } from '@/store/chat/drafts'
+import type { TypedCommand } from '@/hooks/useSlashMenu'
+
+/** #1428 step 2 (spec 4.7): the cancel transport, with the typed command when there is one. */
+type CancelStreamFn = (sessionId?: string, scope?: CancelFrame['scope'], typed?: { kind: 'cancel' | 'stop'; text: string; originKey: string }) => boolean
 
 export type StopLabel = 'stop' | 'stopping'
 
@@ -80,14 +85,14 @@ export interface UseCancelStateResult {
    * First activation = single-session cancel + the 3 s window; a second
    * activation inside that window confirms (tree frame).
    */
-  cancelUnconditional: () => void
+  cancelUnconditional: (typed?: TypedCommand) => void
   /**
    * The self-confirming Stop all (D9): one call → one `cancelStream
    * (undefined, 'tree')` frame, no double activation. Used by `/cancel`
    * (via useSlashMenu) and by the confirmed second Stop/Esc activation.
    * Also closes any open confirmation window without sending anything extra.
    */
-  cancelAllTreeScoped: () => void
+  cancelAllTreeScoped: (typed?: TypedCommand) => void
 }
 
 /** Minimum time the "Stopping..." label stays visible once shown (T25). */
@@ -166,6 +171,13 @@ function useStopAllConfirmWindow() {
   }, [stopAllArmed, activeSessionId, disarmStopAll])
 
   // Clear a live expiry timer on unmount.
+  // #1428 step 2 (spec 4.7, B-27): when the not-stopped notice is established
+  // for chat T, a window armed for T is disarmed in the same step; a window
+  // armed for another chat is left alone.
+  useEffect(() => onNotStoppedEstablished((sid) => {
+    if (stopAllArmedRef.current && stopAllArmedForSidRef.current === sid) disarmStopAll()
+  }), [disarmStopAll])
+
   useEffect(() => {
     return () => {
       if (stopAllTimerRef.current !== null) {
@@ -274,7 +286,7 @@ export function useCancelState(
   // It returns `false` only when the cancel could not be handed to the socket
   // (a visible error toast was already shown). Such a press sent nothing, so
   // it neither shows "Stopping..." nor arms the confirmation window (W2).
-  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => boolean,
+  cancelStream: CancelStreamFn,
 ): UseCancelStateResult {
   const [stopLabel, setStopLabel] = useState<StopLabel>('stop')
 
@@ -304,10 +316,10 @@ export function useCancelState(
 
   // `/cancel` and a confirmed second Stop/Esc activation land here — one
   // call, one scope:"tree" frame, window closed, nothing else sent.
-  const cancelAllTreeScoped = useCallback(() => {
+  const cancelAllTreeScoped = useCallback((typed?: TypedCommand) => {
     disarmStopAll()
     stoppingStartedAt.current = Date.now()
-    if (cancelStream(undefined, 'tree') === false) return
+    if (cancelStream(undefined, 'tree', typed && { kind: 'cancel', ...typed }) === false) return
     setStopLabel('stopping')
   }, [cancelStream, disarmStopAll])
 
@@ -315,12 +327,17 @@ export function useCancelState(
   // Escape): session-scoped cancel, then "Stopping..." (when asked for) and
   // the 3 s window — but only if the cancel was actually handed to the
   // socket; an undelivered press leaves the next press a first press (W2).
-  const activateFirstPress = useCallback((showStopping: boolean) => {
+  const activateFirstPress = useCallback((showStopping: boolean, typed?: TypedCommand) => {
     stoppingStartedAt.current = Date.now()
-    if (cancelStream() === false) return
+    if (cancelStream(undefined, undefined, typed && { kind: 'stop', ...typed }) === false) return
     if (showStopping) setStopLabel('stopping')
     armStopAll()
   }, [cancelStream, armStopAll])
+
+  // #1428 step 2 (B-27): the notice for the chat on screen puts the label back to "Stop".
+  useEffect(() => onNotStoppedEstablished((sid) => {
+    if (useSessionStore.getState().activeSessionId === sid) setStopLabel('stop')
+  }), [])
 
   useEffect(() => {
     if (isStreaming) {
@@ -362,16 +379,16 @@ export function useCancelState(
     activateFirstPress(isStreaming)
   }, [isStreaming, cancelAllTreeScoped, activateFirstPress])
 
-  const cancelUnconditional = useCallback(() => {
+  const cancelUnconditional = useCallback((typed?: TypedCommand) => {
     // D9: same contract as cancelIfStreaming, minus the streaming guard —
     // the Stop button keeps its always-morphs semantics; first press sends
     // the session-scoped frame and arms the window; a press inside that
     // window confirms the tree stop.
     if (stopAllArmedRef.current) {
-      cancelAllTreeScoped()
+      cancelAllTreeScoped(typed)
       return
     }
-    activateFirstPress(true)
+    activateFirstPress(true, typed)
   }, [cancelAllTreeScoped, activateFirstPress])
 
   // US-1.4 / FR-23 / T23: the global (document-level) Escape handler. The

@@ -1,4 +1,5 @@
 import type { OutboundQueueItem, QueuedOutboundMessage } from './types'
+import { submissionIsOpen } from '@/lib/bound-send'
 
 /**
  * #1428 step 1: a queued message goes only to the chat it was written in.
@@ -51,6 +52,7 @@ export function queuedItemBelongsHere(item: OutboundQueueItem, activeSessionId: 
   // Owned follow-ups wait for their own first send to be confirmed (it binds
   // them) and are never sent into whatever chat happens to be open.
   if (isOwnedAndUnbound(item)) return false
+  if (typeof item !== 'string' && item.submission) return submissionIsOpen(item.submission)
   if (typeof item === 'string' || !item.targetSessionId) return true
   return item.targetSessionId === activeSessionId
 }

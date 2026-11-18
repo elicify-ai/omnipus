@@ -12,6 +12,7 @@ import { noteForegroundAttach } from '@/store/session/foregroundAck'
 import { runStartNewSession, type NewChatOutcome, type NewChatStartArg } from '@/store/session/newChatFlow'
 import type { NewChatPrompt } from '@/store/session/newChatFlow'
 import { resumeWorkspaceEntryQueue, runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
+import { enterNewChat } from '@/store/session/newChatKey'
 import type { WorkspaceEntryView } from '@/store/session/workspaceEntryFlow'
 
 // syncChatForeground is imported lazily to avoid the chat ↔ session circular init.
@@ -176,6 +177,8 @@ interface SessionStore {
   mainPointerByPair: Record<string, string>
   /** Set when + New chat must ask before abandoning an unconfirmed first send. Read by the sidebar row's dialog (M7: newChatFlow is the decision's only owner). */
   newChatPrompt: NewChatPrompt | null
+  /** #1428 step 2 (4.4.1): K of the "no chat yet" screen; written only by enterNewChat / enterBlockedNoChat. */
+  newChatKey: string | null
   /** Last workspace-entry decision. `sendEnabled: false` blocks send. */
   workspaceEntry: WorkspaceEntryView | null
   setActiveSession: (
@@ -501,6 +504,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   agentSelectionWorkspaceId: null,
   mainPointerByPair: {},
   newChatPrompt: null,
+  newChatKey: null,
   workspaceEntry: null,
 
   setActiveSession: (sessionId, agentId, agentType) => {
@@ -715,9 +719,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
     // Mirrors the inline check this replaces: deleting the currently-attached
     // session must not leave chat pointed at a now-dead session id.
-    if (get().activeSessionId === sessionId) {
-      get().setActiveSession(null, null, null)
-    }
+    if (get().activeSessionId === sessionId) enterNewChat(useWorkspacesStore.getState().activeWorkspaceId, get().activeAgentId)
   },
 
   sessionByWorkspace: {},

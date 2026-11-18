@@ -14,7 +14,7 @@ import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 // call, which references every REST schema and defeats tree-shaking
 // (bundle-budget incident, PR #860).
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
-import type { CancelFrame, MessageFrame } from '@/lib/api/generated/asyncapi-types'
+import type { CancelFrame, MessageFrame, SendOrigin } from '@/lib/api/generated/asyncapi-types'
 import type { components } from '@/lib/api/generated/openapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -30,7 +30,9 @@ import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, Sessi
 import { mergeDrainBatch, stampQueuedMessage } from '../queue-target'
 import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
-import { settleAllCancelAcks } from '../stop-checkpoint'
+import { settleAllCancelAcks, shownCheckpointFor } from '../stop-checkpoint'
+import { buildMessageFrame, originForTarget, sendCommand, submissionForMessage, type Submission } from '@/lib/bound-send'
+import { useDraftStore } from '@/store/chat/drafts'
 
 /** Accepted sends request a fresh current window; failures never move a reader. */
 function followAcceptedHistorySend(get: () => ChatStore, sid: string): void {
@@ -188,6 +190,34 @@ function armClearRefreshForSend(sessionId: string, clientMessageId: string, get:
  * session-carrying payloads; the composer's own visible block
  * (ChatScreen's recipientAddressBlocked) is what stops an @-addressed
  * submit in a brand-new chat long before this line. */
+/** #1428 step 2: the recipient pair of an @-addressed send, as frame fields. */
+function recipientFields(content: string): Pick<MessageFrame, 'recipient'> {
+  const recipient = outgoingRecipient(content)
+  return recipient ? { recipient } : {}
+}
+
+/**
+ * #1428 step 2 (spec 4.6.1): what a send names. A frozen submission names its
+ * own target, agent, workspace and origin; a send without one (a non-composer
+ * caller) names the open chat, as before, with that chat's origin.
+ */
+function sendTargetOf(submission: Submission | undefined): { rawActiveSessionId: string | null; activeAgentId: string | null; origin: SendOrigin; workspaceId: string } {
+  if (!submission) {
+    const { activeSessionId, activeAgentId } = useSessionStore.getState()
+    return { rawActiveSessionId: activeSessionId, activeAgentId, origin: originForTarget(activeSessionId), workspaceId: outboundWorkspaceId(activeSessionId) }
+  }
+  const workspaceId = submission.target === null ? (submission.workspaceId ?? '') : outboundWorkspaceId(submission.target)
+  return { rawActiveSessionId: submission.target, activeAgentId: submission.agentId, origin: submission.origin, workspaceId }
+}
+
+/** #1428 step 2 (spec 4.7, r4): the #1534 checkpoint of the open answer, read without freezing it. */
+function shownBeforeFreeze(get: () => ChatStore, sessionId: string | null): CancelFrame['shown'] | undefined {
+  const bucket = sessionId ? get().sessionsById[sessionId] : undefined
+  if (!bucket) return undefined
+  const openId = findOpenAssistantMessageId(bucket.messageOrder, bucket.messagesById)
+  return shownCheckpointFor(bucket, openId ? bucket.messagesById[openId] : undefined)
+}
+
 function outgoingRecipient(content: string): { workspace_id: string; agent_id: string } | null {
   return resolveAddressedAgent(content)?.recipient ?? null
 }
@@ -286,7 +316,7 @@ function performResendMessage(
   // agent. If its owner is not loaded, keep the failed row retriable and
   // explain how to recover instead of guessing or minting another chat.
   const targetSession = loadedOutboundSession(targetSid)
-  const targetAgentId = targetSession?.agent_id
+  const targetAgentId = targetSession?.agent_id ?? submissionForMessage(messageId)?.agentId ?? undefined
   if (!targetAgentId?.trim()) {
     logDiagnostic('chatResendBlockedOwnerUnavailable', {
       sessionId: targetSid,
@@ -324,23 +354,18 @@ function performResendMessage(
   }
 
   const workspaceId = targetSid === '__pending' ? '' : outboundWorkspaceId(targetSid)
-  const payload = {
-    type: 'message' as const,
+  const payload = buildMessageFrame({
     content,
     session_id: targetSid === '__pending' ? undefined : targetSid,
     client_message_id: messageId,
     agent_id: targetAgentId,
     ...(workspaceId ? { metadata: { workspace_id: workspaceId } } : {}),
     ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
-    // Recipient re-derived from the kept content at resend time. A '__pending'
-    // target has no session for the pair to ride on, so the recipient is
-    // omitted there (the recipient-only-with-session_id wire rule) — a corner
-    // the retained-first-send retry path (`retryFirstSend`) normally owns.
-    ...(targetSid !== '__pending' ? (() => {
-      const recipient = outgoingRecipient(content)
-      return recipient ? { recipient } : {}
-    })() : {}),
-  }
+    // Recipient re-derived from the kept content at resend time; a '__pending'
+    // target has no session for the pair to ride on (the
+    // recipient-only-with-session_id wire rule).
+    ...(targetSid !== '__pending' ? recipientFields(content) : {}),
+  }, submissionForMessage(messageId)?.origin ?? originForTarget(targetSid))
   get()._validateOutboundFrame(payload, targetSid)
   const sent = connection.send(payload)
   if (!sent) {
@@ -541,18 +566,17 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelNameRaw = opts?.model_name
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
-      const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
+      const { rawActiveSessionId, activeAgentId, origin, workspaceId } = sendTargetOf(opts?.submission)
       // #1428: a queued message remembers the chat it was typed in.
-      const queuedMessage = stampQueuedMessage(untargetedMessage, rawActiveSessionId, getPendingFirstSend(get())?.clientMessageId, opts?.queueSeq)
+      const queuedMessage = { ...stampQueuedMessage(untargetedMessage, rawActiveSessionId, getPendingFirstSend(get())?.clientMessageId, opts?.queueSeq), ...(opts?.submission ? { submission: opts.submission } : {}) }
       // Ordinary sends, mid-turn steering and new-answer requests share the
       // attached session's canonical binding; only a first send uses context.
-      const workspaceId = outboundWorkspaceId(rawActiveSessionId)
       // K8 (FR-012): target data naming the workflow a screen button started.
       const workflowStartFrame = opts?.workflowStart ? { workflow_start: opts.workflowStart } : {}
 
       const metadataFrame = buildMetadataFrame(modelName, opts, workspaceId)
       const { connection, isConnected } = useConnectionStore.getState()
-      const { isStreaming } = get()
+      const isStreaming = opts?.submission?.target ? (get().sessionsById[opts.submission.target]?.isStreaming ?? false) : get().isStreaming
       // Composer guard: a '__pending' sentinel with no in-flight
       // stream is a STUCK state, not a real session — a turn started under
       // '__pending' ended (rejected, rolled back, or otherwise never got its
@@ -664,23 +688,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             return { ...applyMessageArray(allMsgs, b), lastUserMessageAt: Date.now() }
           })
 
-          const steerPayload = {
-            type: 'message' as const,
-            content,
-            session_id: activeSessionId,
-            client_message_id: userMsg.id,
-            agent_id: activeAgentId ?? undefined,
-            ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
-            ...metadataFrame,
-            ...workflowStartFrame,
-            // @-addressed steer (founder 2026-10-11 Q1 B): legal here — a
-            // steer always carries a real session_id ('__pending' steers are
-            // enqueued above, never put on the wire).
-            ...(() => {
-              const recipient = outgoingRecipient(content)
-              return recipient ? { recipient } : {}
-            })(),
-          }
+          const steerPayload = buildMessageFrame({
+            content, session_id: activeSessionId, client_message_id: userMsg.id, agent_id: activeAgentId ?? undefined,
+            ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}), ...metadataFrame, ...workflowStartFrame,
+            // @-addressed steer (founder 2026-10-11 Q1 B): legal here, a steer always carries a real session_id.
+            ...recipientFields(content),
+          }, origin)
           get()._validateOutboundFrame(steerPayload, activeSessionId)
           const steerSent = connection.send(steerPayload)
 
@@ -811,22 +824,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           }
         })
 
-        const payload = {
-          type: 'message' as const,
-          content,
-          session_id: activeSessionId,
-          client_message_id: userMsg.id,
-          agent_id: activeAgentId ?? undefined,
-          ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
-          ...metadataFrame,
-          ...workflowStartFrame,
-          // @-addressed ordinary send (founder 2026-10-11 Q1 B): the pair
-          // rides WITH this session_id, never alone.
-          ...(() => {
-            const recipient = outgoingRecipient(content)
-            return recipient ? { recipient } : {}
-          })(),
-        }
+        const payload = buildMessageFrame({
+          content, session_id: activeSessionId, client_message_id: userMsg.id, agent_id: activeAgentId ?? undefined,
+          ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}), ...metadataFrame, ...workflowStartFrame,
+          // @-addressed ordinary send (founder 2026-10-11 Q1 B): the pair rides WITH this session_id, never alone.
+          ...recipientFields(content),
+        }, origin)
         get()._validateOutboundFrame(payload, activeSessionId)
         const sent = connection.send(payload)
 
@@ -870,15 +873,14 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         if (refuseAgentlessNewChat(activeAgentId, 'send')) return
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
         const autoApproveChoice = get().pendingAutoApproveChoice
-        startOrdinaryFirstSend({ set, get, withBucket }, {
-          type: 'message',
+        startOrdinaryFirstSend({ set, get, withBucket }, buildMessageFrame({
           content,
           client_message_id: clientMessageId,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
           ...(autoApproveChoice !== null ? { auto_approve: autoApproveChoice } : {}),
-        }, queuedAt, workspaceId || null, attachments)
+        }, origin), queuedAt, workspaceId || null, attachments)
       }
   },
 
@@ -887,7 +889,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     // rather than here.
     resendMessage: (messageId) => performResendMessage(get, getActiveSid, withBucket, messageId),
 
-    cancelStream: (sessionId, scope) => {
+    cancelStream: (sessionId, scope, typed) => {
       const { connection } = useConnectionStore.getState()
       const { activeSessionId } = useSessionStore.getState()
       const targetSid = sessionId ?? activeSessionId
@@ -917,7 +919,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // (cancelUnconditional): by design, the founder's second-Stop tree rule needs
       // its first press to arm the confirmation window even on an idle parent chat.
       // #1534: the freeze returns what the screen showed of the frozen answer.
-      const shown = targetIsStreaming ? get().markLastMessageInterrupted(sessionId) : undefined
+      // #1428 r4: the checkpoint is read before the send; the answer is frozen
+      // only after the cancel was handed over (below), in the same step.
+      const shown = targetIsStreaming ? shownBeforeFreeze(get, targetSid) : undefined
       // A plain Stop supersedes any pending redirect: its turn_canceled is a
       // stop, and must keep "(interrupted)".
       if (targetSid) pendingRedirectSids.delete(targetSid)
@@ -925,13 +929,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // W2: a cancel that cannot even reach a transport is reported — to the
       // caller (return false, so the Stop window is never armed for a click
       // that sent nothing) and to the user (visible error toast).
-      if (!connection) {
-        useUiStore.getState().addToast({
-          message: 'Could not send cancel — the gateway connection is down. The response may keep running; reconnect and press Stop again.',
-          variant: 'error',
-        })
-        return false
-      }
+      // #1428 (spec 4.7): with no connection nothing is sent; the target
+      // chat shows the persistent not-stopped notice (sendCommand).
+      if (!connection) return targetSid ? sendCommand({ kind: typed?.kind ?? 'stop', target: targetSid, originKey: typed?.originKey ?? targetSid, text: typed?.text ?? '' }) : false
       if (!targetSid) {
         // No server-side session established yet — just clear local streaming
         // state. S7: activeTurn* travels with isStreaming everywhere else in
@@ -958,7 +958,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // the completed-turn no-op gate exactly as before — sending cancel for
       // a completed turn is a no-op on the server but wastes a round-trip
       // and may confuse the audit log.
-      if (targetIsStreaming || goalRunning || scope === 'tree') {
+      // #1428 (spec 4.7, B-27): after "Not stopped. Press Stop again." the next Stop is a normal Stop.
+      if (targetIsStreaming || goalRunning || scope === 'tree' || !!useDraftStore.getState().notStopped[targetSid]) {
         // ADR-20260928 MAJ-002: `scope` rides the generated CancelFrame
         // verbatim. Omitted (every pre-existing call path) goes out WITHOUT
         // the key — the wire default is `session`, a single-session stop the
@@ -969,21 +970,16 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // that froze a streaming answer, whatever the scope (a first Stop, a
         // typed /cancel). A confirming second press freezes nothing (the
         // answer is no longer streaming), so it carries none.
-        const cancelFrame: CancelFrame = {
-          type: 'cancel', session_id: targetSid,
-          ...(scope ? { scope } : {}),
-          ...(shown ? { shown } : {}),
-        }
-        const sent = connection.send(cancelFrame)
-        if (!sent) {
-          delivered = false
-          console.warn('[chat] cancelStream: send failed — connection may be closed')
+        delivered = sendCommand({
+          kind: typed?.kind ?? 'stop', target: targetSid, originKey: typed?.originKey ?? targetSid, text: typed?.text ?? '',
+          ...(scope ? { scope } : {}), ...(shown ? { shown } : {}),
+        })
+        if (!delivered) {
+          // The record is gone and the notice is shown (sendCommand). Nothing was frozen.
           logDiagnostic('chatCancelStreamSendFailed', { sessionId: targetSid })
-          useUiStore.getState().addToast({
-            message: 'Could not send cancel — connection dropped. The response may continue briefly.',
-            variant: 'error',
-          })
         } else {
+          // #1428 r4: freeze only now, in the same synchronous step as the hand-over.
+          if (targetIsStreaming) get().markLastMessageInterrupted(sessionId)
           // F-S3: the server now owes this session a terminal ack. Track it so
           // an untagged (missing session_id) token/done/error frame that
           // arrives while a DIFFERENT session is foreground can be attributed

@@ -157,29 +157,41 @@ let counter = 0;
 // `satisfies` (not `: AttachmentAdapter`) so callers keep the concrete return
 // types (add → Promise<PendingAttachment>) instead of the adapter interface's
 // Promise|AsyncGenerator union, while still being checked for conformance.
+/**
+ * The size/type check every attach route runs (spec #1428 4.5 rule 2): the
+ * adapter's own `add`, and the session binding's drop, paste and picker, which
+ * write into the draft store without the runtime. Returns the user-facing
+ * reason, or null when the file is accepted. Size and audio rejections show
+ * their toast here, as the adapter always did.
+ */
+export function rejectAttachment(file: File): string | null {
+  // G16: Reject files that exceed the server-side size limit before any upload
+  // attempt, giving the user immediate feedback.
+  if (file.size > MAX_UPLOAD_BYTES) {
+    const tooLargeMsg = `"${file.name}" is too large (max 100 MB).`;
+    useUiStore.getState().addToast({ message: tooLargeMsg, variant: "error" });
+    return tooLargeMsg;
+  }
+  // Reject unsupported types immediately so the drag-drop / paste / commitFiles
+  // paths surface a user-facing error instead of silently throwing later.
+  if (!isAcceptedFile(file.name, file.type)) {
+    // G15: Audio files get a tailored message instead of the generic rejection.
+    if (isAudioFile(file.name, file.type)) {
+      const audioMsg = "Audio files aren't supported yet.";
+      useUiStore.getState().addToast({ message: audioMsg, variant: "error" });
+      return audioMsg;
+    }
+    return `Can't attach "${file.name}": file type not supported`;
+  }
+  return null;
+}
+
 export const omnipusAttachmentAdapter = {
   accept: ACCEPT,
 
   async add({ file }): Promise<PendingAttachment> {
-    // G16: Reject files that exceed the server-side size limit before any upload
-    // attempt, giving the user immediate feedback.
-    if (file.size > MAX_UPLOAD_BYTES) {
-      const tooLargeMsg = `"${file.name}" is too large (max 100 MB).`;
-      useUiStore.getState().addToast({ message: tooLargeMsg, variant: "error" });
-      throw new Error(tooLargeMsg);
-    }
-
-    // Reject unsupported types immediately so the drag-drop / paste / commitFiles
-    // paths surface a user-facing error instead of silently throwing later.
-    if (!isAcceptedFile(file.name, file.type)) {
-      // G15: Audio files get a tailored message instead of the generic rejection.
-      if (isAudioFile(file.name, file.type)) {
-        const audioMsg = "Audio files aren't supported yet.";
-        useUiStore.getState().addToast({ message: audioMsg, variant: "error" });
-        throw new Error(audioMsg);
-      }
-      throw new Error(`Can't attach "${file.name}": file type not supported`);
-    }
+    const rejected = rejectAttachment(file);
+    if (rejected !== null) throw new Error(rejected);
 
     // Defer the upload to send() — registering here only tracks the pending file.
     return {

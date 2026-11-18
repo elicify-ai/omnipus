@@ -11,14 +11,13 @@
 //
 // BrowserLivePanel is mounted OUTSIDE the AssistantRuntimeProvider (see
 // AppShell.tsx), so `composerRuntime.addAttachment()` is not reachable from
-// here — this calls `uploadFiles` + the chat store's `sendMessage` directly,
-// exactly like the composer's own AttachmentAdapter does internally
-// (src/lib/attachment-adapter.ts), just without needing the runtime.
+// here — this calls `uploadFiles` itself and hands the uploaded image to the
+// send pipeline (src/lib/bound-send.ts), without needing the runtime.
 
 import { uploadFiles, inspectBrowserElement } from '@/lib/api'
 import { mediaRefURL } from '@/lib/library-attachment'
+import { modelChoiceNow, sendToChat } from '@/lib/bound-send'
 import { useChatStore } from '@/store/chat'
-import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
 export interface SubmitAnnotationParams { // not-wire-format: local params for the annotate-submit orchestration, never serialized across the gateway/SPA boundary
@@ -52,13 +51,9 @@ export class AnnotationBusyError extends Error {}
  * re-read from useSessionStore — best-effort enriching the comment with
  * the inspected element's tag/text first.
  *
- * `useChatStore.sendMessage` itself has no session-override parameter: it
- * always posts to whatever chat is CURRENTLY active (this is the same
- * acknowledged "v1 limitation" as BrowserTool.tsx's handleWatchLive).
- * Sending anyway when the active chat has drifted away from `sessionId`
- * would silently attach media uploaded under one session to a DIFFERENT
- * session's transcript — so this refuses (throws) rather than misdirecting
- * when the two disagree at send time; the caller surfaces that to the user.
+ * #1428 step 2 (spec 4.6.1): the message is bound to that pinned session
+ * through the send pipeline (bound-send.ts::sendToChat), so a chat switch
+ * during the upload or inspection neither retargets nor refuses it.
  *
  * Also refuses (throws AnnotationBusyError) when the target session already
  * has a turn in flight — sendMessage would otherwise silently no-op (banner
@@ -75,6 +70,10 @@ export async function submitAnnotation({ comment, file, point, isPointCurrent, s
   if (useChatStore.getState().isStreaming) {
     throw new AnnotationBusyError('The agent is busy — wait for it to finish, then send.')
   }
+  // #1428 step 2 (spec 4.6.1): the panel session, its agent, its workspace and
+  // the model are frozen at submit, before the upload.
+  const workspaceId = useWorkspacesStore.getState().activeWorkspaceId ?? null
+  const model = modelChoiceNow()
 
   // No client-side vision pre-send warning here (ADR-068 T068-05): the SPA's
   // only model-capability source is the registry-fed catalog
@@ -82,7 +81,7 @@ export async function submitAnnotation({ comment, file, point, isPointCurrent, s
   // check is re-added on that source in a later B5 task. The reactive
   // server-side explanation (loop_media.go) is the backstop meanwhile.
 
-  const uploadResult = await uploadFiles(sessionId, [file], useWorkspacesStore.getState().activeWorkspaceId ?? undefined)
+  const uploadResult = await uploadFiles(sessionId, [file], workspaceId ?? undefined)
   const uploaded = uploadResult.files[0]
   if (!uploaded?.ref) {
     throw new Error('Upload failed — no media reference was returned.')
@@ -151,34 +150,20 @@ export async function submitAnnotation({ comment, file, point, isPointCurrent, s
   // unavailable-attachment note) rather than predicting which one wins.
   const finalComment = `${comment}\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank.${autoContext} An image was sent with this message. If you can see it, treat it as the source of truth and describe exactly what you see rather than saying no image was attached. If instead this message contains a note that the attachment is unavailable, trust that note instead.]`
 
-  // sendMessage always targets whatever chat is CURRENTLY active — re-check
-  // right before sending (the user could have switched chats during the
-  // upload/inspect round-trips above) rather than silently posting this
-  // browser's media into a chat it doesn't belong to.
-  const { activeSessionId, activeAgentId } = useSessionStore.getState()
-  if (activeSessionId !== sessionId || activeAgentId !== agentId) {
-    throw new Error("The active chat has changed — switch back to this browser's chat to send the annotation.")
-  }
-
-  // D16 fix: build the preview URL from the returned media ref (mediaRefURL),
-  // not a hardcoded `/api/v1/uploads/${sessionId}/${uploaded.name}` string.
-  // When this panel is opened from a workspace-scoped chat, uploadFiles()
-  // above routes the file into the workspace media library (HandleUpload,
-  // pkg/gateway/rest.go) and returns a `media://workspace/<ws>/<id>` ref —
-  // the legacy uploads/{session}/{filename} path is never written for that
-  // case, so the hardcoded URL 404s (HandleServeUpload only resolves
-  // uploads/<session>/<file>). mediaRefURL derives the correct route
-  // (/api/v1/media/workspace/<ws>/<id> or /api/v1/media/<id>) from the ref
-  // itself, mirroring the Go-side mediaRefURL in webchat_channel.go.
-  useChatStore.getState().sendMessage(finalComment, {
-    mediaRefs: [uploaded.ref],
-    attachments: [
-      {
-        type: 'image',
-        url: mediaRefURL(uploaded.ref),
-        filename: file.name,
-        contentType: uploaded.content_type,
-      },
-    ],
+  // #1428 step 2 (spec 4.6.1): a non-navigation path. The message is bound to
+  // the panel session captured above, so switching chats during the upload or
+  // inspection never retargets or refuses it.
+  //
+  // D16 fix: the preview URL is built from the returned media ref
+  // (mediaRefURL), not a hardcoded `/api/v1/uploads/${sessionId}/...` string:
+  // a workspace-scoped upload returns a `media://workspace/<ws>/<id>` ref that
+  // the legacy uploads route cannot serve.
+  await sendToChat('Browser annotation', {
+    text: finalComment,
+    sessionId,
+    agentId,
+    workspaceId,
+    model,
+    files: [{ kind: 'uploaded', id: uploaded.ref, ref: uploaded.ref, workspaceId, name: file.name, mime: uploaded.content_type ?? file.type, previewUrl: mediaRefURL(uploaded.ref) }],
   })
 }
