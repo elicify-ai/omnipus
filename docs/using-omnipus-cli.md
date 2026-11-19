@@ -4,7 +4,7 @@ Omnipus ships as a single binary called `omnipus`. This page covers the terminal
 
 ## What it is
 
-One binary, a small set of commands. `omnipus <agent> "<prompt>"` runs a one-shot task. The named commands: `onboard` (first-time setup), `start` and `stop` (the server), `credentials` (secrets), `doctor` and `audit` (health and the security log), `records import-obsidian` (import notes — see [the knowledge base](knowledge.md)), and `version`.
+One binary, a small set of commands. `omnipus <agent> "<prompt>"` runs a one-shot task. The named commands: `onboard` (first-time setup), `start` and `stop` (the server), `credentials` (secrets), `doctor` and `audit` (health and the security log), `records import-obsidian` (import notes — see [the knowledge base](knowledge.md)), `export` and `import` (move one custom agent — see [below](#how-to-move-an-agent-to-another-install)), `package inspect` and `package verify` (look inside a package file), and `version`.
 
 ## How to install the binary
 
@@ -139,7 +139,7 @@ The reply streams to stdout; tool activity and progress go to stderr, so you can
 omnipus jim "List the top 5 files by size" > files.txt
 ```
 
-Run `omnipus` with no arguments to list the agents you can address, by ID and name — on a fresh install that is `mia`, `jim`, `ava`, and `admin`.
+Run `omnipus` with no arguments to list the agents you can address, by ID and name. On a fresh install that list is `mia`, `jim` and `omnipus`. Ava and Admin are retired and are not installed. A worker is not in that list: addressing one prints `error: "<id>" is a worker agent and cannot be run directly`.
 
 Some tools, such as an agent's shell, require approval. Without `--yes` they are denied and the run continues; with it, approvals are granted for this run only:
 
@@ -176,6 +176,192 @@ omnipus audit verify  # verify the log has not been tampered with
 
 Run `omnipus doctor` after any big configuration change, and before exposing the server to the internet.
 
+## How to move an agent to another install
+
+You can pack **one custom agent** into a single file, copy that file to another Omnipus you run yourself, look inside it, and add the agent there. The file is a package (`.omnpkg`). The agent on the new install is a new agent: it gets a new id, and it does not replace anyone who is already there.
+
+There is no screen for this, and no agent can do it for you. You use the commands below, or the three endpoints named on the [Agents](agents.md#how-to-create-your-own-agent) page. What is inside the file, and what changes on the way in, is on [Agents](agents.md#how-to-move-an-agent-to-another-install).
+
+These commands work only when you run Omnipus yourself, the same limit as Backup and Restore. A hosted or desktop install does not offer them.
+
+A stopped server is started for you, the same way as for a one-shot task, when the master key is already available (see [Limits and things to watch](#limits-and-things-to-watch)). `export` and `import` talk to that server. They do not edit the data folder. The only local reads are the CLI token and the gateway address; the server does the export or the import. `package inspect` and `package verify` read only the file you name: they need no server and they write nothing.
+
+### Export one agent
+
+```bash
+omnipus export --agent Writer -o writer.omnpkg
+```
+
+`--agent` takes an id or a name. An exact id is used first. A name matches ignoring letter case. If the name matches more than one agent, the command refuses and lists their ids. If it matches none, it names what you typed and writes no file.
+
+| Flag | What it does |
+|---|---|
+| `--agent <id\|name>` | Required. The one custom agent to pack. |
+| `-o <file>` | Required. Where to write the package. |
+| `--force` | Replace an existing file at `-o`. Without it, an existing file is left byte for byte and the command stops. |
+
+You see a progress line, for example `Exporting Writer…`. When that export finishes, the success line is:
+
+```text
+Exported "Writer" (1 agent, 3 files, 4.2 KB) to writer.omnpkg
+```
+
+That is the success line for this example: one agent, three files, that size. Every package in this version holds one agent. Every export then prints:
+
+```text
+SOUL.md and AGENT.md are copied as they are; check them for pasted secrets before sharing
+```
+
+That notice is the limit: a key or password pasted into those files travels with them. Export does not open `credentials.json`, `master.key`, `cli.token`, `auth.json` or `config.json`, and a value that lives only in those files is not in the package. It also does not contain an external worker's program path, environment values or extra arguments — and in this version an external worker is refused outright, rather than packed with those values removed.
+
+With `--force`, the old file is replaced only when the new one is complete. A transfer that stops halfway leaves the previous file as it was.
+
+A refusal prints `error:` and a reason, and leaves no new file (an existing `-o` file is untouched). Built-in agents cannot be exported: the refusal says they cannot be exported. That covers the shipped agents `mia`, `jim`, `omnipus`, `planner`, `researcher`, `worker` (General Purpose), `judge` and `plansupervisor`. A custom agent that is merely *named* like one of them, for example a custom agent named Mia, can be exported. A native agent with a blank prompt is refused (`agent_prompt_missing`). A worker with an empty description is refused (`element_not_creatable`). A prompt or instructions file that is a link, not a normal file, unreadable, or over 1 MiB is refused (`agent_file_unreadable`); a link is not followed.
+
+### Look inside a package without installing it
+
+Neither command needs a running server, and neither writes anything.
+
+```bash
+omnipus package inspect writer.omnpkg
+omnipus package verify writer.omnpkg
+```
+
+`inspect` reads only the manifest. It shows the format version, the build that wrote the file, when it was created, the elements, each file with its size and checksum, and any secrets the package says must be typed again. It ends with:
+
+```text
+Checksums not verified; run `omnipus package verify`
+```
+
+It does not claim the files are intact. A package whose manifest is intact still inspects even if a later file has been changed, and it exits 0.
+
+`verify` checks every file. For an unchanged package of three files the success line is `OK: 3 files verified` and the exit code is 0. A changed file fails with `FAILED: <file>: <reason>` and exit 1, and the message names that file (for example `omnipus/agents/<id>/SOUL.md`).
+
+A package from a newer Omnipus (`format_version` higher than this install knows) is refused by both commands, exit 1. The message tells you it was made by a newer Omnipus and to update. A compressed file that asks for a decoder window over 8 MiB is refused as too large, without allocating that window.
+
+### Import: preview first, then apply
+
+```bash
+omnipus import writer.omnpkg
+```
+
+The command uploads the file, prints a **provisional** preview, then asks:
+
+```text
+Import 1 agent as new? [y/N]
+```
+
+The preview lists the agent that would be added and the name it would get, anything skipped, warnings (a skill or a provider the new install does not have, a connector assignment that will be dropped), and anything you must type again. It is provisional: confirming checks the install again, and applies what is true then. You see `Uploading…` while the file is sent. Nothing on the install changes at preview: no agent, workspace, skill, connector or configuration file. The upload is remembered for 30 minutes from the moment it is ready. At exactly 30 minutes it is gone. A restart forgets a preview you have not confirmed; upload the file again. At most five previews can wait at once. Only one import can be applied at a time.
+
+`y` or `yes`, in any letter case, confirms. Anything else, including Enter alone, cancels. Cancelling prints `Import cancelled`, exits 1, and imports nothing. If the terminal is not interactive and you did not pass `--yes`, the command cancels the same way.
+
+| Flag | What it does |
+|---|---|
+| `<file>` | Required. The package to import. |
+| `--workspace <id\|name>` | Join this workspace instead of the default one. An id is used first, then a name that matches exactly one workspace. Two matches are refused and both ids are listed. An unknown workspace is refused (`workspace_not_found`). |
+| `--yes` | Skip the confirm prompt. |
+| `--mode new` | Optional. New is the only mode. Leaving the flag out also means New. |
+
+`--mode replace` and `--mode merge` are refused (`import_mode_not_available`, exit 1). Nothing is imported. Replace is planned to become the default later; it is not available now, and there is no password prompt on New.
+
+If you name no workspace and this install has no default workspace, the import is refused (`default_workspace_missing`) and the message asks you to pass `--workspace`.
+
+When the name had to change, the success line is:
+
+```text
+Imported "Writer (imported)" as <new-id> into workspace "<name>"
+```
+
+The name in quotes is the final name. The id is new: it is never the id from the package, and it is never an id that already exists. For a worker the command also prints:
+
+```text
+This worker is reached by delegation: draw a line to it from a Main agent in the Team graph.
+```
+
+A Main agent gets its own main chat in that workspace once the live list has confirmed the import. No other member's chat is created or changed. A worker gets no main chat, and no existing agent gains a delegation line to it. You draw that line yourself. When the live list has confirmed the import, an open Team tab shows the new member without a page reload. Warnings (a dropped skill, a provider that is not configured here, a main chat that could not be created yet) still exit 0. The agent is imported.
+
+**A name that is already taken.** Matching ignores letter case and spaces at either end. The existing agent is not changed. The new name is the incoming name plus ` (imported)`, then ` (imported 2)`, and so on up to ` (imported 99)`. The whole name stays within 100 characters. A name that is already 100 characters is shortened so the result is exactly 100: one hundred letter A's becomes eighty-nine A's plus ` (imported)`. If ` (imported 99)` is taken as well, the import is refused (`name_suffix_exhausted`) and nothing is written. This includes a custom agent with the same name as a built-in one: importing "Mia" where Mia already exists creates a new custom agent "Mia (imported)" and does not change the built-in Mia. The name "Omnipus", in any letter case, is treated as a clash the same way.
+
+**If the install changed after the preview.** A name taken in the meantime, a skill removed or installed, a provider configured since: the import goes ahead on the current install and lists each difference (`changed_since_preview`). If a check now refuses (the workspace is gone, or a create rule is now broken), it refuses before writing.
+
+**Activation pending.** After the agent has been saved, Omnipus reloads the live list. If that reload returns an error or times out, the import has still succeeded: the agent is stored and is not reported as missing. The result says `activation: "pending"`. Pending means the reload was not confirmed. It does not mean a partial import. The command exits 0 and prints:
+
+```text
+Imported "<name>" as <id>, but the gateway did not confirm that it is live yet. Restart the gateway, or wait and check the agent list, before chatting with it.
+```
+
+Until you do that, the Team tab is not refreshed for this import, and the main chat is not created yet. Restart the gateway, or wait and check the agent list, before you chat with the agent.
+
+**Warnings you can expect, with the import still succeeding.**
+
+| What the package refers to | What is stored | Listed as |
+|---|---|---|
+| A skill that is installed here | Kept, and bound to the copy of that skill on this install | `skill_bound_local` |
+| A skill that is not installed here, or whose name is not a valid skill name | Dropped | `skill_dropped` |
+| Connector assignments | Always dropped. They are not matched by name | `mcp_binding_dropped` |
+| A tool permission for a tool this install does not have | Dropped | `tool_policy_dropped` |
+| Allow on a tool that must always ask | Stored as ask, which is stricter | `tool_policy_tightened` |
+| A provider name for a provider that is not configured here | The name is kept | `provider_not_configured` |
+| An old-style fallback list (`model.fallbacks`) | Left out. The current fallback list is kept when it fits the create rules (at most two, each with a provider) | `field_not_carried` |
+| The main chat could not be created | The agent is kept. The chat is created when you open it | `main_chat_pending` |
+| The audit record could not be written after the agent was saved | The agent is kept | `audit_failed` |
+
+The last column is the code on the result. The sentence printed next to that code is not a fixed phrase.
+
+### What a failed import does
+
+Until the import has fully succeeded, the new agent is invisible. It is not in the agent list, not in chat, not in the sessions API, and not available to other screens or to agent tools. A failed import removes its own writes — the pending record, the agent's folder, the team entry and the delegation row — and prints:
+
+```text
+Import failed; nothing was imported: <reason>.
+```
+
+Nothing else can have used the agent, because nothing else could see it. The exit code is 1.
+
+If the undo itself cannot finish, the agent was still never visible. The command prints:
+
+```text
+Import failed and could not be fully undone. The agent was never visible. Agent <id>, staging <staging_id>. Restart the gateway to finish the clean-up; see 'Recover from a failed import' in the CLI guide.
+```
+
+Restarting the gateway is the normal fix. The next start finishes an import whose save had completed, or undoes one whose save had not, before any agent is loaded. Look for the log line `import rolled back at start-up` or `import completed at start-up`.
+
+**If the connection drops after you confirm,** the command cannot know which of those happened. It prints the following and exits 1:
+
+```text
+The import may or may not have completed (staging <staging_id>). Check the agent list for "<name>" before importing again. If the gateway stopped, it finishes or rolls back the import when it starts.
+```
+
+Check the agent list before you import the file again.
+
+**What is not guaranteed.**
+
+- **During the last step, a workspace list can show the new id.** The workspace list and the delegation read do not take the lock that the import holds. For the length of that last step, normally a few milliseconds, they can show the new agent's id on the team. If the step then fails, the id disappears again. Nothing can chat with it, open a session for it, or start work for it in that moment: there is no readable agent behind the id, and every save to that workspace waits. An open Team tab is not told to refresh, but a refresh that lands in exactly that moment can show one unknown-member card briefly.
+- **A power cut is only as safe as the disk.** After a crash, the next start either finishes the import or undoes it, as long as the disk really stored what it said it stored. That is not guaranteed on a drive or virtual disk that reports a write as finished before the data is stored. It is also not guaranteed on Windows, where the program cannot force the folder itself to disk. On Windows, an import that had already told you it succeeded can, after a power cut, come back as not committed and be undone at the next start.
+- **An undo that cannot write the workspace file can leave the id listed.** The agent itself stays invisible. The id can sit on that workspace as an unknown member until a later start succeeds. Restarting is how it is cleared.
+- **A committed import whose recovery cannot finish.** If the next start can neither put the agent back on the team nor undo it, the agent is loaded as an ordinary agent without its team entry, and the next upload warns you (`unfinished_import_found`, naming the agent id). Use [step 4](#recover-from-a-failed-import) below.
+
+After a successful undo, the install matches what it was, apart from harmless internal markers: a skill may have gained a generation stamp, an internal lock file for the unused id may remain, the workspace's revision may have moved (a save you had open will ask you to reload that workspace), and the audit log records the attempt.
+
+### Recover from a failed import
+
+Normally you only restart. The steps below are for a start that keeps failing, for example because the disk is read-only. The agent id is in the incomplete-undo message, in the `unfinished_import_found` warning, in the gateway log, or as `new_agent_id` in `$OMNIPUS_HOME/backups/.staging/<staging_id>/journal.json`.
+
+1. Fix the cause the gateway log names, then restart the gateway. Check the log line `import rolled back at start-up` or `import completed at start-up`.
+2. Only if it still fails: with the gateway **stopped**, delete `$OMNIPUS_HOME/entities/agents/<id>.pending` if it is present, the folder `$OMNIPUS_HOME/agents/<id>/` only if `$OMNIPUS_HOME/entities/agents/<id>.json` does **not** exist, and the staging folder `$OMNIPUS_HOME/backups/.staging/<staging_id>/`. Start the gateway.
+3. If the import's workspace still lists the id as an unknown member, remove that card on the Team tab. Or send `PUT /api/v1/workspaces/<id>` with the current `revision`, the team list without that id, and the delegation graph without edges that name it.
+4. If `$OMNIPUS_HOME/entities/agents/<id>.json` exists, delete the agent with **Delete agent**. That also cleans its team entries and edges.
+
+### Exit codes
+
+| Code | When |
+|---|---|
+| 0 | Success, including an import that finished with warnings, and including activation pending. |
+| 1 | Refused or failed. This includes a verify failure, a cancelled import, a gateway that stays unreachable, an unknown or ambiguous agent or workspace, an output file that already exists, and any of the refusals above. |
+| 2 | Usage. An unknown flag, a missing `--agent` or `-o`, a missing import file, or an input path that is missing, unreadable or a folder. `package inspect` on a folder, and `package` with an unknown subcommand, are usage errors. |
+
+Errors go to standard error. A result is never indicated by colour alone.
+
 ## CLI or web app?
 
 Most jobs can be done from either place.
@@ -188,6 +374,7 @@ Most jobs can be done from either place.
 | Manage API keys | `omnipus credentials …` | Settings → Providers |
 | Review the audit log | `omnipus audit` | Settings → Security |
 | Create and edit agents | — | Ask Omnipus (**Add agent** in the sidebar or **Team → Add agent**); edit from the workspace's **Team** |
+| Move one custom agent to another install | `omnipus export`, `omnipus import`, `omnipus package inspect`, `omnipus package verify` | No separate screen. After a confirmed import the agent shows on the workspace **Team** |
 | Connect Telegram, Discord, Slack and more | — | The Connectors screen, Configure |
 | Add MCP servers | — | The Skills screen |
 | Follow task work | — | A workspace's Board and Calendar |
@@ -195,9 +382,12 @@ Most jobs can be done from either place.
 
 ## Limits and things to watch
 
-- **One-shot tasks need a running server.** If it is down, the command prints `Omnipus isn't running — start it with: omnipus start`. The command stops waiting for the answer after five minutes by default; change it with `--timeout <duration>`. That only ends the terminal's wait: the agent's work has no time limit and carries on in the server, so you can read its result in the web app.
+- **A stopped server is started for you when the master key is already available.** A one-shot task, `export` and `import` all do this. The key counts as available when `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE` is set, or when a `master.key` file is already in the data folder. You then see `Omnipus is not running — starting gateway...` and the command continues. You do not have to run `omnipus start` first. If none of those is set, the command does not start the server. It prints `` no gateway running and no non-interactive key configured; run `omnipus start` ``. If the connection is still refused after a start was attempted, the message is `omnipus isn't running — start it with: omnipus start`. A one-shot task stops waiting for the answer after five minutes by default; change it with `--timeout <duration>`. That only ends the terminal's wait: the agent's work has no time limit and carries on in the server, so you can read its result in the web app.
 - **Talking to a remote server is not supported yet.** The `--url` flag exists but is reserved.
-- **Command names shadow agent names, and worker agents cannot be addressed directly.** An agent named `start` cannot be run from the terminal; rename it or use the web app. `omnipus` with no arguments lists the agents you can run.
+- **Command names shadow agent names, and worker agents cannot be addressed directly.** An agent named `start`, `export`, `import` or `package` cannot be run from the terminal, because the command is chosen first. There is no check at create time that refuses those names. Rename the agent or use the web app. `omnipus` with no arguments lists the agents you can run.
+- **A package holds one custom agent, and nothing over the size caps.** The upload can be at most 64 MiB. The decoded archive, headers and padding included, can be at most 256 MiB, with at most 10,000 entries. The manifest can be at most 1 MiB, and each agent file (the record, the prompt, the instructions) can be at most 1 MiB. The compressed file must use a decoder window of at most 8 MiB. The decoder uses at most 256 MiB of memory and runs one decode at a time, for upload, `verify` and `inspect`. A body of 64 MiB is accepted and then checked as a package. One byte over 64 MiB is refused as too large (`package_too_large`), whether or not the request declares its length. The export and apply requests themselves stay on the ordinary 1 MiB JSON limit; that limit does not apply to the package upload.
+- **New is the only import mode.** `--mode replace` and `--mode merge` are refused. Replace is planned to become the default in a later version; it does not work now.
+- **Built-in agents never travel, and external workers do not travel in this version.** Export refuses a built-in, system or shipped worker agent, and the message says it cannot be exported. An external-worker package is refused on export and on upload (`external_worker_not_supported_yet`). A package that contains an element type this version does not know is refused (`element_type_not_supported`). Skills, connectors, memory, workspaces and chats do not travel. Details, the name-suffix rule and how a failed import is undone are in [How to move an agent to another install](#how-to-move-an-agent-to-another-install).
 
 ## Related pages
 
@@ -206,3 +396,4 @@ Most jobs can be done from either place.
 - [Concepts](concepts.md) — the agents, sessions, tools, and how routing works.
 - [Troubleshooting](troubleshooting.md) — for when something misbehaves.
 - [The knowledge base](knowledge.md) — where imported notes and records live.
+- [Agents](agents.md#how-to-move-an-agent-to-another-install) — what a package contains, and what changes on import.

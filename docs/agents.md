@@ -117,11 +117,52 @@ Omnipus can create three kinds of agent:
 | Subagent | The Omnipus engine | Other agents, through delegation | No |
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
-**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. It is an API only, with no screen in the app.
+**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. The same scripts can export, preview and import one custom agent through `POST /api/v1/packages/export`, `POST /api/v1/packages/import` and `POST /api/v1/packages/import/{staging_id}/apply` — see [How to move an agent to another install](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). It is an API only, with no screen in the app.
 
 For scripts that change or remove an agent, update with `PUT /api/v1/agents/{id}` and delete with `DELETE /api/v1/agents/{id}` — never add a sub-path. An unknown sub-path returns `404`; a known one (`sessions`, `activity-runs`, `runner/test`, `tools`, `mailboxes/{workspaceId}`, `dependencies`) used with a method it does not serve returns `405` and an `Allow` header listing the methods it does serve. Neither refusal changes or deletes the agent. The gateway answers `OPTIONS` itself, before the agents handler runs; browsers send it as the preflight request.
 
 To change an agent, open its card on the workspace's **Team**, or its row menu in the sidebar, and choose **Edit**. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
+
+## How to move an agent to another install
+
+You can copy one custom agent to another Omnipus you run yourself. The command line packs it into one file and, on the other install, adds it as a **new** agent. The commands, the preview, the confirm step and the exit codes are in [Using the Omnipus command line](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). There is no screen for it, and asking an agent does not do it.
+
+**Built-in agents never go into a package.** That is Mia, Jim, Omnipus, the shipped workers Planner, Researcher and General Purpose, and the internal agents Judge and Plan Supervisor. Export refuses them, and the message says they cannot be exported. Import never changes a built-in agent. A custom agent that only shares a built-in's name, such as a custom agent named Mia, can be exported. On an install that already has Mia, it arrives as a new custom agent named Mia (imported), with a new id. The built-in Mia's record, prompt and memory are unchanged.
+
+**The new agent has a new id.** It is never the id from the file, and it is never an id that already exists. It joins the default workspace, or the workspace you name. It does not join any other workspace, and no existing agent gains a delegation line to it.
+
+**A Main agent gets its main chat** in that workspace, once the live list has confirmed the import. You can chat with it there. If the chat cannot be created, the agent is still imported and the chat is created when you open it.
+
+**A native worker is not a chat partner.** It is on the team, with only its own delegation row, and it has no main chat. The result says: "This worker is reached by delegation: draw a line to it from a Main agent in the Team graph." Draw that line, and that Main agent's delegation directory then lists the worker. You can also assign it a workspace task.
+
+**What travels, and what changes.** The file holds the agent's name, description, kind (Main or native worker), prompt (`SOUL.md`), instructions (`AGENT.md`, only when the agent has one), model and provider name, current fallback models, reasoning effort, tool-call limit, temperature and max tokens, the skill names, the tool permissions, the look (figure, role badge and colour), and, for a Main agent, the voice. On import the same rules apply as when an agent is created:
+
+| In the package | On the new install |
+|---|---|
+| Prompt (`SOUL.md`) | Stored with whitespace removed at the very start and end (spaces, tabs and blank lines). The text in the middle is unchanged. A native agent whose prompt is blank is refused, at export and at import. |
+| Instructions (`AGENT.md`) | Stored byte for byte, when the file has them. |
+| Description | Stored with spaces at the start and end removed. A worker with an empty description is refused. |
+| Name | Kept, unless that name is already taken. A clash adds ` (imported)`, then ` (imported 2)`, up to ` (imported 99)`. The existing agent is not renamed. Letter case and spaces at either end count as the same name. See the [command line page](using-omnipus-cli.md#how-to-move-an-agent-to-another-install) for the 100-character case. |
+| Skills | A skill that is installed here is kept and bound to the local copy. A skill that is not installed, or whose name is not valid, is dropped, and the import still succeeds. You are warned. |
+| Connector assignments | Always dropped, even when a connector of the same name exists here. You assign connectors again yourself. You are warned. |
+| Tool permissions | Kept when the tool exists here. A permission for an unknown tool is dropped. Allow on a tool that must always ask is stored as ask. A tool the package does not mention gets that agent type's usual starting value. |
+| Provider | The provider name is kept. If that provider is not configured here, you are warned and the agent is still imported. |
+| Old fallback list | An older field, `model.fallbacks`, is left out and listed as not carried. The current fallback list is kept when it fits the create rules: at most two, each paired with a provider. |
+| Retired delegation list | `subagents.allow_agents` and `subagents.model` are not in the package and not on the new agent. Delegation is the line you draw on the Team graph, not a list inside the agent. |
+| Home folder path, created and updated times, the locked flag | Not in the package. The new agent gets a new home folder, new times, and is not locked. |
+| Voice, memory on or off, context-window override | Kept for a native agent, the same way asking Omnipus to create an agent stores them. A worker that carries a voice is refused. A context-window override that is not a positive whole number is refused. |
+
+A tool-call limit outside 1 to 1000, or above the global limit on the new install, refuses the package. So does a fallback list of more than two, a fallback that is not paired with a provider, or a figure, role badge or colour that is not one of the listed values. Export only writes values the source install already accepted, so those colour and figure refusals matter for a hand-made or damaged package.
+
+**A secret pasted into the prompt travels.** The prompt and the instructions are copied as they are, apart from whitespace trimmed from the ends of the prompt. The export command says so: "SOUL.md and AGENT.md are copied as they are; check them for pasted secrets before sharing." The install's stored credentials, keys and configuration do not travel. Check those two files before you share the package.
+
+**An agent created through the REST API may arrive without a voice.** Today, creating an agent with `POST /api/v1/agents` accepts a voice and does not store it. Import stores a voice the way the create-agent tool does. So an agent made through that endpoint, then exported, carries an empty voice. This version does not change the REST create behaviour.
+
+**External workers are not part of this version.** Export and import both refuse a package whose agent is an external worker (`external_worker_not_supported_yet`), whether or not the file contains a program path, environment values or extra arguments. A later version is specified to accept them: the program would come from Settings → Third-party agents on the new install, environment overrides and additional arguments would be typed again under Edit → Runtime, and a completed import would still not mean the worker can run. That later version is not what these commands do now.
+
+**An import is all or nothing.** Until it has fully succeeded, the new agent is invisible: no list, chat, session or other screen can use it. If the import fails before that point, its own writes are removed and nothing else had a chance to use the agent. If the gateway stops in the middle, the next start finishes the import or undoes it before any agent is loaded. The limits of that promise — a brief glimpse of the new id on the workspace list during the last step, a power cut on a disk that does not honour flushes (including Windows), an unknown member left behind when the undo cannot write, and a committed import whose recovery cannot finish — and the manual steps when a restart keeps failing, are in [Recover from a failed import](using-omnipus-cli.md#recover-from-a-failed-import).
+
+If the import saved the agent but the live list did not confirm the reload, the result says activation pending. The agent is complete and stored. It is not a partial import. Restart the gateway, or wait and check the agent list, before you chat with it.
 
 ## Where an agent's instructions come from
 
@@ -354,3 +395,4 @@ If nothing needs attention, the agent records an all-clear. The sidebar lists ch
 - [Tools](tools.md) — the allow, ask, and deny rules for Omnipus tools
 - [Skills](skills.md) — reusable playbooks an agent picks up
 - [Calendar](calendar.md) — scheduled task work, separate from heartbeats
+- [Using the Omnipus command line](using-omnipus-cli.md#how-to-move-an-agent-to-another-install) — export, import, inspect and verify
