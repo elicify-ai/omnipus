@@ -24,8 +24,10 @@
 // Each test re-execs the test binary (Landlock restrict_self is an
 // irreversible per-process/per-thread ratchet — see
 // backend_linux_subprocess_test.go, whose conventions this file follows:
-// child exit 42 = scenario expectation met, 1 = spec violation, 2 =
-// unexpected error, 77 = Landlock net ABI unavailable → parent skips).
+// child exit 42 = scenario expectation met, 1 = spec violation — including
+// a Landlock Apply error on a capable kernel, which must fail, never skip —
+// 2 = unexpected error, 77 = Landlock net ABI unavailable → parent skips;
+// 77 is the ONLY skip path).
 //
 // Determinism: LockOSThread is taken BEFORE Apply and held through the
 // listen/bind, so the listen runs on the restricted thread itself — the
@@ -192,8 +194,12 @@ func runIssue1909Child(t *testing.T, envVar, testRunName, successMsg string, wan
 
 // childLandlockOrExit selects the Landlock backend and applies policy in
 // enforce mode on the CALLING thread (the caller must hold LockOSThread).
-// Exits 77 when the kernel cannot run the scenario at all — the parent
-// skips on 77, never fails.
+// Exits 77 ONLY for genuine kernel absence — a non-landlock backend or a
+// Landlock ABI below v4; 77 is the only skip path and the parent skips on
+// it. A backend.Apply error on a capable kernel (landlock backend, ABI v4+)
+// is a hard failure: print the error and exit 1 (spec violation), so the
+// parent FAILS with the child's stderr inline — an Apply failure must never
+// masquerade as a skip.
 func childLandlockOrExit(policy sandbox.SandboxPolicy) {
 	backend, name := sandbox.SelectBackend()
 	if !strings.HasPrefix(name, "landlock") {
@@ -205,8 +211,13 @@ func childLandlockOrExit(policy sandbox.SandboxPolicy) {
 		os.Exit(77)
 	}
 	if err := backend.Apply(policy); err != nil {
-		fmt.Fprintf(os.Stderr, "Apply failed (treating as skip): %v\n", err)
-		os.Exit(77)
+		// Capable kernel (landlock backend, ABI v4+ checked above): Apply
+		// must succeed. Fail loudly — never skip — so a broken production
+		// Apply cannot turn this suite green; the parent FAILs on any exit
+		// code other than wantCode or 77, with this stderr inline.
+		fmt.Fprintf(os.Stderr, "APPLY FAILED on capable kernel (backend=%q, ABI v%d): %v\n",
+			name, sandbox.ProbeLandlockABI(), err)
+		os.Exit(1)
 	}
 }
 
