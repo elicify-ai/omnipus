@@ -366,7 +366,8 @@ function createForKey(sub: Submission): Promise<string | null> {
 function uploadReason(err: unknown): string {
   const status = err instanceof ApiError ? err.status : (err as { status?: number } | null)?.status
   if (status === 404) return SEND_TEXT.upload404
-  if (status === 409) return SEND_TEXT.upload409
+  const code = err instanceof ApiError ? err.code : undefined
+  if (status === 409 || code?.startsWith('upload_routing_')) return SEND_TEXT.upload409
   if (status === 413) return SEND_TEXT.upload413
   return SEND_TEXT.uploadNetwork
 }
