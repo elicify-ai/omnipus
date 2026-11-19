@@ -14,7 +14,6 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
 import { Callout, CalloutActions, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { Button } from '@/components/ui/button'
 import { CopyButton } from '@/components/ui/copy-button'
@@ -42,7 +41,7 @@ import {
   type UnsentItem,
 } from '@/store/chat/drafts'
 import { useOpenDraftKey } from './useSessionDraftBinding'
-import { openSavedChat, type OpenChatNavigate } from './openUnsentChat'
+import { openSavedChat } from './openUnsentChat'
 
 type Action = 'open' | 'openAndSend' | 'copy' | 'discard' | 'move'
 
@@ -137,7 +136,7 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
   return rows
 }
 
-function openRow(row: Row, navigate: OpenChatNavigate, sessionOf: (id: string) => Session | undefined): void {
+function openRow(row: Row, sessionOf: (id: string) => Session | undefined): void {
   const session = useSessionStore.getState()
   const pending = useChatStore.getState().pendingFirstSend
   if (!row.item) {
@@ -158,7 +157,7 @@ function openRow(row: Row, navigate: OpenChatNavigate, sessionOf: (id: string) =
     enterNewChat(info?.workspaceId ?? row.item.workspaceId, info?.agentId ?? row.item.agentId, undefined, key)
   } else {
     const saved = sessionOf(key)
-    openSavedChat({ sessionId: key, workspaceId: row.item.workspaceId ?? saved?.workspace_id ?? null, type: saved?.type, title: saved?.title }, row.item.agentId ?? session.activeAgentId ?? undefined, navigate)
+    openSavedChat({ sessionId: key, workspaceId: row.item.workspaceId ?? saved?.workspace_id ?? null, type: saved?.type, title: saved?.title }, row.item.agentId ?? session.activeAgentId ?? undefined)
   }
 }
 
@@ -191,7 +190,6 @@ export function UnsentNotice({ focusComposer }: { focusComposer: () => void }) {
   const notStopped = useDrafts((s) => !!s.notStopped[openKey])
   const recovery = useDrafts((s) => s.drafts[openKey]?.recovery)
   const rows = useRows(openKey, unsupported)
-  const navigate = useNavigate()
   const { sessionOf } = useNames()
   const narrow = useNarrow()
   const [expanded, setExpanded] = useState(false)
@@ -238,7 +236,7 @@ export function UnsentNotice({ focusComposer }: { focusComposer: () => void }) {
       ? () => setDiscarding(row)
       : action === 'move'
         ? () => moveHere(row, openKey)
-        : () => { openRow(row, navigate, sessionOf); focusComposer() }
+        : () => { openRow(row, sessionOf); focusComposer() }
     return (
       <Button key={action} ref={ref as never} size="sm" variant={action === 'discard' ? 'ghost' : 'outline'} onClick={onClick}>
         {ACTION_LABEL[action]}

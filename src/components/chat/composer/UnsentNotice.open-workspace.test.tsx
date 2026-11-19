@@ -12,15 +12,14 @@
 // active workspace is w1 and the router is asked for w1's chat route with
 // open=chat-a. The defect leaves the workspace at w2 and never navigates,
 // so the address keeps /workspaces/w2/chat with ?open=chat-a.
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   apiMocks, framesOf, makeAgent, makeSession, makeWorkspace, mountComposer, resetBindingWorld, sent, typeIntoComposer,
 } from '@/test/sendBinding1428'
-// After the harness: its vi.mock of the router is then the module this import gets.
-import { useNavigate } from '@tanstack/react-router'
+import { registerAppNavigate, type AppNavigate } from '@/lib/appNavigate'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
@@ -31,6 +30,11 @@ function drop(name: string): void {
 }
 
 describe('DEFECT 2: Unsent Open lands on the chat\'s own workspace', () => {
+  // The workspace chat route registers the router navigate in the app; here a recording stand-in.
+  const navigate = vi.fn()
+  let unregister = () => {}
+  afterEach(() => { unregister() })
+
   it('Open from a chat in w2 on an item of chat-a (w1) switches to w1 and navigates to w1 with open=chat-a', async () => {
     resetBindingWorld()
     apiMocks.fetchWorkspaces.mockResolvedValue([makeWorkspace({ id: 'w1', name: 'W1' }), makeWorkspace({ id: 'w2', name: 'W2' })])
@@ -55,8 +59,8 @@ describe('DEFECT 2: Unsent Open lands on the chat\'s own workspace', () => {
     await act(async () => {
       release({ files: [{ ref: 'media://workspace/w1/a', name: 'a.txt', content_type: 'text/plain' }] })
     })
-    const navigate = useNavigate() as unknown as { mock: { calls: unknown[][] }; mockClear: () => void }
     navigate.mockClear()
+    unregister = registerAppNavigate(navigate as AppNavigate)
     const attachesBefore = framesOf('attach_session', sent()).length
 
     await user.click(screen.getByRole('button', { name: 'Open' }))
@@ -69,8 +73,6 @@ describe('DEFECT 2: Unsent Open lands on the chat\'s own workspace', () => {
     expect(framesOf('attach_session', sent()).slice(attachesBefore), 'Open attaches chat-a').toEqual([
       expect.objectContaining({ type: 'attach_session', session_id: 'chat-a' }),
     ])
-    expect(navigate.mock.calls, 'Open navigates to w1\'s chat route naming chat-a').toContainEqual([
-      expect.objectContaining({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'w1' }, search: { open: 'chat-a' } }),
-    ])
+    expect(navigate.mock.calls, 'Open navigates to w1\'s chat route naming chat-a').toEqual([[{ workspaceId: 'w1', open: 'chat-a' }]])
   })
 })

@@ -6,14 +6,12 @@
 // or search selection (useSelectSession.ts): workspace, session, then the
 // workspace chat route naming the chat in `open` (#1437).
 
-import type { useNavigate } from '@tanstack/react-router'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import type { Session } from '@/lib/api'
 import { supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
-
-export type OpenChatNavigate = ReturnType<typeof useNavigate>
+import { appNavigate } from '@/lib/appNavigate'
 
 /** The saved chat to open: its id, workspace and, when the list knows it, its type and title. */
 export interface SavedChatTarget {
@@ -28,7 +26,7 @@ export interface SavedChatTarget {
  * entry skips a session that is already active, so only this attach loads the
  * transcript. A failed attach switches nothing and is reported.
  */
-export function openSavedChat(target: SavedChatTarget, agentId: string | undefined, navigate: OpenChatNavigate): void {
+export function openSavedChat(target: SavedChatTarget, agentId: string | undefined): void {
   const { sessionId, workspaceId } = target
   const workspaces = useWorkspacesStore.getState()
   const previousWorkspaceId = workspaces.activeWorkspaceId
@@ -40,5 +38,6 @@ export function openSavedChat(target: SavedChatTarget, agentId: string | undefin
   }
   if (!workspaceId) return
   supersedeNavigationIntent()
-  void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId }, search: { open: sessionId } })
+  // Unregistered (no workspace chat route mounted): the stores above already switched.
+  appNavigate({ workspaceId, open: sessionId })
 }
