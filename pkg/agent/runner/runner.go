@@ -338,6 +338,32 @@ func ResumeCurrent(ctx context.Context, driver ExternalAgentRunner, opts RunOpti
 	return driver.Resume(ctx, opts.RunID, opts.Input)
 }
 
+// NativeConversationReporter is an ExternalAgentRunner that can say whether
+// its CLI has announced its own native conversation id yet (#1899). Until it
+// has, an interrupt cannot be followed by a Resume of the same conversation, so
+// a steering delivery queues the instruction without interrupting and the run
+// continues to its natural end. Every real driver implements it.
+type NativeConversationReporter interface {
+	HasNativeConversation() bool
+}
+
+var (
+	_ NativeConversationReporter = (*OpencodeDriver)(nil)
+	_ NativeConversationReporter = (*ClaudeDriver)(nil)
+	_ NativeConversationReporter = (*CodexDriver)(nil)
+)
+
+// CanResumeAfterInterrupt reports whether interrupting driver's current run
+// can be followed by a Resume of the same native conversation. A driver that
+// cannot report readiness (a test double) keeps the earlier interrupt
+// behaviour: true.
+func CanResumeAfterInterrupt(driver ExternalAgentRunner) bool {
+	if r, ok := driver.(NativeConversationReporter); ok {
+		return r.HasNativeConversation()
+	}
+	return true
+}
+
 // ErrMaxTurnsRequired is returned by a driver's Run when RunOptions.MaxTurns is
 // not a positive turn cap. The dispatch site always passes the agent's resolved
 // tool-iteration limit (#904 D4), so a missing cap is a programming error; the

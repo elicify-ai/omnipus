@@ -66,21 +66,11 @@ func (al *AgentLoop) runProgramFor(cli string) (runProgram, string) {
 func (ed *runExternalCLISubTurnState) reportProgramRefusal(text string) error {
 	refusal := &curatedTurnError{text: text}
 	llm := TranslateTurnError(refusal)
-	chatID := ed.childTS.chatID
-	if chatID == "" {
-		chatID = ed.childTS.opts.ChatID
-	}
-	ed.al.emitEvent(
-		EventKindError,
-		ed.childTS.eventMeta("runTurn", "turn.error"),
-		ErrorPayload{
-			Stage:     "external_cli",
-			ChatID:    chatID,
-			SessionID: string(ed.childTS.routingSessionID),
-			Code:      string(llm.Code),
-			Message:   text,
-		},
-	)
+	// The frame carries the refusal text as written and addresses the run's
+	// OWN session, as reportWorkspaceRefusal does (#1895).
+	framed := llm
+	framed.Message = text
+	ed.al.emitExternalErrorFrame(ed.childTS, "external_cli", framed)
 	ed.childTS.appendClassifiedError(EventKindError.String(), "external_cli", llm)
 	return refusal
 }
@@ -90,7 +80,8 @@ func (ed *runExternalCLISubTurnState) reportProgramRefusal(text string) error {
 // filter drops, the preset through thirdpartycli.PresetAuditFilter and
 // thirdpartycli.PresetUseNote when set, and filter_bypassed_by_person_preset with the
 // filter's reasons, through the same filter, whenever
-// a preset token is one the filter would drop from an agent. Write failures
+// a preset token is one the safety denylist would drop from an agent (a model
+// option is not a safety bypass, #1880). Write failures
 // are logged by audit.Emit.
 func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli string) {
 	key := runner.FilterKey(cli)
@@ -110,7 +101,9 @@ func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli str
 		filter := thirdpartycli.PresetAuditFilter(ed.al.GetConfig())
 		fields["preset_args"] = filter(ed.presetText)
 		fields["note"] = thirdpartycli.PresetUseNote
-		if _, bypassed := runner.FilterDangerousCLIArgsDetailed(key, ed.presetArgs); len(bypassed) > 0 {
+		// The safety denylist only: a preset model option is not a safety
+		// bypass (#1880 model precedence applies to Additional CLI arguments).
+		if _, bypassed := runner.SafetyCLIArgsDetailed(key, ed.presetArgs); len(bypassed) > 0 {
 			reasons := make([]string, 0, len(bypassed))
 			for _, d := range bypassed {
 				reasons = append(reasons, filter(d.Flag+": "+d.Reason))

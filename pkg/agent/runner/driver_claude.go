@@ -668,6 +668,15 @@ func (d *ClaudeDriver) Resume(ctx context.Context, runID string, instruction ...
 	return d.ResumeWith(ctx, opts)
 }
 
+// HasNativeConversation reports whether the current or most recent run has
+// announced its claude session id, so an interrupt can be followed by a
+// Resume of the same conversation (#1899; see NativeConversationReporter).
+func (d *ClaudeDriver) HasNativeConversation() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.nativeID != ""
+}
+
 // ResumeWith continues the same native conversation under opts, not the prior
 // Run's options (T11 FR-9/10): see CurrentOptionsResumer.
 func (d *ClaudeDriver) ResumeWith(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {

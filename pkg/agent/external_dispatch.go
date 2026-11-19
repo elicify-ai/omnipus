@@ -177,23 +177,13 @@ type runExternalCLISubTurnState struct {
 // it. Emitting the catalogue frame AND appending the classified error is
 // what makes the refusal visible in the child's own view and as a status
 // line in the parent's side panel.
+//
+// The frame addresses the run's OWN session (emitExternalErrorFrame), like every
+// native terminal error: for a steered helper that is the helper's chat, not the
+// cascade root's (#1895, ADR-091 D1).
 func (ed *runExternalCLISubTurnState) reportWorkspaceRefusal(wsErr error) error {
 	llm := TranslateTurnError(wsErr)
-	chatID := ed.childTS.chatID
-	if chatID == "" {
-		chatID = ed.childTS.opts.ChatID
-	}
-	ed.al.emitEvent(
-		EventKindError,
-		ed.childTS.eventMeta("runTurn", "turn.error"),
-		ErrorPayload{
-			Stage:     "workspace",
-			ChatID:    chatID,
-			SessionID: string(ed.childTS.routingSessionID),
-			Code:      string(llm.Code),
-			Message:   llm.Message,
-		},
-	)
+	ed.al.emitExternalErrorFrame(ed.childTS, "workspace", llm)
 	ed.childTS.appendClassifiedError(EventKindError.String(), "workspace", llm)
 	return fmt.Errorf("external-cli dispatch: %w", wsErr)
 }
@@ -687,7 +677,7 @@ func drainExternalRun(
 			case runner.EventKindOutput:
 				if ev.Output != nil && ev.Output.Text != "" {
 					sb.WriteString(ev.Output.Text)
-					childTS.appendIntermediateAssistantTranscript(ev.Output.Text, transcriptModelFor(childTS.agent))
+					childTS.recordExternalOutput(al, ev.Output.Text, transcriptModelFor(childTS.agent))
 				}
 			case runner.EventKindToolCall:
 				if ev.ToolCall != nil {
@@ -1237,34 +1227,22 @@ func emitExternalCLIErrorEvent(
 	if runnerErr == nil {
 		return
 	}
-	al.emitEvent(
-		EventKindError,
-		ts.eventMeta("runTurn", "turn.error"),
-		ErrorPayload{
-			Stage: "external_cli",
-			// FIX 4: ChatID was never set here, unlike every other
-			// ErrorPayload construction site (ts.opts.ChatID) — the WS
-			// forwarder's matchesChatID gate (pkg/gateway/websocket.go)
-			// never matches an empty ChatID, so this event was silently
-			// dropped for every live subscriber. External-CLI errors
-			// (claude-code/codex/opencode sub-turns) were invisible live,
-			// appearing only after a page reload replayed the transcript.
-			ChatID:    ts.opts.ChatID,
-			SessionID: string(ts.routingSessionID),
-			// FIX 3: SanitizeRunnerError already computed the classifier
-			// code (sanitized.Code) alongside sanitized.AssistantText —
-			// thread it through so the WS forwarder (FIX 2) can use the
-			// already-computed code/message pair instead of re-translating.
-			Code:    string(sanitized.Code),
-			Message: sanitized.AssistantText,
-		},
-	)
-	// Mirror to the JSONL transcript via the write choke point. The raw
-	// runnerErr.Message stays in sanitized.LogText / gateway.log; the
-	// transcript gets the generic copy.
-	ts.appendClassifiedError(EventKindError.String(), "external_cli", LLMError{
+	llm := LLMError{
+		// FIX 3: SanitizeRunnerError already computed the classifier code
+		// (sanitized.Code) alongside sanitized.AssistantText — the frame and
+		// the transcript use that pair instead of re-translating.
 		Code:      sanitized.Code,
 		Message:   sanitized.AssistantText,
 		Retryable: isRetryable(sanitized.Code),
-	})
+	}
+	// The frame addresses the run's OWN session, like every native terminal
+	// error: for a steered helper that is the helper's chat, where its viewers
+	// are subscribed. It used to stamp the cascade root's routing id, so a
+	// helper's CLI failure never reached the helper's own chat live (#1895,
+	// ADR-091 D1). FIX 4 stands: ChatID is set (emitExternalErrorFrame).
+	al.emitExternalErrorFrame(ts, "external_cli", llm)
+	// Mirror to the JSONL transcript via the write choke point. The raw
+	// runnerErr.Message stays in sanitized.LogText / gateway.log; the
+	// transcript gets the generic copy.
+	ts.appendClassifiedError(EventKindError.String(), "external_cli", llm)
 }

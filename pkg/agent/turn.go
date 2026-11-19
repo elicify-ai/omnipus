@@ -615,6 +615,17 @@ type turnState struct {
 	// independent count (FR-017).
 	browserDeferralLedger turnBrowserDeferralLedger
 
+	// externalLiveOutput is set by the steered external-CLI body
+	// (steer_turn_body.go::runExternalCLISteeredTurn) before the run: each CLI
+	// text segment then goes live through the webchat streamer under the id of
+	// its saved row, and the body finalizes the turn with one done (#1895).
+	// Other external callers (the task path) leave it false.
+	externalLiveOutput bool
+	// externalErrorAnnounced records that an external-CLI error frame was
+	// emitted for this turn, so the steered body adds its one terminal error
+	// event only for a failure nothing announced yet (#1895).
+	externalErrorAnnounced atomic.Bool
+
 	// mediaRetryDone is the per-turn guard for the RD2 media-downgrade retry
 	// (ADR-051 §RD2 / FR-007 / FR-008). When true, the loop's classifier-gated
 	// TryMediaDowngrade helper refuses to perform another downgrade — even if

@@ -171,7 +171,7 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 
 **Why agents cannot change it.** The program and its parameters decide what actually runs on your machine. Keeping them person-only means an agent cannot point a worker at a different program or add flags that lift the tool's safety settings. An agent can see the saved program and parameters (read-only) and whether a run would start.
 
-Every change is recorded in the audit log: a changed path or changed parameters, with the old and new value and who saved it. A path is recorded as saved. Old and new parameters pass through the sensitive-data filter, or stay as typed when `tools.filter_sensitive_data` is off. Every external-worker run is recorded too, with the program, the flags the safety filter dropped from the agent's own flags, and your standard parameters under the same rule. A **Send a test message** that used your standard parameters records them the same way.
+Every change is recorded in the audit log: a changed path or changed parameters, with the old and new value and who saved it. A path is recorded as saved. Old and new parameters pass through the sensitive-data filter, or stay as typed when `tools.filter_sensitive_data` is off. Every external-worker run is recorded too, with the program, the flags Omnipus's argument filter dropped from the agent's own flags, and your standard parameters under the same rule. A **Send a test message** that used your standard parameters records them the same way.
 
 Each worker's **Runtime** tab shows the saved program and parameters read-only, with a link back to this tab. See [agents](agents.md) for what the worker keeps per agent.
 
