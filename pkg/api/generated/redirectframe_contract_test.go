@@ -127,8 +127,8 @@ func TestRedirectFrameGoShape_FieldSetMatchesSchema(t *testing.T) {
 		"Instruction":   {"instruction", reflect.String},
 		"SessionId":     {"session_id", reflect.String},
 		"Type":          {"type", reflect.String},
-		"Origin":        {"origin,omitempty", reflect.Ptr},          // *SendOrigin — schema $ref, optional (C-3)
-		"ClientFrameId": {"client_frame_id,omitempty", reflect.Ptr}, // *string — optional, string 1..128 (C-3)
+		"Origin":        {"origin,omitempty", reflect.Pointer},          // *SendOrigin — schema $ref, optional (C-3)
+		"ClientFrameId": {"client_frame_id,omitempty", reflect.Pointer}, // *string — optional, string 1..128 (C-3)
 	}
 	for fieldName, expect := range want {
 		f, ok := typ.FieldByName(fieldName)
