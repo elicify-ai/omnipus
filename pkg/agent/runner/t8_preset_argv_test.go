@@ -46,20 +46,29 @@ func TestSpawn_ArgvOrderPresetUnfiltered_Codex(t *testing.T) {
 	assert.Equal(t, len(argv)-2, presetAt, "the preset is the last thing before the hand-off")
 }
 
-// 9.18: the preset repeated flag is last, so it wins over the agent one.
+// 9.18, amended 2026-11-18 (#1880) and Q-OC1=A (2026-11-19): the
+// worker's model option is removed. With no configured driver model in this
+// fixture, the person's preset model remains unfiltered and last. The new
+// preset-model regression separately covers an actually emitted own model.
 func TestSpawn_ArgvOrderPresetUnfiltered_PresetFlagIsLast(t *testing.T) {
 	for _, cli := range []string{"codex", "claude"} {
 		t.Run(cli, func(t *testing.T) {
-			opts := RunOptions{Input: "task", CLIArgs: []string{"--model", "b"}, PresetArgs: []string{"--model", "a"}}
+			opts := RunOptions{Input: "task", CLIArgs: []string{"--model", "b", "--profile", "worker"}, PresetArgs: []string{"--model", "a"}}
 			var argv []string
 			if cli == "codex" {
 				argv = NewCodexDriver(nil).buildArgs(opts)
 			} else {
 				argv = NewClaudeDriver(nil).buildArgs(opts)
 			}
-			require.True(t, containsSeq(argv, "--model", "b"), "agent flag present: %v", argv)
-			require.True(t, containsSeq(argv, "--model", "a"), "preset flag present: %v", argv)
-			assert.Less(t, slices.Index(argv, "b"), slices.Index(argv, "a"), "--model b comes before --model a: %v", argv)
+			assert.NotContains(t, argv, "b", "#1880: the worker's model option and value are removed")
+			require.True(t, containsSeq(argv, "--model", "a"), "without an own model, the preset model remains: %v", argv)
+			assert.Equal(t, []string{"a"}, opencodeFix1880ModelValues(t, argv), "the preserved preset is the only model source")
+			wantTail := []string{"--profile", "worker", "--model", "a"}
+			if cli == "codex" {
+				wantTail = append(wantTail, "-")
+			}
+			require.GreaterOrEqual(t, len(argv), len(wantTail))
+			assert.Equal(t, wantTail, argv[len(argv)-len(wantTail):], "unrelated worker arguments precede the unchanged preset, immediately before any hand-off")
 		})
 	}
 }

@@ -3,7 +3,9 @@
 package gateway
 
 // Founder Q14 A, Q4/Q5/Q7 and T11 §4 Audit: Send a test message uses the
-// person's SAVED preset, unfiltered, and audits a separately filtered copy.
+// person's SAVED preset and audits a separately filtered copy. Q-OC1=A
+// (2026-11-19) removes its model option when Omnipus emits a configured model;
+// all non-model preset options remain unfiltered. #1880 removes worker models.
 // Actual Settings PUT, encrypted-store filter re-arm, smoke handler, Codex
 // driver, harmless subprocess and audit JSONL. No driver/filter/auditor mock.
 
@@ -52,7 +54,8 @@ func TestPostAgentsExecutorSmokeTest_SavedPresetActuallyRunsAndAuditFollowsFilte
 				t11bGateAssertFilter(t, api, enabled)
 				t11bGateAssertDiskRow(t, api, program, text)
 				agentArgs := "--dangerously-bypass-approvals-and-sandbox --model t11b-agent-model"
-				raw, err := json.Marshal(gen.ExecutorSmokeTestRequest{Cli: gen.ExternalCliToolCodex, CliArgs: &agentArgs})
+				model := "t11b-configured-model"
+				raw, err := json.Marshal(gen.ExecutorSmokeTestRequest{Cli: gen.ExternalCliToolCodex, CliArgs: &agentArgs, Model: &model})
 				require.NoError(t, err)
 				code, resp := postExecutorSmokeTest(t, api, string(raw))
 				require.Equal(t, http.StatusOK, code)
@@ -63,10 +66,13 @@ func TestPostAgentsExecutorSmokeTest_SavedPresetActuallyRunsAndAuditFollowsFilte
 				calls := t11bSmokeRecordedCalls(t, marker)
 				require.Len(t, calls, i+1, "observe actual process invocations, not constructed options")
 				args := calls[i]
+				assert.Equal(t, []string{model}, opencodeFix1880PreviewModels(t, args), "Q-OC1=A: the real subprocess receives exactly the configured model")
+				assert.NotContains(t, args, "t11b-agent-model", "#1880: the worker model is removed")
+				assert.NotContains(t, args, "t11b smoke person model", "Q-OC1=A: the conflicting preset model is removed")
 				if text != "" {
-					want := []string{"--model", "t11b-agent-model", "--model", "t11b smoke person model", "--api-key", t11bGateNewSecret, "--dangerously-bypass-approvals-and-sandbox", "-"}
+					want := []string{"--api-key", t11bGateNewSecret, "--dangerously-bypass-approvals-and-sandbox", "-"}
 					require.GreaterOrEqual(t, len(args), len(want))
-					assert.Equal(t, want, args[len(args)-len(want):], "Q14/FR-10: person preset is unfiltered and last, including its bypass")
+					assert.Equal(t, want, args[len(args)-len(want):], "Q14/FR-10: all non-model person preset parameters remain unfiltered and last, including the API key and bypass")
 				} else {
 					assert.NotContains(t, args, "t11b smoke person model")
 					assert.NotContains(t, args, t11bGateNewSecret)
@@ -84,18 +90,18 @@ func TestPostAgentsExecutorSmokeTest_SavedPresetActuallyRunsAndAuditFollowsFilte
 					continue
 				}
 				assert.Contains(t, values, note, "Q14: every diagnostic using a preset carries the literal use note")
-				var recorded []string
-				for _, value := range values {
-					if strings.Contains(value, "t11b smoke person model") {
-						recorded = append(recorded, value)
-					}
-				}
-				if assert.Len(t, recorded, 1, "Q14: record the actual preset text, not only a CLI name") {
-					assert.Contains(t, recorded[0], "--api-key")
-					assert.Contains(t, recorded[0], "--dangerously-bypass-approvals-and-sandbox")
-					if !enabled {
-						assert.Equal(t, preset, recorded[0], "Q5 B: OFF records the text exactly as typed")
-					}
+				// Q-OC1=A adds a separate preset_flags_dropped field, which may
+				// repeat a model value. Select the original preset_args field
+				// explicitly; its full-text and redaction requirements do not change.
+				details, ok := entries[i]["details"].(map[string]any)
+				require.True(t, ok)
+				recorded, ok := details["preset_args"].(string)
+				require.True(t, ok, "Q14: record the actual preset text, not only a CLI name")
+				assert.Contains(t, recorded, "t11b smoke person model")
+				assert.Contains(t, recorded, "--api-key")
+				assert.Contains(t, recorded, "--dangerously-bypass-approvals-and-sandbox")
+				if !enabled {
+					assert.Equal(t, preset, recorded, "Q5 B: OFF records the text exactly as typed")
 				}
 				if enabled {
 					encoded, err := json.Marshal(entries[i])

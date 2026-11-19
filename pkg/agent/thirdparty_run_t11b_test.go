@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -86,11 +87,18 @@ func TestPresetParams_AppliedLastUnfiltered_AgentFlagsFiltered(t *testing.T) {
 
 	opts := t11bDispatchOptions(t, f, "t11b-preset-order")
 	argv := runner.BuildCodexArgs(opts) // actual dispatched options, not a test-side assembler
-	// T11 run order plus CliPreset.preset_args: presets come AFTER agent args
-	// but BEFORE the prompt hand-off. Codex uses trailing '-' for stdin.
-	wantTail := []string{"--add-dir", "/allowed-extra", bypass, "--model", "gpt-5-codex", "-"}
+	// Q-OC1=A (2026-11-19) excepts preset model conflicts from T11's
+	// unfiltered-preset rule. The independently seeded worker model is
+	// l11274Model; the rest of the saved preset remains last before stdin.
+	require.Equal(t, l11274Model, opts.Model, "fixture: dispatch uses the worker's explicitly seeded own model")
+	modelAt := slices.Index(argv, "-m")
+	require.GreaterOrEqual(t, modelAt, 0, "the configured model option remains in the actual command: %v", argv)
+	require.Greater(t, len(argv), modelAt+1)
+	require.Equal(t, l11274Model, argv[modelAt+1], "the configured model value remains unchanged")
+	require.NotContains(t, argv, "gpt-5-codex", "Q-OC1=A: remove the conflicting preset model")
+	wantTail := []string{"--add-dir", "/allowed-extra", bypass, "-"}
 	require.Greater(t, len(argv), len(wantTail), "driver flags must precede the agent and preset blocks")
-	require.Equal(t, wantTail, argv[len(argv)-len(wantTail):], "driver -> filtered agent -> unfiltered preset -> prompt")
+	require.Equal(t, wantTail, argv[len(argv)-len(wantTail):], "driver -> filtered agent -> surviving non-model preset -> prompt")
 	count := 0
 	for _, arg := range argv {
 		if arg == bypass {
