@@ -59,8 +59,11 @@ type packageT5Seams struct {
 
 	// CrashAt names an apply step. "membership" is a fault just before the
 	// join (Dataset D7 rows 2, 6, 18): the normal rollback runs. Every other
-	// step ("E1", "E4", "self-row", "rename", "committed", "P1") stops the
-	// apply there without compensations, as a crash would (spec N2).
+	// step stops the apply there without compensations, as a crash would
+	// (spec N2): "E1", "E4", then inside the join helper's lock hold
+	// "after-membership" (W written, no self-row), "self-row" (self-row
+	// written, not published) and "rename" (published, journal still
+	// started), then "committed" and "P1".
 	CrashAt string
 
 	// Reload replaces triggerReloadAndWaitOutcome after the commit point.
@@ -119,13 +122,11 @@ func packageNow() time.Time {
 
 // packageState is the per-gateway package state: the staging registry, the
 // proposed names shown at preview (apply lists a change as
-// changed_since_preview) and the fallback audit logger.
+// changed_since_preview).
 type packageState struct {
-	mu        sync.Mutex
-	registry  *omnpkg.StagingRegistry
-	proposed  map[string]string // staging ID -> proposed name at preview
-	auditLog  *audit.Logger
-	auditHome string
+	mu       sync.Mutex
+	registry *omnpkg.StagingRegistry
+	proposed map[string]string // staging ID -> proposed name at preview
 }
 
 func (a *restAPI) packageStagingBase() string {
@@ -310,41 +311,31 @@ func (a *restAPI) packageActor(r *http.Request) string {
 	return ""
 }
 
-// packageAuditLogger is the audit logger package events go to: the gateway's
-// shared logger, else the agent loop's, else one opened on the data folder's
-// system/ directory (FR-016: every export MUST be audited).
-func (a *restAPI) packageAuditLogger() (*audit.Logger, error) {
+// packageAuditLogger is the shared audit logger package events go to: the
+// gateway's, else the agent loop's. nil means audit logging was off when the
+// gateway started (sandbox.audit_log): package operations then write no
+// entry and are not refused for it (ARCH-RULING-T5-A-D, Decision D).
+func (a *restAPI) packageAuditLogger() *audit.Logger {
 	if a.auditor != nil {
-		return a.auditor, nil
+		return a.auditor
 	}
 	if a.agentLoop != nil {
-		if l := a.agentLoop.AuditLogger(); l != nil {
-			return l, nil
-		}
+		return a.agentLoop.AuditLogger()
 	}
-	a.packages.mu.Lock()
-	defer a.packages.mu.Unlock()
-	if a.packages.auditLog != nil && a.packages.auditHome == a.homePath {
-		return a.packages.auditLog, nil
-	}
-	l, err := audit.NewLogger(audit.LoggerConfig{Dir: filepath.Join(a.homePath, "system"), RedactEnabled: true})
-	if err != nil {
-		return nil, fmt.Errorf("open package audit log: %w", err)
-	}
-	a.packages.auditLog, a.packages.auditHome = l, a.homePath
-	return l, nil
+	return nil
 }
 
 // packageAudit writes one package audit entry. kind is the operation
-// (export, upload, apply, recovery); the entry's Details carry it as
-// "operation" plus fields.
+// (export, upload, import, recovery); the entry's Details carry it as
+// "operation" plus fields. With audit logging off it writes nothing.
 func (a *restAPI) packageAudit(kind, actor, agentID string, fields map[string]string) error {
 	if packageT5.AuditWrite != nil {
 		return packageT5.AuditWrite(kind, fields)
 	}
-	logger, err := a.packageAuditLogger()
-	if err != nil {
-		return err
+	logger := a.packageAuditLogger()
+	if logger == nil {
+		slog.Info("packages: audit entry not written: audit log is off", "operation", kind)
+		return nil
 	}
 	return writePackageAuditEntry(logger, kind, actor, agentID, fields)
 }
@@ -353,7 +344,7 @@ func (a *restAPI) packageAudit(kind, actor, agentID string, fields map[string]st
 var packageAuditEvents = map[string]string{
 	"export":   audit.EventPackageExport,
 	"upload":   audit.EventPackageUpload,
-	"apply":    audit.EventPackageApply,
+	"import":   audit.EventPackageImport,
 	"recovery": audit.EventPackageRecovery,
 }
 

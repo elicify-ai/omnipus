@@ -12,9 +12,12 @@
 package gateway
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -30,6 +33,20 @@ import (
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
+
+// fileSHA256 is the hex SHA-256 of the file at path.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open staged package: %w", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("hash staged package: %w", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
 
 // errPackageCrashSeam marks an apply stopped by the crash seam (tests only).
 var errPackageCrashSeam = errors.New("apply stopped at the crash seam")
@@ -117,6 +134,7 @@ type packageApplyRun struct {
 	actor       string
 	workspaceID string
 	sourceID    string
+	packageSHA  string // hex SHA-256 of the staged package (the success audit)
 	plan        *packageAgentPlan
 	warnings    []packageWarning
 	notDurable  bool
@@ -133,8 +151,12 @@ func (p *packageApplyRun) prepare(workspaceID *string) error {
 		return err
 	}
 	p.stagingDir = dir
-	m, payload, err := readStagedPackage(filepath.Join(dir, packageFileInStaging))
+	path := filepath.Join(dir, packageFileInStaging)
+	m, payload, err := readStagedPackage(path)
 	if err != nil {
+		return err
+	}
+	if p.packageSHA, err = fileSHA256(path); err != nil {
 		return err
 	}
 	if p.workspaceID, err = p.a.packageTargetWorkspace(workspaceID); err != nil {
@@ -226,7 +248,12 @@ func (p *packageApplyRun) execute(w http.ResponseWriter) {
 		p.rollback(w, errors.New("fault before the join (crash seam)"), nil) // D7 rows 2, 6, 18
 		return
 	}
-	if leave, err := p.joinAndPublish(); err != nil { // E8, E9, commit rename
+	leave, crashed, err := p.joinAndPublish() // E8, E9, commit rename
+	if crashed != "" {
+		p.stopAtCrash(w, crashed)
+		return
+	}
+	if err != nil {
 		p.rollback(w, err, &leave)
 		return
 	}
@@ -246,11 +273,28 @@ func (p *packageApplyRun) crashAt(w http.ResponseWriter, step string) bool {
 	if packageT5.CrashAt != step {
 		return false
 	}
+	p.stopAtCrash(w, step)
+	return true
+}
+
+func (p *packageApplyRun) stopAtCrash(w http.ResponseWriter, step string) {
 	if err := p.a.packageRegistry().NeedsCleanup(p.stagingID); err != nil {
 		slog.Warn("packages: crash seam: mark staging", "staging_id", p.stagingID, "error", err)
 	}
 	jsonErr(w, http.StatusInternalServerError, errPackageCrashSeam.Error()+": "+step)
-	return true
+}
+
+// packageCrash is the panic value of a crash seam inside the join helper's
+// lock hold ("after-membership", "self-row", "rename"). Unwinding releases the
+// helper's lock through its defer but skips its C1, as a crash would (spec
+// N2); joinAndPublish recovers it. Only the crash seam (nil in production)
+// raises it.
+type packageCrash struct{ step string }
+
+func crashInsideHelper(step string) {
+	if packageT5.CrashAt == step {
+		panic(packageCrash{step: step})
+	}
 }
 
 // createPending is E2 + E4: the coverage check and the D10 re-check under
@@ -284,21 +328,38 @@ func (p *packageApplyRun) createPending() error {
 // joinAndPublish is the one lock hold of mechanism step 2: join W, seed the
 // self-row, sync the workspace and delegation directories, then publish (the
 // commit point). On failure the helper has already run C1 under the same hold.
-func (p *packageApplyRun) joinAndPublish() (systools.LeaveResult, error) {
+// crashed names the crash seam step that stopped it (no C1 ran); it is empty
+// in production.
+func (p *packageApplyRun) joinAndPublish() (leave systools.LeaveResult, crashed string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			c, ok := r.(packageCrash)
+			if !ok {
+				panic(r)
+			}
+			crashed = c.step
+		}
+	}()
 	cfg := p.a.agentLoop.GetConfig()
 	opts := systools.WorkspaceMembershipOptions{
-		Home:                 p.a.homePath,
-		SelfEdgeExcluded:     cfg.SelfEdgeExcludeAgentIDSet,
-		DepthCeiling:         func() int { return delegationDepthCeiling(cfg) },
-		SaveDelegation:       packageT5.SaveDelegation,
-		WriteWorkspace:       packageT5.WriteWorkspace,
-		AfterMembershipWrite: packageT5.AfterMembershipWrite,
+		Home:             p.a.homePath,
+		SelfEdgeExcluded: cfg.SelfEdgeExcludeAgentIDSet,
+		DepthCeiling:     func() int { return delegationDepthCeiling(cfg) },
+		SaveDelegation:   packageT5.SaveDelegation,
+		WriteWorkspace:   packageT5.WriteWorkspace,
+		AfterMembershipWrite: func(wsID, agentID string) {
+			if packageT5.AfterMembershipWrite != nil {
+				packageT5.AfterMembershipWrite(wsID, agentID)
+			}
+			crashInsideHelper("after-membership")
+		},
 	}
 	id := p.agentID()
-	return systools.JoinWorkspaceTeamAndPublish(opts, p.workspaceID, id, func() error {
-		delegationPath, err := workspace.DelegationStorePath(p.a.homePath, p.workspaceID)
-		if err != nil {
-			return err
+	leave, err = systools.JoinWorkspaceTeamAndPublish(opts, p.workspaceID, id, func() error {
+		crashInsideHelper("self-row") // the helper seeds the self-row before publish
+		delegationPath, pathErr := workspace.DelegationStorePath(p.a.homePath, p.workspaceID)
+		if pathErr != nil {
+			return pathErr
 		}
 		for _, dir := range []string{filepath.Join(p.a.homePath, "workspaces"), filepath.Dir(delegationPath)} {
 			if syncErr := syncPackageDir(dir); syncErr != nil {
@@ -312,16 +373,20 @@ func (p *packageApplyRun) joinAndPublish() (systools.LeaveResult, error) {
 				return fmt.Errorf("publish pending agent: rename: %w", renameErr)
 			}
 		}
-		err = store.PublishPending(id)
-		if errors.Is(err, agentstore.ErrPublishNotDurable) {
+		pubErr := store.PublishPending(id)
+		if errors.Is(pubErr, agentstore.ErrPublishNotDurable) {
 			// Chief ruling 1: the rename happened, so the agent is committed and
 			// visible. Never roll it back; report it as a warning.
 			p.notDurable = true
-			slog.Warn("packages: imported agent published, but the directory sync failed", "agent_id", id, "error", err)
-			return nil
+			slog.Warn("packages: imported agent published, but the directory sync failed", "agent_id", id, "error", pubErr)
+			pubErr = nil
 		}
-		return err
+		if pubErr == nil {
+			crashInsideHelper("rename") // committed; the journal still says started
+		}
+		return pubErr
 	})
+	return leave, "", err
 }
 
 // discardPending is C2 (or the DiscardPending seam).
@@ -355,7 +420,7 @@ func (p *packageApplyRun) rollback(w http.ResponseWriter, cause error, leave *sy
 	if !res.Complete {
 		fields["outcome"], fields["failed_step"] = "rollback_incomplete", res.FailedStep
 	}
-	if err := p.a.packageAudit("apply", p.actor, p.agentID(), fields); err != nil {
+	if err := p.a.packageAudit("import", p.actor, p.agentID(), fields); err != nil {
 		slog.Error("packages: audit of a rolled-back import failed", "agent_id", p.agentID(), "error", err)
 	}
 	if res.Complete {

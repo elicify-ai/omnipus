@@ -459,32 +459,15 @@ func (a *restAPI) recheckAgentMaxToolIterationsLocked(p *agentCreatePlan) error 
 // rewritten or reapplied. Gaps come back as *toolPolicyCoverageGapError and
 // stop persist from running.
 //
-// Only gaps the mutation introduces count: config.ValidateToolPolicyCoverage
-// checks every agent on the roster, and a pre-existing agent with an
-// incomplete map (an old record, a bare fixture) must not refuse an
-// unrelated import (the same reason withToolPolicyCoverageGuard skips the
-// check for writes that do not touch tools).
+// It rejects every gap, as REST create does. A running gateway has none
+// outside the new agent, because boot and reload fill the ceiling and abort
+// on a gap.
 func (a *restAPI) withToolPolicyCoverageCheck(mutate func(*config.Config), persist func() error) error {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
-	live := a.agentLoop.GetConfig()
-	baseline, err := a.validateCandidateToolPolicyCoverage(live, func(*config.Config) {})
+	gaps, err := a.validateCandidateToolPolicyCoverage(a.agentLoop.GetConfig(), mutate)
 	if err != nil {
 		return fmt.Errorf("tool policy coverage check: %w", err)
-	}
-	candidate, err := a.validateCandidateToolPolicyCoverage(live, mutate)
-	if err != nil {
-		return fmt.Errorf("tool policy coverage check: %w", err)
-	}
-	existing := make(map[config.CoverageGap]bool, len(baseline))
-	for _, gap := range baseline {
-		existing[gap] = true
-	}
-	var gaps []config.CoverageGap
-	for _, gap := range candidate {
-		if !existing[gap] {
-			gaps = append(gaps, gap)
-		}
 	}
 	if len(gaps) > 0 {
 		return &toolPolicyCoverageGapError{Gaps: gaps}

@@ -30,7 +30,8 @@ import (
 // (FR-062): every failure is logged, the staging keeps its journal, and the
 // next upload warns unfinished_import_found (FR-044). auditWrite is where the
 // one audit entry per recovered import goes; nil opens the data folder's
-// audit log for the run.
+// audit log for the run when cfg.Sandbox.AuditLog is on, and writes nothing
+// when it is off.
 func bootRecoverImports(ctx context.Context, home string, cfg *config.Config,
 	auditWrite func(outcome, agentID, stagingID, message string) error,
 ) {
@@ -76,7 +77,7 @@ type packageRecoveryOps struct {
 	home       string
 	cfg        *config.Config
 	auditWrite func(outcome, agentID, stagingID, message string) error
-	logger     *audit.Logger // opened on first use when auditWrite is nil
+	logger     *audit.Logger // opened on first use when auditWrite is nil and audit is on
 }
 
 func (o *packageRecoveryOps) store() *agentstore.Store { return agentstore.New(o.home) }
@@ -174,8 +175,15 @@ func (o *packageRecoveryOps) writeAudit(outcome, agentID, stagingID, message str
 	if packageT5.AuditWrite != nil {
 		return packageT5.AuditWrite("recovery", map[string]string{"outcome": outcome, "staging_id": stagingID})
 	}
+	if o.cfg == nil || !o.cfg.Sandbox.AuditLog {
+		// Audit logging is off (ARCH-RULING-T5-A-D, Decision D): no entry.
+		slog.Info("packages: audit entry not written: audit log is off", "operation", "recovery")
+		return nil
+	}
 	if o.logger == nil {
-		l, err := audit.NewLogger(audit.LoggerConfig{Dir: filepath.Join(o.home, "system"), RedactEnabled: true})
+		l, err := audit.NewLogger(audit.LoggerConfig{
+			Dir: filepath.Join(o.home, "system"), RedactEnabled: true, AuditLogRequested: true, RetentionDays: 90,
+		})
 		if err != nil {
 			return fmt.Errorf("open audit log: %w", err)
 		}

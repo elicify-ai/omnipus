@@ -58,8 +58,7 @@ type RecoveryReport struct {
 // next upload warns, FR-044) and the next start tries again. It is idempotent:
 // finished journals (done, rolled_back) are left as they are.
 //
-// A recovered staging keeps only its journal, in its terminal state; the next
-// upload's Sweep deletes the folder (a finished journal is deleted there).
+// A recovered staging folder is deleted, journal included.
 func RecoverImports(ctx context.Context, stagingBase string, ops RecoveryOps) RecoveryReport {
 	var rep RecoveryReport
 	keep := map[string]bool{} // agent IDs whose recovery failed: their pending record stays
@@ -151,22 +150,18 @@ func rollbackRecovered(j JournalFile, ops RecoveryOps, discard func(string) erro
 	return errors.Join(leaveErr, discard(j.AgentID))
 }
 
-// finishJournal writes the terminal journal state, removes every other file
-// in the staging folder and writes the recovery audit entry.
+// finishJournal writes the terminal journal state, deletes the staging folder
+// (spec "Start-up recovery": staging folder deleted) and writes the recovery
+// audit entry. The terminal state is written first so that a folder the
+// delete leaves behind is skipped by the next run and removed by the next
+// upload's Sweep.
 func finishJournal(dir, stagingID string, j JournalFile, state JournalState, message string, ops RecoveryOps, rep *RecoveryReport) {
 	j.State = state
 	if err := WriteJournal(dir, j); err != nil {
 		rep.Errors = append(rep.Errors, err)
 	}
-	if files, err := os.ReadDir(dir); err == nil {
-		for _, f := range files {
-			if f.Name() == JournalName {
-				continue
-			}
-			if rerr := os.RemoveAll(filepath.Join(dir, f.Name())); rerr != nil {
-				rep.Errors = append(rep.Errors, fmt.Errorf("omnpkg: recovery: clean staging %s: %w", stagingID, rerr))
-			}
-		}
+	if err := os.RemoveAll(dir); err != nil {
+		rep.Errors = append(rep.Errors, fmt.Errorf("omnpkg: recovery: delete staging %s: %w", stagingID, err))
 	}
 	ops.Audit(string(state), j.AgentID, stagingID, message)
 }

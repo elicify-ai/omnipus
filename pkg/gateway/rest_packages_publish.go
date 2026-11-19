@@ -60,13 +60,13 @@ func (p *packageApplyRun) afterCommit(w http.ResponseWriter) {
 		res.ActivationMessage = &msg
 	}
 	fields := map[string]string{
-		"outcome": "imported", "staging_id": p.stagingID, "workspace_id": p.workspaceID,
-		"source_id": p.sourceID, "activation": string(res.Activation),
+		"outcome": "success", "package_sha256": p.packageSHA, "staging_id": p.stagingID,
+		"workspace_id": p.workspaceID, "source_id": p.sourceID, "activation": string(res.Activation),
 	}
 	if p.notDurable {
 		fields["note"] = "published, directory sync failed"
 	}
-	if err := p.a.packageAudit("apply", p.actor, id, fields); err != nil { // P4
+	if err := p.a.packageAudit("import", p.actor, id, fields); err != nil { // P4
 		slog.Error("packages: audit of a committed import failed", "agent_id", id, "error", err)
 		p.warnings = append(p.warnings, packageWarning{
 			Code: packageCodeAuditFailed, ElementSourceID: p.sourceID,
