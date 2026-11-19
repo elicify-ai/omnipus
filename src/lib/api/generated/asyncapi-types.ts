@@ -99,7 +99,8 @@ export type WsFrameType =
   | "cancel_idle"
   | "send_refused"
   | "server_capabilities"
-  | "command_received";
+  | "command_received"
+  | "turn_started";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -938,6 +939,12 @@ export interface SessionStateActiveTurn {
   started_at: string;
 }
 
+export interface TurnStartedFrame {
+  type: "turn_started";
+  session_id: string;
+  active_turn: SessionStateActiveTurn;
+}
+
 export interface SessionStateFrame {
   history_state?: SessionHistoryState;
   secret_requests?: Array<SessionStateSecretRequest>;
@@ -1624,6 +1631,7 @@ export type WsFrame =
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | AskUserAnswerFrame
+  | TurnStartedFrame
   | SessionStateFrame
   | SystemOverloadFrame
   | ReplayWarningFrame
@@ -1742,6 +1750,7 @@ export type ServerFrame =
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
+  | TurnStartedFrame
   | SessionStateFrame
   | SystemOverloadFrame
   | ReplayWarningFrame

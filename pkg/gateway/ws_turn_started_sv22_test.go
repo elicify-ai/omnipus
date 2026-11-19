@@ -222,7 +222,12 @@ func (r *sv22Rig) doneOf(t *testing.T, turnID string) (int, string) {
 // assertNamed is the SV-22 contract for the turn that starts after oldTurnID.
 func (r *sv22Rig) assertNamed(t *testing.T, sid, oldTurnID string, doneIdx int) {
 	t.Helper()
-	tsIdx := r.bound.waitFor(t, 10*time.Second, "turn_started for the new turn", sv22Type("turn_started"))
+	// The old turn named itself when it started too; R1 is about the frame
+	// naming the NEXT turn.
+	tsIdx := r.bound.waitFor(t, 10*time.Second, "turn_started for the new turn", func(m map[string]any) bool {
+		active, _ := m["active_turn"].(map[string]any)
+		return m["type"] == "turn_started" && active != nil && active["turn_id"] != oldTurnID
+	})
 	frames := r.bound.all()
 	require.Less(t, doneIdx, tsIdx, "R1: the old turn's done must arrive before the next turn_started")
 	for i := doneIdx + 1; i < tsIdx; i++ {
@@ -243,19 +248,24 @@ func (r *sv22Rig) assertNamed(t *testing.T, sid, oldTurnID string, doneIdx int) 
 	require.Equal(t, agentID, active["agent_id"])
 	require.Equal(t, startedAt.UTC().Format(time.RFC3339), active["started_at"])
 
-	// A quiet stretch: the turn still sends no token and the frame is not repeated.
+	// A quiet stretch: the turn still sends no token and no frame is repeated.
 	time.Sleep(time.Second)
-	count := 0
+	perTurn := map[any]int{}
 	for i, raw := range r.bound.all() {
 		m := sv22Decode(t, raw)
 		if m["type"] == "turn_started" {
-			count++
+			active, _ := m["active_turn"].(map[string]any)
+			require.NotNil(t, active, "every turn_started carries active_turn")
+			perTurn[active["turn_id"]]++
 		}
 		if i > tsIdx {
 			require.NotEqual(t, "token", m["type"], "the silent turn sent no token")
 		}
 	}
-	require.Equal(t, 1, count, "one turn_started per turn")
+	require.Equal(t, 1, perTurn[turnID], "exactly one turn_started for the new turn")
+	for id, n := range perTurn {
+		require.Equal(t, 1, n, "exactly one turn_started per turn (turn %v)", id)
+	}
 	for _, raw := range r.unbound.all() {
 		require.NotEqual(t, "turn_started", sv22Decode(t, raw)["type"], "a tab bound to no chat gets nothing")
 	}

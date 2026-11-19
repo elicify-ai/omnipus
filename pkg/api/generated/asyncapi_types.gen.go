@@ -1953,6 +1953,15 @@ type TruncatedResult struct {
 	Preview           string `json:"preview"`
 }
 
+// TurnStartedFrame — Server → client, live only (#1428 step 2, UAT-15 option A). Sent when a foreground turn of the chat session starts, to every connection bound to that session at that moment, so a tab knows the running turn's id before its first token (or when it never streams a token). Sent for every turn start: a new message, a queued follow-up, a redirect's new turn and a revived helper. The previous turn's done is always delivered before the next turn's turn_started. Delivered unsequenced: never numbered, journaled, persisted or replayed, so it has no seq property; a tab that reconnects learns the running turn from session_state.active_turn, which names the same turn. Keep in sync by hand with contracts/components/schemas/TurnStartedFrame.yaml.
+type TurnStartedFrame struct {
+	// The turn that just started, in the same shape (and with the same values) as session_state.active_turn reports while it runs.
+	ActiveTurn SessionStateActiveTurn `json:"active_turn"`
+	// Chat session the turn runs in.
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+}
+
 // UserMessageFrame — Server → client. #823 catch-up redesign, founder decision Q1 (YES). Echoes a persisted user message to every tab bound to the session, not only the sender's. Keep in sync by hand with contracts/components/schemas/UserMessageFrame.yaml.
 type UserMessageFrame struct {
 	AgentId     *string `json:"agent_id,omitempty"`
@@ -2105,4 +2114,5 @@ const (
 	WsFrameTypeSendRefused              WsFrameType = "send_refused"
 	WsFrameTypeServerCapabilities       WsFrameType = "server_capabilities"
 	WsFrameTypeCommandReceived          WsFrameType = "command_received"
+	WsFrameTypeTurnStarted              WsFrameType = "turn_started"
 )
