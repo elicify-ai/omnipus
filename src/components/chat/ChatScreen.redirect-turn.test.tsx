@@ -154,6 +154,17 @@ import { getMessageStatusSuffix } from '@/lib/truncation'
 import { getMessages } from '@/store/chat'
 
 const SID = 'sess_test'
+// Spec 4.7 / C-3: a redirect carries the chat origin and a client_frame_id.
+const FRAME_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+function redirectFrame(instruction: string) {
+  return {
+    type: 'redirect',
+    session_id: SID,
+    instruction,
+    origin: { kind: 'chat', session_id: SID },
+    client_frame_id: expect.stringMatching(FRAME_ID),
+  }
+}
 const PARTIAL = 'Here is the first long part of a very long answer. '.repeat(40)
 
 let send: ReturnType<typeof vi.fn>
@@ -232,7 +243,7 @@ describe('S7 live — /stop-redirect on a streaming chat', () => {
 
     submitCommand('/stop-redirect now just say the word mango')
     expect(send.mock.calls.map((c) => c[0]), 'fixture: the real redirect frame left').toEqual([
-      { type: 'redirect', session_id: SID, instruction: 'now just say the word mango' },
+      redirectFrame('now just say the word mango'),
     ])
     expect(pendingRedirectSids.has(SID), 'the redirect is remembered').toBe(true)
 
@@ -265,7 +276,7 @@ describe('S7 live — /stop-redirect on a streaming chat', () => {
     render(<OmnipusComposer />)
     expect(useChatStore.getState().isStreaming, 'fixture: idle').toBe(false)
     submitCommand('/stop-redirect do it')
-    expect(send.mock.calls.map((c) => c[0])).toEqual([{ type: 'redirect', session_id: SID, instruction: 'do it' }])
+    expect(send.mock.calls.map((c) => c[0])).toEqual([redirectFrame('do it')])
     expect(pendingRedirectSids.has(SID)).toBe(false)
   })
 

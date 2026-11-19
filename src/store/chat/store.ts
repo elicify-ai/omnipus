@@ -21,6 +21,10 @@ import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
 import { createFirstSendActions, firstSendBlocksQueue, getPendingFirstSend } from './first-send'
 import { createFrameSlice } from './slices/frames'
+import { initialDraftState } from './draft-state'
+import { bindDraftHost } from './drafts'
+import { drainSubmission, legacyQueueEntryToItem, observeBoundSendFrame } from '@/lib/bound-send'
+import { withdrawMessage } from './withdraw-message'
 import { createHistorySlice, emptyHistoryState } from './history'
 import { createHistoryFrameOwner } from './history-replay'
 import { applyHistoryPageToBucket } from './history-merge'
@@ -58,8 +62,12 @@ function pendingModelChoicePatch(
  * Module scope so it doesn't count against maybeDrainNext's/create()'s
  * grandfathered line budget (scripts/budgets/functions.txt). */
 function drainQueuedMessage(get: () => ChatStore, next: OutboundQueueItem): void {
+  // #1428 step 2 (spec 4.6.1): a legacy string entry is never sent; a stored
+  // submission drains through the bound pipeline and its eligibility check.
   if (typeof next === 'string') {
-    get().sendMessage(next)
+    legacyQueueEntryToItem(next)
+  } else if (next.submission) {
+    drainSubmission(next.submission)
   } else {
     get().sendMessage(next.content, { clientMessageId: next.id, queuedAt: next.timestamp, queueSeq: next.seq ?? 0 })
   }
@@ -284,6 +292,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     outboundQueue: [],
     pendingDrainQueue: [],
     pendingFirstSend: null,
+    draftState: initialDraftState(),
     abandonedFirstSendIds: [],
     firstSendGeneration: 0,
     ...createFirstSendActions({ set, get, withBucket }),
@@ -769,7 +778,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
     ...createOutboundLifecycleSlice({ set, get: () => currentHistoryState(get(), getActiveSid()), getActiveSid, withBucket: (sid, update) => withLiveHistoryBucket(withBucket, sid, update), bucketToForeground, maybeDrainNext, runtime: chatRuntime }),
     ...createOutboundResponseSlice(),
 
-    handleFrame: frame => historyFrames.handle(frame, frameSlice.handleFrame),
+    handleFrame: frame => { observeBoundSendFrame(frame); historyFrames.handle(frame, frameSlice.handleFrame) },
+    withdrawRefusedMessage: (sid, clientMessageId) => withdrawMessage(withBucket, get, sid, clientMessageId),
   }
 })
 
@@ -778,6 +788,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
 registerWorkspaceEntryQueueResume(() => useChatStore.getState().drainOutboundQueue())
 // R2-S3-02: the team list loading releases an @-message held on it.
 setRosterReleaseDrain(() => useChatStore.getState().drainOutboundQueue())
+// #1428 step 2: the draft state lives in this store (drafts.ts reads it through this binding).
+bindDraftHost(useChatStore)
 
 // Expose syncForeground so setActiveSession can call it after switching sessions.
 // Avoiding a direct import of the session store here to keep the cycle-break intact.

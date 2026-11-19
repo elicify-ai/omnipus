@@ -10,6 +10,14 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
+
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
+function withNewChatOrigin<T extends object>(frame: T): T & { origin: { kind: 'new_chat'; new_chat_key: string } } {
+  return { ...frame, origin: { kind: 'new_chat', new_chat_key: openedKey } }
+}
+
 
 // Oracles: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // C3 ruling; /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/receipts/review-tests.md,
@@ -34,7 +42,7 @@ const ORIGINAL_TEXT = 'Keep this exact first message\nand its trailing spaces.  
 const WORKSPACE = '1090-red6-workspace'
 const MODEL = '1090-red6-model'
 const MEDIA = ['media://1090-red6-image', 'media://1090-red6-file']
-const ORIGINAL_FRAME: MessageFrame = {
+const BASE_ORIGINAL_FRAME: MessageFrame = {
   type: 'message',
   client_message_id: ORIGINAL_ID,
   content: ORIGINAL_TEXT,
@@ -97,6 +105,7 @@ function connectSender() {
     useConnectionStore.getState().setConnected(true)
     useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE })
     useChatStore.setState({ pendingAutoApproveChoice: false })
+    openedKey = enterNewChat(WORKSPACE, 'mia')
   })
   return sender
 }
@@ -114,7 +123,7 @@ function beginSameIdRetry() {
     clientMessageId: ORIGINAL_ID, mediaRefs: [...MEDIA], model_name: MODEL,
   }))
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: exact original session-less request')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   expect(useChatStore.getState().pendingFirstSend?.status, 'fixture: local failure leaves delivery uncertain')
     .toBe('unconfirmed')
   act(() => {
@@ -122,7 +131,7 @@ function beginSameIdRetry() {
     useChatStore.getState().retryFirstSend()
   })
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: explicit Retry reuses the complete original frame')
-    .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   expect(useChatStore.getState().pendingFirstSend?.status, 'fixture: refusal must arrive during an in-flight check')
     .toBe('retrying')
   expect(useSessionStore.getState().activeSessionId, 'fixture: no session acknowledgement was received').toBe('__pending')
@@ -150,7 +159,7 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
     const chat = useChatStore.getState()
     expect(chat.pendingFirstSend?.status, 'C3: correlated refusal must end retrying as a failed check').toBe('check_failed')
     expect(chat.pendingFirstSend?.clientMessageId, 'C3: correlation identity survives the refusal').toBe(ORIGINAL_ID)
-    expect(chat.pendingFirstSend?.payload, 'C3: preserve text, ordered media, routing and false Auto').toStrictEqual(ORIGINAL_FRAME)
+    expect(chat.pendingFirstSend?.payload, 'C3: preserve text, ordered media, routing and false Auto').toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
     expect(chat.pendingFirstSend?.sessionId, 'C3: refusal cannot invent a confirmed saved chat').toBeNull()
     expect(users(), 'C3: exactly one original bubble remains, including its whitespace and wire ID')
       .toStrictEqual([{ id: ORIGINAL_ID, clientMessageId: ORIGINAL_ID, content: ORIGINAL_TEXT }])
@@ -172,13 +181,13 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
         .toBe(frame.message)
     }
     expect(sender.send.mock.calls.map(([outbound]) => outbound), 'C3: no automatic resend on refusal')
-      .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME)])
 
     const retry = screen.getByRole('button', { name: /^Retry$/ })
     expect(retry, 'C3: the real recovery Retry control is enabled again').toBeEnabled()
     fireEvent.click(retry)
     expect(sender.send.mock.calls.map(([outbound]) => outbound), 'C3: one explicit click retries the original payload and ID')
-      .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME)])
     expect(useChatStore.getState().pendingFirstSend?.status, 'C3: usable Retry starts the next check').toBe('retrying')
     expect(users(), 'C3: Retry never duplicates or replaces the original bubble')
       .toStrictEqual([{ id: ORIGINAL_ID, clientMessageId: ORIGINAL_ID, content: ORIGINAL_TEXT }])

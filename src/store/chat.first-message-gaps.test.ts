@@ -11,8 +11,15 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
+
 import { entry, expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../tests/chat-history-paging/fixtures'
 
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
+function withNewChatOrigin<T extends object>(frame: T): T & { origin: { kind: 'new_chat'; new_chat_key: string } } {
+  return { ...frame, origin: { kind: 'new_chat', new_chat_key: openedKey } }
+}
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7/D8, as retained by the founder's "middle way" ruling.
 // T4 bypasses confirmation and checks only subsequent user bubbles. T10 checks
@@ -38,7 +45,7 @@ const WORKSPACE = '1090-red5-workspace'
 const NEW_ID = '1090-red5-new-client'
 const NEW_CONTENT = 'Only this message belongs to the new chat.'
 const ORIGINAL_MEDIA = ['media://1090-red5-image', 'media://1090-red5-file']
-const ORIGINAL_FRAME: MessageFrame = {
+const BASE_ORIGINAL_FRAME: MessageFrame = {
   type: 'message',
   client_message_id: OLD_ID,
   content: OLD_CONTENT,
@@ -89,6 +96,7 @@ function connectGapSender() {
     useConnectionStore.getState().setConnected(true)
     useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE })
     useChatStore.setState({ pendingAutoApproveChoice: false })
+    openedKey = enterNewChat(WORKSPACE, 'mia')
   })
   return sender
 }
@@ -105,11 +113,11 @@ function sendFirst(sender: ReturnType<typeof connectGapSender>) {
     model_name: '1090-red5-model',
   }))
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: exact original session-less request')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   expect(useSessionStore.getState().activeSessionId, 'fixture: no acknowledgement yet').toBe('__pending')
   expect(users(), 'fixture: original bubble is visible').toStrictEqual([{ id: OLD_ID, content: OLD_CONTENT }])
   expect(useChatStore.getState().pendingFirstSend?.payload, 'fixture: original recovery request is retained')
-    .toStrictEqual(ORIGINAL_FRAME)
+    .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
 }
 
 function dropAndReconnect(sender: ReturnType<typeof connectGapSender>) {
@@ -125,7 +133,7 @@ function dropAndReconnect(sender: ReturnType<typeof connectGapSender>) {
   expect(useChatStore.getState().pendingFirstSend?.status, 'fixture: delivery is uncertain after disconnect')
     .toBe('unconfirmed')
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: reconnect did not retransmit')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
 }
 
 function recoverFirst() {
@@ -150,7 +158,7 @@ function expectFailedCheck() {
     .toStrictEqual([{ id: OLD_ID, content: OLD_CONTENT }])
   const chat = useChatStore.getState()
   expect(chat.pendingFirstSend?.clientMessageId, 'D7: failed check retains the original correlation ID').toBe(OLD_ID)
-  expect(chat.pendingFirstSend?.payload, 'D7: failed check must not reconstruct the request').toStrictEqual(ORIGINAL_FRAME)
+  expect(chat.pendingFirstSend?.payload, 'D7: failed check must not reconstruct the request').toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
   expect(chat.pendingFirstSend?.sessionId, 'D7: Retry must know which saved chat to check').toBe(OLD_SESSION)
   expect(chat.pendingFirstSend?.status, 'D7: failed attach is check failure, not failed delivery').toBe('check_failed')
   expect(chat.messages.filter((message) => message.role === 'assistant'), 'D7: no inert empty reply remains')
@@ -284,7 +292,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     expect(useChatStore.getState().pendingFirstSend, 'FR-005: prompting preserves the exact recovery request')
       .toStrictEqual(oldRequest)
     expect(sender.send.mock.calls.map(([frame]) => frame), 'FR-005: prompting must not transmit or retry')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
     act(() => useSessionStore.getState().startNewSession({ choice: 'confirm', clientMessageId: OLD_ID }))
     expect(useSessionStore.getState().newChatPrompt, 'FR-005: accepted confirmation closes the prompt').toBeNull()
 
@@ -295,7 +303,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     expect(useChatStore.getState().pendingFirstSend, 'D8: clear the request, not just the visible bubble').toBeNull()
     act(() => useChatStore.getState().retryFirstSend())
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D8: abandoned message cannot be retried from this tab')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   })
 
   it.each(LATE_FRAMES)('D8: late old $label after confirmed + New chat cannot change the new pending chat', ({ frame, discoversSavedChat }) => {
@@ -359,7 +367,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     expect(screen.queryByRole('button', { name: /Generate again/ }), 'D7: no new-answer action without confirmed delivery')
       .not.toBeInTheDocument()
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: no automatic second send after local failure')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   })
 
   it('D7: a locally unsuccessful delivery Retry returns to unconfirmed without duplicating the bubble or changing its request', () => {
@@ -372,11 +380,11 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Retry$/ }))
 
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: Retry uses the same exact original frame even on failure')
-      .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME)])
     expect(users(), 'D7: unsuccessful Retry keeps exactly one original bubble')
       .toStrictEqual([{ id: OLD_ID, content: OLD_CONTENT }])
     expect(useChatStore.getState().pendingFirstSend?.payload, 'D7: preserve the request for a later explicit retry')
-      .toStrictEqual(ORIGINAL_FRAME)
+      .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
     expect(useChatStore.getState().pendingFirstSend?.status, 'D7: unsuccessful Retry releases its in-flight state')
       .toBe('unconfirmed')
     expect(screen.getByText('Delivery not confirmed', { exact: true }).textContent, 'D7: unsuccessful check restores uncertainty')
@@ -397,14 +405,14 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     expectFailedCheck()
     expect(screen.getByRole('button', { name: /^Retry$/ }), 'D7: connected failed-attach Retry is enabled').toBeEnabled()
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: recovered ack attempted a cursor-free attach, not another message')
-      .toStrictEqual([ORIGINAL_FRAME, ATTACH_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME])
     fireEvent.click(screen.getByRole('button', { name: /^Retry$/ }))
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: failed-attach Retry checks the saved chat without a new turn')
-      .toStrictEqual([ORIGINAL_FRAME, ATTACH_FRAME, ATTACH_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME, ATTACH_FRAME])
     expect(users(), 'D7: repeating attach keeps the same original message')
       .toStrictEqual([{ id: OLD_ID, content: OLD_CONTENT }])
     expect(useChatStore.getState().pendingFirstSend?.payload, 'D7: attach Retry still retains the original first-send ID/payload')
-      .toStrictEqual(ORIGINAL_FRAME)
+      .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
     expect(screen.getByText('Checking chat…', { exact: true }).textContent, 'D7: successful attach transmission awaits replay')
       .toBe('Checking chat…')
   })
@@ -424,7 +432,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
       expectFailedCheck()
       expect(screen.getByRole('button', { name: /^Retry$/ }), 'D7: offline check Retry must be disabled').toBeDisabled()
       expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: cannot attach without a connected transport')
-        .toStrictEqual([ORIGINAL_FRAME])
+        .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
     },
   )
 
@@ -438,16 +446,16 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
       render(createElement(GapRows))
       recoverFirst()
       expect(sender.send.mock.calls.map(([outbound]) => outbound), 'fixture: recovered attach was sent successfully')
-        .toStrictEqual([ORIGINAL_FRAME, ATTACH_FRAME])
+        .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME])
 
       act(() => useChatStore.getState().handleFrame(frame))
 
       expectFailedCheck()
       fireEvent.click(screen.getByRole('button', { name: /^Retry$/ }))
       expect(sender.send.mock.calls.map(([outbound]) => outbound), 'D7: Retry after failed replay does not resubmit the user entry')
-        .toStrictEqual([ORIGINAL_FRAME, ATTACH_FRAME, ATTACH_FRAME])
+        .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME, ATTACH_FRAME])
       expect(useChatStore.getState().pendingFirstSend?.payload, 'D7: server failure never changes the original request')
-        .toStrictEqual(ORIGINAL_FRAME)
+        .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
     },
   )
 
@@ -472,7 +480,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     expect(screen.queryByRole('button', { name: /Generate again/ }), 'D7: do not offer a duplicate answer while one is active')
       .not.toBeInTheDocument()
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: recovery starts no new answer turn')
-      .toStrictEqual([ORIGINAL_FRAME, ATTACH_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME])
   })
 
   it('D7: recovered catch-up with an existing answer keeps the answer and never labels the original message unfinished', () => {
@@ -500,7 +508,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     expect(screen.queryByRole('button', { name: /Generate again/ }), 'D7: completed answer is not a first-send recovery failure')
       .not.toBeInTheDocument()
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: completed replay never regenerates automatically')
-      .toStrictEqual([ORIGINAL_FRAME, ATTACH_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME])
   })
 
   it.each(['active turn', 'completed answer'] as const)(
@@ -535,7 +543,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
       expect(screen.queryByRole('button', { name: /Generate again/ }), 'D5: lower-bound receipt cannot authorize another answer')
         .not.toBeInTheDocument()
       expect(sender.send.mock.calls.map(([frame]) => frame), 'D5: lower-bound receipt cannot start a turn')
-        .toStrictEqual([ORIGINAL_FRAME, ATTACH_FRAME])
+        .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME])
     },
   )
 
@@ -555,7 +563,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
       'D7: the one-shot recovery flag is consumed after successful catch-up').toBeUndefined()
     act(() => useChatStore.getState().retryFirstSend())
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: only a deliberate Generate again may start another turn')
-      .toStrictEqual([ORIGINAL_FRAME, ATTACH_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME])
     expect(users(), 'D7: finished recovery leaves exactly the authoritative original bubble')
       .toStrictEqual([{ id: SERVER_ENTRY, content: OLD_CONTENT }])
   })

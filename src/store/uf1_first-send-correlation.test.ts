@@ -35,6 +35,7 @@ import type { ChatStore } from './chat/types'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
 
 const WORKSPACE = 'uf1-first-send-workspace'
 const CLIENT_ID = 'uf1-client-1'
@@ -64,9 +65,12 @@ function connectSender() {
       isConnected: true,
     })
     useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE })
+    // Spec 4.4.1 / 4.6.1: the ordinary first send is reached by enterNewChat and carries {new_chat, K}.
+    openedKey = enterNewChat(WORKSPACE, 'mia')
   })
   return sender
 }
+let openedKey = ''
 
 beforeEach(resetStores)
 afterEach(resetStores)
@@ -79,6 +83,9 @@ describe('UF1/DEL-F21+F22 — an uncorrelated session_started does not establish
     })
     // Fixture: an ordinary session-less first send is pending.
     expect(sender.send).toHaveBeenCalledTimes(1)
+    expect(sender.send.mock.calls[0][0], 'spec 4.6.1: the first frame names the new chat').toMatchObject({
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
+    })
     expect(useChatStore.getState().pendingFirstSend, 'fixture: pending first send exists').not.toBeNull()
     expect(useChatStore.getState().pendingFirstSend!.sessionId, 'fixture: not bound yet').toBeNull()
 
@@ -101,6 +108,9 @@ describe('UF1/DEL-F21+F22 — an uncorrelated session_started does not establish
       useChatStore.getState().sendMessage(CONTENT, { clientMessageId: CLIENT_ID })
     })
     expect(sender.send).toHaveBeenCalledTimes(1)
+    expect(sender.send.mock.calls[0][0], 'spec 4.6.1: the first frame names the new chat').toMatchObject({
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
+    })
 
     act(() => {
       useChatStore.getState().handleFrame({

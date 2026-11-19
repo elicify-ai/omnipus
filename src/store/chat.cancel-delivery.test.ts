@@ -2,9 +2,27 @@ import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WsConnection } from '@/lib/ws'
 import { useChatStore } from './chat'
+import { useDraftStore } from './chat/drafts'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
+
+// Spec 4.7: a cancel carries the chat origin and a client_frame_id. Spec 4.10:
+// a stand-in sends only while the connection is marked connected.
+const FRAME_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+function boundCancel(extra: Record<string, unknown> = {}) {
+  return {
+    type: 'cancel',
+    session_id: SID,
+    origin: { kind: 'chat', session_id: SID },
+    client_frame_id: expect.stringMatching(FRAME_ID),
+    ...extra,
+  }
+}
+function connectAcceptingSocket() {
+  useConnectionStore.getState().setConnection(sender as unknown as WsConnection)
+  useConnectionStore.getState().setConnected(true)
+}
 
 // Oracle: founder stop rules (2026-10-06) + reviewer finding W2 — a Stop that
 // sent nothing must be reported to the caller AND shown to the user, so the
@@ -35,34 +53,34 @@ afterEach(reset)
 
 describe('cancelStream delivery report (W2)', () => {
   it('returns true and sends one frame when the socket accepts the cancel', () => {
-    act(() => { useConnectionStore.getState().setConnection(sender as unknown as WsConnection) })
+    act(() => { connectAcceptingSocket() })
     let delivered: boolean | undefined
     act(() => { delivered = useChatStore.getState().cancelStream() })
     expect(delivered).toBe(true)
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID, shown: { code_points: 0 } }]])
+    // Spec 4.7: no open answer, so the cancel carries no shown checkpoint.
+    expect(sender.send.mock.calls).toEqual([[boundCancel()]])
     expect(useUiStore.getState().toasts).toEqual([])
   })
 
-  it('returns false and shows a visible error toast when there is no connection', () => {
+  it('returns false and shows the not-stopped notice when there is no connection', () => {
     let delivered: boolean | undefined
     act(() => { delivered = useChatStore.getState().cancelStream() })
     expect(delivered).toBe(false)
     expect(sender.send).not.toHaveBeenCalled()
-    const toasts = useUiStore.getState().toasts
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].variant).toBe('error')
-    expect(toasts[0].message).toMatch(/could not send (the )?(stop|cancel)/i)
+    // Spec 4.7: no connection shows "Not stopped. Press Stop again.", not a toast.
+    expect(useDraftStore.getState().notStopped[SID]).toBe(true)
+    expect(useUiStore.getState().toasts).toEqual([])
   })
 
-  it('returns false when the socket rejects the frame (existing toast stays)', () => {
+  it('returns false when the socket rejects the frame and does not add a toast', () => {
     sender.send.mockReturnValue(false)
-    act(() => { useConnectionStore.getState().setConnection(sender as unknown as WsConnection) })
+    act(() => { connectAcceptingSocket() })
     let delivered: boolean | undefined
     act(() => { delivered = useChatStore.getState().cancelStream() })
     expect(delivered).toBe(false)
-    const toasts = useUiStore.getState().toasts
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].variant).toBe('error')
+    // Spec 4.7: a rejected handover shows the not-stopped notice and leaves toasts alone.
+    expect(useDraftStore.getState().notStopped[SID]).toBe(true)
+    expect(useUiStore.getState().toasts).toEqual([])
   })
 })
 
@@ -75,7 +93,7 @@ describe('cancelStream delivery report (W2)', () => {
 // turn is the documented completed-turn no-op; only a tree stop still sends.
 describe('second cancel after the first one ended the turn locally', () => {
   beforeEach(() => {
-    act(() => { useConnectionStore.getState().setConnection(sender as unknown as WsConnection) })
+    act(() => { connectAcceptingSocket() })
   })
 
   it('the first cancel clears isStreaming immediately, with no server done', () => {
@@ -86,15 +104,15 @@ describe('second cancel after the first one ended the turn locally', () => {
   it('a second session-scoped cancel sends no frame (completed-turn no-op)', () => {
     act(() => { useChatStore.getState().cancelStream() })
     act(() => { useChatStore.getState().cancelStream() })
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID, shown: { code_points: 0 } }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel()]])
   })
 
   it('a confirmed tree cancel still sends after the turn ended locally', () => {
     act(() => { useChatStore.getState().cancelStream() })
     act(() => { useChatStore.getState().cancelStream(undefined, 'tree') })
     expect(sender.send.mock.calls).toEqual([
-      [{ type: 'cancel', session_id: SID, shown: { code_points: 0 } }],
-      [{ type: 'cancel', session_id: SID, scope: 'tree' }],
+      [boundCancel()],
+      [boundCancel({ scope: 'tree' })],
     ])
   })
 })

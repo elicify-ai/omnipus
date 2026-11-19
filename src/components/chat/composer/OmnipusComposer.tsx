@@ -34,7 +34,6 @@ import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
 import { pendingRedirectSids } from '@/store/chat/runtime-state'
-import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
@@ -52,6 +51,12 @@ import { recipientAddressBlocked } from '@/store/chat/recipientSend'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import { useCancelState } from '@/hooks/useCancelState'
 import type { UseCancelStateResult } from '@/hooks/useCancelState'
+import type { TypedCommand } from '@/hooks/useSlashMenu'
+import { refuseHeldCommand, sendHeldText, sendTypedRedirect } from '@/lib/bound-send'
+import { openDraftKey, canonical } from '@/store/chat/drafts'
+import { useSessionDraftBinding, type SessionComposerBinding } from './useSessionDraftBinding'
+import { UnsentNotice } from './UnsentNotice'
+import { SessionDraftChip } from './SessionDraftChip'
 
 // ── Composer ──────────────────────────────────────────────────────────────────
 
@@ -181,6 +186,8 @@ export interface ComposerConversation { // not-wire-format: React props for the 
   sendBlocked: () => boolean
   /** Notices shown in the box's notice area, above the card (group chat). */
   notices?: React.ReactNode
+  /** #1428 step 2 (spec 4.5): the session binding; absent for rooms (4.13). */
+  binding?: SessionComposerBinding
 }
 
 /** The group chat has no Stop (D21): an inert stop machine that never sends a cancel. */
@@ -267,41 +274,26 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
   // The frame never touches message intake, which lets this chat redirect
   // mid-stream; a swallowed failure would leave the user believing its
   // turn was stopped when it is still running.
-  const sendRedirectFrame = useCallback((frame: RedirectFrame) => {
-    const { connection } = useConnectionStore.getState()
-    if (!connection) {
-      useUiStore.getState().addToast({
-        message: 'Could not send the redirect — the gateway connection is down. Reconnect and run /stop-redirect again.',
-        variant: 'error',
-      })
-      return
-    }
-    const sent = connection.send(frame)
-    if (!sent) {
-      useUiStore.getState().addToast({
-        message: 'Could not send the redirect — connection dropped. This chat\'s turn was NOT stopped; run /stop-redirect again.',
-        variant: 'error',
-      })
-      return
-    }
-    // The server's turn_canceled answer carries no cause; remember this send
-    // so the live view finalises the partial as a redirected turn (no
-    // "(interrupted)"), see runtime-state.ts::pendingRedirectSids.
-    // Only a chat with a streaming turn has anything for the redirect to stop.
-    if (useChatStore.getState().sessionsById[frame.session_id]?.isStreaming) {
-      pendingRedirectSids.add(frame.session_id)
-    }
+  // #1428 step 2 (spec 4.6.1, 4.7): the redirect is a command with a record,
+  // built and handed over by bound-send.ts. A failed or refused hand-over puts
+  // the typed text back and shows the not-stopped notice there.
+  const sendRedirectFrame = useCallback((instruction: string, typed: TypedCommand) => {
+    if (!sendTypedRedirect(instruction, typed)) return
+    const target = canonical(typed.originKey || openDraftKey())
+    if (useChatStore.getState().sessionsById[target]?.isStreaming) pendingRedirectSids.add(target)
   }, [])
+  const binding = useSessionDraftBinding(composerRuntime)
   const slashMenu = useSlashMenu({
     isStreaming,
     isReplaying,
     inputEnabled,
-    composerRuntime,
+    composerRuntime: binding.slashComposer,
     appendMessage,
     // /stop is one Stop-button activation; /cancel stays immediate tree.
     activateStop: cancelState.cancelUnconditional,
     cancelIfStreaming: cancelState.cancelAllTreeScoped,
     sendRedirectFrame,
+    origin: { capture: openDraftKey, refuseSwitched: refuseHeldCommand, sendHeld: sendHeldText },
   })
 
   const sendBlocked = useCallback(() => {
@@ -330,6 +322,7 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
     goalRunning,
     slashMenu,
     sendBlocked,
+    binding,
   }
 }
 
@@ -415,7 +408,11 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
   }, [])
 
 
-  const fileUpload = useFileUpload(composerRuntime)
+  const binding = conversation.binding
+  const fileUpload = useFileUpload(composerRuntime, binding?.fileSink)
+  // #1428 step 2 (spec 4.5 rule 2): the picker's key is captured at the button click.
+  const pickerRef = useRef<HTMLInputElement>(null)
+  const pickerKeyRef = useRef<string | null>(null)
 
   // Fix E (bugfixes3 sign-off): `shouldShowSlash` alone is not "the menu
   // has content to render" — the LOW S8 commandsError carve-out
@@ -646,7 +643,8 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
     // mid-stream Send button/hint even though the composer visually still
     // holds that whitespace.
     const hadSendableText = slashMenu.inputValue.trim().length > 0
-    composerRuntime.send()
+    if (binding) binding.submit()
+    else composerRuntime.send()
     if (hadSendableText) {
       // Fix-4 mirror resync — see the identical call + comment in onSubmit
       // below; the runtime clears its own text on a successful send without
@@ -739,6 +737,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
     >
       {profile.unavailableNotice && <UnavailableChatNotice />}
       {conversation.notices}
+      {binding && <UnsentNotice focusComposer={focusChatInput} />}
       {/* a11y HIGH (Fix 2, restored with the menu — founder decision
           2026-10-11 Q1 B): selecting an agent via "@" changes ONLY the
           composer text (the "@<Name> " address prefix — the recipient is
@@ -886,6 +885,12 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
             // isStreaming guard, interceptClientCommand(), nor the
             // @-recipient block intercepted it above), so this can't clear
             // the mirror out from under a blocked/intercepted send.
+            // #1428 step 2 (spec 4.5 rule 5): the session binding submits the
+            // draft itself; the primitive's composer.send() never runs.
+            if (binding) {
+              e.preventDefault()
+              binding.submit()
+            }
             slashMenu.onInputChange('')
           }}
         >
@@ -893,15 +898,49 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
               context: files, images, anything) instead of the email-era
               paperclip. items-end row → mb-1.5 = (40px single-line input − 28px)/2 centers it against
               the single-line textarea baseline. */}
-          <ComposerPrimitive.AddAttachment
-            disabled={attachDisabled}
-            tabIndex={5}
-            className="shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            aria-label={conversation.attachLabel ?? 'Add files or context'}
-            title={conversation.attachLabel ?? 'Add files or context'}
-          >
-            <Plus size={16} />
-          </ComposerPrimitive.AddAttachment>
+          {binding ? (
+            <>
+              <IconButton
+                type="button"
+                size="sm"
+                disabled={attachDisabled}
+                tabIndex={5}
+                className="shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)]"
+                aria-label={conversation.attachLabel ?? 'Add files or context'}
+                title={conversation.attachLabel ?? 'Add files or context'}
+                onClick={() => {
+                  pickerKeyRef.current = binding.fileSink.capture()
+                  pickerRef.current?.click()
+                }}
+              >
+                <Plus size={16} />
+              </IconButton>
+              <input
+                ref={pickerRef}
+                type="file"
+                multiple
+                hidden
+                data-testid="composer-file-picker"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? [])
+                  const key = pickerKeyRef.current ?? binding.fileSink.capture()
+                  pickerKeyRef.current = null
+                  e.target.value = ''
+                  if (files.length > 0) binding.fileSink.commit(key, files)
+                }}
+              />
+            </>
+          ) : (
+            <ComposerPrimitive.AddAttachment
+              disabled={attachDisabled}
+              tabIndex={5}
+              className="shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label={conversation.attachLabel ?? 'Add files or context'}
+              title={conversation.attachLabel ?? 'Add files or context'}
+            >
+              <Plus size={16} />
+            </ComposerPrimitive.AddAttachment>
+          )}
 
           {/* ADR-051 Rev 4 (Slice H) — attach an existing workspace-library
               entry without re-uploading (FR-022). Disabled alongside the file
@@ -982,6 +1021,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
               aria-autocomplete="list"
               onChange={(e) => {
                 const val = (e.target as HTMLTextAreaElement).value
+                binding?.onTyped(val)
                 slashMenu.onInputChange(val)
                 if (val.length > 1_000_000) {
                   if (!hasWarnedLargeInput.current) {
@@ -1019,7 +1059,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
           {/* The same Stop button confirms a second activation for all 3 s,
               including after streaming and the 1 s stopping label reset.
               No separate Stop-all control (founder 2026-10-06). */}
-          {profile.stop && (isStreaming || goalRunning || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed) ? (
+          {profile.stop && (isStreaming || goalRunning || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed || binding?.notStoppedOpen) ? (
             // tabIndex={6}: this button replaces Send in the exact same ring
             // slot mid-stream (see the composer tab-ring map in
             // ChatControls.tsx) — it must keep Send's slot, not default to 0,
@@ -1133,42 +1173,86 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
             // not just the keyboard path. Send still auto-disables when the
             // composer is empty (no text and no attachments) via the runtime's
             // canSend, so no manual empty-check is needed here either.
-            <ComposerPrimitive.Send
-              disabled={!sendEnabled || isReplaying}
-              data-testid="chat-send"
-              tabIndex={6}
-              onClick={(e) => {
-                if (slashMenu.interceptClientCommand()) {
-                  e.preventDefault()
-                  return
+            binding ? (
+              <Button
+                  type="button"
+                  variant="ghost"
+                disabled={!sendEnabled || isReplaying || !binding.canSend}
+                data-testid="chat-send"
+                tabIndex={6}
+                onClick={(e) => {
+                  if (slashMenu.interceptClientCommand()) {
+                    e.preventDefault()
+                    return
+                  }
+                  // @-recipient no-session block (same contract as onSubmit's):
+                  // preventDefault stops the primitive's own composer.send()
+                  // (composeEventHandlers honours it — see the J correction
+                  // note above), so the composer text is kept.
+                  if (recipientAddressBlockedNow()) {
+                    e.preventDefault()
+                    return
+                  }
+                  binding.submit()
+                  slashMenu.onInputChange('')
+                }}
+                className={cn(
+                  'shrink-0 w-9 h-9 p-0 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
+                  sendEnabled && !isReplaying
+                    ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                      // Muted accent while reconnecting — functional but visually signals
+                      // the message will queue rather than send immediately.
+                      ? 'bg-[var(--color-accent)]/50 text-[var(--color-primary)] hover:bg-[var(--color-accent)]/70'
+                      : 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
+                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
+                )}
+                aria-label={
+                  reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                    ? 'Queue message (will send on reconnect)'
+                    : 'Send message'
                 }
-                // @-recipient no-session block (same contract as onSubmit's):
-                // preventDefault stops the primitive's own composer.send()
-                // (composeEventHandlers honours it — see the J correction
-                // note above), so the composer text is kept.
-                if (recipientAddressBlockedNow()) {
-                  e.preventDefault()
+                aria-disabled={isReplaying || undefined}
+              >
+                <PaperPlaneRight size={15} weight="bold" />
+              </Button>
+            ) : (
+              <ComposerPrimitive.Send
+                disabled={!sendEnabled || isReplaying}
+                data-testid="chat-send"
+                tabIndex={6}
+                onClick={(e) => {
+                  if (slashMenu.interceptClientCommand()) {
+                    e.preventDefault()
+                    return
+                  }
+                  // @-recipient no-session block (same contract as onSubmit's):
+                  // preventDefault stops the primitive's own composer.send()
+                  // (composeEventHandlers honours it — see the J correction
+                  // note above), so the composer text is kept.
+                  if (recipientAddressBlockedNow()) {
+                    e.preventDefault()
+                  }
+                }}
+                className={cn(
+                  'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
+                  sendEnabled && !isReplaying
+                    ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                      // Muted accent while reconnecting — functional but visually signals
+                      // the message will queue rather than send immediately.
+                      ? 'bg-[var(--color-accent)]/50 text-[var(--color-primary)] hover:bg-[var(--color-accent)]/70'
+                      : 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
+                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
+                )}
+                aria-label={
+                  reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                    ? 'Queue message (will send on reconnect)'
+                    : 'Send message'
                 }
-              }}
-              className={cn(
-                'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
-                sendEnabled && !isReplaying
-                  ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
-                    // Muted accent while reconnecting — functional but visually signals
-                    // the message will queue rather than send immediately.
-                    ? 'bg-[var(--color-accent)]/50 text-[var(--color-primary)] hover:bg-[var(--color-accent)]/70'
-                    : 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
-                  : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
-              )}
-              aria-label={
-                reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
-                  ? 'Queue message (will send on reconnect)'
-                  : 'Send message'
-              }
-              aria-disabled={isReplaying || undefined}
-            >
-              <PaperPlaneRight size={15} weight="bold" />
-            </ComposerPrimitive.Send>
+                aria-disabled={isReplaying || undefined}
+              >
+                <PaperPlaneRight size={15} weight="bold" />
+              </ComposerPrimitive.Send>
+            )
           )}
         </ComposerPrimitive.Root>
 
@@ -1204,7 +1288,9 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
             LibraryAttachmentChips renders staged workspace-library reuse refs
             (ADR-051 Rev 4 / Slice H) alongside them. */}
         <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-2)] empty:hidden [&:has(*)]:pb-[var(--space-2)]">
-          <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
+          {binding
+            ? binding.files.map((file) => <SessionDraftChip key={file.id} file={file} onRemove={() => binding.removeFile(file.id)} />)
+            : <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />}
           {profile.mediaLibrary && <LibraryAttachmentChips />}
         </div>
 

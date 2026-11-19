@@ -17,6 +17,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { clearPendingAutoApproveOnSessionChange, knownSessionDescriptor, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
+import { enterBlockedNoChat } from '@/store/session/newChatKey'
 
 export type WorkspaceEntryView = (
   | { status: 'exact'; acknowledged: false }
@@ -308,9 +309,7 @@ function applyEntry(
   if (result.status === 'unavailable' || result.status === 'empty-team') {
     if (!stillViewing) return
     useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
-    if (useSessionStore.getState().activeSessionId !== null) {
-      useSessionStore.getState().setActiveSession(null)
-    }
+    if (useSessionStore.getState().activeSessionId !== null) enterBlockedNoChat(result.status)
     return
   }
 

@@ -131,6 +131,8 @@ export interface ObservedRequest {
   path: string
   query: string
   body: unknown
+  /** Form field values when the body is FormData. File parts are `file:<name>`. Session uploads put `session_id` here, not in the URL (spec BR-22). */
+  form: Record<string, string> | null
   credentials: RequestCredentials | undefined
   headers: Headers
 }
@@ -146,6 +148,15 @@ export const effortConfig = {
 
 export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+function formFieldMap(body: BodyInit | null | undefined): Record<string, string> | null {
+  if (typeof FormData === 'undefined' || !(body instanceof FormData)) return null
+  const fields: Record<string, string> = {}
+  for (const [key, value] of body.entries()) {
+    fields[key] = value instanceof File ? `file:${value.name}` : String(value)
+  }
+  return fields
 }
 
 export class Network {
@@ -201,6 +212,7 @@ export class Network {
       method: (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase(),
       path: url.pathname, query: url.search,
       body: typeof init?.body === 'string' ? JSON.parse(init.body) as unknown : null,
+      form: formFieldMap(init?.body),
       credentials: init?.credentials, headers: new Headers(init?.headers),
     }
     this.requests.push(request)

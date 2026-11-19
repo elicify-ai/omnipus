@@ -367,6 +367,45 @@ function getWsUrl(): string {
   return `${wsBase}/api/v1/chat/ws`
 }
 
+// ── Send capability (#1428 step 2, spec 4.10) ───────────────────────────────
+//
+// Every socket starts `unconfirmed`. The first application frame decides:
+// an `error` frame leaves it unconfirmed (an auth refusal is followed by close
+// 1008, which runs forceLogout; never a version mismatch); a valid
+// `server_capabilities{send_origin: true}` makes it `supported`; anything else
+// makes it `unsupported` (an old engine). A previous socket's state never
+// carries over and a retired socket's late frame is ignored (onmessage drops
+// it). While not `supported`, no message/redirect/cancel frame may leave the
+// browser (lib/bound-send.ts gates on this).
+
+export type SendCapability = 'unconfirmed' | 'supported' | 'unsupported'
+
+export interface ConnectionEvent { // not-wire-format: in-browser connection lifecycle notification
+  type: 'open' | 'close' | 'capability'
+  connection: WsConnection
+  generation: number
+  capability: SendCapability
+}
+
+const connectionListeners = new Set<(event: ConnectionEvent) => void>()
+
+/** Lifecycle of every WsConnection socket: open, close, capability decided. */
+export function subscribeConnectionEvents(listener: (event: ConnectionEvent) => void): () => void {
+  connectionListeners.add(listener)
+  return () => { connectionListeners.delete(listener) }
+}
+
+function emitConnectionEvent(event: ConnectionEvent): void {
+  for (const listener of [...connectionListeners]) listener(event)
+}
+
+/** Classifies the first application frame of a socket (spec 4.10, in order). */
+function classifyFirstFrame(sniff: { type?: unknown; send_origin?: unknown }): SendCapability | null {
+  if (sniff.type === 'error') return null
+  if (sniff.type === 'server_capabilities' && sniff.send_origin === true) return 'supported'
+  return 'unsupported'
+}
+
 // ── Connection ────────────────────────────────────────────────────────────────
 
 export interface WsConnectionCallbacks { // not-wire-format: SPA-only callback interface passed to WsConnection constructor. Never serialized to or from the gateway — purely internal to the SPA's WebSocket connection manager.
@@ -401,6 +440,10 @@ export class WsConnection {
    * "an attach_session is already in flight" - can tell it is stale.
    */
   get socketGeneration(): number { return this._socketGeneration }
+  private _sendCapability: SendCapability = 'unconfirmed'
+  private _capabilityDecided = false
+  /** This socket generation's send capability (spec 4.10). */
+  get sendCapability(): SendCapability { return this._sendCapability }
   /** Fast-phase attempt counter — resets on successful connect. */
   private reconnectAttempts = 0
   /** Slow-phase attempt counter — resets on successful connect. */
@@ -768,6 +811,10 @@ export class WsConnection {
       // gateway's authenticateWS resolves identity from that cookie on the
       // handshake; a missing/invalid cookie closes with 1008 (handled below).
       this._startHeartbeat()
+      // Spec 4.10: unconfirmed is set before onConnected runs (F-bb).
+      this._sendCapability = 'unconfirmed'
+      this._capabilityDecided = false
+      emitConnectionEvent({ type: 'open', connection: this, generation: this._socketGeneration, capability: 'unconfirmed' })
       this.callbacks.onConnected()
     }
 
@@ -780,12 +827,13 @@ export class WsConnection {
       // so it never enters the batch (transport-layer only).
       let maybePong = false
       try {
-        const sniff = JSON.parse(raw) as { type?: string }
+        const sniff = JSON.parse(raw) as { type?: string; send_origin?: unknown }
         if (sniff && typeof sniff.type === 'string') {
           // Any parseable frame with a type field counts as "alive".
           this._receivedSinceLastPing = true
           this.missedPingCount = 0
           if (sniff.type === 'pong') maybePong = true
+          else if (!this._capabilityDecided) this._decideCapability(sniff)
         }
       } catch {
         // Not JSON — will be caught and dropped during full parse below.
@@ -837,9 +885,24 @@ export class WsConnection {
   // can leave the UI falsely connected while an unreachable peer never
   // answers. Takes only the two fields it reads, so a synthetic
   // {code, reason} literal is a legal argument.
+  /** Spec 4.10: the first application frame decides this socket's capability. */
+  private _decideCapability(sniff: { type?: unknown; send_origin?: unknown }): void {
+    const decided = classifyFirstFrame(sniff)
+    if (decided === null) return
+    this._capabilityDecided = true
+    this._sendCapability = decided
+    emitConnectionEvent({ type: 'capability', connection: this, generation: this._socketGeneration, capability: decided })
+  }
+
   private _handleClose(event: Pick<CloseEvent, 'code' | 'reason'>): void {
     // Drop this socket from the test-visible registry before nulling.
     this._removeSocketFromRegistry()
+    // Spec 4.7: commands handed to this socket and not yet received become
+    // uncertain. The generation ends here; the next socket starts unconfirmed.
+    const closedGeneration = this._socketGeneration
+    this._sendCapability = 'unconfirmed'
+    this._capabilityDecided = false
+    emitConnectionEvent({ type: 'close', connection: this, generation: closedGeneration, capability: 'unconfirmed' })
 
     // An incomplete attach must not survive into the next socket generation.
     // Existing disconnect/reconnect reducers expose reachability and release
