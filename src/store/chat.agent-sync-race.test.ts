@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { enterNewChat } from '@/store/session/newChatKey'
 
 const MINTED_SID = 'agent-sync-race-minted-sid'
 
@@ -73,12 +74,15 @@ describe('chat — session_started agent sync with the session owner', () => {
 
   it('keeps the pending session owner when a different agent hint arrives before its ack', () => {
     const send = connectWithSendSpy()
+    // Spec 4.4.1 / 4.6.1: the mint is reached by enterNewChat and carries {new_chat, K}.
+    const openedKey = enterNewChat(null, 'mia')
     act(() => {
       useChatStore.getState().sendMessage('delegate something', { clientMessageId: 'owner-race-first' })
     })
     expect(send).toHaveBeenCalledTimes(1)
     expect(send).toHaveBeenNthCalledWith(1, {
       type: 'message', content: 'delegate something', client_message_id: 'owner-race-first', agent_id: 'mia',
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
     })
 
     // Wave-2 removed the picker: setActiveSession on the same id is a hint,
@@ -103,9 +107,11 @@ describe('chat — session_started agent sync with the session owner', () => {
       useChatStore.getState().sendMessage('next turn', { clientMessageId: 'owner-race-followup' })
     })
     expect(send).toHaveBeenCalledTimes(2)
+    // Spec 4.4.1: the chat K just created still carries {new_chat, K} (keyBySession), not a saved-chat origin.
     expect(send).toHaveBeenNthCalledWith(2, {
       type: 'message', session_id: MINTED_SID, content: 'next turn',
       client_message_id: 'owner-race-followup', agent_id: 'mia',
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
     })
   })
 
@@ -113,6 +119,8 @@ describe('chat — session_started agent sync with the session owner', () => {
     // Guard against over-correction: the marker is cleared on the first ack,
     // so a later session binding is not mistaken for a same-session hint.
     const send = connectWithSendSpy()
+    // Spec 4.4.1: this later-ack case starts from a real new chat, not a session-less send.
+    enterNewChat(null, 'mia')
     act(() => {
       useChatStore.getState().sendMessage('first')
     })

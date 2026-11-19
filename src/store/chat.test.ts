@@ -7,6 +7,7 @@ import { useSessionStore } from './session'
 import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useWhatsAppPairingStore } from './whatsappPairing'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
 import type { WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
 import type { WsConnection, ServerFrame } from '@/lib/ws'
 
@@ -965,6 +966,7 @@ describe('chat store — #253 no-session send failure preserves a retriable unco
     const content = 'Hello no-session'
     const clientMessageId = '253-no-session-client'
     const mockSend = vi.fn<WsConnection['send']>().mockReturnValue(false)
+    let openedKey = ''
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
@@ -972,7 +974,8 @@ describe('chat store — #253 no-session send failure preserves a retriable unco
         isConnected: true,
         connectionError: null,
       })
-      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'general-assistant' })
+      // Spec 4.4.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+      openedKey = enterNewChat(null, 'general-assistant')
       useChatStore.getState().sendMessage(content, { clientMessageId })
     })
 
@@ -981,6 +984,7 @@ describe('chat store — #253 no-session send failure preserves a retriable unco
     const originalFrame = structuredClone(mockSend.mock.calls[0][0])
     expect(originalFrame, 'C2: retain the requested text and wire identity').toMatchObject({
       type: 'message', content, client_message_id: clientMessageId, agent_id: 'general-assistant',
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
     })
     expect(originalFrame, 'C2: first send has no confirmed session').not.toHaveProperty('session_id')
     expect(state.messages.filter((m) => m.role === 'user')
@@ -1010,21 +1014,23 @@ describe('chat store — #253 no-session send failure preserves a retriable unco
     //   Then a user message with content 'Hello' is visible (not status:'error')
     //   And isStreaming is true (awaiting session_started ack)
     const mockSend = vi.fn().mockReturnValue(true)
+    let openedKey = ''
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
         isConnected: true,
       })
-      useSessionStore.setState({
-        activeSessionId: null,
-        activeAgentId: 'general-assistant',
-      })
+      // Spec 4.4.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+      openedKey = enterNewChat(null, 'general-assistant')
       useChatStore.getState().sendMessage('Hello pending')
     })
 
     const state = useChatStore.getState()
     const userMsg = state.messages.find((m) => m.role === 'user' && m.content === 'Hello pending')
+    expect(mockSend.mock.calls[0]?.[0], 'spec 4.6.1: the first frame names the new chat').toMatchObject({
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
+    })
     expect(userMsg).toBeDefined()
     // status should be 'done' (successfully queued, awaiting session_started)
     expect(userMsg?.status).toBe('done')

@@ -31,6 +31,14 @@ import type { WsConnection } from '@/lib/ws'
 import type { Agent } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
 import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
+import { enterNewChat } from '@/store/session/newChatKey'
+
+/** Spec 4.4.1: a brand-new chat is entered with a key before any send. */
+function openNewChat(agentId: string | null): string {
+  let key = ''
+  act(() => { key = enterNewChat(null, agentId) })
+  return key
+}
 
 const TEST_SESSION_ID = 'sess_recipient_test'
 const WORKSPACE_ID = 'ws_recipient_test'
@@ -211,6 +219,7 @@ describe('sendMessage — the @-recipient rides the frame with session_id', () =
 
 describe('the outbound queue holds an @-addressed message while no session exists', () => {
   it('a queued @-message does not drain into an unaddressed first send: it holds with a visible warning', () => {
+    openNewChat(null)
     // Offline: the @-message queues (existing offline buffering).
     act(() => { useChatStore.getState().sendMessage('@Mia please review X') })
     expect(useChatStore.getState().outboundQueue).toHaveLength(1)
@@ -226,6 +235,7 @@ describe('the outbound queue holds an @-addressed message while no session exist
   })
 
   it('once a session exists, the held message drains WITH its recipient', () => {
+    openNewChat(null)
     act(() => { useChatStore.getState().sendMessage('@Mia please review X') })
     const send = connectWithSendSpy()
     act(() => { useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' }) })
@@ -242,6 +252,7 @@ describe('the outbound queue holds an @-addressed message while no session exist
   })
 
   it('an unaddressed queued message drains exactly as before (no behavioural change)', () => {
+    openNewChat(null)
     act(() => { useChatStore.getState().sendMessage('plain first message') })
     const send = connectWithSendSpy()
     act(() => { useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' }) })
@@ -306,8 +317,8 @@ describe('resendMessage (Retry) re-derives the recipient from the kept content',
 
 describe('first-send payloads never carry a recipient', () => {
   it('the minting frame (no session_id) omits recipient even for @-prefixed text — the composer blocks that path in the UI', () => {
-    // B1/B2: an owner is required to mint a chat; recipient assertions stay exact.
-    act(() => { useSessionStore.setState({ activeAgentId: 'jim', activeAgentType: 'core' }) })
+    // Spec 4.4.1 / 4.6.1: the minting frame is reached by enterNewChat and carries {new_chat, K}.
+    const openedKey = openNewChat('jim')
     const send = connectWithSendSpy()
 
     act(() => { useChatStore.getState().sendMessage('@Mia please review X') })
@@ -315,7 +326,10 @@ describe('first-send payloads never carry a recipient', () => {
     // The frame went out (this store-level guard is defence in depth; the
     // composer's visible block is what the user meets first) — without a
     // recipient, because recipient is valid only together with session_id.
-    expect(sentPayloads(send)[0]).toMatchObject({ type: 'message', content: '@Mia please review X' })
+    expect(sentPayloads(send)[0]).toMatchObject({
+      type: 'message', content: '@Mia please review X',
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
+    })
     expect(sentPayloads(send)[0].recipient).toBeUndefined()
     expect(sentPayloads(send)[0].session_id).toBeUndefined()
   })
@@ -366,6 +380,7 @@ describe('C8 — the @ address is never dropped silently', () => {
     // cache): the address cannot be checked.
     act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
     expect(queryClient.getQueryData(['agents'])).toBeUndefined()
+    openNewChat(null)
 
     act(() => { useChatStore.getState().sendMessage('@Mia please review X') }) // offline → queued
     expect(useChatStore.getState().outboundQueue).toHaveLength(1)
@@ -452,6 +467,7 @@ describe('C8 — a FAILED agents list (not merely loading) says so and offers Re
 
   it('the drain hold on a FAILED roster keeps holding (no silent drop) but says "could not be loaded" and kicks a roster refetch', async () => {
     useChatStore.setState({ outboundQueue: [], pendingDrainQueue: [] })
+    openNewChat(null)
     act(() => { useChatStore.getState().sendMessage('@Mia please review X') }) // disconnected → queued
     expect(useChatStore.getState().outboundQueue).toHaveLength(1)
 

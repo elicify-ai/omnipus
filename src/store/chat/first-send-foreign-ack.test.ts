@@ -18,8 +18,15 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
+
 import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
+function withNewChatOrigin<T extends object>(frame: T): T & { origin: { kind: 'new_chat'; new_chat_key: string } } {
+  return { ...frame, origin: { kind: 'new_chat', new_chat_key: openedKey } }
+}
 const A_ID = 'f1140-client-a'
 const A_TEXT = 'First message of chat A, never confirmed.'
 const A_WORKSPACE = 'f1140-workspace-a'
@@ -28,7 +35,7 @@ let run = 0
 let CHAT_B = 'f1140-chat-b'
 let FOREIGN_ID = 'f1140-client-b'
 
-const ORIGINAL_A_FRAME: MessageFrame = {
+const BASE_ORIGINAL_A_FRAME: MessageFrame = {
   type: 'message', client_message_id: A_ID, content: A_TEXT, agent_id: 'mia',
   metadata: { model_name: A_MODEL, workspace_id: A_WORKSPACE }, auto_approve: false,
 }
@@ -63,10 +70,11 @@ function unconfirmedAThenForeignB() {
     useConnectionStore.getState().setConnected(true)
     useWorkspacesStore.setState({ activeWorkspaceId: A_WORKSPACE })
     useChatStore.setState({ pendingAutoApproveChoice: false })
+    openedKey = enterNewChat(A_WORKSPACE, 'mia')
     useChatStore.getState().sendMessage(A_TEXT, { clientMessageId: A_ID, model_name: A_MODEL })
   })
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: A went out once as a chat-less first message')
-    .toStrictEqual([ORIGINAL_A_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_A_FRAME)])
 
   // The acknowledgement for A was lost; the connection drops and comes back.
   act(() => {
@@ -99,7 +107,7 @@ const REFUSAL = 'This message belongs to another chat, send it again.'
 const toastMessages = () => useUiStore.getState().toasts.map((t) => t.message)
 
 const ORPHAN_OTHER_PENDING = () => ({
-  clientMessageId: 'f1140-other-first-send', payload: { ...ORIGINAL_A_FRAME, client_message_id: 'f1140-other-first-send', content: 'Another first message' },
+  clientMessageId: 'f1140-other-first-send', payload: { ...withNewChatOrigin(BASE_ORIGINAL_A_FRAME), client_message_id: 'f1140-other-first-send', content: 'Another first message' },
   workspaceId: null, attemptGeneration: 99, sessionId: null, assistantPlaceholderId: 'f1140-other-placeholder', status: 'unconfirmed' as const,
 })
 
@@ -174,6 +182,8 @@ describe('#1140: Retry on an unconfirmed first message never targets another cha
       useConnectionStore.getState().setConnected(true)
       useWorkspacesStore.setState({ activeWorkspaceId: A_WORKSPACE })
       useChatStore.setState({ pendingAutoApproveChoice: false })
+      // Spec 4.4.1: this first message is reached by enterNewChat, not a session-less send.
+      openedKey = enterNewChat(A_WORKSPACE, 'mia')
       useChatStore.getState().sendMessage(A_TEXT, { clientMessageId: A_ID, model_name: A_MODEL })
     })
     act(() => {
@@ -184,7 +194,7 @@ describe('#1140: Retry on an unconfirmed first message never targets another cha
     })
     expect(useChatStore.getState().pendingFirstSend?.status).toBe('unconfirmed')
     act(() => { useChatStore.getState().resendMessage(A_ID) })
-    expect(resent(sender), 'exactly the original chat-less request goes out again').toStrictEqual([ORIGINAL_A_FRAME])
+    expect(resent(sender), 'exactly the original chat-less request goes out again').toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_A_FRAME)])
     expect(toastMessages()).not.toContain(REFUSAL)
   })
 })
