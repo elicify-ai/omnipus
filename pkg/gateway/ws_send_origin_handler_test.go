@@ -87,7 +87,7 @@ func soLiveFrameDelivered(t *testing.T, s *sendOriginSrv, conn *websocket.Conn, 
 	raw, err := json.Marshal(generated.UserMessageFrame{Type: "user_message", SessionId: chatID, Content: marker, Id: "so-live-" + phase})
 	require.NoError(t, err)
 	s.handler.hubs.getOrCreate(chatID).publish(raw)
-	frames := soWindow(t, conn, soRequesterWindow)
+	frames := soSettle(t, conn)
 	var observed []generated.UserMessageFrame
 	for _, frame := range frames {
 		if frame.Type == "user_message" {
@@ -223,7 +223,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		b := s.mintChat(t, conn, soKeyB, "SV-4 mint")
 		soSend(t, conn, soMessage(&b, nil, "so-sv4-m1", "old tab send"))
-		frames := soWindow(t, conn, soRequesterWindow)
+		frames := soSettle(t, conn)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab message must get the OUTDATED error (window: %v)", soTypes(frames))
 		require.NotNil(t, errs[0].SessionId, "old-tab refusal must name its exact target")
@@ -240,7 +240,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		conn := s.dialBrowserConn(t)
 		drainAdmissionOneShot(t, conn)
 		soSend(t, conn, soMessage(nil, nil, "so-sv4-first", "old tab first send"))
-		frames := soWindow(t, conn, soRequesterWindow)
+		frames := soSettle(t, conn)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab first message must get the not_saved reply (window: %v)", soTypes(frames))
 		require.Nil(t, errs[0].SessionId, "SV-4: the first-message reply carries no session_id")
@@ -257,7 +257,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		b := s.mintChat(t, conn, soKeyB, "SV-4 redirect mint")
 		soSend(t, conn, generated.RedirectFrame{Type: "redirect", SessionId: b, Instruction: "old tab redirect"})
-		frames := soWindow(t, conn, soRequesterWindow)
+		frames := soSettle(t, conn)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab redirect must get its error (window: %v)", soTypes(frames))
 		require.NotNil(t, errs[0].SessionId, "old-tab refusal must name its exact target")
@@ -276,7 +276,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		b := s.mintChat(t, conn, soKeyB, "SV-4 cancel mint")
 		soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b})
-		frames := soWindow(t, conn, soRequesterWindow)
+		frames := soSettle(t, conn)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab cancel must get its error (window: %v)", soTypes(frames))
 		require.Equal(t, soOutdatedStop, errs[0].Message, "SV-4: OUTDATED_STOP text is exact")
@@ -290,7 +290,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		b := s.mintChat(t, conn, soKeyB, "SV-4 no-id mint")
 		raw := []byte(`{"type":"message","agent_id":"mia","session_id":"` + b + `","content":"no id"}`)
 		soSend(t, conn, raw)
-		frames := soWindow(t, conn, soRequesterWindow)
+		frames := soSettle(t, conn)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the no-id old-tab message must still get its notice (window: %v)", soTypes(frames))
 		require.NotNil(t, errs[0].ClientMessageId, "SV-4: the synthetic id is present")
@@ -308,7 +308,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		soSend(t, conn, []byte(`{"type":"message","agent_id":"mia","session_id":7,"client_message_id":"so-m8b","content":"x"}`))
 		// M-9: absent target and no valid id.
 		soSend(t, conn, []byte(`{"type":"message","agent_id":"mia","content":"no target no id"}`))
-		frames := soWindow(t, conn, 2*time.Second)
+		frames := soSettle(t, conn)
 		require.Empty(t, frames, "M-8b/M-9: an unroutable old-tab frame gets ZERO replies (got %v)", soTypes(frames))
 	})
 }
@@ -401,7 +401,7 @@ func TestSendOriginHandler_SV18_ReceiptObligationTable(t *testing.T) {
 			drainAdmissionOneShot(t, conn)
 			b := s.mintChat(t, conn, soKeyB, "SV-18 mint "+tc.name)
 			soSend(t, conn, tc.send(b))
-			frames := soWindow(t, conn, soRequesterWindow)
+			frames := soSettle(t, conn)
 			receipts := 0
 			receiptIdx := -1
 			effectIdx := -1

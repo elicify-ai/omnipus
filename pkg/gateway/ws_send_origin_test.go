@@ -30,6 +30,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -253,6 +254,60 @@ func soWindow(t *testing.T, conn *websocket.Conn, window time.Duration, stopType
 	}
 }
 
+// soBarrierPings remembers when soSettle last received a barrier pong on each
+// connection: the server answers at most one ping per 100 ms per connection
+// (websocket.go::dispatchFrame), so a faster second ping would get no pong.
+var soBarrierPings sync.Map // *websocket.Conn -> time.Time
+
+// soBarrierGap keeps consecutive barrier pings outside that debounce.
+const soBarrierGap = 110 * time.Millisecond
+
+// soSettle returns every frame the server sends on conn in reply to the frames
+// already written to it, without a fixed wait. The server reads one
+// connection's frames one at a time and handles each fully in its read loop
+// (websocket.go::dispatchFrame) before reading the next; the pong to a ping
+// sent now is queued on the same outbound queue after everything that
+// handling queued. So the frames before that pong are the complete synchronous
+// reply — refusals, old-tab notices, refusal snapshots, receipts, the first
+// cancel stage, cancel_idle, and anything a hub publish already returned —
+// and the pong itself is not returned. Use soWindow instead when a check needs
+// frames produced later by a running turn (tokens, done, a forced stop).
+// A missing pong fails the test instead of passing an empty window.
+func soSettle(t *testing.T, conn *websocket.Conn) []soFrame {
+	t.Helper()
+	if last, ok := soBarrierPings.Load(conn); ok {
+		if wait := soBarrierGap - time.Since(last.(time.Time)); wait > 0 {
+			time.Sleep(wait)
+		}
+	} else {
+		t.Cleanup(func() { soBarrierPings.Delete(conn) })
+	}
+	soSend(t, conn, generated.PingFrame{Type: string(generated.WsFrameTypePing)})
+	reader := soReaderFor(t, conn)
+	timer := time.NewTimer(lifecycleEW)
+	defer timer.Stop()
+	var out []soFrame
+	for {
+		select {
+		case result := <-reader.frames:
+			require.NoError(t, result.err, "observation reader must remain live")
+			var peek wsTypeOnly
+			require.NoError(t, json.Unmarshal(result.raw, &peek), "every frame must decode")
+			if peek.Type == string(generated.WsFrameTypePong) {
+				// The server's debounce runs from when it SENT this pong, which
+				// can be long after the ping was written (the read loop first
+				// finishes the frames ahead of it); receipt is never earlier.
+				soBarrierPings.Store(conn, time.Now())
+				return out
+			}
+			out = append(out, soFrame{Type: peek.Type, Raw: result.raw})
+		case <-timer.C:
+			t.Fatalf("barrier: no pong within %s; frames so far: %v", lifecycleEW, soTypes(out))
+			return nil
+		}
+	}
+}
+
 func soTypes(frames []soFrame) []string {
 	types := make([]string, len(frames))
 	for i, f := range frames {
@@ -297,7 +352,7 @@ func TestCheckSendOrigin(t *testing.T) {
 		a := s.mintChat(t, conn, soKeyA, "check-mismatch other")
 		before := s.transcriptLen(t, b)
 		soSend(t, conn, soMessage(&b, soChatOrigin(a), "so-mismatch-1", "borrowed origin"))
-		frames := soWindow(t, conn, 4*time.Second)
+		frames := soSettle(t, conn)
 		refused := soRefusedFrame(t, frames, "4.3.1 kind chat, target != origin.session_id")
 		require.Equal(t, "wrong_chat", refused.Reason)
 		require.Equal(t, "message", refused.RefusedFrame, "refused_frame must name the message")
@@ -327,7 +382,7 @@ func TestCheckSendOrigin(t *testing.T) {
 				bindIdleCancelFixture(t, conn, b)
 				before := s.transcriptLen(t, b)
 				soSend(t, conn, row.raw)
-				frames := soWindow(t, conn, 4*time.Second)
+				frames := soSettle(t, conn)
 				refused := soRefusedFrame(t, frames, "P1a row: "+row.name)
 				require.Equal(t, "origin_malformed", refused.Reason, "P1a row %s: wrong reason (frames: %v)", row.name, soTypes(frames))
 				require.Equal(t, "message", refused.RefusedFrame, "P1a row %s: wrong refused_frame", row.name)
@@ -370,7 +425,7 @@ func TestCheckSendOrigin(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		sv9 := s.mintChat(t, conn, soKeyA, "SV-9 mint")
 		soSend(t, conn, soMessage(&sv9, soNewChatOrigin(soKeyB), "so-sv9-1", "borrowed creation"))
-		frames := soWindow(t, conn, 4*time.Second)
+		frames := soSettle(t, conn)
 		refused := soRefusedFrame(t, frames, "SV-9 (origin {new_chat, K2} against S keyed K1)")
 		require.Equal(t, "wrong_chat", refused.Reason)
 	})
@@ -383,7 +438,7 @@ func TestCheckSendOrigin(t *testing.T) {
 		meta, err := s.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
 		require.NoError(t, err, "SETUP: keyless chat")
 		soSend(t, conn, soMessage(&meta.ID, soNewChatOrigin(soKeyB), "so-keyless-1", "key against keyless"))
-		frames := soWindow(t, conn, 4*time.Second)
+		frames := soSettle(t, conn)
 		refused := soRefusedFrame(t, frames, "SV-9 second row (S with no key)")
 		require.Equal(t, "wrong_chat", refused.Reason)
 	})

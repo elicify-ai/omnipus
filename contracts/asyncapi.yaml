@@ -183,6 +183,8 @@ channels:
         $ref: '#/components/messages/RoomMetaFrame'
       OpenInLibraryFrame:
         $ref: '#/components/messages/OpenInLibraryFrame'
+      TurnStartedFrame:
+        $ref: '#/components/messages/TurnStartedFrame'
       ChatPresenceFrame:
         $ref: '#/components/messages/ChatPresenceFrame'
   browser:
@@ -772,6 +774,17 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/CommandReceivedFrame'
+  receiveTurnStarted:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: '#1428 step 2. Live-only notice that a foreground turn of the chat started, naming it before its first token.
+      Delivered unsequenced to the connections bound to the session at that moment, always after the previous turn''s
+      done; never journaled, persisted or replayed (a reconnecting tab reads session_state.active_turn instead).
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/TurnStartedFrame'
   receivePong:
     action: receive
     channel:
@@ -1391,6 +1404,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/OpenInLibraryFrame'
+    TurnStartedFrame:
+      name: TurnStartedFrame
+      title: turn_started
+      summary: Live-only notice naming a foreground turn as it starts (server → client, #1428 step 2).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/TurnStartedFrame'
     ToolApprovalRequiredFrame:
       name: ToolApprovalRequiredFrame
       title: tool_approval_required
@@ -2918,6 +2938,7 @@ components:
       - send_refused
       - server_capabilities
       - command_received
+      - turn_started
     SendOrigin:
       title: SendOrigin
       description: >
@@ -6989,6 +7010,40 @@ components:
         started_at:
           type: string
           format: date-time
+    TurnStartedFrame:
+      title: TurnStartedFrame
+      description: >
+        Server → client, live only (#1428 step 2, UAT-15 option A). Sent when a
+        foreground turn of the chat session starts, to every connection bound to
+        that session at that moment, so a tab knows the running turn's id before
+        its first token (or when it never streams a token). Sent for every turn
+        start: a new message, a queued follow-up, a redirect's new turn and a
+        revived helper. The previous turn's done is always delivered before the
+        next turn's turn_started. Delivered unsequenced: never numbered,
+        journaled, persisted or replayed, so it has no seq property; a tab that
+        reconnects learns the running turn from session_state.active_turn, which
+        names the same turn. Keep in sync by hand with
+        contracts/components/schemas/TurnStartedFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - active_turn
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: turn_started
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Chat session the turn runs in.
+        active_turn:
+          $ref: '#/components/schemas/SessionStateActiveTurn'
+          description: >
+            The turn that just started, in the same shape (and with the same values)
+            as session_state.active_turn reports while it runs.
     SessionStateFrame:
       title: SessionStateFrame
       description: 'Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array
