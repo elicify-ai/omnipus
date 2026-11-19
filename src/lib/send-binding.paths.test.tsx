@@ -18,6 +18,7 @@ import {
 // The harness mocks `@/lib/api`. Everything below must stay under that
 // import so a direct importer binds the mock, not the real upload client.
 import { useChatStore } from '@/store/chat'
+import { aliasNewChat, getDraft, setDraftText } from '@/store/chat/drafts'
 import { useSessionStore } from '@/store/session'
 import { openOmnipusChat } from '@/store/omnipusChat'
 import { makeBucketMessages } from '@/store/chat/messages'
@@ -29,8 +30,79 @@ import { requireFn } from '@/test/send-binding.module'
 
 const PANEL = 'panel-1'
 const OMNIPUS_MAIN = 'omnipus-main'
+const LINGERING_KEY = 'K-linger-0123456789'
+const ALIAS_KEY = 'K-alias-0123456789'
+
+function seedUnfinished(text: string): void {
+  const message = {
+    id: 'user-saved',
+    role: 'user' as const,
+    content: text,
+    timestamp: '2026-01-01T00:00:00Z',
+    status: 'done' as const,
+    firstSendStatus: 'unfinished' as const,
+  }
+  act(() => {
+    useChatStore.setState((s) => ({
+      ...s,
+      sessionsById: {
+        'chat-a': {
+          ...emptySessionState(),
+          ...makeBucketMessages([message]),
+          history: emptyHistoryState(),
+          isStreaming: false,
+          isReplaying: false,
+          toolCalls: {},
+          toolCallOrder: [],
+        },
+      },
+    }))
+  })
+}
+
+function registerGenerateAgainCases(): void {
+  it('MU-8 Generate again ignores a lingering new-chat key and leaves the draft', () => {
+    // Spec 4.6.1 Generate again: origin is {chat, that chat}, even if a
+    // new-chat key is still sitting on the session store.
+    resetBindingWorld()
+    seedUnfinished('saved question')
+    setDraftText('chat-a', 'leave this draft')
+    act(() => { useSessionStore.setState({ newChatKey: LINGERING_KEY }) })
+    act(() => { useChatStore.getState().generateFirstSendAgain('user-saved') })
+    expect(framesOf('message', connection().sent), 'MU-8: the saved chat, not the lingering key').toEqual([
+      expect.objectContaining({
+        type: 'message',
+        content: 'saved question',
+        session_id: 'chat-a',
+        origin: { kind: 'chat', session_id: 'chat-a' },
+      }),
+    ])
+    expect(getDraft('chat-a').text, 'MU-8: the open draft is not rewritten').toBe('leave this draft')
+  })
+
+  it('MU-8-alias Generate again keeps {chat, S} when S is aliased from K', () => {
+    // Spec 4.6.1: Generate again is not a new-chat follow-up. An alias that
+    // would make originForKey(S) return {new_chat, K} does not apply.
+    resetBindingWorld()
+    seedUnfinished('saved question')
+    aliasNewChat(ALIAS_KEY, 'chat-a')
+    setDraftText('chat-a', 'leave this draft')
+    act(() => { useChatStore.getState().generateFirstSendAgain('user-saved') })
+    expect(framesOf('message', connection().sent), 'MU-8-alias: origin stays {chat, S}').toEqual([
+      expect.objectContaining({
+        type: 'message',
+        content: 'saved question',
+        session_id: 'chat-a',
+        origin: { kind: 'chat', session_id: 'chat-a' },
+      }),
+    ])
+    expect(getDraft('chat-a').text, 'MU-8-alias: the open draft is not rewritten').toBe('leave this draft')
+  })
+}
 
 describe('capture and non-navigation paths (spec 4.6.1)', () => {
+  registerGenerateAgainCases()
+
   it('BR-3a local guard: forced target B sends nothing and restores the text to A once', async () => {
     resetBindingWorld()
     mountComposer()
