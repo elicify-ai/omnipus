@@ -83,9 +83,15 @@ case "$platform" in
     case "$platform" in linux-musl-*) strip --strip-unneeded "$out/$lib" ;; esac
     ;;
   windows-*)
-    cl /nologo /O2 /DCOMPONENT_BUILD "/DOMNIPUS_PDFIUM_BUILD_ID=\"$build_id\"" \
-      "/I$work/pdfium/include" "/I$work/zlib" "$src" "${zfiles[@]}" \
-      "$work/pdfium/lib/pdfium.dll.lib" "/Fe:$out/$exe" "/Fo:$work/"
+    # Git Bash: cl is a native program, so hand it Windows paths (cygpath -m)
+    # and switch off MSYS argument rewriting, which would otherwise mangle
+    # "/I/tmp/..." style switches.
+    winpath() { cygpath -m "$1"; }
+    wzfiles=()
+    for f in "${zfiles[@]}"; do wzfiles+=("$(winpath "$f")"); done
+    MSYS2_ARG_CONV_EXCL='*' cl /nologo /O2 /DCOMPONENT_BUILD "/DOMNIPUS_PDFIUM_BUILD_ID=\"$build_id\"" \
+      "/I$(winpath "$work/pdfium/include")" "/I$(winpath "$work/zlib")" "$(winpath "$src")" "${wzfiles[@]}" \
+      "$(winpath "$work/pdfium/lib/pdfium.dll.lib")" "/Fe:$(winpath "$out/$exe")" "/Fo:$(winpath "$work")/"
     cp "$work/pdfium/bin/pdfium.dll" "$out/$lib"
     ;;
 esac
