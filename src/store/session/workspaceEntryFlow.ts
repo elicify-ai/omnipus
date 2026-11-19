@@ -18,6 +18,7 @@ import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { clearPendingAutoApproveOnSessionChange, knownSessionDescriptor, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
 import { enterBlockedNoChat } from '@/store/session/newChatKey'
+import { useDraftStore } from '@/store/chat/drafts'
 
 export type WorkspaceEntryView = (
   | { status: 'exact'; acknowledged: false }
@@ -278,6 +279,20 @@ function clearResolving(workspaceId: string): void {
   })
 }
 
+/**
+ * UAT-16 run B (Option A): the open chat is a new, unsaved chat that belongs
+ * to another workspace. After a failed, unavailable or empty-team entry it must
+ * not stay open here: its queued first message would go out while this
+ * workspace is on screen. Closing it lists that message in Unsent instead
+ * (4.11). A saved chat is never affected (FR-004 keeps it open).
+ */
+function openNewChatIsForeign(workspaceId: string): boolean {
+  const { activeSessionId, newChatKey } = useSessionStore.getState()
+  if (activeSessionId !== null || !newChatKey) return false
+  const info = useDraftStore.getState().newChats[newChatKey]
+  return info !== undefined && info.workspaceId !== workspaceId
+}
+
 function applyEntry(
   workspaceId: string,
   result: EntryResult,
@@ -291,6 +306,7 @@ function applyEntry(
 
   if (result.status === 'failed-attempt') {
     if (stillViewing) {
+      if (openNewChatIsForeign(workspaceId)) enterBlockedNoChat('failed-attempt')
       useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
       useUiStore.getState().addToast({
         message: 'Could not restore your last conversation. Retry to try again.',
@@ -309,7 +325,7 @@ function applyEntry(
   if (result.status === 'unavailable' || result.status === 'empty-team') {
     if (!stillViewing) return
     useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
-    if (useSessionStore.getState().activeSessionId !== null) enterBlockedNoChat(result.status)
+    if (useSessionStore.getState().activeSessionId !== null || openNewChatIsForeign(workspaceId)) enterBlockedNoChat(result.status)
     return
   }
 
