@@ -41,6 +41,7 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import type { WsConnection } from '@/lib/ws'
 import { useSessionStore } from '@/store/session'
+import { getDraft } from '@/store/chat/drafts'
 import { useComposerRuntime } from '@assistant-ui/react'
 
 class ResizeObserverStub {
@@ -164,6 +165,26 @@ vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
+const MID_CHAT = 'sess_mid_turn_ui_test'
+
+/** Spec 4.5 rule 5 / B-3: the session submit is the bound send, not composer.send(). */
+function boundMessageFrames(): Array<{ type?: string; content?: string; session_id?: string; origin?: { kind: string; session_id?: string } }> {
+  const connection = useConnectionStore.getState().connection as { send?: { mock: { calls: unknown[][] } } } | null
+  return (connection?.send?.mock.calls ?? []).map((call) => call[0] as { type?: string }).filter((frame) => frame.type === 'message') as Array<{ type?: string; content?: string; session_id?: string; origin?: { kind: string; session_id?: string } }>
+}
+
+function expectBoundSteer(content: string): void {
+  expect(mockComposerSend, 'spec 4.5 rule 5: composer.send() is not the session submit').not.toHaveBeenCalled()
+  expect(boundMessageFrames(), 'spec 4.5 rule 5: one bound message for the open chat').toEqual([
+    expect.objectContaining({
+      type: 'message',
+      content,
+      session_id: MID_CHAT,
+      origin: { kind: 'chat', session_id: MID_CHAT },
+    }),
+  ])
+}
+
 function resetStores() {
   act(() => {
     useChatStore.setState({
@@ -181,7 +202,7 @@ function resetStores() {
       reconnectPhase: null,
     })
     useSessionStore.setState({
-      activeSessionId: 'sess_mid_turn_ui_test',
+      activeSessionId: MID_CHAT,
       activeAgentId: 'general-assistant',
       activeAgentType: null,
     })
@@ -208,14 +229,15 @@ beforeEach(() => {
 })
 
 describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
-  it('Enter mid-stream with plain text calls composerRuntime.send() (the isRunning bypass) instead of being blocked', () => {
+  it('Enter mid-stream submits one bound message for the open chat and does not call composer.send', () => {
+    // Spec 4.5 rule 5 / B-3: Enter while a turn runs submits the draft. composer.send() is not that submit.
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
     act(() => { fireEvent.change(input, { target: { value: 'steer this turn' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
 
-    expect(mockComposerSend).toHaveBeenCalledTimes(1)
+    expectBoundSteer('steer this turn')
   })
 
   it('Shift+Enter mid-stream does NOT send — still treated as a newline', () => {
@@ -240,7 +262,7 @@ describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
     expect(screen.queryByTestId('chat-send-mid-stream')).not.toBeInTheDocument()
   })
 
-  it('typing /clear mid-stream does not start a new chat', async () => {
+  it('typing /clear mid-stream sends one bound /clear and does not start a new chat', async () => {
     // /clear is not a client command (FR-007). It must not call startNewSession.
     const realStartNewSession = useSessionStore.getState().startNewSession
     const startNewSession = vi.fn()
@@ -267,9 +289,10 @@ describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
       act(() => { fireEvent.change(input, { target: { value: '/clear' } }) })
       act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
 
+      // Spec 4.5 rule 5: /clear is a server command, so it is one bound message, not a new chat and not composer.send().
       expect(startNewSession).not.toHaveBeenCalled()
-      expect(mockComposerSend).toHaveBeenCalledTimes(1)
-      expect(sentTexts).toEqual(['/clear'])
+      expect(sentTexts, 'spec 4.5 rule 5: composer.send() is not the session submit').toEqual([])
+      expectBoundSteer('/clear')
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }
@@ -325,7 +348,8 @@ describe('OmnipusComposer — Stop + mid-turn Send button coexist while streamin
     expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
   })
 
-  it('clicking the mid-turn Send button calls composerRuntime.send() (the bypass)', () => {
+  it('clicking the mid-turn Send button submits one bound message and does not call composer.send', () => {
+    // Spec 4.5 rule 5 / B-3: the mid-turn Send button submits the draft. composer.send() is not that submit.
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
     act(() => { fireEvent.change(input, { target: { value: 'steer via click' } }) })
@@ -333,7 +357,7 @@ describe('OmnipusComposer — Stop + mid-turn Send button coexist while streamin
     const sendBtn = screen.getByTestId('chat-send-mid-stream')
     act(() => { fireEvent.click(sendBtn) })
 
-    expect(mockComposerSend).toHaveBeenCalledTimes(1)
+    expectBoundSteer('steer via click')
   })
 
   it('the idle Send button (ComposerPrimitive.Send) is not mounted while streaming — Stop occupies its slot', () => {
@@ -462,9 +486,10 @@ describe('OmnipusComposer — Enter mid-stream respects inputEnabled (bugfixes3 
  * ChatScreen.harmful-upload.test.tsx) attach mechanics themselves.
  */
 describe('OmnipusComposer — Attach button + drag-drop mid-stream (bugfixes3: attachDisabled no longer includes isStreaming)', () => {
-  it('AddAttachment is enabled while streaming', () => {
+  it('the add-files control stays enabled while streaming', () => {
     render(<OmnipusComposer />)
-    expect(screen.getByTestId('add-attachment')).not.toBeDisabled()
+    // Spec 4.5 rule 2 / B-19: the session attach control is the draft's file button, enabled while a turn runs.
+    expect(screen.getByRole('button', { name: 'Add files or context' })).not.toBeDisabled()
   })
 
   it('the drag-drop overlay appears mid-stream (drag handlers are wired, not `undefined`)', () => {
@@ -482,7 +507,7 @@ describe('OmnipusComposer — Attach button + drag-drop mid-stream (bugfixes3: a
     expect(screen.getByText(/drop files here/i)).toBeInTheDocument()
   })
 
-  it('dropping a file mid-stream attaches it via composerRuntime.addAttachment — the SAME call the button and paste use', () => {
+  it('dropping a file mid-stream writes that one file onto the open draft', () => {
     const addAttachment = vi.fn(() => Promise.resolve())
     ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockImplementation(() => ({
       getState: () => ({ text: '' }),
@@ -498,47 +523,50 @@ describe('OmnipusComposer — Attach button + drag-drop mid-stream (bugfixes3: a
 
     act(() => { fireEvent.drop(dropzone, { dataTransfer: { files: [file] } }) })
 
-    expect(addAttachment).toHaveBeenCalledTimes(1)
-    expect(addAttachment).toHaveBeenCalledWith(file)
+    // Spec 4.5 rule 2: a drop writes the open chat's draft. It does not call composer.addAttachment.
+    expect(addAttachment).not.toHaveBeenCalled()
+    const staged = getDraft(MID_CHAT).files
+    expect(staged, 'spec 4.5 rule 2: the dropped file is the one draft file').toHaveLength(1)
+    expect(staged[0]).toMatchObject({ kind: 'local', file })
   })
 
-  it('isReplaying still disables the Attach button and suppresses the drag overlay', () => {
+  it('isReplaying still disables the add-files control and suppresses the drag overlay', () => {
     act(() => { useChatStore.setState({ isReplaying: true }) })
     render(<OmnipusComposer />)
 
-    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add files or context' })).toBeDisabled()
 
     const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
     act(() => { fireEvent.dragOver(dropzone) })
     expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument()
   })
 
-  it("reconnectPhase 'gave_up' still disables the Attach button and suppresses the drag overlay", () => {
+  it("reconnectPhase 'gave_up' still disables the add-files control and suppresses the drag overlay", () => {
     act(() => { useConnectionStore.setState({ reconnectPhase: 'gave_up' }) })
     render(<OmnipusComposer />)
 
-    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add files or context' })).toBeDisabled()
 
     const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
     act(() => { fireEvent.dragOver(dropzone) })
     expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument()
   })
 
-  it('!isConnected still disables the Attach button and suppresses the drag overlay', () => {
+  it('!isConnected still disables the add-files control and suppresses the drag overlay', () => {
     act(() => { useConnectionStore.setState({ isConnected: false }) })
     render(<OmnipusComposer />)
 
-    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add files or context' })).toBeDisabled()
 
     const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
     act(() => { fireEvent.dragOver(dropzone) })
     expect(screen.queryByText(/drop files here/i)).not.toBeInTheDocument()
   })
 
-  it('agentRemoved still disables the Attach button and suppresses the drag overlay', () => {
+  it('agentRemoved still disables the add-files control and suppresses the drag overlay', () => {
     render(<OmnipusComposer agentRemoved />)
 
-    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add files or context' })).toBeDisabled()
 
     const dropzone = screen.getByTestId('composer-form').parentElement as HTMLElement
     act(() => { fireEvent.dragOver(dropzone) })
