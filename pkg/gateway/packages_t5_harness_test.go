@@ -481,8 +481,8 @@ func externalPackage(t *testing.T, withRuntime bool) []byte {
 	return buildAgentPackage(t, specSourceID, "Coder", rec, nil, nil, 0)
 }
 
-// unknownElementPackage is a package whose only element is a skill (S1a refuses
-// unknown element types, FR-006).
+// unknownElementPackage has only a skill: Dataset D12-2 / FR-009 requires
+// no_supported_element. The mixed fixture below separately covers FR-006.
 func unknownElementPackage(t *testing.T) []byte {
 	t.Helper()
 	const path = "skills/writing/SKILL.md"
@@ -501,4 +501,30 @@ func unknownElementPackage(t *testing.T) []byte {
 	man, err := json.Marshal(m)
 	require.NoError(t, err)
 	return zstdTar(t, []tarPart{{name: omnpkg.ManifestEntry, body: man}, {name: path, body: body}})
+}
+
+// mixedUnknownElementPackage is a test-owned, otherwise valid Main package
+// with a second (unsupported in S1a) skill element: FR-006, not D12-2.
+func mixedUnknownElementPackage(t *testing.T) []byte {
+	t.Helper()
+	manifest, files := decodePackageBytes(t, validMainPackage(t))
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	var m omnpkg.Manifest
+	require.NoError(t, json.Unmarshal(raw, &m))
+	const path = "skills/writing/SKILL.md"
+	body := []byte("# writing\n")
+	m.Elements = append(m.Elements, omnpkg.ManifestElement{
+		Type: "skill", Schema: 1, SourceID: "writing", Name: "writing", Files: []string{path},
+	})
+	m.Counts["skill"] = 1
+	m.Files[path] = omnpkg.FileInfo{SHA256: sha256hex(body), Size: int64(len(body))}
+	raw, err = json.Marshal(m)
+	require.NoError(t, err)
+	parts := []tarPart{{name: omnpkg.ManifestEntry, body: raw}}
+	for _, path := range m.Elements[0].Files {
+		parts = append(parts, tarPart{name: path, body: files[path]})
+	}
+	parts = append(parts, tarPart{name: path, body: body})
+	return zstdTar(t, parts)
 }

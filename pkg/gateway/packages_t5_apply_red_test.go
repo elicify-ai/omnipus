@@ -316,69 +316,110 @@ func TestPackagesApply_Rollback(t *testing.T) {
 		status int
 		code   string
 		step   string
-		setup  func()
+		setup  func(t *testing.T, home string)
 	}{
-		{"D7-1 soul replace fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func() { packageT5.CreatePendingFault = "soul" }},
-		{"D7-2 fault before the join", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func() { packageT5.CrashAt = "membership" }},
-		{"D7-3 AGENT.md replace fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func() { packageT5.CreatePendingFault = "agentmd" }},
-		{"D7-4 membership write fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func() {
+		{"D7-1 soul replace fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func(t *testing.T, home string) { packageT5.CreatePendingFault = "soul" }},
+		{"D7-2 fault before the join", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func(t *testing.T, home string) { packageT5.CrashAt = "membership" }},
+		{"D7-3 AGENT.md replace fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func(t *testing.T, home string) { packageT5.CreatePendingFault = "agentmd" }},
+		{"D7-4 membership write fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func(t *testing.T, home string) {
 			packageT5.WriteWorkspace = func(string, string, workspace.Workspace) error { return errors.New("membership") }
 		}},
-		{"D7-22 publish rename fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func() {
+		{"D7-22 publish rename fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func(t *testing.T, home string) {
 			packageT5.PublishRename = func(string, string) error { return errors.New("rename") }
 		}},
-		{"D7-11 rollback keeps its code when audit fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func() {
+		{"D7-11 rollback keeps its code when audit fails", http.StatusInternalServerError, omnpkg.CodeImportRolledBack, "", func(t *testing.T, home string) {
 			packageT5.WriteWorkspace = func(string, string, workspace.Workspace) error { return errors.New("membership") }
 			packageT5.AuditWrite = func(string, map[string]string) error { return errAuditFailed }
 		}},
-		{"D7-6 DiscardPending fails", http.StatusInternalServerError, omnpkg.CodeImportRollbackIncomplete, "C2", func() {
+		{"D7-6 DiscardPending fails", http.StatusInternalServerError, omnpkg.CodeImportRollbackIncomplete, "C2", func(t *testing.T, home string) {
 			packageT5.CrashAt = "membership"
 			packageT5.DiscardPending = func(string) error { return errors.New("pending remains") }
 		}},
-		{"D7-13 C1 membership removal fails and C2 still runs", http.StatusInternalServerError, omnpkg.CodeImportRollbackIncomplete, "C1", func() {
+		{"D7-13 C1 membership removal fails and C2 still runs", http.StatusInternalServerError, omnpkg.CodeImportRollbackIncomplete, "C1", func(t *testing.T, home string) {
 			var n int
 			packageT5.SaveDelegation = func(string, string, []workspace.DelegationEdge) error { return errors.New("self-row") }
-			packageT5.WriteWorkspace = func(string, string, workspace.Workspace) error {
+			packageT5.WriteWorkspace = func(dir, wsID string, w workspace.Workspace) error {
 				n++
 				if n > 1 {
 					return errors.New("leave")
 				}
-				return nil
+				require.Equal(t, filepath.Join(home, "workspaces"), dir)
+				require.Equal(t, wsID, w.ID)
+				// SaveRecord takes the file sidecar, not the already-held LockID.
+				return workspace.SaveRecord(home, w)
 			}
+			t.Cleanup(func() { require.Equal(t, 2, n, "D7-13: real join, then failed C1 membership removal") })
 		}},
-		{"D7-14 partial C1", http.StatusInternalServerError, omnpkg.CodeImportRollbackIncomplete, "C1", func() {
+		{"D7-14 partial C1", http.StatusInternalServerError, omnpkg.CodeImportRollbackIncomplete, "C1", func(t *testing.T, home string) {
 			var n int
 			packageT5.PublishRename = func(string, string) error { return errors.New("rename") }
-			packageT5.SaveDelegation = func(string, string, []workspace.DelegationEdge) error {
+			packageT5.SaveDelegation = func(home, wsID string, edges []workspace.DelegationEdge) error {
 				n++
 				if n >= 2 {
 					return errors.New("leave save")
 				}
-				return nil
+				return workspace.SaveDelegation(home, wsID, edges)
 			}
+			t.Cleanup(func() { require.Equal(t, 2, n, "D7-14: seed persisted, then C1 delegation save failed") })
 		}},
-		{"D7-18 partial C2 leaves the folder", http.StatusInternalServerError, omnpkg.CodeImportRollbackIncomplete, "C2", func() {
+		{"D7-18 partial C2 leaves the folder", http.StatusInternalServerError, omnpkg.CodeImportRollbackIncomplete, "C2", func(t *testing.T, home string) {
 			packageT5.CrashAt = "membership"
-			packageT5.DiscardPending = func(id string) error { return errors.New("folder remains") }
+			packageT5.DiscardPending = func(id string) error {
+				// D7-18 fails only AFTER the pending record has been deleted.
+				if err := os.Remove(filepath.Join(home, "entities", "agents", id+".pending")); err != nil {
+					return err
+				}
+				return errors.New("folder remains")
+			}
 		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			api := packageAPI(t)
 			usePackageSeams(t)
-			tc.setup()
+			survivor := createMainAgent(t, api, "Survivor", "Keep the existing prompt.")
+			require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "agents", survivor, "AGENT.md"), []byte("Keep these rules.\n"), 0o600))
 			ws := createWorkspaceViaAPI(t, api, "Research", "notes")
-			before := entityNames(t, api.homePath)
+			createWorkspaceViaAPI(t, api, "Untouched", "second workspace")
+			before := t5CaptureRollback(t, api.homePath)
+			tc.setup(t, api.homePath)
+			packageT5.Reload = func() (bool, error) {
+				t.Error("rollback must not request a live-publication reload")
+				return false, errors.New("unexpected rollback reload")
+			}
+			packageT5.EnsureMain = func(string, string) error {
+				t.Error("rollback must not prepare a main chat")
+				return errors.New("unexpected rollback main chat")
+			}
 			prev := stageUpload(t, api, validMainPackage(t))
 			got := callPackageApply(t, api, prev.StagingId, applyBody("new", ws))
 			er := requirePackageStatus(t, got, tc.status, tc.code)
 			requireNoRollbackActivation(t, er)
+			id := t5NewRollbackID(t, api.homePath, before.entries)
 			if tc.step != "" {
 				require.Equal(t, tc.step, packageDetail(er, "failed_step"), "[r7] failed_step")
 				require.NotEmpty(t, packageDetail(er, "agent_id"))
 				require.NotEmpty(t, packageDetail(er, "staging_id"))
+				require.Equal(t, id, packageDetail(er, "agent_id"))
+				require.Equal(t, prev.StagingId, packageDetail(er, "staging_id"))
 			}
-			require.Equal(t, before, entityNames(t, api.homePath), "C2 discards the pending record; no .json appears")
+			if tc.code == omnpkg.CodeImportRollbackIncomplete {
+				// Check the specified partial state before clearing the disk fault.
+				t5RequireRollbackState(t, api.homePath, ws, id, tc.name, before)
+				requireAgentInvisible(t, api, id)
+				state, err := api.packageRegistry().State(prev.StagingId)
+				require.NoError(t, err)
+				require.Equal(t, omnpkg.StagingNeedsCleanup, state)
+				journal, err := omnpkg.ReadJournal(filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
+				require.NoError(t, err)
+				require.Equal(t, omnpkg.JournalRollbackIncomplete, journal.State)
+				// Revision 7 checks the stored-state cleanup AFTER fault-free recovery.
+				packageT5 = packageT5Seams{}
+				require.NoError(t, api.recoverImportsBeforeRoster(packageCtx(t)))
+			}
+			t5RequireRollbackState(t, api.homePath, ws, id, "", before)
+			// Required even after recovery; a retained terminal journal is NOT a pass.
+			t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
 			if tc.code == omnpkg.CodeImportRolledBack {
 				_, err := os.Stat(filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
 				require.True(t, os.IsNotExist(err), "complete rollback retires the staging folder")
@@ -509,7 +550,7 @@ func TestImportCreateParity(t *testing.T) {
 		soul = "Answer in rhyme."
 		desc = "Drafts"
 	)
-	restBody := `{"name":"ParityWriter","type":"Main","soul":"` + soul + `","description":"` + desc + `","model":"m-1","provider":"openrouter","color":"#4F8A80","max_tool_iterations":7,"voice":"alloy","memory_enabled":false,"context_window_override":64000}`
+	restBody := `{"name":"ParityWriter","type":"Main","soul":"` + soul + `","description":"` + desc + `","model":"m-1","provider":"openrouter","color":"#4F8A80","max_tool_iterations":7,"voice":"alloy"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(restBody))
 	r.Header.Set("Content-Type", "application/json")
@@ -520,6 +561,9 @@ func TestImportCreateParity(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 	restRec := readAgentRecord(t, api.homePath, created.ID)
+	require.Equal(t, desc, restRec["description"], "spec-normalised REST description")
+	require.Equal(t, "#4F8A80", restRec["color"])
+	require.EqualValues(t, 7, restRec["max_tool_iterations"])
 	_, restHasVoice := restRec["voice"]
 	require.False(t, restHasVoice, "REST create still does not store voice (known limit L17)")
 

@@ -19,23 +19,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPackages_RedStubAnswersNotImplemented is the explicit control that the
-// RED stub is reachable. It is the one test allowed to pass: it proves a
-// missing handler is visible as 501 not_implemented rather than a compile
-// failure. Every other test in this file expects a spec status and must fail.
-func TestPackages_RedStubAnswersNotImplemented(t *testing.T) {
-	api := packageAPI(t)
-	got := callPackageExport(t, api, `{"agent_ids":["`+specSourceID+`"]}`)
-	requirePackageStatus(t, got, http.StatusNotImplemented, "not_implemented")
-	// D7 closing note: crash, leave and publish seams are nil in production.
+// TestPackages_ProductionSeamsAreNil preserves D7's production-seam guard.
+// The RED-only 501 control is retired: stub_t5_for_red.go explicitly says
+// "DELETE when GREEN lands". Production routing is checked separately below.
+func TestPackages_ProductionSeamsAreNil(t *testing.T) {
 	require.False(t, packageSeamsBlocked(), "production package seams must be nil")
-	// The stub registrar is what GREEN replaces. It must answer 501, not 404.
-	mux := http.NewServeMux()
-	api.registerPackageRoutes(&testMuxRegistrar{mux: mux})
-	req := packageAuthRequest(t, http.MethodPost, "/api/v1/packages/export", strings.NewReader(`{"agent_ids":[]}`))
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusNotImplemented, rec.Code, "stub route body=%s", rec.Body)
 }
 
 // TestPackages_RoutesRegisteredLocalOnly is FR-045 [local mode only] and
@@ -181,6 +169,9 @@ func TestPackagesExport_Route(t *testing.T) {
 		api := packageAPI(t)
 		usePackageSeams(t)
 		id := createMainAgent(t, api, "Writer", "Answer in rhyme.\n")
+		// REST create trims its input; FR-015 exports the bytes STORED on disk.
+		// Persist deliberate trailing whitespace so illegal export trimming still dies.
+		require.NoError(t, os.WriteFile(api.homePath+"/agents/"+id+"/SOUL.md", []byte("Answer in rhyme.\n"), 0o600))
 		// AGENT.md is import-only at create; write it the way a stored agent has it.
 		mdPath := api.homePath + "/agents/" + id + "/AGENT.md"
 		const rules = "  rules\n"
@@ -350,9 +341,14 @@ func TestPackages_S1aRefusals(t *testing.T) {
 			require.True(t, os.IsNotExist(statErr), "a refused upload must not keep a staging folder")
 		}
 	})
-	t.Run("upload unknown element type is element_type_not_supported", func(t *testing.T) {
+	t.Run("D12-2 only unknown elements is no_supported_element", func(t *testing.T) {
 		api := packageAPI(t)
 		got := callPackageImport(t, api, unknownElementPackage(t))
+		requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeNoSupportedElement)
+	})
+	t.Run("FR-006 agent plus unknown element is element_type_not_supported", func(t *testing.T) {
+		api := packageAPI(t)
+		got := callPackageImport(t, api, mixedUnknownElementPackage(t))
 		requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeElementTypeNotSupported)
 	})
 }
