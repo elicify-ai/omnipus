@@ -20,6 +20,7 @@ import { act } from 'react'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatControls } from '@/components/chat/ChatControls'
+import { openChatKey } from '@/store/chat/drafts'
 import { useSessionStore } from '@/store/session'
 
 function dropFile(name: string): void {
@@ -65,13 +66,26 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     )
     await reachNewChat(makeSession({ id: 'saved-w2', title: 'Saved W2', workspace_id: 'w2', agent_id: 'mia' }))
     await typeIntoComposer('private K2')
-    await user.click(screen.getByRole('button', { name: 'Send message' }))
-    const k2 = assertNewChatKey(
-      (framesOf('message', sent()).at(-1) as { origin?: { new_chat_key?: string } } | undefined)?.origin?.new_chat_key,
-    )
+    const k2 = assertNewChatKey(useSessionStore.getState().newChatKey)
     expect(k2, 'BR-5: each entry mints a different key').not.toBe(k1)
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    const k2Frames = framesOf('message', sent()).filter((frame) => (frame as { content?: string }).content === 'private K2')
+    expect(k2Frames, 'BR-5: one K2 first message').toHaveLength(1)
+    const k2Frame = k2Frames[0] as {
+      content?: string
+      session_id?: string
+      agent_id?: string
+      client_message_id?: string
+      origin?: { kind?: string; new_chat_key?: string }
+      metadata?: { workspace_id?: string }
+    }
+    expect(k2Frame.session_id, 'BR-5: a text-only first message names no saved session').toBeUndefined()
+    expect(k2Frame.origin, 'BR-5: origin is the K2 captured before Send').toEqual({ kind: 'new_chat', new_chat_key: k2 })
+    expect(k2Frame.agent_id, 'BR-5: K2 keeps agent X').toBe('mia')
+    expect(k2Frame.metadata?.workspace_id, 'BR-5: K2\'s text is created in W2').toBe('w2')
     await act(async () => { pendingCreates[0]!({ id: 's1', agent_id: 'mia', workspace_id: 'w1' }) })
     expect(useSessionStore.getState().activeSessionId, 'BR-5: S1 is not activated while K2 is open').not.toBe('s1')
+    expect(openChatKey(), 'BR-5: the open logical key stays K2 across K1\'s completion').toBe(k2)
     expect(screen.getByText(SWITCHED), 'BR-5: K1 is ineligible and says switched chats').toBeTruthy()
     const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => uploadedFileName(call) === 'k1.txt')
     expect(k1Uploads, 'BR-5: K1\'s file is uploaded').not.toEqual([])
@@ -83,7 +97,17 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
       k1Uploads.some((call) => call[2] === 'w2'),
       'BR-5: K1\'s file is not uploaded to W2',
     ).toBe(false)
-    expect(framesOf('message', sent()).some((frame) => (frame as { content?: string }).content === 'private K2'), 'BR-5: K2\'s text is its own send').toBe(true)
+    expect(framesOf('message', sent()).some((frame) => {
+      const message = frame as { content?: string; origin?: { new_chat_key?: string } }
+      return message.content === 'file for K1' || message.origin?.new_chat_key === k1
+    }), 'BR-5: no K1 frame is in K2\'s send').toBe(false)
+    deliverFrame({
+      type: 'session_started',
+      session_id: 's2',
+      agent_id: 'mia',
+      client_message_id: k2Frame.client_message_id,
+    } as never)
+    expect(useSessionStore.getState().activeSessionId, 'BR-5: only S2 activates').toBe('s2')
   })
 
   it('BR-5 with the barrier on the upload, K1\'s file stays in W1 while K2 is open', async () => {
@@ -115,15 +139,26 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     expect(pendingUploads, 'BR-5 upload: K1\'s upload is held').toHaveLength(1)
     await reachNewChat(makeSession({ id: 'saved-w2b', title: 'Saved W2b', workspace_id: 'w2', agent_id: 'mia' }))
     await typeIntoComposer('private K2')
-    await user.click(screen.getByRole('button', { name: 'Send message' }))
-    const k2 = assertNewChatKey(
-      (framesOf('message', sent()).at(-1) as { origin?: { new_chat_key?: string } } | undefined)?.origin?.new_chat_key,
-    )
+    const k2 = assertNewChatKey(useSessionStore.getState().newChatKey)
     expect(k2, 'BR-5 upload: K2 mints its own key').not.toBe(k1)
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    const k2Frames = framesOf('message', sent()).filter((frame) => (frame as { content?: string }).content === 'private K2')
+    expect(k2Frames, 'BR-5 upload: one K2 first message').toHaveLength(1)
+    const k2Frame = k2Frames[0] as {
+      session_id?: string
+      agent_id?: string
+      origin?: { kind?: string; new_chat_key?: string }
+      metadata?: { workspace_id?: string }
+    }
+    expect(k2Frame.session_id, 'BR-5 upload: K2 names no saved session').toBeUndefined()
+    expect(k2Frame.origin, 'BR-5 upload: origin is the K2 captured before Send').toEqual({ kind: 'new_chat', new_chat_key: k2 })
+    expect(k2Frame.agent_id, 'BR-5 upload: K2 keeps agent X').toBe('mia')
+    expect(k2Frame.metadata?.workspace_id, 'BR-5 upload: K2\'s text is created in W2').toBe('w2')
     await act(async () => {
       pendingUploads[0]!({ files: [{ ref: 'media://workspace/w1/k1', name: 'k1.txt', content_type: 'text/plain' }] })
     })
     expect(useSessionStore.getState().activeSessionId, 'BR-5 upload: S1 is not activated while K2 is open').not.toBe('s1')
+    expect(openChatKey(), 'BR-5 upload: the open logical key stays K2').toBe(k2)
     expect(screen.getByText(SWITCHED), 'BR-5 upload: K1 says switched chats').toBeTruthy()
     const k1Uploads = apiMocks.uploadFiles.mock.calls.filter((call) => uploadedFileName(call) === 'k1.txt')
     expect(k1Uploads, 'BR-5 upload: K1\'s file is uploaded').not.toEqual([])

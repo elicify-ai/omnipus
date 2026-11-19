@@ -4,6 +4,7 @@ import { act } from 'react'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
+import { useDraftStore } from '@/store/chat/drafts'
 import { useSessionStore } from '@/store/session'
 import { WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
@@ -340,7 +341,13 @@ function registerCommandFailureCases(): void {
     if (!socket) throw new Error('socket missing')
     act(() => { socket.open() })
     act(() => { socket.receive({ type: 'server_capabilities', send_origin: true }) })
-    socket.send = () => { throw new Error('OPEN socket send threw') }
+    // Spec 4.7 / BR-23e: a throw is one attempt. A later timer or an unrelated
+    // inbound frame must not call send again.
+    let attempts = 0
+    socket.send = () => {
+      attempts += 1
+      throw new Error('OPEN socket send threw')
+    }
     useConnectionStore.setState({ connection: conn as never, isConnected: true })
     mountComposer()
     await typeIntoComposer('/stop-redirect private A')
@@ -348,12 +355,26 @@ function registerCommandFailureCases(): void {
     // Enter is a keydown, not userEvent, because userEvent hangs under them.
     vi.useFakeTimers()
     fireEvent.keyDown(screen.getByTestId('chat-input'), { key: 'Enter', code: 'Enter' })
+    expect(attempts, 'BR-23e: the command is handed over once').toBe(1)
     expect(socket.readyState, 'BR-23e: the socket stays OPEN').toBe(FakeSocket.OPEN)
     expect(screen.getByTestId('chat-input'), 'BR-23e: the exact text is back once').toHaveValue('/stop-redirect private A')
     expect(screen.getByText(CONN_FAILED), 'BR-23e: the connection-failed line').toBeTruthy()
     expect(screen.queryByText('May not have been delivered'), 'BR-23e: no uncertain item without a close').toBeNull()
     expect(screen.getByText(NOT_STOPPED), 'BR-23e: the notice is shown').toBeTruthy()
+    expect(useDraftStore.getState().commands, 'BR-23e: the failed command record is dropped').toEqual({})
+    act(() => {
+      socket.receive({
+        type: 'session_state',
+        user_id: 'ada',
+        pending_approvals: [],
+        session_id: 'chat-b',
+        emitted_at: '2026-11-18T00:00:00Z',
+        auto_approve_modifier: true,
+      })
+    })
     await act(async () => { vi.advanceTimersByTime(60_000) })
+    expect(attempts, 'BR-23e: unrelated frames and 60s do not retry').toBe(1)
+    expect(useDraftStore.getState().commands, 'BR-23e: no command record appears later').toEqual({})
     expect(screen.getAllByDisplayValue('/stop-redirect private A'), 'BR-23e: still one copy').toHaveLength(1)
     expect(screen.getByText(CONN_FAILED)).toBeTruthy()
   })

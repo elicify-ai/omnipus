@@ -17,6 +17,7 @@ import { act } from 'react'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
+import { aliasNewChat, openChatKey } from '@/store/chat/drafts'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 
@@ -27,6 +28,8 @@ function dropFile(name: string): void {
 }
 
 describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', () => {
+  registerAliasedQueueCase()
+
   it('BR-13 a queued send waits until its own chat is open, and Retry keeps the id', async () => {
     resetBindingWorld()
     act(() => { useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting' }) })
@@ -82,6 +85,9 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     apiMocks.fetchSessions.mockResolvedValue([saved])
     apiMocks.fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core' } as never])
     await deleteOpenChatThroughSidebar('Saved K')
+    // Spec 4.11 / BR-13b: the key is the one minted when K was opened, not a
+    // key read back off the frame Open and send happens to emit.
+    const originalK = assertNewChatKey(useSessionStore.getState().newChatKey)
     connection().fail = true
     const user = userEvent.setup()
     await typeIntoComposer('first for K')
@@ -93,6 +99,7 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     expect(originalId, 'BR-13b: the offline Send captured the original client_message_id').toEqual(
       expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     )
+    expect(openChatKey(), 'BR-13b: the offline Send does not mint a second key').toBe(originalK)
     act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
     connection().fail = false
     expect(apiMocks.createSession, 'BR-13b: no create while B is open').not.toHaveBeenCalled()
@@ -104,14 +111,22 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     await user.click(screen.getByRole('button', { name: 'Copy' }))
     expect(await navigator.clipboard.readText(), 'BR-13b: Copy is the exact text').toBe('first for K')
     await user.click(screen.getByRole('button', { name: 'Open and send' }))
-    const message = framesOf('message', sent())[0] as { origin?: { new_chat_key?: string }; client_message_id?: string }
-    const key = assertNewChatKey(message?.origin?.new_chat_key)
-    expect(message, 'BR-13b: one first message with that same id').toEqual(expect.objectContaining({
+    expect(openChatKey(), 'BR-13b: Open and send re-enters the same K').toBe(originalK)
+    const message = framesOf('message', sent())[0] as {
+      origin?: { kind?: string; new_chat_key?: string }
+      client_message_id?: string
+      agent_id?: string
+      session_id?: string
+      metadata?: { workspace_id?: string }
+    }
+    expect(message?.session_id, 'BR-13b: the first message names no saved session').toBeUndefined()
+    expect(message, 'BR-13b: Open and send keeps the original K, id and agent').toEqual(expect.objectContaining({
       content: 'first for K',
       agent_id: 'mia',
       client_message_id: originalId,
-      origin: { kind: 'new_chat', new_chat_key: key },
+      origin: { kind: 'new_chat', new_chat_key: originalK },
     }))
+    expect(message?.metadata?.workspace_id, 'BR-13b: the first message stays in W1').toBe('w1')
     expect(framesOf('message', sent()), 'BR-13b: delivered once').toHaveLength(1)
   })
 
@@ -205,3 +220,45 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     expect(screen.queryByText('1 not sent'), 'BR-18: the Unsent list is gone').toBeNull()
   })
 })
+
+function registerAliasedQueueCase(): void {
+  it('MU-7 a queued first message keeps {new_chat, K} after K is aliased to S', async () => {
+    // Spec 4.6.1 queue drain: the stored origin is not rewritten to whatever
+    // chat is open when the queue drains. 4.6.2: nothing goes out while B is open.
+    resetBindingWorld()
+    mountComposer({ sidebar: true })
+    const saved = makeSession({ id: 'saved-q', title: 'Saved Q', workspace_id: 'w1', agent_id: 'mia' })
+    seedSavedChat(saved, undefined, undefined)
+    apiMocks.fetchSessions.mockResolvedValue([saved])
+    apiMocks.fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core' } as never])
+    await deleteOpenChatThroughSidebar('Saved Q')
+    const key = assertNewChatKey(useSessionStore.getState().newChatKey)
+    act(() => { useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting' }) })
+    const user = userEvent.setup()
+    await typeIntoComposer('queued for K')
+    await user.click(screen.getByRole('button', { name: 'Queue message (will send on reconnect)' }))
+    expect(framesOf('message', sent()), 'MU-7: offline enqueue sends nothing').toEqual([])
+    const queued = useChatStore.getState().outboundQueue.find((item) =>
+      typeof item !== 'string' && item.content === 'queued for K')
+    const originalId = queued && typeof queued !== 'string' ? queued.submission?.clientMessageId ?? queued.id : undefined
+    expect(originalId, 'MU-7: the queued submission keeps its id').toEqual(expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/))
+    expect(
+      queued && typeof queued !== 'string' ? queued.submission?.origin : undefined,
+      'MU-7: enqueue stores {new_chat, K}',
+    ).toEqual({ kind: 'new_chat', new_chat_key: key })
+    aliasNewChat(key, 'chat-a')
+    act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
+    act(() => { useConnectionStore.setState({ isConnected: true, reconnectPhase: null }) })
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    expect(framesOf('message', sent()), 'MU-7: nothing is sent while B is open').toEqual([])
+    act(() => { useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core') })
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    expect(framesOf('message', sent()), 'MU-7: opening S sends the original origin and id').toEqual([
+      expect.objectContaining({
+        content: 'queued for K',
+        client_message_id: originalId,
+        origin: { kind: 'new_chat', new_chat_key: key },
+      }),
+    ])
+  })
+}

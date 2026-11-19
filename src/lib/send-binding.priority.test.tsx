@@ -14,9 +14,11 @@ import {
 import { act } from 'react'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { submissionForMessage } from '@/lib/bound-send'
 import { ApiError } from '@/lib/api-error'
 import { addLibraryAttachment } from '@/lib/library-attachment'
 import { useChatStore } from '@/store/chat'
+import { useDraftStore } from '@/store/chat/drafts'
 import { emptySessionState } from '@/store/chat/session'
 import { useSessionStore } from '@/store/session'
 
@@ -49,8 +51,21 @@ describe('refusal, restore and remount (spec 4.8 / 4.9)', () => {
     deliverFrame(refusal)
     expect(screen.getByTestId('chat-input'), 'BR-3c: the text is back in A').toHaveValue('for A')
     expect(useChatStore.getState().sessionsById['chat-c']?.isStreaming, 'BR-3c: another chat keeps running').toBe(true)
+    // Spec 4.8: the first terminal outcome wins. The pending record is released,
+    // so a duplicate cannot append another recovery item (merge would hide that
+    // in the box text).
+    expect(useDraftStore.getState().unsent, 'BR-3c: one recovery item').toHaveLength(1)
+    expect(submissionForMessage(id), 'BR-3c: the pending record is released').toBeUndefined()
     deliverFrame(refusal)
     expect(screen.getByTestId('chat-input'), 'BR-3c: a duplicate refusal does not restore twice').toHaveValue('for A')
+    expect(useDraftStore.getState().unsent, 'BR-3c: a duplicate refusal adds no second item').toHaveLength(1)
+    expect(submissionForMessage(id), 'BR-3c: the record stays released').toBeUndefined()
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(screen.getByTestId('chat-input'), 'BR-3c: Discard clears the restored box').toHaveValue('')
+    const afterDiscard = useDraftStore.getState().unsent.length
+    deliverFrame(refusal)
+    expect(screen.getByTestId('chat-input'), 'BR-3c: a refusal after Discard does not recreate the text').toHaveValue('')
+    expect(useDraftStore.getState().unsent, 'BR-3c: a refusal after Discard does not recreate an item').toHaveLength(afterDiscard)
   })
 
   it('BR-7 an upload released after leaving A sends nothing and lists A from C', async () => {
