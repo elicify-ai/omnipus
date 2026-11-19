@@ -95,9 +95,15 @@ const UPLOAD_RESPONSE = {
 // /api/v1/skills, /api/v1/commands, /api/v1/workspaces/{id},
 // /api/v1/rooms/{roomId}). Every entry is a body-less read with its exact
 // query shape, and isAllowedRead rejects any request with a body or any
-// non-GET method — a defect cannot hide a carrier in an allowed-looking
-// shape, and the request the oracle compares field by field below (the
-// sentinel POST) is never on this list.
+// non-GET method. The sentinel POST the oracle compares field by field
+// below is never on this list.
+// Revision 5 (CHECK r5, lead ruling): not a raw-request proof.
+// isAllowedRead does not look at request headers. The oracle proves that
+// no message-carrying request (POST, PUT, PATCH, upload) and no message
+// field of an allowed request (method, path, query, recorded body) carries
+// the draft to room B. Headers of allowed reads are outside the proof.
+// Issue #1849 is about the draft being posted as a message; a custom
+// header on a read is not a message field.
 const ALLOWED_READS: ReadonlyArray<{ method: string; path: string; query: string }> = [
   { method: 'GET', path: '/api/v1/agents', query: '' },
   { method: 'GET', path: '/api/v1/skills', query: '' },
@@ -332,6 +338,11 @@ describe('#1849 an unsent room draft must not follow the user into another room'
       // WebSocket frame (src/lib/ws.ts::_startHeartbeat), never a REST
       // request, so it needs no entry in the allow-list. No substring or
       // containment filter anywhere.
+      // Revision 5 (CHECK r5, lead ruling): the log above is every recorded
+      // request's method, path, query and body, not every raw byte. The
+      // oracle proves that no message-carrying request (POST, PUT, PATCH,
+      // upload) and no message field of an allowed request carries the
+      // draft to room B. Headers of allowed reads are outside the proof.
       const requestsAfterCheckedSend = net.requests.slice(requestsBeforeCheckedSend)
       const nonSentinelRequests = requestsAfterCheckedSend.filter((request) => !isAllowedRead(request))
       expect(nonSentinelRequests, '1849: exactly one request may follow the checked Send — the sentinel POST; any other request, ANY method, any path, any content, fails').toHaveLength(1)

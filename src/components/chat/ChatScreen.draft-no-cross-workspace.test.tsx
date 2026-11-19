@@ -401,8 +401,8 @@ describe('#1853 an unsent chat draft must not follow the user into another works
       //   keep the connection alive through proxies" (contracts/asyncapi.yaml
       //   heartbeat ping; generated ws-schemas.ts WsFrameType 'ping'; sent
       //   by src/lib/ws.ts::_startHeartbeat). An allowed ping is asserted
-      //   below to carry ONLY its type — its contract shape has no other
-      //   field — so nothing, draft or otherwise, can ride inside it.
+      //   below to have exactly the recorded key `type` — its contract
+      //   shape has no other field. That checks the recorded frame object.
       // There is no outbound handshake frame to allow: auth rides the HTTP
       // cookie on the WS handshake itself (src/lib/ws.ts onopen, US-5/
       // FR-010 — "no client-sent {type:'auth'} frame is needed or
@@ -413,8 +413,13 @@ describe('#1853 an unsent chat draft must not follow the user into another works
       // interval is created before useFakeTimers and stays a real timer,
       // so zero pings actually land in-window today; the allowance exists
       // because the heartbeat is the one frame type the protocol
-      // legitimately emits mid-session, and the shape assertion keeps it
-      // text-proof).
+      // legitimately emits mid-session).
+      // Revision 5 (CHECK r5): the shape assertion proves the recorded ping
+      // object has only the key `type`. Bytes outside that recorded object
+      // are outside the proof. The oracle proves that no message-carrying
+      // frame (any type other than the single sentinel message) carries the
+      // draft to workspace B, and that an allowed ping has no extra
+      // recorded field.
       const ALLOWED_NON_SENTINEL_FRAME_TYPES = ['ping']
       const framesAfterCheckedSend = socket.sent.slice(sentBeforeCheckedSend)
       const nonSentinelFrames = framesAfterCheckedSend.filter((frame) => {
