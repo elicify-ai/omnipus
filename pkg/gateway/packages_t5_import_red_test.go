@@ -18,6 +18,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -138,6 +139,25 @@ func TestPackagesImport_Route(t *testing.T) {
 		)
 		got, _ := importViaRouteLimit(t, api, chunk, -1)
 		requirePackageStatus(t, got, http.StatusRequestEntityTooLarge, omnpkg.CodePackageTooLarge)
+	})
+
+	// FR-008: a valid package followed by a second frame whose decoded output
+	// crosses 256 MiB is package_too_large / decoded. A format code
+	// (manifest_mismatch, not_a_package) does not prove the size layer, and the
+	// compressed upload under 64 MiB is copied in full before decoding (FR-045).
+	t.Run("FR-008 valid package plus a second frame over 256 MiB is package_too_large decoded", func(t *testing.T) {
+		api := packageAPI(t)
+		pkg := validMainPackage(t)
+		extra := zstdZeros(t, (256<<20)+1)
+		body := append(append([]byte{}, pkg...), extra...)
+		require.Less(t, len(body), 64<<20, "the compressed upload must stay under the 64 MiB body cap so the refusal is the decoded stream")
+		got, n := importCounted(t, api, body)
+		er := requirePackageStatus(t, got, http.StatusRequestEntityTooLarge, omnpkg.CodePackageTooLarge)
+		require.NotNil(t, er.Details)
+		limit, _ := (*er.Details)["limit"].(string)
+		require.Equal(t, omnpkg.LimitDecoded, limit,
+			"FR-008: the limit is the decoded stream, not a later format check; body=%s", got.Body)
+		require.Equal(t, int64(len(body)), n, "FR-045: the route copies all %d compressed bytes before decoding; it read %d", len(body), n)
 	})
 
 	// Representative damaged packages the route must refuse (BDD "Damaged, unsafe
@@ -363,6 +383,54 @@ func listedPackage(t *testing.T, parts []tarPart, el omnpkg.ManifestElement) []b
 	require.NoError(t, err)
 	all := append([]tarPart{{name: omnpkg.ManifestEntry, body: man}}, parts...)
 	return zstdTar(t, all)
+}
+
+// zstdZeros is one zstd frame, window 8 MiB (FR-008), whose decoded output is
+// n zero bytes. The frame is small on the wire; the decoded stream is not.
+func zstdZeros(t *testing.T, n int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w, err := zstd.NewWriter(&buf, zstd.WithWindowSize(8<<20))
+	require.NoError(t, err)
+	block := make([]byte, 1<<20)
+	for n > 0 {
+		chunk := block
+		if n < len(chunk) {
+			chunk = block[:n]
+		}
+		_, err = w.Write(chunk)
+		require.NoError(t, err)
+		n -= len(chunk)
+	}
+	require.NoError(t, w.Close())
+	return buf.Bytes()
+}
+
+// importCounted posts a package through the registered route and counts the
+// compressed bytes the handler reads. The client timeout is the hang bound for
+// a decoded stream just over 256 MiB, not a success wait.
+func importCounted(t *testing.T, api *restAPI, body []byte) (packageHTTP, int64) {
+	t.Helper()
+	var n int64
+	mux := packageRouteMux(t, api)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = &countingBody{ReadCloser: r.Body, n: &n}
+		cfg := api.agentLoop.GetConfig()
+		r = r.WithContext(putConfigSnapshot(r.Context(), cfg))
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/packages/import", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Authorization", "Bearer "+packageTestBearer)
+	resp, err := (&http.Client{Timeout: 3 * time.Minute}).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return packageHTTP{Code: resp.StatusCode, Body: raw, Hdr: resp.Header}, n
 }
 
 func packageFixtureTime() time.Time {
