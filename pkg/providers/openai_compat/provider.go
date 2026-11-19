@@ -321,13 +321,24 @@ func (p *Provider) ChatStream(
 		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
-	// Intentional concurrent close: net/http response bodies are safe to Close() concurrently with reads, unblocking any blocked scanner.Scan().
-	// body is the real response body, captured before the JSON path wraps
-	// resp.Body. Both this goroutine and the stall monitor close it.
+	// Intentional concurrent close: net/http response bodies are safe to Close()
+	// concurrently with reads, unblocking any blocked scanner.Scan(). body is the
+	// real response body, captured before the JSON path wraps resp.Body. Both this
+	// goroutine and the stall monitor close it. The goroutine also exits when this
+	// call returns: a context that is never cancelled (context.Background, which
+	// the provider interface allows) has a nil Done channel, so waiting only on
+	// ctx.Done would park one goroutine for every completed or stall-aborted call.
+	// A cancel that races the return may Close the body twice; that close is
+	// idempotent.
 	body := resp.Body
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		body.Close()
+		select {
+		case <-ctx.Done():
+			body.Close()
+		case <-done:
+		}
 	}()
 
 	// Silence check (founder decision 2026-09-14): abort this call when
