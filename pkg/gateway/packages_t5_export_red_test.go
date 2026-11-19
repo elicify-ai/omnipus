@@ -8,8 +8,9 @@
 package gateway
 
 import (
-	"encoding/binary"
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,7 +20,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sys/unix"
 )
 
 // TestPackages_ProductionSeamsAreNil preserves D7's production-seam guard.
@@ -133,6 +133,62 @@ func TestPackages_AccessRules(t *testing.T) {
 	t.Run("D8 apply JSON over 1 MiB is 413", func(t *testing.T) {
 		hitAccess(t, accessOpts{route: "apply", auth: "admin", bigBody: true, want: http.StatusRequestEntityTooLarge})
 	})
+	// FR-045: a complete JSON value followed by more than 1 MiB must be refused
+	// as too large. Decoding the first value and ignoring the rest is not the size layer.
+	t.Run("FR-045 export valid JSON prefix then more than 1 MiB is 413", func(t *testing.T) {
+		requireJSONPrefixStopped(t, "export")
+	})
+	t.Run("FR-045 apply valid JSON prefix then more than 1 MiB is 413", func(t *testing.T) {
+		requireJSONPrefixStopped(t, "apply")
+	})
+}
+
+// jsonBodyLimit is the export and apply JSON cap from FR-045: 1 MiB.
+const jsonBodyLimit = 1 << 20
+
+func requireJSONPrefixStopped(t *testing.T, route string) {
+	t.Helper()
+	api := packageAPI(t)
+	var path, prefix, contentType string
+	switch route {
+	case "export":
+		id := createMainAgent(t, api, "Writer", "Answer in rhyme.")
+		path = "/api/v1/packages/export"
+		prefix = `{"agent_ids":["` + id + `"]}`
+		contentType = "application/json"
+	case "apply":
+		path = "/api/v1/packages/import/00000000-0000-4000-8000-000000000099/apply"
+		prefix = `{"mode":"new"}`
+		contentType = "application/json"
+	default:
+		t.Fatalf("unknown route %s", route)
+	}
+	body := append([]byte(prefix), bytes.Repeat([]byte("x"), jsonBodyLimit+1)...)
+	var n int64
+	mux := packageRouteMux(t, api)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = &countingBody{ReadCloser: r.Body, n: &n}
+		cfg := api.agentLoop.GetConfig()
+		r = r.WithContext(putConfigSnapshot(r.Context(), cfg))
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequestWithContext(packageCtx(t), http.MethodPost, srv.URL+path, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Authorization", "Bearer "+packageTestBearer)
+	resp, err := (&http.Client{Timeout: packageCallTimeout}).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode,
+		"FR-045: %s must refuse a body over 1 MiB even when a valid JSON value is a prefix; read %d of %d; body=%s",
+		route, n, len(body), raw)
+	require.LessOrEqual(t, n, int64(jsonBodyLimit)+1,
+		"FR-045: %s consumed %d bytes; the size layer stops at 1 MiB plus the one overflow byte, not the whole trailing body (%d)",
+		route, n, len(body))
 }
 
 type accessOpts struct {
@@ -453,14 +509,6 @@ func decodePackageBytes(t *testing.T, raw []byte) (map[string]any, map[string][]
 	return man, files
 }
 
-// The helpers below are filled in the import file? No, keep decode here but
-// I referenced helpers I haven't written: decompressZstd, tarNew, readTar,
-// errEOF, jsonUnmarshal, require.NoDirExists, putConfigSnapshot, config.HashBearer,
-// config.WithSnapshot (removed).
-//
-// I need to fix this file before compile. Let me add the missing helpers in the
-// harness via a second edit, and fix HashBearer / snapshot / NoDirExists.
-
 // exportOmitsStructuredSecrets is FR-013. The sentinels live in the real
 // config.json (provider api_key and an MCP header) and in auth.json
 // (access_token / refresh_token), plus the other files export must not open.
@@ -499,22 +547,15 @@ func exportOmitsStructuredSecrets(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(auth), authRefresh, "the credential must be in auth.json before export")
 
-	fd, err := unix.InotifyInit1(unix.IN_NONBLOCK | unix.IN_CLOEXEC)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = unix.Close(fd) })
-	for _, path := range watched {
-		_, err = unix.InotifyAddWatch(fd, path, unix.IN_OPEN)
-		require.NoError(t, err)
-	}
-	discardInotify(t, fd)
+	watch := newOpenWatch(t, watched)
 
 	got := callPackageExport(t, api, `{"agent_ids":["`+id+`"]}`)
 	require.Equal(t, http.StatusOK, got.Code, "body=%s", got.Body)
-	require.Zero(t, countInotifyOpens(t, fd), "FR-013: export must not open config.json, auth.json, credentials, master.key or cli.token")
+	watch.requireNoOpens(t, "FR-013: export must not open config.json, auth.json, credentials, master.key or cli.token")
 	probe, err := os.Open(api.homePath + "/auth.json")
 	require.NoError(t, err)
 	require.NoError(t, probe.Close())
-	require.Equal(t, 1, countInotifyOpens(t, fd), "inotify must observe an open of auth.json; otherwise the no-open check is blind")
+	watch.requireProbeSeen(t, "the watch must observe an open of auth.json; otherwise the no-open check is blind")
 	plain := decompressZstd(t, got.Body)
 	for _, secret := range []string{providerKey, authAccess, authRefresh, "cred-SECRET-value", "master-KEY-value", "cli-TOKEN-value"} {
 		require.NotContains(t, string(got.Body), secret)
@@ -548,34 +589,4 @@ func plantConfigProviderKey(t *testing.T, home, key string) {
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(home+"/config.json", raw, 0o600))
-}
-
-func discardInotify(t *testing.T, fd int) {
-	t.Helper()
-	_ = countInotifyOpens(t, fd)
-}
-
-func countInotifyOpens(t *testing.T, fd int) int {
-	t.Helper()
-	buf := make([]byte, 4096)
-	opens := 0
-	for {
-		n, err := unix.Read(fd, buf)
-		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-			return opens
-		}
-		require.NoError(t, err)
-		off := 0
-		for off < n {
-			if n-off < unix.SizeofInotifyEvent {
-				t.Fatalf("short inotify event")
-			}
-			mask := binary.LittleEndian.Uint32(buf[off+4 : off+8])
-			nameLen := binary.LittleEndian.Uint32(buf[off+12 : off+16])
-			off += unix.SizeofInotifyEvent + int(nameLen)
-			if mask&unix.IN_OPEN != 0 {
-				opens++
-			}
-		}
-	}
 }
