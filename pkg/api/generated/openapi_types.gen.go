@@ -7730,6 +7730,138 @@ func (e OperationResultValidationOutcome) Valid() bool {
 	}
 }
 
+// Defines values for PackageImportApplyRequestMode.
+const (
+	PackageImportApplyRequestModeMerge   PackageImportApplyRequestMode = "merge"
+	PackageImportApplyRequestModeNew     PackageImportApplyRequestMode = "new"
+	PackageImportApplyRequestModeReplace PackageImportApplyRequestMode = "replace"
+)
+
+// Valid indicates whether the value is a known member of the PackageImportApplyRequestMode enum.
+func (e PackageImportApplyRequestMode) Valid() bool {
+	switch e {
+	case PackageImportApplyRequestModeMerge:
+		return true
+	case PackageImportApplyRequestModeNew:
+		return true
+	case PackageImportApplyRequestModeReplace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageImportPreviewManifestFormat.
+const (
+	PackageImportPreviewManifestFormatOmnpkg PackageImportPreviewManifestFormat = "omnpkg"
+)
+
+// Valid indicates whether the value is a known member of the PackageImportPreviewManifestFormat enum.
+func (e PackageImportPreviewManifestFormat) Valid() bool {
+	switch e {
+	case PackageImportPreviewManifestFormatOmnpkg:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageImportPreviewManifestScope.
+const (
+	PackageImportPreviewManifestScopeCustom    PackageImportPreviewManifestScope = "custom"
+	PackageImportPreviewManifestScopeSystem    PackageImportPreviewManifestScope = "system"
+	PackageImportPreviewManifestScopeWorkspace PackageImportPreviewManifestScope = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PackageImportPreviewManifestScope enum.
+func (e PackageImportPreviewManifestScope) Valid() bool {
+	switch e {
+	case PackageImportPreviewManifestScopeCustom:
+		return true
+	case PackageImportPreviewManifestScopeSystem:
+		return true
+	case PackageImportPreviewManifestScopeWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageImportResultActivation.
+const (
+	PackageImportResultActivationActive  PackageImportResultActivation = "active"
+	PackageImportResultActivationPending PackageImportResultActivation = "pending"
+)
+
+// Valid indicates whether the value is a known member of the PackageImportResultActivation enum.
+func (e PackageImportResultActivation) Valid() bool {
+	switch e {
+	case PackageImportResultActivationActive:
+		return true
+	case PackageImportResultActivationPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageImportResultMode.
+const (
+	PackageImportResultModeMerge   PackageImportResultMode = "merge"
+	PackageImportResultModeNew     PackageImportResultMode = "new"
+	PackageImportResultModeReplace PackageImportResultMode = "replace"
+)
+
+// Valid indicates whether the value is a known member of the PackageImportResultMode enum.
+func (e PackageImportResultMode) Valid() bool {
+	switch e {
+	case PackageImportResultModeMerge:
+		return true
+	case PackageImportResultModeNew:
+		return true
+	case PackageImportResultModeReplace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageManifestFormat.
+const (
+	PackageManifestFormatOmnpkg PackageManifestFormat = "omnpkg"
+)
+
+// Valid indicates whether the value is a known member of the PackageManifestFormat enum.
+func (e PackageManifestFormat) Valid() bool {
+	switch e {
+	case PackageManifestFormatOmnpkg:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageManifestScope.
+const (
+	PackageManifestScopeCustom    PackageManifestScope = "custom"
+	PackageManifestScopeSystem    PackageManifestScope = "system"
+	PackageManifestScopeWorkspace PackageManifestScope = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PackageManifestScope enum.
+func (e PackageManifestScope) Valid() bool {
+	switch e {
+	case PackageManifestScopeCustom:
+		return true
+	case PackageManifestScopeSystem:
+		return true
+	case PackageManifestScopeWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PerformancePendingApplyChangedFields.
 const (
 	PerformancePendingApplyChangedFieldsGoalMaxRounds             PerformancePendingApplyChangedFields = "goal_max_rounds"
@@ -18305,7 +18437,7 @@ type EnumValueDefGroup string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
-	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
+	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed. The package routes (/packages/export, /packages/import, /packages/import/{staging_id}/apply) use: export_selection_invalid, agent_not_found, core_agent_not_exportable, agent_prompt_missing, agent_file_unreadable (details.file, details.check one of link, not_regular, unreadable, too_large), audit_failed, not_a_package, package_too_new, element_schema_too_new, package_too_large (details.limit one of window, decoded, entries, manifest, agent_file, body), checksum_mismatch (details.file), manifest_mismatch (details.file or details.element), unsafe_path (details.file), unsafe_entry_type (details.file), no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable (field, details.reason), external_worker_not_supported_yet, too_many_staged_imports, import_mode_not_available, staging_not_found, import_in_progress, workspace_not_found, default_workspace_missing, name_suffix_exhausted, import_rolled_back and import_rollback_incomplete (details.failed_step C1 or C2, details.leftovers, details.agent_id, details.staging_id).
 	Code *string `json:"code,omitempty"`
 
 	// Details Optional structured details about the error. For `cli_path_invalid` and `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and `check` (the failed check's name). No path is returned; path-check diagnostics are recorded in the server log.
@@ -22798,6 +22930,304 @@ type OperationResult struct {
 
 // OperationResultValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 type OperationResultValidationOutcome string
+
+// PackageExportRequest Request body of POST /api/v1/packages/export. S1 accepts exactly one agent ID; any other count is refused with 400 export_selection_invalid.
+type PackageExportRequest struct {
+	// AgentIds IDs of the agents to export (exactly one in S1).
+	AgentIds []string `json:"agent_ids"`
+}
+
+// PackageImportApplyRequest Request body of POST /api/v1/packages/import/{staging_id}/apply. mode is required and has no default; S1 accepts only "new" (replace and merge are refused with 422 import_mode_not_available).
+type PackageImportApplyRequest struct {
+	// Mode How to import; S1 supports new (add as new items) only.
+	Mode PackageImportApplyRequestMode `json:"mode"`
+
+	// WorkspaceId Workspace the imported agent joins. Absent: the default workspace (409 default_workspace_missing when there is none).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// PackageImportApplyRequestMode How to import; S1 supports new (add as new items) only.
+type PackageImportApplyRequestMode string
+
+// PackageImportPreview Response of POST /api/v1/packages/import (201). The upload was checked in full and kept in a staging folder until expires_at (30 minutes after it became ready). Everything in the preview is provisional: apply re-runs the checks on the current state and lists each difference as the warning changed_since_preview (FR-021, FR-042).
+type PackageImportPreview struct {
+	// ExpiresAt When the staged upload expires (ready time + 30 minutes).
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Manifest The manifest of an .omnpkg package: the first entry (manifest.json) of the zstd-compressed tar, and the `manifest` field of PackageImportPreview. Readers refuse a higher format_version (package_too_new) and a higher agent element schema (element_schema_too_new), and ignore unknown properties (export-import S1 spec, FR-001 to FR-005).
+	Manifest PackageImportPreview_Manifest `json:"manifest"`
+
+	// NeedsSecrets Secrets to enter again after the import (S1a lists none).
+	NeedsSecrets []struct {
+		// Kind Kind of secret.
+		Kind string `json:"kind"`
+
+		// Name Secret name.
+		Name string `json:"name"`
+
+		// UsedBy Source ID of the element that uses it.
+		UsedBy string `json:"used_by"`
+	} `json:"needs_secrets"`
+
+	// SkippedElements Elements that would not be imported (unknown element types, from S1b).
+	SkippedElements []struct {
+		// Name The element's name in the package.
+		Name *string `json:"name,omitempty"`
+
+		// SourceId The element's ID in the package.
+		SourceId string `json:"source_id"`
+
+		// Type Element type.
+		Type string `json:"type"`
+	} `json:"skipped_elements"`
+
+	// StagingId ID of the staged upload; pass it to the apply operation.
+	StagingId string `json:"staging_id"`
+
+	// Warnings Items the import changes or leaves out (for example skill_dropped, mcp_binding_dropped, tool_policy_tightened, provider_not_configured, field_not_carried, unfinished_import_found).
+	Warnings []struct {
+		// Code Machine-readable warning code.
+		Code string `json:"code"`
+
+		// ElementSourceId Source ID of the element the warning is about, when it is about one.
+		ElementSourceId *string `json:"element_source_id,omitempty"`
+
+		// Items The items concerned (skill names, tool names, connector IDs).
+		Items *[]string `json:"items,omitempty"`
+
+		// Message Plain-language explanation.
+		Message string `json:"message"`
+	} `json:"warnings"`
+
+	// WillAdd The elements New mode would add, with their proposed (provisional) names.
+	WillAdd []struct {
+		// ProposedName The name the element would get now (a suffix is added on a name clash).
+		ProposedName string `json:"proposed_name"`
+
+		// Renamed Whether proposed_name differs from source_name.
+		Renamed bool `json:"renamed"`
+
+		// SourceId The element's ID in the package.
+		SourceId string `json:"source_id"`
+
+		// SourceName The element's name in the package.
+		SourceName string `json:"source_name"`
+
+		// Type Element type (agent in S1).
+		Type string `json:"type"`
+	} `json:"will_add"`
+}
+
+// PackageImportPreview_Manifest_Elements_Item defines model for PackageImportPreview.Manifest.Elements.Item.
+type PackageImportPreview_Manifest_Elements_Item struct {
+	// Files Package paths this element owns; every path is listed in `files`.
+	Files []string `json:"files"`
+
+	// Name The element's display name (equals the agent record's name).
+	Name string `json:"name"`
+
+	// Schema Version of the element's record format; agent records are 1.
+	Schema int `json:"schema"`
+
+	// SourceId The element's ID on the install it was exported from.
+	SourceId string `json:"source_id"`
+
+	// Type Element type. Open string: S1 knows "agent"; later Omnipus versions add more types.
+	Type                 string                 `json:"type"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// PackageImportPreviewManifestFormat Always "omnpkg".
+type PackageImportPreviewManifestFormat string
+
+// PackageImportPreviewManifestScope What the package was made from; S1 writes custom.
+type PackageImportPreviewManifestScope string
+
+// PackageImportPreview_Manifest The manifest of an .omnpkg package: the first entry (manifest.json) of the zstd-compressed tar, and the `manifest` field of PackageImportPreview. Readers refuse a higher format_version (package_too_new) and a higher agent element schema (element_schema_too_new), and ignore unknown properties (export-import S1 spec, FR-001 to FR-005).
+type PackageImportPreview_Manifest struct {
+	// Counts Number of elements per element type.
+	Counts map[string]int `json:"counts"`
+
+	// CreatedAt When the package was made (UTC).
+	CreatedAt time.Time `json:"created_at"`
+
+	// Elements The elements in the package (S1 exports exactly one agent).
+	Elements []PackageImportPreview_Manifest_Elements_Item `json:"elements"`
+
+	// Files Every payload entry (all entries except manifest.json) with its SHA-256 and size.
+	Files map[string]struct {
+		// Sha256 Lowercase hex SHA-256 of the entry's bytes.
+		Sha256 string `json:"sha256"`
+
+		// Size Entry size in bytes.
+		Size int64 `json:"size"`
+	} `json:"files"`
+
+	// Format Always "omnpkg".
+	Format PackageImportPreviewManifestFormat `json:"format"`
+
+	// FormatVersion Package format version; S1 writes 1.
+	FormatVersion int `json:"format_version"`
+
+	// IncludesSessions Whether the package carries chat sessions; S1 writes false.
+	IncludesSessions bool `json:"includes_sessions"`
+
+	// NeedsSecrets Secrets the importer must enter again (S1a writes none).
+	NeedsSecrets []struct {
+		// Kind Kind of secret (S1b writes executor_env).
+		Kind string `json:"kind"`
+
+		// Name Secret name, for example an environment variable name.
+		Name string `json:"name"`
+
+		// UsedBy Source ID of the element that uses the secret.
+		UsedBy string `json:"used_by"`
+	} `json:"needs_secrets"`
+
+	// Scope What the package was made from; S1 writes custom.
+	Scope PackageImportPreviewManifestScope `json:"scope"`
+
+	// SourceBuild Version of the Omnipus build that made the package.
+	SourceBuild          string                 `json:"source_build"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// PackageImportResult Response of POST /api/v1/packages/import/{staging_id}/apply (200): the import is committed. activation "active" means the live agent list confirmed the new agent; "pending" means it is stored and complete but the live list has not confirmed it yet (restart the gateway, or wait and check the agent list). A pending activation is never a partial import (FR-036, FR-041).
+type PackageImportResult struct {
+	// Activation Whether the live agent list confirmed the new agent (see the schema description).
+	Activation PackageImportResultActivation `json:"activation"`
+
+	// ActivationMessage Plain-language guidance when activation is pending.
+	ActivationMessage *string `json:"activation_message,omitempty"`
+
+	// Created The elements the import created.
+	Created []struct {
+		// Name The final name, including any clash suffix.
+		Name string `json:"name"`
+
+		// NewId The new ID on this install (never the source ID).
+		NewId string `json:"new_id"`
+
+		// SourceId The element's ID in the package.
+		SourceId string `json:"source_id"`
+
+		// Type Element type (agent in S1).
+		Type string `json:"type"`
+
+		// WorkspaceId The workspace the agent joined.
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"created"`
+
+	// Mode The mode that was applied (new in S1).
+	Mode PackageImportResultMode `json:"mode"`
+
+	// NeedsSecrets Secrets to enter again (S1a lists none).
+	NeedsSecrets []struct {
+		// Kind Kind of secret.
+		Kind string `json:"kind"`
+
+		// Name Secret name.
+		Name string `json:"name"`
+
+		// UsedBy ID of the created element that uses it.
+		UsedBy string `json:"used_by"`
+	} `json:"needs_secrets"`
+
+	// Warnings Items the import changed or left out, including changed_since_preview, main_chat_pending and audit_failed.
+	Warnings []struct {
+		// Code Machine-readable warning code.
+		Code string `json:"code"`
+
+		// ElementSourceId Source ID of the element the warning is about, when it is about one.
+		ElementSourceId *string `json:"element_source_id,omitempty"`
+
+		// Items The items concerned.
+		Items *[]string `json:"items,omitempty"`
+
+		// Message Plain-language explanation.
+		Message string `json:"message"`
+	} `json:"warnings"`
+}
+
+// PackageImportResultActivation Whether the live agent list confirmed the new agent (see the schema description).
+type PackageImportResultActivation string
+
+// PackageImportResultMode The mode that was applied (new in S1).
+type PackageImportResultMode string
+
+// PackageManifest The manifest of an .omnpkg package: the first entry (manifest.json) of the zstd-compressed tar, and the `manifest` field of PackageImportPreview. Readers refuse a higher format_version (package_too_new) and a higher agent element schema (element_schema_too_new), and ignore unknown properties (export-import S1 spec, FR-001 to FR-005).
+type PackageManifest struct {
+	// Counts Number of elements per element type.
+	Counts map[string]int `json:"counts"`
+
+	// CreatedAt When the package was made (UTC).
+	CreatedAt time.Time `json:"created_at"`
+
+	// Elements The elements in the package (S1 exports exactly one agent).
+	Elements []PackageManifest_Elements_Item `json:"elements"`
+
+	// Files Every payload entry (all entries except manifest.json) with its SHA-256 and size.
+	Files map[string]struct {
+		// Sha256 Lowercase hex SHA-256 of the entry's bytes.
+		Sha256 string `json:"sha256"`
+
+		// Size Entry size in bytes.
+		Size int64 `json:"size"`
+	} `json:"files"`
+
+	// Format Always "omnpkg".
+	Format PackageManifestFormat `json:"format"`
+
+	// FormatVersion Package format version; S1 writes 1.
+	FormatVersion int `json:"format_version"`
+
+	// IncludesSessions Whether the package carries chat sessions; S1 writes false.
+	IncludesSessions bool `json:"includes_sessions"`
+
+	// NeedsSecrets Secrets the importer must enter again (S1a writes none).
+	NeedsSecrets []struct {
+		// Kind Kind of secret (S1b writes executor_env).
+		Kind string `json:"kind"`
+
+		// Name Secret name, for example an environment variable name.
+		Name string `json:"name"`
+
+		// UsedBy Source ID of the element that uses the secret.
+		UsedBy string `json:"used_by"`
+	} `json:"needs_secrets"`
+
+	// Scope What the package was made from; S1 writes custom.
+	Scope PackageManifestScope `json:"scope"`
+
+	// SourceBuild Version of the Omnipus build that made the package.
+	SourceBuild          string                 `json:"source_build"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// PackageManifest_Elements_Item defines model for PackageManifest.elements.Item.
+type PackageManifest_Elements_Item struct {
+	// Files Package paths this element owns; every path is listed in `files`.
+	Files []string `json:"files"`
+
+	// Name The element's display name (equals the agent record's name).
+	Name string `json:"name"`
+
+	// Schema Version of the element's record format; agent records are 1.
+	Schema int `json:"schema"`
+
+	// SourceId The element's ID on the install it was exported from.
+	SourceId string `json:"source_id"`
+
+	// Type Element type. Open string: S1 knows "agent"; later Omnipus versions add more types.
+	Type                 string                 `json:"type"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// PackageManifestFormat Always "omnpkg".
+type PackageManifestFormat string
+
+// PackageManifestScope What the package was made from; S1 writes custom.
+type PackageManifestScope string
 
 // PendingRestartEntry A single config key that has been written to disk but not yet applied — the running value diverges from the persisted value. Returned in the array from GET /api/v1/config/pending-restart.
 type PendingRestartEntry struct {
@@ -30623,6 +31053,12 @@ type CompleteOnboardingJSONRequestBody = OnboardingCompleteRequest
 // ProbeProviderJSONRequestBody defines body for ProbeProvider for application/json ContentType.
 type ProbeProviderJSONRequestBody = ProbeProviderRequest
 
+// ExportPackageJSONRequestBody defines body for ExportPackage for application/json ContentType.
+type ExportPackageJSONRequestBody = PackageExportRequest
+
+// ApplyPackageImportJSONRequestBody defines body for ApplyPackageImport for application/json ContentType.
+type ApplyPackageImportJSONRequestBody = PackageImportApplyRequest
+
 // UpdatePerformanceSettingsJSONRequestBody defines body for UpdatePerformanceSettings for application/json ContentType.
 type UpdatePerformanceSettingsJSONRequestBody = PerformanceSettingsUpdate
 
@@ -31252,6 +31688,628 @@ func (a McpToolsListResponse_Item) MarshalJSON() ([]byte, error) {
 	object["name"], err = json.Marshal(a.Name)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'name': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PackageImportPreview_Manifest_Elements_Item. Returns the specified
+// element and whether it was found
+func (a PackageImportPreview_Manifest_Elements_Item) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PackageImportPreview_Manifest_Elements_Item
+func (a *PackageImportPreview_Manifest_Elements_Item) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PackageImportPreview_Manifest_Elements_Item to handle AdditionalProperties
+func (a *PackageImportPreview_Manifest_Elements_Item) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["files"]; found {
+		err = json.Unmarshal(raw, &a.Files)
+		if err != nil {
+			return fmt.Errorf("error reading 'files': %w", err)
+		}
+		delete(object, "files")
+	}
+
+	if raw, found := object["name"]; found {
+		err = json.Unmarshal(raw, &a.Name)
+		if err != nil {
+			return fmt.Errorf("error reading 'name': %w", err)
+		}
+		delete(object, "name")
+	}
+
+	if raw, found := object["schema"]; found {
+		err = json.Unmarshal(raw, &a.Schema)
+		if err != nil {
+			return fmt.Errorf("error reading 'schema': %w", err)
+		}
+		delete(object, "schema")
+	}
+
+	if raw, found := object["source_id"]; found {
+		err = json.Unmarshal(raw, &a.SourceId)
+		if err != nil {
+			return fmt.Errorf("error reading 'source_id': %w", err)
+		}
+		delete(object, "source_id")
+	}
+
+	if raw, found := object["type"]; found {
+		err = json.Unmarshal(raw, &a.Type)
+		if err != nil {
+			return fmt.Errorf("error reading 'type': %w", err)
+		}
+		delete(object, "type")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PackageImportPreview_Manifest_Elements_Item to handle AdditionalProperties
+func (a PackageImportPreview_Manifest_Elements_Item) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Files != nil {
+		object["files"], err = json.Marshal(a.Files)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'files': %w", err)
+		}
+	}
+
+	object["name"], err = json.Marshal(a.Name)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'name': %w", err)
+	}
+
+	object["schema"], err = json.Marshal(a.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'schema': %w", err)
+	}
+
+	object["source_id"], err = json.Marshal(a.SourceId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'source_id': %w", err)
+	}
+
+	object["type"], err = json.Marshal(a.Type)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'type': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PackageImportPreview_Manifest. Returns the specified
+// element and whether it was found
+func (a PackageImportPreview_Manifest) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PackageImportPreview_Manifest
+func (a *PackageImportPreview_Manifest) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PackageImportPreview_Manifest to handle AdditionalProperties
+func (a *PackageImportPreview_Manifest) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["counts"]; found {
+		err = json.Unmarshal(raw, &a.Counts)
+		if err != nil {
+			return fmt.Errorf("error reading 'counts': %w", err)
+		}
+		delete(object, "counts")
+	}
+
+	if raw, found := object["created_at"]; found {
+		err = json.Unmarshal(raw, &a.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("error reading 'created_at': %w", err)
+		}
+		delete(object, "created_at")
+	}
+
+	if raw, found := object["elements"]; found {
+		err = json.Unmarshal(raw, &a.Elements)
+		if err != nil {
+			return fmt.Errorf("error reading 'elements': %w", err)
+		}
+		delete(object, "elements")
+	}
+
+	if raw, found := object["files"]; found {
+		err = json.Unmarshal(raw, &a.Files)
+		if err != nil {
+			return fmt.Errorf("error reading 'files': %w", err)
+		}
+		delete(object, "files")
+	}
+
+	if raw, found := object["format"]; found {
+		err = json.Unmarshal(raw, &a.Format)
+		if err != nil {
+			return fmt.Errorf("error reading 'format': %w", err)
+		}
+		delete(object, "format")
+	}
+
+	if raw, found := object["format_version"]; found {
+		err = json.Unmarshal(raw, &a.FormatVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'format_version': %w", err)
+		}
+		delete(object, "format_version")
+	}
+
+	if raw, found := object["includes_sessions"]; found {
+		err = json.Unmarshal(raw, &a.IncludesSessions)
+		if err != nil {
+			return fmt.Errorf("error reading 'includes_sessions': %w", err)
+		}
+		delete(object, "includes_sessions")
+	}
+
+	if raw, found := object["needs_secrets"]; found {
+		err = json.Unmarshal(raw, &a.NeedsSecrets)
+		if err != nil {
+			return fmt.Errorf("error reading 'needs_secrets': %w", err)
+		}
+		delete(object, "needs_secrets")
+	}
+
+	if raw, found := object["scope"]; found {
+		err = json.Unmarshal(raw, &a.Scope)
+		if err != nil {
+			return fmt.Errorf("error reading 'scope': %w", err)
+		}
+		delete(object, "scope")
+	}
+
+	if raw, found := object["source_build"]; found {
+		err = json.Unmarshal(raw, &a.SourceBuild)
+		if err != nil {
+			return fmt.Errorf("error reading 'source_build': %w", err)
+		}
+		delete(object, "source_build")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PackageImportPreview_Manifest to handle AdditionalProperties
+func (a PackageImportPreview_Manifest) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Counts != nil {
+		object["counts"], err = json.Marshal(a.Counts)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'counts': %w", err)
+		}
+	}
+
+	object["created_at"], err = json.Marshal(a.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'created_at': %w", err)
+	}
+
+	if a.Elements != nil {
+		object["elements"], err = json.Marshal(a.Elements)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'elements': %w", err)
+		}
+	}
+
+	if a.Files != nil {
+		object["files"], err = json.Marshal(a.Files)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'files': %w", err)
+		}
+	}
+
+	object["format"], err = json.Marshal(a.Format)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'format': %w", err)
+	}
+
+	object["format_version"], err = json.Marshal(a.FormatVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'format_version': %w", err)
+	}
+
+	object["includes_sessions"], err = json.Marshal(a.IncludesSessions)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'includes_sessions': %w", err)
+	}
+
+	if a.NeedsSecrets != nil {
+		object["needs_secrets"], err = json.Marshal(a.NeedsSecrets)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'needs_secrets': %w", err)
+		}
+	}
+
+	object["scope"], err = json.Marshal(a.Scope)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'scope': %w", err)
+	}
+
+	object["source_build"], err = json.Marshal(a.SourceBuild)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'source_build': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PackageManifest. Returns the specified
+// element and whether it was found
+func (a PackageManifest) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PackageManifest
+func (a *PackageManifest) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PackageManifest to handle AdditionalProperties
+func (a *PackageManifest) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["counts"]; found {
+		err = json.Unmarshal(raw, &a.Counts)
+		if err != nil {
+			return fmt.Errorf("error reading 'counts': %w", err)
+		}
+		delete(object, "counts")
+	}
+
+	if raw, found := object["created_at"]; found {
+		err = json.Unmarshal(raw, &a.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("error reading 'created_at': %w", err)
+		}
+		delete(object, "created_at")
+	}
+
+	if raw, found := object["elements"]; found {
+		err = json.Unmarshal(raw, &a.Elements)
+		if err != nil {
+			return fmt.Errorf("error reading 'elements': %w", err)
+		}
+		delete(object, "elements")
+	}
+
+	if raw, found := object["files"]; found {
+		err = json.Unmarshal(raw, &a.Files)
+		if err != nil {
+			return fmt.Errorf("error reading 'files': %w", err)
+		}
+		delete(object, "files")
+	}
+
+	if raw, found := object["format"]; found {
+		err = json.Unmarshal(raw, &a.Format)
+		if err != nil {
+			return fmt.Errorf("error reading 'format': %w", err)
+		}
+		delete(object, "format")
+	}
+
+	if raw, found := object["format_version"]; found {
+		err = json.Unmarshal(raw, &a.FormatVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'format_version': %w", err)
+		}
+		delete(object, "format_version")
+	}
+
+	if raw, found := object["includes_sessions"]; found {
+		err = json.Unmarshal(raw, &a.IncludesSessions)
+		if err != nil {
+			return fmt.Errorf("error reading 'includes_sessions': %w", err)
+		}
+		delete(object, "includes_sessions")
+	}
+
+	if raw, found := object["needs_secrets"]; found {
+		err = json.Unmarshal(raw, &a.NeedsSecrets)
+		if err != nil {
+			return fmt.Errorf("error reading 'needs_secrets': %w", err)
+		}
+		delete(object, "needs_secrets")
+	}
+
+	if raw, found := object["scope"]; found {
+		err = json.Unmarshal(raw, &a.Scope)
+		if err != nil {
+			return fmt.Errorf("error reading 'scope': %w", err)
+		}
+		delete(object, "scope")
+	}
+
+	if raw, found := object["source_build"]; found {
+		err = json.Unmarshal(raw, &a.SourceBuild)
+		if err != nil {
+			return fmt.Errorf("error reading 'source_build': %w", err)
+		}
+		delete(object, "source_build")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PackageManifest to handle AdditionalProperties
+func (a PackageManifest) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Counts != nil {
+		object["counts"], err = json.Marshal(a.Counts)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'counts': %w", err)
+		}
+	}
+
+	object["created_at"], err = json.Marshal(a.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'created_at': %w", err)
+	}
+
+	if a.Elements != nil {
+		object["elements"], err = json.Marshal(a.Elements)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'elements': %w", err)
+		}
+	}
+
+	if a.Files != nil {
+		object["files"], err = json.Marshal(a.Files)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'files': %w", err)
+		}
+	}
+
+	object["format"], err = json.Marshal(a.Format)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'format': %w", err)
+	}
+
+	object["format_version"], err = json.Marshal(a.FormatVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'format_version': %w", err)
+	}
+
+	object["includes_sessions"], err = json.Marshal(a.IncludesSessions)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'includes_sessions': %w", err)
+	}
+
+	if a.NeedsSecrets != nil {
+		object["needs_secrets"], err = json.Marshal(a.NeedsSecrets)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'needs_secrets': %w", err)
+		}
+	}
+
+	object["scope"], err = json.Marshal(a.Scope)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'scope': %w", err)
+	}
+
+	object["source_build"], err = json.Marshal(a.SourceBuild)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'source_build': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PackageManifest_Elements_Item. Returns the specified
+// element and whether it was found
+func (a PackageManifest_Elements_Item) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PackageManifest_Elements_Item
+func (a *PackageManifest_Elements_Item) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PackageManifest_Elements_Item to handle AdditionalProperties
+func (a *PackageManifest_Elements_Item) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["files"]; found {
+		err = json.Unmarshal(raw, &a.Files)
+		if err != nil {
+			return fmt.Errorf("error reading 'files': %w", err)
+		}
+		delete(object, "files")
+	}
+
+	if raw, found := object["name"]; found {
+		err = json.Unmarshal(raw, &a.Name)
+		if err != nil {
+			return fmt.Errorf("error reading 'name': %w", err)
+		}
+		delete(object, "name")
+	}
+
+	if raw, found := object["schema"]; found {
+		err = json.Unmarshal(raw, &a.Schema)
+		if err != nil {
+			return fmt.Errorf("error reading 'schema': %w", err)
+		}
+		delete(object, "schema")
+	}
+
+	if raw, found := object["source_id"]; found {
+		err = json.Unmarshal(raw, &a.SourceId)
+		if err != nil {
+			return fmt.Errorf("error reading 'source_id': %w", err)
+		}
+		delete(object, "source_id")
+	}
+
+	if raw, found := object["type"]; found {
+		err = json.Unmarshal(raw, &a.Type)
+		if err != nil {
+			return fmt.Errorf("error reading 'type': %w", err)
+		}
+		delete(object, "type")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PackageManifest_Elements_Item to handle AdditionalProperties
+func (a PackageManifest_Elements_Item) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Files != nil {
+		object["files"], err = json.Marshal(a.Files)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'files': %w", err)
+		}
+	}
+
+	object["name"], err = json.Marshal(a.Name)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'name': %w", err)
+	}
+
+	object["schema"], err = json.Marshal(a.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'schema': %w", err)
+	}
+
+	object["source_id"], err = json.Marshal(a.SourceId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'source_id': %w", err)
+	}
+
+	object["type"], err = json.Marshal(a.Type)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'type': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {
