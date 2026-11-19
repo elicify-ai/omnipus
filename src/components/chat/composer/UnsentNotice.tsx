@@ -28,8 +28,10 @@ import { useSessionStore } from '@/store/session'
 import { enterNewChat } from '@/store/session/newChatKey'
 import {
   canonical,
-  clearDraftRecovery,
   clearNotStopped,
+  discardDraftInput,
+  discardUnsentItem,
+  hasDraftInput,
   isNewChatKey,
   mergeRestoredText,
   mirrorOpenDraft,
@@ -125,7 +127,7 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
   }
   if (unsupported) {
     for (const [key, draft] of Object.entries(drafts)) {
-      if (draft.text.trim() === '') continue
+      if (!hasDraftInput(draft)) continue
       rows.push({ id: `draft-${key}`, title: isNewChatKey(key) ? 'New chat' : names.chat(key), text: draft.text, lines: [], actions: ['copy'] })
     }
   }
@@ -158,7 +160,7 @@ function openRow(row: Row): void {
 
 function discardRow(row: Row): void {
   if (row.item) {
-    removeUnsentItem(row.item.id)
+    discardUnsentItem(row.item.id)
     return
   }
   useChatStore.getState().abandonPendingFirstSend()
@@ -266,8 +268,7 @@ export function UnsentNotice({ focusComposer }: { focusComposer: () => void }) {
               size="sm"
               variant="ghost"
               onClick={() => {
-                updateDraft(openKey, (draft) => ({ ...draft, text: '', files: [], libraryPicks: [], recovery: undefined }))
-                clearDraftRecovery(openKey)
+                discardDraftInput(openKey)
                 mirrorOpenDraft('restore')
               }}
             >

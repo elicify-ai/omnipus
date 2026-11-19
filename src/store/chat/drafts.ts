@@ -258,6 +258,51 @@ export function removeUnsentItem(id: string): void {
   useDraftStore.setState((state) => ({ unsent: state.unsent.filter((item) => item.id !== id) }))
 }
 
+/** Undoes mergeRestoredText for one restored block; newer text around it stays. */
+function withoutRestoredText(restored: string, text: string): string {
+  if (!restored) return text
+  if (text === restored) return ''
+  if (text.startsWith(`${restored}\n`)) return text.slice(restored.length + 1)
+  if (text.endsWith(`\n${restored}`)) return text.slice(0, text.length - restored.length - 1)
+  const at = text.indexOf(`\n${restored}\n`)
+  if (at >= 0) return text.slice(0, at) + text.slice(at + restored.length + 1)
+  return text
+}
+
+/**
+ * Confirmed Discard of one list item (spec 4.4.3, 4.9): a "Not sent" item is
+ * one recovered input shown in two places, so its text, files and library
+ * picks also leave its origin draft. Newer input typed into that draft stays.
+ */
+export function discardUnsentItem(id: string): void {
+  const item = useDraftStore.getState().unsent.find((have) => have.id === id)
+  if (!item) return
+  removeUnsentItem(id)
+  if (item.kind !== 'not_sent') return
+  const k = canonical(item.key)
+  if (!useDraftStore.getState().drafts[k]) return
+  const others = useDraftStore.getState().unsent.some((have) => have.kind === 'not_sent' && canonical(have.key) === k)
+  updateDraft(k, (draft) => ({
+    ...draft,
+    text: withoutRestoredText(item.text, draft.text),
+    files: draft.files.filter((file) => !item.files.some((gone) => sameFile(gone, file))),
+    libraryPicks: draft.libraryPicks.filter((pick) => !item.libraryPicks.some((gone) => gone.ref === pick.ref)),
+    recovery: others ? draft.recovery : undefined,
+  }))
+}
+
+/**
+ * Confirmed in-box Discard (spec 4.9): the box holds the chat's recovered
+ * input, so the draft is emptied and its "Not sent" list items go with it.
+ */
+export function discardDraftInput(key: string): void {
+  const k = canonical(key)
+  updateDraft(k, (draft) => ({ ...draft, text: '', files: [], libraryPicks: [], recovery: undefined }))
+  const { unsent } = useDraftStore.getState()
+  const keep = unsent.filter((item) => !(item.kind === 'not_sent' && canonical(item.key) === k))
+  if (keep.length !== unsent.length) useDraftStore.setState({ unsent: keep })
+}
+
 /**
  * A later submission from a key that carries a restored item's text settles
  * that item: the person sent it again (spec 4.9 "Send it again").
@@ -313,5 +358,10 @@ export function currentAuthGeneration(): number {
 /** True while any non-empty draft or Unsent item exists (B-23 leave warning). */
 export function hasUnsavedInput(): boolean {
   const { drafts, unsent } = useDraftStore.getState()
-  return unsent.length > 0 || Object.values(drafts).some((draft) => draft.text.trim().length > 0 || draft.files.length > 0)
+  return unsent.length > 0 || Object.values(drafts).some(hasDraftInput)
+}
+
+/** A draft that holds text, native files or library picks (4.4.3, 4.10 "non-empty"). */
+export function hasDraftInput(draft: Draft): boolean {
+  return draft.text.trim().length > 0 || draft.files.length > 0 || draft.libraryPicks.length > 0
 }
