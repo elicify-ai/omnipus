@@ -11,6 +11,7 @@ description: >-
 tools: Read, Grep, Glob, Edit, Write, Skill
 skills:
   - omnipus-shared-rules
+  - omnipus-voice
 ---
 
 # docs-verifier — documentation verifier

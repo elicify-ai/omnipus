@@ -717,6 +717,85 @@ const PROVIDER_MESSAGE_SLOTS = new Set([
 ])
 
 /**
+ * The CLOSED slot vocabulary for `message` and `variants` sentences (#1857,
+ * notifications spec §13.8): facts the server fills at the emit site.
+ * Mirrored in scripts/gen-asyncapi-go/usermessages.go (messageSlots) — keep
+ * the two sets identical.
+ */
+const MESSAGE_SLOTS = new Set(["{cli}", "{model}", "{n}", "{minutes}"])
+
+/** Throw unless `text` has balanced braces and only MESSAGE_SLOTS slots. */
+function validateMessageSlots(where, text) {
+  const opens = (text.match(/\{/g) ?? []).length
+  const closes = (text.match(/\}/g) ?? []).length
+  if (opens !== closes) {
+    throw new Error(`${where} has unbalanced braces (${opens} open, ${closes} close)`)
+  }
+  for (const slot of text.match(/\{[^}]*\}/g) ?? []) {
+    if (!MESSAGE_SLOTS.has(slot)) {
+      throw new Error(
+        `${where} uses slot "${slot}" — not in the closed slot vocabulary (${[...MESSAGE_SLOTS].sort().join(" ")})`,
+      )
+    }
+  }
+}
+
+/**
+ * First-person tokens of a chat-voice sentence (#1857 design note D-B B1):
+ * "I" as a word (covering the I' and I’ contractions) and "me" / "my" in any
+ * case. Mirrored in scripts/gen-asyncapi-go/usermessages.go
+ * (firstPersonPattern) — keep the two identical.
+ */
+const FIRST_PERSON = /\bI\b|\b[Mm][EeYy]\b/
+
+/** Throw unless `text` is a valid neutral twin: non-empty, no first person, MESSAGE_SLOTS only. */
+function validateNeutralSentence(where, text) {
+  if (typeof text !== "string" || text.trim() === "") {
+    throw new Error(`${where} must be a non-empty string when present`)
+  }
+  if (FIRST_PERSON.test(text)) {
+    throw new Error(`${where} is itself first person: a neutral twin must not use I, me or my`)
+  }
+  validateMessageSlots(where, text)
+}
+
+/**
+ * Validate an entry's optional neutral twins (#1857 D-B B1). The TS generator
+ * validates only and emits nothing: no SPA surface renders the neutral form.
+ * Fatal: a first-person chat message or variant without its twin,
+ * neutral_variants keys that differ from the variants keys, or a twin that is
+ * empty, first person, or uses a slot outside MESSAGE_SLOTS.
+ */
+function validateNeutralForms(where, entry, variants) {
+  const hasNeutral = entry.neutral !== undefined && entry.neutral !== null
+  if (hasNeutral) validateNeutralSentence(`${where}.neutral`, entry.neutral)
+  if (!hasNeutral && FIRST_PERSON.test(entry.message)) {
+    throw new Error(`${where}: message is first person but has no "neutral" twin`)
+  }
+  const neutralVariants = {}
+  if (entry.neutral_variants !== undefined && entry.neutral_variants !== null) {
+    const raw = entry.neutral_variants
+    if (typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`${where}.neutral_variants: must be a mapping of variant key → sentence`)
+    }
+    const got = Object.keys(raw).sort()
+    const want = Object.keys(variants).sort()
+    if (got.length === 0 || got.length !== want.length || got.some((k, i) => k !== want[i])) {
+      throw new Error(`${where}.neutral_variants: keys [${got.join(", ")}] must equal the variants keys [${want.join(", ")}]`)
+    }
+    for (const key of got) {
+      validateNeutralSentence(`${where}.neutral_variants: variant ${key}`, raw[key])
+      neutralVariants[key] = raw[key]
+    }
+  }
+  for (const [key, sentence] of Object.entries(variants)) {
+    if (!(key in neutralVariants) && FIRST_PERSON.test(sentence)) {
+      throw new Error(`${where}.variants: variant ${key} is first person but has no neutral_variants twin`)
+    }
+  }
+}
+
+/**
  * Read and validate the LLMError copy catalogue out of the parsed contract.
  * Returns { attributions, entries } with entries in contract (enum) order.
  */
@@ -789,7 +868,23 @@ function extractUserMessageCatalogue(allSchemas, schemaName) {
         }
       }
     }
-    entries.push({ code, message: entry.message, attribution: entry.attribution, providerMessage });
+    validateMessageSlots(`${schemaName}.x-user-messages.${code}: message`, entry.message);
+    const variants = {};
+    if (entry.variants !== undefined && entry.variants !== null) {
+      if (typeof entry.variants !== "object" || Array.isArray(entry.variants) || Object.keys(entry.variants).length === 0) {
+        throw new Error(`${schemaName}.x-user-messages.${code}.variants: must be a non-empty mapping of variant key → sentence`);
+      }
+      for (const key of Object.keys(entry.variants).sort()) {
+        const sentence = entry.variants[key];
+        if (key.trim() === "" || typeof sentence !== "string" || sentence.trim() === "") {
+          throw new Error(`${schemaName}.x-user-messages.${code}.variants: variant "${key}" must be a non-empty string`);
+        }
+        validateMessageSlots(`${schemaName}.x-user-messages.${code}.variants: variant ${key}`, sentence);
+        variants[key] = sentence;
+      }
+    }
+    validateNeutralForms(`${schemaName}.x-user-messages.${code}`, entry, variants);
+    entries.push({ code, message: entry.message, attribution: entry.attribution, providerMessage, variants });
     seen.add(code);
   }
 
@@ -858,6 +953,23 @@ const messageLines = [
   " */",
   "export const llmErrorProviderMessages: Partial<Record<LLMErrorCode, string>> = {",
   ...catalogue.entries.filter((e) => e.providerMessage !== "").map((e) => `  ${e.code}: ${JSON.stringify(e.providerMessage)},`),
+  "}",
+  "",
+  "/**",
+  " * Catalogue variants (#1857, notifications spec §13.8): variant key → sentence",
+  " * for the codes whose instance classes need different sentences. A code absent",
+  " * from this map has only its catalogue message. Sentences may carry the closed",
+  " * message slots ({cli} {model} {n} {minutes}). The Go half is",
+  " * LLMErrorMessageVariants in llm_error_messages.gen.go.",
+  " */",
+  "export const llmErrorMessageVariants: Partial<Record<LLMErrorCode, Record<string, string>>> = {",
+  ...catalogue.entries
+    .filter((e) => Object.keys(e.variants).length > 0)
+    .flatMap((e) => [
+      `  ${e.code}: {`,
+      ...Object.keys(e.variants).map((k) => `    ${k}: ${JSON.stringify(e.variants[k])},`),
+      "  },",
+    ]),
   "}",
   "",
 ];

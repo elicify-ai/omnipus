@@ -11,6 +11,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   fetchConfig: vi.fn(), fetchCredentials: vi.fn(), fetchBuiltinTools: vi.fn(),
   fetchGlobalToolPolicies: vi.fn(), fetchSandboxConfig: vi.fn(),
   fetchSandboxStatus: vi.fn(), fetchAppState: vi.fn(),
+  fetchRateLimits: vi.fn(),
 }))
 vi.mock('./DiagnosticsSection', () => ({ DiagnosticsSection: () => null }))
 vi.mock('./SandboxSection', () => ({ SandboxSection: () => null }))
@@ -56,6 +57,7 @@ beforeEach(() => {
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue(structuredClone(A))
   vi.mocked(api.fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
   vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
+  vi.mocked(api.fetchRateLimits).mockResolvedValue({ enabled: true, max_agent_llm_calls_per_hour: 0, max_agent_tool_calls_per_minute: 0 } as never)
   vi.mocked(api.fetchAppState).mockResolvedValue({ onboarding_complete: true, identity: { mode: 'platform', edition: 'hosted', signed_in: true } } as never)
 })
 

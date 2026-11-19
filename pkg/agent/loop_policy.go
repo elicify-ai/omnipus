@@ -178,7 +178,13 @@ func (al *AgentLoop) checkToolDedupInvariant(ts *turnState, filtered []tools.Too
 				User:      ts.auditUser(), // FR-017
 				Details:   details,
 			})
-			return fmt.Errorf("tools[] dedup invariant violated: tool %q appears from sources %v", name, sources)
+			// #1857 B10: typed, same text; carries the structured MCP fact
+			// (an MCP tool among the colliding pair) to the emit site.
+			return &toolDedupError{
+				name:        name,
+				sources:     sources,
+				mcpInvolved: firstSrc == "mcp:unknown" || sourceTag == "mcp:unknown",
+			}
 		}
 		seen[name] = sourceTag
 	}

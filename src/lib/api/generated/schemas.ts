@@ -14840,7 +14840,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/security/rate-limits",
     alias: "getRateLimits",
-    description: `Returns the current rate-limit config and the live daily LLM cost. Hot-reloaded — requires_restart is always false on PUT.
+    description: `Returns the current per-agent sliding-window rate-limit config: the two caps max_agent_llm_calls_per_hour and max_agent_tool_calls_per_minute (0 &#x3D; unlimited), and enabled, true when either cap is above 0. Per ADR-053 D12 the SEC-26 USD daily cost cap was retired; no cost is returned. Hot-reloaded — requires_restart is always false on PUT.
 `,
     requestFormat: "json",
     response: RateLimitsResponse,
@@ -14856,7 +14856,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/security/rate-limits",
     alias: "updateRateLimits",
-    description: `Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).
+    description: `Partial update — any subset of the two per-agent cap fields (max_agent_llm_calls_per_hour, max_agent_tool_calls_per_minute). The retired daily_cost_cap_usd field (ADR-053 D12) is rejected with HTTP 400. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).
 `,
     requestFormat: "json",
     parameters: [
@@ -19262,7 +19262,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -19279,7 +19279,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     provider_message: z.boolean().optional(),

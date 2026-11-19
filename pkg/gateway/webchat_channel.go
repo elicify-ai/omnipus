@@ -128,6 +128,14 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 	c.mu.Lock()
 	alreadyStreamed := c.streamed[msg.ChatID]
 	delete(c.streamed, msg.ChatID) // consume the flag
+	if alreadyStreamed {
+		// #1857 X1 fix B: the streamed turn's identity was recorded for a
+		// fallback that is not happening. Consume it with the flag, or a
+		// later turn with no streamer (a refusal before any stream) would
+		// stamp this turn's ids on its own frames and the SPA would drop
+		// them as late tokens of the finished bubble.
+		delete(c.turnIdentity, msg.ChatID)
+	}
 	c.mu.Unlock()
 
 	if alreadyStreamed {

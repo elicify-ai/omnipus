@@ -718,7 +718,7 @@ func parseOpencodeError(raw []byte, runID string) []RunEvent {
 	return []RunEvent{{
 		Kind:  EventKindError,
 		RunID: runID,
-		Err:   &ErrorEvent{Message: msg, Fatal: true},
+		Err:   &ErrorEvent{Message: msg, Fatal: true, Type: errType},
 	}}
 }
 
