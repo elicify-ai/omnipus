@@ -26,10 +26,13 @@ import { mutationFailureMessage } from '@/lib/mutationOutcome'
 import { useConnectionStore } from '@/store/connection'
 import { useRoomStore } from '@/store/rooms'
 import { useUiStore } from '@/store/ui'
-import { VirtualizedMessageList } from '@/components/chat/ChatMessageList'
+import { VirtualizedMessageList, type RoomListOpening } from '@/components/chat/ChatMessageList'
 import { ConversationKindContext, ConversationSourceContext } from '@/components/chat/conversationSource'
 import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
 import { AskUserQuestionCard } from '@/components/chat/AskUserQuestionCard'
+import type { Agent, Workspace } from '@/lib/api'
+import type { Room } from '@/lib/api/generated/openapi-types'
+import type { ChatMessage } from '@/store/chat'
 import { useRoomConversationSource } from './roomConversationSource'
 import { ROOM_ASK_AGAIN_EVENT, type RoomAskAgainDetail } from './roomModel'
 import { RoomMessageBox, roomBlockedReason } from './RoomMessageBox'
@@ -41,6 +44,82 @@ import { useRoomCardRequestIds, useRoomQuestionCards, useRoomView } from './useR
 export interface RoomScreenProps {
   workspaceId: string
   roomId: string
+}
+
+/** Ask again (FR-036), tagged with the room it was requested in. */
+type RoomAskAgainPrefill = { agentId: string; nonce: number; roomId: string }
+
+/**
+ * The live thread for one room. #1849: RoomScreen stays mounted across a room
+ * change (the route only swaps the roomId prop), and this child is keyed by
+ * room id so it remounts. The composer runtime, mention picks and send outcome
+ * are created here, so room A's unsent text, attachments and mention picks are
+ * discarded. They are not restored when the user returns to room A.
+ */
+function RoomThread({
+  roomId,
+  room,
+  members,
+  workspace,
+  liteMode,
+  messages,
+  openFailed,
+  opening,
+  blockedReason,
+  prefill,
+}: {
+  roomId: string
+  room: Room
+  members: Agent[]
+  workspace: Workspace | undefined
+  liteMode: boolean
+  messages: ChatMessage[]
+  openFailed: boolean
+  opening: RoomListOpening
+  blockedReason: string | undefined
+  prefill: RoomAskAgainPrefill | undefined
+}) {
+  const send = useRoomSend(roomId)
+  const workspaceRef = useRef<string | undefined>(undefined)
+  workspaceRef.current = room.workspace_id
+  const bridge = useRef<RoomSendBridge | null>(null)
+  const runtime = useRoomRuntime(send, () => workspaceRef.current, bridge)
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <div className="flex flex-col absolute inset-0 overflow-hidden" data-room-id={roomId}>
+        {/* US-11 AS 11.5 / S-102: the group's name is the chat's name for
+            assistive technology (no visible title bar, D13). */}
+        <span role="status" className="sr-only" data-testid="room-header">{room.name}</span>
+        <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
+          <VirtualizedMessageList
+            key={`room:${roomId}`}
+            messages={messages}
+            liteMode={liteMode}
+            agentName={room.name}
+            openFailed={openFailed}
+            room={opening}
+          />
+          {/* FR-048, FR-051: only the cards of THIS group's work; secret
+              and helper cards stay in the agent's own chat. */}
+          <RoomQuestionTail roomId={roomId} />
+          <ToolApprovalThreadTail roomId={roomId} />
+          <div className="relative w-full">
+            <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[var(--space-2)]">
+              <RoomMessageBox
+                room={room}
+                members={members}
+                workspace={workspace}
+                send={send}
+                blockedReason={blockedReason}
+                prefill={prefill}
+                bridge={bridge}
+              />
+            </div>
+          </div>
+        </ThreadPrimitive.Root>
+      </div>
+    </AssistantRuntimeProvider>
+  )
 }
 
 /** FR-048: this group's question cards, one at a time with "+N more" (as the normal chat). */
@@ -63,8 +142,7 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   const connected = useConnectionStore((state) => state.isConnected)
   const connection = useConnectionStore((state) => state.connection)
   const liteMode = useConnectionStore((state) => state.liteMode)
-  const send = useRoomSend(roomId)
-  const [askAgain, setAskAgain] = useState<{ agentId: string; nonce: number }>()
+  const [askAgain, setAskAgain] = useState<RoomAskAgainPrefill>()
   const [attachedRoomId, setAttachedRoomId] = useState<string>()
   const groupCards = useRoomCardRequestIds(roomId)
   // ADR §11 C-I4: the box is locked only by a pending question of THIS
@@ -96,7 +174,7 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   useEffect(() => {
     const onAskAgain = (event: Event) => {
       const detail = (event as CustomEvent<RoomAskAgainDetail>).detail
-      if (detail?.roomId === roomId) setAskAgain({ agentId: detail.agentId, nonce: Date.now() })
+      if (detail?.roomId === roomId) setAskAgain({ agentId: detail.agentId, nonce: Date.now(), roomId })
     }
     window.addEventListener(ROOM_ASK_AGAIN_EVENT, onAskAgain)
     return () => window.removeEventListener(ROOM_ASK_AGAIN_EVENT, onAskAgain)
@@ -104,10 +182,6 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
 
   const attachedHere = connected && attachedRoomId === roomId
   const conversation = useRoomConversationSource(roomId, attachedHere, view.roomQuery.isError)
-  const workspaceRef = useRef<string | undefined>(undefined)
-  workspaceRef.current = view.room?.workspace_id
-  const bridge = useRef<RoomSendBridge | null>(null)
-  const runtime = useRoomRuntime(send, () => workspaceRef.current, bridge)
   const opening = useMemo(() => ({
     ...conversation.opening,
     tail: (
@@ -136,44 +210,25 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
 
   const room = view.room
   const liveViewReceived = attachedHere && view.live?.snapshotReceived === true
+  // A previous room's Ask again must not prefill this room's box (#1849).
+  const prefill = askAgain?.roomId === roomId ? askAgain : undefined
   return (
     <ConversationSourceContext.Provider value={conversation.source}>
       <ConversationKindContext.Provider value="room">
-        <AssistantRuntimeProvider runtime={runtime}>
-          <div className="flex flex-col absolute inset-0 overflow-hidden" data-room-id={roomId}>
-            {/* US-11 AS 11.5 / S-102: the group's name is the chat's name for
-                assistive technology (no visible title bar, D13). */}
-            <span role="status" className="sr-only" data-testid="room-header">{room.name}</span>
-            <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
-              <VirtualizedMessageList
-                key={`room:${roomId}`}
-                messages={conversation.messages}
-                liteMode={liteMode}
-                agentName={room.name}
-                openFailed={view.roomQuery.isError}
-                room={opening}
-              />
-              {/* FR-048, FR-051: only the cards of THIS group's work; secret
-                  and helper cards stay in the agent's own chat. */}
-              <RoomQuestionTail roomId={roomId} />
-              <ToolApprovalThreadTail roomId={roomId} />
-              <div className="relative w-full">
-                <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[var(--space-2)]">
-                  <RoomMessageBox
-                    room={room}
-                    members={view.members}
-                    workspace={view.workspace}
-                    send={send}
-                    blockedReason={roomBlockedReason(room, connected, liveViewReceived)
-                      ?? (questionPending ? 'Answer the question card above, or cancel it, to write again.' : undefined)}
-                    prefill={askAgain}
-                    bridge={bridge}
-                  />
-                </div>
-              </div>
-            </ThreadPrimitive.Root>
-          </div>
-        </AssistantRuntimeProvider>
+        <RoomThread
+          key={roomId}
+          roomId={roomId}
+          room={room}
+          members={view.members}
+          workspace={view.workspace}
+          liteMode={liteMode}
+          messages={conversation.messages}
+          openFailed={view.roomQuery.isError}
+          opening={opening}
+          blockedReason={roomBlockedReason(room, connected, liveViewReceived)
+            ?? (questionPending ? 'Answer the question card above, or cancel it, to write again.' : undefined)}
+          prefill={prefill}
+        />
       </ConversationKindContext.Provider>
     </ConversationSourceContext.Provider>
   )
