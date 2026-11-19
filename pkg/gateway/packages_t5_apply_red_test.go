@@ -159,6 +159,35 @@ func TestPackagesApply_NewMode(t *testing.T) {
 			require.Equal(t, miaBefore[rel], miaAfter[rel], "built-in Mia must be byte-identical (%s)", rel)
 		}
 	})
+
+	// Sign-off C-2: apply re-reads the staged package and refuses the same raw effort.
+	t.Run("C-2 primary reasoning_effort of 33 Unicode characters is refused at apply", func(t *testing.T) {
+		applyEffortRefusal(t, recordWithPrimaryEffort(effortRunes(33)), effortPrimaryField, effortLengthSentence)
+	})
+	t.Run("C-2 primary reasoning_effort of 32 Unicode characters is kept", func(t *testing.T) {
+		applyEffortAccepted(t, recordWithPrimaryEffort(effortRunes(32)), func(t *testing.T, stored map[string]any) {
+			require.Equal(t, effortRunes(32), stored["reasoning_effort"])
+		})
+	})
+	t.Run("C-2 primary reasoning_effort JSON null is refused at apply", func(t *testing.T) {
+		applyEffortRefusal(t, recordWithPrimaryEffort(nil), effortPrimaryField, effortNullSentence)
+	})
+	t.Run("C-2 fallback reasoning_effort of 33 Unicode characters is refused at apply", func(t *testing.T) {
+		applyEffortRefusal(t, recordWithFallbackEffort(effortRunes(33)), effortFallbackField, effortLengthSentence)
+	})
+	t.Run("C-2 fallback reasoning_effort of 32 Unicode characters is kept", func(t *testing.T) {
+		applyEffortAccepted(t, recordWithFallbackEffort(effortRunes(32)), func(t *testing.T, stored map[string]any) {
+			chain, ok := stored["fallback_models"].([]any)
+			require.True(t, ok, "stored fallback_models=%#v", stored["fallback_models"])
+			require.Len(t, chain, 1)
+			entry, ok := chain[0].(map[string]any)
+			require.True(t, ok, "entry=%#v", chain[0])
+			require.Equal(t, effortRunes(32), entry["reasoning_effort"])
+		})
+	})
+	t.Run("C-2 fallback reasoning_effort JSON null is refused at apply", func(t *testing.T) {
+		applyEffortRefusal(t, recordWithFallbackEffort(nil), effortFallbackField, effortNullSentence)
+	})
 }
 
 // TestPackagesApply_ModesConcurrency is TDD row 28 (FR-030, FR-038).

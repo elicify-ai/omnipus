@@ -188,6 +188,26 @@ func TestPackagesImport_Route(t *testing.T) {
 			require.Contains(t, codes, want, "FR-033 warning %s missing in %#v", want, codes)
 		}
 	})
+
+	// Sign-off C-2: raw reasoning_effort on the package record, at upload.
+	t.Run("C-2 primary reasoning_effort of 33 Unicode characters is refused", func(t *testing.T) {
+		uploadEffortRefusal(t, recordWithPrimaryEffort(effortRunes(33)), effortPrimaryField, effortLengthSentence)
+	})
+	t.Run("C-2 primary reasoning_effort of 32 Unicode characters is accepted", func(t *testing.T) {
+		uploadEffortAccepted(t, recordWithPrimaryEffort(effortRunes(32)))
+	})
+	t.Run("C-2 primary reasoning_effort JSON null is refused", func(t *testing.T) {
+		uploadEffortRefusal(t, recordWithPrimaryEffort(nil), effortPrimaryField, effortNullSentence)
+	})
+	t.Run("C-2 fallback reasoning_effort of 33 Unicode characters is refused", func(t *testing.T) {
+		uploadEffortRefusal(t, recordWithFallbackEffort(effortRunes(33)), effortFallbackField, effortLengthSentence)
+	})
+	t.Run("C-2 fallback reasoning_effort of 32 Unicode characters is accepted", func(t *testing.T) {
+		uploadEffortAccepted(t, recordWithFallbackEffort(effortRunes(32)))
+	})
+	t.Run("C-2 fallback reasoning_effort JSON null is refused", func(t *testing.T) {
+		uploadEffortRefusal(t, recordWithFallbackEffort(nil), effortFallbackField, effortNullSentence)
+	})
 }
 
 func decodePreview(t *testing.T, raw []byte) gen.PackageImportPreview {
