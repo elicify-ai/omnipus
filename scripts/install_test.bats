@@ -373,3 +373,255 @@ STUB
   # chrome.sha256 beside the .app survived the move.
   [ -f "$SANDBOX/bin/../chromium/chrome-mac-arm64/chrome.sha256" ]
 }
+
+# ── Office/pdfium packaging (P4, #1713, founder decisions 2026-11-19) ────────
+#
+# CONTRACT the developer implements to (sources: office-preview spec §10
+# delivery table; packaging-sizing.md P4; founder decisions 2026-11-19):
+#
+#   OMNIPUS_INSTALL_BASE_URL  test-only BASE-url override. When non-empty it
+#     replaces the releases base for EVERY download of the run:
+#       "$BASE/omnipus_${PLATFORM}.tar.gz", "$BASE/checksums.txt",
+#       "$BASE/office_${os}_${arch}.tar.gz", "$BASE/pdfium_${os}_${arch}.tar.gz"
+#     Checksum verification STAYS ON (this is the difference to
+#     OMNIPUS_INSTALL_URL, which overrides one archive and skips checksums).
+#     file:// URLs work like OMNIPUS_INSTALL_URL (strip + cp).
+#   Component release file names use lowercase go values:
+#     office_{linux,darwin}_{amd64,arm64}.tar.gz
+#     pdfium_{linux,darwin}_{amd64,arm64}.tar.gz  (+ pdfium_windows_amd64.zip
+#     as a release file only — Windows registers, it does not install, AD-12).
+#   §10 target folders, relative to OMNIPUS_INSTALL_DIR:
+#     linux  →  ../share/omnipus/office   and   ../share/omnipus/pdfium
+#     darwin →  ../office                 and   ../pdfium
+#   Flags --without-office / --without-pdf-renderer skip that component; a
+#     re-run with a flag REMOVES a previously installed component folder so a
+#     re-run matches the choice (packaging-sizing P4).
+#   A checksums.txt hash mismatch for a component FAILS CLOSED: nonzero exit,
+#     that component folder never created (same refuse-to-install posture as
+#     the bundled chrome above — a substituted component is exactly what
+#     SHA-256 pinning exists to catch).
+#   darwin/amd64 (Intel Mac) is a SUPPORTED target (founder decision
+#     2026-11-19): not refused, archive + components installed.
+#
+# RED reason on the pre-change code: install.sh has no component logic, no
+# --without-* flags, no OMNIPUS_INSTALL_BASE_URL, and refuses Intel Macs.
+
+# stub_uname <os> <arch>: pin install.sh's platform detection for this test.
+stub_uname() {
+  local os="$1" arch="$2"
+  cat > "$SCRUB_BIN/uname" <<STUB
+#!/bin/sh
+case "\$1" in
+  -s) echo "$os" ;;
+  -m) echo "$arch" ;;
+  *) echo "unknown" ;;
+esac
+STUB
+  chmod +x "$SCRUB_BIN/uname"
+}
+
+# stub_download_tools_offline: make any non-file:// fetch fail fast and
+# loudly, so a test can never silently depend on real network. file:// URLs
+# are handled inside install.sh by cp, not by curl/wget.
+stub_download_tools_offline() {
+  for tool in curl wget; do
+    cat > "$SCRUB_BIN/$tool" <<STUB
+#!/bin/sh
+echo "test harness: network fetch attempted ($tool \$*)" >&2
+exit 7
+STUB
+    chmod +x "$SCRUB_BIN/$tool"
+  done
+}
+
+# build_fake_release <base> <os> <arch>: stage a complete fake release —
+# the main archive for <os>/<arch> (goreleaser naming), office + pdfium
+# component archives for BOTH arches of <os>, and checksums.txt covering
+# every file.
+build_fake_release() {
+  local base="$1" os="$2" arch="$3"
+  local title_os xarch other_arch variant arch_v
+  case "$os" in
+    linux)  title_os="Linux"  ;;
+    darwin) title_os="Darwin" ;;
+    *) echo "build_fake_release: unsupported os '$os'" >&2; return 1 ;;
+  esac
+  case "$arch" in
+    amd64) xarch="x86_64"; other_arch="arm64" ;;
+    arm64) xarch="arm64";  other_arch="amd64" ;;
+    *) echo "build_fake_release: unsupported arch '$arch'" >&2; return 1 ;;
+  esac
+
+  mkdir -p "$base"
+  local stage
+  stage="$base/stage-main"
+  mkdir -p "$stage"
+  cp "$STAGE_BIN_DIR/omnipus" "$stage/omnipus"
+  chmod +x "$stage/omnipus"
+  ( cd "$stage" && tar -czf "$base/omnipus_${title_os}_${xarch}.tar.gz" omnipus )
+  rm -rf "$stage"
+
+  for variant in office pdfium; do
+    for arch_v in "$arch" "$other_arch"; do
+      stage="$base/stage-${variant}-${arch_v}"
+      mkdir -p "$stage"
+      if [ "$variant" = "office" ]; then
+        if [ "$os" = "darwin" ]; then
+          mkdir -p "$stage/LibreOffice.app/Contents/MacOS"
+          cp "$STAGE_BIN_DIR/omnipus" "$stage/LibreOffice.app/Contents/MacOS/soffice"
+          chmod +x "$stage/LibreOffice.app/Contents/MacOS/soffice"
+        else
+          mkdir -p "$stage/program"
+          cp "$STAGE_BIN_DIR/omnipus" "$stage/program/soffice"
+          chmod +x "$stage/program/soffice"
+          cp "$STAGE_BIN_DIR/omnipus" "$stage/program/soffice.bin"
+        fi
+      else
+        cp "$STAGE_BIN_DIR/omnipus" "$stage/omnipus-pdfium"
+        chmod +x "$stage/omnipus-pdfium"
+      fi
+      if [ "$variant" = "office" ]; then
+        printf '{"schema":1,"component":"office","trust":"packaged"}\n' > "$stage/manifest.json"
+      else
+        printf '{"schema":1,"component":"pdf-renderer","trust":"packaged"}\n' > "$stage/manifest.json"
+      fi
+      if [ "$variant" = "office" ]; then
+        if [ "$os" = "darwin" ]; then
+          ( cd "$stage" && tar -czf "$base/${variant}_${os}_${arch_v}.tar.gz" manifest.json LibreOffice.app )
+        else
+          ( cd "$stage" && tar -czf "$base/${variant}_${os}_${arch_v}.tar.gz" manifest.json program )
+        fi
+      else
+        ( cd "$stage" && tar -czf "$base/${variant}_${os}_${arch_v}.tar.gz" manifest.json omnipus-pdfium )
+      fi
+      rm -rf "$stage"
+    done
+  done
+
+  # checksums.txt: sha256sum text mode ("hash␣␣name"), one line per file.
+  ( cd "$base" && : > checksums.txt.tmp \
+      && for f in omnipus_*.tar.gz office_*.tar.gz pdfium_*.tar.gz; do
+           sha256sum "$f" | awk '{print $1 "  " $2}' >> checksums.txt.tmp
+         done \
+      && mv checksums.txt.tmp checksums.txt )
+}
+
+# bad_checksum_for <base> <file>: replace checksums.txt's entry for <file>
+# with an all-zero hash.
+bad_checksum_for() {
+  local base="$1" name="$2"
+  awk -v name="$name" '
+    $2 == name { print "0000000000000000000000000000000000000000000000000000000000000000  " $2; next }
+    { print }
+  ' "$base/checksums.txt" > "$base/checksums.txt.new" && mv "$base/checksums.txt.new" "$base/checksums.txt"
+}
+
+@test "install.sh: OMNIPUS_INSTALL_BASE_URL is honoured for the whole release (P4)" {
+  # The override must exist AND be used: the download line names the local
+  # base, never github.com. (Today the variable is unknown, so the script
+  # falls through to the GitHub releases base and the assertion fails.)
+  stub_uname Linux x86_64
+  stub_download_tools_offline
+  build_fake_release "$SANDBOX/release" linux amd64
+  export OMNIPUS_INSTALL_BASE_URL="file://$SANDBOX/release"
+  run "$INSTALL_SH"
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$SANDBOX/release"* ]]
+  [[ "$output" != *"github.com"* ]]
+  [ -x "$TEST_INSTALL_DIR/omnipus" ]
+}
+
+@test "install.sh: default install places office and pdfium in the linux §10 folders (P4)" {
+  stub_uname Linux x86_64
+  stub_download_tools_offline
+  build_fake_release "$SANDBOX/release" linux amd64
+  export OMNIPUS_INSTALL_BASE_URL="file://$SANDBOX/release"
+  run "$INSTALL_SH"
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ -x "$TEST_INSTALL_DIR/omnipus" ]
+  # linux: <INSTALL_DIR>/../share/omnipus/{office,pdfium}.
+  [ -f "$SANDBOX/bin/../share/omnipus/office/manifest.json" ]
+  [ -f "$SANDBOX/bin/../share/omnipus/office/program/soffice" ]
+  [ -f "$SANDBOX/bin/../share/omnipus/pdfium/manifest.json" ]
+  [ -f "$SANDBOX/bin/../share/omnipus/pdfium/omnipus-pdfium" ]
+}
+
+@test "install.sh: --without-office installs only the pdf renderer (P4)" {
+  stub_uname Linux x86_64
+  stub_download_tools_offline
+  build_fake_release "$SANDBOX/release" linux amd64
+  export OMNIPUS_INSTALL_BASE_URL="file://$SANDBOX/release"
+  run "$INSTALL_SH" --without-office
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ -x "$TEST_INSTALL_DIR/omnipus" ]
+  [ ! -e "$SANDBOX/bin/../share/omnipus/office" ]
+  [ -f "$SANDBOX/bin/../share/omnipus/pdfium/manifest.json" ]
+}
+
+@test "install.sh: --without-pdf-renderer installs only office (P4)" {
+  stub_uname Linux x86_64
+  stub_download_tools_offline
+  build_fake_release "$SANDBOX/release" linux amd64
+  export OMNIPUS_INSTALL_BASE_URL="file://$SANDBOX/release"
+  run "$INSTALL_SH" --without-pdf-renderer
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ -x "$TEST_INSTALL_DIR/omnipus" ]
+  [ -f "$SANDBOX/bin/../share/omnipus/office/manifest.json" ]
+  [ ! -e "$SANDBOX/bin/../share/omnipus/pdfium" ]
+}
+
+@test "install.sh: office checksum mismatch in checksums.txt refuses the office component (P4)" {
+  # Fail closed: nonzero exit, the office folder is never created.
+  stub_uname Linux x86_64
+  stub_download_tools_offline
+  build_fake_release "$SANDBOX/release" linux amd64
+  bad_checksum_for "$SANDBOX/release" office_linux_amd64.tar.gz
+  export OMNIPUS_INSTALL_BASE_URL="file://$SANDBOX/release"
+  run "$INSTALL_SH"
+  echo "status=$status output=$output"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"office_linux_amd64.tar.gz"* ]]
+  [ ! -e "$SANDBOX/bin/../share/omnipus/office" ]
+}
+
+@test "install.sh: re-run with --without-office removes a previously installed office folder (P4)" {
+  stub_uname Linux x86_64
+  stub_download_tools_offline
+  build_fake_release "$SANDBOX/release" linux amd64
+  export OMNIPUS_INSTALL_BASE_URL="file://$SANDBOX/release"
+
+  run "$INSTALL_SH"
+  echo "first run: status=$status"
+  [ "$status" -eq 0 ]
+  [ -f "$SANDBOX/bin/../share/omnipus/office/manifest.json" ]
+
+  run "$INSTALL_SH" --without-office
+  echo "second run: status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ ! -e "$SANDBOX/bin/../share/omnipus/office" ]
+  [ -f "$SANDBOX/bin/../share/omnipus/pdfium/manifest.json" ]
+  [ -x "$TEST_INSTALL_DIR/omnipus" ]
+}
+
+@test "install.sh: darwin/amd64 (Intel Mac) is a supported target and installs both components (P4)" {
+  # Founder decision 2026-11-19: Intel Mac is supported. Today install.sh
+  # refuses darwin/x86_64 outright ("planned but not in v0.1") — this test
+  # goes red on that refusal.
+  stub_uname Darwin x86_64
+  stub_download_tools_offline
+  build_fake_release "$SANDBOX/release" darwin amd64
+  export OMNIPUS_INSTALL_BASE_URL="file://$SANDBOX/release"
+  run "$INSTALL_SH"
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"planned but not"* ]]
+  [ -x "$TEST_INSTALL_DIR/omnipus" ]
+  # darwin: <INSTALL_DIR>/../office and <INSTALL_DIR>/../pdfium.
+  [ -f "$SANDBOX/bin/../office/manifest.json" ]
+  [ -f "$SANDBOX/bin/../office/LibreOffice.app/Contents/MacOS/soffice" ]
+  [ -f "$SANDBOX/bin/../pdfium/manifest.json" ]
+}
