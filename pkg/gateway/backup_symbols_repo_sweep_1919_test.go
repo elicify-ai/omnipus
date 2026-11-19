@@ -22,6 +22,7 @@
 package gateway
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -59,18 +60,18 @@ func TestRepoHasNoBackupRestoreSymbols_1919(t *testing.T) {
 	const maxReadBytes = 32 << 20 // 32 MB — far above any generated source here; the SPA build tree is excluded by name
 
 	var hits []string
+	// A walk or path error must fail the test. Returning the error (never
+	// nil) is what keeps that failure loud: WalkDir stops and
+	// require.NoError below names the path. Swallowing it and returning
+	// nil is what nilerr rejects, and it would also let a later empty
+	// hit list look like a clean sweep.
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			// An unreadable path could be hiding a hit — that is a harness
-			// failure, not a pass. Name it and keep walking so the report
-			// lists everything else too.
-			hits = append(hits, path+": UNREADABLE: "+err.Error())
-			return nil
+			return fmt.Errorf("issue #1919 sweep: cannot walk %s: %w", path, err)
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
-			hits = append(hits, path+": UNRESOLVABLE: "+relErr.Error())
-			return nil
+			return fmt.Errorf("issue #1919 sweep: cannot resolve %s: %w", path, relErr)
 		}
 		if d.IsDir() {
 			if skipDirNames[d.Name()] {
@@ -82,14 +83,16 @@ func TestRepoHasNoBackupRestoreSymbols_1919(t *testing.T) {
 			return nil
 		}
 		info, statErr := d.Info()
-		if statErr != nil || info.Size() > maxReadBytes {
-			hits = append(hits, rel+": UNVERIFIABLE (too large or unstatable) — widen the sweep before trusting a pass")
+		if statErr != nil {
+			return fmt.Errorf("issue #1919 sweep: cannot stat %s: %w", rel, statErr)
+		}
+		if info.Size() > maxReadBytes {
+			hits = append(hits, rel+": UNVERIFIABLE (too large) — widen the sweep before trusting a pass")
 			return nil
 		}
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
-			hits = append(hits, rel+": UNREADABLE: "+readErr.Error())
-			return nil
+			return fmt.Errorf("issue #1919 sweep: cannot read %s: %w", rel, readErr)
 		}
 		lines := strings.Split(string(raw), "\n")
 		for i, line := range lines {
