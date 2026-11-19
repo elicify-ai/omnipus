@@ -122,7 +122,8 @@ func decodedTar(t *testing.T, n int) []byte {
 	t.Helper()
 	require.Zero(t, n%512, "a tar length is a multiple of 512")
 	m, files := validManifest(testSourceID, false)
-	entries := []tarEntry{manifestEntry(t, m, nil, nil, 0)}
+	entries := make([]tarEntry, 0, 1+len(files))
+	entries = append(entries, manifestEntry(t, m, nil, nil, 0))
 	for _, name := range sortedKeys(files) {
 		entries = append(entries, tarEntry{Name: name, Body: files[name]})
 	}
