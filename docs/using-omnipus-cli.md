@@ -4,7 +4,7 @@ Omnipus ships as a single binary called `omnipus`. This page covers the terminal
 
 ## What it is
 
-One binary, a small set of commands. `omnipus <agent> "<prompt>"` runs a one-shot task. The named commands: `onboard` (first-time setup), `start` and `stop` (the server), `credentials` (secrets), `doctor` and `audit` (health and the security log), `records import-obsidian` (import notes — see [the knowledge base](knowledge.md)), `export` and `import` (move one custom agent — see [below](#how-to-move-an-agent-to-another-install)), `package inspect` and `package verify` (look inside a package file), and `version`.
+One binary, a small set of commands. `omnipus <agent> "<prompt>"` runs a one-shot task. The named commands: `onboard` (first-time setup), `start` and `stop` (the server), `credentials` (secrets), `doctor` and `audit` (health and the security log), `browser` (managed Chrome), `records` with `import-obsidian` and `stamp-ids` (notes — see [the knowledge base](knowledge.md)), `export` and `import` (move one custom agent — see [below](#how-to-move-an-agent-to-another-install)), `package inspect` and `package verify` (look inside a package file), and `version`.
 
 ## How to install the binary
 
@@ -184,6 +184,8 @@ There is no screen for this, and no agent can do it for you. You use the command
 
 These commands work only when you run Omnipus yourself, the same limit as Backup and Restore. A hosted or desktop install does not offer them.
 
+Exports, imports and start-up recovery are recorded in the audit log while audit logging is on, which is the default (`sandbox.audit_log`). If you turned that off, they are not recorded and they are not refused.
+
 A stopped server is started for you, the same way as for a one-shot task, when the master key is already available (see [Limits and things to watch](#limits-and-things-to-watch)). `export` and `import` talk to that server. They do not edit the data folder. The only local reads are the CLI token and the gateway address; the server does the export or the import. `package inspect` and `package verify` read only the file you name: they need no server and they write nothing.
 
 ### Export one agent
@@ -230,7 +232,7 @@ omnipus package verify writer.omnpkg
 `inspect` reads only the manifest. It shows the format version, the build that wrote the file, when it was created, the elements, each file with its size and checksum, and any secrets the package says must be typed again. It ends with:
 
 ```text
-Checksums not verified; run `omnipus package verify`
+Checksums not verified; run `omnipus package verify` to check them.
 ```
 
 It does not claim the files are intact. A package whose manifest is intact still inspects even if a later file has been changed, and it exits 0.
@@ -264,7 +266,7 @@ The preview lists the agent that would be added and the name it would get, anyth
 
 `--mode replace` and `--mode merge` are refused (`import_mode_not_available`, exit 1). Nothing is imported. Replace is planned to become the default later; it is not available now, and there is no password prompt on New.
 
-If you name no workspace and this install has no default workspace, the import is refused (`default_workspace_missing`) and the message asks you to pass `--workspace`.
+If you name no workspace and this install has no default workspace, the import is refused (`default_workspace_missing`) and the message asks you to name a workspace (`there is no default workspace; name a workspace to import into`). On the command line, that is `--workspace`.
 
 When the name had to change, the success line is:
 
@@ -275,8 +277,10 @@ Imported "Writer (imported)" as <new-id> into workspace "<name>"
 The name in quotes is the final name. The id is new: it is never the id from the package, and it is never an id that already exists. For a worker the command also prints:
 
 ```text
-This worker is reached by delegation: draw a line to it from a Main agent in the Team graph.
+"<name>" is a worker: it is reached by delegation. Draw a delegation line to it from a Main agent in the Team graph.
 ```
+
+The import result sent by the server carries its own sentence in `activation_message`, when the reload was confirmed: "This agent is a worker: it is not a chat partner. It is reached by delegation once you draw a delegation line to it from a Main agent in the Team graph." When activation is pending, that sentence is not set and the pending sentence is sent instead. The command still prints the worker line above from the package itself.
 
 A Main agent gets its own main chat in that workspace once the live list has confirmed the import. No other member's chat is created or changed. A worker gets no main chat, and no existing agent gains a delegation line to it. You draw that line yourself. When the live list has confirmed the import, an open Team tab shows the new member without a page reload. Warnings (a dropped skill, a provider that is not configured here, a main chat that could not be created yet) still exit 0. The agent is imported.
 
@@ -291,6 +295,8 @@ Imported "<name>" as <id>, but the gateway did not confirm that it is live yet. 
 ```
 
 Until you do that, the Team tab is not refreshed for this import, and the main chat is not created yet. Restart the gateway, or wait and check the agent list, before you chat with the agent.
+
+If the record was renamed into place but the folder could not be flushed to disk, the import is still committed. Apply answers 200. The result is success, with the warning `publish_not_durable`: the agent is imported, and a power cut now could undo it. Do not import the file again and do not delete the agent. A later start keeps the agent if the rename survived.
 
 **Warnings you can expect, with the import still succeeding.**
 
@@ -324,7 +330,7 @@ If the undo itself cannot finish, the agent was still never visible. The command
 Import failed and could not be fully undone. The agent was never visible. Agent <id>, staging <staging_id>. Restart the gateway to finish the clean-up; see 'Recover from a failed import' in the CLI guide.
 ```
 
-Restarting the gateway is the normal fix. The next start finishes an import whose save had completed, or undoes one whose save had not, before any agent is loaded. Look for the log line `import rolled back at start-up` or `import completed at start-up`.
+Restarting the gateway is the normal fix. The next start finishes an import whose save had completed, or undoes one whose save had not, before any agent is loaded. When that start finishes the recovery, it deletes the staging folder. Delete the folder yourself only in step 2 of [Recover from a failed import](#recover-from-a-failed-import), with the gateway stopped, after restart keeps failing. Look for the gateway log line `packages: start-up recovery`. While audit logging is on, the audit log message is `import rolled back at start-up` or `import completed at start-up`.
 
 **If the connection drops after you confirm,** the command cannot know which of those happened. It prints the following and exits 1:
 
@@ -345,12 +351,26 @@ After a successful undo, the install matches what it was, apart from harmless in
 
 ### Recover from a failed import
 
-Normally you only restart. The steps below are for a start that keeps failing, for example because the disk is read-only. The agent id is in the incomplete-undo message, in the `unfinished_import_found` warning, in the gateway log, or as `new_agent_id` in `$OMNIPUS_HOME/backups/.staging/<staging_id>/journal.json`.
+Restarting is the normal fix. The next start either finishes an import whose record was saved, or undoes one whose record was not. When that recovery finishes, it deletes the staging folder. You do not delete anything after a start that succeeded.
 
-1. Fix the cause the gateway log names, then restart the gateway. Check the log line `import rolled back at start-up` or `import completed at start-up`.
-2. Only if it still fails: with the gateway **stopped**, delete `$OMNIPUS_HOME/entities/agents/<id>.pending` if it is present, the folder `$OMNIPUS_HOME/agents/<id>/` only if `$OMNIPUS_HOME/entities/agents/<id>.json` does **not** exist, and the staging folder `$OMNIPUS_HOME/backups/.staging/<staging_id>/`. Start the gateway.
-3. If the import's workspace still lists the id as an unknown member, remove that card on the Team tab. Or send `PUT /api/v1/workspaces/<id>` with the current `revision`, the team list without that id, and the delegation graph without edges that name it.
-4. If `$OMNIPUS_HOME/entities/agents/<id>.json` exists, delete the agent with **Delete agent**. That also cleans its team entries and edges.
+How to tell which happened:
+
+| What you find | What it means | What to do |
+|---|---|---|
+| The agent is in the agent list, or `$OMNIPUS_HOME/entities/agents/<id>.json` exists | The import is committed. Activation pending (above) is this case too: the record is saved, and the live list had not confirmed the reload. | Stop. Do not import the file again. A second import creates a second agent. Do not delete the record or the agent's folder. |
+| Only `$OMNIPUS_HOME/entities/agents/<id>.pending` exists, and there is no `<id>.json` | The import is not committed. The agent was never visible. | Restart first. Delete files only if restart keeps failing (step 2). |
+| The gateway log shows `packages: start-up recovery` with this staging id under `finished` or `rolled_back` | Recovery finished and deleted the staging folder. | Stop. Do not delete the agent. |
+
+While audit logging is on (the default), the audit log also has one entry whose message is `import completed at start-up` or `import rolled back at start-up`. That sentence is in the audit log, not in the gateway's ordinary log. If you turned `sandbox.audit_log` off, recovery still runs and is not refused, and there is no audit entry. A missing audit sentence does not mean recovery failed.
+
+The agent id is in the incomplete-undo message, in the `unfinished_import_found` warning (the two ids after the message), in the gateway log, or as `new_agent_id` in `$OMNIPUS_HOME/backups/.staging/<staging_id>/journal.json`.
+
+Manual steps are only for a start that keeps failing, for example a read-only disk. Stop the gateway before you delete anything.
+
+1. Fix the cause the gateway log names, then start the gateway. If the agent is in the list, or `<id>.json` exists, stop here.
+2. Only if it still fails and `<id>.json` does **not** exist: delete `$OMNIPUS_HOME/entities/agents/<id>.pending` if it is present, the folder `$OMNIPUS_HOME/agents/<id>/`, and the staging folder `$OMNIPUS_HOME/backups/.staging/<staging_id>/`. Start the gateway. Do not delete `agents/<id>/` when `<id>.json` exists.
+3. If the workspace still lists the id as an unknown member and there is no agent record, remove that card on the Team tab. Or send `PUT /api/v1/workspaces/<id>` with the current `revision`, the team list without that id, and the delegation graph without edges that name it.
+4. Delete the agent with **Delete agent** only when `<id>.json` exists **and** recovery could not put the agent back on its team (the agent loads with no team entry, and the next upload still warns `unfinished_import_found`). That is the only time you delete a published record. A normal successful import is not this case. **Delete agent** also cleans team entries and edges.
 
 ### Exit codes
 
@@ -360,7 +380,7 @@ Normally you only restart. The steps below are for a start that keeps failing, f
 | 1 | Refused or failed. This includes a verify failure, a cancelled import, a gateway that stays unreachable, an unknown or ambiguous agent or workspace, an output file that already exists, and any of the refusals above. |
 | 2 | Usage. An unknown flag, a missing `--agent` or `-o`, a missing import file, or an input path that is missing, unreadable or a folder. `package inspect` on a folder, and `package` with an unknown subcommand, are usage errors. |
 
-Errors go to standard error. A result is never indicated by colour alone.
+Refusals and errors go to standard error. The `Import cancelled.` line goes to standard output, and the exit code is still 1. A result is never indicated by colour alone.
 
 ## CLI or web app?
 
@@ -382,7 +402,7 @@ Most jobs can be done from either place.
 
 ## Limits and things to watch
 
-- **A stopped server is started for you when the master key is already available.** A one-shot task, `export` and `import` all do this. The key counts as available when `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE` is set, or when a `master.key` file is already in the data folder. You then see `Omnipus is not running — starting gateway...` and the command continues. You do not have to run `omnipus start` first. If none of those is set, the command does not start the server. It prints `` no gateway running and no non-interactive key configured; run `omnipus start` ``. If the connection is still refused after a start was attempted, the message is `omnipus isn't running — start it with: omnipus start`. A one-shot task stops waiting for the answer after five minutes by default; change it with `--timeout <duration>`. That only ends the terminal's wait: the agent's work has no time limit and carries on in the server, so you can read its result in the web app.
+- **A stopped server is started for you when the master key is already available.** A one-shot task, `export` and `import` all do this. The key counts as available when `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE` is set, or when a `master.key` file is already in the data folder. You then see `Omnipus is not running — starting gateway...` and the command continues. You do not have to run `omnipus start` first. If none of those is set, the command does not start the server. It prints `` no gateway running and no non-interactive key configured; run `omnipus start` ``. If the connection is still refused after a start was attempted, a one-shot task prints `omnipus isn't running — start it with: omnipus start`. `export` and `import` print `error: the gateway is not reachable at <address> after starting it`, and exit 1. A one-shot task stops waiting for the answer after five minutes by default; change it with `--timeout <duration>`. That only ends the terminal's wait: the agent's work has no time limit and carries on in the server, so you can read its result in the web app.
 - **Talking to a remote server is not supported yet.** The `--url` flag exists but is reserved.
 - **Command names shadow agent names, and worker agents cannot be addressed directly.** An agent named `start`, `export`, `import` or `package` cannot be run from the terminal, because the command is chosen first. There is no check at create time that refuses those names. Rename the agent or use the web app. `omnipus` with no arguments lists the agents you can run.
 - **A package holds one custom agent, and nothing over the size caps.** The upload can be at most 64 MiB. The decoded archive, headers and padding included, can be at most 256 MiB, with at most 10,000 entries. The manifest can be at most 1 MiB, and each agent file (the record, the prompt, the instructions) can be at most 1 MiB. The compressed file must use a decoder window of at most 8 MiB. The decoder uses at most 256 MiB of memory and runs one decode at a time, for upload, `verify` and `inspect`. A body of 64 MiB is accepted and then checked as a package. One byte over 64 MiB is refused as too large (`package_too_large`), whether or not the request declares its length. The export and apply requests themselves stay on the ordinary 1 MiB JSON limit; that limit does not apply to the package upload.

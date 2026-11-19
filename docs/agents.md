@@ -117,7 +117,7 @@ Omnipus can create three kinds of agent:
 | Subagent | The Omnipus engine | Other agents, through delegation | No |
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
-**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. The same scripts can export, preview and import one custom agent through `POST /api/v1/packages/export`, `POST /api/v1/packages/import` and `POST /api/v1/packages/import/{staging_id}/apply` — see [How to move an agent to another install](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). It is an API only, with no screen in the app.
+**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. The same scripts can export, preview and import one custom agent through `POST /api/v1/packages/export`, `POST /api/v1/packages/import` and `POST /api/v1/packages/import/{staging_id}/apply` — see [How to move an agent to another install](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). Export and apply answer 200. The upload that returns the preview answers 201. A committed apply is 200 even when activation is pending or the warning is `publish_not_durable`. It is an API only, with no screen in the app.
 
 For scripts that change or remove an agent, update with `PUT /api/v1/agents/{id}` and delete with `DELETE /api/v1/agents/{id}` — never add a sub-path. An unknown sub-path returns `404`; a known one (`sessions`, `activity-runs`, `runner/test`, `tools`, `mailboxes/{workspaceId}`, `dependencies`) used with a method it does not serve returns `405` and an `Allow` header listing the methods it does serve. Neither refusal changes or deletes the agent. The gateway answers `OPTIONS` itself, before the agents handler runs; browsers send it as the preflight request.
 
@@ -133,13 +133,13 @@ You can copy one custom agent to another Omnipus you run yourself. The command l
 
 **A Main agent gets its main chat** in that workspace, once the live list has confirmed the import. You can chat with it there. If the chat cannot be created, the agent is still imported and the chat is created when you open it.
 
-**A native worker is not a chat partner.** It is on the team, with only its own delegation row, and it has no main chat. The result says: "This worker is reached by delegation: draw a line to it from a Main agent in the Team graph." Draw that line, and that Main agent's delegation directory then lists the worker. You can also assign it a workspace task.
+**A native worker is not a chat partner.** It is on the team, with only its own delegation row, and it has no main chat. The command prints: `"<name>" is a worker: it is reached by delegation. Draw a delegation line to it from a Main agent in the Team graph.` When the reload was confirmed, the apply result's `activation_message` says: "This agent is a worker: it is not a chat partner. It is reached by delegation once you draw a delegation line to it from a Main agent in the Team graph." When activation is pending, that message is not set and the pending sentence is sent instead. Draw that line, and that Main agent's delegation directory then lists the worker. You can also assign it a workspace task.
 
 **What travels, and what changes.** The file holds the agent's name, description, kind (Main or native worker), prompt (`SOUL.md`), instructions (`AGENT.md`, only when the agent has one), model and provider name, current fallback models, reasoning effort, tool-call limit, temperature and max tokens, the skill names, the tool permissions, the look (figure, role badge and colour), and, for a Main agent, the voice. On import the same rules apply as when an agent is created:
 
 | In the package | On the new install |
 |---|---|
-| Prompt (`SOUL.md`) | Stored with whitespace removed at the very start and end (spaces, tabs and blank lines). The text in the middle is unchanged. A native agent whose prompt is blank is refused, at export and at import. |
+| Prompt (`SOUL.md`) | Stored with whitespace removed at the very start and end (spaces, tabs, blank lines and other Unicode spaces). The text in the middle is unchanged. A native agent whose prompt is blank is refused, at export and at import. |
 | Instructions (`AGENT.md`) | Stored byte for byte, when the file has them. |
 | Description | Stored with spaces at the start and end removed. A worker with an empty description is refused. |
 | Name | Kept, unless that name is already taken. A clash adds ` (imported)`, then ` (imported 2)`, up to ` (imported 99)`. The existing agent is not renamed. Letter case and spaces at either end count as the same name. See the [command line page](using-omnipus-cli.md#how-to-move-an-agent-to-another-install) for the 100-character case. |
@@ -162,7 +162,7 @@ A tool-call limit outside 1 to 1000, or above the global limit on the new instal
 
 **An import is all or nothing.** Until it has fully succeeded, the new agent is invisible: no list, chat, session or other screen can use it. If the import fails before that point, its own writes are removed and nothing else had a chance to use the agent. If the gateway stops in the middle, the next start finishes the import or undoes it before any agent is loaded. The limits of that promise — a brief glimpse of the new id on the workspace list during the last step, a power cut on a disk that does not honour flushes (including Windows), an unknown member left behind when the undo cannot write, and a committed import whose recovery cannot finish — and the manual steps when a restart keeps failing, are in [Recover from a failed import](using-omnipus-cli.md#recover-from-a-failed-import).
 
-If the import saved the agent but the live list did not confirm the reload, the result says activation pending. The agent is complete and stored. It is not a partial import. Restart the gateway, or wait and check the agent list, before you chat with it.
+If the import saved the agent but the live list did not confirm the reload, the result says activation pending. The agent is complete and stored. It is not a partial import. Restart the gateway, or wait and check the agent list, before you chat with it. If the record file exists, the import is committed: do not import again and do not delete the agent unless recovery left it with no team entry.
 
 ## Where an agent's instructions come from
 
