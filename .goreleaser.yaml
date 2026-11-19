@@ -49,13 +49,13 @@ before:
     # the binary so each per-OS+arch package ships a version-pinned,
     # integrity-verified Chrome. The chrome bundling itself runs from the
     # per-arch `builds.hooks.pre` below (after the SPA mirror, just before
-    # the per-arch go build) — cft-bundle.sh accepts an arch arg, walks the
-    # live CfT manifest for that arch's Stable-channel chrome zip, and
-    # cleanly no-ops (exit 0, log a warning) when CfT has no build for the
-    # arch. As of 2026-07-21 CfT publishes {linux64, mac-arm64, mac-x64,
-    # win32, win64}; linux-arm64 is NOT published — the arm64 linux archive
-    # therefore ships without a chromium/ payload and the runtime falls
-    # back to managed download. Darwin/windcome in Phases 3/4. See
+    # the per-arch go build): cft-bundle.sh walks the live CfT manifest for
+    # that OS+arch's Stable-channel chrome zip and stages it in
+    # build/chromium/<os>_<arch>/chromium (#1913). linux/arm64 gets an empty
+    # folder: the runtime's package-Chrome resolver has no linux-arm64
+    # layout (pkg/tools/browser/package_chrome.go::binaryLayoutsForRoot),
+    # so that archive ships without a chromium/ payload and the runtime
+    # uses its managed download, as ADR-052 decided. See
     # docs/internal/architecture/ADR-052-*.md §D2 + SEC-ADR052-003.
     #
     # Pipeline (scripts/cft-bundle.sh implements all five steps per arch):
@@ -68,11 +68,12 @@ before:
     #      (mirrors verifyGoogHashMD5 in pkg/tools/browser/installer.go —
     #      M2 / SEC-ADR052-003). Repeated X-Goog-Hash header lines are
     #      concatenated (the CORS-folding pattern — see CORR-008).
-    #   4. Unzip into dist/chromium/ (goreleaser's working dir), wiping
-    #      any prior arch's payload first.
-    #   5. Compute SHA-256 of dist/chromium/<subdir>/chrome and write
-    #      dist/chromium/chrome.sha256 — the integrity manifest the
-    #      runtime reads back and verifies at first launch.
+    #   4. Unzip into build/chromium/<os>_<arch>/chromium/, wiping any
+    #      previous payload in that folder first.
+    #   5. Compute SHA-256 of the chrome binary and write
+    #      <subdir>/chrome.sha256 beside it (beside the .app on macOS) —
+    #      the integrity manifest the runtime reads back and verifies at
+    #      first launch.
 
 builds:
   - id: omnipus
@@ -96,18 +97,16 @@ builds:
     main: ./cmd/omnipus
     hooks:
       pre:
-        # ADR-052 Phase 1: per-arch bundled-Chrome-for-Testing payload.
-        # Runs AFTER the global `before.hooks` SPA mirror (which wipes
-        # dist/) and BEFORE the go build for this arch. cft-bundle.sh:
-        #   - downloads + verifies the per-arch CfT chrome zip,
-        #   - stages dist/chromium/<subdir>/chrome + chrome.sha256,
-        #   - no-ops (exit 0 + warning) when CfT has no build for the arch
-        #     (today: linux/arm64 — CfT publishes no linux-arm64 build).
-        # The `archives.files: chromium/**/*` glob below picks up the
-        # staged chromium/ for whichever arch goreleaser is currently
-        # archiving; the per-arch `rm -rf dist/chromium` inside
-        # cft-bundle.sh prevents leakage between arches.
-        - cmd: bash scripts/cft-bundle.sh {{ .Arch }}
+        # ADR-052: per-platform bundled-Chrome-for-Testing payload, staged
+        # in build/chromium/<os>_<arch>/chromium (#1913). GoReleaser runs
+        # every build (and its hook) before it packs any archive, so each
+        # platform needs its own folder: the old shared dist/chromium held
+        # only the last platform's Chrome. cft-bundle.sh downloads and
+        # verifies the CfT zip and writes chrome.sha256. linux/arm64 only
+        # gets the empty folder (see the before-hooks note above).
+        - cmd: >-
+            {{ if and (eq .Os "linux") (eq .Arch "arm64") }}mkdir -p build/chromium/linux_arm64/chromium
+            {{- else }}bash scripts/cft-bundle.sh {{ .Arch }} {{ .Os }} build/chromium/{{ .Os }}_{{ .Arch }}/chromium{{ end }}
           dir: .
 
 dockers_v2:
@@ -141,14 +140,19 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
-    # ADR-052 Phase 1: include the pinned Chrome-for-Testing payload + its
-    # integrity manifest in the per-OS archive. The archive's `files`
-    # defaults to the binary only; chromium/ is added explicitly so
-    # install.sh / package managers lay it down alongside `omnipus`. The
-    # pre-build hook above creates dist/chromium/ before goreleaser packs.
+    # ADR-052: include the pinned Chrome-for-Testing payload + its
+    # integrity manifest in the per-OS archive as chromium/<subdir>/...,
+    # the layout install.sh moves next to the binary (#1913). A literal
+    # folder as src keeps the folder structure and the .app's symbolic
+    # links, and GoReleaser fails the release when the folder is missing
+    # (measured with GoReleaser 2.20.2, 2026-11-19). A wildcard here would
+    # silently match nothing, which is how chromium/ went missing from
+    # every archive before; with src/dst, GoReleaser also strips the
+    # matched files' common parent folder, which would flatten the layout.
     files:
       - omnipus
-      - chromium/**/*
+      - src: build/chromium/{{ .Os }}_{{ .Arch }}/chromium
+        dst: chromium
 
 nfpms:
   - id: omnipus
@@ -176,8 +180,11 @@ nfpms:
     contents:
       - src: ./omnipus
         dst: /usr/bin/omnipus
-      - src: ./dist/chromium/**/*
+      # #1913: the per-platform staged folder, copied as a tree (an empty
+      # folder on arm64, see the before-hooks note).
+      - src: build/chromium/linux_{{ .Arch }}/chromium/
         dst: /usr/share/omnipus/chromium
+        type: tree
       # Office preview components (spec §10): /usr/share/omnipus/{office,pdfium}
       # is the resolver's <exe>/../share/omnipus/<slot> for /usr/bin/omnipus.
       - src: build/components/linux_{{ .Arch }}/office/
@@ -226,15 +233,15 @@ nfpms:
 checksum:
   name_template: checksums.txt
   extra_files:
-    - glob: ./build/components/release/omnipus-office_Linux_x86_64.tar.gz
-    - glob: ./build/components/release/omnipus-office_Linux_arm64.tar.gz
-    - glob: ./build/components/release/omnipus-office_Darwin_arm64.tar.gz
-    - glob: ./build/components/release/omnipus-office_Darwin_x86_64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Linux_x86_64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Linux_arm64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Darwin_arm64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Darwin_x86_64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Windows_x86_64.zip
+    - glob: ./build/components/release/office_linux_amd64.tar.gz
+    - glob: ./build/components/release/office_linux_arm64.tar.gz
+    - glob: ./build/components/release/office_darwin_arm64.tar.gz
+    - glob: ./build/components/release/office_darwin_amd64.tar.gz
+    - glob: ./build/components/release/pdfium_linux_amd64.tar.gz
+    - glob: ./build/components/release/pdfium_linux_arm64.tar.gz
+    - glob: ./build/components/release/pdfium_darwin_arm64.tar.gz
+    - glob: ./build/components/release/pdfium_darwin_amd64.tar.gz
+    - glob: ./build/components/release/pdfium_windows_amd64.zip
 
 changelog:
   sort: asc
@@ -247,15 +254,15 @@ release:
   disable: '{{ isEnvSet "NIGHTLY_BUILD" }}'
   # The Office preview components, as separate downloads (spec §10).
   extra_files:
-    - glob: ./build/components/release/omnipus-office_Linux_x86_64.tar.gz
-    - glob: ./build/components/release/omnipus-office_Linux_arm64.tar.gz
-    - glob: ./build/components/release/omnipus-office_Darwin_arm64.tar.gz
-    - glob: ./build/components/release/omnipus-office_Darwin_x86_64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Linux_x86_64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Linux_arm64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Darwin_arm64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Darwin_x86_64.tar.gz
-    - glob: ./build/components/release/omnipus-pdf-renderer_Windows_x86_64.zip
+    - glob: ./build/components/release/office_linux_amd64.tar.gz
+    - glob: ./build/components/release/office_linux_arm64.tar.gz
+    - glob: ./build/components/release/office_darwin_arm64.tar.gz
+    - glob: ./build/components/release/office_darwin_amd64.tar.gz
+    - glob: ./build/components/release/pdfium_linux_amd64.tar.gz
+    - glob: ./build/components/release/pdfium_linux_arm64.tar.gz
+    - glob: ./build/components/release/pdfium_darwin_arm64.tar.gz
+    - glob: ./build/components/release/pdfium_darwin_amd64.tar.gz
+    - glob: ./build/components/release/pdfium_windows_amd64.zip
   footer: >-
 
     ---
