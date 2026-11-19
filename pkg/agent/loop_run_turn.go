@@ -653,7 +653,7 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 	turnProvider, turnModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
 	rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
 		rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, turnProvider, turnModel,
-		&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
+		&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir, ctx: rp.rc.rx.rr.rq.ri.rf.rt.turnCtx}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
 	)
 
@@ -810,7 +810,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 			trimProvider, trimModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
 			rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
 				rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, trimProvider, trimModel,
-				&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
+				&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir, ctx: rp.rc.rx.rr.rq.ri.rf.rt.turnCtx}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
 			)
 		}
@@ -1367,7 +1367,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		resolvedPending := resolveMediaRefsWithOffload(
 			ri.pendingMessages, ri.turnMediaStore, ri.maxMediaSize,
 			candidateProvider(ri.rf.rt.activeCandidates), ri.activeModel,
-			&offloadSink{workDir: ri.wsDir}, ri.turnCatalog, ri.turnRefcounter,
+			&offloadSink{workDir: ri.wsDir, ctx: ri.rf.rt.turnCtx}, ri.turnCatalog, ri.turnRefcounter,
 			ri.rf.rt.ts.opts.WorkspaceID,
 		)
 		totalContentLen := 0

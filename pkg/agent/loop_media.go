@@ -8,6 +8,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -218,7 +219,7 @@ func resolveMediaRefsWithOffload(
 						offInj = buildOffloadInjection(dest, detectFileClass(mime, meta.Filename), model)
 					}
 					if modelSupportsImage(cat, provider, model) {
-						pages := uploadPDFPageImages(localPath, meta.Filename, resizeBudgetForModel(cat, provider, model, maxSize))
+						pages := uploadPDFPageImagesCtx(sink.turnContext(), localPath, meta.Filename, resizeBudgetForModel(cat, provider, model, maxSize))
 						resolved = append(resolved, pages.images...)
 						textInj = pages.note(dest, offErr) + textInj
 					}
@@ -1294,6 +1295,17 @@ func fallbackName(filename, alt string) string {
 // failing the turn.
 type offloadSink struct {
 	workDir string
+	// ctx is the turn's context: work the resolver starts for an upload
+	// (PDF page rendering) ends on Stop. Nil means no turn (background).
+	ctx context.Context
+}
+
+// turnContext is the sink's turn context, or Background without one.
+func (s *offloadSink) turnContext() context.Context {
+	if s == nil || s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
 }
 
 // offload performs step-5 offload (ADR-051 Rev 4): it copies the file into the

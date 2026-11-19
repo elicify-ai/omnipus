@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media/resize"
@@ -50,12 +51,37 @@ func (p uploadPages) note(dest string, offErr error) string {
 	return line + "]"
 }
 
-// uploadPDFPageImages renders pages 1–10 of an uploaded PDF through the
-// shared preview service (same admission, limits, cache and sandbox as
-// preview_document) and resizes them to the model's image limits. The
-// resolver has no turn context, so the call is bounded by the preview call
-// timeout only.
+// uploadRenderTimeout is the page-rendering budget of one uploaded PDF,
+// admission wait included (AD-6 "Upload rendering: 20 s per PDF, then text
+// fallback"); the PDF's text form is sent either way.
+const uploadRenderTimeout = 20 * time.Second
+
+// errUploadRenderTimeout marks the upload budget, not the turn, as the
+// reason the render stopped.
+var errUploadRenderTimeout = errors.New("upload page rendering budget spent")
+
+// uploadPDFPageImages renders an uploaded PDF's first pages without a turn
+// (no Stop to follow); see uploadPDFPageImagesCtx.
 func uploadPDFPageImages(localPath, name string, limits catalog.ResizeLimits) uploadPages {
+	return uploadPDFPageImagesCtx(context.Background(), localPath, name, limits)
+}
+
+// uploadPDFPageImagesCtx renders pages 1–10 of an uploaded PDF through the
+// shared preview service (same admission, limits, cache and sandbox as
+// preview_document) and resizes them to the model's image limits. It runs
+// under the turn's context, so Stop ends it, and within uploadRenderTimeout
+// (AD-6), not the 120 s whole-call budget of preview_document.
+func uploadPDFPageImagesCtx(turnCtx context.Context, localPath, name string, limits catalog.ResizeLimits) uploadPages {
+	ctx, cancel := context.WithTimeoutCause(turnCtx, uploadRenderTimeout, errUploadRenderTimeout)
+	defer cancel()
+	pages := renderUploadPages(ctx, localPath, name, limits)
+	if len(pages.images) == 0 && errors.Is(context.Cause(ctx), errUploadRenderTimeout) {
+		pages.problem = fmt.Sprintf("page rendering did not finish within %d s", int(uploadRenderTimeout/time.Second))
+	}
+	return pages
+}
+
+func renderUploadPages(ctx context.Context, localPath, name string, limits catalog.ResizeLimits) uploadPages {
 	svc := preview.Shared()
 	if svc == nil {
 		return uploadPages{problem: "document preview is not running"}
@@ -64,8 +90,6 @@ func uploadPDFPageImages(localPath, name string, limits catalog.ResizeLimits) up
 	if err != nil {
 		return uploadPages{problem: "the PDF could not be read (" + err.Error() + ")"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), preview.CallTimeout)
-	defer cancel()
 	adm, err := svc.Admit(ctx, false)
 	if err != nil {
 		return uploadPages{problem: err.Error()}

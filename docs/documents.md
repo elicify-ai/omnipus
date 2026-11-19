@@ -113,6 +113,14 @@ the chat; only `preview_document` does. A file that ends in `.pdf` but is not
 a PDF, or a PDF whose text cannot be extracted, is read the way `read_file`
 reads any other file.
 
+When you attach a PDF to a message and the agent's model reads images but not
+PDFs, the model receives the PDF's text, images of its first pages, and the
+path of a workspace copy it can pass to `preview_document` for later pages.
+Rendering those page images may take at most 20 seconds per PDF, including
+waiting for a free renderer; after that the model gets the text alone and the
+note `page images unavailable: page rendering did not finish within 20 s`.
+**Stop** ends the rendering at once.
+
 ### What previews need
 
 - **PDF files** need nothing extra to reach the model. Page images need the PDF
