@@ -417,11 +417,29 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 			"connect_rules", len(policy.ConnectPortRules))
 	}
 
+	// #1909: once the bind-port list is in force, a listen on 127.0.0.1:0
+	// is denied (port 0 is never on the list), so in enforce mode the egress
+	// proxy's listener is taken now, while bind is still unrestricted, and
+	// parked for NewEgressProxy. No port-0 rule is added: sandboxed code and
+	// children keep being denied port 0 and every unlisted port. Done BEFORE
+	// the per-thread prctl below so these socket syscalls cannot move the
+	// goroutine to another OS thread between prctl and restrict_self. A
+	// failure here is not fatal to the sandbox: NewEgressProxy then makes its
+	// own listen and returns that error, which buildEgressProxyOrAbort turns
+	// into a boot abort when an egress allow-list is configured.
+	if mode == ModeEnforce && effectiveHandledAccessNet(lb, policy)&landlockAccessNetBindTcp != 0 {
+		if err := reserveEgressListener(); err != nil {
+			slog.Warn("egress_proxy: pre-restriction listener reservation failed; the proxy will listen on its own",
+				"error", err)
+		}
+	}
+
 	// Set no_new_privs unconditionally — seccomp install (which runs after
 	// this) requires NNP, and NNP is also a prerequisite for Landlock's
 	// restrict_self. This is safe in permissive mode because NNP by itself
 	// enforces nothing; it only disables setuid/setgid and seccomp-bypass.
 	if _, _, prctlErrno := unix.RawSyscall(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); prctlErrno != 0 {
+		releaseReservedEgressListener()
 		return fmt.Errorf("landlock: prctl(PR_SET_NO_NEW_PRIVS) failed: %w", prctlErrno)
 	}
 
@@ -441,21 +459,6 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 			"bind_rules", len(policy.BindPortRules),
 			"connect_rules", len(policy.ConnectPortRules))
 		return nil
-	}
-
-	// #1909: once the bind-port list is in force, a listen on 127.0.0.1:0
-	// is denied (port 0 is never on the list), so the egress proxy's
-	// listener is taken now, while bind is still unrestricted, and parked
-	// for NewEgressProxy. No port-0 rule is added: sandboxed code and
-	// children keep being denied port 0 and every unlisted port. A failure
-	// here is not fatal to the sandbox: NewEgressProxy then makes its own
-	// listen and returns that error, which buildEgressProxyOrAbort turns
-	// into a boot abort when an egress allow-list is configured.
-	if effectiveHandledAccessNet(lb, policy)&landlockAccessNetBindTcp != 0 {
-		if err := reserveEgressListener(); err != nil {
-			slog.Warn("egress_proxy: pre-restriction listener reservation failed; the proxy will listen on its own",
-				"error", err)
-		}
 	}
 
 	// Enforce mode: restrict_self is the one-way ratchet that actually
