@@ -86,9 +86,24 @@ type packageHTTP struct {
 	Hdr  http.Header
 }
 
-func doPackage(handler http.HandlerFunc, req *http.Request) packageHTTP {
+// packageRouteMux is the production registrar (FR-045: tests go through the
+// registered routes, including auth and the route body caps). A direct
+// handler call is not a substitute.
+func packageRouteMux(t *testing.T, api *restAPI) *http.ServeMux {
+	t.Helper()
+	mux := http.NewServeMux()
+	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
+	return mux
+}
+
+// serveRegisteredPackage sends req through that registrar. The config snapshot
+// is what withAuth reads; the bearer on req is the test token.
+func serveRegisteredPackage(t *testing.T, api *restAPI, req *http.Request) packageHTTP {
+	t.Helper()
+	cfg := api.agentLoop.GetConfig()
+	req = req.WithContext(putConfigSnapshot(req.Context(), cfg))
 	w := httptest.NewRecorder()
-	handler(w, req)
+	packageRouteMux(t, api).ServeHTTP(w, req)
 	return packageHTTP{Code: w.Code, Body: w.Body.Bytes(), Hdr: w.Header()}
 }
 
@@ -96,14 +111,14 @@ func callPackageExport(t *testing.T, api *restAPI, body string) packageHTTP {
 	t.Helper()
 	req := packageAuthRequest(t, http.MethodPost, "/api/v1/packages/export", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	return doPackage(api.handlePackageExport, req)
+	return serveRegisteredPackage(t, api, req)
 }
 
 func callPackageImport(t *testing.T, api *restAPI, body []byte) packageHTTP {
 	t.Helper()
 	req := packageAuthRequest(t, http.MethodPost, "/api/v1/packages/import", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/octet-stream")
-	return doPackage(api.handlePackageImport, req)
+	return serveRegisteredPackage(t, api, req)
 }
 
 func callPackageApply(t *testing.T, api *restAPI, stagingID, jsonBody string) packageHTTP {
@@ -112,7 +127,7 @@ func callPackageApply(t *testing.T, api *restAPI, stagingID, jsonBody string) pa
 	req := packageAuthRequest(t, http.MethodPost, path, strings.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = path
-	return doPackage(api.handlePackageImportApply, req)
+	return serveRegisteredPackage(t, api, req)
 }
 
 func decodePackageErr(t *testing.T, raw []byte) gen.ErrorResponse {
@@ -521,7 +536,8 @@ func mixedUnknownElementPackage(t *testing.T) []byte {
 	m.Files[path] = omnpkg.FileInfo{SHA256: sha256hex(body), Size: int64(len(body))}
 	raw, err = json.Marshal(m)
 	require.NoError(t, err)
-	parts := []tarPart{{name: omnpkg.ManifestEntry, body: raw}}
+	parts := make([]tarPart, 0, 1+len(m.Elements[0].Files)+1)
+	parts = append(parts, tarPart{name: omnpkg.ManifestEntry, body: raw})
 	for _, path := range m.Elements[0].Files {
 		parts = append(parts, tarPart{name: path, body: files[path]})
 	}

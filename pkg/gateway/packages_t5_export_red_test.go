@@ -95,32 +95,107 @@ func TestPackages_AccessRules(t *testing.T) {
 	t.Run("D8-7 export JSON over 1 MiB is 413", func(t *testing.T) {
 		hitAccess(t, accessOpts{auth: "admin", bigBody: true, want: http.StatusRequestEntityTooLarge})
 	})
+	// The same D8 rows on import and apply. Export-only coverage would stay green
+	// if those registered routes dropped auth or the apply JSON cap (FR-045).
+	t.Run("D8 import no header is 401", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "import", auth: "none", want: http.StatusUnauthorized})
+	})
+	t.Run("D8 import wrong bearer is 401", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "import", auth: "wrong", want: http.StatusUnauthorized})
+	})
+	t.Run("D8 import admin is 201", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "import", auth: "admin", want: http.StatusCreated})
+	})
+	t.Run("D8 import cli token is 201", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "import", auth: "cli", want: http.StatusCreated})
+	})
+	t.Run("D8 import bypass is 503", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "import", auth: "bypass", want: http.StatusServiceUnavailable})
+	})
+	t.Run("D8 apply no header is 401", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "apply", auth: "none", want: http.StatusUnauthorized})
+	})
+	t.Run("D8 apply wrong bearer is 401", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "apply", auth: "wrong", want: http.StatusUnauthorized})
+	})
+	t.Run("D8 apply admin is 200", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "apply", auth: "admin", want: http.StatusOK})
+	})
+	t.Run("D8 apply cli token is 200", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "apply", auth: "cli", want: http.StatusOK})
+	})
+	t.Run("D8 apply bypass is 503", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "apply", auth: "bypass", want: http.StatusServiceUnavailable})
+	})
+	t.Run("D8 apply JSON over 1 MiB is 413", func(t *testing.T) {
+		hitAccess(t, accessOpts{route: "apply", auth: "admin", bigBody: true, want: http.StatusRequestEntityTooLarge})
+	})
 }
 
 type accessOpts struct {
 	auth    string
+	route   string
 	bigBody bool
 	want    int
 }
 
 func hitAccess(t *testing.T, opt accessOpts) packageHTTP {
 	t.Helper()
+	if opt.route == "" {
+		opt.route = "export"
+	}
 	api := packageAPI(t)
-	id := createMainAgent(t, api, "Writer", "Answer in rhyme.")
+	var agentID string
+	if opt.route == "export" {
+		agentID = createMainAgent(t, api, "Writer", "Answer in rhyme.")
+	}
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
 
-	var body string
-	if opt.bigBody {
-		// 1 MiB + 1 byte (FR-045, D8 row 7). The padding is inside a JSON string
-		// so the body is still one JSON value larger than the route limit.
-		body = `{"agent_ids":["` + id + `"],"pad":"` + strings.Repeat("a", packageJSONLimit) + `"}`
-	} else {
-		body = `{"agent_ids":["` + id + `"]}`
+	var (
+		path        string
+		body        string
+		contentType string
+	)
+	switch opt.route {
+	case "export":
+		path = "/api/v1/packages/export"
+		contentType = "application/json"
+		if opt.bigBody {
+			// 1 MiB + 1 byte (FR-045, D8 row 7). The padding is inside a JSON string
+			// so the body is still one JSON value larger than the route limit.
+			body = `{"agent_ids":["` + agentID + `"],"pad":"` + strings.Repeat("a", packageJSONLimit) + `"}`
+		} else {
+			body = `{"agent_ids":["` + agentID + `"]}`
+		}
+	case "import":
+		path = "/api/v1/packages/import"
+		contentType = "application/octet-stream"
+		body = string(validMainPackage(t))
+	case "apply":
+		contentType = "application/json"
+		// A non-UUID id is refused before the body is read, so the size case
+		// uses a real id shape. The cap must answer 413 before any lookup.
+		stagingID := "00000000-0000-4000-8000-000000000099"
+		if opt.bigBody {
+			body = `{"mode":"new","pad":"` + strings.Repeat("a", packageJSONLimit) + `"}`
+		} else if opt.want == http.StatusOK {
+			usePackageSeams(t)
+			packageT5.Reload = func() (bool, error) { return true, nil }
+			ws := createWorkspaceViaAPI(t, api, "Research", "notes")
+			prev := stageUpload(t, api, validMainPackage(t))
+			stagingID = prev.StagingId
+			body = applyBody("new", ws)
+		} else {
+			body = `{"mode":"new"}`
+		}
+		path = "/api/v1/packages/import/" + stagingID + "/apply"
+	default:
+		t.Fatalf("unknown route %q", opt.route)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/packages/export", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req = req.WithContext(packageCtx(t))
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	cfg := api.agentLoop.GetConfig()
 	switch opt.auth {
 	case "none":
@@ -157,7 +232,7 @@ func hitAccess(t *testing.T, opt accessOpts) packageHTTP {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	got := packageHTTP{Code: w.Code, Body: w.Body.Bytes(), Hdr: w.Header()}
-	require.Equal(t, opt.want, got.Code, "D8 auth=%s body=%s", opt.auth, got.Body)
+	require.Equal(t, opt.want, got.Code, "D8 route=%s auth=%s body=%s", opt.route, opt.auth, got.Body)
 	return got
 }
 

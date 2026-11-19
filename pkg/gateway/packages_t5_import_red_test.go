@@ -325,18 +325,19 @@ func packageFixtureTime() time.Time {
 	return time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 }
 
-// importViaRouteLimit posts to the import handler through an HTTP server with
-// the 64 MiB MaxBytesReader the route must use (FR-045). n is how many body
-// bytes the handler actually read.
+// importViaRouteLimit posts through the production registrar (FR-045). The
+// byte counter wraps the body outside that handler, so the 64 MiB cap is the
+// route's own MaxBytesReader and not one the test installs.
 func importViaRouteLimit(t *testing.T, api *restAPI, body io.Reader, contentLength int64) (packageHTTP, int64) {
 	t.Helper()
 	var n int64
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/packages/import", func(w http.ResponseWriter, r *http.Request) {
-		r.Body = &countingBody{ReadCloser: http.MaxBytesReader(w, r.Body, packageUploadLimit), n: &n}
-		api.handlePackageImport(w, r)
-	})
-	srv := httptest.NewServer(mux)
+	mux := packageRouteMux(t, api)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = &countingBody{ReadCloser: r.Body, n: &n}
+		cfg := api.agentLoop.GetConfig()
+		r = r.WithContext(putConfigSnapshot(r.Context(), cfg))
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	req, err := http.NewRequestWithContext(packageCtx(t), http.MethodPost, srv.URL+"/api/v1/packages/import", body)
 	require.NoError(t, err)

@@ -43,12 +43,9 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		writeStagingJournal(t, api.homePath, "stg-23a", recoveryAgentID, "ws-1", omnpkg.JournalStarted)
 		err := api.recoverImportsBeforeRoster(packageCtx(t))
 		require.NoError(t, err, "FR-062")
-		_, statErr := os.Stat(dir)
-		if statErr == nil {
-			j, rerr := omnpkg.ReadJournal(dir)
-			require.NoError(t, rerr)
-			require.Equal(t, omnpkg.JournalRolledBack, j.State)
-		}
+		// Spec recovery row (not committed): staging folder deleted, audit written.
+		t5RequireAbsent(t, dir)
+		require.Contains(t, readAudit(t, api.homePath), omnpkg.RecoveryRolledBackMessage)
 		requireNoRecoveryAgent(t, api.homePath)
 	})
 
@@ -58,6 +55,7 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		writePendingOnly(t, api.homePath, recoveryAgentID)
 		err := api.recoverImportsBeforeRoster(packageCtx(t))
 		require.NoError(t, err, "FR-062")
+		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-23b"))
 		requireNoRecoveryAgent(t, api.homePath)
 	})
 
@@ -69,6 +67,7 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		writeStagingJournal(t, api.homePath, "stg-23c", recoveryAgentID, ws, omnpkg.JournalStarted)
 		require.NoError(t, api.recoverImportsBeforeRoster(packageCtx(t)))
 		require.Equal(t, before, fileBytes(t, filepath.Join(api.homePath, "workspaces", ws+".json")), "W equals before")
+		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-23c"))
 		requireNoRecoveryAgent(t, api.homePath)
 	})
 
@@ -78,6 +77,7 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		writePendingOnly(t, api.homePath, recoveryAgentID)
 		writeStagingJournal(t, api.homePath, "stg-23d", recoveryAgentID, ws, omnpkg.JournalStarted)
 		require.NoError(t, api.recoverImportsBeforeRoster(packageCtx(t)))
+		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-23d"))
 		requireNoRecoveryAgent(t, api.homePath)
 	})
 
@@ -89,13 +89,12 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		order, err := api.bootImportsThenRoster(packageCtx(t))
 		require.NoError(t, err, "FR-062")
 		require.Equal(t, []string{"recover-imports", "roster"}, order, "recovery before the first roster load")
-		j, rerr := omnpkg.ReadJournal(filepath.Join(api.homePath, "backups", ".staging", "stg-23e"))
-		require.NoError(t, rerr)
-		require.Equal(t, omnpkg.JournalDone, j.State)
+		// A finished import deletes the staging folder. The journal is not left to re-read.
+		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-23e"))
 		_, err = os.Stat(filepath.Join(api.homePath, "entities", "agents", recoveryAgentID+".json"))
 		require.NoError(t, err, "the published agent stays")
 		audit := readAudit(t, api.homePath)
-		require.Contains(t, audit, "import completed at start-up")
+		require.Contains(t, audit, omnpkg.RecoveryFinishedMessage)
 		require.NotContains(t, audit, "agent_created")
 	})
 
@@ -109,6 +108,7 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		require.Contains(t, workspaceTeam(t, api.homePath, ws), recoveryAgentID, "recovery re-joins W")
 		_, err := os.Stat(filepath.Join(api.homePath, "entities", "agents", recoveryAgentID+".json"))
 		require.NoError(t, err)
+		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-23f"))
 	})
 
 	t.Run("D7-23g a failed leave does not abort boot", func(t *testing.T) {
@@ -123,10 +123,14 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		require.Contains(t, workspaceTeam(t, api.homePath, ws), recoveryAgentID, "W still lists X when leave failed")
 		_, statErr := os.Stat(filepath.Join(api.homePath, "entities", "agents", recoveryAgentID+".json"))
 		require.True(t, os.IsNotExist(statErr), "X stays invisible")
+		// D7-23g: a failed leave keeps the staging for the next start.
+		_, statErr = os.Stat(filepath.Join(api.homePath, "backups", ".staging", "stg-23g"))
+		require.NoError(t, statErr, "needs-cleanup staging stays when recovery fails")
 		packageT5.RecoveryLeave = nil
 		err = api.recoverImportsBeforeRoster(packageCtx(t))
 		require.NoError(t, err)
 		require.NotContains(t, workspaceTeam(t, api.homePath, ws), recoveryAgentID)
+		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-23g"))
 	})
 
 	t.Run("D7-24 orphan pending with no journal is removed", func(t *testing.T) {
@@ -155,6 +159,7 @@ func TestPackages_ManualRecovery(t *testing.T) {
 		writePendingOnly(t, api.homePath, recoveryAgentID)
 		require.NoError(t, api.recoverImportsBeforeRoster(packageCtx(t)))
 		requireNoRecoveryAgent(t, api.homePath)
+		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-d15"))
 		got := callPackageImport(t, api, validMainPackage(t))
 		require.Equal(t, http.StatusCreated, got.Code, "the slot is free; body=%s", got.Body)
 	})
@@ -167,6 +172,7 @@ func TestPackages_ManualRecovery(t *testing.T) {
 		writeStagingJournal(t, api.homePath, "stg-c1", recoveryAgentID, ws, omnpkg.JournalRollbackIncomplete)
 		require.NoError(t, api.recoverImportsBeforeRoster(packageCtx(t)))
 		require.Equal(t, before, fileBytes(t, filepath.Join(api.homePath, "workspaces", ws+".json")), "W equals before")
+		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-c1"))
 		got := callPackageImport(t, api, validMainPackage(t))
 		require.Equal(t, http.StatusCreated, got.Code, "body=%s", got.Body)
 	})
@@ -198,6 +204,9 @@ func TestPackages_ManualRecovery(t *testing.T) {
 			writeStagingJournal(t, api.homePath, "stg-full-"+string(rune('a'+i)), recoveryAgentID, "ws-1", omnpkg.JournalRollbackIncomplete)
 		}
 		require.NoError(t, api.recoverImportsBeforeRoster(packageCtx(t)))
+		for i := 0; i < omnpkg.MaxStagedImports; i++ {
+			t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-full-"+string(rune('a'+i))))
+		}
 		got := callPackageImport(t, api, validMainPackage(t))
 		require.Equal(t, http.StatusCreated, got.Code, "a freed slot admits the next upload; body=%s", got.Body)
 	})

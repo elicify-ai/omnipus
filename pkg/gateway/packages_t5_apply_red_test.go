@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,15 +13,21 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,6 +45,7 @@ func TestPackagesApply_NewMode(t *testing.T) {
 		api := packageAPI(t)
 		usePackageSeams(t)
 		packageT5.Reload = func() (bool, error) { return true, nil }
+		frames := agentCreatedRecorder(api)
 		ws := createWorkspaceViaAPI(t, api, "Research", "notes")
 		before := configBytes(t, api.homePath)
 		info, err := os.Stat(filepath.Join(api.homePath, "config.json"))
@@ -61,6 +69,9 @@ func TestPackagesApply_NewMode(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, after.ModTime().Equal(info.ModTime()), "SC-008 config.json mtime unchanged")
 		require.Contains(t, readAudit(t, api.homePath), res.Created[0].NewId)
+		gotFrames := frames()
+		require.Len(t, gotFrames, 1, "oracle 7 positive control: a confirmed import emits one agent_created")
+		require.Equal(t, res.Created[0].NewId, gotFrames[0].AgentId)
 	})
 
 	t.Run("D14-5 no workspace and no default is 409", func(t *testing.T) {
@@ -184,16 +195,24 @@ func TestPackagesApply_ModesConcurrency(t *testing.T) {
 		reqB := packageAuthRequest(t, http.MethodPost, path, strings.NewReader(body))
 		reqA.Header.Set("Content-Type", "application/json")
 		reqB.Header.Set("Content-Type", "application/json")
+		mux := packageRouteMux(t, api)
+		cfg := api.agentLoop.GetConfig()
+		serve := func(req *http.Request) int {
+			req = req.WithContext(putConfigSnapshot(req.Context(), cfg))
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			return w.Code
+		}
 		var wg sync.WaitGroup
 		codes := make([]int, 2)
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			codes[0] = doPackage(api.handlePackageImportApply, reqA).Code
+			codes[0] = serve(reqA)
 		}()
 		go func() {
 			defer wg.Done()
-			codes[1] = doPackage(api.handlePackageImportApply, reqB).Code
+			codes[1] = serve(reqB)
 		}()
 		wg.Wait()
 		ok, blocked := 0, 0
@@ -382,6 +401,9 @@ func TestPackagesApply_Rollback(t *testing.T) {
 			ws := createWorkspaceViaAPI(t, api, "Research", "notes")
 			createWorkspaceViaAPI(t, api, "Untouched", "second workspace")
 			before := t5CaptureRollback(t, api.homePath)
+			homeBefore := snapshotHome(t, api.homePath)
+			listedBefore := listedAgentIDs(t, api)
+			frames := agentCreatedRecorder(api)
 			tc.setup(t, api.homePath)
 			packageT5.Reload = func() (bool, error) {
 				t.Error("rollback must not request a live-publication reload")
@@ -420,6 +442,10 @@ func TestPackagesApply_Rollback(t *testing.T) {
 			t5RequireRollbackState(t, api.homePath, ws, id, "", before)
 			// Required even after recovery; a retained terminal journal is NOT a pass.
 			t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
+			require.Empty(t, frames(), "oracle 7: a rollback sends no agent_created frame")
+			require.Equal(t, listedBefore, listedAgentIDs(t, api), "oracle 1: GET /api/v1/agents equals the set before")
+			requireNoSessionNames(t, api, id)
+			t5RequireOtherFiles(t, homeBefore, snapshotHome(t, api.homePath), id, ws)
 			if tc.code == omnpkg.CodeImportRolledBack {
 				_, err := os.Stat(filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
 				require.True(t, os.IsNotExist(err), "complete rollback retires the staging folder")
@@ -431,14 +457,16 @@ func TestPackagesApply_Rollback(t *testing.T) {
 		api := packageAPI(t)
 		usePackageSeams(t)
 		ws := createWorkspaceViaAPI(t, api, "Research", "notes")
+		z := createMainAgent(t, api, "Zed", "Keep Z.")
 		var agentID string
-		acquired := make(chan struct{}, 1)
+		errCh := make(chan error, 1)
 		packageT5.AfterMembershipWrite = func(wsID, id string) {
 			agentID = id
+			require.NotContains(t, workspaceTeam(t, api.homePath, ws), z, "D7-5: Z is not on the team while the import holds W's lock")
 			go func() {
 				unlock := workspace.LockID(wsID)
-				acquired <- struct{}{}
-				unlock()
+				defer unlock()
+				errCh <- t5AppendTeam(api.homePath, wsID, z)
 			}()
 		}
 		packageT5.SaveDelegation = func(string, string, []workspace.DelegationEdge) error {
@@ -450,12 +478,14 @@ func TestPackagesApply_Rollback(t *testing.T) {
 		requireNoRollbackActivation(t, er)
 		require.NotEmpty(t, agentID, "the membership hook must run inside the lock hold")
 		select {
-		case <-acquired:
+		case err := <-errCh:
+			require.NoError(t, err, "D7-5: the competing writer adds Z after the helper releases W's lock")
 		case <-packageCtx(t).Done():
-			t.Fatal("D7-5: competing LockID did not acquire the workspace lock after the helper returned")
+			t.Fatal("D7-5: competing writer did not acquire the workspace lock after the helper returned")
 		}
 		team := workspaceTeam(t, api.homePath, ws)
 		require.NotContains(t, team, agentID, "X is removed before the lock is released")
+		require.Contains(t, team, z, "D7-5: the competing writer's Z is kept")
 	})
 
 	t.Run("D7-10 invisible until commit, then rolled back", func(t *testing.T) {
@@ -463,9 +493,12 @@ func TestPackagesApply_Rollback(t *testing.T) {
 		usePackageSeams(t)
 		ws := createWorkspaceViaAPI(t, api, "Research", "notes")
 		var probed string
+		known := createMainAgent(t, api, "Visible", "A real chat partner.")
+		requireSessionCreated(t, api, known)
 		packageT5.AfterMembershipWrite = func(_, id string) {
 			probed = id
 			requireAgentInvisible(t, api, id)
+			requirePackageChatRefused(t, api, id)
 		}
 		packageT5.PublishRename = func(string, string) error { return errors.New("rename") }
 		prev := stageUpload(t, api, validMainPackage(t))
@@ -566,6 +599,16 @@ func TestImportCreateParity(t *testing.T) {
 	require.EqualValues(t, 7, restRec["max_tool_iterations"])
 	_, restHasVoice := restRec["voice"]
 	require.False(t, restHasVoice, "REST create still does not store voice (known limit L17)")
+	_, restHasMemory := restRec["memory_enabled"]
+	require.False(t, restHasMemory, "REST create does not store memory_enabled")
+	_, restHasWindow := restRec["context_window_override"]
+	require.False(t, restHasWindow, "REST create does not store context_window_override")
+	restPrimary, restProvider := recordModel(t, restRec)
+	require.Equal(t, "m-1", restPrimary, "spec-literal REST model")
+	require.Equal(t, "openrouter", restProvider, "spec-literal REST provider")
+
+	toolID := createParityAgentByTool(t, api, soul, desc)
+	toolRec := readAgentRecord(t, api.homePath, toolID)
 
 	rec := mainRecord(specSourceID, "ParityWriter", "  "+desc+"  ")
 	rec["color"] = "#4F8A80"
@@ -587,6 +630,22 @@ func TestImportCreateParity(t *testing.T) {
 	require.Equal(t, false, imp["memory_enabled"])
 	require.EqualValues(t, 64000, imp["context_window_override"])
 	require.NotEqual(t, specSourceID, res.Created[0].NewId)
+	impPrimary, impProvider := recordModel(t, imp)
+	require.Equal(t, "m-1", impPrimary)
+	require.Equal(t, "openrouter", impProvider)
+	require.Equal(t, restRec["type"], imp["type"], "shared type")
+	toolPrimary, toolProvider := recordModel(t, toolRec)
+	require.Equal(t, desc, toolRec["description"], "create_agent stores the normalised description")
+	require.Equal(t, "#4F8A80", toolRec["color"])
+	require.EqualValues(t, 7, toolRec["max_tool_iterations"])
+	require.Equal(t, "m-1", toolPrimary)
+	require.Equal(t, "openrouter", toolProvider)
+	require.Equal(t, "alloy", toolRec["voice"], "FR-047: import and create_agent store the same voice")
+	require.Equal(t, toolRec["memory_enabled"], imp["memory_enabled"])
+	require.EqualValues(t, toolRec["context_window_override"], imp["context_window_override"])
+	require.Equal(t, false, toolRec["memory_enabled"])
+	require.EqualValues(t, 64000, toolRec["context_window_override"])
+	require.Equal(t, soul, string(fileBytes(t, filepath.Join(api.homePath, "agents", toolID, "SOUL.md"))), "create_agent stores the trimmed prompt")
 }
 
 // TestPackages_ConfigUntouched is TDD row 30 (SC-008, FR-034).
@@ -727,20 +786,6 @@ func requireNoRollbackActivation(t *testing.T, er gen.ErrorResponse) {
 	require.False(t, ok, "[r7] no details.activation on a rollback answer")
 }
 
-func entityNames(t *testing.T, home string) []string {
-	t.Helper()
-	dir := filepath.Join(home, "entities", "agents")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	return names
-}
-
 func fileBytes(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -787,7 +832,16 @@ func requireAgentInvisible(t *testing.T, api *restAPI, id string) {
 	post := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", body)
 	post.Header.Set("Content-Type", "application/json")
 	api.HandleSessions(sess, post)
-	require.NotEqual(t, http.StatusCreated, sess.Code, "a pending agent must not get a session")
+	require.Equal(t, http.StatusBadRequest, sess.Code, "FR-049: a pending agent is an unknown agent; body=%s", sess.Body)
+	require.Contains(t, sess.Body.String(), id)
+	require.Contains(t, sess.Body.String(), "not found")
+	requireNoSessionNames(t, api, id)
+	agents, skipped, err := agentstore.New(api.homePath).List()
+	require.NoError(t, err)
+	require.Empty(t, skipped, "a corrupt record must not hide a pending agent")
+	for _, agent := range agents {
+		require.NotEqual(t, id, agent.ID, "agentstore.List must not contain a pending agent")
+	}
 }
 
 func writeStagingJournal(t *testing.T, home, staging, agent, ws string, state omnpkg.JournalState) {
@@ -797,4 +851,177 @@ func writeStagingJournal(t *testing.T, home, staging, agent, ws string, state om
 	require.NoError(t, omnpkg.WriteJournal(dir, omnpkg.JournalFile{
 		State: state, AgentID: agent, StagingID: staging, WorkspaceID: ws,
 	}))
+}
+
+func listedAgentIDs(t *testing.T, api *restAPI) []string {
+	t.Helper()
+	list := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
+	api.HandleAgents(list, req)
+	require.Equal(t, http.StatusOK, list.Code, "GET /api/v1/agents; body=%s", list.Body)
+	var agents []struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(list.Body.Bytes(), &agents), "agent list body=%s", list.Body)
+	ids := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		require.NotEmpty(t, agent.ID)
+		ids = append(ids, agent.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// requireNoSessionNames is rollback oracle 7: no session, main chat or transcript names X.
+func requireNoSessionNames(t *testing.T, api *restAPI, id string) {
+	t.Helper()
+	roots := []string{filepath.Join(api.homePath, "sessions")}
+	agentRoot := filepath.Join(api.homePath, "agents")
+	entries, err := os.ReadDir(agentRoot)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				roots = append(roots, filepath.Join(agentRoot, entry.Name(), "sessions"))
+			}
+		}
+	}
+	for _, root := range roots {
+		if _, statErr := os.Stat(root); statErr != nil {
+			if os.IsNotExist(statErr) {
+				continue
+			}
+			require.NoError(t, statErr, "session store %s", root)
+		}
+		walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info == nil || info.IsDir() {
+				return nil
+			}
+			raw, readErr := os.ReadFile(path)
+			require.NoError(t, readErr, "read session file %s", path)
+			require.NotContains(t, string(raw), id, "oracle 7: session store names %s in %s", id, path)
+			return nil
+		})
+		require.NoError(t, walkErr)
+	}
+}
+
+func requireSessionCreated(t *testing.T, api *restAPI, id string) {
+	t.Helper()
+	sess := httptest.NewRecorder()
+	post := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", strings.NewReader(`{"agent_id":"`+id+`"}`))
+	post.Header.Set("Content-Type", "application/json")
+	api.HandleSessions(sess, post)
+	require.Equal(t, http.StatusCreated, sess.Code, "positive control: a registered agent gets a session; body=%s", sess.Body)
+}
+
+// requirePackageChatRefused dials the production websocket handler and requires
+// the unknown-agent refusal (spec invisibility probe, D7-10). The token is the
+// test bearer already configured on the home.
+func requirePackageChatRefused(t *testing.T, api *restAPI, id string) {
+	t.Helper()
+	handler := newWSHandler(bus.NewMessageBus(), api.agentLoop, "")
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/chat/ws", nil)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
+	write := func(frame wsClientFrameTestHelper) {
+		t.Helper()
+		raw, marshalErr := json.Marshal(frame)
+		require.NoError(t, marshalErr)
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
+	}
+	write(wsClientFrameTestHelper{Type: "auth", Token: packageTestBearer})
+	write(wsClientFrameTestHelper{Type: "message", Content: "hello", AgentID: id})
+	var saw string
+	for i := 0; i < 6; i++ {
+		_, raw, readErr := conn.ReadMessage()
+		if readErr != nil {
+			break
+		}
+		saw += string(raw) + "\n"
+		if strings.Contains(string(raw), id) && strings.Contains(string(raw), "not available") {
+			return
+		}
+	}
+	t.Fatalf("FR-049: websocket chat to %s was not refused as an unknown agent; frames=%s", id, saw)
+}
+
+// t5AppendTeam is D7-5's competing writer. The caller already holds no lock;
+// LockID in the caller serialises it behind the import.
+func t5AppendTeam(home, wsID, agentID string) error {
+	path := filepath.Join(home, "workspaces", wsID+".json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var record workspace.Workspace
+	if err = json.Unmarshal(raw, &record); err != nil {
+		return err
+	}
+	if record.ID == "" {
+		record.ID = wsID
+	}
+	for _, id := range record.CoreTeam {
+		if id == agentID {
+			return nil
+		}
+	}
+	record.CoreTeam = append(record.CoreTeam, agentID)
+	return workspace.SaveRecord(home, record)
+}
+
+func recordModel(t *testing.T, rec map[string]any) (string, string) {
+	t.Helper()
+	model, _ := rec["model"].(map[string]any)
+	primary, _ := model["primary"].(string)
+	provider, _ := model["provider"].(string)
+	require.NotEmpty(t, primary, "stored model.primary missing in %#v", rec["model"])
+	require.NotEmpty(t, provider, "stored model.provider missing in %#v", rec["model"])
+	return primary, provider
+}
+
+// createParityAgentByTool runs the real create_agent tool (FR-047). It does not
+// copy an import result into the expectation.
+func createParityAgentByTool(t *testing.T, api *restAPI, soul, desc string) string {
+	t.Helper()
+	deps := &systools.Deps{
+		Home:         api.homePath,
+		ConfigPath:   filepath.Join(api.homePath, "config.json"),
+		GetCfg:       api.agentLoop.GetConfig,
+		MutateConfig: api.agentLoop.MutateConfig,
+		SaveConfigLocked: func(cfg *config.Config) error {
+			return config.SaveConfig(filepath.Join(api.homePath, "config.json"), cfg)
+		},
+	}
+	reg := tools.NewToolRegistry()
+	reg.Register(systools.NewAgentCreateTool(deps))
+	res := reg.Execute(context.Background(), "create_agent", map[string]any{
+		"name":                    "ParityWriter",
+		"description":             desc,
+		"soul":                    soul,
+		"model":                   "m-1",
+		"provider":                "openrouter",
+		"agent_type":              "Main",
+		"color":                   "#4F8A80",
+		"max_tool_iterations":     7,
+		"voice":                   "alloy",
+		"memory_enabled":          false,
+		"context_window_override": 64000,
+	})
+	require.NotNil(t, res)
+	require.False(t, res.IsError, "create_agent failed: %s", res.ForLLM)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(res.ForLLM), &payload), "create_agent result=%s", res.ForLLM)
+	id, _ := payload["id"].(string)
+	require.NotEmpty(t, id, "create_agent result has no id: %s", res.ForLLM)
+	return id
 }

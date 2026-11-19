@@ -177,3 +177,45 @@ func t5RequireRollbackState(t *testing.T, home, ws, id, fault string, before t5R
 		}
 	}
 }
+
+// t5RequireOtherFiles is rollback oracle 6. Bytes must match except AD-1..AD-4:
+// a skill generation stamp, X's permanent entity lock, W's workspace record,
+// the audit log, the gateway log, and the staging tree (journal included).
+func t5RequireOtherFiles(t *testing.T, before, after map[string]string, id, ws string) {
+	t.Helper()
+	allowed := func(rel string) bool {
+		switch rel {
+		case filepath.Join("system", "audit.jsonl"),
+			filepath.Join("logs", "gateway.log"),
+			filepath.Join("logs", "gateway_panic.log"),
+			filepath.Join("entities", "agents", id+".lock"),
+			filepath.Join("workspaces", ws+".json"):
+			return true
+		}
+		if strings.HasPrefix(rel, filepath.Join("backups", ".staging")+string(os.PathSeparator)) {
+			return true
+		}
+		return strings.HasSuffix(rel, string(os.PathSeparator)+".omnipus-identity")
+	}
+	hash := func(value string) string {
+		if cut := strings.LastIndex(value, "|"); cut >= 0 {
+			return value[:cut]
+		}
+		return value
+	}
+	for rel, value := range before {
+		if allowed(rel) {
+			continue
+		}
+		got, ok := after[rel]
+		require.True(t, ok, "file disappeared outside AD-1..AD-4: %s", rel)
+		require.Equal(t, hash(value), hash(got), "oracle 6: file bytes changed: %s", rel)
+	}
+	for rel := range after {
+		if allowed(rel) {
+			continue
+		}
+		_, ok := before[rel]
+		require.True(t, ok, "oracle 6: new file outside AD-1..AD-4: %s", rel)
+	}
+}
