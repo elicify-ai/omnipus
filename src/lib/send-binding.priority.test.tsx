@@ -4,21 +4,25 @@ import {
   SWITCHED,
   UPLOAD_404,
   apiMocks,
+  assertNewChatKey,
+  deleteOpenChatThroughSidebar,
   deliverFrame,
   framesOf,
+  makeSession,
   mountComposer,
   resetBindingWorld,
+  seedSavedChat,
   sent,
   typeIntoComposer,
 } from '@/test/sendBinding1428'
 import { act } from 'react'
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { submissionForMessage } from '@/lib/bound-send'
 import { ApiError } from '@/lib/api-error'
 import { addLibraryAttachment } from '@/lib/library-attachment'
 import { useChatStore } from '@/store/chat'
-import { useDraftStore } from '@/store/chat/drafts'
+import { getDraft, useDraftStore } from '@/store/chat/drafts'
 import { emptySessionState } from '@/store/chat/session'
 import { useSessionStore } from '@/store/session'
 
@@ -212,6 +216,62 @@ describe('refusal, restore and remount (spec 4.8 / 4.9)', () => {
     expect(framesOf('message', sent()), 'BR-12: an upload 404 sends no message').toEqual([])
     expect(screen.getByText(UPLOAD_404), 'BR-12: the upload 404 uses the class reason').toBeTruthy()
     expect(screen.getByTestId('chat-input'), 'BR-12: the text stays in the draft').toHaveValue('still here')
+  })
+
+  it('BR-18 a failed creation shows New chat (not created) and sends nothing', async () => {
+    // Spec 4.8 line 620: creation for K failed restores the draft and, once K
+    // is not open, the item line is exactly "New chat (not created)".
+    // Spec 4.6.3: no partial message is sent.
+    resetBindingWorld()
+    mountComposer({ sidebar: true })
+    const saved = makeSession({ id: 'saved-create', title: 'Saved Create', workspace_id: 'w1', agent_id: 'mia' })
+    seedSavedChat(saved, undefined, undefined)
+    apiMocks.fetchSessions.mockResolvedValue([saved])
+    apiMocks.fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core' } as never])
+    await deleteOpenChatThroughSidebar('Saved Create')
+    const key = assertNewChatKey(useSessionStore.getState().newChatKey)
+    drop('plan.txt')
+    apiMocks.createSession.mockRejectedValueOnce(new ApiError(500, 'nope'))
+    const user = userEvent.setup()
+    await typeIntoComposer('make the chat')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(apiMocks.createSession, 'BR-18: creation was attempted').toHaveBeenCalled())
+    act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
+    await waitFor(() => {
+      expect(screen.getByText('New chat (not created)'), 'BR-18: the pinned creation-failure line').toBeTruthy()
+    })
+    expect(framesOf('message', sent()), 'BR-18: a failed creation sends no message').toEqual([])
+    expect(getDraft(key).text, 'BR-18: the text is restored into K').toBe('make the chat')
+  })
+
+  it('BR-18 sign-out while a creation is in flight sends nothing when it completes', async () => {
+    // Spec BR-18: a creation in flight, then sign out, then it completes.
+    // Nothing reappears and no partial message is sent.
+    resetBindingWorld()
+    const first = mountComposer({ sidebar: true })
+    const saved = makeSession({ id: 'saved-flight', title: 'Saved Flight', workspace_id: 'w1', agent_id: 'mia' })
+    seedSavedChat(saved, undefined, undefined)
+    apiMocks.fetchSessions.mockResolvedValue([saved])
+    apiMocks.fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core' } as never])
+    await deleteOpenChatThroughSidebar('Saved Flight')
+    drop('late.txt')
+    let release: (value: unknown) => void = () => {}
+    apiMocks.createSession.mockImplementation(() => new Promise((resolve) => { release = resolve }))
+    const user = userEvent.setup()
+    await typeIntoComposer('in flight')
+    await user.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(apiMocks.createSession, 'BR-18: the creation started').toHaveBeenCalled())
+    await user.click(screen.getByRole('button', { name: 'Open user menu' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Sign out' }))
+    await act(async () => {
+      release({ id: 'created-late', agent_id: 'mia' })
+      await Promise.resolve()
+    })
+    expect(framesOf('message', sent()), 'BR-18: the late creation sends nothing').toEqual([])
+    first.unmount()
+    mountComposer()
+    expect(screen.getByTestId('chat-input'), 'BR-18: nothing reappears').toHaveValue('')
+    expect(screen.queryByText('1 not sent'), 'BR-18: the Unsent list is gone').toBeNull()
   })
 })
 

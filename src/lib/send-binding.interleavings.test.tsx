@@ -1,7 +1,10 @@
 // #1428 step 2 RED. Spec BR-5, BR-6, BR-8, BR-14, BR-16, BR-24.
 import { describe, expect, it } from 'vitest'
+import { ApiError } from '@/lib/api-error'
 import {
   SWITCHED,
+  UPLOAD_409,
+  UPLOAD_413,
   UPLOAD_NETWORK,
   apiMocks,
   assertNewChatKey,
@@ -275,6 +278,9 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     )
   })
 
+})
+
+describe('BR-24 upload class sentences (spec 4.6.3)', () => {
   it('BR-24 a partial upload sends no message and keeps the failed file local', async () => {
     resetBindingWorld()
     mountComposer()
@@ -296,4 +302,39 @@ describe('creation, upload and open-browser interleavings (spec 4.4 / 4.6)', () 
     expect(apiMocks.uploadFiles.mock.calls.length - calls, 'BR-24: Send again uploads only the failed file').toBe(1)
     expect(framesOf('message', sent()), 'BR-24: one message after the retry').toHaveLength(1)
   })
+
+  it('BR-24 a 413 keeps the text and sends no message', async () => {
+    // Spec 4.6.3: 413 is "File too large". No partial message.
+    await expectUploadClass(new ApiError(413, 'too big'), UPLOAD_413, '413')
+  })
+
+  it('BR-24 a 409 keeps the text and sends no message', async () => {
+    // Spec 4.6.3: 409 is the page-error sentence. No partial message.
+    await expectUploadClass(new ApiError(409, 'conflict'), UPLOAD_409, '409')
+  })
+
+  it('BR-24 an upload_routing refusal keeps the text and sends no message', async () => {
+    // Spec 4.6.3: upload_routing_* uses the same sentence as 409.
+    await expectUploadClass(
+      new ApiError(400, 'late field', { code: 'upload_routing_field_late' }),
+      UPLOAD_409,
+      'upload_routing_field_late',
+    )
+  })
 })
+
+async function expectUploadClass(failed: unknown, reason: string, label: string): Promise<void> {
+  resetBindingWorld()
+  mountComposer()
+  dropFile('ok.txt')
+  dropFile('bad.txt')
+  apiMocks.uploadFiles
+    .mockResolvedValueOnce({ files: [{ ref: 'media://workspace/w1/ok', name: 'ok.txt', content_type: 'text/plain' }] })
+    .mockRejectedValueOnce(failed)
+  const user = userEvent.setup()
+  await typeIntoComposer('two files')
+  await user.click(screen.getByRole('button', { name: 'Send message' }))
+  expect(framesOf('message', sent()), `BR-24 ${label}: no partial message`).toEqual([])
+  expect(screen.getByText(reason), `BR-24 ${label}: the class reason`).toBeTruthy()
+  expect(screen.getByTestId('chat-input'), `BR-24 ${label}: the text stays`).toHaveValue('two files')
+}

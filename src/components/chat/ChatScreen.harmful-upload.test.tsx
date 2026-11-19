@@ -9,8 +9,10 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import * as React from 'react'
 import { act } from 'react'
 import { useChatStore } from '@/store/chat'
+import { getDraft, initialDraftState } from '@/store/chat/drafts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 
 import { OmnipusComposer } from './ChatScreen'
 
@@ -120,6 +122,7 @@ function resetStores() {
     useChatStore.setState({
       messages: [], isStreaming: false, isReplaying: false,
       toolCalls: {}, sessionTokens: 0, sessionCost: 0,
+      draftState: initialDraftState(),
     })
     useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
     useSessionStore.setState({
@@ -143,6 +146,11 @@ function dropFiles(files: File[]) {
   fireEvent.drop(dropzone, { dataTransfer: { files } })
 }
 
+/** Spec 4.5 rule 2: a dropped file is a local draft file, not addAttachment. */
+function attachedNames(): string[] {
+  return getDraft('sess_harmful_test').files.map((file) => file.kind === 'local' ? file.file.name : file.name)
+}
+
 const safeFile = () => new File(['hi'], 'photo.png', { type: 'image/png' })
 const harmfulFile = (name = 'malware.exe') => new File(['x'], name, { type: 'application/octet-stream' })
 
@@ -150,7 +158,7 @@ describe('ChatScreen — harmful-file upload confirmation', () => {
   it('attaches a non-harmful file immediately with no dialog', async () => {
     render(<OmnipusComposer />)
     dropFiles([safeFile()])
-    await waitFor(() => expect(addAttachment).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(attachedNames()).toEqual(['photo.png']))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
@@ -160,7 +168,7 @@ describe('ChatScreen — harmful-file upload confirmation', () => {
     const dialog = await screen.findByRole('alertdialog')
     // Stage 1 title (heading) — distinct from stage 2's "Confirm upload".
     expect(within(dialog).getByRole('heading', { name: /Potentially harmful file/i })).toBeInTheDocument()
-    expect(addAttachment).not.toHaveBeenCalled()
+    expect(attachedNames()).toEqual([])
   })
 
   it('stage-1 Continue advances to stage 2 and still does NOT attach', async () => {
@@ -169,7 +177,7 @@ describe('ChatScreen — harmful-file upload confirmation', () => {
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
     await screen.findByText(/Confirm upload/i)
-    expect(addAttachment).not.toHaveBeenCalled()
+    expect(attachedNames()).toEqual([])
   })
 
   it('stage-2 Upload attaches the file', async () => {
@@ -180,7 +188,12 @@ describe('ChatScreen — harmful-file upload confirmation', () => {
     await screen.findByText(/Confirm upload/i)
     dialog = screen.getByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Upload' }))
-    await waitFor(() => expect(addAttachment).toHaveBeenCalledTimes(1))
+    // Spec 4.5 rule 2: exe is not an accepted type, so the confirm commits
+    // and the type check rejects it. It is not stored.
+    await waitFor(() => expect(useUiStore.getState().toasts.map((toast) => toast.message)).toContain(
+      'Can\'t attach "malware.exe": file type not supported',
+    ))
+    expect(attachedNames()).toEqual([])
   })
 
   it('Cancel at stage 1 attaches nothing', async () => {
@@ -189,7 +202,7 @@ describe('ChatScreen — harmful-file upload confirmation', () => {
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
-    expect(addAttachment).not.toHaveBeenCalled()
+    expect(attachedNames()).toEqual([])
   })
 
   it('Escape at stage 2 attaches nothing', async () => {
@@ -200,7 +213,7 @@ describe('ChatScreen — harmful-file upload confirmation', () => {
     await screen.findByText(/Confirm upload/i)
     fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape', code: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
-    expect(addAttachment).not.toHaveBeenCalled()
+    expect(attachedNames()).toEqual([])
   })
 
   it('a subsequent harmful upload restarts at stage 1 (no stale stage)', async () => {
@@ -218,6 +231,6 @@ describe('ChatScreen — harmful-file upload confirmation', () => {
     dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('heading', { name: /Potentially harmful file/i })).toBeInTheDocument()
     expect(within(dialog).queryByRole('heading', { name: /Confirm upload/i })).not.toBeInTheDocument()
-    expect(addAttachment).not.toHaveBeenCalled()
+    expect(attachedNames()).toEqual([])
   })
 })

@@ -172,8 +172,15 @@ describe('G5 — judge_conclusion_failed is a visible non-terminal notice', () =
     expect.soft(useChatStore.getState().sessionsById[SID].messagesById[MESSAGE].content,
       'G5 a notice cannot poison the continuing token path').toBe(NARRATION + ' Still making progress.')
     act(() => { fireEvent.click(stopBefore) })
-    expect(send.mock.calls.map(([frame]) => frame), 'G5 real Stop must still reach the WebSocket edge')
-      .toContainEqual({ type: 'cancel', session_id: SID, shown: { code_points: [...NARRATION].length, message_id: MESSAGE, turn_id: TURN } })
+    // Spec 4.6.1 / 4.7: Stop's cancel frame carries {chat, this chat} and a client_frame_id.
+    const cancel = send.mock.calls.map(([frame]) => frame).find((frame) => frame.type === 'cancel')
+    expect(cancel, 'G5 real Stop must still reach the WebSocket edge').toEqual({
+      type: 'cancel',
+      session_id: SID,
+      origin: { kind: 'chat', session_id: SID },
+      client_frame_id: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
+      shown: { code_points: [...NARRATION].length, message_id: MESSAGE, turn_id: TURN },
+    })
   })
 
   it('control: an ordinary terminal error still closes the streaming turn and removes Stop', () => {

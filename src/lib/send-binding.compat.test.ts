@@ -4,6 +4,7 @@ import { act } from 'react'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WsConnection } from '@/lib/ws'
+import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import {
@@ -31,6 +32,33 @@ vi.mock('@/lib/authLogout', async (importOriginal) => {
 })
 
 let live: WsConnection | null = null
+
+function queued(text: string): boolean {
+  const state = useChatStore.getState()
+  return [...state.outboundQueue, ...state.pendingDrainQueue].some((item) =>
+    typeof item !== 'string' && item.content === text && item.submission === undefined)
+}
+
+function messageFrames(socket: FakeSocket) {
+  return socket.sent.filter((frame) => frame.type === 'message')
+}
+
+/** Spec 4.10: connect drains from onConnected, the same call the runtime provider makes. */
+function openDrainingSocket(): FakeSocket {
+  installFakeWebSocket()
+  live = new WsConnection({
+    onFrames: () => {},
+    onConnected: () => { useChatStore.getState().drainOutboundQueue() },
+    onDisconnected: () => {},
+    onError: () => {},
+  })
+  live.connect()
+  const socket = FakeSocket.instances.at(-1)
+  if (!socket) throw new Error('socket was not created')
+  useConnectionStore.setState({ connection: live, isConnected: true, reconnectPhase: null })
+  act(() => { socket.open() })
+  return socket
+}
 
 function openSocket(): FakeSocket {
   installFakeWebSocket()
@@ -80,6 +108,41 @@ describe('capability state (spec 4.10)', () => {
         origin: { kind: 'chat', session_id: 'chat-a' },
       }),
     ])
+  })
+
+  it('BR-20a a submission-less queue item waits for supported and then leaves once', () => {
+    // Spec 4.10: while unconfirmed or unsupported, drainOutboundQueue does not
+    // run, so a queued object with content and no submission stays queued.
+    // The first server_capabilities frame makes the connection supported and
+    // that one item leaves exactly once.
+    const text = 'workflow queued'
+    resetBindingWorld()
+    mountComposer()
+    act(() => {
+      useChatStore.getState().enqueueOutboundMessage(text, {
+        id: 'wf-no-submission',
+        content: text,
+        timestamp: '2026-11-19T00:00:00.000Z',
+        targetSessionId: 'chat-a',
+      })
+    })
+    const first = openDrainingSocket()
+    expect(messageFrames(first), '4.10: unconfirmed drain sends no message').toEqual([])
+    expect(queued(text), '4.10: the item stays queued while unconfirmed').toBe(true)
+    act(() => { first.receive({ type: 'session_state', session_id: 'chat-a', pending_approvals: [] } as never) })
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    expect(live?.sendCapability, '4.10: a session_state first frame is unsupported').toBe('unsupported')
+    expect(messageFrames(first), '4.10: unsupported drain sends no message').toEqual([])
+    expect(queued(text), '4.10: unsupported does not drop the item').toBe(true)
+    const next = openDrainingSocket()
+    expect(messageFrames(next), '4.10: the new socket sends nothing before its first frame').toEqual([])
+    expect(queued(text), '4.10: the item is still queued at the new unconfirmed socket').toBe(true)
+    act(() => { next.receive({ type: 'server_capabilities', send_origin: true }) })
+    expect(live?.sendCapability, '4.10: server_capabilities{send_origin: true} is supported').toBe('supported')
+    expect(messageFrames(next), '4.10: supported drain sends the item once').toEqual([
+      expect.objectContaining({ type: 'message', content: text }),
+    ])
+    expect(queued(text), '4.10: the drained item is not still queued').toBe(false)
   })
 
   it('BR-20b a session_state first frame is unsupported and lists the draft', async () => {

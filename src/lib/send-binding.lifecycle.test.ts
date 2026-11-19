@@ -14,12 +14,40 @@ import {
   typeIntoComposer,
 } from '@/test/sendBinding1428'
 import { act } from 'react'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/store/chat'
-import { aliasNewChat, openChatKey } from '@/store/chat/drafts'
+import { aliasNewChat, getDraft, openChatKey } from '@/store/chat/drafts'
 import { useSessionStore } from '@/store/session'
+import { enterNewChat } from '@/store/session/newChatKey'
 import { useConnectionStore } from '@/store/connection'
+
+async function confirmListDiscard(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole('button', { name: 'Discard' }))
+  const dialog = await screen.findByRole('alertdialog')
+  await user.click(within(dialog).getByRole('button', { name: 'Discard' }))
+}
+
+/** Spec BR-13b: offline first message for K, then saved chat B is open. */
+async function queueOfflineFirst(text: string, fileName?: string): Promise<{ key: string }> {
+  resetBindingWorld()
+  mountComposer({ sidebar: true })
+  const saved = makeSession({ id: 'saved-discard', title: 'Saved Discard', workspace_id: 'w1', agent_id: 'mia' })
+  seedSavedChat(saved, undefined, undefined)
+  apiMocks.fetchSessions.mockResolvedValue([saved])
+  apiMocks.fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core' } as never])
+  await deleteOpenChatThroughSidebar('Saved Discard')
+  const key = assertNewChatKey(useSessionStore.getState().newChatKey)
+  connection().fail = true
+  if (fileName) dropFile(fileName)
+  const user = userEvent.setup()
+  await typeIntoComposer(text)
+  await user.click(screen.getByRole('button', { name: 'Send message' }))
+  act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
+  expect(screen.getByText('New chat with Mia, not saved yet'), 'BR-13b: B lists the unsaved chat').toBeTruthy()
+  expect(framesOf('message', sent()), 'BR-13b: nothing is sent while B is open').toEqual([])
+  return { key }
+}
 
 function dropFile(name: string): void {
   const zone = screen.getByTestId('composer-card').parentElement
@@ -128,6 +156,37 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     }))
     expect(message?.metadata?.workspace_id, 'BR-13b: the first message stays in W1').toBe('w1')
     expect(framesOf('message', sent()), 'BR-13b: delivered once').toHaveLength(1)
+  })
+
+  it('BR-13b Discard drops the offline first message, and re-entering K sends nothing', async () => {
+    // Spec BR-13b (c): Discard confirmed removes the Unsent item and the pending
+    // send. Leaving B and re-entering the same K still produces zero frames.
+    const { key } = await queueOfflineFirst('discard me')
+    const user = userEvent.setup()
+    await confirmListDiscard(user)
+    expect(screen.queryByText('New chat with Mia, not saved yet'), 'BR-13b: Discard removes the Unsent item').toBeNull()
+    expect(useChatStore.getState().pendingFirstSend, 'BR-13b: Discard removes the pending send').toBeNull()
+    expect(framesOf('message', sent()), 'BR-13b: Discard sends nothing').toEqual([])
+    act(() => { enterNewChat('w1', 'mia', 'core', key) })
+    connection().fail = false
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    expect(framesOf('message', sent()), 'BR-13b: re-entering K still sends nothing').toEqual([])
+    expect(getDraft(key).text, 'BR-13b: the discarded text is not put back').toBe('')
+  })
+
+  it('BR-13b Discard of a file-bearing first message uploads nothing and sends nothing', async () => {
+    // Spec BR-13b file variant, Discard leg: the file is not uploaded while B is
+    // open, and Discard does not upload it later either.
+    const { key } = await queueOfflineFirst('discard the file', 'note.txt')
+    expect(apiMocks.uploadFiles, 'BR-13b: the offline Send does not upload').not.toHaveBeenCalled()
+    const user = userEvent.setup()
+    await confirmListDiscard(user)
+    expect(useChatStore.getState().pendingFirstSend, 'BR-13b: the file-bearing pending send is gone').toBeNull()
+    act(() => { enterNewChat('w1', 'mia', 'core', key) })
+    connection().fail = false
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    expect(apiMocks.uploadFiles, 'BR-13b: Discard never uploads the file').not.toHaveBeenCalled()
+    expect(framesOf('message', sent()), 'BR-13b: re-entering K sends no frame for the file').toEqual([])
   })
 
   it('BR-21 a restored upload still sends its original ref after 60 other uploads', async () => {

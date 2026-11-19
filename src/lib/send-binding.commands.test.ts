@@ -379,6 +379,64 @@ function registerCommandFailureCases(): void {
     expect(screen.getByText(CONN_FAILED)).toBeTruthy()
   })
 
+  it('BR-23e a CLOSING socket returns false and restores the text without a close', async () => {
+    // Spec BR-23e variant: send() is false because readyState is CLOSING.
+    // No close event is fired. The box, the connection-failed line and the
+    // not-stopped notice match the OPEN-throw case, and nothing is retried.
+    resetBindingWorld()
+    installFakeWebSocket()
+    const conn = new WsConnection({
+      onFrames: () => {},
+      onConnected: () => {},
+      onDisconnected: () => {},
+      onError: () => {},
+    })
+    conn.connect()
+    const socket = FakeSocket.instances.at(-1)
+    if (!socket) throw new Error('socket missing')
+    act(() => { socket.open() })
+    act(() => { socket.receive({ type: 'server_capabilities', send_origin: true }) })
+    let writes = 0
+    let closes = 0
+    socket.send = () => {
+      writes += 1
+      return undefined as never
+    }
+    const previousClose = socket.onclose
+    socket.onclose = (event) => {
+      closes += 1
+      previousClose?.call(socket, event)
+    }
+    socket.readyState = 2
+    useConnectionStore.setState({ connection: conn as never, isConnected: true })
+    mountComposer()
+    await typeIntoComposer('/stop-redirect private A')
+    vi.useFakeTimers()
+    fireEvent.keyDown(screen.getByTestId('chat-input'), { key: 'Enter', code: 'Enter' })
+    expect(writes, 'BR-23e: a CLOSING socket is not written').toBe(0)
+    expect(closes, 'BR-23e: no close event').toBe(0)
+    expect(socket.readyState, 'BR-23e: the socket stays CLOSING').toBe(2)
+    expect(screen.getByTestId('chat-input'), 'BR-23e: the exact text is back once').toHaveValue('/stop-redirect private A')
+    expect(screen.getByText(CONN_FAILED), 'BR-23e: the connection-failed line').toBeTruthy()
+    expect(screen.queryByText('May not have been delivered'), 'BR-23e: no uncertain item without a close').toBeNull()
+    expect(screen.getByText(NOT_STOPPED), 'BR-23e: the notice is shown').toBeTruthy()
+    expect(useDraftStore.getState().commands, 'BR-23e: the failed command record is dropped').toEqual({})
+    act(() => {
+      socket.receive({
+        type: 'session_state',
+        user_id: 'ada',
+        pending_approvals: [],
+        session_id: 'chat-b',
+        emitted_at: '2026-11-18T00:00:00Z',
+        auto_approve_modifier: true,
+      })
+    })
+    await act(async () => { vi.advanceTimersByTime(60_000) })
+    expect(writes, 'BR-23e: 60s and an unrelated frame do not retry').toBe(0)
+    expect(closes, 'BR-23e: still no close event').toBe(0)
+    expect(screen.getAllByDisplayValue('/stop-redirect private A'), 'BR-23e: still one copy').toHaveLength(1)
+  })
+
   it('BR-23f a Stop closed before receipt follows the turn id', async () => {
     resetBindingWorld()
     const socket = openLive()

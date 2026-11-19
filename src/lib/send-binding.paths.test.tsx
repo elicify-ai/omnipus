@@ -24,6 +24,7 @@ import { openOmnipusChat } from '@/store/omnipusChat'
 import { makeBucketMessages } from '@/store/chat/messages'
 import { emptyHistoryState } from '@/store/chat/history-state'
 import { emptySessionState } from '@/store/chat/session'
+import { submissionForMessage } from '@/lib/bound-send'
 import { submitAnnotation } from '@/lib/browserAnnotate'
 import { MermaidDiagram } from '@/components/chat/mermaid-renderer'
 import { requireFn } from '@/test/send-binding.module'
@@ -133,6 +134,45 @@ describe('capture and non-navigation paths (spec 4.6.1)', () => {
       'BR-3a: zero REST calls for this submission',
     ).toBe(sendsBefore)
     expect(screen.getByTestId('chat-input'), 'BR-3a: text restored once into A').toHaveValue('secret A')
+  })
+
+  it('a send the workspace-entry gate blocks is put back and not handed to the socket', async () => {
+    // Spec 4.8: a local refusal creates no bubble. The captured text goes back
+    // to that chat's box. Nothing is in the handed-over set and no frame leaves.
+    resetBindingWorld()
+    mountComposer()
+    const capture = await requireFn('../lib/bound-send', 'captureSubmission', 'spec 4.6.1')
+    const frozen = capture('Composer Send', {
+      text: 'kept by the gate',
+      files: [],
+      libraryPicks: [],
+      workspaceId: 'w1',
+      agentId: 'mia',
+      origin: { kind: 'chat', session_id: 'chat-a' },
+      target: 'chat-a',
+      navigationSensitive: true,
+    }) as { clientMessageId: string }
+    act(() => {
+      useSessionStore.setState({
+        workspaceEntry: {
+          status: 'unavailable',
+          sessionId: null,
+          sendEnabled: false,
+          acknowledged: false,
+          retry: true,
+        },
+      })
+    })
+    const sendBound = await requireFn('../lib/bound-send', 'sendBound', 'spec 4.6.2 deliver')
+    act(() => { sendBound(frozen) })
+    expect(getDraft('chat-a').text, '4.8: the captured text is back in the chat draft').toBe('kept by the gate')
+    expect(screen.getByTestId('chat-input'), '4.8: the open box shows the restored text').toHaveValue('kept by the gate')
+    expect(framesOf('message', sent()), '4.8: the gate sends no frame').toEqual([])
+    expect(submissionForMessage(frozen.clientMessageId), '4.8: nothing was handed over').toBeUndefined()
+    expect(
+      useChatStore.getState().messages.some((message) => message.content === 'kept by the gate'),
+      '4.8: the gate creates no bubble',
+    ).toBe(false)
   })
 
   it('BR-15 typed /cancel in A is held, and Enter in B submits only B', async () => {

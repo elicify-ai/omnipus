@@ -94,6 +94,22 @@ function outboundQueueContents(): string[] {
   return useChatStore.getState().outboundQueue.map((item) => typeof item === 'string' ? item : item.content)
 }
 
+function textsOf(items: readonly (string | { content: string })[]): string[] {
+  return items.map((item) => typeof item === 'string' ? item : item.content)
+}
+
+/** Spec 4.6.1: a legacy string is never sent. A queued message for the open chat is. */
+function queuedMessage(content: string) {
+  return {
+    id: `id-${content}`,
+    content,
+    timestamp: '2026-07-01T00:00:00.000Z',
+    targetSessionId: 'test-session',
+  }
+}
+
+const CHAT_ORIGIN = { kind: 'chat', session_id: 'test-session' } as const
+
 // ── enqueueOutboundMessage ─────────────────────────────────────────────────────
 
 describe('outboundQueue — enqueueOutboundMessage', () => {
@@ -156,7 +172,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
   it('clears outboundQueue immediately, but only actually SENDS the first message — the rest wait for the turn to complete', () => {
     const send = connectWithSendSpy()
     act(() => {
-      useChatStore.setState({ outboundQueue: ['msg1', 'msg2'] })
+      useChatStore.setState({ outboundQueue: [queuedMessage('msg1'), queuedMessage('msg2')] })
     })
     act(() => {
       useChatStore.getState().drainOutboundQueue()
@@ -168,8 +184,8 @@ describe('outboundQueue — drainOutboundQueue', () => {
     // sendMessage's isStreaming guard would otherwise have silently discarded
     // msg2 had both been sent synchronously in the same tick.
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: 'msg1' }))
-    expect(useChatStore.getState().pendingDrainQueue).toEqual(['msg2'])
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: 'msg1', origin: CHAT_ORIGIN }))
+    expect(textsOf(useChatStore.getState().pendingDrainQueue)).toEqual(['msg2'])
     expect(useChatStore.getState().isStreaming).toBe(true)
 
     // Completing msg1's turn (the server's `done` frame) must release msg2 —
@@ -179,7 +195,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
       useChatStore.getState().handleFrame({ type: 'done', session_id: 'test-session' })
     })
     expect(send).toHaveBeenCalledTimes(2)
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: 'msg2' }))
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: 'msg2', origin: CHAT_ORIGIN }))
     expect(useChatStore.getState().pendingDrainQueue).toEqual([])
   })
 
@@ -187,7 +203,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
     const send = connectWithSendSpy()
     const queued = ['q-msg-1', 'q-msg-2', 'q-msg-3', 'q-msg-4']
     act(() => {
-      useChatStore.setState({ outboundQueue: [...queued] })
+      useChatStore.setState({ outboundQueue: queued.map(queuedMessage) })
     })
 
     act(() => {
@@ -202,9 +218,9 @@ describe('outboundQueue — drainOutboundQueue', () => {
     for (let i = 0; i < queued.length; i++) {
       // Message i has just been sent — i+1 total sends so far.
       expect(send).toHaveBeenCalledTimes(i + 1)
-      expect(send.mock.calls[i][0]).toEqual(expect.objectContaining({ content: queued[i] }))
+      expect(send.mock.calls[i][0]).toEqual(expect.objectContaining({ content: queued[i], origin: CHAT_ORIGIN }))
       // Everything after message i is still waiting its turn.
-      expect(useChatStore.getState().pendingDrainQueue).toEqual(queued.slice(i + 1))
+      expect(textsOf(useChatStore.getState().pendingDrainQueue)).toEqual(queued.slice(i + 1))
       if (i < queued.length - 1) {
         // Complete message i's turn — this must release message i+1.
         act(() => {
@@ -249,7 +265,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
     // not A, C, B.
     const send = connectWithSendSpy()
     act(() => {
-      useChatStore.setState({ outboundQueue: ['A', 'B', 'C'] })
+      useChatStore.setState({ outboundQueue: [queuedMessage('A'), queuedMessage('B'), queuedMessage('C')] })
     })
 
     // First reconnect: drains A,B,C into pendingDrainQueue and sends A.
@@ -257,8 +273,8 @@ describe('outboundQueue — drainOutboundQueue', () => {
       useChatStore.getState().drainOutboundQueue()
     })
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenNthCalledWith(1, expect.objectContaining({ content: 'A' }))
-    expect(useChatStore.getState().pendingDrainQueue).toEqual(['B', 'C'])
+    expect(send).toHaveBeenNthCalledWith(1, expect.objectContaining({ content: 'A', origin: CHAT_ORIGIN }))
+    expect(textsOf(useChatStore.getState().pendingDrainQueue)).toEqual(['B', 'C'])
     expect(useChatStore.getState().isStreaming).toBe(true)
 
     // Mid-flight disconnect while A is in flight. The real WS-close handler
@@ -273,7 +289,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
     })
     expect(send).toHaveBeenCalledTimes(1) // B did NOT reach the wire
     expect(outboundQueueContents()).toEqual(['B'])
-    expect(useChatStore.getState().pendingDrainQueue).toEqual(['C'])
+    expect(textsOf(useChatStore.getState().pendingDrainQueue)).toEqual(['C'])
 
     // Second reconnect: drainOutboundQueue must merge the bounced-back
     // queue BACK IN FRONT of what's still parked, then immediately try to
@@ -286,7 +302,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
     })
     expect(send).toHaveBeenCalledTimes(2)
     expect(send).toHaveBeenNthCalledWith(2, expect.objectContaining({ content: 'B' }))
-    expect(useChatStore.getState().pendingDrainQueue).toEqual(['C'])
+    expect(textsOf(useChatStore.getState().pendingDrainQueue)).toEqual(['C'])
 
     // Complete B's turn — C must go out last.
     act(() => {
@@ -310,7 +326,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
     // whatever sendMessage re-queued (not doubled). This verifies no infinite loop.
     act(() => {
       useChatStore.setState({
-        outboundQueue: ['first', 'second'],
+        outboundQueue: [queuedMessage('first'), queuedMessage('second')],
         isStreaming: false,
       })
       useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting' })
