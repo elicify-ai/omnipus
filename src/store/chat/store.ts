@@ -23,7 +23,7 @@ import { createFirstSendActions, firstSendBlocksQueue, getPendingFirstSend } fro
 import { createFrameSlice } from './slices/frames'
 import { initialDraftState } from './draft-state'
 import { bindDraftHost } from './drafts'
-import { drainSubmission, legacyQueueEntryToItem, observeBoundSendFrame } from '@/lib/bound-send'
+import { currentSendCapability, drainSubmission, legacyQueueEntryToItem, observeBoundSendFrame } from '@/lib/bound-send'
 import { withdrawMessage } from './withdraw-message'
 import { createHistorySlice, emptyHistoryState } from './history'
 import { createHistoryFrameOwner } from './history-replay'
@@ -264,6 +264,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
   function maybeDrainNext(): void {
     const { pendingDrainQueue, isStreaming } = get()
     if (pendingDrainQueue.length === 0 || isStreaming || firstSendBlocksQueue(get())) return
+    // #1428 (spec 4.10): no drain while the connection is unconfirmed or
+    // unsupported; items stay queued. bound-send.ts drains again when the
+    // connection reports `supported`. Checked BEFORE the pop, so nothing is lost.
+    const capability = currentSendCapability()
+    if (capability === 'unconfirmed' || capability === 'unsupported') return
     // Gate BEFORE the pop: sendMessage may refuse an unresolved destination.
     if (blockSendForWorkspaceEntry('drain')) return
     // @-recipient hold (founder 2026-10-11 Q1 B) — also BEFORE the pop: a
