@@ -34,7 +34,15 @@
 // thread"). The bind-only policy (no ConnectPortRules) is deliberate: the
 // defect surface is the BIND list, and connect rules would make the dial
 // assertions thread-dependent — injecting the very nondeterminism under
-// test into the controls.
+// test into the controls. The accept proof therefore dials from a SECOND
+// OS thread pinned BEFORE the restriction (handshake-ordered, so it is
+// deterministically outside the Landlock domain): on ABI v4+ computeRights
+// declares NET_CONNECT_TCP too (sandbox_linux.go), so a dial from inside
+// the domain is denied unless the port is in ConnectPortRules — and the
+// proxy's port cannot be pre-authorized there, because it resolves from
+// 127.0.0.1:0 during Apply, after the policy is already fixed. Only the
+// accept proof moves outside the domain; the listen under test stays on
+// the restricted thread.
 
 package sandbox_test
 
@@ -235,6 +243,38 @@ func runIssue1909ProxyListenChild() {
 	// deterministic worst case of the production thread lottery. Same
 	// rationale as runLandlockBindBlockedChild.
 	runtime.LockOSThread()
+
+	// Accept-proof dialer: pinned to its own OS thread BEFORE the
+	// restriction. The handshake below guarantees that thread exists and is
+	// locked while no thread in this process is inside a Landlock domain, so
+	// its dial is deterministically unrestricted. The dial cannot run on the
+	// restricted thread itself: on ABI v4+ the ruleset handles
+	// NET_CONNECT_TCP too (sandbox_linux.go::computeRights), so connect(2)
+	// from inside the domain is denied without a matching ConnectPortRules
+	// entry — and the proxy's port cannot be pre-authorized there, because
+	// it resolves from 127.0.0.1:0 during Apply, after the policy is fixed.
+	// accept(2) itself is not Landlock-gated; gating applies to the
+	// bind/connect of the sockets that meet the listener, and this dial
+	// comes from outside the domain — exactly as a client process's would.
+	dialAddr := make(chan string, 1)
+	dialErr := make(chan error, 1)
+	dialerReady := make(chan struct{})
+	go func() {
+		runtime.LockOSThread()
+		close(dialerReady)
+		addr := <-dialAddr
+		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+		if err != nil {
+			dialErr <- err
+			return
+		}
+		if closeErr := conn.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "dial close failed: %v\n", closeErr)
+		}
+		dialErr <- nil
+	}()
+	<-dialerReady
+
 	workspace := os.Getenv("OMNIPUS_LANDLOCK_SANDBOX_DIR")
 	if workspace == "" {
 		os.Exit(77)
@@ -253,15 +293,13 @@ func runIssue1909ProxyListenChild() {
 		fmt.Fprintf(os.Stderr, "SPEC VIOLATION (AC-1): proxy constructed with empty Addr\n")
 		os.Exit(2)
 	}
-	// The listener must be live, not merely allocated: dial it (connect(2)
-	// is unrestricted — the policy is bind-only; see the file comment).
-	conn, err := net.DialTimeout("tcp", p.Addr(), 5*time.Second)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "SPEC VIOLATION (AC-1): proxy Addr %s refuses connections: %v\n", p.Addr(), err)
+	// The listener must be live, not merely allocated: dial it — from the
+	// pinned unrestricted thread set up above (see its comment for why the
+	// restricted thread itself cannot dial).
+	dialAddr <- p.Addr()
+	if dialFailure := <-dialErr; dialFailure != nil {
+		fmt.Fprintf(os.Stderr, "SPEC VIOLATION (AC-1): proxy Addr %s refuses connections: %v\n", p.Addr(), dialFailure)
 		os.Exit(1)
-	}
-	if closeErr := conn.Close(); closeErr != nil {
-		fmt.Fprintf(os.Stderr, "dial close failed: %v\n", closeErr)
 	}
 	if closeErr := p.Close(); closeErr != nil {
 		fmt.Fprintf(os.Stderr, "proxy close failed: %v\n", closeErr)
@@ -343,10 +381,14 @@ func runIssue1909PreboundServesChild() {
 		fmt.Fprintf(os.Stderr, "SPEC VIOLATION (control): pre-bound proxy stopped serving after restriction: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		fmt.Fprintf(os.Stderr, "SPEC VIOLATION (control): expected 403 for a non-listed host (package doc), got %d\n", resp.StatusCode)
 		os.Exit(1)
+	}
+	// Checked close (lint: errcheck); every path below ends in os.Exit, which
+	// never runs defers, so an explicit close is the only one that happens.
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		fmt.Fprintf(os.Stderr, "response body close failed: %v\n", closeErr)
 	}
 	if closeErr := p.Close(); closeErr != nil {
 		fmt.Fprintf(os.Stderr, "proxy close failed: %v\n", closeErr)
