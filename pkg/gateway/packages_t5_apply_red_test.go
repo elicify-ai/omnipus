@@ -205,6 +205,11 @@ func TestPackagesApply_NewMode(t *testing.T) {
 	t.Run("F05 max_tool_iterations 900 is refused at apply when the global limit is 200", func(t *testing.T) {
 		applyIterationsRefusal(t, true, 900, "200", 0)
 	})
+
+	// F07 / FR-042 / D14: skill and provider differences are listed, not only the name.
+	t.Run("F07 preview freshness lists skill and provider differences", func(t *testing.T) {
+		previewFreshnessCases(t)
+	})
 }
 
 // TestPackagesApply_ModesConcurrency is TDD row 28 (FR-030, FR-038).
