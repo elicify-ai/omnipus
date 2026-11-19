@@ -18,7 +18,9 @@
 // exactly as the real sidebar does it (Sidebar.tsx workspace onOpen):
 // setActiveWorkspaceId + router.navigate — a route param change, no reload.
 // Only the network edge is doubled: fetch (request-recording stub) and the
-// browser WebSocket class (frame-recording stub below the real parser).
+// browser WebSocket class (frame-recording stub below the real parser), with
+// the stub playing the gateway's own first frame (server_capabilities — see
+// mountAndOpen).
 //
 // Brief item 3: what the box holds when the user RETURNS to workspace A is
 // not decided (kept or cleared) — no test asserts it; see the RED report.
@@ -211,6 +213,21 @@ async function mountAndOpen() {
   })
   const socket = TestSocket.instances[0]
   act(() => socket.open())
+  // The gateway's first frame on every connection (#1428 spec 4.10,
+  // contracts/asyncapi.yaml ServerCapabilitiesFrame: "First frame on every
+  // connection"). The test socket plays that server part so the #1428 send
+  // gate (bound-send.ts::passGate reading ws.ts::WsConnection.sendCapability,
+  // decided by ws.ts::classifyFirstFrame from this first frame) opens here as
+  // it does against the real gateway — without it every composer send is kept
+  // in its draft and no frame ever reaches the socket. Delivered through the
+  // raw onmessage (what a real socket delivers), not TestSocket.receive:
+  // receive's fixture guard rejects frames the CURRENT head's parser does not
+  // know, and this frame is deliberately cross-version — on the release head
+  // it is not in the contract yet, the parser drops it as unknown and nothing
+  // reads capabilities.
+  act(() => {
+    socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'server_capabilities', send_origin: true }) }))
+  })
   // Socket open: the entry's session reads may proceed, so the attach lands
   // on a live connection (as it does in the browser, where the handshake
   // finishes before the entry's REST reads resolve).
@@ -323,6 +340,11 @@ describe('#1853 an unsent chat draft must not follow the user into another works
     // every remaining pending timer runs before the whole recorded log is
     // read — a build that merely delays the submit (M5: 250 ms) still fires
     // inside the flush and dies.
+    // Revision 2: the #1428 head's bound-send gate (bound-send.ts::passGate)
+    // holds every send while the connection capability is not `supported`, so
+    // the stub now plays the gateway's first frame (mountAndOpen) and the
+    // proof additionally shows the draft sits in NO outbound queue — a send
+    // parked by the gate would otherwise only look like a pass.
     vi.useFakeTimers()
     try {
       const sendButton = () => screen.getByRole('button', { name: /^send/i })
@@ -347,6 +369,17 @@ describe('#1853 an unsent chat draft must not follow the user into another works
         .map((frame) => frame as unknown as { content?: string })
         .filter((frame) => (frame.content ?? '').includes(DRAFT))
       expect(draftFrames, '1853: no send may post the draft text (every message frame checked, not only the sentinel\'s)').toEqual([])
+      // Revision 2 addendum: neither queue may hold the draft either. On
+      // #1428 a send parked by the capability gate waits in
+      // `outboundQueue` (enqueueOutboundMessage; drain moves items through
+      // `pendingDrainQueue`) — a queued draft is not "never sent", it goes
+      // out the moment the gate opens. Both fields and the item shape
+      // (string | QueuedOutboundMessage with .content) are identical on the
+      // release head and on #1428, so one assertion serves both heads.
+      const queuedDrafts = [...useChatStore.getState().outboundQueue, ...useChatStore.getState().pendingDrainQueue]
+        .map((item) => (typeof item === 'string' ? item : item.content))
+        .filter((text) => text.includes(DRAFT))
+      expect(queuedDrafts, '1853: the draft may not wait in the outbound queue for chat B (a capability-held send is not a pass)').toEqual([])
     } finally {
       vi.useRealTimers()
     }
