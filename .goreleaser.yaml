@@ -114,6 +114,9 @@ dockers_v2:
     dockerfile: docker/Dockerfile.goreleaser
     extra_files:
       - docker/entrypoint.sh
+      # LibreOffice's host libraries (the list install.sh and the deb/rpm
+      # dependencies below share; scripts/check-office-host-libs-sync.sh).
+      - scripts/office-pack/libreoffice-host-libs.env
       # Office preview components per image platform (Dockerfile.goreleaser
       # copies build/components/<os>_<arch>/{office,pdfium}).
       - build/components/linux_amd64
@@ -202,6 +205,7 @@ nfpms:
       deb:
         dependencies:
           - libx11-6
+          - libx11-xcb1
           - libxext6
           - libxinerama1
           - libcairo2
@@ -217,6 +221,7 @@ nfpms:
       rpm:
         dependencies:
           - libX11
+          - libX11-xcb
           - libXext
           - libXinerama
           - cairo

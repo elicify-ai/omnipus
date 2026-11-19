@@ -531,39 +531,53 @@ if [ "$OS" = "Linux" ] && { [ -d "$CHROMIUM_DIR" ] || [ -d "$SHARE_CHROMIUM" ]; 
 fi
 
 # ── LibreOffice's Linux host shared libraries (office-preview spec §10) ─────
-# The official LibreOffice build links against these system libraries (the
-# same set the deb/rpm packages depend on). Entries with "|" are package-name
-# alternatives across distribution releases (e.g. Ubuntu 24.04's t64 names):
-# the first one the package manager knows is installed.
+# The system packages the official LibreOffice build needs to start (the
+# deb/rpm packages depend on the same list). The block below is a verbatim
+# copy of scripts/office-pack/libreoffice-host-libs.env — this script is
+# fetched on its own, so it cannot read that file; CI's
+# scripts/check-office-host-libs-sync.sh fails when the two differ. Entries
+# with "|" are package-name alternatives across distribution releases (e.g.
+# Ubuntu 24.04's t64 names): the first one apt knows is installed.
+# BEGIN libreoffice-host-libs
+OFFICE_DEB_LIBS="libx11-6 libx11-xcb1 libxext6 libxinerama1 libcairo2 libcups2t64|libcups2 libdbus-1-3 libfontconfig1 libfreetype6 libglib2.0-0t64|libglib2.0-0 libnss3 libnspr4"
+OFFICE_DEB_RECOMMENDS="fonts-liberation"
+OFFICE_RPM_LIBS="libX11 libX11-xcb libXext libXinerama cairo cups-libs dbus-libs fontconfig freetype glib2 nss nspr"
+OFFICE_RPM_RECOMMENDS="liberation-fonts"
+# END libreoffice-host-libs
 if [ "$OS" = "Linux" ] && [ "$WITH_OFFICE" -eq 1 ]; then
   run_root() {
     if [ "$(id -u)" -ne 0 ]; then sudo "$@"; else "$@"; fi
   }
   if command -v apt-get >/dev/null 2>&1; then
-    OFFICE_LIBS="libx11-6 libxext6 libxinerama1 libcairo2 libcups2t64|libcups2 libdbus-1-3 libfontconfig1 libfreetype6 libglib2.0-0t64|libglib2.0-0 libnss3 libnspr4 fonts-liberation"
-    set --
-    for entry in $OFFICE_LIBS; do
+    # Entries none of whose alternatives is installed yet.
+    MISSING=""
+    for entry in $OFFICE_DEB_LIBS $OFFICE_DEB_RECOMMENDS; do
       have=0
       for alt in $(printf '%s' "$entry" | tr '|' ' '); do
         if dpkg -s "$alt" >/dev/null 2>&1; then have=1; break; fi
       done
-      [ "$have" -eq 1 ] && continue
-      pick=""
-      for alt in $(printf '%s' "$entry" | tr '|' ' '); do
-        if apt-cache show "$alt" >/dev/null 2>&1; then pick="$alt"; break; fi
-      done
-      [ -n "$pick" ] || err "none of $entry is available from apt — LibreOffice needs it (or re-run with --without-office)"
-      set -- "$@" "$pick"
+      [ "$have" -eq 1 ] || MISSING="$MISSING $entry"
     done
-    if [ "$#" -gt 0 ]; then
+    if [ -n "$MISSING" ]; then
+      # Package lists first: apt-cache cannot name an alternative without them.
+      run_root apt-get update >/dev/null 2>&1 \
+        || info "(note: apt-get update failed — trying the existing package lists)"
+      set --
+      for entry in $MISSING; do
+        pick=""
+        for alt in $(printf '%s' "$entry" | tr '|' ' '); do
+          if apt-cache show "$alt" >/dev/null 2>&1; then pick="$alt"; break; fi
+        done
+        [ -n "$pick" ] || err "none of $entry is available from apt — LibreOffice needs it (or re-run with --without-office)"
+        set -- "$@" "$pick"
+      done
       info "installing LibreOffice host libraries: $*"
-      run_root apt-get update >/dev/null 2>&1 || true
-      run_root apt-get install -y "$@" \
+      run_root apt-get install -y --no-install-recommends "$@" \
         || err "failed to install LibreOffice host libraries (try: sudo apt-get install $*, or re-run with --without-office)"
     fi
   elif command -v dnf >/dev/null 2>&1; then
     set --
-    for lib in libX11 libXext libXinerama cairo cups-libs dbus-libs fontconfig freetype glib2 nss nspr liberation-fonts; do
+    for lib in $OFFICE_RPM_LIBS $OFFICE_RPM_RECOMMENDS; do
       rpm -q "$lib" >/dev/null 2>&1 || set -- "$@" "$lib"
     done
     if [ "$#" -gt 0 ]; then
