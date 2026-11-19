@@ -52,7 +52,7 @@ import { useFileUpload } from '@/hooks/useFileUpload'
 import { useCancelState } from '@/hooks/useCancelState'
 import type { UseCancelStateResult } from '@/hooks/useCancelState'
 import type { TypedCommand } from '@/hooks/useSlashMenu'
-import { refuseHeldCommand, sendTypedRedirect } from '@/lib/bound-send'
+import { refuseHeldCommand, sendHeldText, sendTypedRedirect } from '@/lib/bound-send'
 import { openDraftKey, canonical } from '@/store/chat/drafts'
 import { useSessionDraftBinding, type SessionComposerBinding } from './useSessionDraftBinding'
 import { UnsentNotice } from './UnsentNotice'
@@ -293,7 +293,7 @@ export function useSessionComposerConversation(agentRemoved: boolean, composerRu
     activateStop: cancelState.cancelUnconditional,
     cancelIfStreaming: cancelState.cancelAllTreeScoped,
     sendRedirectFrame,
-    origin: { capture: openDraftKey, refuseSwitched: refuseHeldCommand },
+    origin: { capture: openDraftKey, refuseSwitched: refuseHeldCommand, sendHeld: sendHeldText },
   })
 
   const sendBlocked = useCallback(() => {

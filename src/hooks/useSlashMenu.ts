@@ -107,9 +107,16 @@ export interface UseSlashMenuParams {
    * #1428 step 2 (spec 4.6.1): the session binding's capture of the chat a
    * typed command belongs to. A command held while the command list loads is
    * flushed only if that chat is still open; otherwise it is handed to
-   * `refuseSwitched` with its key and text. Absent: no capture (no binding).
+   * `refuseSwitched` with its key and text. `sendHeld` sends a held submit
+   * that turned out to be a message with its text frozen at the submit, when
+   * the box was edited meanwhile (the edit stays as the newer draft).
+   * Absent: no capture (no binding).
    */
-  origin?: { capture: () => string; refuseSwitched: (key: string, text: string) => void }
+  origin?: {
+    capture: () => string
+    refuseSwitched: (key: string, text: string) => void
+    sendHeld: (key: string, text: string) => void
+  }
 }
 
 /** #1428 step 2 (spec 4.5 rule 6): the composer surface the slash menu writes to. */
@@ -404,6 +411,24 @@ function sendServerRunCommand(composerRuntime: SlashComposer, label: string, set
   composerRuntime.setText(label)
   setInputValue(label)
   composerRuntime.send()
+}
+
+/**
+ * A held submit whose box was edited, with no draft binding to send the
+ * frozen text through: the latest text is acted on, after the SAME WC-1
+ * retirement check an immediate submit gets (a held submit edited to "/new"
+ * never reaches the wire; review round 1, F4).
+ */
+function flushUnboundEdited(composerRuntime: SlashComposer, setInputValue: (value: string) => void, appendMessage: (message: ChatMessage) => void): void {
+  const latest = (composerRuntime.getState().text ?? '').trim()
+  if (latest === '') return
+  if (isRetiredCommandSubmit(latest)) {
+    composerRuntime.setText('')
+    setInputValue('')
+    refuseRetiredCommand(appendMessage)
+    return
+  }
+  sendComposerUnlessBlocked(composerRuntime)
 }
 
 function refuseRetiredCommand(appendMessage: (message: ChatMessage) => void): void {
@@ -1262,11 +1287,12 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
 
   // Flush of the held slash submit above, once the command list has landed.
   //
-  // Re-reads the composer's CURRENT text rather than replaying whatever was
-  // captured at submit time: the user may have edited or cleared it while
-  // the fetch was in flight, and their latest text is the only thing worth
-  // acting on. Runs only on a `commandsFirstLoadPending` transition, and the
-  // ref is cleared before dispatch so a re-render cannot double-fire it.
+  // #1428 step 2 (spec 4.6.1, 4.6.2): the held submission is frozen at the
+  // original submit. Its text is what runs or is sent; an edit of the same
+  // draft made while the list was in flight is a newer draft and stays in the
+  // box. Eligibility is checked here, at the flush. Runs only on a
+  // `commandsFirstLoadPending` transition, and the ref is cleared before
+  // dispatch so a re-render cannot double-fire it.
   //
   // #472 investigation note: this effect was named as the OTHER candidate
   // for the slash-menu self-close race. Confirmed it is NOT one for the
@@ -1287,37 +1313,27 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const held = deferredSlashSubmitRef.current
     if (!held) return
     deferredSlashSubmitRef.current = null
-    // #1428 step 2 (spec 4.6.2): the held command is checked for eligibility at the flush.
     if (origin && origin.capture() !== held.key) return origin.refuseSwitched(held.key, held.text)
-    const trimmed = (composerRuntime.getState().text ?? '').trim()
-    if (trimmed === '') return
-    // WC-1: the deferred dispatch reads the composer's LATEST text — which
-    // may have been edited while the list was in flight — so it runs the
-    // SAME retirement check an immediate submit gets. Without it, a held
-    // submit edited to "/new" would go straight to the wire when the list
-    // landed (review round 1, F4).
-    if (isRetiredCommandSubmit(trimmed)) {
-      composerRuntime.setText('')
-      setInputValue('')
-      refuseRetiredCommand(appendMessage)
-      return
-    }
-    const resolved = trimmed.startsWith('/') ? resolveClientCommand(trimmed) : null
+    const frozen = held.text.trim()
+    const current = (composerRuntime.getState().text ?? '').trim()
+    const unchanged = current === frozen
+    const resolved = resolveClientCommand(frozen)
     if (resolved) {
-      composerRuntime.setText('')
-      setInputValue('')
-      runClientCommand(resolved.command.name, resolved.argument, { text: trimmed, originKey: held.key })
+      if (unchanged) {
+        composerRuntime.setText('')
+        setInputValue('')
+      }
+      runClientCommand(resolved.command.name, resolved.argument, { text: frozen, originKey: held.key })
       return
     }
     // Not a client command after all (a skill, an agent-delivery command, or
-    // plain text that happens to start with "/") — complete the send the
-    // user asked for. `composerRuntime.send()` is the same runtime call
-    // every submit path converges on: ComposerPrimitive.Root's onSubmit and
-    // ComposerPrimitive.Send's onClick both end in `composer.send()`, and
-    // ChatScreen's own mid-stream path calls this method directly.
-    // The gate may have closed while the list was in flight: the draft stays.
-    sendComposerUnlessBlocked(composerRuntime)
-     
+    // plain text that happens to start with "/"): complete the send the user
+    // asked for. With the box unchanged that is the composer's own send
+    // (`composerRuntime.send()`, where every submit path converges); the gate
+    // may have closed while the list was in flight, and then the draft stays.
+    if (unchanged) return sendComposerUnlessBlocked(composerRuntime)
+    if (origin) return origin.sendHeld(held.key, frozen)
+    flushUnboundEdited(composerRuntime, setInputValue, appendMessage)
   }, [commandsFirstLoadPending])
 
   function onInputChange(val: string) {

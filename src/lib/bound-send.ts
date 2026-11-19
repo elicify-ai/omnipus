@@ -31,6 +31,7 @@ import { WsConnection, subscribeConnectionEvents, type SendCapability } from '@/
 import { useConnectionStore } from '@/store/connection'
 import { onSignOut } from '@/store/auth'
 import { useSessionStore } from '@/store/session'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatStore } from '@/store/chat/store'
 import type { MediaAttachment } from '@/store/chat/types'
@@ -485,6 +486,18 @@ function putBackTyped(input: CommandInput, reason: string | null, quiet: boolean
 /** A held typed command whose chat is no longer open at its flush (4.6.2). */
 export function refuseHeldCommand(key: string, text: string): void {
   putBackTyped({ kind: 'redirect', target: key, originKey: key, text }, SEND_TEXT.switched, false)
+}
+
+/**
+ * A held slash submit that turned out to be a message, flushed after the box
+ * was edited (4.6.1): it goes out with the text frozen at its submit, and the
+ * edit stays in the box as the newer draft. The workspace-entry gate keeps it
+ * in its draft instead.
+ */
+export function sendHeldText(key: string, text: string): void {
+  if (canonical(key) !== openDraftKey()) return refuseHeldCommand(key, text)
+  if (blockSendForWorkspaceEntry('send')) return keepInDraft(key, text)
+  void sendBound(captureForOpenKey('Held slash submit', canonical(key), { text, files: [], libraryPicks: [] }))
 }
 
 /** The redirect transport of the session composer (useSlashMenu's sendRedirectFrame). */
