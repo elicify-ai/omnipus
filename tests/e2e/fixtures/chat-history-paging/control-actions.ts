@@ -325,6 +325,8 @@ export async function floodRealJournal(producer: Page, traffic: Traffic, session
     const content = `HISTORY_JOURNAL_FILL_${i} ` + '\u{20000}'.repeat(60_000);
     expect([...content].length, 'journal fixture fits the shipped 64,000-codepoint user admission bound').toBeLessThanOrEqual(64_000);
     const frame = { type: 'message', session_id: sessionId, agent_id: agentId,
+      // Spec 4.3.4: a message with no origin is refused, so the gateway never echoes it.
+      origin: { kind: 'chat' as const, session_id: sessionId },
       client_message_id: `history-journal-fill-${i}`, content } satisfies ClientFrame;
     const schemas = await import('../../../../src/lib/api/generated/ws-schemas');
     schemas.WsFrame.parse(frame);
