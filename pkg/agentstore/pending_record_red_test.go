@@ -100,6 +100,8 @@ func TestCreatePendingState_InvisibleToReaders(t *testing.T) {
 	}
 	_, err = s.ReadState("pendv1")
 	require.ErrorIs(t, err, entity.ErrNotFound, "ReadState must not see a pending record")
+	_, err = s.PeekRevision("pendv1")
+	require.ErrorIs(t, err, entity.ErrNotFound, "FR-049: PeekRevision must not see a pending record")
 }
 
 // TestCreatePendingState_PartialWrites pins the pending path's staging
@@ -187,6 +189,41 @@ func TestCreatePendingState_PartialWrites(t *testing.T) {
 		_, err = s.Get("pendp2")
 		require.ErrorIs(t, err, entity.ErrNotFound)
 	})
+
+	// FR-049 / D7 row 1: AGENT.md is the third staged file. A failure on that
+	// replacement leaves the pending entity and SOUL, and nothing visible.
+	t.Run("a third AGENT.md replace failure is PersistencePartial", func(t *testing.T) {
+		home := t.TempDir()
+		s := New(home)
+		calls := 0
+		errReplace := errors.New("replace failed: AGENT.md device busy")
+		realReplace := s.replaceFile
+		s.replaceFile = func(src, dst string) error {
+			calls++
+			if calls == 3 {
+				require.Equal(t, filepath.Join(pendingAgentDir(home, "pendp3"), "AGENT.md"), dst)
+				return errReplace
+			}
+			return realReplace(src, dst)
+		}
+
+		res, err := s.CreatePendingState("pendp3", pendingTestAgent("pendp3"), "soul", "agent instructions")
+		require.ErrorIs(t, err, errReplace, "the third-file cause must reach the caller")
+		assert.Equal(t, 3, calls, "entity and SOUL were replaced; AGENT.md is the one that failed")
+		assert.Equal(t, PersistencePartial, res.PersistenceStatus)
+		assert.Equal(t, "replace_agent_md", res.ErrorStage)
+		assert.Equal(t, []string{"entity", "soul"}, res.ChangedFields)
+		assert.Equal(t, []string{"agent_md"}, res.NotSaved)
+		assert.True(t, pendingPathMissing(t, filepath.Join(pendingAgentDir(home, "pendp3"), "AGENT.md")),
+			"the failed AGENT.md replacement published no instructions")
+		_, err = os.Stat(filepath.Join(pendingAgentDir(home, "pendp3"), "SOUL.md"))
+		require.NoError(t, err, "the earlier SOUL replacement stays")
+		assert.True(t, pendingPathMissing(t, filepath.Join(RecordsDir(home), "pendp3.json")))
+		_, err = s.Get("pendp3")
+		require.ErrorIs(t, err, entity.ErrNotFound)
+		_, err = s.PeekRevision("pendp3")
+		require.ErrorIs(t, err, entity.ErrNotFound)
+	})
 }
 
 // TestPublishPending_IsTheCommitRename pins mechanism step 3 and FR-049's
@@ -258,6 +295,34 @@ func TestPublishPending_IsTheCommitRename(t *testing.T) {
 		after, readErr := os.ReadFile(filepath.Join(RecordsDir(home), "pendc3.json"))
 		require.NoError(t, readErr)
 		assert.Equal(t, string(before), string(after), "the published record must be byte-identical after the refusal")
+	})
+
+	// FR-049 / N2: the rename is the commit. A directory sync that fails after
+	// that real rename returns ErrPublishNotDurable and leaves the agent visible.
+	t.Run("a directory sync failure after the real rename stays committed", func(t *testing.T) {
+		home := t.TempDir()
+		s := New(home)
+		_, err := s.CreatePendingState("pendc5", pendingTestAgent("pendc5"), "soul", "instructions")
+		require.NoError(t, err)
+
+		syncErr := errors.New("sync failed: disk did not flush")
+		syncDirFn = func(dir string) error {
+			require.Equal(t, RecordsDir(home), dir, "the sync targets the records folder")
+			_, statErr := os.Stat(filepath.Join(RecordsDir(home), "pendc5.json"))
+			require.NoError(t, statErr, "the commit rename must already have happened")
+			return syncErr
+		}
+		t.Cleanup(func() { syncDirFn = nil })
+
+		err = s.PublishPending("pendc5")
+		require.ErrorIs(t, err, ErrPublishNotDurable, "a failed sync after the rename is not a failed commit")
+		require.ErrorIs(t, err, syncErr)
+		got, err := s.Get("pendc5")
+		require.NoError(t, err, "the published agent stays readable")
+		assert.Equal(t, "Pending pendc5", got.Name)
+		assert.True(t, pendingPathMissing(t, pendingRecordPath(home, "pendc5")), "the pending name is gone")
+		_, err = os.Stat(filepath.Join(pendingAgentDir(home, "pendc5"), "AGENT.md"))
+		require.NoError(t, err, "AGENT.md stays with the committed agent")
 	})
 
 	t.Run("publishing with no pending record fails", func(t *testing.T) {
