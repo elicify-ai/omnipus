@@ -3,7 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import type { WsConnection } from '@/lib/ws'
 import * as api from '@/lib/api'
 import { submitDraft } from '@/lib/bound-send'
-import { addDraftFiles, setDraftText } from '@/store/chat/drafts'
+import { addDraftFiles, getDraft, setDraftText } from '@/store/chat/drafts'
 import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -104,17 +104,20 @@ describe('useOmnipusRuntime — draft-owned attachment flow (spec 4.5 rule 5)', 
     expect(userRow('')?.media?.[0]?.url).toBe(mediaRefURL('media://img'))
   })
 
-  it('upload with no media ref: text still sends, file is dropped, and onNew warns the user', async () => {
-    // FINDING: this oracle has no r9 equivalent. Spec 4.6.3 says a missing
-    // media ref sends no frame and restores the draft with "Upload failed.
-    // Try again." The old runtime append sent the text and toasted
-    // "was not sent". Left as written.
+  it('upload with no media ref: the text frame still leaves and the file is not attached', async () => {
+    // The upload runs in the attachment adapter's send(), before the runtime
+    // append. With a path and no media ref the adapter's own pre-existing
+    // product text is the toast below (attachment-adapter.ts, the no-ref
+    // branch). The file is not stashed and never enters the draft, so there
+    // is no local file left for a send-time refusal. Spec 4.6.3's sentence
+    // "Upload failed. Try again." is that send-time case, not this one.
+    // Spec 4.5 rule 5: the append calls submitText and the draft owns files,
+    // so the message frame carries the typed text and no media.
+    const NOT_REGISTERED = '"broken.docx" could not be registered for the agent — re-attach and try again.'
     vi.mocked(api.uploadFiles).mockResolvedValue({
       files: [{ name: 'broken.docx', path: 'uploads/sess1/broken.docx', size: 9, content_type: DOCX }],
     } as never)
-    const sendSpy = vi.fn()
     const addToast = vi.fn()
-    useChatStore.setState({ sendMessage: sendSpy as never })
     useUiStore.setState({ addToast })
 
     const { result } = renderHook(() => useOmnipusRuntime())
@@ -128,13 +131,15 @@ describe('useOmnipusRuntime — draft-owned attachment flow (spec 4.5 rule 5)', 
       await composer.send()
     })
 
-    expect(sendSpy).toHaveBeenCalledTimes(1)
-    const [text, opts] = sendSpy.mock.calls[0]
-    expect(text).toContain('here is a file')
-    expect(opts?.mediaRefs ?? []).toEqual([])
-    expect(addToast).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining('was not sent'), variant: 'error' }),
-    )
+    expect(addToast).toHaveBeenCalledWith({ message: NOT_REGISTERED, variant: 'error' })
+    expect(messageFrames(), 'spec 4.5 rule 5: the typed text still leaves as one message').toHaveLength(1)
+    expect(messageFrames()[0]?.content).toBe('here is a file')
+    expect(messageFrames()[0]?.media ?? [], 'spec 4.5 rule 5: the unregistered file is not media on the frame').toEqual([])
+    expect(
+      sent.some((frame) => JSON.stringify(frame).includes('broken.docx') || JSON.stringify(frame).includes('media://')),
+      'the failed file is on no frame',
+    ).toBe(false)
+    expect(getDraft(CHAT).files, 'spec 4.5 rule 5: a file that never registered is not in the draft').toEqual([])
   })
 
   describe('library picks on the open draft (spec 4.4.3)', () => {
