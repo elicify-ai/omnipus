@@ -69,7 +69,10 @@ require_check() {
 # make_chromium_archive <archive-name> <cft-platform>: stage a REAL main
 # archive carrying the bundled-Chrome payload in the layout ADR-052 Phase 1/3
 # define (chromium/ at the archive root; chrome.sha256 beside the binary /
-# beside the .app — PERF2-001, C3 option ii).
+# beside the .app — PERF2-001, C3 option ii). The inner folder is the CfT
+# extraction subdir: chrome-<platform> (scripts/cft-bundle.sh EXTRACT_SUBDIR:
+# linux64→chrome-linux64, mac-arm64→chrome-mac-arm64, mac-x64→chrome-mac-x64),
+# exactly what fullChromeBinaryRelPath() expects inside the package root.
 make_chromium_archive() {
   local out="$1" platform="$2"
   local stage="$RELEASE/stage-chromium"
@@ -83,9 +86,9 @@ make_chromium_archive() {
       ;;
     mac-arm64|mac-x64)
       local app="Google Chrome for Testing.app"
-      mkdir -p "$stage/chromium/$platform/$app/Contents/MacOS"
-      printf 'chrome-binary-marker\n' > "$stage/chromium/$platform/$app/Contents/MacOS/Google Chrome for Testing"
-      printf 'chrome-sha-marker\n' > "$stage/chromium/$platform/chrome.sha256"
+      mkdir -p "$stage/chromium/chrome-$platform/$app/Contents/MacOS"
+      printf 'chrome-binary-marker\n' > "$stage/chromium/chrome-$platform/$app/Contents/MacOS/Google Chrome for Testing"
+      printf 'chrome-sha-marker\n' > "$stage/chromium/chrome-$platform/chrome.sha256"
       ;;
     *) echo "make_chromium_archive: unsupported platform '$platform'" >&2; return 1 ;;
   esac
