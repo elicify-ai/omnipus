@@ -208,6 +208,23 @@ func TestPackagesImport_Route(t *testing.T) {
 	t.Run("C-2 fallback reasoning_effort JSON null is refused", func(t *testing.T) {
 		uploadEffortRefusal(t, recordWithFallbackEffort(nil), effortFallbackField, effortNullSentence)
 	})
+
+	// F05: max_tool_iterations presence and bounds (field mapping; D5 row 11).
+	t.Run("F05 explicit max_tool_iterations -1 is refused", func(t *testing.T) {
+		uploadIterationsRefusal(t, true, -1, iterationsBoundSentence, 0)
+	})
+	t.Run("F05 omitted max_tool_iterations is accepted", func(t *testing.T) {
+		uploadIterationsAccepted(t, false, nil)
+	})
+	t.Run("F05 max_tool_iterations 1 is accepted", func(t *testing.T) {
+		uploadIterationsAccepted(t, true, 1)
+	})
+	t.Run("F05 max_tool_iterations 1001 is refused when the global limit is 1000", func(t *testing.T) {
+		uploadIterationsRefusal(t, true, 1001, "1000", 1000)
+	})
+	t.Run("F05 max_tool_iterations 900 is refused when the global limit is 200", func(t *testing.T) {
+		uploadIterationsRefusal(t, true, 900, "200", 0)
+	})
 }
 
 func decodePreview(t *testing.T, raw []byte) gen.PackageImportPreview {

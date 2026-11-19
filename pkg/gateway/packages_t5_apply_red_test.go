@@ -188,6 +188,23 @@ func TestPackagesApply_NewMode(t *testing.T) {
 	t.Run("C-2 fallback reasoning_effort JSON null is refused at apply", func(t *testing.T) {
 		applyEffortRefusal(t, recordWithFallbackEffort(nil), effortFallbackField, effortNullSentence)
 	})
+
+	// F05 at apply. The global limit is changed after the preview where the row says so.
+	t.Run("F05 explicit max_tool_iterations -1 is refused at apply", func(t *testing.T) {
+		applyIterationsRefusal(t, true, -1, iterationsBoundSentence, 0)
+	})
+	t.Run("F05 omitted max_tool_iterations stores no own limit", func(t *testing.T) {
+		applyIterationsAccepted(t, false, nil, nil)
+	})
+	t.Run("F05 max_tool_iterations 1 is kept", func(t *testing.T) {
+		applyIterationsAccepted(t, true, 1, float64(1))
+	})
+	t.Run("F05 max_tool_iterations 1001 is refused at apply when the global limit is 1000", func(t *testing.T) {
+		applyIterationsRefusal(t, true, 1001, "1000", 1000)
+	})
+	t.Run("F05 max_tool_iterations 900 is refused at apply when the global limit is 200", func(t *testing.T) {
+		applyIterationsRefusal(t, true, 900, "200", 0)
+	})
 }
 
 // TestPackagesApply_ModesConcurrency is TDD row 28 (FR-030, FR-038).
