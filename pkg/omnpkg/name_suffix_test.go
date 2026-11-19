@@ -46,7 +46,7 @@ func TestNameSuffix(t *testing.T) {
 			got, err := omnpkg.ResolveImportName(tc.incoming, tc.existing)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
-			require.LessOrEqual(t, len([]rune(got)), omnpkg.MaxAgentNameLen, "the final name stays within 100 characters")
+			require.LessOrEqual(t, len([]rune(got)), 100, "the final name stays within 100 characters")
 		})
 	}
 

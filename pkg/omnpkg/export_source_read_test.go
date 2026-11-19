@@ -105,16 +105,16 @@ func TestExportSourceRead(t *testing.T) {
 
 	t.Run("D11-5 SOUL.md exactly 1 MiB exports", func(t *testing.T) {
 		src := newFakeSource()
-		soul := bytes.Repeat([]byte("s"), omnpkg.MaxAgentFileBytes)
+		soul := bytes.Repeat([]byte("s"), specAgentFileBytes)
 		src.withAgent(t, testSourceID, baseRecord(testSourceID), soul, nil)
 		pkg := exportOne(t, src, testSourceID)
 		dec := decodePackagePlain(t, pkg)
-		require.Len(t, dec.Payload[soulPath(testSourceID)], omnpkg.MaxAgentFileBytes)
+		require.Len(t, dec.Payload[soulPath(testSourceID)], specAgentFileBytes)
 	})
 
 	t.Run("D11-6 SOUL.md 1 MiB + 1 refused as too_large", func(t *testing.T) {
 		src := newFakeSource()
-		soul := bytes.Repeat([]byte("s"), omnpkg.MaxAgentFileBytes+1)
+		soul := bytes.Repeat([]byte("s"), specAgentFileBytes+1)
 		src.withAgent(t, testSourceID, baseRecord(testSourceID), soul, nil)
 		var out bytes.Buffer
 		err := omnpkg.Export(testCtx(t), src, omnpkg.Selection{AgentIDs: []string{testSourceID}}, &out)
