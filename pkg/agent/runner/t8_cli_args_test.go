@@ -3,6 +3,8 @@ package runner
 // Oracle: tool-parity r17 D-5 rows 1–4, 8–9. D-5 explicitly names the
 // existing runtime filter as its drop oracle. These isolate that boundary,
 // not the new update_agent result or Settings-preset integration.
+// 2026-11-18 amendment (#1880, ADR-032): D5.1/D5.4 now remove worker
+// model options as well as safety conflicts; literal parsing is unchanged.
 import (
 	"testing"
 
@@ -15,10 +17,10 @@ func TestCliArgs_D5_RuntimeFilterBoundaries(t *testing.T) {
 		name, cli, raw    string
 		argv, kept, flags []string
 	}{
-		{"D5.1 unsafe sandbox", "codex", "--sandbox danger-full-access --model gpt-5", []string{"--sandbox", "danger-full-access", "--model", "gpt-5"}, []string{"--model", "gpt-5"}, []string{"--sandbox danger-full-access"}},
+		{"D5.1 unsafe sandbox", "codex", "--sandbox danger-full-access --model gpt-5", []string{"--sandbox", "danger-full-access", "--model", "gpt-5"}, []string{}, []string{"--sandbox danger-full-access", "--model gpt-5"}},
 		{"D5.2 narrow sandbox", "codex", "--sandbox read-only", []string{"--sandbox", "read-only"}, []string{"--sandbox", "read-only"}, nil},
 		{"D5.3 wrong output format", "claude-code", "--output-format json", []string{"--output-format", "json"}, []string{}, []string{"--output-format json"}},
-		{"D5.4 quoted model", "claude-code", `--model "sonnet x"`, []string{"--model", "sonnet x"}, []string{"--model", "sonnet x"}, nil},
+		{"D5.4 quoted model", "claude-code", `--model "sonnet x"`, []string{"--model", "sonnet x"}, []string{}, []string{"--model sonnet x"}},
 		{"D5.8 shell text is literal", "codex", "a; rm -rf /", []string{"a;", "rm", "-rf", "/"}, []string{"a;", "rm", "-rf", "/"}, nil},
 		{"D5.9 result argv retains value", "codex", "--api-key sk-live-123456789", []string{"--api-key", "sk-live-123456789"}, []string{"--api-key", "sk-live-123456789"}, nil},
 	} {
