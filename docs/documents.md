@@ -58,7 +58,7 @@ Retry works for files in the workspace Library: it renders the file you could op
 
 ### Screen readers
 
-Page images are buttons named by their caption. When a new group arrives, a screen reader announces it once, for example "Preview of report.docx: 4 pages", or "Page previews unavailable". Groups that were already there when you opened the chat are not announced again. In the viewer, each page change is announced as "Page n of N".
+Page images are buttons named by their caption. When a new group arrives, a screen reader announces it once, for example "Preview of report.docx: 4 pages", "Page previews unavailable", or "Page previews could not be saved" when the page images could not be saved. Groups that were already there when you opened the chat are not announced again. In the viewer, each page change is announced as "Page n of N".
 
 ## How agents preview documents
 

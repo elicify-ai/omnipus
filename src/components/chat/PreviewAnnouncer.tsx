@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import type { ChatMessage } from '@/store/chat'
-import { partitionMedia } from './previewGroups'
+import { partitionMedia, unavailableHeadline } from './previewGroups'
 
 interface Announcement {
   key: string
@@ -30,7 +30,9 @@ function collectAnnouncements(messages: readonly ChatMessage[]): Announcement[] 
       // tool_call_id is unique per session; it survives a message id swap.
       const id = group.toolCallId ?? `${message.id}|${group.key}`
       if (group.unavailable) {
-        out.push({ key: `${id}|unavailable`, text: 'Page previews unavailable' })
+        // Matches the card: storage_failed is "could not be saved".
+        const text = group.unavailable.reason === 'storage_failed' ? unavailableHeadline('storage_failed') : 'Page previews unavailable'
+        out.push({ key: `${id}|unavailable`, text })
       } else if (group.pages.length > 0) {
         const name = group.preview?.source_name ?? group.pages[0]?.filename ?? 'document'
         const n = group.pages.length
