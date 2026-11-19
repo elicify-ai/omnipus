@@ -322,6 +322,14 @@ func (p *Provider) ChatStream(
 		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
+	// Issue #1901: a provider that ignores stream:true and answers with one
+	// JSON chat.completion (Content-Type application/json) is not an SSE
+	// stream. Reading it as "data: " lines yields an empty stream and a
+	// failed chat. Accept that body on the non-streamed parse path.
+	if contentTypeIsJSON(resp.Header.Get("Content-Type")) {
+		return acceptNonStreamedJSONReply(resp, onChunk, p.apiBase, p.providerID)
+	}
+
 	// Intentional concurrent close: net/http response bodies are safe to Close() concurrently with reads, unblocking any blocked scanner.Scan().
 	go func() {
 		<-ctx.Done()
@@ -339,6 +347,43 @@ func (p *Provider) ChatStream(
 	defer watch.Stop()
 
 	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch, p.providerID)
+}
+
+// contentTypeIsJSON reports whether Content-Type is a JSON body
+// (application/json, parameters such as charset allowed). The media type
+// is compared exactly so text/event-stream stays on the SSE parser.
+func contentTypeIsJSON(contentType string) bool {
+	media := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.IndexByte(media, ';'); i >= 0 {
+		media = strings.TrimSpace(media[:i])
+	}
+	return media == "application/json"
+}
+
+// acceptNonStreamedJSONReply parses a plain chat.completion body returned
+// for a streaming request (issue #1901). Non-empty content is handed to
+// onChunk once, as the accumulated text, before the parsed response is
+// returned. A body with no content and no tool calls is still a failed
+// attempt (issue #1664): the error matches common.ErrEmptyStream, and no
+// successful empty reply is synthesized.
+func acceptNonStreamedJSONReply(
+	resp *http.Response,
+	onChunk func(accumulated string),
+	apiBase, providerID string,
+) (*LLMResponse, error) {
+	parsed, err := common.ReadAndParseResponse(resp, apiBase, providerID)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Content == "" && len(parsed.ToolCalls) == 0 {
+		logger.WarnCF("openai_compat", "provider answered a streaming request with an empty JSON body; treated as a failed attempt",
+			map[string]any{"completion_tokens": completionTokens(parsed.Usage)})
+		return nil, common.NewEmptyStreamError(parsed.Usage)
+	}
+	if parsed.Content != "" && onChunk != nil {
+		onChunk(parsed.Content)
+	}
+	return parsed, nil
 }
 
 // ExplicitRequestTimeout implements providers.RequestTimeoutReporter: the
