@@ -583,7 +583,12 @@ function onCommandReceived(frame: Extract<ServerFrame, { type: 'command_received
   if (record?.kind === 'stop' || record?.kind === 'cancel') clearNotStopped(record.target)
 }
 
-/** F7: only the server's error{code: not_found} confirms a deleted chat. */
+/**
+ * BR-12 deleted-chat recovery is PARKED (#1904): the generated ErrorFrame has
+ * no `code`, so nothing on the wire sends this signal today. The read stays so
+ * the parked BR-12 tests keep exercising the reducer until #1904 decides the
+ * contract.
+ */
 function onConfirmedNotFound(sessionId: string): void {
   for (const [id, sent] of sentMessages) {
     if (sent.submission.target !== sessionId) continue
@@ -630,10 +635,21 @@ export function observeBoundSendFrame(frame: ServerFrame): void {
     case 'done':
       if (frame.session_id) clearNotStopped(frame.session_id)
       return
+    case 'message_status':
+      // 4.4.3 "accepted send -> submission dropped": the server took the
+      // message past its binding check, so no refusal can follow. A failed
+      // status keeps the submission: Retry still needs its stored identity.
+      if (frame.state !== 'failed') sentMessages.delete(frame.client_message_id)
+      return
+    case 'session_started':
+      if (frame.client_message_id) sentMessages.delete(frame.client_message_id)
+      return
     case 'error': {
       if (!frame.session_id) return
-      clearNotStopped(frame.session_id)
-      // The generated ErrorFrame has no `code` yet (contract gap, reported).
+      // 4.7 / B-24: a message-scoped refusal (client_message_id, no
+      // first_message_error) ends no turn, so it leaves the notice alone.
+      if (!(frame.client_message_id && !frame.first_message_error)) clearNotStopped(frame.session_id)
+      // Parked signal (#1904): the generated ErrorFrame has no `code`; nothing sends it today.
       if ((frame as { code?: unknown }).code === 'not_found') onConfirmedNotFound(frame.session_id)
       return
     }
