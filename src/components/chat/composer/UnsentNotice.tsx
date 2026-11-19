@@ -20,6 +20,7 @@ import { CopyButton } from '@/components/ui/copy-button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { fetchAgents, fetchSessions, fetchWorkspaces, type Session } from '@/lib/api'
+import { sessionDisplayTitle } from '@/lib/nav/sessionDisplayTitle'
 import { SEND_TEXT, currentSendCapability } from '@/lib/bound-send'
 import { subscribeConnectionEvents } from '@/lib/ws'
 import { useChatStore } from '@/store/chat'
@@ -92,7 +93,13 @@ function useNames() {
   return {
     agent: (id: string | null) => agents.find((a) => a.id === id)?.name ?? id ?? 'the agent',
     workspace: (id: string | null) => workspaces.find((w) => w.id === id)?.name ?? id ?? 'this workspace',
-    chat: (id: string) => sessions.find((s) => s.id === id)?.title || 'Chat',
+    // The sidebar's name for the chat: a main chat has no stored title of its own (Defect 3).
+    chat: (id: string) => {
+      const session = sessions.find((s) => s.id === id)
+      if (!session) return 'Chat'
+      const agentName = agents.find((a) => a.id === session.agent_id)?.name
+      return sessionDisplayTitle(session, agentName, 'Chat', session.agent_id) ?? 'Chat'
+    },
     sessionOf: (id: string) => sessions.find((s) => s.id === id),
   }
 }
