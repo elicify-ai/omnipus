@@ -25789,6 +25789,9 @@ type SessionCreateRequest struct {
 	// AgentId Agent ID that will own this session. Required and nonblank — there is no default agent (omnipus-system-agent FR-122, K16); a missing or blank value is refused with 400 "an agent must be named". Must reference an existing chat-target agent (400 if not found). Omnipus has exactly one conversation, so naming Omnipus is refused with 409 carrying its main session id (FR-005).
 	AgentId string `json:"agent_id"`
 
+	// NewChatKey #1428 step 2. The browser's new-chat key (SendOrigin.new_chat_key) of the "no chat yet" screen this creation belongs to. Optional. When present it is saved in the new session's metadata in the same creation write (a failed write returns the storage error, never 201), so later `message`/`redirect`/`cancel` frames with `origin {kind: new_chat}` and this key are accepted for this session. Never changed after creation and never returned: it is not part of Session or any other response.
+	NewChatKey *string `json:"new_chat_key,omitempty"`
+
 	// Type Session type. Defaults to "chat" when omitted. "main" is absent.
 	Type *SessionCreateRequestType `json:"type,omitempty"`
 
@@ -30380,19 +30383,19 @@ type UploadFilesMultipartBody struct {
 	// Files One or more files to upload.
 	Files *[]openapi_types.File `json:"files,omitempty"`
 
-	// SessionId Session ID (alternative to query parameter).
+	// SessionId Session ID (alternative to the query parameter); must precede the file parts (later is 400 upload_routing_field_late).
 	SessionId *string `json:"session_id,omitempty"`
 
-	// WorkspaceId Workspace ID (alternative to the query parameter); must precede the file parts.
+	// WorkspaceId Workspace ID (alternative to the query parameter); must precede the file parts (later is 400 upload_routing_field_late).
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // UploadFilesParams defines parameters for UploadFiles.
 type UploadFilesParams struct {
-	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
+	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field before the file parts. When workspace_id is also given, the session must belong to that workspace (404 unknown chat, 409 upload_workspace_mismatch, 500 read failure); the files still go to the workspace library.
 	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
 
-	// WorkspaceId Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id.
+	// WorkspaceId Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Routes the files; with session_id also given, the pair is checked (see the operation description).
 	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 

@@ -85,6 +85,7 @@ type u5IdentityFile struct {
 	Partitions            []string           `json:"partitions"`
 	LastCompactionSummary string             `json:"last_compaction_summary,omitempty"`
 	Owner                 string             `json:"owner,omitempty"`
+	NewChatKey            string             `json:"new_chat_key,omitempty"`
 	AgentIDs              []string           `json:"agent_ids,omitempty"`
 	CompactionSummaries   map[string]string  `json:"compaction_summaries,omitempty"`
 	Type                  UnifiedSessionType `json:"type"`
@@ -154,6 +155,7 @@ func u5IdentityFromMeta(meta *UnifiedMeta) u5IdentityFile {
 		Partitions:            meta.Partitions,
 		LastCompactionSummary: meta.LastCompactionSummary,
 		Owner:                 meta.Owner,
+		NewChatKey:            meta.NewChatKey,
 		AgentIDs:              meta.AgentIDs,
 		CompactionSummaries:   meta.CompactionSummaries,
 		Type:                  meta.Type,
@@ -217,6 +219,7 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5Loo
 			Partitions:            identity.Partitions,
 			LastCompactionSummary: identity.LastCompactionSummary,
 			Owner:                 identity.Owner,
+			NewChatKey:            identity.NewChatKey,
 			AgentIDs:              identity.AgentIDs,
 			CompactionSummaries:   identity.CompactionSummaries,
 			ParentSessionID:       identity.ParentSessionID,
@@ -379,6 +382,7 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 		cached.Partitions = slices.Clone(meta.Partitions)
 		cached.LastCompactionSummary = meta.LastCompactionSummary
 		cached.Owner = meta.Owner
+		cached.NewChatKey = meta.NewChatKey
 		cached.AgentIDs = slices.Clone(meta.AgentIDs)
 		cached.CompactionSummaries = maps.Clone(meta.CompactionSummaries)
 		cached.ParentSessionID = meta.ParentSessionID

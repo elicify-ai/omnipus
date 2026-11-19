@@ -24,6 +24,7 @@ func (wh *wsHandlerReadLoop) handleRedirectFrame(data []byte) wsHandlerReadLoopF
 	if err := json.Unmarshal(data, &frame); err != nil {
 		return wh.rejectRedirectFrame("malformed redirect frame", "")
 	}
+	sendCommandReceived(wh.wc, string(generated.WsFrameTypeRedirect), frame.ClientFrameId, frame.SessionId)
 	if err := validation.EntityID(frame.SessionId); err != nil {
 		return wh.rejectRedirectFrame("redirect requires a valid session_id", frame.SessionId)
 	}

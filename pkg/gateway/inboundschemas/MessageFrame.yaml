@@ -52,7 +52,23 @@ properties:
     maxLength: 255
     description: >
       If present, continue this existing session. If omitted, the server mints
-      a new session and responds with a session_started frame.
+      a new session and responds with a session_started frame. This is the
+      frame's target: the chat it acts on. Compare `origin`.
+  origin:
+    $ref: ./SendOrigin.yaml
+    description: >
+      #1428 step 2. The chat the message was written in (see SendOrigin).
+      The gateway checks it against the target before any side effect:
+      kind chat must name the target; kind new_chat is accepted with no
+      target (the created chat saves the key) or with a target whose saved
+      key equals it. A mismatch is refused with send_refused and nothing is
+      saved. This is a consistency control, not authorization. Optional on
+      the wire: on a browser connection (WebSocket upgrade with an Origin
+      header, not the CLI token) a message without the origin key is refused
+      with an out-of-date reply; on other connections it is accepted as
+      before. `origin: null` is malformed, not absent. The origin takes part
+      in the first-message retry identity: the same client_message_id with a
+      different origin is a conflict.
   agent_id:
     type: string
     minLength: 1

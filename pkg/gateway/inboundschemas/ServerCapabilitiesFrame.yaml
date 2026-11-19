@@ -1,0 +1,31 @@
+title: ServerCapabilitiesFrame
+description: >
+  Server → client. #1428 step 2 (option C). The first frame on every
+  WebSocket connection: enqueued right after authentication succeeds and
+  before the connection can receive any other frame (no session_state,
+  replay, broadcast or pong precedes it). Not sent when authentication
+  fails. A client that does not receive it as the first application frame
+  is talking to an older server and must not send `message`, `redirect` or
+  `cancel` frames on that connection.
+
+  Obligation: a server that sends `send_origin: true` MUST answer every
+  accepted `redirect` and `cancel` that carries a valid `client_frame_id`
+  with exactly one `command_received`, and every refused one with
+  `send_refused`. A missing receipt on an open connection is a contract
+  violation.
+type: object
+required:
+  - type
+  - send_origin
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: server_capabilities
+  send_origin:
+    type: boolean
+    const: true
+    description: >
+      The server checks `origin` against the target on `message`, `redirect`
+      and `cancel`, answers with `send_refused` / `command_received`, and
+      accepts `new_chat_key` on chat creation.
