@@ -2,9 +2,9 @@
 
 <!-- Draft sections: "Page previews in the chat" is drafted by the frontend
 lead; the remaining sections of this page are drafted by the backend lead
-("How agents preview documents" added with office-preview wave 2).
-Still to draft with packaging: the installer components. docs-verifier
-audits the page against the code before landing. -->
+("How agents preview documents" added with office-preview wave 2; "Getting
+the components" added with packaging). docs-verifier audits the page
+against the code before landing. -->
 
 ## Page previews in the chat
 
@@ -113,6 +113,22 @@ a PDF, or a PDF whose text cannot be extracted, is read the way `read_file`
 reads any other file.
 
 ### What previews need
+
+Most installs already have both components:
+
+| How you installed Omnipus | LibreOffice and PDF renderer |
+|---|---|
+| One-line installer (Linux, macOS) | Installed by default, next to the binary: on Linux in `<install dir>/../share/omnipus/office` and `…/pdfium` (with the default `/usr/local/bin` that is `/usr/local/share/omnipus/`), on macOS in `<install dir>/../office` and `…/pdfium`. Skip one with `--without-office` or `--without-pdf-renderer` (see [getting-started.md](getting-started.md)) |
+| `.deb` / `.rpm` package | Included, in `/usr/share/omnipus/office` and `/usr/share/omnipus/pdfium` |
+| Published Docker image | Included, in `/usr/local/share/omnipus/office` and `…/pdfium` |
+| A Windows binary you built or downloaded as a test candidate | Not installed (the release has no Windows installer; Windows users normally run the Docker image). Install LibreOffice 26.8 yourself and register it; download `pdfium_windows_amd64.zip` from the release, unpack it, and register its `pdfium` folder (commands below) |
+
+Components that came with the installer, a package or the image need no
+registration: Omnipus finds them next to its own program and checks their
+fingerprints before every use. Each one is a separate download in the
+release, listed in its `checksums.txt`; the installer refuses a download
+whose checksum does not match. The details below apply when you register
+a copy yourself.
 
 - **PDF files** need nothing extra to reach the model. Page images need the PDF
   renderer component. Without it the agent gets the PDF or its text, and the
