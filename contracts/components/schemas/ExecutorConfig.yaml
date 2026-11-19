@@ -78,7 +78,9 @@ properties:
     description: >
       Read-only. The standard parameters saved in Settings -> Third-party
       agents for this agent's CLI, exactly as typed. Absent when none are
-      saved. Appended after this agent's cli_args at spawn, unfiltered.
+      saved. Appended after this agent's cli_args at spawn. A model option
+      in them (--model, and -m for codex and opencode) is dropped when
+      Omnipus passes this agent's own model; nothing else is filtered.
     example: "--max-turns 40"
   program_warning:
     type: string

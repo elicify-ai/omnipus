@@ -9446,7 +9446,7 @@ export interface components {
              */
             readonly effective_cli_path?: string;
             /**
-             * @description Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+             * @description Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn. A model option in them (--model, and -m for codex and opencode) is dropped when Omnipus passes this agent's own model; nothing else is filtered.
              * @example --max-turns 40
              */
             readonly effective_preset_args?: string;
@@ -15494,7 +15494,7 @@ export interface components {
              */
             path: string;
             /**
-             * @description Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+             * @description Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token may be saved: no allow list. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name. One exception: a model option (--model, and -m for codex and opencode) is dropped at spawn when Omnipus passes the agent's own model, and the command preview and the run audit list it as dropped; when Omnipus passes no model it stays. Nothing else is filtered.
              * @example --max-turns 40
              */
             preset_args: string;
