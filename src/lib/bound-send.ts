@@ -547,7 +547,10 @@ function dropRecord(id: string): CommandRecord | undefined {
 
 // ── Frames (4.7, 4.8) ───────────────────────────────────────────────────────
 
-const REFUSAL_REASON: Record<string, string | null> = {
+type RefusalReason = Extract<ServerFrame, { type: 'send_refused' }>['reason']
+
+/** 4.8: only origin_malformed / frame_malformed add the page-error line; wrong_chat adds none. */
+const REFUSAL_REASON: Record<RefusalReason, string | null> = {
   wrong_chat: null,
   origin_malformed: SEND_TEXT.pageError,
   frame_malformed: SEND_TEXT.pageError,
@@ -555,7 +558,8 @@ const REFUSAL_REASON: Record<string, string | null> = {
 }
 
 function onSendRefused(frame: Extract<ServerFrame, { type: 'send_refused' }>): void {
-  const reason = REFUSAL_REASON[frame.reason] ?? SEND_TEXT.pageError
+  const known: string | null | undefined = REFUSAL_REASON[frame.reason]
+  const reason = known === undefined ? SEND_TEXT.pageError : known
   if (frame.client_frame_id) {
     const record = dropRecord(frame.client_frame_id)
     if (record) {
