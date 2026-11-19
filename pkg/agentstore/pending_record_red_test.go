@@ -102,11 +102,13 @@ func TestCreatePendingState_InvisibleToReaders(t *testing.T) {
 	require.ErrorIs(t, err, entity.ErrNotFound, "ReadState must not see a pending record")
 }
 
-// TestCreatePendingState_PartialWrites pins D7 rows 1/3 at the pending path:
-// a staging failure persists NOTHING (PersistenceNone); a mid-sequence
-// replace failure is reported as PersistencePartial with its error stage —
-// and no reader can see any of it, so import's failure path can discard
-// safely.
+// TestCreatePendingState_PartialWrites pins the pending path's staging
+// discipline (the same as CreateState; D7 rows 1 and 3). A stage failure and
+// the first replacement persist NOTHING (PersistenceNone, stage replace_entity
+// when the entity replace is the one that fails). D7 row 1's partial case is
+// the later SOUL replacement, after the pending entity has already landed
+// (PersistencePartial, stage replace_soul). No reader can see any of it, so
+// import's failure path can discard safely.
 func TestCreatePendingState_PartialWrites(t *testing.T) {
 	t.Run("a stage failure persists nothing", func(t *testing.T) {
 		home := t.TempDir()
@@ -124,23 +126,60 @@ func TestCreatePendingState_PartialWrites(t *testing.T) {
 		assert.True(t, pendingPathMissing(t, pendingAgentDir(home, "pendp1")), "no agent folder is left behind")
 	})
 
-	t.Run("a replace failure is PersistencePartial with its stage", func(t *testing.T) {
+	t.Run("a first replace failure is PersistenceNone with its stage", func(t *testing.T) {
+		home := t.TempDir()
+		s := New(home)
+		errReplace := errors.New("first replace failed: device busy")
+		calls := 0
+		s.replaceFile = func(src, dst string) error {
+			calls++
+			require.Equal(t, pendingRecordPath(home, "pendp0"), dst, "the first replacement targets the entity")
+			return errReplace
+		}
+
+		res, err := s.CreatePendingState("pendp0", pendingTestAgent("pendp0"), "soul", "")
+		require.ErrorIs(t, err, errReplace)
+		assert.Equal(t, 1, calls, "the first replacement failed before any other replacement")
+		assert.Equal(t, PersistenceNone, res.PersistenceStatus)
+		assert.Equal(t, "replace_entity", res.ErrorStage)
+		assert.Empty(t, res.ChangedFields, "no replacement succeeded")
+		assert.True(t, pendingPathMissing(t, pendingRecordPath(home, "pendp0")), "no pending entity was published")
+		assert.True(t, pendingPathMissing(t, filepath.Join(pendingAgentDir(home, "pendp0"), "SOUL.md")), "no SOUL was published")
+		assert.True(t, pendingPathMissing(t, filepath.Join(RecordsDir(home), "pendp0.json")), "no visible record was published")
+		_, err = s.Get("pendp0")
+		require.ErrorIs(t, err, entity.ErrNotFound)
+	})
+
+	t.Run("a later SOUL replace failure is PersistencePartial with its stage", func(t *testing.T) {
 		home := t.TempDir()
 		s := New(home)
 		calls := 0
+		errReplace := errors.New("replace failed: device busy")
 		realReplace := s.replaceFile
 		s.replaceFile = func(src, dst string) error {
 			calls++
-			if calls == 1 { // replace_entity: the first replace of the sequence
-				return errors.New("replace failed: device busy")
+			if calls == 2 { // D7 row 1: the entity landed; the later SOUL replacement fails
+				require.Equal(t, filepath.Join(pendingAgentDir(home, "pendp2"), "SOUL.md"), dst)
+				return errReplace
 			}
 			return realReplace(src, dst)
 		}
 
 		res, err := s.CreatePendingState("pendp2", pendingTestAgent("pendp2"), "soul", "")
 		require.Error(t, err)
+		require.ErrorIs(t, err, errReplace, "the injected later-replacement cause must reach the caller")
+		assert.Equal(t, 2, calls, "the first replacement succeeded and the second failed")
 		assert.Equal(t, PersistencePartial, res.PersistenceStatus)
-		assert.Equal(t, "replace_entity", res.ErrorStage)
+		assert.Equal(t, "replace_soul", res.ErrorStage)
+		assert.Equal(t, []string{"entity"}, res.ChangedFields)
+		assert.Equal(t, []string{"soul"}, res.NotSaved)
+		data, readErr := os.ReadFile(pendingRecordPath(home, "pendp2"))
+		require.NoError(t, readErr, "partial persistence requires a pending entity on disk")
+		var stored config.AgentConfig
+		require.NoError(t, json.Unmarshal(data, &stored))
+		assert.Equal(t, "pendp2", stored.ID)
+		assert.Equal(t, "Pending pendp2", stored.Name)
+		assert.True(t, pendingPathMissing(t, filepath.Join(pendingAgentDir(home, "pendp2"), "SOUL.md")), "the failed SOUL replacement published no SOUL")
 
 		// Whatever landed must be invisible and unpublished.
 		assert.True(t, pendingPathMissing(t, filepath.Join(RecordsDir(home), "pendp2.json")),

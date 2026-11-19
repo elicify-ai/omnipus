@@ -610,7 +610,7 @@ func TestRollbackOrder_C1ThenC2(t *testing.T) {
 	o := redMemberOptions(home)
 	o.SaveDelegation = func(homeDir, id string, edges []workspacepkg.DelegationEdge) error {
 		if saveCalls.Add(1) == 1 {
-			return nil // the join's self-row seed succeeds
+			return workspacepkg.SaveDelegation(homeDir, id, edges) // D7 row 14: actually persist the seed
 		}
 		return errSave // C1's rollback save fails: a partial C1
 	}
@@ -632,6 +632,8 @@ func TestRollbackOrder_C1ThenC2(t *testing.T) {
 	out := redWaitJoin(t, done)
 
 	require.ErrorIs(t, out.err, errCommit, "the commit failure is what the helper reports")
+	assert.Equal(t, int32(2), saveCalls.Load(), "D7 row 14: the seed succeeds, then C1's delegation save is reached and fails")
+	assert.True(t, redSelfRowPresent(t, home, wsID, agentID), "the failed C1 save must leave the real seeded self-row on disk")
 	assert.Equal(t, systools.LeaveResult{MembershipRemoved: true, FailedStage: systools.LeaveStageSaveDelegation},
 		out.res, "a partial C1 is reported (membership removed, delegation save failed) so the caller knows what C1 undid")
 	assert.False(t, redCoreTeamHas(redLoadWorkspace(t, home, wsID), agentID),

@@ -94,6 +94,7 @@ func requireSnapshotUnchanged(t *testing.T, before, after map[string]string) {
 // the value import must store too.
 func TestBuildAgentCreate_MapsSharedFieldsPerSpec(t *testing.T) {
 	api := buildExecutorTestAPI(t)
+	policies := fullBuiltinPolicyMap("deny") // tools_cfg submits a complete replacement map, not sparse changes
 
 	temp := 0.4
 	maxTok := 512
@@ -111,7 +112,7 @@ func TestBuildAgentCreate_MapsSharedFieldsPerSpec(t *testing.T) {
 		},
 		ReasoningEffort:   strPtr("low"),
 		ModelParams:       &agentModelParamsInput{Temperature: &temp, MaxTokens: &maxTok},
-		ToolsCfg:          &agentCreateToolsCfgInput{BuiltinPolicies: map[string]string{"bash": "deny"}},
+		ToolsCfg:          &agentCreateToolsCfgInput{BuiltinPolicies: policies},
 		MaxToolIterations: &maxIter,
 	}
 
@@ -160,14 +161,15 @@ func TestBuildAgentCreate_MapsSharedFieldsPerSpec(t *testing.T) {
 	assert.Equal(t, coreagent.DefaultFigure, plan.Agent.Figure)
 	assert.Equal(t, coreagent.DefaultRole, plan.Agent.Role)
 	assert.Equal(t, coreagent.DefaultColor, plan.Agent.Color)
-	// Tool seed: the caller's sparse map is merged over the complete deny-seeded
-	// baseline and every known static builtin keeps an explicit entry (sign-off
-	// step 5; CLAUDE.md hard constraint 6).
+	// The complete caller map passes the submitted-map check and overrides the
+	// type's seed. Sparse edits use tool_policy_changes instead (spec alias table;
+	// sign-off T-3 step 5). Every explicit deny must survive the build.
 	require.NotNil(t, plan.Agent.Tools)
 	assert.Equal(t, config.ToolPolicyDeny, plan.Agent.Tools.Builtin.Policies["bash"])
 	for name := range buildKnownBuiltinToolNames() {
 		_, covered := plan.Agent.Tools.Builtin.Policies[name]
 		assert.True(t, covered, "seeded plan must keep an explicit policy for %q", name)
+		assert.Equal(t, config.ToolPolicyDeny, plan.Agent.Tools.Builtin.Policies[name], "the caller's deny for %q must override the seed", name)
 	}
 	// The plan is not persisted by the build step (see
 	// TestBuildAgentCreate_HasNoSideEffects).
@@ -180,7 +182,21 @@ func TestBuildAgentCreate_MapsSharedFieldsPerSpec(t *testing.T) {
 // `element_not_creatable` with that same rule). Each case asserts the refusal
 // the REST handler writes today, so import refusals cannot drift from create.
 func TestBuildAgentCreate_RefusalsMatchREST(t *testing.T) {
+	// REST deliberately accepts arbitrary ids with an empty installed set.
+	// Install a real skill so the unknown-id case reaches referential validation.
+	skillsRoot := t.TempDir()
+	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
+	skillDir := filepath.Join(skillsRoot, "writing")
+	require.NoError(t, os.MkdirAll(skillDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: writing\ndescription: fixture for create-rule validation\n---\n# Writing\n"), 0o600))
 	api := buildExecutorTestAPI(t)
+	installed := api.installedSkillIDs()
+	require.Contains(t, installed, "writing", "setup: the real loader must discover the installed fixture")
+	require.NotContains(t, installed, "no-such-skill", "setup: the refusal target must not be installed")
+	known, knownRefusal := api.buildAgentCreate(agentCreateInput{WireType: "Main", Name: "Known skill", Soul: "s", Skills: &[]string{"writing"}})
+	require.Nil(t, knownRefusal, "instrument: an installed skill is accepted")
+	assert.Equal(t, []string{"writing"}, known.Agent.Skills)
 
 	longName := strings.Repeat("A", 101)
 	threeFallbacks := []gen.FallbackModel{
@@ -216,9 +232,10 @@ func TestBuildAgentCreate_RefusalsMatchREST(t *testing.T) {
 			code:   codeAgentNameTooLong,
 		},
 		{
-			name:   "unknown skill is refused 400 (validateSkillIDs before any build)",
-			in:     agentCreateInput{WireType: "Main", Name: "Skilled", Soul: "s", Skills: &[]string{"no-such-skill"}},
-			status: http.StatusBadRequest,
+			name:    "unknown skill is refused 400 (validateSkillIDs before any build)",
+			in:      agentCreateInput{WireType: "Main", Name: "Skilled", Soul: "s", Skills: &[]string{"no-such-skill"}},
+			status:  http.StatusBadRequest,
+			wantMsg: `unknown skill id: "no-such-skill"`,
 		},
 		{
 			name:    "worker without a description is refused 400 (Field mapping row description)",
