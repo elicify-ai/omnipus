@@ -30,6 +30,7 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import type { WsConnection } from '@/lib/ws'
 import { useSessionStore } from '@/store/session'
+import { setDraftText } from '@/store/chat/drafts'
 
 class ResizeObserverStub {
   observe() {}
@@ -167,6 +168,8 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
     vi.useFakeTimers()
     act(() => {
       useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting', reconnectAttempt: 1 })
+      // Spec 4.5 rule 4: Send is enabled only when the draft has text or files.
+      setDraftText('sess_outbound_queue_ui_test', 'queue me')
     })
     render(<OmnipusComposer />)
 
@@ -187,6 +190,8 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
     vi.useFakeTimers()
     act(() => {
       useConnectionStore.setState({ isConnected: false, reconnectPhase: 'slow', reconnectAttempt: 3 })
+      // Spec 4.5 rule 4: Send is enabled only when the draft has text or files.
+      setDraftText('sess_outbound_queue_ui_test', 'queue me')
     })
     render(<OmnipusComposer />)
 
@@ -225,6 +230,9 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
   })
 
   it('isConnected:true, reconnectPhase:null (the normal case): textarea and Send are ENABLED and no reconnect banner renders', () => {
+    // Spec 4.5 rule 4: an empty draft leaves Send disabled. Text makes the
+    // enabled button the proof that a normal connection does not block it.
+    act(() => { setDraftText('sess_outbound_queue_ui_test', 'queue me') })
     render(<OmnipusComposer />)
 
     expect(screen.getByTestId('composer-input')).not.toBeDisabled()
