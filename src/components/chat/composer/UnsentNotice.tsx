@@ -104,13 +104,15 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
   const names = useNames()
   const rows: Row[] = []
   for (const item of unsent) {
+    const key = canonical(item.key)
+    const chatName = isNewChatKey(key) ? `New chat with ${names.agent(item.agentId)} in ${names.workspace(item.workspaceId)}` : names.chat(key)
     if (item.kind === 'uncertain') {
-      rows.push({ id: item.id, title: 'May not have been delivered', text: item.text, lines: [SEND_TEXT.uncertainLine], actions: ['copy', 'discard'], item })
+      // Spec 4.7 close row / 4.9: the item names its origin chat; it is listed in every chat.
+      rows.push({ id: item.id, title: 'May not have been delivered', text: item.text, lines: [chatName, SEND_TEXT.uncertainLine], actions: ['copy', 'discard'], item })
     } else if (item.kind === 'deleted') {
       rows.push({ id: item.id, title: 'Deleted chat', text: item.text, lines: [SEND_TEXT.upload404], actions: ['copy', 'discard', 'move'], item })
-    } else if (canonical(item.key) !== openKey) {
-      const key = canonical(item.key)
-      const title = isNewChatKey(key) ? `New chat with ${names.agent(item.agentId)} in ${names.workspace(item.workspaceId)}` : names.chat(key)
+    } else if (key !== openKey) {
+      const title = chatName
       rows.push({ id: item.id, title, text: item.text, lines: item.reason ? [item.reason] : [], actions: ['open', 'copy', 'discard'], item })
     }
   }
