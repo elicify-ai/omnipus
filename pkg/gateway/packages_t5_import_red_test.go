@@ -11,10 +11,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
 	"github.com/stretchr/testify/require"
 )
@@ -361,4 +364,138 @@ func (c *countingBody) Read(p []byte) (int, error) {
 	n, err := c.ReadCloser.Read(p)
 	*c.n += int64(n)
 	return n, err
+}
+
+// zstdMagic is the zstd frame magic an export body must start with when the
+// handler returned package bytes rather than an error document.
+var zstdMagic = []byte{0x28, 0xB5, 0x2F, 0xFD}
+
+// TestPackagesAudit_OffIsHonoured is Decision D (ARCH-RULING-T5-A-D;
+// FR-016, FR-040, FR-062). With audit_log false, package operations succeed
+// and write no audit file. Current production falls back to audit.NewLogger.
+func TestPackagesAudit_OffIsHonoured(t *testing.T) {
+	t.Run("audit_log false writes nothing and refuses nothing", func(t *testing.T) {
+		api := packageAPI(t)
+		usePackageSeams(t)
+		packageT5.Reload = func() (bool, error) { return true, nil }
+		setPackageAuditLog(t, api, false)
+		require.Nil(t, api.auditor)
+		require.Nil(t, api.agentLoop.AuditLogger(), "the agent loop's logger is nil when audit was off at loop start")
+
+		id := createMainAgent(t, api, "Writer", "Answer in rhyme.")
+		exp := callPackageExport(t, api, `{"agent_ids":["`+id+`"]}`)
+		require.Equal(t, http.StatusOK, exp.Code, "export must not be 500 audit_failed when audit is off; body=%s", exp.Body)
+		require.True(t, bytes.HasPrefix(exp.Body, zstdMagic), "export returns the package bytes")
+
+		damaged := callPackageImport(t, api, []byte("this is not a package"))
+		requirePackageStatus(t, damaged, http.StatusUnprocessableEntity, omnpkg.CodeNotAPackage)
+
+		ws := createWorkspaceViaAPI(t, api, "Research", "notes")
+		prev := stageUpload(t, api, validMainPackage(t))
+		applied := callPackageApply(t, api, prev.StagingId, applyBody("new", ws))
+		// Spec route table: apply is 200. The ruling wrote 201 (the upload
+		// status). Asserting 201 would fail after the fallback is removed.
+		require.Equal(t, http.StatusOK, applied.Code, "apply succeeds when audit is off (spec status 200). body=%s", applied.Body)
+		require.NotContains(t, resultWarningCodes(decodeResult(t, applied.Body)), "audit_failed")
+
+		dir := filepath.Join(api.homePath, "backups", ".staging", "stg-audit-off")
+		writeStagingJournal(t, api.homePath, "stg-audit-off", recoveryAgentID, "ws-missing", omnpkg.JournalStarted)
+		bootRecoverImports(packageCtx(t), api.homePath, api.agentLoop.GetConfig(), nil)
+		journal, err := omnpkg.ReadJournal(dir)
+		require.NoError(t, err)
+		require.Equal(t, omnpkg.JournalRolledBack, journal.State, "bootRecoverImports rolls a started journal back")
+
+		matches, gerr := filepath.Glob(filepath.Join(api.homePath, "system", "audit*.jsonl"))
+		require.NoError(t, gerr)
+		require.Empty(t, matches, "audit_log false: packageAuditLogger and packageRecoveryOps.writeAudit must not fall back to audit.NewLogger; found %v", matches)
+	})
+
+	t.Run("audit_log true writes exactly one entry per step", func(t *testing.T) {
+		api := packageAPI(t)
+		usePackageSeams(t)
+		packageT5.Reload = func() (bool, error) { return true, nil }
+		setPackageAuditLog(t, api, true)
+		lg, err := audit.NewLogger(audit.LoggerConfig{
+			Dir:               filepath.Join(api.homePath, "system"),
+			RedactEnabled:     true,
+			AuditLogRequested: true,
+			RetentionDays:     90,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = lg.Close() })
+		// The agent and workspace are fixture, not one of the four audited steps.
+		// Wire the logger after they exist so a workspace-create entry is not counted.
+		id := createMainAgent(t, api, "Writer", "Answer in rhyme.")
+		ws := createWorkspaceViaAPI(t, api, "Research", "notes")
+		api.auditor = lg
+
+		n := 0
+		exp := callPackageExport(t, api, `{"agent_ids":["`+id+`"]}`)
+		require.Equal(t, http.StatusOK, exp.Code, "body=%s", exp.Body)
+		require.True(t, bytes.HasPrefix(exp.Body, zstdMagic))
+		n = requireOneNewAudit(t, api.homePath, n, "export")
+
+		damaged := callPackageImport(t, api, []byte("this is not a package"))
+		requirePackageStatus(t, damaged, http.StatusUnprocessableEntity, omnpkg.CodeNotAPackage)
+		n = requireOneNewAudit(t, api.homePath, n, "upload")
+
+		prev := stageUpload(t, api, validMainPackage(t))
+		applied := callPackageApply(t, api, prev.StagingId, applyBody("new", ws))
+		require.Equal(t, http.StatusOK, applied.Code, "body=%s", applied.Body)
+		require.NotContains(t, resultWarningCodes(decodeResult(t, applied.Body)), "audit_failed")
+		n = requireOneNewAudit(t, api.homePath, n, "apply")
+
+		dir := filepath.Join(api.homePath, "backups", ".staging", "stg-audit-on")
+		writeStagingJournal(t, api.homePath, "stg-audit-on", recoveryAgentID, "ws-missing", omnpkg.JournalStarted)
+		bootRecoverImports(packageCtx(t), api.homePath, api.agentLoop.GetConfig(), nil)
+		journal, rerr := omnpkg.ReadJournal(dir)
+		require.NoError(t, rerr)
+		require.Equal(t, omnpkg.JournalRolledBack, journal.State)
+		requireOneNewAudit(t, api.homePath, n, "recovery")
+	})
+}
+
+func setPackageAuditLog(t *testing.T, api *restAPI, on bool) {
+	t.Helper()
+	api.agentLoop.GetConfig().Sandbox.AuditLog = on
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(configBytes(t, api.homePath), &doc))
+	sandbox, _ := doc["sandbox"].(map[string]any)
+	if sandbox == nil {
+		sandbox = map[string]any{}
+	}
+	sandbox["audit_log"] = on
+	doc["sandbox"] = sandbox
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "config.json"), append(raw, '\n'), 0o600))
+}
+
+func requireOneNewAudit(t *testing.T, home string, before int, operation string) int {
+	t.Helper()
+	lines := auditJSONLLines(t, home)
+	require.Equal(t, before+1, len(lines), "exactly one new audit entry for %s", operation)
+	var row struct {
+		Details map[string]any `json:"details"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(lines[len(lines)-1]), &row), "line=%s", lines[len(lines)-1])
+	require.Equal(t, operation, row.Details["operation"], "line=%s", lines[len(lines)-1])
+	return len(lines)
+}
+
+func auditJSONLLines(t *testing.T, home string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(home, "system", "audit*.jsonl"))
+	require.NoError(t, err)
+	var lines []string
+	for _, path := range matches {
+		raw, rerr := os.ReadFile(path)
+		require.NoError(t, rerr)
+		for _, line := range bytes.Split(raw, []byte("\n")) {
+			if len(bytes.TrimSpace(line)) > 0 {
+				lines = append(lines, string(line))
+			}
+		}
+	}
+	return lines
 }

@@ -646,6 +646,10 @@ func TestImportCreateParity(t *testing.T) {
 	require.Equal(t, false, toolRec["memory_enabled"])
 	require.EqualValues(t, 64000, toolRec["context_window_override"])
 	require.Equal(t, soul, string(fileBytes(t, filepath.Join(api.homePath, "agents", toolID, "SOUL.md"))), "create_agent stores the trimmed prompt")
+	// ARCH-RULING-T5-A-D Decision A. Expected red on current production:
+	// withToolPolicyCoverageCheck subtracts baseline gaps, so import accepts
+	// a gap REST create refuses.
+	t.Run("FR-034_coverage_gap_refused_like_REST_create", testImportCoverageGapRefusedLikeRESTCreate)
 }
 
 // TestPackages_ConfigUntouched is TDD row 30 (SC-008, FR-034).
@@ -1024,4 +1028,105 @@ func createParityAgentByTool(t *testing.T, api *restAPI, soul, desc string) stri
 	id, _ := payload["id"].(string)
 	require.NotEmpty(t, id, "create_agent result has no id: %s", res.ForLLM)
 	return id
+}
+
+// coverageGapAgentA is the existing agent with no per-agent entry for the
+// ceiling tool that this test removes. coverageToolT is a shipped built-in
+// (pkg/config/defaults.go::defaultToolPoliciesGeneral).
+const (
+	coverageGapAgentA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	coverageToolT     = "bash"
+)
+
+// testImportCoverageGapRefusedLikeRESTCreate is Decision A
+// (ARCH-RULING-T5-A-D). The ceiling is the reconciled production ceiling.
+// Agent A has no per-agent entry for T. The package agent carries an entry
+// for T, so the new agent itself is covered and the only gap is A's.
+func testImportCoverageGapRefusedLikeRESTCreate(t *testing.T) {
+	t.Helper()
+	api := packageAPI(t)
+	usePackageSeams(t)
+	packageT5.Reload = func() (bool, error) { return true, nil }
+	cfg := api.agentLoop.GetConfig()
+	gaps := repairAndValidateToolPolicyCoverage(cfg)
+	require.Empty(t, gaps, "repairAndValidateToolPolicyCoverage must leave a reconciled ceiling with no gaps before T is removed")
+	shipped, ok := cfg.Sandbox.ToolPolicies[coverageToolT]
+	require.True(t, ok, "bash must be on the reconciled ceiling (defaultToolPoliciesGeneral)")
+	delete(cfg.Sandbox.ToolPolicies, coverageToolT)
+	seedListedAgent(t, api, config.AgentConfig{ID: coverageGapAgentA, Name: "CeilingA", Type: "custom"})
+	require.Nil(t, agentTools(t, api, coverageGapAgentA), "A must have no per-agent tool entry")
+
+	rest := postRESTCreate(t, api, `{"name":"CoverageWriter","type":"Main","soul":"Answer in rhyme."}`)
+	require.Equal(t, http.StatusBadRequest, rest.Code, "REST create must refuse A's gap for %s; body=%s", coverageToolT, rest.Body)
+	require.Contains(t, string(rest.Body), coverageGapAgentA, "REST create body must name A")
+	require.Contains(t, string(rest.Body), coverageToolT, "REST create body must name T")
+
+	ws := createWorkspaceViaAPI(t, api, "Research", "notes")
+	rec := mainRecord(specSourceID, "CoverageWriter", "Drafts")
+	rec["tools"] = map[string]any{
+		"builtin": map[string]any{
+			"policies": map[string]any{coverageToolT: "ask"},
+		},
+	}
+	pkg := buildAgentPackage(t, specSourceID, "CoverageWriter", rec, []byte("Answer in rhyme.\n"), nil, 0)
+	before := agentEntityNames(t, api.homePath)
+	prev := stageUpload(t, api, pkg)
+	got := callPackageApply(t, api, prev.StagingId, applyBody("new", ws))
+	if got.Code == http.StatusOK || got.Code == http.StatusCreated {
+		t.Fatalf("FR-034: apply succeeded (HTTP %d) while REST create refused agent %s missing tool %s. "+
+			"withToolPolicyCoverageCheck subtracts baseline gaps, so A's pre-existing gap is dropped and import succeeds. body=%s",
+			got.Code, coverageGapAgentA, coverageToolT, got.Body)
+	}
+	er := requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeElementNotCreatable)
+	require.Contains(t, er.Error, coverageGapAgentA, "the refusal must list the same gap REST create named (agent A)")
+	require.Contains(t, er.Error, coverageToolT, "the refusal must list the same gap REST create named (tool T)")
+	require.Equal(t, before, agentEntityNames(t, api.homePath), "no pending or final agent file for the new id")
+	_, err := os.Stat(filepath.Join(api.packageStagingBase(), prev.StagingId, omnpkg.JournalName))
+	require.ErrorIs(t, err, os.ErrNotExist, "a refusal before any write removes the journal")
+	state, err := api.packageRegistry().State(prev.StagingId)
+	require.NoError(t, err)
+	require.Equal(t, omnpkg.StagingReady, state, "staging stays ready after a create-rule refusal")
+
+	// Positive control. The spec route table says apply is 200
+	// (export-import-s1-spec.md). The ruling wrote 201, which is the upload
+	// status; asserting 201 would stay red after the subtraction is removed.
+	cfg.Sandbox.ToolPolicies[coverageToolT] = shipped
+	again := callPackageApply(t, api, prev.StagingId, applyBody("new", ws))
+	require.Equal(t, http.StatusOK, again.Code, "T restored to the global ceiling: the same apply succeeds (spec status 200). body=%s", again.Body)
+}
+
+func agentTools(t *testing.T, api *restAPI, id string) *config.AgentToolsCfg {
+	t.Helper()
+	for _, agent := range api.agentLoop.GetConfig().Agents.List {
+		if agent.ID == id {
+			return agent.Tools
+		}
+	}
+	t.Fatalf("agent %s is not on the live roster", id)
+	return nil
+}
+
+func postRESTCreate(t *testing.T, api *restAPI, body string) packageHTTP {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	return packageHTTP{Code: w.Code, Body: w.Body.Bytes(), Hdr: w.Header()}
+}
+
+func agentEntityNames(t *testing.T, home string) []string {
+	t.Helper()
+	dir := filepath.Join(home, "entities", "agents")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	return names
 }
