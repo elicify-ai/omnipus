@@ -149,8 +149,10 @@ archives:
     # silently match nothing, which is how chromium/ went missing from
     # every archive before; with src/dst, GoReleaser also strips the
     # matched files' common parent folder, which would flatten the layout.
+    # The binary itself is always added by GoReleaser; it is not listed here.
+    # A `- omnipus` entry named a file that never exists at the repository
+    # root, and GoReleaser 2.20 fails the release on such a literal name.
     files:
-      - omnipus
       - src: build/chromium/{{ .Os }}_{{ .Arch }}/chromium
         dst: chromium
 
@@ -177,9 +179,10 @@ nfpms:
     # package so .deb / .rpm installs land chrome at /usr/share/omnipus/chromium
     # (GoReleaser v2 / nfpm v2 uses `contents:` instead of the v1 `files:` key
     # — each entry is an explicit {src, dst} mapping).
+    # The binary goes to bindir (/usr/bin/omnipus) without a contents entry;
+    # the former `src: ./omnipus` named a file that does not exist at the
+    # repository root and makes nfpm fail.
     contents:
-      - src: ./omnipus
-        dst: /usr/bin/omnipus
       # #1913: the per-platform staged folder, copied as a tree (an empty
       # folder on arm64, see the before-hooks note).
       - src: build/chromium/linux_{{ .Arch }}/chromium/
