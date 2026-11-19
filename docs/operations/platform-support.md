@@ -24,7 +24,7 @@ Each release publishes:
 
 | Download | Platforms |
 |---|---|
-| `omnipus_<Os>_<arch>.tar.gz` — the binary, plus the bundled Chrome-for-Testing in `chromium/` | `Linux_x86_64`, `Linux_arm64` (no bundled Chrome: Chrome-for-Testing on Linux ARM64 is not used, the browser tools download Chrome when first needed), `Darwin_arm64`, `Darwin_x86_64` |
+| `omnipus_<Os>_<arch>.tar.gz` — the binary, plus the bundled Chrome-for-Testing in `chromium/` | `Linux_x86_64`, `Linux_arm64` (no bundled Chrome; the browser tools fall back to their managed Chrome download), `Darwin_arm64`, `Darwin_x86_64` |
 | `omnipus_x86_64.deb` / `.rpm`, `omnipus_aarch64.deb` / `.rpm` — binary, bundled Chrome (x86_64 only) and both document-preview components | Linux x86_64 and ARM64 |
 | `office_<os>_<arch>.tar.gz` — official LibreOffice 26.8 build with its packaged manifest | `linux_amd64`, `linux_arm64`, `darwin_arm64`, `darwin_amd64` |
 | `pdfium_<os>_<arch>.tar.gz` — the PDF page renderer | the same four |

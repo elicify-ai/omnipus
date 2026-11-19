@@ -2,9 +2,9 @@
 
 <!-- Draft sections: "Page previews in the chat" is drafted by the frontend
 lead; the remaining sections of this page are drafted by the backend lead
-("How agents preview documents" added with office-preview wave 2; "Getting
-the components" added with packaging). docs-verifier audits the page
-against the code before landing. -->
+("How agents preview documents" added with office-preview wave 2; the
+component table under "What previews need" added with packaging).
+docs-verifier audits the page against the code before landing. -->
 
 ## Page previews in the chat
 
