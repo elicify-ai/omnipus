@@ -933,12 +933,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// Chain: withAuth (verifies token) → handler.
 	rae.cm.RegisterHTTPHandler("/api/v1/credentials", rae.a.withAuth(rae.a.HandleCredentials))
 	rae.cm.RegisterHTTPHandler("/api/v1/credentials/", rae.a.withAuth(rae.a.HandleCredentials))
-	// WP4: local backup — off in platform mode
-	if config.EditionAuthMode() == config.AuthModeLocal {
-		rae.cm.RegisterHTTPHandler("/api/v1/backup", rae.a.withAuth(rae.a.HandleCreateBackup))
-		rae.cm.RegisterHTTPHandler("/api/v1/backups", rae.a.withAuth(rae.a.HandleListBackups))
-		rae.cm.RegisterHTTPHandler("/api/v1/restore", rae.a.withAuth(rae.a.HandleRestore))
-	}
 	// Option A keeps workspace and media IDs as separately validated path segments;
 	// the legacy global media route remains below for backward compatibility.
 	// Issue #716 (founder ruling 2026-09-15): the workspace-media route requires

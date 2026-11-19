@@ -146,7 +146,6 @@ import type {
   DevicePending,
   DevicePaired,
   DevicesResponse,
-  BackupEntry,
   StorageStats,
   // Newly promoted from inline openapi.yaml schemas:
   SkillTrustUpdateRequest,
@@ -156,7 +155,6 @@ import type {
   ChannelEnabledResponse,
   AgentToolsResponse,
   UploadFilesResponse,
-  BackupCreateResponse,
   OperationResult,
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse,
@@ -339,7 +337,6 @@ export type {
   DevicePending,
   DevicePaired,
   DevicesResponse,
-  BackupEntry,
   StorageStats,
   // Promoted from inline openapi.yaml schemas:
   SkillTrustUpdateRequest,
@@ -349,7 +346,6 @@ export type {
   ChannelEnabledResponse,
   AgentToolsResponse,
   UploadFilesResponse,
-  BackupCreateResponse,
   OperationResult,
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse,
