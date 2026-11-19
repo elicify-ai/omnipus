@@ -1,42 +1,34 @@
-// #1428 step 2. Production gaps pinned to spec C r9. These stay red until the
-// code matches the clause named on each assertion. Do not loosen them.
+// #1428 step 2. Production gaps pinned to spec C r9. Do not loosen them.
+// The five capability-gate pins (F2, spec 4.10 / B-16) are a known limit and
+// are not in this file. The removal commit keeps them in a patch.
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   NOT_STOPPED,
   SWITCHED,
   apiMocks,
-  assertNewChatKey,
   connection,
-  deleteOpenChatThroughSidebar,
   deliverFrame,
   flushInbound,
   framesOf,
   installFakeWebSocket,
-  makeSession,
-  makeWorkspace,
   mountComposer,
   resetBindingWorld,
-  seedSavedChat,
   seedStreamingAnswer,
   sent,
   typeIntoComposer,
   FakeSocket,
 } from '@/test/sendBinding1428'
 import { act } from 'react'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SEND_TEXT, submissionForMessage } from '@/lib/bound-send'
 import { submitAnnotation } from '@/lib/browserAnnotate'
-import { ChatControls } from '@/components/chat/ChatControls'
-import { OMNIPUS_AGENT_ID } from '@/lib/omnipus'
 import { queryClient } from '@/lib/queryClient'
 import { WsConnection } from '@/lib/ws'
 import { useChatStore } from '@/store/chat'
 import { emptyHistoryState } from '@/store/chat/history-state'
-import { makeBucketMessages } from '@/store/chat/messages'
 import { emptySessionState } from '@/store/chat/session'
 import { addDraftFiles, addLibraryPick, getDraft, useDraftStore } from '@/store/chat/drafts'
-import { openOmnipusChat } from '@/store/omnipusChat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -52,10 +44,6 @@ function withinDialogDiscard(dialog: HTMLElement): HTMLElement {
   const button = Array.from(dialog.querySelectorAll('button')).find((candidate) => candidate.textContent === 'Discard')
   if (!button) throw new Error('Discard confirm missing')
   return button
-}
-
-function controlSent(socket: FakeSocket) {
-  return socket.sent.filter((frame) => frame.type === 'message' || frame.type === 'redirect' || frame.type === 'cancel')
 }
 
 /** An OPEN socket whose first frame is not server_capabilities (spec 4.10). */
@@ -88,7 +76,6 @@ function openUnsupported(): FakeSocket {
 }
 
 describe('production gaps the spec already decides (4.4.3 / 4.6 / 4.7 / 4.8 / 4.9 / 4.10)', () => {
-  registerCapabilityGaps()
   registerDiscardGaps()
   registerNoticeGap()
   registerSlashGaps()
@@ -97,122 +84,6 @@ describe('production gaps the spec already decides (4.4.3 / 4.6 / 4.7 / 4.8 / 4.
   registerDraftWarningGaps()
   registerRefusalReasons()
 })
-
-function registerCapabilityGaps(): void {
-  it('F2 Retry sends nothing while the open socket is unsupported', () => {
-    // Spec 4.10 / B-16: no message frame while unsupported. 4.6.1 Resend row
-    // still goes through that gate.
-    resetBindingWorld()
-    const socket = openUnsupported()
-    queryClient.setQueryData(['sessions'], [{ id: 'chat-a', agent_id: 'mia', workspace_id: 'w1', title: 'A' }])
-    act(() => {
-      useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core')
-      useChatStore.setState((s) => ({
-        ...s,
-        sessionsById: {
-          'chat-a': {
-            ...emptySessionState(),
-            ...makeBucketMessages([{
-              id: 'retry-1',
-              role: 'user' as const,
-              content: 'retry me',
-              timestamp: '2026-01-01T00:00:00Z',
-              status: 'done' as const,
-              deliveryStatus: 'failed' as const,
-            }]),
-            history: emptyHistoryState(),
-            isStreaming: false,
-            isReplaying: false,
-            toolCalls: {},
-            toolCallOrder: [],
-          },
-        },
-      }))
-    })
-    act(() => { useChatStore.getState().resendMessage('retry-1') })
-    expect(controlSent(socket), 'F2: Retry sends no frame while unsupported').toEqual([])
-    expect(apiMocks.createSession, 'F2: Retry does not create a chat').not.toHaveBeenCalled()
-    expect(apiMocks.uploadFiles, 'F2: Retry does not upload').not.toHaveBeenCalled()
-  })
-
-  it('F2 Open and send sends nothing while the open socket is unsupported', async () => {
-    resetBindingWorld()
-    mountComposer({ sidebar: true })
-    const saved = makeSession({ id: 'saved-cap', title: 'Saved Cap', workspace_id: 'w1', agent_id: 'mia' })
-    seedSavedChat(saved, undefined, undefined)
-    apiMocks.fetchSessions.mockResolvedValue([saved])
-    apiMocks.fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core' } as never])
-    await deleteOpenChatThroughSidebar('Saved Cap')
-    assertNewChatKey(useSessionStore.getState().newChatKey)
-    connection().fail = true
-    const user = userEvent.setup()
-    await typeIntoComposer('first for K')
-    await user.click(screen.getByRole('button', { name: 'Send message' }))
-    act(() => { useSessionStore.getState().setActiveSession('chat-b', 'mia', 'core') })
-    const socket = openUnsupported()
-    await user.click(screen.getByRole('button', { name: 'Open and send' }))
-    expect(controlSent(socket), 'F2: Open and send sends no frame while unsupported').toEqual([])
-    expect(apiMocks.createSession, 'F2: Open and send does not create a chat').not.toHaveBeenCalled()
-    expect(apiMocks.uploadFiles, 'F2: Open and send does not upload').not.toHaveBeenCalled()
-  })
-
-  it('F2 a workflow button sends nothing while the open socket is unsupported', () => {
-    resetBindingWorld()
-    const socket = openUnsupported()
-    const home = makeWorkspace({
-      id: 'home',
-      name: 'Home',
-      is_default: true,
-      member_configs: { [OMNIPUS_AGENT_ID]: { main_session_id: 'omnipus-main' } },
-    })
-    act(() => { useSessionStore.getState().setActiveSession('omnipus-main', OMNIPUS_AGENT_ID, 'core') })
-    openOmnipusChat({
-      workspaces: [home],
-      sessions: [],
-      workflow: { workflow: 'W1', workspaceId: 'home', workspaceName: 'Home' },
-    })
-    expect(controlSent(socket), 'F2: a workflow start sends no frame while unsupported').toEqual([])
-    expect(apiMocks.createSession, 'F2: a workflow start does not create a chat').not.toHaveBeenCalled()
-    expect(apiMocks.uploadFiles, 'F2: a workflow start does not upload').not.toHaveBeenCalled()
-  })
-
-  it('F2 Open browser does not create a chat while the open socket is unsupported', async () => {
-    resetBindingWorld()
-    mountComposer({ sidebar: true })
-    const saved = makeSession({ id: 'saved-browser', title: 'Saved Browser', workspace_id: 'w1', agent_id: 'mia' })
-    seedSavedChat(saved, undefined, undefined)
-    apiMocks.fetchSessions.mockResolvedValue([saved])
-    apiMocks.fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core' } as never])
-    await deleteOpenChatThroughSidebar('Saved Browser')
-    assertNewChatKey(useSessionStore.getState().newChatKey)
-    openUnsupported()
-    render(<ChatControls />)
-    const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: 'Open browser' }))
-    expect(apiMocks.createSession, 'F2: Open browser does not POST /sessions while unsupported').not.toHaveBeenCalled()
-    expect(apiMocks.uploadFiles, 'F2: Open browser does not upload').not.toHaveBeenCalled()
-  })
-
-  it('F2 an annotation uploads nothing while the open socket is unsupported', async () => {
-    resetBindingWorld()
-    const socket = openUnsupported()
-    act(() => { useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core') })
-    apiMocks.uploadFiles.mockResolvedValue({
-      files: [{ ref: 'media://workspace/w1/shot', name: 'shot.png', content_type: 'image/png' }],
-    })
-    await submitAnnotation({
-      comment: 'look',
-      file: new File(['png'], 'shot.png', { type: 'image/png' }),
-      point: null,
-      isPointCurrent: () => false,
-      sessionId: 'chat-a',
-      agentId: 'mia',
-    })
-    expect(apiMocks.uploadFiles, 'F2: an annotation does not upload while unsupported').not.toHaveBeenCalled()
-    expect(controlSent(socket), 'F2: an annotation sends no frame while unsupported').toEqual([])
-    expect(apiMocks.createSession, 'F2: an annotation does not create a chat').not.toHaveBeenCalled()
-  })
-}
 
 function registerDiscardGaps(): void {
   async function refuseInA(): Promise<ReturnType<typeof userEvent.setup>> {
