@@ -23,7 +23,7 @@ import {
   FakeSocket,
 } from '@/test/sendBinding1428'
 import { act } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SEND_TEXT, submissionForMessage } from '@/lib/bound-send'
 import { submitAnnotation } from '@/lib/browserAnnotate'
@@ -486,16 +486,21 @@ function registerDraftWarningGaps(): void {
     expect(leaving.defaultPrevented, 'F14: a library-only draft warns').toBe(true)
   })
 
-  it('F14 a native-file-only draft is listed while the connection is unsupported', () => {
+  it('F14 a native-file-only draft is listed while the connection is unsupported', async () => {
     // Spec 4.9 / 4.10: unsupported mode lists every non-empty draft. A native
-    // file with no text is non-empty.
+    // file with no text is non-empty. The list row is the Copy action inside
+    // the notice (and the "1 not sent" count). The composer file chip also
+    // shows the filename, so the filename is not the list.
     resetBindingWorld()
     openUnsupported()
     mountComposer()
-    addDraftFiles('chat-a', [new File(['x'], 'notes.txt', { type: 'text/plain' })])
+    act(() => {
+      addDraftFiles('chat-a', [new File(['x'], 'notes.txt', { type: 'text/plain' })])
+    })
     expect(getDraft('chat-a').text, 'F14: the draft has no text').toBe('')
-    expect(screen.getByText('notes.txt'), 'F14: the file-only draft is in the unsupported list').toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Copy' }), 'F14: the listed draft can be copied').toBeTruthy()
+    const notice = await screen.findByTestId('unsent-notice')
+    expect(within(notice).getByRole('button', { name: 'Copy' }), 'F14: the unsupported list row can be copied').toHaveAccessibleName('Copy')
+    expect(within(notice).getByText('1 not sent'), 'F14: the file-only draft is one list row').toHaveTextContent('1 not sent')
   })
 }
 
