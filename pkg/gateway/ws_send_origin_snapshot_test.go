@@ -155,7 +155,7 @@ func (r *soSnapshotRig) requireCompletedWithoutStop(t *testing.T) {
 func soSV19A(t *testing.T) {
 	r := soPausedSnapshotRig(t, true)
 	soSend(t, r.conn, generated.CancelFrame{Type: "cancel", SessionId: r.sid})
-	frames := soWindow(t, r.conn, soRequesterWindow)
+	frames := soSettle(t, r.conn)
 	require.Equal(t, []string{"error", "session_state"}, soTypes(frames), "SV-19a: exact refusal then snapshot order")
 	errs := soErrors(t, frames)
 	require.Len(t, errs, 1)
@@ -173,7 +173,7 @@ func soSV19A(t *testing.T) {
 func soSV19B(t *testing.T) {
 	r := soPausedSnapshotRig(t, true)
 	soSend(t, r.conn, generated.RedirectFrame{Type: "redirect", SessionId: r.sid, Instruction: "old tab redirect"})
-	frames := soWindow(t, r.conn, soRequesterWindow)
+	frames := soSettle(t, r.conn)
 	require.Equal(t, []string{"error", "session_state"}, soTypes(frames), "SV-19b: exact refusal then snapshot order")
 	errs := soErrors(t, frames)
 	require.Len(t, errs, 1)
@@ -190,7 +190,7 @@ func soSV19C(t *testing.T) {
 	require.NoError(t, err)
 	soRequireBound(t, r.s, r.conn, r.sid)
 	soSend(t, r.conn, generated.CancelFrame{Type: "cancel", SessionId: r.sid, Origin: soChatOrigin(a.ID), ClientFrameId: strPtr("so-19c1")})
-	frames := soWindow(t, r.conn, soRequesterWindow)
+	frames := soSettle(t, r.conn)
 	require.Equal(t, []string{"send_refused", "session_state"}, soTypes(frames), "SV-19c: refusal, never command receipt, then snapshot")
 	refused := soRefusedFrame(t, frames, "SV-19c")
 	require.Equal(t, "wrong_chat", refused.Reason)
@@ -209,7 +209,7 @@ func soSV19D(t *testing.T) {
 	b := s.mintChat(t, conn, soKeyB, "SV-19d finished turn") // B is last; its own done is drained
 	soRequireBound(t, s, conn, b)
 	soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b, Origin: soChatOrigin(a), ClientFrameId: strPtr("so-19d1")})
-	frames := soWindow(t, conn, soRequesterWindow)
+	frames := soSettle(t, conn)
 	require.Equal(t, []string{"send_refused", "session_state"}, soTypes(frames))
 	soRefusedFrame(t, frames, "SV-19d")
 	st := soLastSessionState(t, frames)
@@ -229,7 +229,7 @@ func soSV19G(t *testing.T) {
 	require.Nil(t, initialBinding, "SETUP: the requester must really be unbound")
 	// §4.3.1: B/B is accepted; SV-19g must send a VALID mismatching origin.
 	soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: r.sid, Origin: soChatOrigin("SV19-other-chat"), ClientFrameId: strPtr("so-19g1")})
-	frames := soWindow(t, conn, soRequesterWindow)
+	frames := soSettle(t, conn)
 	require.Equal(t, []string{"send_refused"}, soTypes(frames), "SV-19g: refusal only, zero session_state on the unbound requester")
 	refused := soRefusedFrame(t, frames, "SV-19g")
 	require.Equal(t, "wrong_chat", refused.Reason)
@@ -257,12 +257,12 @@ func soSV19H(t *testing.T) {
 		// Both malformed classes run on the SAME still-live connection. No
 		// timeout may silently disable the second half of the negative check.
 		soSend(t, r.conn, soRawCommandForSnapshot(frameType, r.sid, `"so-19h1"`, `null`))
-		frames = soWindow(t, r.conn, soRequesterWindow)
+		frames = soSettle(t, r.conn)
 		refused := soRefusedFrame(t, frames, "SV-19h P1a "+frameType)
 		require.Equal(t, "origin_malformed", refused.Reason)
 		require.Equal(t, []string{"send_refused"}, soTypes(frames), "SV-19h P1a: zero session_state and zero effects")
 		soSend(t, r.conn, soRawCommandForSnapshot(frameType, r.sid, `""`, soOriginChat("so-other")))
-		frames = soWindow(t, r.conn, soRequesterWindow)
+		frames = soSettle(t, r.conn)
 		refused = soRefusedFrame(t, frames, "SV-19h P1b "+frameType)
 		require.Equal(t, "frame_malformed", refused.Reason)
 		require.Equal(t, []string{"send_refused"}, soTypes(frames), "SV-19h P1b: zero session_state and zero effects")
@@ -286,7 +286,7 @@ func soSV19Control(t *testing.T) {
 	drainAdmissionOneShot(t, conn)
 	b := s.mintChat(t, conn, soKeyB, "SV-19 control idle chat")
 	soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b, Origin: soChatOrigin(b), ClientFrameId: strPtr("so-19ctl")})
-	frames := soWindow(t, conn, soRequesterWindow)
+	frames := soSettle(t, conn)
 	require.Contains(t, soTypes(frames), "command_received", "SV-19 control: accepted command must actually run")
 	for _, f := range frames {
 		require.NotEqual(t, "session_state", f.Type, "SV-19 control: an ACCEPTED cancel gets no refusal snapshot (got %s)", f.Raw)
@@ -340,7 +340,7 @@ func soDecisiveSnapshotOrder(t *testing.T, beforeHold bool) {
 		soSnapshotHooks(t, nil, hook, nil)
 	}
 	soSend(t, r.conn, generated.CancelFrame{Type: "cancel", SessionId: r.sid})
-	frames := soWindow(t, r.conn, soRequesterWindow)
+	frames := soSettle(t, r.conn)
 	require.Equal(t, 1, hookCalls.load(), "instrument: decisive hook must actually execute")
 	want := []string{"error", "session_state", "done"}
 	if beforeHold {
@@ -413,7 +413,7 @@ func soSV19J(t *testing.T) {
 		return nil
 	})
 	soSend(t, r.conn, generated.CancelFrame{Type: "cancel", SessionId: r.sid})
-	frames := soWindow(t, r.conn, soRequesterWindow)
+	frames := soSettle(t, r.conn)
 	require.Equal(t, 1, calls.load(), "instrument: nil-builder path must execute")
 	require.Equal(t, []string{"error"}, soTypes(frames), "SV-19j: nil snapshot builder still sends refusal, no snapshot")
 	require.Equal(t, soOutdatedStop, soErrors(t, frames)[0].Message)

@@ -210,7 +210,7 @@ func soRunRow(t *testing.T, s *sendOriginSrv, row soRowFrames, n int) (frames []
 	}
 	for _, raw := range row.build(sid) {
 		soSend(t, conn, raw)
-		frames = append(frames, soWindow(t, conn, soRefusalWindow)...)
+		frames = append(frames, soSettle(t, conn)...)
 	}
 	row.check(t, s, frames, sid, before)
 	return frames, sid, before
