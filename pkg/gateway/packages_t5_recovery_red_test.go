@@ -8,12 +8,14 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,17 +24,9 @@ const recoveryAgentID = "11111111-1111-4111-8111-111111111111"
 // TestPackages_StartupRecovery_WiredBeforeRoster is FR-062's boot order.
 // gateway.go must call recovery before seedAndPersistAgentRoster.
 func TestPackages_StartupRecovery_WiredBeforeRoster(t *testing.T) {
-	raw, err := os.ReadFile("gateway.go")
-	require.NoError(t, err)
-	src := string(raw)
-	roster := strings.Index(src, "seedAndPersistAgentRoster(")
-	require.GreaterOrEqual(t, roster, 0, "seedAndPersistAgentRoster( must exist")
-	head := src[:roster]
-	call := strings.Index(head, "RecoverImports(")
-	if call < 0 {
-		call = strings.Index(head, "recoverImportsBeforeRoster(")
-	}
-	require.GreaterOrEqual(t, call, 0, "FR-062 [r7]: start-up must recover imports before the first roster load")
+	// Comments are stripped first. A commented-out bootRecoverImports satisfies
+	// a raw substring search and is not a call (FR-062).
+	TestPackages_StartupRecovery_BootCallIsLive(t)
 }
 
 // TestPackages_StartupRecovery is TDD row 26a (D7 rows 23a–23g and 24).
@@ -86,9 +80,8 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		ws := createWorkspaceViaAPI(t, api, "Research", "notes")
 		writePublished(t, api.homePath, recoveryAgentID, ws)
 		writeStagingJournal(t, api.homePath, "stg-23e", recoveryAgentID, ws, omnpkg.JournalStarted)
-		order, err := api.bootImportsThenRoster(packageCtx(t))
+		err := api.recoverImportsBeforeRoster(packageCtx(t))
 		require.NoError(t, err, "FR-062")
-		require.Equal(t, []string{"recover-imports", "roster"}, order, "recovery before the first roster load")
 		// A finished import deletes the staging folder. The journal is not left to re-read.
 		t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-23e"))
 		_, err = os.Stat(filepath.Join(api.homePath, "entities", "agents", recoveryAgentID+".json"))
@@ -190,8 +183,18 @@ func TestPackages_ManualRecovery(t *testing.T) {
 		require.NoError(t, os.RemoveAll(filepath.Join(api.homePath, "entities", "agents", recoveryAgentID+".pending")))
 		require.NoError(t, os.RemoveAll(filepath.Join(api.homePath, "agents", recoveryAgentID)))
 		require.NoError(t, os.RemoveAll(filepath.Join(api.homePath, "backups", ".staging", "stg-manual")))
-		// Manual step 3: drop X from W through the workspace file.
-		removeTeamMember(t, api.homePath, ws, recoveryAgentID)
+		// Manual step 3 (D15-3): the public revision-checked workspace PUT, not a
+		// direct rewrite of the workspace file.
+		state, readErr := workspace.ReadState(api.homePath, ws)
+		require.NoError(t, readErr)
+		body := `{"revision":` + packageJSONString(state.Revision) + `,"core_team":[],"delegation":[]}`
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+ws, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.URL.Path = "/api/v1/workspaces/" + ws
+		api.HandleWorkspaces(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "D15-3: PUT with the current revision removes the unknown member; body=%s", rec.Body)
+		require.NotContains(t, workspaceTeam(t, api.homePath, ws), recoveryAgentID)
 		packageT5.RecoveryLeave = nil
 		got := callPackageImport(t, api, validMainPackage(t))
 		require.Equal(t, http.StatusCreated, got.Code, "body=%s", got.Body)
@@ -200,15 +203,30 @@ func TestPackages_ManualRecovery(t *testing.T) {
 
 	t.Run("D15-4 five retained stagings release on restart", func(t *testing.T) {
 		api := packageAPI(t)
-		for i := 0; i < omnpkg.MaxStagedImports; i++ {
-			writeStagingJournal(t, api.homePath, "stg-full-"+string(rune('a'+i)), recoveryAgentID, "ws-1", omnpkg.JournalRollbackIncomplete)
+		// One unfinished journal per slot, each retaining a different agent id
+		// (SC-010). Reusing one id does not show that five recoveries freed five slots.
+		ids := []string{
+			"11111111-1111-4111-8111-111111111111",
+			"22222222-2222-4222-8222-222222222222",
+			"33333333-3333-4333-8333-333333333333",
+			"44444444-4444-4444-8444-444444444444",
+			"55555555-5555-4555-8555-555555555555",
+		}
+		require.Equal(t, omnpkg.MaxStagedImports, len(ids))
+		for i, id := range ids {
+			writeStagingJournal(t, api.homePath, "stg-full-"+string(rune('a'+i)), id, "ws-1", omnpkg.JournalRollbackIncomplete)
 		}
 		require.NoError(t, api.recoverImportsBeforeRoster(packageCtx(t)))
-		for i := 0; i < omnpkg.MaxStagedImports; i++ {
+		for i := range ids {
 			t5RequireAbsent(t, filepath.Join(api.homePath, "backups", ".staging", "stg-full-"+string(rune('a'+i))))
 		}
-		got := callPackageImport(t, api, validMainPackage(t))
-		require.Equal(t, http.StatusCreated, got.Code, "a freed slot admits the next upload; body=%s", got.Body)
+		for i := range ids {
+			got := callPackageImport(t, api, validMainPackage(t))
+			require.Equal(t, http.StatusCreated, got.Code, "slot %d of %d is free after recovery; body=%s", i+1, len(ids), got.Body)
+		}
+		sixth := callPackageImport(t, api, validMainPackage(t))
+		require.Equal(t, http.StatusConflict, sixth.Code, "the five-slot cap still holds; body=%s", sixth.Body)
+		require.Contains(t, string(sixth.Body), omnpkg.CodeTooManyStagedImports)
 	})
 }
 
