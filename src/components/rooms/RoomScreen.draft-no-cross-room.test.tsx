@@ -42,10 +42,9 @@ const ROOM_B_NAME = 'Beta'
 const DRAFT_TEXT = 'Plan the offsite, '
 const DRAFT_WITH_MENTION = 'Plan the offsite, @Jim '
 const FILE_NAME = 'offsite-notes.txt'
-// The mention id the real @-picker binds (Jim is a room member) and the
-// media ref the real upload adapter registers — the send body must carry
-// neither anywhere in the recorded transport log.
-const MENTIONED_MEMBER_ID = 'jim'
+// The media ref the real upload adapter registers. The mention id the real
+// @-picker binds is covered by the exact send oracle: the one permitted POST
+// must carry an empty mention list, so room A's picked mention may not cross.
 const MEDIA_REF = 'media://workspace/sales/upl-offsite-1'
 // Revision 1 (CHECK F1): the sentinel is a second, known send after the
 // checked Send click. Its POST must reach room B, which proves the recorded
@@ -54,13 +53,27 @@ const MEDIA_REF = 'media://workspace/sales/upl-offsite-1'
 const MARKER = 'room B marker sent after the checked send'
 // Virtual-time windows for the fake-timer proof. The first settles the checked
 // Send (a build that merely delays the submit — CHECK mutant M4 added 250 ms —
-// fires inside it); the second runs every remaining pending timer before the
-// recorded log is read. An unbounded runAllTimersAsync cannot be used because
-// the real WsConnection keeps self-rescheduling its heartbeat timer, so the
-// timer queue never drains; both windows are generous multiples of the known
-// scheduling delays while staying bounded.
+// fires inside it).
+//
+// Revision 3 (CHECK r3 F1): the flush after the sentinel runs ONE HOUR of
+// virtual time — the revision brief's option (a) — so a first submit delayed
+// by any realistic interval (CHECK's first-submit-only 10-minute mutant, up
+// to a full hour) still fires inside the observed window and dies at the
+// exact oracle; the previous 121-second horizon let such a submit settle
+// unseen after the test ended, and useRealTimers discards scheduled fake
+// timers (vitest VitestUtils.useRealTimers docs), so the discarded timer was
+// not proof the send never happened. Stepping through the heartbeat is what
+// keeps the long window finite: the heartbeat interval never accumulates, and
+// the real WsConnection's unanswered-ping force-close plus its bounded
+// reconnect schedule (fast phase, fixed slow phase, give-up — ws.ts
+// constants) exhaust themselves within roughly the first half hour of virtual
+// time, after which no send-owned timer remains. A submit that stays pending
+// beyond the hour is recorded as the proof's stated bound in the RED report,
+// not claimed impossible. An unbounded runAllTimersAsync still cannot be
+// used: a self-rescheduling timer (the heartbeat while connected) never
+// drains the queue.
 const SENTINEL_SETTLE_MS = 1_000
-const QUEUED_SUBMIT_FLUSH_MS = 120_000
+const QUEUED_SUBMIT_FLUSH_MS = 3_600_000
 // UploadFilesResponse (contracts): the room attachment adapter reads
 // files[0].ref and files[0].content_type off this body.
 const UPLOAD_RESPONSE = {
@@ -252,39 +265,47 @@ describe('#1849 an unsent room draft must not follow the user into another room'
     // fake clock (fireEvent — the suite's established way to act under fake
     // timers, because @testing-library/react's asyncWrapper drains a faked
     // setTimeout that only `jest` would advance), a SECOND known send (the
-    // sentinel) proves the log observed activity after the click, and then
-    // every remaining pending timer runs before the whole recorded log is
-    // read — a build that merely delays the submit (M4: 250 ms) still fires
-    // inside the flush and dies.
+    // sentinel) proves the log observed activity after the click, and then a
+    // bounded one-hour virtual window runs every submit the build may have
+    // deferred before the recorded log is read (see QUEUED_SUBMIT_FLUSH_MS —
+    // Revision 3, CHECK r3 F1).
     vi.useFakeTimers()
     try {
       const sendButton = () => screen.getByRole('button', { name: /^send/i })
+      // Everything the transport records from this instant on sits inside the
+      // checked window: the checked Send, the sentinel and the whole flush.
+      const writesBeforeCheckedSend = net.writes().length
       fireEvent.click(sendButton())
       await act(async () => { await vi.advanceTimersByTimeAsync(SENTINEL_SETTLE_MS) })
       // The sentinel: a second, known send after the checked Send.
       fireEvent.change(groupInput(), { target: { value: MARKER } })
       fireEvent.click(sendButton())
       await act(async () => { await vi.advanceTimersByTimeAsync(QUEUED_SUBMIT_FLUSH_MS) })
-      // Instrument control: the sentinel reached room B. Without it, a log
-      // holding nothing could also mean the transport recorded nothing at all.
-      const markerWrite = net.writes().find((write) =>
-        write.path === `/api/v1/rooms/${ROOM_B}/messages`
-        && ((write.body as { text?: string } | null)?.text ?? '').includes(MARKER))
-      expect(markerWrite, 'instrument: the sentinel send reached room B after the checked Send').toBeDefined()
-      // Issue requirement: NO send anywhere in the recorded log — before,
-      // up to and including the sentinel, or after the full flush — may carry
-      // room A's draft: not its text, not its picked mention id, not its
-      // staged media ref, at room B's endpoint (the target room checked) or
-      // anywhere else. With a clean box the checked Send is disabled and
-      // nothing at all is posted.
-      const draftWrites = net.writes().filter((write) => {
-        const body = write.body as { text?: string; mentions?: string[]; media?: string[] } | null
-        return write.path.endsWith('/messages')
-          && ((body?.text ?? '').includes(DRAFT_TEXT.trim())
-            || body?.mentions?.includes(MENTIONED_MEMBER_ID) === true
-            || body?.media?.includes(MEDIA_REF) === true)
-      })
-      expect(draftWrites, '1849: no send may carry room A\'s draft (text, mention id, media ref — every endpoint checked, not only room B\'s)').toEqual([])
+      // Revision 3 (CHECK r3 F3): the oracle is EXACT. The complete list of
+      // POSTs recorded after the checked Send click must equal the single
+      // expected sentinel POST — exactly one, compared field by field below:
+      // room B's message endpoint, exactly the sentinel text, empty mention
+      // and media lists. No other POST, with ANY content, to ANY endpoint,
+      // may exist. The revision-2 filter (writes whose text includes the
+      // whole draft text or the picked mention id or the media ref) passed a
+      // build that sent only a prefix of the draft ("Plan the off", its
+      // mention binding and attachments already stripped) into room B; a
+      // length-plus-fields oracle cannot.
+      const writesAfterCheckedSend = net.writes().slice(writesBeforeCheckedSend)
+      const postWrites = writesAfterCheckedSend.filter((write) => write.method === 'POST')
+      expect(postWrites, '1849: exactly one POST may follow the checked Send — the sentinel; any further POST, with any content, to any endpoint, fails').toHaveLength(1)
+      const sentinelWrite = postWrites[0]
+      expect(sentinelWrite.path, '1849: the one permitted send must target room B\'s message endpoint').toBe(`/api/v1/rooms/${ROOM_B}/messages`)
+      const body = sentinelWrite.body as { text?: string; mentions?: string[]; media?: string[]; client_message_id?: string }
+      expect(body.text, '1849: the one permitted send must carry exactly the sentinel text — none of the draft may ride along, prefix or otherwise').toBe(MARKER)
+      // The list fields are exact at the wire level: the room body builder
+      // omits `media` entirely for a text-only send (the complete-reset
+      // satisfiability run proved the shape), and an absent list and an empty
+      // list carry the same meaning — no mention binding and no attachment
+      // crosses. Any actual mention id or media ref still fails.
+      expect(body.mentions ?? [], '1849: the one permitted send must carry no mention — room A\'s picked mention id may not cross').toEqual([])
+      expect(body.media ?? [], '1849: the one permitted send must carry no attachment — room A\'s staged media ref may not cross').toEqual([])
+      expect(body.client_message_id, '1849: the one permitted send must be a fresh message carrying its own client id').toEqual(expect.any(String))
     } finally {
       vi.useRealTimers()
     }

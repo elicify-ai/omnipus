@@ -59,13 +59,27 @@ const DRAFT = 'Draft for the Alpha quarterly numbers'
 const MARKER = 'workspace B marker sent after the checked send'
 // Virtual-time windows for the fake-timer proof. The first settles the checked
 // Send (a build that merely delays the submit — CHECK mutant M5 added 250 ms —
-// fires inside it); the second runs every remaining pending timer before the
-// recorded log is read. An unbounded runAllTimersAsync cannot be used because
-// the real WsConnection keeps self-rescheduling its heartbeat timer, so the
-// timer queue never drains; both windows are generous multiples of the known
-// scheduling delays while staying bounded.
+// fires inside it).
+//
+// Revision 3 (CHECK r3 F1): the flush after the sentinel runs ONE HOUR of
+// virtual time — the revision brief's option (a) — so a first submit delayed
+// by any realistic interval (CHECK's first-submit-only 10-minute mutant, up
+// to a full hour) still fires inside the observed window and dies at the
+// exact oracle; the previous 121-second horizon let such a submit settle
+// unseen after the test ended, and useRealTimers discards scheduled fake
+// timers (vitest VitestUtils.useRealTimers docs), so the discarded timer was
+// not proof the send never happened. Stepping through the heartbeat is what
+// keeps the long window finite: the heartbeat interval never accumulates, and
+// the real WsConnection's unanswered-ping force-close plus its bounded
+// reconnect schedule (fast phase, fixed slow phase, give-up — ws.ts
+// constants) exhaust themselves within roughly the first half hour of virtual
+// time, after which no send-owned timer remains. A submit that stays pending
+// beyond the hour is recorded as the proof's stated bound in the RED report,
+// not claimed impossible. An unbounded runAllTimersAsync still cannot be
+// used: a self-rescheduling timer (the heartbeat while connected) never
+// drains the queue.
 const SENTINEL_SETTLE_MS = 1_000
-const QUEUED_SUBMIT_FLUSH_MS = 120_000
+const QUEUED_SUBMIT_FLUSH_MS = 3_600_000
 
 const originalScrollTo = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTo')
 let net: Network
@@ -336,50 +350,63 @@ describe('#1853 an unsent chat draft must not follow the user into another works
     // fake clock (fireEvent — the suite's established way to act under fake
     // timers, because @testing-library/react's asyncWrapper drains a faked
     // setTimeout that only `jest` would advance), a SECOND known send (the
-    // sentinel) proves the log observed activity after the click, and then
-    // every remaining pending timer runs before the whole recorded log is
-    // read — a build that merely delays the submit (M5: 250 ms) still fires
-    // inside the flush and dies.
+    // sentinel) proves the log observed activity after the click, and then a
+    // bounded one-hour virtual window runs every submit the build may have
+    // deferred before the recorded log is read (see QUEUED_SUBMIT_FLUSH_MS —
+    // Revision 3, CHECK r3 F1).
     // Revision 2: the #1428 head's bound-send gate (bound-send.ts::passGate)
     // holds every send while the connection capability is not `supported`, so
     // the stub now plays the gateway's first frame (mountAndOpen) and the
-    // proof additionally shows the draft sits in NO outbound queue — a send
-    // parked by the gate would otherwise only look like a pass.
+    // proof additionally covers the outbound queue — a send parked by the
+    // gate would otherwise only look like a pass.
     vi.useFakeTimers()
     try {
       const sendButton = () => screen.getByRole('button', { name: /^send/i })
+      // Everything the transport records from this instant on sits inside the
+      // checked window: the checked Send, the sentinel and the whole flush.
+      const sentBeforeCheckedSend = socket.sent.length
       fireEvent.click(sendButton())
       await act(async () => { await vi.advanceTimersByTimeAsync(SENTINEL_SETTLE_MS) })
       // The sentinel: a second, known send after the checked Send.
       fireEvent.change(chatInput(), { target: { value: MARKER } })
       fireEvent.click(sendButton())
       await act(async () => { await vi.advanceTimersByTimeAsync(QUEUED_SUBMIT_FLUSH_MS) })
-      // Instrument control: the sentinel reached workspace B's session.
-      // Without it, a log holding nothing could also mean the transport
-      // recorded nothing at all.
-      const markerFrame = (socket.sent.filter((frame) => frame.type === 'message') as Array<{ session_id: string; content: string }>)
-        .find((frame) => frame.session_id === SESSION_B && frame.content.includes(MARKER))
-      expect(markerFrame, 'instrument: the sentinel send reached workspace B\'s session after the checked Send').toBeDefined()
-      // Issue requirement: NO message frame anywhere in the recorded log —
-      // before, up to and including the sentinel, or after the full flush —
-      // may carry the draft text into workspace B's session (or anywhere
-      // else). With a clean box the checked Send is disabled and nothing at
-      // all is sent.
-      const draftFrames = socket.sent.filter((frame) => frame.type === 'message')
-        .map((frame) => frame as unknown as { content?: string })
-        .filter((frame) => (frame.content ?? '').includes(DRAFT))
-      expect(draftFrames, '1853: no send may post the draft text (every message frame checked, not only the sentinel\'s)').toEqual([])
-      // Revision 2 addendum: neither queue may hold the draft either. On
-      // #1428 a send parked by the capability gate waits in
-      // `outboundQueue` (enqueueOutboundMessage; drain moves items through
-      // `pendingDrainQueue`) — a queued draft is not "never sent", it goes
-      // out the moment the gate opens. Both fields and the item shape
-      // (string | QueuedOutboundMessage with .content) are identical on the
-      // release head and on #1428, so one assertion serves both heads.
-      const queuedDrafts = [...useChatStore.getState().outboundQueue, ...useChatStore.getState().pendingDrainQueue]
+      // Revision 3 (CHECK r3 F3): the oracle is EXACT. The complete list of
+      // message frames recorded after the checked Send click must equal the
+      // single expected sentinel record — exactly one frame, compared field
+      // by field below. No other message frame, with ANY content, to ANY
+      // session, may exist. The revision-2 filter (frames whose content
+      // includes the whole draft text) passed a build that sent only a prefix
+      // of the draft ("Draft for th") into workspace B; a length-plus-fields
+      // oracle cannot.
+      const framesAfterCheckedSend = socket.sent.slice(sentBeforeCheckedSend)
+      const messageFrames = framesAfterCheckedSend.filter((frame) => (frame as { type?: string }).type === 'message')
+      expect(messageFrames, '1853: exactly one message frame may follow the checked Send — the sentinel; any further message frame, with any content, to any session, fails').toHaveLength(1)
+      const sentinel = messageFrames[0] as unknown as {
+        session_id?: string; content?: string; agent_id?: string
+        metadata?: { workspace_id?: string }; client_message_id?: string
+      }
+      expect(sentinel.session_id, '1853: the one permitted send must target workspace B\'s session').toBe(SESSION_B)
+      expect(sentinel.content, '1853: the one permitted send must carry exactly the sentinel text — none of the draft may ride along, prefix or otherwise').toBe(MARKER)
+      expect(sentinel.agent_id, '1853: the one permitted send must keep the session\'s agent').toBe('mia')
+      expect(sentinel.metadata?.workspace_id, '1853: the one permitted send must carry workspace B\'s id').toBe(WS_B)
+      expect(sentinel.client_message_id, '1853: the one permitted send must be a fresh message carrying its own client id').toEqual(expect.any(String))
+      // Contract fields only one head adds (e.g. #1428's `origin`) are
+      // tolerated; the count, the target and every content field above are
+      // exact.
+      // Revision 2 addendum, exact since Revision 3 (CHECK r3 F3): NO queued
+      // item may exist at all — nothing queued, with any content. On #1428 a
+      // send parked by the capability gate waits in `outboundQueue`
+      // (enqueueOutboundMessage; drain moves items through
+      // `pendingDrainQueue`) — a parked draft is not "never sent", it goes
+      // out the moment the gate opens; a delayed submit that lands after the
+      // flush horizon (connection down) parks here too. Both fields and the
+      // item shape (string | QueuedOutboundMessage with .content) are
+      // identical on the release head and on #1428, so one assertion serves
+      // both heads.
+      const queuedTexts = [...useChatStore.getState().outboundQueue, ...useChatStore.getState().pendingDrainQueue]
         .map((item) => (typeof item === 'string' ? item : item.content))
-        .filter((text) => text.includes(DRAFT))
-      expect(queuedDrafts, '1853: the draft may not wait in the outbound queue for chat B (a capability-held send is not a pass)').toEqual([])
+      expect(queuedTexts, '1853: nothing may sit in either outbound queue — a parked or late-arriving draft is still a cross-chat send').toEqual([])
     } finally {
       vi.useRealTimers()
     }
