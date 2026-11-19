@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Smoke test of a built PDF renderer release folder (office-preview AD-2).
 
-usage: renderer-smoke.py <renderer folder>
+usage: renderer-smoke.py [--exec "<command prefix>"] <renderer folder>
+
+--exec runs the renderer through a command prefix instead of the folder's
+executable, for example `docker run -i --rm --entrypoint <path> <image>`; the
+manifest is still checked against the folder (a copy of the image's files).
 
 Checks, and exits non-zero on the first failure:
   1. manifest.json is a packaged pdf-renderer manifest whose file
@@ -20,6 +24,7 @@ because the renderer treats end-of-input during page work as "parent gone".
 import hashlib
 import json
 import os
+import shlex
 import struct
 import subprocess
 import sys
@@ -82,9 +87,9 @@ def check_manifest(folder):
     return m
 
 
-def run(exe, op, pdf, first=0, last=0, maxedge=0):
+def run(argv, op, pdf, first=0, last=0, maxedge=0):
     header = b"OPDF" + struct.pack("<HHIIIIQ", 1, op, first, last, maxedge, 0, len(pdf))
-    proc = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     proc.stdin.write(header + pdf)
     proc.stdin.flush()
     frames = []
@@ -106,11 +111,16 @@ def run(exe, op, pdf, first=0, last=0, maxedge=0):
 
 
 def main():
-    if len(sys.argv) != 2:
-        fail("usage: renderer-smoke.py <renderer folder>")
-    folder = os.path.abspath(sys.argv[1])
+    args = sys.argv[1:]
+    prefix = None
+    if len(args) == 3 and args[0] == "--exec":
+        prefix = shlex.split(args[1])
+        args = args[2:]
+    if len(args) != 1:
+        fail('usage: renderer-smoke.py [--exec "<command prefix>"] <renderer folder>')
+    folder = os.path.abspath(args[0])
     m = check_manifest(folder)
-    exe = os.path.join(folder, m["executable"])
+    exe = prefix if prefix else [os.path.join(folder, m["executable"])]
     pdf = one_page_pdf()
 
     frames = run(exe, OP_INFO, pdf)
