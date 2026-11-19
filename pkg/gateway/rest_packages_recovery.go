@@ -41,8 +41,15 @@ func bootRecoverImports(ctx context.Context, home string, cfg *config.Config,
 	for _, err := range rep.Errors {
 		slog.Error("packages: start-up recovery step failed; it runs again at the next start", "error", err)
 	}
+	// WARN when recovery finished or rolled back an import: the shipped
+	// gateway.log_level is warn, and an operator must see that an interrupted
+	// import was settled. Anything less stays at INFO.
+	level := slog.LevelInfo
+	if len(rep.Finished)+len(rep.RolledBack) > 0 {
+		level = slog.LevelWarn
+	}
 	if n := len(rep.Finished) + len(rep.RolledBack) + len(rep.OrphansRemoved) + len(rep.Failed); n > 0 {
-		slog.Info("packages: start-up recovery", "finished", rep.Finished, "rolled_back", rep.RolledBack,
+		slog.Log(ctx, level, "packages: start-up recovery", "finished", rep.Finished, "rolled_back", rep.RolledBack,
 			"orphans_removed", rep.OrphansRemoved, "failed", rep.Failed)
 	}
 }

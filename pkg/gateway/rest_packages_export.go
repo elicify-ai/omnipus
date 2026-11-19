@@ -62,8 +62,7 @@ func (a *restAPI) handlePackageExport(w http.ResponseWriter, r *http.Request) {
 		writePackageError(w, packageErr(packageCodeAuditFailed), nil)
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+packageFileName(src.name)+`"`)
+	applyPackageDownloadHeaders(w, packageFileName(src.name))
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(buf.Bytes()); err != nil {

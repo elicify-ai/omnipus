@@ -230,6 +230,19 @@ func applyMailPreviewInlineByteHeaders(w http.ResponseWriter, contentType string
 	h.Set(headerContentDisposition, "inline")
 }
 
+// applyPackageDownloadHeaders sets the type and attachment disposition of a
+// package export download (FR-010). fileName is packageFileName's output,
+// already reduced to ASCII letters, digits, space, dot, dash and underscore,
+// so contentDispositionAttachment yields the plain
+// `attachment; filename="<name>"` form. It lives here because FR-008c's source
+// gate allows a Content-Disposition write in this file only. Callers MUST call
+// this BEFORE writing any bytes.
+func applyPackageDownloadHeaders(w http.ResponseWriter, fileName string) {
+	h := w.Header()
+	h.Set(headerContentType, "application/octet-stream")
+	h.Set(headerContentDisposition, contentDispositionAttachment(fileName))
+}
+
 // serveLibraryContent serves already-opened bytes with the headers above.
 //
 // The name argument to http.ServeContent is deliberately empty. That argument
