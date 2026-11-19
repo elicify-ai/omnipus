@@ -424,8 +424,9 @@ type fakeGateway struct {
 
 	// Apply behaviour: replies consumed in order; applyDropConn drops the
 	// connection without answering (the lost-connection BDD scenario).
-	applyReplies []applyReply
-	applyDrop    bool
+	applyReplies  []applyReply
+	applyDrop     bool
+	applyTruncate bool
 
 	agentsReqs     []capturedRequest
 	workspacesReqs []capturedRequest
@@ -576,12 +577,28 @@ func (f *fakeGateway) serveUpload(w http.ResponseWriter, r *http.Request) {
 func (f *fakeGateway) serveApply(w http.ResponseWriter, r *http.Request) {
 	f.record(&f.applies, r)
 	f.mu.Lock()
-	replies, drop := f.applyReplies, f.applyDrop
+	replies, drop, truncate := f.applyReplies, f.applyDrop, f.applyTruncate
 	f.mu.Unlock()
 	if drop {
 		// Simulates the connection dying before the answer arrives: the
 		// server aborts the response, the client sees a transport error.
 		panic(http.ErrAbortHandler)
+	}
+	if truncate {
+		// Headers are committed (send returns the response) and the
+		// declared body is then cut off, so reading it fails.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			panic("fake gateway: response cannot be hijacked")
+		}
+		conn, bufrw, herr := hj.Hijack()
+		if herr != nil {
+			panic(herr)
+		}
+		_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4096\r\n\r\n{\"activation\":")
+		_ = bufrw.Flush()
+		_ = conn.Close()
+		return
 	}
 	reply := applyReply{status: http.StatusInternalServerError, body: `{"code":"fake_gateway_bug","error":"apply answer not scripted"}`}
 	if len(replies) > 0 {

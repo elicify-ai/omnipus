@@ -417,6 +417,38 @@ func TestPkgCmd_PromptAndLostConnection(t *testing.T) {
 		assert.Contains(t, stderr, "Check the agent list", "…and tells the owner what to check")
 		assert.Contains(t, stderr, "Writer", "…for the agent by name")
 	})
+
+	// FR-051: the apply headers already arrived, so send succeeded. A cut-off
+	// body or a 200 that is not JSON is still ambiguous: not success, not a rollback.
+	ambiguous := fmt.Sprintf("The import may or may not have completed (staging %s). Check the agent list for %q before importing again. If the gateway stopped, it finishes or rolls back the import when it starts.", fixtureStagingID, "Writer")
+	t.Run("FR-051 apply 200 with a truncated body is ambiguous, exit 1", func(t *testing.T) {
+		f := newFakeGateway(t).
+			withWorkspaces(map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"}).
+			servePreview(previewBody(t, nil))
+		f.applyTruncate = true
+		file := defaultImportSetup(t, dir)
+		stdout, stderr, err := runCommand(t, importCmd(f, Options{Token: "tok"}), "y\n",
+			"import", file, "--workspace", "Research")
+		require.Equal(t, 1, exitCodeOf(t, err))
+		assert.Contains(t, stderr, ambiguous)
+		assert.NotContains(t, stdout, "Imported", "a cut-off answer is not success")
+		assert.NotContains(t, stderr, "nothing was imported", "the CLI must not claim a rollback")
+		assert.NotContains(t, stderr, "could not be fully undone")
+	})
+	t.Run("FR-051 apply 200 that is not JSON is ambiguous, exit 1", func(t *testing.T) {
+		f := newFakeGateway(t).
+			withWorkspaces(map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"}).
+			servePreview(previewBody(t, nil)).
+			scriptApply([]applyReply{{status: 200, body: `{"activation":`}}, false)
+		file := defaultImportSetup(t, dir)
+		stdout, stderr, err := runCommand(t, importCmd(f, Options{Token: "tok"}), "y\n",
+			"import", file, "--workspace", "Research")
+		require.Equal(t, 1, exitCodeOf(t, err))
+		assert.Contains(t, stderr, ambiguous)
+		assert.NotContains(t, stdout, "Imported")
+		assert.NotContains(t, stderr, "nothing was imported")
+		assert.NotContains(t, stderr, "could not be fully undone")
+	})
 }
 
 // ─── export success line, notice, atomic write, cli.token ─────────────────────
