@@ -311,7 +311,6 @@ func (p *Provider) ChatStream(
 	// arrived, only the stream-stall watcher below applies — a stream that keeps
 	// delivering is never cut.
 	streamClient := &http.Client{Transport: p.streamingTransport()}
-	//nolint:bodyclose // body is closed via defer resp.Body.Close() below; goroutine also closes to unblock scanner on ctx cancel
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
@@ -322,29 +321,37 @@ func (p *Provider) ChatStream(
 		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
-	// Issue #1901: a provider that ignores stream:true and answers with one
-	// JSON chat.completion (Content-Type application/json) is not an SSE
-	// stream. Reading it as "data: " lines yields an empty stream and a
-	// failed chat. Accept that body on the non-streamed parse path.
-	if contentTypeIsJSON(resp.Header.Get("Content-Type")) {
-		return acceptNonStreamedJSONReply(resp, onChunk, p.apiBase, p.providerID)
-	}
-
 	// Intentional concurrent close: net/http response bodies are safe to Close() concurrently with reads, unblocking any blocked scanner.Scan().
+	// body is the real response body, captured before the JSON path wraps
+	// resp.Body. Both this goroutine and the stall monitor close it.
+	body := resp.Body
 	go func() {
 		<-ctx.Done()
-		resp.Body.Close()
+		body.Close()
 	}()
 
 	// Silence check (founder decision 2026-09-14): abort this call when
 	// NOTHING has arrived for the configured limit. The monitor's clock is
 	// re-armed by the parser on every consumed SSE event (parseStreamResponse
-	// holds the arm fn), so any byte of any kind — content, tool-call delta,
-	// reasoning, keep-alive — keeps a slow stream alive. This is not a
-	// wall-clock limit.
+	// holds the arm fn), and by the JSON path on every non-empty body read,
+	// so any byte of any kind — content, tool-call delta, reasoning,
+	// keep-alive, or a plain JSON body that keeps arriving — keeps a slow
+	// reply alive. This is not a wall-clock limit.
 	stall := p.effectiveStreamStallTimeout()
-	watch := common.WatchStreamStall(ctx, func() { _ = resp.Body.Close() }, stall)
+	watch := common.WatchStreamStall(ctx, func() { _ = body.Close() }, stall)
 	defer watch.Stop()
+
+	// Issue #1901: a provider that ignores stream:true and answers with one
+	// JSON chat.completion (Content-Type application/json) is not an SSE
+	// stream. Reading it as "data: " lines yields an empty stream and a
+	// failed chat. Accept that body on the non-streamed parse path. The
+	// watch above already covers it: a silent or half-delivered body is
+	// cut with the same stall error as an SSE stream. Reads re-arm the
+	// watch so a body that keeps arriving is not cut.
+	if contentTypeIsJSON(resp.Header.Get("Content-Type")) {
+		resp.Body = &stallArmingBody{ReadCloser: body, watch: watch}
+		return acceptNonStreamedJSONReply(ctx, resp, onChunk, watch, p.apiBase, p.providerID)
+	}
 
 	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch, p.providerID)
 }
@@ -360,20 +367,42 @@ func contentTypeIsJSON(contentType string) bool {
 	return media == "application/json"
 }
 
+// stallArmingBody re-arms the stream-stall watch on every non-empty read.
+// A plain JSON body that keeps arriving resets the silence clock; a body
+// that goes quiet does not, so the watch ChatStream already armed still
+// cuts it. Close is the embedded body's Close — ChatStream closes that
+// body directly from the context goroutine and the stall monitor.
+type stallArmingBody struct {
+	io.ReadCloser
+	watch *common.StreamStallWatch
+}
+
+func (b *stallArmingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.watch.Arm()
+	}
+	return n, err
+}
+
 // acceptNonStreamedJSONReply parses a plain chat.completion body returned
 // for a streaming request (issue #1901). Non-empty content is handed to
 // onChunk once, as the accumulated text, before the parsed response is
 // returned. A body with no content and no tool calls is still a failed
 // attempt (issue #1664): the error matches common.ErrEmptyStream, and no
-// successful empty reply is synthesized.
+// successful empty reply is synthesized. A read aborted by the stall
+// monitor is the same typed stall error the SSE path returns; a cancelled
+// caller context is returned as that context error, not as a parse failure.
 func acceptNonStreamedJSONReply(
+	ctx context.Context,
 	resp *http.Response,
 	onChunk func(accumulated string),
+	watch *common.StreamStallWatch,
 	apiBase, providerID string,
 ) (*LLMResponse, error) {
 	parsed, err := common.ReadAndParseResponse(resp, apiBase, providerID)
 	if err != nil {
-		return nil, err
+		return nil, jsonBodyReadError(ctx, err, watch)
 	}
 	if parsed.Content == "" && len(parsed.ToolCalls) == 0 {
 		logger.WarnCF("openai_compat", "provider answered a streaming request with an empty JSON body; treated as a failed attempt",
@@ -384,6 +413,20 @@ func acceptNonStreamedJSONReply(
 		onChunk(parsed.Content)
 	}
 	return parsed, nil
+}
+
+// jsonBodyReadError classifies a failed plain-JSON body read the way
+// streamScanError classifies a failed SSE read, without relabelling a
+// genuine parse failure as a transient streaming read error. Caller
+// cancellation wins, then the stall monitor's own body close.
+func jsonBodyReadError(ctx context.Context, err error, watch *common.StreamStallWatch) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if watch.Fired() && common.IsBodyClosedStreamError(err) {
+		return common.NewStallError(watch.SilentFor())
+	}
+	return err
 }
 
 // ExplicitRequestTimeout implements providers.RequestTimeoutReporter: the
