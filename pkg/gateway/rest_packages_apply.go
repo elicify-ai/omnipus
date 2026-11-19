@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -168,12 +169,8 @@ func (p *packageApplyRun) prepare(workspaceID *string) error {
 		return err
 	}
 	p.warnings = append(p.warnings, p.plan.Warnings...)
-	if proposed, ok := p.a.proposedName(p.stagingID); ok && proposed != p.plan.Name {
-		p.warnings = append(p.warnings, packageWarning{
-			Code: packageCodeChangedSincePreview, ElementSourceID: el.SourceID,
-			Message: fmt.Sprintf("The name changed since the preview: %q is now taken, so the agent is named %q.", proposed, p.plan.Name),
-			Items:   []string{"name"},
-		})
+	if snap, ok := p.a.previewSnapshot(p.stagingID); ok {
+		p.warnings = append(p.warnings, changedSincePreview(el.SourceID, snap, previewSnapshotOf(p.plan))...)
 	}
 	taken := map[string]bool{el.SourceID: true}
 	for _, ac := range p.a.agentLoop.GetConfig().Agents.List {
@@ -209,6 +206,45 @@ func (a *restAPI) packageTargetWorkspace(id *string) (string, error) {
 		}
 	}
 	return "", packageErr(packageCodeDefaultWSMissing)
+}
+
+// changedSincePreview lists what differs between the preview and apply
+// (FR-041, FR-042, Dataset D14): the name, then each skill installed or
+// removed and each provider that became configured or lost its key since the
+// preview, one changed_since_preview warning per difference.
+func changedSincePreview(sourceID string, was, now packagePreviewSnapshot) []packageWarning {
+	var out []packageWarning
+	add := func(item, msg string) {
+		out = append(out, packageWarning{Code: packageCodeChangedSincePreview, ElementSourceID: sourceID,
+			Message: msg, Items: []string{item}})
+	}
+	if was.Name != now.Name {
+		add("name", fmt.Sprintf("The name changed since the preview: %q is now taken, so the agent is named %q.", was.Name, now.Name))
+	}
+	for _, slug := range onlyIn(now.DroppedSkills, was.DroppedSkills) {
+		add(slug, fmt.Sprintf("The skill %q was removed since the preview, so it is left out.", slug))
+	}
+	for _, slug := range onlyIn(was.DroppedSkills, now.DroppedSkills) {
+		add(slug, fmt.Sprintf("The skill %q was installed since the preview, so it is kept.", slug))
+	}
+	for _, id := range onlyIn(was.UnconfiguredProviders, now.UnconfiguredProviders) {
+		add(id, fmt.Sprintf("The provider %q was configured since the preview.", id))
+	}
+	for _, id := range onlyIn(now.UnconfiguredProviders, was.UnconfiguredProviders) {
+		add(id, fmt.Sprintf("The provider %q is no longer configured since the preview.", id))
+	}
+	return out
+}
+
+// onlyIn returns the members of a that are not in b, in a's order.
+func onlyIn(a, b []string) []string {
+	var out []string
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 func (p *packageApplyRun) journal(state omnpkg.JournalState) error {
@@ -430,7 +466,7 @@ func (p *packageApplyRun) rollback(w http.ResponseWriter, cause error, leave *sy
 		if err := reg.FinishApply(p.stagingID); err != nil {
 			slog.Warn("packages: retire rolled-back staging", "staging_id", p.stagingID, "error", err)
 		}
-		p.a.forgetProposedName(p.stagingID)
+		p.a.forgetPreview(p.stagingID)
 		writePackageError(w, packageErr(omnpkg.CodeImportRolledBack), nil)
 		return
 	}

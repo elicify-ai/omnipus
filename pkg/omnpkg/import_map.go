@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/skillname"
 )
 
@@ -97,12 +98,16 @@ func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*Ag
 	return &AgentPlan{Record: out, Warnings: im.warnings}, nil
 }
 
-// checkMaxToolIterations refuses a value above the target's global limit
-// (Dataset D5 row 11). The 1–1000 range itself is the create rule's.
+// checkMaxToolIterations refuses a present value outside the create rule's
+// 1–1000 range, then one above the target's global limit (Field mapping;
+// Dataset D5 row 11). An omitted field is no own limit and passes.
 func (im *importMapper) checkMaxToolIterations(rec map[string]any) error {
 	v, ok := rec["max_tool_iterations"].(float64)
 	if !ok {
 		return nil
+	}
+	if v != float64(int(v)) || config.ValidateMaxToolIterationsBound(int(v)) != nil {
+		return fieldErr(CodeElementNotCreatable, "max_tool_iterations", config.MaxToolIterationsBoundMessage)
 	}
 	if limit := im.target.GlobalMaxToolIterations(); limit > 0 && v > float64(limit) {
 		return fieldErr(CodeElementNotCreatable, "max_tool_iterations",

@@ -103,7 +103,7 @@ func (a *restAPI) stageUpload(r *http.Request, stagingID string, unfinished []om
 	if err := reg.MarkReady(stagingID); err != nil {
 		return nil, err
 	}
-	a.rememberProposedName(stagingID, plan.Name)
+	a.rememberPreview(stagingID, previewSnapshotOf(plan))
 	return buildPackagePreview(m, stagingID, el, plan, unfinished)
 }
 
@@ -163,7 +163,13 @@ type packageAgentPlan struct {
 // are not a refusal (the error table places 409 name_suffix_exhausted at
 // apply): the preview proposes the source name and apply decides.
 func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string][]byte, existing []string, preview bool) (*packageAgentPlan, error) {
-	mapped, err := omnpkg.MapAgentForImport(payload[packageAgentPath(el.SourceID, omnpkg.AgentRecordName)], el.SourceID, packageImportTarget{a: a})
+	raw := payload[packageAgentPath(el.SourceID, omnpkg.AgentRecordName)]
+	// Sign-off C-2: the REST raw-body effort rule on the record bytes, so a
+	// JSON null or an over-long value is refused, not silently dropped.
+	if msg, field := effortBodyRefusal(raw); msg != "" {
+		return nil, notCreatable(field, msg)
+	}
+	mapped, err := omnpkg.MapAgentForImport(raw, el.SourceID, packageImportTarget{a: a})
 	if err != nil {
 		return nil, err
 	}

@@ -79,7 +79,7 @@ func (p *packageApplyRun) afterCommit(w http.ResponseWriter) {
 	if err := p.a.packageRegistry().FinishApply(p.stagingID); err != nil {
 		slog.Warn("packages: delete finished staging", "staging_id", p.stagingID, "error", err)
 	}
-	p.a.forgetProposedName(p.stagingID)
+	p.a.forgetPreview(p.stagingID)
 	p.fillResult(&res)
 	writeJSON(w, http.StatusOK, res)
 }

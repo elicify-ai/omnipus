@@ -242,6 +242,11 @@ func readPayload(s *boundedStream, tr *tar.Reader, m *Manifest) (map[string][]by
 		}
 		payload[hdr.Name] = body
 	}
+	// FR-008 counts the whole decoded stream, not just the tar: read what
+	// follows the end-of-archive marker through the counter too.
+	if _, err := io.Copy(io.Discard, s); err != nil {
+		return nil, s.classify(err)
+	}
 	if firstUnlisted != "" {
 		return nil, newErr(CodeManifestMismatch, "file", firstUnlisted, "reason", "entry not listed in the manifest")
 	}

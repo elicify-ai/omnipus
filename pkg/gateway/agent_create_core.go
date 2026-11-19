@@ -65,6 +65,11 @@ type agentCreateRefusalError struct {
 	Msg    string
 	Code   string // only for the name rules (agent_name_too_long, reserved_agent_name)
 	Field  string // e.g. "max_tool_iterations", "executor.env_overrides"
+	// fieldOffWire keeps Field out of the REST body. The description,
+	// fallback_models, color, figure and role rules name their field for
+	// import's element_not_creatable (D1 rows 23, 24, 29), while REST create
+	// keeps its earlier body: the sentence alone.
+	fieldOffWire bool
 }
 
 func (r *agentCreateRefusalError) Error() string { return r.Msg }
@@ -73,7 +78,7 @@ func (r *agentCreateRefusalError) write(w http.ResponseWriter) {
 	switch {
 	case r.Code != "":
 		jsonErrCode(w, r.Status, r.Msg, r.Code)
-	case r.Field != "":
+	case r.Field != "" && !r.fieldOffWire:
 		jsonErrField(w, r.Status, r.Msg, r.Field)
 	default:
 		jsonErr(w, r.Status, r.Msg)
@@ -82,6 +87,12 @@ func (r *agentCreateRefusalError) write(w http.ResponseWriter) {
 
 func createRefusal(status int, msg string) *agentCreateRefusalError {
 	return &agentCreateRefusalError{Status: status, Msg: msg}
+}
+
+// createFieldRefusal is createRefusal naming the offending field for import,
+// with the REST body unchanged (fieldOffWire).
+func createFieldRefusal(status int, msg, field string) *agentCreateRefusalError {
+	return &agentCreateRefusalError{Status: status, Msg: msg, Field: field, fieldOffWire: true}
 }
 
 // agentCreatePlan is a fully validated, built, NOT yet persisted agent.
@@ -173,14 +184,14 @@ func (b *agentCreateBuild) validateCreateFields() (createFields, *agentCreateRef
 	// require a non-empty description after trim. A worker without a
 	// description cannot be routed to by the orchestrator.
 	if b.createType == config.AgentTypeWorker && out.description == "" {
-		return out, createRefusal(http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
+		return out, createFieldRefusal(http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)", "description")
 	}
 	// W2 spec §3.1 row 16 / §9.2 F-13 (mirror of PUT path): fallback_models
 	// is capped at 2 entries. Server-enforced so direct REST callers (not the
 	// SPA) cannot smuggle more entries past the schema validator. subagent_3p
 	// has no fallback_models property (FallbackModels stays nil for that variant).
 	if b.in.FallbackModels != nil && len(*b.in.FallbackModels) > 2 {
-		return out, createRefusal(http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
+		return out, createFieldRefusal(http.StatusBadRequest, "fallback_models exceeds maxItems: 2", "fallback_models")
 	}
 	// Issue #1340 (founder rule 2026-10-18): same pair rule as the update path.
 	if b.in.FallbackModels != nil {
@@ -200,7 +211,7 @@ func (b *agentCreateBuild) validateCreateFields() (createFields, *agentCreateRef
 	if b.in.Figure != nil && string(*b.in.Figure) != "" {
 		canon, ok := coreagent.CanonicalFigure(string(*b.in.Figure))
 		if !ok {
-			return out, createRefusal(http.StatusBadRequest, "figure must be Robot, Man, Woman, Omnipus, or Monogram")
+			return out, createFieldRefusal(http.StatusBadRequest, "figure must be Robot, Man, Woman, Omnipus, or Monogram", "figure")
 		}
 		out.figure = canon
 	}
@@ -208,7 +219,7 @@ func (b *agentCreateBuild) validateCreateFields() (createFields, *agentCreateRef
 	if b.in.Role != nil && string(*b.in.Role) != "" {
 		canon, ok := coreagent.CanonicalRole(string(*b.in.Role))
 		if !ok {
-			return out, createRefusal(http.StatusBadRequest, "role must be one of the curated role slugs")
+			return out, createFieldRefusal(http.StatusBadRequest, "role must be one of the curated role slugs", "role")
 		}
 		out.role = canon
 	}
@@ -216,7 +227,7 @@ func (b *agentCreateBuild) validateCreateFields() (createFields, *agentCreateRef
 	if b.in.Color != nil && string(*b.in.Color) != "" {
 		canon, ok := coreagent.CanonicalColor(string(*b.in.Color))
 		if !ok {
-			return out, createRefusal(http.StatusBadRequest, "color must be one of the ten identity colours")
+			return out, createFieldRefusal(http.StatusBadRequest, "color must be one of the ten identity colours", "color")
 		}
 		out.color = canon
 	}

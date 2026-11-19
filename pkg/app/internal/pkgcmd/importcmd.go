@@ -95,13 +95,16 @@ func runImport(cmd *cobra.Command, opts Options, path string, fl importFlags) er
 		if errors.Is(err, errUnreachable) {
 			return failErr(cmd, err)
 		}
-		return failLine(cmd, fmt.Sprintf("The import may or may not have completed (staging %s). "+
-			"Check the agent list for %q before importing again. "+
-			"If the gateway stopped, it finishes or rolls back the import when it starts.",
-			preview.StagingId, previewName(&preview)))
+		return applyAmbiguous(cmd, &preview)
 	}
 	var result gen.PackageImportResult
 	if err = decodeAnswer(resp, http.StatusOK, &result); err != nil {
+		var ae *apiError
+		if !errors.As(err, &ae) {
+			// The answer was cut off or unreadable (FR-051): the gateway may
+			// have committed the import, so neither success nor rollback.
+			return applyAmbiguous(cmd, &preview)
+		}
 		return applyFailure(cmd, err, preview.StagingId)
 	}
 	printResult(cmd, client, ws, data, &result)
@@ -239,6 +242,15 @@ func previewName(p *gen.PackageImportPreview) string {
 		return ""
 	}
 	return p.WillAdd[0].ProposedName
+}
+
+// applyAmbiguous is the FR-051 line when the apply's outcome is unknown: the
+// connection was lost, or a 200 answer was cut off or not readable.
+func applyAmbiguous(cmd *cobra.Command, p *gen.PackageImportPreview) error {
+	return failLine(cmd, fmt.Sprintf("The import may or may not have completed (staging %s). "+
+		"Check the agent list for %q before importing again. "+
+		"If the gateway stopped, it finishes or rolls back the import when it starts.",
+		p.StagingId, previewName(p)))
 }
 
 // applyFailure prints the apply refusal: the rollback texts of the CLI rows

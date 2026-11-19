@@ -120,13 +120,36 @@ func packageNow() time.Time {
 	return time.Now()
 }
 
-// packageState is the per-gateway package state: the staging registry, the
-// proposed names shown at preview (apply lists a change as
-// changed_since_preview).
+// packageState is the per-gateway package state: the staging registry and
+// what each preview showed (apply lists a change as changed_since_preview,
+// FR-041, FR-042).
 type packageState struct {
 	mu       sync.Mutex
 	registry *omnpkg.StagingRegistry
-	proposed map[string]string // staging ID -> proposed name at preview
+	previews map[string]packagePreviewSnapshot // staging ID -> what the preview showed
+}
+
+// packagePreviewSnapshot is what a preview showed that apply re-checks: the
+// proposed name, the skills left out as not installed and the providers not
+// configured on this install.
+type packagePreviewSnapshot struct {
+	Name                  string
+	DroppedSkills         []string
+	UnconfiguredProviders []string
+}
+
+// previewSnapshotOf is the snapshot of one planned agent.
+func previewSnapshotOf(plan *packageAgentPlan) packagePreviewSnapshot {
+	snap := packagePreviewSnapshot{Name: plan.Name}
+	for _, w := range plan.Warnings {
+		switch w.Code {
+		case omnpkg.WarnSkillDropped:
+			snap.DroppedSkills = append(snap.DroppedSkills, w.Items...)
+		case omnpkg.WarnProviderNotConfigured:
+			snap.UnconfiguredProviders = append(snap.UnconfiguredProviders, w.Items...)
+		}
+	}
+	return snap
 }
 
 func (a *restAPI) packageStagingBase() string {
@@ -139,28 +162,28 @@ func (a *restAPI) packageRegistry() *omnpkg.StagingRegistry {
 	defer a.packages.mu.Unlock()
 	if a.packages.registry == nil {
 		a.packages.registry = omnpkg.NewStagingRegistry(a.packageStagingBase(), packageNow)
-		a.packages.proposed = map[string]string{}
+		a.packages.previews = map[string]packagePreviewSnapshot{}
 	}
 	return a.packages.registry
 }
 
-func (a *restAPI) rememberProposedName(stagingID, name string) {
+func (a *restAPI) rememberPreview(stagingID string, snap packagePreviewSnapshot) {
 	a.packages.mu.Lock()
 	defer a.packages.mu.Unlock()
-	a.packages.proposed[stagingID] = name
+	a.packages.previews[stagingID] = snap
 }
 
-func (a *restAPI) proposedName(stagingID string) (string, bool) {
+func (a *restAPI) previewSnapshot(stagingID string) (packagePreviewSnapshot, bool) {
 	a.packages.mu.Lock()
 	defer a.packages.mu.Unlock()
-	name, ok := a.packages.proposed[stagingID]
-	return name, ok
+	snap, ok := a.packages.previews[stagingID]
+	return snap, ok
 }
 
-func (a *restAPI) forgetProposedName(stagingID string) {
+func (a *restAPI) forgetPreview(stagingID string) {
 	a.packages.mu.Lock()
 	defer a.packages.mu.Unlock()
-	delete(a.packages.proposed, stagingID)
+	delete(a.packages.previews, stagingID)
 }
 
 // registerPackageRoutes registers the three package routes. It is called from
