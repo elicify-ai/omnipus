@@ -13,8 +13,10 @@ package gateway
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -301,6 +303,21 @@ func writePackageErr(w http.ResponseWriter, op string, err error) {
 	}
 	slog.Error("packages: request failed", "operation", op, "error", err)
 	jsonErr(w, http.StatusInternalServerError, "internal server error")
+}
+
+// decodePackageJSON decodes the export or apply JSON body into dst and then
+// reads the rest of the body through the route's 1 MiB limiter, so a body
+// over the limit is refused even after a complete JSON value (FR-045).
+// tooLarge reports that limit; any other error is an unreadable body.
+func decodePackageJSON(r *http.Request, dst any) (tooLarge bool, err error) {
+	err = json.NewDecoder(r.Body).Decode(dst)
+	if err == nil {
+		if _, err = io.Copy(io.Discard, r.Body); err != nil {
+			err = fmt.Errorf("read request body: %w", err)
+		}
+	}
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe), err
 }
 
 func packageErr(code string, kv ...string) *omnpkg.PackageError {

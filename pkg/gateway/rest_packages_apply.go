@@ -14,7 +14,6 @@ package gateway
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -71,9 +70,8 @@ func (a *restAPI) handlePackageImportApply(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req gen.PackageImportApplyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
+	if tooLarge, err := decodePackageJSON(r, &req); err != nil {
+		if tooLarge {
 			jsonErr(w, http.StatusRequestEntityTooLarge, "request body too large")
 			return
 		}
