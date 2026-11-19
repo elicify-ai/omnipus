@@ -85,6 +85,7 @@ export const SEND_TEXT = {
   restoredLine: 'Restored, not sent. Send it again or discard it.',
   uncertainLine: 'This may already have reached the agent. Check that chat before sending it again.',
   noChatOpen: 'There is no chat open to send to. Your text is kept.',
+  creationFailed: 'New chat (not created)',
 } as const
 
 // ── Submissions (4.6.1) ─────────────────────────────────────────────────────
@@ -339,7 +340,8 @@ async function runPipeline(sub: Submission): Promise<void> {
     target = await createForKey(sub)
     if (sub.authGeneration !== currentAuthGeneration()) return
     if (!target) {
-      restoreSubmission(sub, SEND_TEXT.uploadNetwork)
+      // 4.8 "Creation for K failed": nothing was uploaded, so not an upload reason.
+      restoreSubmission(sub, SEND_TEXT.creationFailed)
       return
     }
   }
