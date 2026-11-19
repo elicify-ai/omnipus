@@ -20,6 +20,13 @@ name: Office packaging dry run
 
 on:
   workflow_dispatch:
+  # GitHub starts a workflow_dispatch run only for a workflow file that is on
+  # the default branch, and this one is not there before it lands. A push to
+  # the dedicated dry-run branch starts it instead; no other workflow runs on
+  # that branch.
+  push:
+    branches:
+      - packaging/office-dryrun
 
 permissions:
   contents: read
