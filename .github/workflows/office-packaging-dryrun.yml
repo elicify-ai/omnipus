@@ -73,6 +73,11 @@ jobs:
       - name: Lay out the Linux components for packages and images
         run: bash scripts/office-pack/unpack-linux.sh build/components
 
+      - name: Install rpm (lists the .rpm packages' contents)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
       - name: Run GoReleaser (snapshot, nothing published)
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -99,12 +104,40 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: List every release file's contents
+        # The proof the packaging plan asks for: what is actually inside
+        # each archive and package (#1913: chromium/ must be there).
+        run: |
+          rel="$RUNNER_TEMP/release"
+          out="$RUNNER_TEMP/listings"
+          mkdir -p "$out"
+          for f in "$rel"/*; do
+            name="$(basename "$f")"
+            case "$name" in
+              *.tar.gz) tar -tzvf "$f" ;;
+              *.zip) python3 -m zipfile -l "$f" ;;
+              *.deb) dpkg-deb -c "$f" ;;
+              *.rpm) rpm -qlvp "$f" ;;
+              *) continue ;;
+            esac > "$out/$name.txt"
+            printf '%7s entries  %s (chromium entries: %s)\n' "$(wc -l < "$out/$name.txt" | tr -d ' ')" "$name" "$(grep -c 'chromium/' "$out/$name.txt" || true)"
+          done | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the content listings
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-listings
+          path: ${{ runner.temp }}/listings
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Check the release contents
         run: |
-          images="$(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '/omnipus:' | sort -u)"
+          images="$(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '/omnipus:' | grep -E -- '-(amd64|arm64)$' | sort -u)"
           echo "images built: $images"
+          [ -n "$images" ] || { echo "no per-platform omnipus images were built" >&2; exit 1; }
           # shellcheck disable=SC2086 # one argument per image
-          bash scripts/office-pack/check-release-contents.sh "$RUNNER_TEMP/release" $images
+          bash scripts/release/check-release-contents.sh --contents "$RUNNER_TEMP/release" $images
 
       - name: Convert a document inside each Docker image
         # T-33 smoke: the image's own LibreOffice converts a Word document
@@ -119,9 +152,15 @@ jobs:
           for plat in Linux_x86_64 Linux_arm64 Darwin_arm64 Darwin_x86_64; do
             dir="$RUNNER_TEMP/install-$plat"
             mkdir -p "$dir"
+            case "$plat" in
+              Linux_x86_64) comp=linux_amd64 ;;
+              Linux_arm64) comp=linux_arm64 ;;
+              Darwin_arm64) comp=darwin_arm64 ;;
+              Darwin_x86_64) comp=darwin_amd64 ;;
+            esac
             cp "$RUNNER_TEMP/release/omnipus_${plat}.tar.gz" \
-               "$RUNNER_TEMP/release/omnipus-office_${plat}.tar.gz" \
-               "$RUNNER_TEMP/release/omnipus-pdf-renderer_${plat}.tar.gz" \
+               "$RUNNER_TEMP/release/office_${comp}.tar.gz" \
+               "$RUNNER_TEMP/release/pdfium_${comp}.tar.gz" \
                "$RUNNER_TEMP/release/checksums.txt" "$dir"/
           done
 
@@ -266,7 +305,7 @@ jobs:
 
       - name: Unpack the zip as a user would
         shell: pwsh
-        run: Expand-Archive -Path "$env:RUNNER_TEMP\win\omnipus-pdf-renderer_Windows_x86_64.zip" -DestinationPath "$env:RUNNER_TEMP\unpacked"
+        run: Expand-Archive -Path "$env:RUNNER_TEMP\win\pdfium_windows_amd64.zip" -DestinationPath "$env:RUNNER_TEMP\unpacked"
 
       - name: Renderer answers a real request
         run: python scripts/office-pack/renderer-smoke.py "$RUNNER_TEMP/unpacked/pdfium"
