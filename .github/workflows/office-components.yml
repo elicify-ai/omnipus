@@ -110,8 +110,10 @@ jobs:
             echo
             for f in "$RUNNER_TEMP"/office-pack/release/*; do
               case "$f" in
-                *.zip) entries="$(python -m zipfile -l "$f" | tail -n +2 | wc -l | tr -d ' ')"; list="$(python -m zipfile -l "$f" | head -20)" ;;
-                *) entries="$(tar -tzf "$f" | wc -l | tr -d ' ')"; list="$(tar -tzf "$f" | head -20)" ;;
+                # sed reads its whole input: `| head` would close the pipe
+                # early, and under pipefail tar's write error fails the step.
+                *.zip) entries="$(python -m zipfile -l "$f" | tail -n +2 | wc -l | tr -d ' ')"; list="$(python -m zipfile -l "$f" | sed -n 1,20p)" ;;
+                *) entries="$(tar -tzf "$f" | wc -l | tr -d ' ')"; list="$(tar -tzf "$f" | sed -n 1,20p)" ;;
               esac
               echo "### $(basename "$f") ($(wc -c < "$f" | tr -d ' ') bytes, $entries entries)"
               echo
