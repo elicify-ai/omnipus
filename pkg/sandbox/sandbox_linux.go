@@ -443,10 +443,26 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 		return nil
 	}
 
+	// #1909: once the bind-port list is in force, a listen on 127.0.0.1:0
+	// is denied (port 0 is never on the list), so the egress proxy's
+	// listener is taken now, while bind is still unrestricted, and parked
+	// for NewEgressProxy. No port-0 rule is added: sandboxed code and
+	// children keep being denied port 0 and every unlisted port. A failure
+	// here is not fatal to the sandbox: NewEgressProxy then makes its own
+	// listen and returns that error, which buildEgressProxyOrAbort turns
+	// into a boot abort when an egress allow-list is configured.
+	if effectiveHandledAccessNet(lb, policy)&landlockAccessNetBindTcp != 0 {
+		if err := reserveEgressListener(); err != nil {
+			slog.Warn("egress_proxy: pre-restriction listener reservation failed; the proxy will listen on its own",
+				"error", err)
+		}
+	}
+
 	// Enforce mode: restrict_self is the one-way ratchet that actually
 	// activates policy enforcement on this thread and all future children.
 	_, _, errno = unix.Syscall(sysLandlockRestrictSelf, rulesetFd, 0, 0)
 	if errno != 0 {
+		releaseReservedEgressListener()
 		return fmt.Errorf("landlock: restrict_self failed: %w", errno)
 	}
 
