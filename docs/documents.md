@@ -127,6 +127,12 @@ newer uploads used this request's 20 page images or 32 MiB`. Attached PDFs
 and PDFs the agent opened itself share the model's limit on PDF documents
 per request.
 
+If the provider rejects a request because it carries a PDF (for example
+`PDF input for model 'm' is not available.`), Omnipus retries once with the
+PDF's extracted text instead. This covers an attached PDF and a PDF the agent
+read with `read_file` or `preview_document`. For the rest of that chat turn no
+request carries a PDF again: the agent's model gets page images or the text.
+
 ### What previews need
 
 - **PDF files** need nothing extra to reach the model. Page images need the PDF

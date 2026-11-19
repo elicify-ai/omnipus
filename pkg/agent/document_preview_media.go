@@ -206,6 +206,9 @@ type previewModelForms struct {
 	// maxPDFs is the most native PDFs per request (0 = no recorded limit).
 	maxPDFs int
 	resize  catalog.ResizeLimits
+	// pdfRejected: a provider rejected a native PDF this turn; pdf is then
+	// false and a preview without text sends the PDF's extracted text.
+	pdfRejected bool
 }
 
 // attachTurnDocumentPreviews builds each preview_document result's model
@@ -350,6 +353,12 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 		}
 		return 0, nil
 	}
+	if d.Text == "" && forms.pdfRejected && len(d.PDF) > 0 {
+		// The provider rejected the native PDF: recover with the text
+		// extracted from the same bytes, as an uploaded PDF does.
+		msg.Content += "\n[model received: extracted text; the provider rejected the native PDF]" + pdfFallbackText(d.PDF)
+		return 0, nil
+	}
 	msg.Content += "\n[model received: extracted text" + reason + "]\n" + d.Text
 	return 0, nil
 }
@@ -398,12 +407,14 @@ func (rt *agentLoopRunTurn) previewForms(cat *catalog.Catalog, provider, model s
 		maxSize = cfg.Agents.Defaults.GetMaxMediaSize()
 	}
 	maxPDF, maxDocs := nativePDFLimits(cat, provider, model, maxSize)
+	rejected := rt.ts != nil && rt.ts.pdfRejected.Load()
 	return previewModelForms{
-		pdf:     modelSupportsPDF(cat, provider, model),
-		images:  modelSupportsImage(cat, provider, model),
-		maxPDF:  maxPDF,
-		maxPDFs: maxDocs,
-		resize:  limits,
+		pdf:         modelSupportsPDF(cat, provider, model) && !rejected,
+		images:      modelSupportsImage(cat, provider, model),
+		maxPDF:      maxPDF,
+		maxPDFs:     maxDocs,
+		resize:      limits,
+		pdfRejected: rejected,
 	}
 }
 

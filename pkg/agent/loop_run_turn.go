@@ -1441,9 +1441,13 @@ func (rf *agentLoopRunTurnFallbacks) tryPDFTextFallback() bool {
 	if permanentModelFailure(rf.err) {
 		return false
 	}
-	if !downgradePDFMediaToText(rf.callMessages) {
+	// A tool preview's PDF rides only on the request (B-10): the rejected
+	// request's record covers it; downgrading callMessages covers uploads.
+	toolPDF := rf.rt.ts.lastRequestCarriedPDF.Load()
+	if !downgradePDFMediaToText(rf.callMessages) && !toolPDF {
 		return false
 	}
+	rf.rt.ts.pdfRejected.Store(true)
 	logger.WarnCF(
 		"agent",
 		"provider rejected request carrying a native PDF block — retrying with extracted text",

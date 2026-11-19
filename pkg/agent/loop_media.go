@@ -363,6 +363,18 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 	return "\n\n[user uploaded: " + workPath + "]"
 }
 
+// pdfFallbackText is a PDF's text-fallback injection: its extracted text,
+// or why none could be extracted.
+func pdfFallbackText(data []byte) string {
+	const fallbackName = "attachment.pdf"
+	text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
+	if ok {
+		return fmt.Sprintf("\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text)
+	}
+	return fmt.Sprintf("\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
+		fallbackName, len(data), reason)
+}
+
 // downgradePDFMediaToText converts any native PDF data URL in each message's
 // Media array back into extracted text injected into Content. It is the recovery
 // path for providers that reject native PDF blocks at request time: text input
@@ -371,7 +383,6 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 // block was downgraded.
 func downgradePDFMediaToText(messages []providers.Message) bool {
 	const pdfPrefix = "data:application/pdf;base64,"
-	const fallbackName = "attachment.pdf"
 	anyChanged := false
 
 	for i := range messages {
@@ -394,15 +405,7 @@ func downgradePDFMediaToText(messages []providers.Message) bool {
 					"\n\n[Attached PDF could not be decoded for text fallback]")
 				continue
 			}
-			text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
-			if ok {
-				injections = append(injections, fmt.Sprintf(
-					"\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text))
-			} else {
-				injections = append(injections, fmt.Sprintf(
-					"\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
-					fallbackName, len(data), reason))
-			}
+			injections = append(injections, pdfFallbackText(data))
 		}
 
 		if msgChanged {
