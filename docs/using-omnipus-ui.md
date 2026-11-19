@@ -429,13 +429,13 @@ Each chat keeps its own draft: the text, the files you dropped, pasted or picked
 
 A message is sent to the chat you wrote it in. If you switch chats while it is still being prepared (for example while a file uploads), it is not sent anywhere: it goes back into its own chat's box with the line **Restored, not sent. Send it again or discard it.** and **Discard**, and the reason, such as **Not sent because you switched chats**. If that chat's box already holds newer text, the restored text is added once in front of it.
 
-From any other chat, the **Unsent list** above the message box shows **N not sent**; expand it to see each item. On a narrow screen it is one line until you expand it. Each item names its chat (or **New chat with <agent> in <workspace>**, or **Deleted chat**), the start of the text and the number of files, with these actions:
+From any other chat, the **Unsent list** above the message box shows **N not sent**; expand it to see each item. On a narrow screen it is one line until you expand it. Each item names its chat as the sidebar does (a chat without a title reads **Untitled session**; or **New chat with <agent> in <workspace>**, or **Deleted chat**), the start of the text and the number of files, with these actions:
 
 | Item | Actions |
 |---|---|
 | Not sent | **Open** goes to that chat with the text and files in its box (for a new chat that was not created yet, the same new chat); **Copy**; **Discard** (asks first) |
 | Deleted chat | **Copy**, **Discard**, **Move text here** — moves only the text into the chat you have open; files stay in their own workspace and are not moved |
-| May not have been delivered | **Copy**, **Discard**, with the line **This may already have reached the agent. Check that chat before sending it again.** It is never resent automatically |
+| May not have been delivered | **Open** goes to the chat it was typed in, in that chat's own workspace, so you can check what happened there; the item stays in the list and nothing is sent. **Copy**, **Discard**, with the line **This may already have reached the agent. Check that chat before sending it again.** It is never resent automatically |
 
 A chat counts as deleted only when the server confirms it; a failed request alone never marks it. A file that could not be uploaded stays in the draft with the reason (for example **File too large** or **Upload failed. Try again.**).
 
