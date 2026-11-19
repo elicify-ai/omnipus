@@ -190,7 +190,7 @@ export function UnsentNotice({ focusComposer }: { focusComposer: () => void }) {
   const notStopped = useDrafts((s) => !!s.notStopped[openKey])
   const recovery = useDrafts((s) => s.drafts[openKey]?.recovery)
   const rows = useRows(openKey, unsupported)
-  const navigate = useNavigate() as OpenChatNavigate
+  const navigate = useNavigate()
   const { workspaceOf } = useNames()
   const narrow = useNarrow()
   const [expanded, setExpanded] = useState(false)

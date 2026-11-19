@@ -6,15 +6,12 @@
 // or search selection (useSelectSession.ts): workspace, session, then the
 // workspace chat route naming the chat in `open` (#1437).
 
+import type { useNavigate } from '@tanstack/react-router'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
 
-export type OpenChatNavigate = (options: {
-  to: '/workspaces/$workspaceId/chat'
-  params: { workspaceId: string }
-  search: { open: string }
-}) => unknown
+export type OpenChatNavigate = ReturnType<typeof useNavigate>
 
 /** Opens saved chat `sessionId`; with a known `workspaceId`, in that workspace. */
 export function openSavedChat(sessionId: string, workspaceId: string | null, agentId: string | undefined, navigate: OpenChatNavigate): void {
