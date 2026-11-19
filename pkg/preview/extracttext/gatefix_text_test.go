@@ -39,13 +39,17 @@ func TestExtractText_PageFailureIsNotEmptySuccess(t *testing.T) {
 // content stream (a bare Tf, which the extractor rejects), page 2 carries
 // extractable sentinel text. The xref is computed from the bytes written.
 func gatefixTwoPagePDF(page1, page2 string) []byte {
-	objects := []string{
+	pages := []string{page1, page2}
+	// Catalog, pages node, font, then one page object and one content stream
+	// per page. The capacity is that count so the later appends do not grow.
+	objects := make([]string, 0, 3+2*len(pages))
+	objects = append(objects,
 		"<< /Type /Catalog /Pages 2 0 R >>",
 		"",
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-	}
+	)
 	kids := ""
-	for i, stream := range []string{page1, page2} {
+	for i, stream := range pages {
 		pageObj := 4 + 2*i
 		kids += fmt.Sprintf("%d 0 R ", pageObj)
 		objects = append(objects, fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>", pageObj+1))

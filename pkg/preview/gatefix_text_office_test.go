@@ -74,11 +74,14 @@ func TestOfficePreview_PageFrameCutKeepsLaterPagesAndSaysSo(t *testing.T) {
 // gatefixStreamsPDF builds a PDF whose page content streams are the given
 // strings, in order. The xref is computed from the bytes written.
 func gatefixStreamsPDF(streams []string) []byte {
-	objects := []string{
+	// Catalog, pages node, font, then one page object and one content stream
+	// per page. The capacity is that count so the later appends do not grow.
+	objects := make([]string, 0, 3+2*len(streams))
+	objects = append(objects,
 		"<< /Type /Catalog /Pages 2 0 R >>",
 		"",
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-	}
+	)
 	var kids strings.Builder
 	for i, stream := range streams {
 		pageObj := 4 + 2*i

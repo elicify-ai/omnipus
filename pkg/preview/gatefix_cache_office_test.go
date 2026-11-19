@@ -16,12 +16,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
 	"github.com/elicify-ai/omnipus/pkg/preview/protocol"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // The cache test's converter and renderer are this test binary, launched
@@ -44,8 +44,8 @@ func TestOfficePreview_PageCacheKeysTheConvertedPDF(t *testing.T) {
 	home := t.TempDir()
 	officeRoot := gatefixInstallProgram(t, "gatefix-soffice")
 	rendererRoot := gatefixInstallProgram(t, "gatefix-pdfium")
-	gatefixRegisterComponent(t, home, officeRoot, "", component.KindOffice, "", 0)
-	gatefixRegisterComponent(t, home, rendererRoot, "", component.KindPDFRenderer, "gatefix-renderer", 1)
+	gatefixRegisterComponent(t, home, officeRoot, "gatefix-soffice", component.KindOffice, "", 0)
+	gatefixRegisterComponent(t, home, rendererRoot, "gatefix-pdfium", component.KindPDFRenderer, "gatefix-renderer", 1)
 	svc, err := New(Config{Home: home, Self: self, Resolver: &component.Resolver{Home: home, Executable: self}})
 	require.NoError(t, err)
 	source := []byte("same-office-source-for-both-previews")
