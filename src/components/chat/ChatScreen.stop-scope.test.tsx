@@ -156,6 +156,15 @@ vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 type CancelFrameOnWire = CancelFrame
 
+/** Spec C-3: a new tab sets origin and client_frame_id on every redirect and cancel. */
+function boundCommand<T extends { session_id: string }>(frame: T) {
+  return {
+    ...frame,
+    origin: { kind: 'chat' as const, session_id: frame.session_id },
+    client_frame_id: expect.stringMatching(/^.{1,128}$/),
+  }
+}
+
 function sentCancelFrames(send: ReturnType<typeof vi.fn>): CancelFrameOnWire[] {
   return send.mock.calls
     .map((call) => call[0] as CancelFrameOnWire)
@@ -255,7 +264,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
 
     submitCommand('/stop')
 
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }]])
+    expect(send.mock.calls).toEqual([[boundCommand({ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } })]])
     assertNoTreeScope(sentCancelFrames(send), `submitted /stop in ${sessionType ?? 'root'}`)
     expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
@@ -270,7 +279,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     expect(stopItem).not.toBeNull()
     act(() => { fireEvent.mouseDown(stopItem!) })
 
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }]])
+    expect(send.mock.calls).toEqual([[boundCommand({ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } })]])
     assertNoTreeScope(sentCancelFrames(send), 'palette /stop')
     expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
@@ -287,8 +296,8 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     // Founder: "/stop in chat needs to work like one escape or one stop
     // click" — it reuses the same second-activation tree path when armed.
     expect(send.mock.calls).toEqual([
-      [{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }],
-      [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
+      [boundCommand({ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } })],
+      [boundCommand({ type: 'cancel', session_id: 'sess_test', scope: 'tree' })],
     ])
     expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
@@ -299,7 +308,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
 
     submitCommand('/cancel')
 
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', scope: 'tree', shown: { code_points: 0 } }]])
+    expect(send.mock.calls).toEqual([[boundCommand({ type: 'cancel', session_id: 'sess_test', scope: 'tree', shown: { code_points: 0 } })]])
     expect(composerRuntime.send).not.toHaveBeenCalled()
     expect(screen.queryByText('Stop all')).not.toBeInTheDocument()
   })
@@ -312,8 +321,8 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     submitCommand('/cancel')
 
     expect(send.mock.calls).toEqual([
-      [{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }],
-      [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
+      [boundCommand({ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } })],
+      [boundCommand({ type: 'cancel', session_id: 'sess_test', scope: 'tree' })],
     ])
     expect(screen.queryByText('Stop all')).not.toBeInTheDocument()
     expect(composerRuntime.send).not.toHaveBeenCalled()
@@ -323,7 +332,7 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     vi.useFakeTimers()
     render(<OmnipusComposer />)
     submitCommand('/stop')
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }]])
+    expect(send.mock.calls).toEqual([[boundCommand({ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } })]])
 
     // Past the 1 s label minimum but still inside the 3 s confirmation
     // window: the same Stop button, not a separate offer, must be usable.
@@ -332,8 +341,8 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
     else pressEscape()
 
     expect(send.mock.calls).toEqual([
-      [{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }],
-      [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
+      [boundCommand({ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } })],
+      [boundCommand({ type: 'cancel', session_id: 'sess_test', scope: 'tree' })],
     ])
   })
 
@@ -348,11 +357,11 @@ describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () 
 
     // The socket edge is spied, not the backend's redirect implementation:
     // this proves the SPA request, not server acceptance or execution.
-    expect(send.mock.calls).toEqual([[{
+    expect(send.mock.calls).toEqual([[boundCommand({
       type: 'redirect',
       session_id: 'sess_test',
       instruction: 'focus on the failing tests',
-    }]])
+    })]])
     expect(sentCancelFrames(send)).toEqual([])
     expect(composerRuntime.send).not.toHaveBeenCalled()
   })
@@ -449,7 +458,7 @@ describe('Double Stop/Esc confirmation and dismissal (founder 2026-10-06)', () =
     expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
     act(() => { vi.advanceTimersByTime(1) })
     expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
-    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }]])
+    expect(send.mock.calls).toEqual([[boundCommand({ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } })]])
   })
 
   it('RED slash /cancel sends tree scope in one action', () => {
@@ -517,8 +526,8 @@ describe('Double Stop/Esc confirmation and dismissal (founder 2026-10-06)', () =
 // /stop-redirect = this chat's own redirect frame) and the generated wire
 // types — not read off the implementation.
 
-const SESSION_FRAME = { type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } }
-const TREE_FRAME = { type: 'cancel', session_id: 'sess_test', scope: 'tree' }
+const SESSION_FRAME = boundCommand({ type: 'cancel', session_id: 'sess_test', shown: { code_points: 0 } })
+const TREE_FRAME = boundCommand({ type: 'cancel', session_id: 'sess_test', scope: 'tree' })
 
 describe('W1 no stuck "Stopping..." after the stream ended', () => {
   it('click 1, stream ended, click 2 inside the window sends one tree frame and Send returns after the window', () => {
@@ -597,12 +606,12 @@ describe('W2 a Stop that sent nothing does not arm the window', () => {
 
     pressStop()
 
-    const toasts = useUiStore.getState().toasts
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].variant).toBe('error')
-    expect(toasts[0].message).toMatch(/could not send/i)
+    // Spec 4.7 / chief pin: a Stop that cannot be sent is the persistent notice, never a toast.
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+    expect(screen.getByText('Not stopped. Press Stop again.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Stopping...' })).not.toBeInTheDocument()
-    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    // Spec B-24: the Stop control stays active while the turn runs. The label is Stop, not Stopping.
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
 
     // The gateway comes back while the turn is still running: the next press
     // is again a FIRST press (session scope), never a tree stop.
@@ -626,7 +635,9 @@ describe('W2 a Stop that sent nothing does not arm the window', () => {
 
     pressEscape()
 
-    expect(useUiStore.getState().toasts).toHaveLength(1)
+    // Spec 4.7: the same Stop with no connection shows the notice, not a toast.
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+    expect(screen.getByText('Not stopped. Press Stop again.')).toBeInTheDocument()
     act(() => {
       useConnectionStore.setState({
         connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
@@ -681,7 +692,7 @@ describe('W4 /stop-redirect neither arms the window nor counts as the second Sto
     render(<OmnipusComposer />)
 
     submitCommand('/stop-redirect do the other thing')
-    expect(send.mock.calls).toEqual([[{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }]])
+    expect(send.mock.calls).toEqual([[boundCommand({ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' })]])
 
     pressStop()
     expect(sentCancelFrames(send)).toEqual([SESSION_FRAME])
@@ -697,7 +708,7 @@ describe('W4 /stop-redirect neither arms the window nor counts as the second Sto
 
     expect(send.mock.calls).toEqual([
       [SESSION_FRAME],
-      [{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }],
+      [boundCommand({ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' })],
     ])
     expect(sentCancelFrames(send).some((f) => f.scope === 'tree')).toBe(false)
   })
@@ -739,7 +750,7 @@ describe('W4 /stop-redirect neither arms the window nor counts as the second Sto
 
     expect(send.mock.calls).toEqual([
       [SESSION_FRAME],
-      [{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }],
+      [boundCommand({ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' })],
       [TREE_FRAME],
     ])
   })
@@ -761,14 +772,14 @@ describe('Stop during the idle gap of an active goal (G1)', () => {
     act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().handleFrame(goal('active')) })
     render(<OmnipusComposer />)
     pressStop()
-    expect(sentCancelFrames(send)).toEqual([{ type: 'cancel', session_id: 'sess_test' }])
+    expect(sentCancelFrames(send)).toEqual([boundCommand({ type: 'cancel', session_id: 'sess_test' })])
   })
 
   it('Escape in the focused composer sends exactly one cancel frame while a goal is active and nothing streams', () => {
     act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().handleFrame(goal('active')) })
     render(<OmnipusComposer />)
     pressEscape()
-    expect(sentCancelFrames(send)).toEqual([{ type: 'cancel', session_id: 'sess_test' }])
+    expect(sentCancelFrames(send)).toEqual([boundCommand({ type: 'cancel', session_id: 'sess_test' })])
   })
 
   it('Escape on an idle chat without a goal (or a finished goal) sends nothing', () => {
@@ -798,7 +809,7 @@ describe('Stop during the idle gap of an active goal (G1)', () => {
     act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().handleFrame(goal('active')) })
     render(<OmnipusComposer />)
     pressStop()
-    expect(sentCancelFrames(send)).toEqual([{ type: 'cancel', session_id: 'sess_test' }])
+    expect(sentCancelFrames(send)).toEqual([boundCommand({ type: 'cancel', session_id: 'sess_test' })])
     act(() => { useChatStore.getState().handleFrame({ ...goal('active'), state: 'waiting_on_user' }) })
     act(() => { vi.advanceTimersByTime(3100) })
     expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
