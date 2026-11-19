@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -252,43 +253,63 @@ func RegisterOffice(opts RegisterOptions) (*Manifest, error) {
 	if overlap := FirstOverlap(layout.root, opts.WriteRoots); overlap != nil {
 		return nil, fmt.Errorf("LibreOffice folder is writable by an agent (%s); choose a folder no agent can write", overlap.Grant)
 	}
-	for _, f := range append([]string{layout.executable}, layout.extra...) {
-		if outsideErr := layout.insideRoot(f); outsideErr != nil {
-			return nil, outsideErr
-		}
-	}
-	if layout.version, err = layout.officeVersion(opts.goos()); err != nil {
+	m, registry, err := buildOfficeManifest(layout, opts.goos(), runtime.GOARCH, "")
+	if err != nil {
 		return nil, err
 	}
+	m.Trust = TrustOperatorRegistered
+	m.Root = layout.root
+	m.RegisteredBy = opts.Operator
+	m.RegisteredAt = opts.now().UTC().Format(time.RFC3339)
+	if err := writeRegistered(opts.Home, KindOffice, m, registry); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// buildOfficeManifest checks a located LibreOffice install and builds its
+// manifest without writing anything: every layout file stays inside the
+// install, the version is the supported series, and each program file is
+// fingerprinted. prefix (a slash path, "" for none) is put in front of the
+// layout's paths when the manifest sits in a folder above the install root
+// (the packaged macOS folder holding LibreOffice.app). On macOS it also
+// returns the filtered services registry files. Trust and the
+// registration fields are the caller's.
+func buildOfficeManifest(layout *officeLayout, goos, goarch, prefix string) (*Manifest, map[string][]byte, error) {
+	for _, f := range append([]string{layout.executable}, layout.extra...) {
+		if outsideErr := layout.insideRoot(f); outsideErr != nil {
+			return nil, nil, outsideErr
+		}
+	}
+	var err error
+	if layout.version, err = layout.officeVersion(goos); err != nil {
+		return nil, nil, err
+	}
 	if !strings.HasPrefix(layout.version, SupportedOfficeSeries) {
-		return nil, fmt.Errorf("LibreOffice %s is not supported; install the official %sx release", layout.version, SupportedOfficeSeries)
+		return nil, nil, fmt.Errorf("LibreOffice %s is not supported; install the official %sx release", layout.version, SupportedOfficeSeries)
 	}
 	files := map[string]string{}
 	for _, f := range append([]string{layout.executable}, layout.extra...) {
 		sum, _, hashErr := HashFile(filepath.Join(layout.root, filepath.FromSlash(f)))
 		if hashErr != nil {
-			return nil, fmt.Errorf("LibreOffice file %s: %w", f, hashErr)
+			return nil, nil, fmt.Errorf("LibreOffice file %s: %w", f, hashErr)
 		}
-		files[f] = sum
+		files[path.Join(prefix, f)] = sum
 	}
 	m := &Manifest{
 		Schema:         ManifestSchema,
 		Component:      KindOffice,
 		Version:        layout.version,
-		Platform:       opts.goos() + "-" + runtime.GOARCH,
-		Executable:     layout.executable,
+		Platform:       goos + "-" + goarch,
+		Executable:     path.Join(prefix, layout.executable),
 		Files:          files,
 		FileListSHA256: FileListDigest(files),
-		Trust:          TrustOperatorRegistered,
-		Root:           layout.root,
-		RegisteredBy:   opts.Operator,
-		RegisteredAt:   opts.now().UTC().Format(time.RFC3339),
 	}
 	var registry map[string][]byte
 	if layout.services != "" {
 		registry, err = filteredServices(layout.services)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		digests := make(map[string]string, len(registry))
 		for name, data := range registry {
@@ -297,10 +318,7 @@ func RegisterOffice(opts RegisterOptions) (*Manifest, error) {
 		m.Registry = "services"
 		m.RegistrySHA256 = FileListDigest(digests)
 	}
-	if err := writeRegistered(opts.Home, KindOffice, m, registry); err != nil {
-		return nil, err
-	}
-	return m, nil
+	return m, registry, nil
 }
 
 // filteredServices copies every .rdb of the bundle's services folder,

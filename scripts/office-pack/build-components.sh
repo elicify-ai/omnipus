@@ -161,7 +161,7 @@ if [ "$office" = yes ]; then
   if [ "$os" = Linux ]; then stage_linux_office "$archive"; else stage_darwin_office "$archive"; fi
   # Packaged manifest (trust "packaged"); macOS also gets services/ beside
   # the .app. Written by Go so it is the same code the resolver checks.
-  (cd "$repo" && CGO_ENABLED=0 go run -tags goolm,stdjson ./internal/officepack/cmd/office-manifest "$stage/office")
+  (cd "$repo" && CGO_ENABLED=0 go run -tags goolm,stdjson ./internal/tools/office-manifest write "$stage/office")
   [ -f "$stage/office/manifest.json" ] || die "the manifest tool wrote no manifest.json"
   if [ "$os" = Darwin ]; then
     [ -f "$stage/office/services/services.rdb" ] || die "the manifest tool wrote no filtered services list"
