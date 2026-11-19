@@ -203,6 +203,9 @@ type Result struct {
 	Text []protocol.TextPage
 	// TextTruncated reports that the 4 MiB text budget cut the text.
 	TextTruncated bool
+	// TextProblem is why no text could be extracted at all (Text is then
+	// nil); "" otherwise. A single page that failed is named in Text instead.
+	TextProblem string
 	// RenderReason is "" when pages were rendered, else a Reason* value;
 	// RenderDetail is the human reason.
 	RenderReason string
@@ -321,13 +324,23 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 	if textErr != nil && render != nil {
 		text, textErr = s.text(ctx, extract, pdf, res.First, res.Last)
 	}
+	if f := (*failure)(nil); errors.As(textErr, &f) && f.Kind == failText {
+		// One page's text could not be extracted: extract page by page so
+		// the other pages keep their text and the failed page is named, not
+		// delivered as a blank page (AD-15, SF-02).
+		text, textErr = s.textByPage(ctx, extract, pdf, res.First, res.Last)
+	}
 	if textErr != nil {
 		var f *failure
 		if errors.As(textErr, &f) && f.Kind == failStopped {
 			return nil, textErr
 		}
-		// Text is a fallback form; its failure does not undo a render.
+		// Text is a fallback form; its failure does not undo a render, but
+		// the cause is kept for the model and the log (SF-02).
+		logger.WarnCF("preview", "document text extraction failed",
+			map[string]any{"name": req.Name, "first_page": res.First, "last_page": res.Last, "error": textErr.Error()})
 		res.Text = nil
+		res.TextProblem = textErr.Error()
 	} else {
 		res.Text = text
 		total := 0
@@ -421,6 +434,34 @@ func (s *Service) text(ctx context.Context, prog protocolProgram, pdf []byte, fi
 		return nil, err
 	}
 	return resp.Text, nil
+}
+
+// textByPage extracts first..last one page per run after a page's text
+// failed: a page that fails again is kept as a "[text extraction failed on
+// page n: …]" entry; any other failure (Stop, a crash, a limit) ends it. The
+// 4 MiB whole-call budget still applies across the runs.
+func (s *Service) textByPage(ctx context.Context, prog protocolProgram, pdf []byte, first, last int) ([]protocol.TextPage, error) {
+	var out []protocol.TextPage
+	total := 0
+	for p := first; p <= last && total < protocol.MaxTextTotalBytes; p++ {
+		pages, err := s.text(ctx, prog, pdf, p, p)
+		var f *failure
+		switch {
+		case err == nil:
+		case errors.As(err, &f) && f.Kind == failText:
+			pages = []protocol.TextPage{{Number: uint32(p), Text: "[" + f.Message + "]"}}
+		default:
+			return nil, err
+		}
+		for _, page := range pages {
+			if room := protocol.MaxTextTotalBytes - total; len(page.Text) > room {
+				page.Text = protocol.TruncateUTF8(page.Text, room)
+			}
+			total += len(page.Text)
+			out = append(out, page)
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) writeRoots(caller []component.WriteRoot) []component.WriteRoot {

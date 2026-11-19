@@ -199,6 +199,10 @@ type TextPage struct {
 	Text   string
 }
 
+// CodeTextFailed is the ERROR code a program sends when one page's text
+// cannot be extracted; its message names the page.
+const CodeTextFailed = "text_failed"
+
 // PeerError is the program's terminal error report.
 type PeerError struct {
 	Code    string `json:"code"`

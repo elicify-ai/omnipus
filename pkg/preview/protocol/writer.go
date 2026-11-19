@@ -97,6 +97,9 @@ func (fw *FrameWriter) Done() error {
 	return fw.frame(FrameDone, b[:])
 }
 
+// TruncateUTF8 cuts s to at most n bytes at a UTF-8 boundary.
+func TruncateUTF8(s string, n int) string { return truncateUTF8(s, n) }
+
 func truncateUTF8(s string, n int) string {
 	if n <= 0 {
 		return ""

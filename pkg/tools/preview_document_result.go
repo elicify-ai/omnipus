@@ -244,6 +244,8 @@ func previewTextForm(res *preview.Result) string {
 		fmt.Fprintf(&b, "--- page %d ---\n%s\n", p.Number, p.Text)
 	}
 	switch {
+	case res.Text == nil && res.TextProblem != "":
+		return "[text extraction unavailable for this document: " + res.TextProblem + "]"
 	case res.Text == nil:
 		return "[text extraction unavailable for this document]"
 	case empty:
