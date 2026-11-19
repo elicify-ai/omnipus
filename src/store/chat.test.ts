@@ -15,6 +15,16 @@ import type { WsConnection, ServerFrame } from '@/lib/ws'
 //             wave5a-wire-ui-spec.md — Scenario: Cancel during streaming preserves partial response
 
 const TEST_SESSION_ID = 'test-session-1'
+// Spec 4.7: a cancel carries the chat origin and a client_frame_id.
+const FRAME_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+function boundCancel(sessionId: string) {
+  return {
+    type: 'cancel',
+    session_id: sessionId,
+    origin: { kind: 'chat', session_id: sessionId },
+    client_frame_id: expect.stringMatching(FRAME_ID),
+  }
+}
 
 function resetStore() {
   act(() => {
@@ -38,6 +48,9 @@ function resetStore() {
       lastUserMessageAt: null,
       cancelStage: null,
       lastReceivedEventTime: null,
+      // Spec 4.7: a failed Stop leaves a not-stopped notice. Clear it so an
+      // idle no-op is not turned into a send by the previous test.
+      draftState: useChatStore.getInitialState().draftState,
     })
     useConnectionStore.setState({
       connection: null,
@@ -428,7 +441,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
 
   it('cancelStream calls connection.send with cancel frame', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Cancel during streaming (AC1 — WebSocket frame sent)
-    const mockSend = vi.fn()
+    const mockSend = vi.fn().mockReturnValue(true)
     act(() => {
       useChatStore.getState().appendMessage({
         id: 'asst_5',
@@ -447,7 +460,8 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
       // activeSessionId is already TEST_SESSION_ID from resetStore
       useChatStore.getState().cancelStream()
     })
-    expect(mockSend).toHaveBeenCalledWith({ type: 'cancel', session_id: TEST_SESSION_ID })
+    // Spec 4.7: the cancel names this chat and carries a client_frame_id.
+    expect(mockSend.mock.calls).toEqual([[boundCancel(TEST_SESSION_ID)]])
     expect(useChatStore.getState().isStreaming).toBe(false)
   })
 
@@ -490,7 +504,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
 
   it('cancelStream(sessionId) cancels/marks the specified (background) session, not the active one', () => {
     const OTHER_SID = 'other-sid'
-    const mockSend = vi.fn()
+    const mockSend = vi.fn().mockReturnValue(true)
 
     const activeMsgs: ChatMessage[] = [
       { id: 'asst_active', session_id: TEST_SESSION_ID, role: 'assistant', content: 'active turn...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
@@ -525,7 +539,8 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
 
     // The cancel frame targets OTHER_SID only — never the active session.
     expect(mockSend).toHaveBeenCalledTimes(1)
-    expect(mockSend).toHaveBeenCalledWith({ type: 'cancel', session_id: OTHER_SID })
+    // Spec 4.7: the cancel names the background chat and carries a client_frame_id.
+    expect(mockSend.mock.calls).toEqual([[boundCancel(OTHER_SID)]])
 
     // OTHER_SID's message is marked interrupted.
     const otherBucket = useChatStore.getState().sessionsById[OTHER_SID]
@@ -543,7 +558,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
   })
 
   it('cancelStream() with no argument still targets the active session (default behaviour unchanged)', () => {
-    const mockSend = vi.fn()
+    const mockSend = vi.fn().mockReturnValue(true)
     const activeMsgs: ChatMessage[] = [
       { id: 'asst_default', session_id: TEST_SESSION_ID, role: 'assistant', content: 'active turn...', timestamp: '2026-03-29T10:00:01Z', status: 'streaming', isStreaming: true },
     ]
@@ -559,7 +574,8 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
       })
       useChatStore.getState().cancelStream()
     })
-    expect(mockSend).toHaveBeenCalledWith({ type: 'cancel', session_id: TEST_SESSION_ID })
+    // Spec 4.7: the cancel names the active chat and carries a client_frame_id.
+    expect(mockSend.mock.calls).toEqual([[boundCancel(TEST_SESSION_ID)]])
     const msg = useChatStore.getState().messages.find((m) => m.id === 'asst_default')
     expect(msg?.status).toBe('interrupted')
   })

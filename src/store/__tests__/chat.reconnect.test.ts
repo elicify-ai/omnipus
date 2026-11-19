@@ -26,9 +26,10 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
+import type { SessionStateFrame, ReplayMessageFrame, TokenFrame, DoneFrame, WsConnection } from '@/lib/ws'
 import { useChatStore, getMessages, __resetFinishedTurnIdsForTests } from '../chat'
+import { useConnectionStore } from '../connection'
 import { useSessionStore } from '../session'
-import type { SessionStateFrame, ReplayMessageFrame, TokenFrame, DoneFrame } from '@/lib/ws'
 import { makeSnapshotHistory } from '@/test/factories'
 
 const SID = 'reconnect-active-turn-session'
@@ -62,6 +63,7 @@ function resetStores() {
       activeAgentId: null,
       activeAgentType: null,
     })
+    useConnectionStore.setState({ connection: null, isConnected: false })
   })
 }
 
@@ -566,6 +568,11 @@ describe('chat.reconnect — explicit cancel clears active-turn state (review S7
     expect(assistantMessages()[0]?.isStreaming).toBe(true)
 
     act(() => {
+      // Spec 4.7: the turn is frozen only after a connected stand-in accepts the cancel.
+      useConnectionStore.setState({
+        connection: { send: () => true } as unknown as WsConnection,
+        isConnected: true,
+      })
       useChatStore.getState().cancelStream()
     })
 

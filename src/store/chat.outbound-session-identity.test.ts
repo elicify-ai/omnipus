@@ -192,6 +192,8 @@ describe('canonical outbound session identity', () => {
       type: 'message', session_id: TEST_SESSION_ID, client_message_id: original.id,
       content: original.content, agent_id: OWNER, media: ['media://original-image'],
       metadata: { workspace_id: WORKSPACE },
+      // Spec 4.6.1: a saved chat's message carries origin {kind: chat, session_id}.
+      origin: { kind: 'chat', session_id: TEST_SESSION_ID },
     }]])
     const state = useChatStore.getState()
     expect(getMessages(state.sessionsById[TEST_SESSION_ID])).toEqual([
