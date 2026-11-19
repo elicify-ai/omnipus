@@ -242,12 +242,14 @@ func TestBuildAgentCreate_RefusalsMatchREST(t *testing.T) {
 			in:      agentCreateInput{WireType: "Subagent", Name: "Worker", Soul: "s"},
 			status:  http.StatusBadRequest,
 			wantMsg: "description is required for worker agents (Subagent, subagent_3p)",
+			field:   "description",
 		},
 		{
 			name:   "three fallback models are refused 400 (create rule: at most 2, paired)",
 			in:     agentCreateInput{WireType: "Main", Name: "Fbs", Soul: "s", FallbackModels: &threeFallbacks},
 			status: http.StatusBadRequest,
 			msgHas: "fallback_models",
+			field:  "fallback_models",
 		},
 		{
 			name:   "unpaired fallback model is refused 400 (create rule: paired)",
@@ -268,6 +270,21 @@ func TestBuildAgentCreate_RefusalsMatchREST(t *testing.T) {
 			in:     agentCreateInput{WireType: "Main", Name: "Colored", Soul: "s", Color: (*gen.AgentColor)(strPtr("not-a-colour"))},
 			status: http.StatusBadRequest,
 			msgHas: "color must be one of the ten identity colours",
+			field:  "color",
+		},
+		{
+			name:   "non-canonical figure is refused 400 (D1 row 29)",
+			in:     agentCreateInput{WireType: "Main", Name: "Figured", Soul: "s", Figure: (*gen.AgentFigure)(strPtr("NotAFigure"))},
+			status: http.StatusBadRequest,
+			msgHas: "figure must be Robot, Man, Woman, Omnipus, or Monogram",
+			field:  "figure",
+		},
+		{
+			name:   "non-canonical role is refused 400 (D1 row 29)",
+			in:     agentCreateInput{WireType: "Main", Name: "Roled", Soul: "s", Role: (*gen.AgentRole)(strPtr("not-a-role"))},
+			status: http.StatusBadRequest,
+			msgHas: "role must be one of the curated role slugs",
+			field:  "role",
 		},
 		{
 			name:   "unconfigured MCP server is refused 422 (sign-off step 5 buildToolConfig)",

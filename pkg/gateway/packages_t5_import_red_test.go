@@ -225,6 +225,11 @@ func TestPackagesImport_Route(t *testing.T) {
 	t.Run("F05 max_tool_iterations 900 is refused when the global limit is 200", func(t *testing.T) {
 		uploadIterationsRefusal(t, true, 900, "200", 0)
 	})
+
+	// F06 / D1 rows 23, 24, 29: the refusal names the offending field.
+	t.Run("F06 create-rule refusals name the field", func(t *testing.T) {
+		uploadCreateFieldCases(t)
+	})
 }
 
 func decodePreview(t *testing.T, raw []byte) gen.PackageImportPreview {
