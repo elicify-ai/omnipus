@@ -916,6 +916,7 @@ export function ComposerBody({ conversation, composerRuntime }: { conversation: 
                 <Plus size={16} />
               </IconButton>
               <input
+                tabIndex={0}
                 ref={pickerRef}
                 type="file"
                 multiple
