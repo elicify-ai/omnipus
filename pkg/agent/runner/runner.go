@@ -201,8 +201,10 @@ type RunOptions struct {
 	CLIArgs []string
 	// PresetArgs are the person's Settings preset parameters for this CLI,
 	// tokenised (r17 §3.7). Each driver appends them after the filtered
-	// CLIArgs and never filters them: the last occurrence of a repeated flag
-	// wins, so a person's value beats an agent flag of the same name.
+	// CLIArgs: the last occurrence of a repeated flag wins, so a person's
+	// value beats an agent flag of the same name. The one exception is a
+	// model option, dropped when the driver passes the worker's own model
+	// (#1880, preset_model.go::filterPresetArgs); nothing else is filtered.
 	PresetArgs []string
 	// EnvOverrides are additional environment variables merged into Env for the
 	// spawned process (MAJ-5 / ExecutorConfig.env_overrides). Omnipus-internal

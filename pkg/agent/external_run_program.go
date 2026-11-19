@@ -78,7 +78,9 @@ func (ed *runExternalCLISubTurnState) reportProgramRefusal(text string) error {
 // auditRunSpawn writes the external_cli.run audit entry for one spawn
 // (r17 §3.10): agent, CLI, entered and resolved program, the agent flags the
 // filter drops, the preset through thirdpartycli.PresetAuditFilter and
-// thirdpartycli.PresetUseNote when set, and filter_bypassed_by_person_preset with the
+// thirdpartycli.PresetUseNote when set, preset_flags_dropped (through the same
+// filter) when the preset's model option is dropped because the driver passes
+// the worker's own model (#1880), and filter_bypassed_by_person_preset with the
 // filter's reasons, through the same filter, whenever
 // a preset token is one the safety denylist would drop from an agent (a model
 // option is not a safety bypass, #1880). Write failures
@@ -101,6 +103,15 @@ func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli str
 		filter := thirdpartycli.PresetAuditFilter(ed.al.GetConfig())
 		fields["preset_args"] = filter(ed.presetText)
 		fields["note"] = thirdpartycli.PresetUseNote
+		// The preset's model option, dropped when the driver passes the
+		// worker's own model (#1880) — the same decision as buildArgs.
+		if droppedPreset := runner.PresetArgsDroppedAtRun(key, ed.agentModel, ed.presetArgs); len(droppedPreset) > 0 {
+			presetFlags := make([]string, 0, len(droppedPreset))
+			for _, d := range droppedPreset {
+				presetFlags = append(presetFlags, filter(d.Flag))
+			}
+			fields["preset_flags_dropped"] = presetFlags
+		}
 		// The safety denylist only: a preset model option is not a safety
 		// bypass (#1880 model precedence applies to Additional CLI arguments).
 		if _, bypassed := runner.SafetyCLIArgsDetailed(key, ed.presetArgs); len(bypassed) > 0 {

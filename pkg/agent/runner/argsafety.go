@@ -52,8 +52,10 @@
 // earlier rule that a cli_args model override passed through and won as the
 // last occurrence. The model entries live in modelPrecedenceCLIFlagsByCLI,
 // separate from the safety denylist, because they are not a safety guard:
-// PresetArgs (a Settings surface the filter never touches) are audited against
-// the safety denylist only (safetyCLIFlagsDetailed).
+// PresetArgs (a Settings surface the safety filter never touches) are audited
+// against the safety denylist only (safetyCLIFlagsDetailed). The same model
+// entries also apply to PresetArgs, but only when the driver passes its own
+// model (preset_model.go::filterPresetArgs, founder decision 2026-11-19).
 
 package runner
 

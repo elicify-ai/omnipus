@@ -125,10 +125,11 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	presetArgs := runner.ParseCLIArgs(row.PresetArgs, "executor-preview")
 	opts := runner.RunOptions{
 		Model:      model,
 		CLIArgs:    cliArgs,
-		PresetArgs: runner.ParseCLIArgs(row.PresetArgs, "executor-preview"),
+		PresetArgs: presetArgs,
 		MaxTurns:   maxTurns,
 		// Constant placeholder: inert for claude/codex (their buildArgs never
 		// reads opts.Input — the real prompt reaches them exclusively via
@@ -160,6 +161,10 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 	// (filterKey, cliArgs), so this reproduces exactly the "kept" set already
 	// reflected in argv above without re-deriving the filtering logic here.
 	_, droppedDetailed := runner.FilterDangerousCLIArgsDetailed(filterKey, cliArgs)
+	// The person's preset loses its model option when the driver passes the
+	// worker's own model (#1880); the same decision BuildXArgs made above,
+	// listed after the agent's own dropped flags.
+	droppedDetailed = append(droppedDetailed, runner.PresetArgsDroppedAtRun(filterKey, model, presetArgs)...)
 	droppedArgs := make([]executorPreviewDroppedArg, 0, len(droppedDetailed))
 	for _, d := range droppedDetailed {
 		droppedArgs = append(droppedArgs, executorPreviewDroppedArg{Flag: d.Flag, Reason: d.Reason})
