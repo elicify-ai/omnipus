@@ -64,4 +64,7 @@ properties:
       component is not installed (no Retry; the card explains how to install).
       renderer_damaged: the installed renderer failed its integrity check.
       renderer_failed: the renderer ran and failed (crash, limit, protocol
-      error). storage_failed: pages rendered but no thumbnail could be stored.
+      error). storage_failed: pages rendered but they could not be kept —
+      either no thumbnail could be stored, or (a Retry) the thumbnails were
+      stored and sent in this frame's parts but the preview could not be
+      saved to the chat record, so a reload would not show them.

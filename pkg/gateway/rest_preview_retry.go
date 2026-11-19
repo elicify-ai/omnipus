@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -44,6 +45,11 @@ const (
 	previewRetryMsgNotInLibrary = "the preview's source is not a file of this session's workspace Library"
 	previewRetryMsgChanged      = "the source file changed since the preview"
 	previewRetryMsgUnavailable  = "the PDF renderer is not available"
+
+	// previewRetryReasonNotSaved is the unavailable_reason of a Retry that
+	// rendered but whose chat record could not be saved (contract
+	// MediaPreview.unavailable_reason "storage_failed").
+	previewRetryReasonNotSaved = "storage_failed"
 )
 
 // previewRetryToolCallID returns the tool call id of a
@@ -410,7 +416,17 @@ func (a *restAPI) runPreviewRetry(svc *preview.Service, adm *preview.Admission, 
 	if err == nil && record.Outcome != tools.PreviewOutcomeUnavailable {
 		// Only a successful retry persists (ruling follow-up 2026-11-01): a
 		// reload then shows the new group; a failed one leaves the old card.
-		a.settlePreviewRetry(sessionID, toolCallID, thumbs, record)
+		if saveErr := a.settlePreviewRetry(sessionID, toolCallID, thumbs, record); saveErr != nil {
+			// The pages rendered but the chat record still holds the old
+			// preview, so a reload would lose them (SF-04): the person gets
+			// the rendered pages together with the unavailable card
+			// ("could not be stored", with Retry), never an unqualified
+			// success.
+			slog.Error("rest: preview retry rendered but not saved to the chat", "session_id", sessionID, "tool_call_id", toolCallID, "error", saveErr)
+			reason := previewRetryReasonNotSaved
+			record.Outcome = tools.PreviewOutcomeUnavailable
+			record.UnavailableReason = &reason
+		}
 	}
 	if err != nil {
 		slog.Warn("rest: preview retry failed", "session_id", sessionID, "tool_call_id", toolCallID, "error", err)
@@ -486,21 +502,24 @@ func (a *restAPI) renderPreviewRetry(ctx context.Context, svc *preview.Service, 
 // and preview group, so replay rebuilds the new group. The model view and
 // the call's result text are unchanged; no second record with the same
 // tool_call_id is written (replay keeps the last occurrence of an id).
-func (a *restAPI) settlePreviewRetry(sessionID, toolCallID string, thumbs []tools.DocumentPreviewThumbnail, record generated.MediaPreview) {
+// It returns why the record could not be saved, nil when it was.
+func (a *restAPI) settlePreviewRetry(sessionID, toolCallID string, thumbs []tools.DocumentPreviewThumbnail, record generated.MediaPreview) error {
 	store := a.resolveSessionStore(sessionID)
 	if store == nil {
-		slog.Error("rest: preview retry not persisted: session store unavailable", "session_id", sessionID, "tool_call_id", toolCallID)
-		return
+		return errors.New("session store unavailable")
 	}
 	addr, call, found, err := store.LocateChatToolCall(sessionID, session.ToolCallID(toolCallID))
-	if err != nil || !found {
-		slog.Error("rest: preview retry not persisted: original call not found", "session_id", sessionID, "tool_call_id", toolCallID, "found", found, "error", err)
-		return
+	if err != nil {
+		return fmt.Errorf("locate the original call: %w", err)
+	}
+	if !found {
+		return errors.New("the original call is no longer in the chat")
 	}
 	call.Result = previewRetryResult(call.Result, thumbs, record)
 	if _, err := store.SettleToolCall(sessionID, addr, "", call); err != nil {
-		slog.Error("rest: preview retry not persisted", "session_id", sessionID, "tool_call_id", toolCallID, "error", err)
+		return fmt.Errorf("settle the original call: %w", err)
 	}
+	return nil
 }
 
 // previewRetryResult is the call's recorded result with its display media

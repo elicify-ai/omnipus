@@ -51,6 +51,7 @@ After you select **Retry**:
 | "Retry failed: …" | The retry could not start, with the reason. For example "Retry failed: the PDF renderer is not available." You can try again unless you no longer have access to the chat or the file |
 | "This file is outside the workspace Library, so its previews can't be retried here. Ask the agent to preview it again." | Retry works only for files in the chat's workspace Library (its work folder and mounted folders). The card then hides its Retry button |
 | "This preview is no longer available." | The chat or this preview could not be found, for example because the chat was deleted. The card then hides its Retry button |
+| The new page images, together with the card "Page previews unavailable — the page images could not be stored" | The retry rendered the pages and shows them now, but they could not be saved to the chat, so they will not be there after you reload the page. Select **Retry** again later to save them |
 
 Retry works for files in the workspace Library: it renders the file you could open in the Library, checks that it is still the previewed version, and shows the page images to you only. The agent's model receives nothing from a retry.
 
