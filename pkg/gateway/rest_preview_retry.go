@@ -58,11 +58,14 @@ func previewRetryToolCallID(subPath string) (string, bool) {
 }
 
 // recordedPreview is what a preview_document call recorded: the file the
-// agent named, and the version and pages of its preview record.
+// agent named, and the version, page count and pages of its preview record.
+// pageCount is kept so a failed Retry's frame carries the recorded count
+// (contract MediaPreview.page_count is at least 1; a 0 is dropped by the SPA).
 type recordedPreview struct {
 	file          string
 	sourceName    string
 	sourceVersion string
+	pageCount     int
 	first, last   int
 }
 
@@ -217,9 +220,10 @@ func previewRecordOf(call session.ToolCall) (recordedPreview, bool) {
 	rec := recordedPreview{file: file}
 	rec.sourceName, _ = group["source_name"].(string)
 	rec.sourceVersion, _ = group["source_version"].(string)
+	rec.pageCount = recordedInt(group["page_count"])
 	rec.first = recordedInt(group["first_page"])
 	rec.last = recordedInt(group["last_page"])
-	if rec.sourceVersion == "" || rec.first < 1 || rec.last < rec.first {
+	if rec.sourceVersion == "" || rec.first < 1 || rec.last < rec.first || rec.pageCount < rec.last {
 		return recordedPreview{}, false
 	}
 	if rec.sourceName == "" {
@@ -413,7 +417,7 @@ func (a *restAPI) runPreviewRetry(svc *preview.Service, adm *preview.Admission, 
 		reason := preview.ReasonRendererFailed
 		record = generated.MediaPreview{
 			SourceName: src.rec.sourceName, SourceVersion: src.rec.sourceVersion,
-			FirstPage: src.rec.first, LastPage: src.rec.last,
+			PageCount: src.rec.pageCount, FirstPage: src.rec.first, LastPage: src.rec.last,
 			Outcome: tools.PreviewOutcomeUnavailable, UnavailableReason: &reason,
 		}
 		thumbs = nil
