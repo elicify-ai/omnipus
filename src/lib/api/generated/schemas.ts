@@ -5720,12 +5720,6 @@ export const CredentialSetRequest = z.object({
 export const CredentialRotateRequest = z.object({
   new_passphrase: z.string().min(1),
 });
-export const BackupCreateResponse = z.object({
-  path: z.string(),
-  size_bytes: z.number().int().gte(0),
-  created_at: z.string().datetime({ offset: true }),
-});
-export const RestoreBackupRequest = z.object({ filename: z.string() });
 export const StorageStats = z
   .object({
     workspace_size_bytes: z.number().int().gte(0),
@@ -8360,11 +8354,6 @@ export const PerformanceReloadFailedError: z.ZodType<PerformanceReloadFailedErro
     code: z.string(),
     details: PerformanceReloadFailedDetails,
   });
-export const BackupEntry = z.object({
-  filename: z.string(),
-  size_bytes: z.number().int().gte(0),
-  created_at: z.string().datetime({ offset: true }),
-});
 export const CreateEmailDraftResult = z.object({
   created: z.boolean(),
   message_id: z.string(),
@@ -10056,56 +10045,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 429,
         description: `Rate limit exceeded.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/backup",
-    alias: "createBackup",
-    description: `Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories. The archive is written atomically to ~/.omnipus/backups/.
-`,
-    requestFormat: "json",
-    response: BackupCreateResponse,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/backups",
-    alias: "listBackups",
-    description: `Lists all .tar.gz files in ~/.omnipus/backups/ with filename, size, and creation time. Returns an empty array when no backups exist.
-`,
-    requestFormat: "json",
-    response: z.array(
-      z
-        .object({
-          filename: z.string(),
-          size_bytes: z.number().int().gte(0),
-          created_at: z.string().datetime({ offset: true }),
-        })
-        .passthrough()
-    ),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
         schema: ErrorResponse,
       },
     ],
@@ -14071,46 +14010,6 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/restore",
-    alias: "restoreBackup",
-    description: `Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: z.object({ filename: z.string() }),
-      },
-    ],
-    response: z
-      .object({ status: z.literal("restored"), filename: z.string() })
-      .passthrough(),
-    errors: [
-      {
-        status: 400,
-        description: `Invalid filename (path traversal, missing .tar.gz).`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Backup file not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 422,
-        description: `Filename field is required.`,
         schema: ErrorResponse,
       },
     ],

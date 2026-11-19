@@ -1573,66 +1573,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/backup": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create a backup archive
-         * @description Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories. The archive is written atomically to ~/.omnipus/backups/.
-         */
-        post: operations["createBackup"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/backups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List backup archives
-         * @description Lists all .tar.gz files in ~/.omnipus/backups/ with filename, size, and creation time. Returns an empty array when no backups exist.
-         */
-        get: operations["listBackups"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Restore from a backup archive
-         * @description Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
-         */
-        post: operations["restoreBackup"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/storage/stats": {
         parameters: {
             query?: never;
@@ -12719,29 +12659,6 @@ export interface components {
             paired: components["schemas"]["DevicePaired"][];
         };
         /**
-         * BackupEntry
-         * @description A single backup archive entry returned by GET /api/v1/backups.
-         */
-        BackupEntry: {
-            /**
-             * @description Backup archive filename (e.g. "omnipus-backup-2026-05-16.tar.gz").
-             * @example omnipus-backup-2026-05-16T10-00-00Z.tar.gz
-             */
-            filename: string;
-            /**
-             * Format: int64
-             * @description Archive size in bytes.
-             * @example 1048576
-             */
-            size_bytes: number;
-            /**
-             * Format: date-time
-             * @description RFC3339 timestamp when the backup was created.
-             * @example 2026-05-16T10:00:00Z
-             */
-            created_at: string;
-        };
-        /**
          * StorageStats
          * @description Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
          */
@@ -14389,29 +14306,6 @@ export interface components {
             cleanup_intent: string;
         };
         /**
-         * BackupCreateResponse
-         * @description Response from POST /api/v1/backup. Returns the path, size, and creation time of the new backup archive.
-         */
-        BackupCreateResponse: {
-            /**
-             * @description Absolute path to the backup file.
-             * @example /home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz
-             */
-            path: string;
-            /**
-             * Format: int64
-             * @description Size of the backup file in bytes.
-             * @example 1048576
-             */
-            size_bytes: number;
-            /**
-             * Format: date-time
-             * @description RFC3339 timestamp when the backup was created.
-             * @example 2026-05-16T10:30:00Z
-             */
-            created_at: string;
-        };
-        /**
          * OnboardingStatusResponse
          * @description Response from PATCH /api/v1/state when marking onboarding complete. Confirms that onboarding has been completed.
          */
@@ -15378,17 +15272,6 @@ export interface components {
              * @example correct-horse-battery-staple
              */
             new_passphrase: string;
-        };
-        /**
-         * RestoreBackupRequest
-         * @description Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
-         */
-        RestoreBackupRequest: {
-            /**
-             * @description Name of the backup file (without path). Must not contain path separators or traversal sequences. Must end with .tar.gz.
-             * @example omnipus-backup-20260516T103000Z.tar.gz
-             */
-            filename: string;
         };
         /**
          * BearerToken
@@ -23584,139 +23467,6 @@ export interface operations {
             };
         };
     };
-    createBackup: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Backup created. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackupCreateResponse"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            /** @description Method not allowed. */
-            405: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    listBackups: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description List of backup archive entries. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        /** @example backup-20260516T103000Z.tar.gz */
-                        filename: string;
-                        /**
-                         * Format: int64
-                         * @example 1048576
-                         */
-                        size_bytes: number;
-                        /**
-                         * Format: date-time
-                         * @example 2026-05-16T10:30:00Z
-                         */
-                        created_at: string;
-                    }[];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            /** @description Method not allowed. */
-            405: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    restoreBackup: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RestoreBackupRequest"];
-            };
-        };
-        responses: {
-            /** @description Backup restored. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        /**
-                         * @example restored
-                         * @enum {string}
-                         */
-                        status: "restored";
-                        /** @example backup-20260516T103000Z.tar.gz */
-                        filename: string;
-                    };
-                };
-            };
-            /** @description Invalid filename (path traversal, missing .tar.gz). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            /** @description Backup file not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Filename field is required. */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
     getStorageStats: {
         parameters: {
             query?: never;
@@ -29516,7 +29266,6 @@ export type DoctorResult = components["schemas"]["DoctorResult"];
 export type DevicePending = components["schemas"]["DevicePending"];
 export type DevicePaired = components["schemas"]["DevicePaired"];
 export type DevicesResponse = components["schemas"]["DevicesResponse"];
-export type BackupEntry = components["schemas"]["BackupEntry"];
 export type StorageStats = components["schemas"]["StorageStats"];
 export type AuditLogToggleRequest = components["schemas"]["AuditLogToggleRequest"];
 export type AuditLogUpdateResponse = components["schemas"]["AuditLogUpdateResponse"];
@@ -29580,7 +29329,6 @@ export type MailReplyContextRequest = components["schemas"]["MailReplyContextReq
 export type MailReplyContextResponse = components["schemas"]["MailReplyContextResponse"];
 export type MailboxRemovalResult = components["schemas"]["MailboxRemovalResult"];
 export type MailboxCleanupRequest = components["schemas"]["MailboxCleanupRequest"];
-export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];
 export type ToolApprovalResponse = components["schemas"]["ToolApprovalResponse"];
@@ -29612,7 +29360,6 @@ export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStat
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
 export type CredentialRotateRequest = components["schemas"]["CredentialRotateRequest"];
-export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"];
 export type BearerToken = components["schemas"]["BearerToken"];
 export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
 export type CliDetect = components["schemas"]["CliDetect"];

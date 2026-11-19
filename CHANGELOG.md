@@ -6,6 +6,10 @@ Pre-1.0 versions are tracked by the active release branch rather than by tagged 
 
 ## [Unreleased] — `feat/browser-streaming-performance`
 
+### Removed
+
+- **Backup and Restore has been removed from Settings → Data and the API.** Existing backup files on disk are not deleted. Use agent packages (export/import) to move agents between installations; packages are not a full backup of the data folder. (#1919)
+
 ### Changed
 
 - **There is no longer a computed default for `performance.max_parallel_agents`.** The old default divided available memory by an assumed per-agent cost (~3.5 MB) to pick a number once at startup. Concurrency is now bounded by live available memory at the moment each agent turn is admitted. `0` means *not configured*, not *auto-detect*. An explicitly configured value is unaffected and is still honoured exactly as set. Settings → Performance shows "automatic — bounded by available memory" instead of an integer when nothing is configured.
