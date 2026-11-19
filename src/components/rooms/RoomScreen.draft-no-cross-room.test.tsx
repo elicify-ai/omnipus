@@ -32,6 +32,7 @@ import {
   Network, connectSocket, json, resetRealStores, room, snapshot,
   stopHarness, WS,
 } from '../../../tests/l1-room-ui/harness'
+import type { ObservedRequest } from '../../../tests/l1-room-ui/harness'
 
 const ROOM_A = 'room-alpha'
 const ROOM_B = 'room-beta'
@@ -62,16 +63,18 @@ const MARKER = 'room B marker sent after the checked send'
 // exact oracle; the previous 121-second horizon let such a submit settle
 // unseen after the test ended, and useRealTimers discards scheduled fake
 // timers (vitest VitestUtils.useRealTimers docs), so the discarded timer was
-// not proof the send never happened. Stepping through the heartbeat is what
-// keeps the long window finite: the heartbeat interval never accumulates, and
-// the real WsConnection's unanswered-ping force-close plus its bounded
-// reconnect schedule (fast phase, fixed slow phase, give-up — ws.ts
-// constants) exhaust themselves within roughly the first half hour of virtual
-// time, after which no send-owned timer remains. A submit that stays pending
-// beyond the hour is recorded as the proof's stated bound in the RED report,
-// not claimed impossible. An unbounded runAllTimersAsync still cannot be
-// used: a self-rescheduling timer (the heartbeat while connected) never
-// drains the queue.
+// not proof the send never happened. Correction (Revision 4, from the
+// red/rev4 observation runs): this paragraph previously credited the
+// heartbeat's unanswered-ping force-close and the bounded reconnect schedule
+// for keeping the window finite — wrong: the heartbeat interval is created
+// when the socket opens, BEFORE useFakeTimers, so it stays a real timer and
+// never fires inside the virtual window (the observation logs record zero
+// pings after the click). The window is finite for the simpler reason that
+// advanceTimersByTimeAsync advances exactly the fixed virtual amount and
+// then stops. A submit that stays pending beyond the hour is recorded as the
+// proof's stated bound in the RED report, not claimed impossible. An
+// unbounded runAllTimersAsync still cannot be used: a self-rescheduling
+// timer never drains the queue.
 const SENTINEL_SETTLE_MS = 1_000
 const QUEUED_SUBMIT_FLUSH_MS = 3_600_000
 // UploadFilesResponse (contracts): the room attachment adapter reads
@@ -84,6 +87,30 @@ const UPLOAD_RESPONSE = {
     content_type: 'text/plain',
     ref: MEDIA_REF,
   }],
+}
+
+// Revision 4 (CHECK r4): the reads that legitimately happen around the room
+// screen, observed on the fixed baseline (red/rev4/room-observe-rev4.log)
+// and pinned to their contract paths (contracts/openapi.yaml: /api/v1/agents,
+// /api/v1/skills, /api/v1/commands, /api/v1/workspaces/{id},
+// /api/v1/rooms/{roomId}). Every entry is a body-less read with its exact
+// query shape, and isAllowedRead rejects any request with a body or any
+// non-GET method — a defect cannot hide a carrier in an allowed-looking
+// shape, and the request the oracle compares field by field below (the
+// sentinel POST) is never on this list.
+const ALLOWED_READS: ReadonlyArray<{ method: string; path: string; query: string }> = [
+  { method: 'GET', path: '/api/v1/agents', query: '' },
+  { method: 'GET', path: '/api/v1/skills', query: '' },
+  { method: 'GET', path: '/api/v1/commands', query: '?surface=web' },
+]
+function isAllowedRead(request: ObservedRequest): boolean {
+  if (request.method !== 'GET' || request.body !== null) return false
+  const exact = ALLOWED_READS.some((read) => read.path === request.path && read.query === request.query)
+  const roomOrWorkspace = request.query === ''
+    && (request.path === `/api/v1/rooms/${ROOM_A}`
+      || request.path === `/api/v1/rooms/${ROOM_B}`
+      || request.path === `/api/v1/workspaces/${WS}`)
+  return exact || roomOrWorkspace
 }
 
 function roomRecord(id: string, name: string): Room {
@@ -274,7 +301,7 @@ describe('#1849 an unsent room draft must not follow the user into another room'
       const sendButton = () => screen.getByRole('button', { name: /^send/i })
       // Everything the transport records from this instant on sits inside the
       // checked window: the checked Send, the sentinel and the whole flush.
-      const writesBeforeCheckedSend = net.writes().length
+      const requestsBeforeCheckedSend = net.requests.length
       fireEvent.click(sendButton())
       await act(async () => { await vi.advanceTimersByTimeAsync(SENTINEL_SETTLE_MS) })
       // The sentinel: a second, known send after the checked Send.
@@ -291,10 +318,25 @@ describe('#1849 an unsent room draft must not follow the user into another room'
       // build that sent only a prefix of the draft ("Plan the off", its
       // mention binding and attachments already stripped) into room B; a
       // length-plus-fields oracle cannot.
-      const writesAfterCheckedSend = net.writes().slice(writesBeforeCheckedSend)
-      const postWrites = writesAfterCheckedSend.filter((write) => write.method === 'POST')
-      expect(postWrites, '1849: exactly one POST may follow the checked Send — the sentinel; any further POST, with any content, to any endpoint, fails').toHaveLength(1)
-      const sentinelWrite = postWrites[0]
+      //
+      // Revision 4 (CHECK r4): that r3 oracle counted only POSTs, so any
+      // non-POST request carrying room A's draft toward room B — a PUT or
+      // PATCH to the message endpoint, a POST to a different room-B path —
+      // would have passed untouched (CHECK's own probes declined to invent
+      // a valid alternate room method; the hole is closed structurally
+      // here). The oracle is now the COMPLETE request log over EVERY method
+      // (net.requests, not the writes-only filter): after the allow-listed
+      // reads (isAllowedRead — each a body-less contract read pinned to its
+      // exact path and query), exactly one request may remain: the sentinel
+      // POST, compared field by field below. The connection heartbeat is a
+      // WebSocket frame (src/lib/ws.ts::_startHeartbeat), never a REST
+      // request, so it needs no entry in the allow-list. No substring or
+      // containment filter anywhere.
+      const requestsAfterCheckedSend = net.requests.slice(requestsBeforeCheckedSend)
+      const nonSentinelRequests = requestsAfterCheckedSend.filter((request) => !isAllowedRead(request))
+      expect(nonSentinelRequests, '1849: exactly one request may follow the checked Send — the sentinel POST; any other request, ANY method, any path, any content, fails').toHaveLength(1)
+      const sentinelWrite = nonSentinelRequests[0]
+      expect(sentinelWrite.method, '1849: the one permitted request must be a POST — any other method carrying room A\'s draft toward room B fails').toBe('POST')
       expect(sentinelWrite.path, '1849: the one permitted send must target room B\'s message endpoint').toBe(`/api/v1/rooms/${ROOM_B}/messages`)
       const body = sentinelWrite.body as { text?: string; mentions?: string[]; media?: string[]; client_message_id?: string }
       expect(body.text, '1849: the one permitted send must carry exactly the sentinel text — none of the draft may ride along, prefix or otherwise').toBe(MARKER)

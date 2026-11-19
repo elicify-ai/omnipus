@@ -68,16 +68,18 @@ const MARKER = 'workspace B marker sent after the checked send'
 // exact oracle; the previous 121-second horizon let such a submit settle
 // unseen after the test ended, and useRealTimers discards scheduled fake
 // timers (vitest VitestUtils.useRealTimers docs), so the discarded timer was
-// not proof the send never happened. Stepping through the heartbeat is what
-// keeps the long window finite: the heartbeat interval never accumulates, and
-// the real WsConnection's unanswered-ping force-close plus its bounded
-// reconnect schedule (fast phase, fixed slow phase, give-up — ws.ts
-// constants) exhaust themselves within roughly the first half hour of virtual
-// time, after which no send-owned timer remains. A submit that stays pending
-// beyond the hour is recorded as the proof's stated bound in the RED report,
-// not claimed impossible. An unbounded runAllTimersAsync still cannot be
-// used: a self-rescheduling timer (the heartbeat while connected) never
-// drains the queue.
+// not proof the send never happened. Correction (Revision 4, from the
+// red/rev4 observation runs): this paragraph previously credited the
+// heartbeat's unanswered-ping force-close and the bounded reconnect schedule
+// for keeping the window finite — wrong: the heartbeat interval is created
+// when the socket opens, BEFORE useFakeTimers, so it stays a real timer and
+// never fires inside the virtual window (the observation logs record zero
+// pings after the click). The window is finite for the simpler reason that
+// advanceTimersByTimeAsync advances exactly the fixed virtual amount and
+// then stops. A submit that stays pending beyond the hour is recorded as the
+// proof's stated bound in the RED report, not claimed impossible. An
+// unbounded runAllTimersAsync still cannot be used: a self-rescheduling
+// timer never drains the queue.
 const SENTINEL_SETTLE_MS = 1_000
 const QUEUED_SUBMIT_FLUSH_MS = 3_600_000
 
@@ -379,13 +381,54 @@ describe('#1853 an unsent chat draft must not follow the user into another works
       // includes the whole draft text) passed a build that sent only a prefix
       // of the draft ("Draft for th") into workspace B; a length-plus-fields
       // oracle cannot.
+      //
+      // Revision 4 (CHECK r4): that r3 oracle still compared only frames
+      // whose type is 'message', so a schema-valid `redirect` frame carrying
+      // the whole draft in its `instruction` field sailed through —
+      // check/r4/chat-redirect.log records exit 0 while the draft actually
+      // left for workspace B's session, and the frame is contract-valid
+      // (contracts/components/schemas/RedirectFrame.yaml: the instruction
+      // becomes the continued chat's next user message). The oracle is now
+      // the COMPLETE outbound frame log: every frame recorded after the
+      // checked Send click must be either the single sentinel `message`
+      // frame, compared field by field below, or a frame whose type is on
+      // the named allow-list. No substring or containment filter anywhere
+      // (CHECK r3 scored those as weakening).
+      //
+      // The named allow-list — outbound frame types that can legitimately
+      // happen in this window, cited to its contract:
+      // - 'ping': the SPA heartbeat, "sent every 30 seconds by the SPA to
+      //   keep the connection alive through proxies" (contracts/asyncapi.yaml
+      //   heartbeat ping; generated ws-schemas.ts WsFrameType 'ping'; sent
+      //   by src/lib/ws.ts::_startHeartbeat). An allowed ping is asserted
+      //   below to carry ONLY its type — its contract shape has no other
+      //   field — so nothing, draft or otherwise, can ride inside it.
+      // There is no outbound handshake frame to allow: auth rides the HTTP
+      // cookie on the WS handshake itself (src/lib/ws.ts onopen, US-5/
+      // FR-010 — "no client-sent {type:'auth'} frame is needed or
+      // possible"), and the entry's attach_session frames all precede the
+      // checked Send, outside the sliced window (red/rev4/
+      // chat-observe-rev4.log — the fixed baseline's complete in-window
+      // log is exactly the sentinel and nothing else; the heartbeat
+      // interval is created before useFakeTimers and stays a real timer,
+      // so zero pings actually land in-window today; the allowance exists
+      // because the heartbeat is the one frame type the protocol
+      // legitimately emits mid-session, and the shape assertion keeps it
+      // text-proof).
+      const ALLOWED_NON_SENTINEL_FRAME_TYPES = ['ping']
       const framesAfterCheckedSend = socket.sent.slice(sentBeforeCheckedSend)
-      const messageFrames = framesAfterCheckedSend.filter((frame) => (frame as { type?: string }).type === 'message')
-      expect(messageFrames, '1853: exactly one message frame may follow the checked Send — the sentinel; any further message frame, with any content, to any session, fails').toHaveLength(1)
-      const sentinel = messageFrames[0] as unknown as {
-        session_id?: string; content?: string; agent_id?: string
+      const nonSentinelFrames = framesAfterCheckedSend.filter((frame) => {
+        const type = (frame as { type?: string }).type ?? ''
+        if (!ALLOWED_NON_SENTINEL_FRAME_TYPES.includes(type)) return true
+        expect(Object.keys(frame).sort(), '1853: an allowed ping frame must carry only its contract shape (type only) — any extra field could carry the draft').toEqual(['type'])
+        return false
+      })
+      expect(nonSentinelFrames, '1853: exactly one non-heartbeat frame may follow the checked Send — the sentinel; any other frame, of ANY type, with any content, to any session, fails').toHaveLength(1)
+      const sentinel = nonSentinelFrames[0] as unknown as {
+        type?: string; session_id?: string; content?: string; agent_id?: string
         metadata?: { workspace_id?: string }; client_message_id?: string
       }
+      expect(sentinel.type, '1853: the one permitted frame must be a message frame — any other frame type carrying user text toward chat B fails').toBe('message')
       expect(sentinel.session_id, '1853: the one permitted send must target workspace B\'s session').toBe(SESSION_B)
       expect(sentinel.content, '1853: the one permitted send must carry exactly the sentinel text — none of the draft may ride along, prefix or otherwise').toBe(MARKER)
       expect(sentinel.agent_id, '1853: the one permitted send must keep the session\'s agent').toBe('mia')
