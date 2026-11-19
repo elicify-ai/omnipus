@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode"
 
@@ -73,6 +72,7 @@ func resolveMediaRefsWithOffload(
 	var nativePDFs []nativePDFPart
 	// Per message: the resolved media and content injections, finished
 	// after the upload page images are rendered (newest uploads first).
+	turnIdx := turnUserMessageIndex(result)
 	outMedia := make([][]string, len(result))
 	outInj := make([][]string, len(result))
 	touched := make([]bool, len(result))
@@ -208,7 +208,7 @@ func resolveMediaRefsWithOffload(
 						nativePDFs = append(nativePDFs, nativePDFPart{
 							msg: i, part: len(resolved) - 1, path: localPath,
 							mime: mime, name: meta.Filename, size: info.Size(),
-							turn: sink.isTurnUpload(ref),
+							turn: i == turnIdx,
 						})
 					} else {
 						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
@@ -233,7 +233,7 @@ func resolveMediaRefsWithOffload(
 							msg: i, mediaAt: len(resolved), injAt: len(contentInjections), noteAt: len(offInj),
 							localPath: localPath, name: meta.Filename, dest: dest, offErr: offErr,
 							limits: resizeBudgetForModel(cat, provider, model, maxSize),
-							turn:   sink.isTurnUpload(ref),
+							turn:   i == turnIdx,
 						})
 					}
 					contentInjections = append(contentInjections, offInj+textInj)
@@ -1325,19 +1325,30 @@ type offloadSink struct {
 	// ctx is the turn's context: work the resolver starts for an upload
 	// (PDF page rendering) ends on Stop. Nil means no turn (background).
 	ctx context.Context
-	// turnUploads are the media refs of this turn's own user message
-	// (turnState.media). Refs are identities, so an upload is recognized
-	// as this turn's wherever the message sits in the request.
-	turnUploads []string
 	// turnMedia is filled by the resolver: the decoded document media of
 	// this turn's uploads in the request it returned.
 	turnMedia turnUploadMedia
 }
 
-// turnOffloadSink is the resolver sink of this turn: its work folder, its
-// Stop, and its own uploads (turnState.media) for the request media budget.
+// turnOffloadSink is the resolver sink of this turn: its work folder and
+// its Stop.
 func (rt *agentLoopRunTurn) turnOffloadSink(workDir string) *offloadSink {
-	return &offloadSink{workDir: workDir, ctx: rt.turnCtx, turnUploads: rt.ts.media}
+	return &offloadSink{workDir: workDir, ctx: rt.turnCtx}
+}
+
+// turnUserMessageIndex is the index of the turn's own user message: the
+// last user message that is neither a tool result nor the request-only
+// volatile note; -1 when there is none. "This turn" starts there
+// (architect rule G5). Messages the loop adds later in the turn with the
+// user role (sub-turn results, repairs) can sit after it, so callers that
+// keep a figure across the turn record it when the request is resolved.
+func turnUserMessageIndex(messages []providers.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if m := messages[i]; m.Role == "user" && m.ToolCallID == "" && !m.Volatile {
+			return i
+		}
+	}
+	return -1
 }
 
 // turnUploadMedia is the decoded document media of a turn's own uploads in
@@ -1345,11 +1356,6 @@ func (rt *agentLoopRunTurn) turnOffloadSink(workDir string) *offloadSink {
 // images rendered from uploaded PDFs.
 type turnUploadMedia struct {
 	nativePDFBytes, pageImageBytes int
-}
-
-// isTurnUpload reports whether ref is one of this turn's own uploads.
-func (s *offloadSink) isTurnUpload(ref string) bool {
-	return s != nil && slices.Contains(s.turnUploads, ref)
 }
 
 // turnContext is the sink's turn context, or Background without one.

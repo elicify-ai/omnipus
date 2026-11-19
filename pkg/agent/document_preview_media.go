@@ -210,8 +210,10 @@ type previewModelForms struct {
 	// false and a preview without text sends the PDF's extracted text.
 	pdfRejected bool
 	// turnUploadBytes is the decoded document media of this turn's own
-	// uploads already in the request (native PDFs and upload page images);
-	// it is taken from the 32 MiB first (AD-6, architect rule G5).
+	// uploads as recorded when the request was resolved (native PDFs and
+	// upload page images); the assembler takes the larger of it and the
+	// native PDFs it finds in the turn's user message, from the 32 MiB first
+	// (AD-6, architect rule G5).
 	turnUploadBytes int
 	// newest marks the newest live preview of the request: when the 32 MiB
 	// has no room for it, it gets its text and a note, not the not-re-sent
@@ -249,6 +251,7 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 	// newest call first. Screenshots, inspection images and earlier turns'
 	// media keep their own limits. The provider's native-document count
 	// covers every PDF in the request, earlier turns included.
+	forms.turnUploadBytes = max(forms.turnUploadBytes, turnMessagePDFBytes(live))
 	budget := max(previewRequestBudget-forms.turnUploadBytes, 0)
 	pdfsLeft := forms.maxPDFs
 	if forms.maxPDFs > 0 {
@@ -282,6 +285,22 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 		}
 	}
 	return live, nil
+}
+
+// turnMessagePDFBytes is the decoded size of the native PDFs in the turn's
+// own user message (turnUserMessageIndex).
+func turnMessagePDFBytes(messages []providers.Message) int {
+	i := turnUserMessageIndex(messages)
+	if i < 0 {
+		return 0
+	}
+	n := 0
+	for _, ref := range messages[i].Media {
+		if strings.HasPrefix(ref, "data:application/pdf;") {
+			n += dataURLDecodedSize(ref)
+		}
+	}
+	return n
 }
 
 // requestNativePDFCount is how many native PDFs the messages carry.
