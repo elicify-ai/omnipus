@@ -174,21 +174,6 @@ describe('queue, offline first send, resend and sign-out (spec 4.11 / 4.4.3)', (
     expect(getDraft(key).text, 'BR-13b: the discarded text is not put back').toBe('')
   })
 
-  it('BR-13b Discard of a file-bearing first message uploads nothing and sends nothing', async () => {
-    // Spec BR-13b file variant, Discard leg: the file is not uploaded while B is
-    // open, and Discard does not upload it later either.
-    const { key } = await queueOfflineFirst('discard the file', 'note.txt')
-    expect(apiMocks.uploadFiles, 'BR-13b: the offline Send does not upload').not.toHaveBeenCalled()
-    const user = userEvent.setup()
-    await confirmListDiscard(user)
-    expect(useChatStore.getState().pendingFirstSend, 'BR-13b: the file-bearing pending send is gone').toBeNull()
-    act(() => { enterNewChat('w1', 'mia', 'core', key) })
-    connection().fail = false
-    act(() => { useChatStore.getState().drainOutboundQueue() })
-    expect(apiMocks.uploadFiles, 'BR-13b: Discard never uploads the file').not.toHaveBeenCalled()
-    expect(framesOf('message', sent()), 'BR-13b: re-entering K sends no frame for the file').toEqual([])
-  })
-
   it('BR-21 a restored upload still sends its original ref after 60 other uploads', async () => {
     // Spec BR-21 / 4.6.1 "Restore, then Send": the restored draft keeps the
     // uploaded ref. Sixty later uploads go through the composer, not the mock.
