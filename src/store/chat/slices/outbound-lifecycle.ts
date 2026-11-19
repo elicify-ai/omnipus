@@ -31,7 +31,7 @@ import { mergeDrainBatch, stampQueuedMessage } from '../queue-target'
 import { getPendingFirstSend, isOrphanedFirstSendMessage, refuseOrphanedFirstSendRetry, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
 import { settleAllCancelAcks, shownCheckpointFor } from '../stop-checkpoint'
-import { buildMessageFrame, originForTarget, sendCommand, submissionForMessage, type Submission } from '@/lib/bound-send'
+import { buildMessageFrame, originForTarget, refuseNoChatOpen, sendCommand, submissionForMessage, type Submission } from '@/lib/bound-send'
 import { useDraftStore } from '@/store/chat/drafts'
 
 /** Accepted sends request a fresh current window; failures never move a reader. */
@@ -201,7 +201,7 @@ function recipientFields(content: string): Pick<MessageFrame, 'recipient'> {
  * own target, agent, workspace and origin; a send without one (a non-composer
  * caller) names the open chat, as before, with that chat's origin.
  */
-function sendTargetOf(submission: Submission | undefined): { rawActiveSessionId: string | null; activeAgentId: string | null; origin: SendOrigin; workspaceId: string } {
+function sendTargetOf(submission: Submission | undefined): { rawActiveSessionId: string | null; activeAgentId: string | null; origin: SendOrigin | null; workspaceId: string } {
   if (!submission) {
     const { activeSessionId, activeAgentId } = useSessionStore.getState()
     return { rawActiveSessionId: activeSessionId, activeAgentId, origin: originForTarget(activeSessionId), workspaceId: outboundWorkspaceId(activeSessionId) }
@@ -329,6 +329,10 @@ function performResendMessage(
     })
     return
   }
+  // #1428 (4.8, C-1, C5): the stored origin, else the target's; none means no
+  // chat and no new-chat key, so nothing is resent and the row stays as it is.
+  const origin = submissionForMessage(messageId)?.origin ?? originForTarget(targetSid)
+  if (!origin) return refuseNoChatOpen('Resend')
 
   // Reset the SAME message in place first — 'sending' — never a second
   // bubble, unlike the pre-fix `sendMessage(content)` call this replaces.
@@ -365,7 +369,7 @@ function performResendMessage(
     // target has no session for the pair to ride on (the
     // recipient-only-with-session_id wire rule).
     ...(targetSid !== '__pending' ? recipientFields(content) : {}),
-  }, submissionForMessage(messageId)?.origin ?? originForTarget(targetSid))
+  }, origin)
   get()._validateOutboundFrame(payload, targetSid)
   const sent = connection.send(payload)
   if (!sent) {
@@ -576,6 +580,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
       const { rawActiveSessionId, activeAgentId, origin, workspaceId } = sendTargetOf(opts?.submission)
+      // #1428 (4.8, C-1, C5): no chat open and no new-chat key: refused here,
+      // before any queue entry, bubble or placeholder exists.
+      if (!origin) return refuseNoChatOpen('sendMessage')
       // #1428: a queued message remembers the chat it was typed in.
       const queuedMessage = { ...stampQueuedMessage(untargetedMessage, rawActiveSessionId, getPendingFirstSend(get())?.clientMessageId, opts?.queueSeq), ...(opts?.submission ? { submission: opts.submission } : {}) }
       // Ordinary sends, mid-turn steering and new-answer requests share the

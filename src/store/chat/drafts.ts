@@ -190,6 +190,11 @@ export function mirrorOpenDraft(reason: MirrorReason): void {
   mirrorWriter?.(getDraft(openDraftKey()).text, reason)
 }
 
+/** Puts refused text back into the composer when no draft key exists to hold it. */
+export function mirrorText(text: string): void {
+  mirrorWriter?.(text, 'restore')
+}
+
 // ── Keys and aliases ────────────────────────────────────────────────────────
 
 export function registerNewChat(key: string, info: NewChatInfo): void {

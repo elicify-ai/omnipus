@@ -33,6 +33,7 @@ import { onSignOut } from '@/store/auth'
 import { useSessionStore } from '@/store/session'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useUiStore } from '@/store/ui'
 import { useChatStore } from '@/store/chat/store'
 import type { MediaAttachment } from '@/store/chat/types'
 import { isImageAttachment } from '@/components/chat/AttachmentCard'
@@ -51,6 +52,7 @@ import {
   isNewChatKey,
   keyOfOrigin,
   mirrorOpenDraft,
+  mirrorText,
   openChatKey,
   openDraftKey,
   originForKey,
@@ -82,6 +84,7 @@ export const SEND_TEXT = {
   unsupportedBanner: 'This page and the server are different versions. Your unsent text is kept below. Reload the page to send.',
   restoredLine: 'Restored, not sent. Send it again or discard it.',
   uncertainLine: 'This may already have reached the agent. Check that chat before sending it again.',
+  noChatOpen: 'There is no chat open to send to. Your text is kept.',
 } as const
 
 // ── Submissions (4.6.1) ─────────────────────────────────────────────────────
@@ -162,7 +165,10 @@ export function captureForOpenKey(path: string, key: string, inputs: Pick<Submis
  */
 export function submitDraft(path = 'Composer Send'): boolean {
   const key = openDraftKey()
-  if (key === NO_CHAT_KEY) return false
+  if (key === NO_CHAT_KEY) {
+    refuseNoChatOpen(path)
+    return false
+  }
   const draft = getDraft(key)
   if (draft.text.trim() === '' && draft.files.length === 0) return false
   const submission = captureForOpenKey(path, key, { text: draft.text, files: draft.files, libraryPicks: draft.libraryPicks })
@@ -199,12 +205,31 @@ registerOwningChatCapture((path, text) => {
   }
 })
 
-/** A runtime append (thread.append) submits its own text for the open chat. */
+/**
+ * A runtime append (thread.append) submits its own text for the open chat.
+ * Returns false only for empty text. With no chat open and no new-chat key
+ * the append is refused locally and its text goes back into the box.
+ */
 export function submitText(path: string, text: string): boolean {
+  if (text.trim() === '') return false
   const key = openDraftKey()
-  if (key === NO_CHAT_KEY || text.trim() === '') return false
+  if (key === NO_CHAT_KEY) {
+    refuseNoChatOpen(path)
+    mirrorText(text)
+    return true
+  }
   void sendBound(captureForOpenKey(path, key, { text, files: [], libraryPicks: [] }))
   return true
+}
+
+/**
+ * Local refusal of a send with no chat open and no new-chat key K (spec 4.8
+ * "Local origin/target refusal", C-1, C5): no frame, no bubble, no
+ * placeholder, nothing created; the text stays where it was typed.
+ */
+export function refuseNoChatOpen(path: string): void {
+  logDiagnostic('boundSendNoChatOpen', { path })
+  useUiStore.getState().addToast({ message: SEND_TEXT.noChatOpen, variant: 'error' })
 }
 
 // ── Capability (4.10) ───────────────────────────────────────────────────────
@@ -420,11 +445,16 @@ export function legacyQueueEntryToItem(text: string): void {
 
 // ── Frame builders (AL-1) ───────────────────────────────────────────────────
 
-/** The origin a frame for this target carries when no submission is at hand. */
-export function originForTarget(target: string | null): SendOrigin {
+/**
+ * The origin a frame for this target carries when no submission is at hand.
+ * null when there is no target and no open chat key: no origin exists then,
+ * so no message frame may be built (spec C-1, C5); the caller refuses locally
+ * (refuseNoChatOpen).
+ */
+export function originForTarget(target: string | null): SendOrigin | null {
   if (target && target !== '__pending') return originForKey(target)
   const key = openChatKey()
-  return key && key !== NO_CHAT_KEY ? originForKey(key) : { kind: 'chat', session_id: target ?? '' }
+  return key && key !== NO_CHAT_KEY ? originForKey(key) : null
 }
 
 export function buildMessageFrame<F extends Omit<MessageFrame, 'type' | 'origin'>>(fields: F, origin: SendOrigin): MessageFrame & F {
