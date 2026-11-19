@@ -66,6 +66,14 @@ beforeEach(() => {
   socket = SocketEdge.instances[0]
   socket.onopen?.(new Event('open'))
   useConnectionStore.getState().setConnection(connection)
+  // Spec 4.10: an open socket stays unconfirmed until server_capabilities.
+  // #1534's shown snapshot is only sent once the socket is supported (4.7).
+  useConnectionStore.getState().setConnected(true)
+  socket.onmessage?.(new MessageEvent('message', {
+    data: JSON.stringify({ type: 'server_capabilities', send_origin: true }),
+  }))
+  expect(connection.sendCapability, 'spec 4.10: send_origin makes this socket supported').toBe('supported')
+  while (scheduled.length > 0) scheduled.shift()!(0)
 })
 afterEach(() => {
   connection.disconnect()
@@ -84,7 +92,12 @@ describe('#1534 queued socket frames do not count as shown', () => {
     expect(contents()).toEqual([['VISIBLE 😀', 'streaming']])
     expect(useChatStore.getState().cancelStream(SID)).toBe(true)
     expect(socket.sent).toEqual([{
-      type: 'cancel', session_id: SID, shown: { message_id: MID, turn_id: TURN, code_points: 9 },
+      type: 'cancel',
+      session_id: SID,
+      // Spec C-3: a new tab sets client_frame_id and origin on every cancel.
+      client_frame_id: expect.stringMatching(/^.{1,128}$/),
+      origin: { kind: 'chat', session_id: SID },
+      shown: { message_id: MID, turn_id: TURN, code_points: 9 },
     }])
     flush()
     expect(contents()).toEqual([['VISIBLE 😀', 'interrupted']])

@@ -14,6 +14,7 @@ import { useSessionStore } from '@/store/session'
 // are in place when the module resolves. This avoids per-test dynamic import
 // contention that caused intermittent timeouts under full-suite parallel load.
 import { OmnipusComposer } from './ChatScreen'
+import { setDraftText } from '@/store/chat/drafts'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -125,7 +126,9 @@ function resetStores() {
       sessionCost: 0,
     })
     useConnectionStore.setState({
-      connection: null,
+      // Spec 4.10: a stand-in that is not a WsConnection is supported. A null
+      // connection is offline, which disables Send for a different reason.
+      connection: { send: () => true } as never,
       isConnected: true, // connected so we can isolate the isReplaying effect
       connectionError: null,
     })
@@ -161,6 +164,8 @@ describe('ChatScreen_Replay_SendDisabled (TDD row 22)', () => {
       useConnectionStore.setState({ isConnected: true })
     })
 
+    // Send is also disabled on an empty draft (binding.canSend). The replay flag is the point of this row.
+    act(() => { setDraftText('sess_replay_test', 'hi') })
     render(<OmnipusComposer />)
 
     const sendButton = screen.getByTestId('chat-send')
@@ -181,6 +186,7 @@ describe('ChatScreen_Replay_SendDisabled (TDD row 22)', () => {
   it('toggling isReplaying from true to false enables the send button', async () => {
     act(() => {
       useChatStore.setState({ isReplaying: true })
+      setDraftText('sess_replay_test', 'hi')
     })
 
     render(<OmnipusComposer />)

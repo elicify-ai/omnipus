@@ -151,7 +151,8 @@ vi.mock('@/store/auth', () => {
   const useAuthStore = (selector?: (s: typeof mockState) => unknown) =>
     selector ? selector(mockState) : mockState
   useAuthStore.getState = () => mockState
-  return { useAuthStore }
+  // Spec 4.4.3: bound-send registers onSignOut at load. Assertions unchanged.
+  return { useAuthStore, onSignOut: () => () => {} }
 })
 
 // Mock useUiStore — Sidebar calls toggleNotificationPanel via the selector-

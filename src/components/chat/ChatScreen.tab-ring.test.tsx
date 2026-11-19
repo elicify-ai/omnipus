@@ -214,7 +214,7 @@ describe('OmnipusComposer — composer tab ring (post-renumber structural guard)
 
   it('the attach (+) button carries tabIndex=5', () => {
     render(<OmnipusComposer />)
-    expect(screen.getByTestId('add-attachment')).toHaveAttribute('tabindex', '5')
+    expect(screen.getByRole('button', { name: 'Add files or context' })).toHaveAttribute('tabindex', '5')
   })
 
   it('the send button carries tabIndex=6', () => {
@@ -227,7 +227,7 @@ describe('OmnipusComposer — composer tab ring (post-renumber structural guard)
     const order = [
       Number(screen.getByTestId('chat-input').getAttribute('tabindex')),
       Number(screen.getByTestId('model-picker-mock').getAttribute('tabindex')),
-      Number(screen.getByTestId('add-attachment').getAttribute('tabindex')),
+      Number(screen.getByRole('button', { name: 'Add files or context' }).getAttribute('tabindex')),
       Number(screen.getByTestId('chat-send').getAttribute('tabindex')),
     ]
     expect(order).toEqual([2, 4, 5, 6])
