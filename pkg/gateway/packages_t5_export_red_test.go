@@ -8,6 +8,8 @@
 package gateway
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // TestPackages_ProductionSeamsAreNil preserves D7's production-seam guard.
@@ -294,23 +297,7 @@ func TestPackagesExport_Route(t *testing.T) {
 	})
 
 	t.Run("FR-013 structured secrets do not appear", func(t *testing.T) {
-		api := packageAPI(t)
-		id := createMainAgent(t, api, "Writer", "Answer in rhyme.\n")
-		// Values that are not in the prompt. Export must not open these files (FR-013).
-		secrets := []string{"cred-SECRET-value", "master-KEY-value", "cli-TOKEN-value", "mcp-HEADER-value"}
-		require.NoError(t, os.WriteFile(api.homePath+"/credentials.json", []byte(secrets[0]), 0o600))
-		require.NoError(t, os.WriteFile(api.homePath+"/master.key", []byte(secrets[1]), 0o600))
-		require.NoError(t, os.WriteFile(api.homePath+"/cli.token", []byte(secrets[2]), 0o600))
-		// config.json is the file export must not open; leave it intact and put the
-		// header value in a sibling the scan still checks the package against.
-		require.NoError(t, os.WriteFile(api.homePath+"/mcp-header.txt", []byte(secrets[3]), 0o600))
-		got := callPackageExport(t, api, `{"agent_ids":["`+id+`"]}`)
-		require.Equal(t, http.StatusOK, got.Code, "body=%s", got.Body)
-		plain := decompressZstd(t, got.Body)
-		for _, s := range secrets {
-			require.NotContains(t, string(got.Body), s)
-			require.NotContains(t, string(plain), s)
-		}
+		exportOmitsStructuredSecrets(t)
 	})
 
 	t.Run("pasted secret in the prompt travels", func(t *testing.T) {
@@ -473,3 +460,122 @@ func decodePackageBytes(t *testing.T, raw []byte) (map[string]any, map[string][]
 //
 // I need to fix this file before compile. Let me add the missing helpers in the
 // harness via a second edit, and fix HashBearer / snapshot / NoDirExists.
+
+// exportOmitsStructuredSecrets is FR-013. The sentinels live in the real
+// config.json (provider api_key and an MCP header) and in auth.json
+// (access_token / refresh_token), plus the other files export must not open.
+// Absence in the package is not enough: an inotify watch fails if export opens
+// one of those files even when its bytes never reach the package.
+func exportOmitsStructuredSecrets(t *testing.T) {
+	api := packageAPI(t)
+	id := createMainAgent(t, api, "Writer", "Answer in rhyme.\n")
+	const (
+		providerKey = "sk-CONFIG-PROVIDER-9f3a"
+		authAccess  = "oauth-ACCESS-authjson-9f3a"
+		authRefresh = "oauth-REFRESH-authjson-9f3a"
+	)
+	plantConfigProviderKey(t, api.homePath, providerKey)
+	require.NoError(t, os.WriteFile(api.homePath+"/auth.json", []byte(
+		`{"access_token":"`+authAccess+`","refresh_token":"`+authRefresh+`","provider":"openai","auth_method":"sign_in"}`), 0o600))
+	secrets := map[string]string{
+		"credentials.json": "cred-SECRET-value",
+		"master.key":       "master-KEY-value",
+		"cli.token":        "cli-TOKEN-value",
+	}
+	for name, value := range secrets {
+		require.NoError(t, os.WriteFile(api.homePath+"/"+name, []byte(value), 0o600))
+	}
+	watched := []string{
+		api.homePath + "/config.json",
+		api.homePath + "/auth.json",
+		api.homePath + "/credentials.json",
+		api.homePath + "/master.key",
+		api.homePath + "/cli.token",
+	}
+	cfg, err := os.ReadFile(watched[0])
+	require.NoError(t, err)
+	require.Contains(t, string(cfg), providerKey, "the provider key must be in config.json before export")
+	auth, err := os.ReadFile(watched[1])
+	require.NoError(t, err)
+	require.Contains(t, string(auth), authRefresh, "the credential must be in auth.json before export")
+
+	fd, err := unix.InotifyInit1(unix.IN_NONBLOCK | unix.IN_CLOEXEC)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Close(fd) })
+	for _, path := range watched {
+		_, err = unix.InotifyAddWatch(fd, path, unix.IN_OPEN)
+		require.NoError(t, err)
+	}
+	discardInotify(t, fd)
+
+	got := callPackageExport(t, api, `{"agent_ids":["`+id+`"]}`)
+	require.Equal(t, http.StatusOK, got.Code, "body=%s", got.Body)
+	require.Zero(t, countInotifyOpens(t, fd), "FR-013: export must not open config.json, auth.json, credentials, master.key or cli.token")
+	probe, err := os.Open(api.homePath + "/auth.json")
+	require.NoError(t, err)
+	require.NoError(t, probe.Close())
+	require.Equal(t, 1, countInotifyOpens(t, fd), "inotify must observe an open of auth.json; otherwise the no-open check is blind")
+	plain := decompressZstd(t, got.Body)
+	for _, secret := range []string{providerKey, authAccess, authRefresh, "cred-SECRET-value", "master-KEY-value", "cli-TOKEN-value"} {
+		require.NotContains(t, string(got.Body), secret)
+		require.NotContains(t, string(plain), secret)
+	}
+}
+
+func plantConfigProviderKey(t *testing.T, home, key string) {
+	t.Helper()
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(configBytes(t, home), &doc))
+	doc["providers"] = []any{map[string]any{
+		"name":        "OpenRouter",
+		"provider":    "openrouter",
+		"api_key":     key,
+		"api_key_ref": "OPENROUTER_API_KEY",
+	}}
+	mcp, _ := doc["mcp"].(map[string]any)
+	if mcp == nil {
+		mcp = map[string]any{}
+	}
+	mcp["servers"] = map[string]any{
+		"docs": map[string]any{
+			"enabled": true,
+			"type":    "http",
+			"url":     "https://example.invalid/mcp",
+			"headers": map[string]any{"Authorization": "Bearer " + key},
+		},
+	}
+	doc["mcp"] = mcp
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(home+"/config.json", raw, 0o600))
+}
+
+func discardInotify(t *testing.T, fd int) {
+	t.Helper()
+	_ = countInotifyOpens(t, fd)
+}
+
+func countInotifyOpens(t *testing.T, fd int) int {
+	t.Helper()
+	buf := make([]byte, 4096)
+	opens := 0
+	for {
+		n, err := unix.Read(fd, buf)
+		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+			return opens
+		}
+		require.NoError(t, err)
+		off := 0
+		for off < n {
+			if n-off < unix.SizeofInotifyEvent {
+				t.Fatalf("short inotify event")
+			}
+			mask := binary.LittleEndian.Uint32(buf[off+4 : off+8])
+			nameLen := binary.LittleEndian.Uint32(buf[off+12 : off+16])
+			off += unix.SizeofInotifyEvent + int(nameLen)
+			if mask&unix.IN_OPEN != 0 {
+				opens++
+			}
+		}
+	}
+}
