@@ -26,13 +26,10 @@ import { mutationFailureMessage } from '@/lib/mutationOutcome'
 import { useConnectionStore } from '@/store/connection'
 import { useRoomStore } from '@/store/rooms'
 import { useUiStore } from '@/store/ui'
-import { VirtualizedMessageList, type RoomListOpening } from '@/components/chat/ChatMessageList'
+import { VirtualizedMessageList } from '@/components/chat/ChatMessageList'
 import { ConversationKindContext, ConversationSourceContext } from '@/components/chat/conversationSource'
 import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
 import { AskUserQuestionCard } from '@/components/chat/AskUserQuestionCard'
-import type { Agent, Workspace } from '@/lib/api'
-import type { Room } from '@/lib/api/generated/openapi-types'
-import type { ChatMessage } from '@/store/chat'
 import { useRoomConversationSource } from './roomConversationSource'
 import { ROOM_ASK_AGAIN_EVENT, type RoomAskAgainDetail } from './roomModel'
 import { RoomMessageBox, roomBlockedReason } from './RoomMessageBox'
@@ -50,76 +47,14 @@ export interface RoomScreenProps {
 type RoomAskAgainPrefill = { agentId: string; nonce: number; roomId: string }
 
 /**
- * The live thread for one room. #1849: RoomScreen stays mounted across a room
- * change (the route only swaps the roomId prop), and this child is keyed by
- * room id so it remounts. The composer runtime, mention picks and send outcome
- * are created here, so room A's unsent text, attachments and mention picks are
- * discarded. They are not restored when the user returns to room A.
+ * #1849: the route keeps one RoomScreen across a room change, so this child is
+ * keyed by room id and remounts only then. Its composer runtime, attachment
+ * adapter and send state are created before the loading and error returns, so
+ * a failed refresh and Retry in the same room keep the unsent draft. A real
+ * room change discards that draft; returning to the room does not restore it.
  */
-function RoomThread({
-  roomId,
-  room,
-  members,
-  workspace,
-  liteMode,
-  messages,
-  openFailed,
-  opening,
-  blockedReason,
-  prefill,
-}: {
-  roomId: string
-  room: Room
-  members: Agent[]
-  workspace: Workspace | undefined
-  liteMode: boolean
-  messages: ChatMessage[]
-  openFailed: boolean
-  opening: RoomListOpening
-  blockedReason: string | undefined
-  prefill: RoomAskAgainPrefill | undefined
-}) {
-  const send = useRoomSend(roomId)
-  const workspaceRef = useRef<string | undefined>(undefined)
-  workspaceRef.current = room.workspace_id
-  const bridge = useRef<RoomSendBridge | null>(null)
-  const runtime = useRoomRuntime(send, () => workspaceRef.current, bridge)
-  return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <div className="flex flex-col absolute inset-0 overflow-hidden" data-room-id={roomId}>
-        {/* US-11 AS 11.5 / S-102: the group's name is the chat's name for
-            assistive technology (no visible title bar, D13). */}
-        <span role="status" className="sr-only" data-testid="room-header">{room.name}</span>
-        <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
-          <VirtualizedMessageList
-            key={`room:${roomId}`}
-            messages={messages}
-            liteMode={liteMode}
-            agentName={room.name}
-            openFailed={openFailed}
-            room={opening}
-          />
-          {/* FR-048, FR-051: only the cards of THIS group's work; secret
-              and helper cards stay in the agent's own chat. */}
-          <RoomQuestionTail roomId={roomId} />
-          <ToolApprovalThreadTail roomId={roomId} />
-          <div className="relative w-full">
-            <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[var(--space-2)]">
-              <RoomMessageBox
-                room={room}
-                members={members}
-                workspace={workspace}
-                send={send}
-                blockedReason={blockedReason}
-                prefill={prefill}
-                bridge={bridge}
-              />
-            </div>
-          </div>
-        </ThreadPrimitive.Root>
-      </div>
-    </AssistantRuntimeProvider>
-  )
+export function RoomScreen(props: RoomScreenProps) {
+  return <RoomSession key={props.roomId} {...props} />
 }
 
 /** FR-048: this group's question cards, one at a time with "+N more" (as the normal chat). */
@@ -137,7 +72,7 @@ function RoomQuestionTail({ roomId }: { roomId: string }) {
   )
 }
 
-export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
+function RoomSession({ workspaceId, roomId }: RoomScreenProps) {
   const view = useRoomView(roomId, workspaceId)
   const connected = useConnectionStore((state) => state.isConnected)
   const connection = useConnectionStore((state) => state.connection)
@@ -182,6 +117,13 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
 
   const attachedHere = connected && attachedRoomId === roomId
   const conversation = useRoomConversationSource(roomId, attachedHere, view.roomQuery.isError)
+  // Above the loading and error returns: unmounting the box must not create a
+  // new runtime while the room id is unchanged (#1849 CHECK F1).
+  const send = useRoomSend(roomId)
+  const workspaceRef = useRef<string | undefined>(undefined)
+  workspaceRef.current = view.room?.workspace_id
+  const bridge = useRef<RoomSendBridge | null>(null)
+  const runtime = useRoomRuntime(send, () => workspaceRef.current, bridge)
   const opening = useMemo(() => ({
     ...conversation.opening,
     tail: (
@@ -215,20 +157,41 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   return (
     <ConversationSourceContext.Provider value={conversation.source}>
       <ConversationKindContext.Provider value="room">
-        <RoomThread
-          key={roomId}
-          roomId={roomId}
-          room={room}
-          members={view.members}
-          workspace={view.workspace}
-          liteMode={liteMode}
-          messages={conversation.messages}
-          openFailed={view.roomQuery.isError}
-          opening={opening}
-          blockedReason={roomBlockedReason(room, connected, liveViewReceived)
-            ?? (questionPending ? 'Answer the question card above, or cancel it, to write again.' : undefined)}
-          prefill={prefill}
-        />
+        <AssistantRuntimeProvider runtime={runtime}>
+          <div className="flex flex-col absolute inset-0 overflow-hidden" data-room-id={roomId}>
+            {/* US-11 AS 11.5 / S-102: the group's name is the chat's name for
+                assistive technology (no visible title bar, D13). */}
+            <span role="status" className="sr-only" data-testid="room-header">{room.name}</span>
+            <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
+              <VirtualizedMessageList
+                key={`room:${roomId}`}
+                messages={conversation.messages}
+                liteMode={liteMode}
+                agentName={room.name}
+                openFailed={view.roomQuery.isError}
+                room={opening}
+              />
+              {/* FR-048, FR-051: only the cards of THIS group's work; secret
+                  and helper cards stay in the agent's own chat. */}
+              <RoomQuestionTail roomId={roomId} />
+              <ToolApprovalThreadTail roomId={roomId} />
+              <div className="relative w-full">
+                <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[var(--space-2)]">
+                  <RoomMessageBox
+                    room={room}
+                    members={view.members}
+                    workspace={view.workspace}
+                    send={send}
+                    blockedReason={roomBlockedReason(room, connected, liveViewReceived)
+                      ?? (questionPending ? 'Answer the question card above, or cancel it, to write again.' : undefined)}
+                    prefill={prefill}
+                    bridge={bridge}
+                  />
+                </div>
+              </div>
+            </ThreadPrimitive.Root>
+          </div>
+        </AssistantRuntimeProvider>
       </ConversationKindContext.Provider>
     </ConversationSourceContext.Provider>
   )
