@@ -19,6 +19,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
 import { useChatStore } from '@/store/chat'
+import { resetDraftsForSignOut } from '@/store/chat/drafts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
@@ -188,8 +189,14 @@ function pressEscape() {
 }
 
 function submitCommand(text: string) {
-  const input = screen.getByTestId('composer-input')
+  const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
   act(() => {
+    // The mock textarea is uncontrolled. React drops a change whose value did
+    // not change, so a second identical /stop never reaches the draft and the
+    // submit carries "". Founder double-Stop still requires that second press
+    // to be the tree cancel. Clear the tracked value first so this change is real.
+    const tracked = input as HTMLTextAreaElement & { _valueTracker?: { setValue: (value: string) => void } }
+    tracked._valueTracker?.setValue('')
     composerRuntime.setText(text)
     fireEvent.change(input, { target: { value: text } })
     fireEvent.submit(screen.getByTestId('composer-form'))
@@ -203,6 +210,9 @@ beforeEach(() => {
     composerRuntime.setText('')
     composerRuntime.send.mockClear()
     act(() => {
+      // A prior test's "Not stopped" notice stays in the draft store and keeps
+      // Stop mounted after the 3 s window. Spec 4.7's notice is per test.
+      resetDraftsForSignOut()
       useConnectionStore.setState({
         connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
         isConnected: true,
