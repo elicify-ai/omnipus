@@ -217,7 +217,10 @@ func q1bForceReexec(t *testing.T) {
 	runtime.LockOSThread()
 	backend, ok := sandbox.NewLinuxBackend()
 	require.True(t, ok, "BLOCKED: enforcing Linux Landlock unavailable — required by founder Q1 B")
-	policy := sandbox.DefaultPolicyForModel(q1bFilesystemModel(model), home, nil, nil, nil, nil)
+	// Execute the installed LibreOffice wherever the job put it. CI uses
+	// RUNNER_TEMP, not only /opt. Without this grant the confined boot
+	// cannot start soffice.
+	policy := sandbox.DefaultPolicyForModel(q1bFilesystemModel(model), home, nil, []string{office}, nil, nil)
 	require.NoError(t, backend.ApplyWithMode(policy, sandbox.ModeEnforce))
 	// The re-exec'd process inherits the boot layer. This flag stops it
 	// from applying that layer and copying the running binary again.
@@ -239,7 +242,10 @@ func q1bConvertForced(t *testing.T) {
 	}()
 	backend, ok := sandbox.NewLinuxBackend()
 	require.True(t, ok, "BLOCKED: enforcing Linux Landlock unavailable — required by founder Q1 B")
-	policy := sandbox.DefaultPolicyForModel(q1bFilesystemModel(model), home, nil, nil, nil, nil)
+	// The child applies its own boot layer. Name the same office root
+	// (CI's RUNNER_TEMP install included), not only /opt.
+	office := os.Getenv("OMNIPUS_TEST_Q1B_OFFICE")
+	policy := sandbox.DefaultPolicyForModel(q1bFilesystemModel(model), home, nil, []string{office}, nil, nil)
 	require.NoError(t, backend.ApplyWithMode(policy, sandbox.ModeEnforce))
 	require.True(t, backend.EnforcingChildren(), "Q1 B: boot layer must be enforcing")
 	root := os.Getenv("OMNIPUS_TEST_Q1B_OFFICE")
@@ -277,9 +283,9 @@ func q1bOneCall(t *testing.T, svc *Service, root string, doc functionalDocument)
 	defer adm.Release()
 	result, previewErr := svc.Preview(ctx, adm, Request{Name: "q1b" + doc.Ext, Ext: doc.Ext, Data: doc.Data, Default: true})
 	obs := finish()
-	for _, observeErr := range obs.Errors {
-		t.Logf("Q1 B observation: %v", observeErr)
-	}
+	// An observer error means the socket facts were not collected. Logging
+	// it and continuing can accept a run that never saw the ports.
+	require.Empty(t, obs.Errors, "Q1 B %s: socket observation failed; fix the observer before accepting this run: %v", doc.Ext, obs.Errors)
 	if previewErr != nil {
 		fact.Err = previewErr.Error()
 	}
