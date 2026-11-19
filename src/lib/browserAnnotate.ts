@@ -18,6 +18,9 @@ import { uploadFiles, inspectBrowserElement } from '@/lib/api'
 import { mediaRefURL } from '@/lib/library-attachment'
 import { modelChoiceNow, sendToChat } from '@/lib/bound-send'
 import { useChatStore } from '@/store/chat'
+import { useDraftStore } from '@/store/chat/drafts'
+import { loadedSessionWorkspaceId } from '@/store/chat/slices/outbound-lifecycle'
+import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
 export interface SubmitAnnotationParams { // not-wire-format: local params for the annotate-submit orchestration, never serialized across the gateway/SPA boundary
@@ -44,6 +47,38 @@ export interface SubmitAnnotationParams { // not-wire-format: local params for t
  *  rather than letting the image upload and the message vanish together. */
 export class AnnotationBusyError extends Error {}
 
+function isForeground(sessionId: string): boolean {
+  return useSessionStore.getState().activeSessionId === sessionId
+}
+
+/**
+ * Whether the PANEL session has a turn running (spec 4.6.1, F11): its own
+ * bucket, and the foreground flags only when the panel session is the one in
+ * the foreground. Activity in an unrelated foreground chat never blocks it.
+ */
+function panelSessionBusy(sessionId: string): boolean {
+  const chat = useChatStore.getState()
+  if (chat.sessionsById[sessionId]?.isStreaming) return true
+  return isForeground(sessionId) && chat.isStreaming
+}
+
+/**
+ * The PANEL session's own workspace (spec 4.6.1, 4.3.7), never the ambient
+ * one of another chat: its loaded metadata, else the workspace its new-chat
+ * key was created in, else the active workspace only when the panel session
+ * is the foreground chat. Unknown: no workspace, so the upload is routed by
+ * the chat alone.
+ */
+function panelSessionWorkspaceId(sessionId: string): string | null {
+  const loaded = loadedSessionWorkspaceId(sessionId)
+  if (loaded !== undefined) return loaded
+  const { keyBySession, newChats } = useDraftStore.getState()
+  const key = keyBySession[sessionId]
+  const created = key ? newChats[key] : undefined
+  if (created) return created.workspaceId
+  return isForeground(sessionId) ? useWorkspacesStore.getState().activeWorkspaceId ?? null : null
+}
+
 /**
  * Uploads the annotation image, sends it (+ the comment) to the agent via
  * `sessionId`/`agentId` — the live-browser panel's pinned pair, passed by
@@ -67,12 +102,12 @@ export async function submitAnnotation({ comment, file, point, isPointCurrent, s
   if (!sessionId || !agentId) {
     throw new Error('No active chat session — open a chat before sending an annotation.')
   }
-  if (useChatStore.getState().isStreaming) {
+  if (panelSessionBusy(sessionId)) {
     throw new AnnotationBusyError('The agent is busy — wait for it to finish, then send.')
   }
   // #1428 step 2 (spec 4.6.1): the panel session, its agent, its workspace and
   // the model are frozen at submit, before the upload.
-  const workspaceId = useWorkspacesStore.getState().activeWorkspaceId ?? null
+  const workspaceId = panelSessionWorkspaceId(sessionId)
   const model = modelChoiceNow()
 
   // No client-side vision pre-send warning here (ADR-068 T068-05): the SPA's

@@ -434,6 +434,15 @@ function clearCatchUpSideChannelsOnDisconnect(): void {
   }
 }
 
+/**
+ * A saved chat's own workspace from its loaded metadata: `undefined` when the
+ * metadata is not loaded, `null` for a known workspace-less chat.
+ */
+export function loadedSessionWorkspaceId(sessionId: string): string | null | undefined {
+  const session = loadedOutboundSession(sessionId)
+  return session ? session.workspace_id ?? null : undefined
+}
+
 /** Canonical identity from the validated saved-chat detail or sidebar list. */
 function loadedOutboundSession(sessionId: string): Pick<components['schemas']['Session'], 'id' | 'agent_id' | 'workspace_id'> | undefined {
   const detail = queryClient.getQueryData<components['schemas']['SessionDetail']>(['session-detail', sessionId])
