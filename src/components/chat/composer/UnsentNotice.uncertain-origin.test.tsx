@@ -21,6 +21,7 @@ import {
 } from '@/test/sendBinding1428'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { registerAppNavigate, type AppNavigate } from '@/lib/appNavigate'
 
 let live: WsConnection | null = null
 
@@ -128,7 +129,17 @@ describe('Defect 3: an uncertain item names its origin chat wherever it is liste
 // falls back to the sidebar's "Untitled session". Oracle: the fixture's ids
 // and the sidebar wording (SessionRow.tsx).
 describe('Defect 3: Open on an uncertain redirect item returns to its origin chat', () => {
-  async function uncertainRedirectFromNovaThenMia(listed: boolean): Promise<HTMLElement> {
+  type Step = { step: 'workspace'; id: string | null } | { step: 'attach'; session: string } | { step: 'navigate'; workspaceId: string; open: string }
+  let steps: Step[] = []
+  let unregister: (() => void) | null = null
+  afterEach(() => { unregister?.(); unregister = null })
+
+  /**
+   * A redirect typed in Nova's chat (W2); the person then opens Mia's chat
+   * (W1) BEFORE the socket closes without a receipt, so the origin must come
+   * from the command's capture, not from what is open at the close.
+   */
+  async function uncertainRedirectFromNovaThenMia(listed: boolean): Promise<{ notice: HTMLElement; next: FakeSocket }> {
     resetBindingWorld()
     apiMocks.fetchWorkspaces.mockResolvedValue([makeWorkspace({ id: 'w1', name: 'My Workspace' }), makeWorkspace({ id: 'w2', name: 'W2' })])
     apiMocks.fetchAgents.mockResolvedValue([makeAgent({ id: 'mia', name: 'Mia' }), makeAgent({ id: 'nova', name: 'Nova' })])
@@ -148,31 +159,77 @@ describe('Defect 3: Open on an uncertain redirect item returns to its origin cha
     const user = userEvent.setup()
     await user.keyboard('{Enter}')
     expect(socket.sent.some((frame) => frame.type === 'redirect'), 'the redirect was handed over').toBe(true)
+    act(() => {
+      useWorkspacesStore.getState().setActiveWorkspaceId('w1')
+      useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core')
+    })
     act(() => { socket.close(4008, 'catch-up required') })
     const next = FakeSocket.instances.at(-1)
     if (!next || next === socket) throw new Error('the close opens the next connection')
     act(() => { next.open() })
     act(() => { next.receive({ type: 'server_capabilities', send_origin: true }) })
     await flushInbound()
-    act(() => {
-      useWorkspacesStore.getState().setActiveWorkspaceId('w1')
-      useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core')
-    })
-    await flushInbound()
     const notice = screen.getByTestId('unsent-notice')
     expect(within(notice).getByText('May not have been delivered'), 'the close made the uncertain item').toBeTruthy()
-    return notice
+    return { notice, next }
+  }
+
+  /** Records, in order, the workspace switch, the attach written to the socket and the navigation. */
+  function recordOpenSteps(next: FakeSocket): void {
+    steps = []
+    const write = next.send
+    next.send = (data: string) => {
+      write(data)
+      const frame = JSON.parse(data) as { type: string; session_id?: string }
+      if (frame.type === 'attach_session' && frame.session_id) steps.push({ step: 'attach', session: frame.session_id })
+    }
+    const offWorkspace = useWorkspacesStore.subscribe((state, previous) => {
+      if (state.activeWorkspaceId !== previous.activeWorkspaceId) steps.push({ step: 'workspace', id: state.activeWorkspaceId })
+    })
+    const offNavigate = registerAppNavigate(((target) => { steps.push({ step: 'navigate', ...target }) }) as AppNavigate)
+    unregister = () => { offWorkspace(); offNavigate() }
+  }
+
+  function expectItemKept(notice: HTMLElement, next: FakeSocket): void {
+    expect(within(notice).getByText('May not have been delivered'), 'the item stays after Open').toBeTruthy()
+    expect(within(notice).getByText('/stop-redirect nova only'), 'with its exact text').toBeTruthy()
+    for (const name of ['Open', 'Copy', 'Discard']) {
+      expect(within(notice).getByRole('button', { name }), `and its ${name} action`).toBeTruthy()
+    }
+    expect(next.sent.filter((frame) => frame.type === 'redirect' || frame.type === 'message'), 'nothing is resent').toEqual([])
   }
 
   for (const listed of [true, false]) {
     it(`an ${listed ? 'untitled' : 'unlisted'} Nova chat in W2: named "Untitled session", Open goes back to it`, async () => {
-      const notice = await uncertainRedirectFromNovaThenMia(listed)
+      const { notice, next } = await uncertainRedirectFromNovaThenMia(listed)
       expect(await within(notice).findByText('Untitled session'), 'the sidebar\'s name for an untitled chat').toBeTruthy()
+      recordOpenSteps(next)
       const user = userEvent.setup()
       await user.click(within(notice).getByRole('button', { name: 'Open' }))
+      expect(steps, 'workspace W2 first, then the attach for chat-n is written, then the chat route of W2 opens chat-n').toEqual([
+        { step: 'workspace', id: 'w2' },
+        { step: 'attach', session: 'chat-n' },
+        { step: 'navigate', workspaceId: 'w2', open: 'chat-n' },
+      ])
       expect(useSessionStore.getState().activeSessionId, 'Open returns to the origin chat').toBe('chat-n')
       expect(useWorkspacesStore.getState().activeWorkspaceId, 'in the origin chat\'s own workspace').toBe('w2')
       expect(useSessionStore.getState().activeAgentId, 'with the origin chat\'s agent').toBe('nova')
+      expectItemKept(screen.getByTestId('unsent-notice'), next)
     })
   }
+
+  it('an attach that cannot be written switches nothing and keeps the item', async () => {
+    const { notice, next } = await uncertainRedirectFromNovaThenMia(false)
+    recordOpenSteps(next)
+    next.send = () => { throw new Error('OPEN socket send threw') }
+    const user = userEvent.setup()
+    await user.click(within(notice).getByRole('button', { name: 'Open' }))
+    expect(steps, 'W2 is tried and W1 restored; no attach was written and nothing navigated').toEqual([
+      { step: 'workspace', id: 'w2' },
+      { step: 'workspace', id: 'w1' },
+    ])
+    expect(useSessionStore.getState().activeSessionId, 'Mia\'s chat stays open').toBe('chat-a')
+    expect(useWorkspacesStore.getState().activeWorkspaceId, 'W1 stays the workspace').toBe('w1')
+    expectItemKept(screen.getByTestId('unsent-notice'), next)
+  })
 })
