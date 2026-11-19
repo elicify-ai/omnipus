@@ -147,6 +147,7 @@ async function waitForCommandList(): Promise<void> {
 describe('command records (spec 4.7)', () => {
   registerCommandReceiptCases()
   registerCommandFailureCases()
+  registerSignedOutCommandCase()
 })
 
 function registerCommandReceiptCases(): void {
@@ -324,6 +325,43 @@ function registerCommandReceiptCases(): void {
     ).toEqual([])
   })
 
+}
+
+function registerSignedOutCommandCase(): void {
+  it('BR-18 sign-out forgets a pending command, and a late refusal restores nothing', async () => {
+    // Spec BR-18 line 819: a command record in flight, then sign out, then it
+    // completes. Spec 4.7: sign-out clears the record with everything else, so a
+    // later send_refused matches nothing (4.8, no matching record: no restore).
+    resetBindingWorld()
+    const first = mountComposer({ sidebar: true })
+    await typeRedirect('/stop-redirect continue')
+    const records = Object.values(useDraftStore.getState().commands)
+    expect(records, 'BR-18: the typed command left one pending record').toHaveLength(1)
+    expect(records[0]?.text, 'BR-18: the record is the typed command').toBe('/stop-redirect continue')
+    const id = records[0]?.clientFrameId ?? ''
+    const handed = sent().length
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Open user menu' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Sign out' }))
+    expect(useDraftStore.getState().commands, 'BR-18: sign-out leaves no command record').toEqual({})
+    deliverFrame({
+      type: 'send_refused',
+      reason: 'wrong_chat',
+      refused_frame: 'redirect',
+      client_frame_id: id,
+      session_id: 'chat-a',
+      origin: { kind: 'chat', session_id: 'chat-a' },
+    })
+    expect(useDraftStore.getState().commands, 'BR-18: the late refusal does not recreate the record').toEqual({})
+    expect(useDraftStore.getState().drafts['chat-a']?.text ?? '', 'BR-18: the late refusal restores no text').toBe('')
+    expect(screen.queryByText(NOT_STOPPED), 'BR-18: the late refusal shows no notice').toBeNull()
+    expect(sent().length, 'BR-18: the late refusal sends no frame').toBe(handed)
+    first.unmount()
+    mountComposer()
+    expect(screen.getByTestId('chat-input'), 'BR-18: nothing reappears').toHaveValue('')
+    expect(screen.queryByText('1 not sent'), 'BR-18: the Unsent list is gone').toBeNull()
+    expect(screen.queryByText(NOT_STOPPED), 'BR-18: no notice after the page returns').toBeNull()
+  })
 }
 
 function registerCommandFailureCases(): void {
