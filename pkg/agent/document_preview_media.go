@@ -34,13 +34,38 @@ const (
 )
 
 // previewGatewayBytes counts the live preview bytes held by every running
-// turn of this gateway.
+// turn of this gateway. It changes only through reservePreviewGatewayBytes
+// (a compare-and-swap reservation, so two turns cannot both take the last
+// room) and releasePreviewGatewayBytes.
 var previewGatewayBytes atomic.Int64
+
+// reservePreviewGatewayBytes takes n bytes of the gateway budget in one
+// atomic step, or nothing when they do not fit (AD-6, SF W-01): a separate
+// load, check and add lets two turns that both see room overshoot together.
+func reservePreviewGatewayBytes(n int64) bool {
+	for {
+		used := previewGatewayBytes.Load()
+		if used+n > previewGatewayBudget {
+			return false
+		}
+		if previewGatewayBytes.CompareAndSwap(used, used+n) {
+			return true
+		}
+	}
+}
+
+func releasePreviewGatewayBytes(n int64) { previewGatewayBytes.Add(-n) }
 
 // turnDocumentPreviews holds one turn's live preview_document forms. Safe
 // for concurrent use (parallel tool calls record into it).
+//
+// mu serializes recording (add), request assembly (attachTurnDocumentPreviews)
+// and release. acct guards the accounting (held, markers, bytes, and the byID
+// entries eviction frees) and is also taken alone by the lazy-page charge,
+// which runs inside request assembly while mu is held (SF-10).
 type turnDocumentPreviews struct {
 	mu      sync.Mutex
+	acct    sync.Mutex
 	order   []string // tool call ids, oldest first
 	byID    map[string]*tools.DocumentPreview
 	held    map[string]int // live bytes per call
@@ -50,13 +75,16 @@ type turnDocumentPreviews struct {
 
 // add records a call's preview, evicting the oldest batches to stay within
 // the per-turn and per-gateway budgets; an item larger than the per-turn
-// budget is refused (its forms freed, a marker kept).
+// budget is refused (its forms freed, a marker kept). Page images a lazy
+// renderer (read_file) produces later are charged when they arrive.
 func (p *turnDocumentPreviews) add(id string, d *tools.DocumentPreview) {
 	if p == nil || d == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.acct.Lock()
+	defer p.acct.Unlock()
 	if p.byID == nil {
 		p.byID, p.held, p.markers = map[string]*tools.DocumentPreview{}, map[string]int{}, map[string]string{}
 	}
@@ -68,22 +96,63 @@ func (p *turnDocumentPreviews) add(id string, d *tools.DocumentPreview) {
 		p.markers[id] = previewMarkerRefused
 		return
 	}
-	for len(p.order) > 1 && (p.bytes+n > previewTurnBudget || previewGatewayBytes.Load()+int64(n) > previewGatewayBudget) {
-		if !p.evictOldestLocked(id) {
-			break
-		}
-	}
-	if previewGatewayBytes.Load()+int64(n) > previewGatewayBudget {
+	if !p.reserveLocked(id, n) {
 		d.FreeLiveForms()
 		p.markers[id] = previewMarkerEvicted
 		return
 	}
 	p.held[id] = n
-	p.bytes += n
-	previewGatewayBytes.Add(int64(n))
+	if render := d.RenderPages; render != nil {
+		d.RenderPages = func(ctx context.Context) ([]tools.DocumentPreviewPage, string, string) {
+			pages, unavailable, note := render(ctx)
+			if len(pages) > 0 && !p.chargeLazyPages(id, pages) {
+				return nil, previewLazyPagesNotKept, note
+			}
+			return pages, unavailable, note
+		}
+	}
 }
 
-// evictOldestLocked frees the oldest held batch other than keep.
+// previewLazyPagesNotKept is the "page images unavailable" reason when
+// lazily rendered pages do not fit the live media budgets.
+const previewLazyPagesNotKept = "the page images do not fit this turn's live media budget"
+
+// reserveLocked takes n bytes of the per-turn and gateway budgets for keep,
+// evicting this turn's oldest other batches while they do not fit. False
+// when they cannot fit; nothing is taken then. Caller holds acct.
+func (p *turnDocumentPreviews) reserveLocked(keep string, n int) bool {
+	for {
+		if p.bytes+n <= previewTurnBudget && reservePreviewGatewayBytes(int64(n)) {
+			p.bytes += n
+			return true
+		}
+		if !p.evictOldestLocked(keep) {
+			return false
+		}
+	}
+}
+
+// chargeLazyPages charges page images rendered after id was recorded (the
+// read_file renderer runs on first send) to the same budgets, so the
+// retained forms never exceed what the accounting says. False when they do
+// not fit or id is no longer held; the caller then drops the pages.
+func (p *turnDocumentPreviews) chargeLazyPages(id string, pages []tools.DocumentPreviewPage) bool {
+	delta := 0
+	for _, page := range pages {
+		delta += len(page.PNG)
+	}
+	p.acct.Lock()
+	defer p.acct.Unlock()
+	held, ok := p.held[id]
+	if !ok || held+delta > previewTurnBudget || !p.reserveLocked(id, delta) {
+		return false
+	}
+	p.held[id] = held + delta
+	return true
+}
+
+// evictOldestLocked frees the oldest held batch other than keep. Caller
+// holds acct.
 func (p *turnDocumentPreviews) evictOldestLocked(keep string) bool {
 	for _, id := range p.order {
 		if id == keep {
@@ -97,7 +166,7 @@ func (p *turnDocumentPreviews) evictOldestLocked(keep string) bool {
 		delete(p.held, id)
 		p.markers[id] = previewMarkerEvicted
 		p.bytes -= n
-		previewGatewayBytes.Add(-int64(n))
+		releasePreviewGatewayBytes(int64(n))
 		return true
 	}
 	return false
@@ -110,13 +179,23 @@ func (p *turnDocumentPreviews) release() {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.acct.Lock()
+	defer p.acct.Unlock()
 	for id, n := range p.held {
 		if d := p.byID[id]; d != nil {
 			d.FreeLiveForms()
 		}
-		previewGatewayBytes.Add(-int64(n))
+		releasePreviewGatewayBytes(int64(n))
 	}
 	p.held, p.bytes = map[string]int{}, 0
+}
+
+// marker is id's eviction or refusal marker, if any.
+func (p *turnDocumentPreviews) marker(id string) (string, bool) {
+	p.acct.Lock()
+	defer p.acct.Unlock()
+	m, ok := p.markers[id]
+	return m, ok
 }
 
 // previewModelForms is what the active model reads (catalog only, AD-11).
@@ -151,7 +230,7 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 		if !ok {
 			continue
 		}
-		if marker, gone := p.markers[live[i].ToolCallID]; gone {
+		if marker, gone := p.marker(live[i].ToolCallID); gone {
 			live[i].Content += marker
 			continue
 		}
