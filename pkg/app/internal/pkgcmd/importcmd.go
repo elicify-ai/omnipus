@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -187,30 +188,50 @@ func itemsSuffix(items *[]string) string {
 	return " [" + strings.Join(*items, ", ") + "]"
 }
 
+// maxAnswerBytes bounds the confirmation answer that is read; any longer
+// line cannot be "y" or "yes" and cancels.
+const maxAnswerBytes = 1024
+
 // confirm asks "Import <n> agent(s) as <mode>? [y/N]". Only y or yes (any
-// letter case) confirms; Enter, anything else, end of input and a standard
-// input that is not a terminal cancel.
+// letter case) confirms; Enter, anything else, end of input, a cancelled
+// command context and a standard input file that is not a real terminal
+// (a pipe, a regular file, /dev/null, /dev/zero) cancel. An injected
+// non-file reader is read as the typed answer.
 func confirm(cmd *cobra.Command, n int, mode string) bool {
 	in := cmd.InOrStdin()
-	if f, ok := in.(*os.File); ok {
-		info, err := f.Stat()
-		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
-			fmt.Fprintln(cmd.ErrOrStderr(), "No terminal to confirm on; pass --yes to import without the prompt.")
-			return false
-		}
+	if f, ok := in.(*os.File); ok && !term.IsTerminal(int(f.Fd())) {
+		fmt.Fprintln(cmd.ErrOrStderr(), "No terminal to confirm on; pass --yes to import without the prompt.")
+		return false
 	}
 	noun := "agents"
 	if n == 1 {
 		noun = "agent"
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Import %d %s as %s? [y/N] ", n, noun, mode)
-	line, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && line == "" {
+
+	// The read runs aside so a cancelled command context ends the prompt; a
+	// blocked terminal read is abandoned and ends with the process.
+	type answer struct {
+		line string
+		err  error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		line, err := bufio.NewReader(io.LimitReader(in, maxAnswerBytes)).ReadString('\n')
+		got <- answer{line, err}
+	}()
+	select {
+	case <-cmd.Context().Done():
 		fmt.Fprintln(cmd.OutOrStdout())
 		return false
+	case a := <-got:
+		if a.err != nil && a.line == "" {
+			fmt.Fprintln(cmd.OutOrStdout())
+			return false
+		}
+		reply := strings.ToLower(strings.TrimSpace(a.line))
+		return reply == "y" || reply == "yes"
 	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes"
 }
 
 func previewName(p *gen.PackageImportPreview) string {
