@@ -57,6 +57,7 @@ interface Row {
 }
 
 const NARROW_PX = 640
+const UNTITLED = 'Untitled session'
 
 function subscribeCapability(callback: () => void): () => void {
   const offEvents = subscribeConnectionEvents(callback)
@@ -93,12 +94,13 @@ function useNames() {
   return {
     agent: (id: string | null) => agents.find((a) => a.id === id)?.name ?? id ?? 'the agent',
     workspace: (id: string | null) => workspaces.find((w) => w.id === id)?.name ?? id ?? 'this workspace',
-    // The sidebar's name for the chat: a main chat has no stored title of its own (Defect 3).
+    // The sidebar's name for the chat: a main chat has no stored title of its own,
+    // an untitled or unlisted one reads "Untitled session" (Defect 3, SessionRow.tsx).
     chat: (id: string) => {
       const session = sessions.find((s) => s.id === id)
-      if (!session) return 'Chat'
+      if (!session) return UNTITLED
       const agentName = agents.find((a) => a.id === session.agent_id)?.name
-      return sessionDisplayTitle(session, agentName, 'Chat', session.agent_id) ?? 'Chat'
+      return sessionDisplayTitle(session, agentName, UNTITLED, session.agent_id) ?? UNTITLED
     },
     sessionOf: (id: string) => sessions.find((s) => s.id === id),
   }
@@ -118,7 +120,8 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
     const chatName = isNewChatKey(key) ? `New chat with ${names.agent(item.agentId)} in ${names.workspace(item.workspaceId)}` : names.chat(key)
     if (item.kind === 'uncertain') {
       // Spec 4.7 close row / 4.9: the item names its origin chat; it is listed in every chat.
-      rows.push({ id: item.id, title: 'May not have been delivered', text: item.text, lines: [chatName, SEND_TEXT.uncertainLine], actions: ['copy', 'discard'], item })
+      // Chief ruling 2026-11-19: Open leads back to that chat (Defect 3).
+      rows.push({ id: item.id, title: 'May not have been delivered', text: item.text, lines: [chatName, SEND_TEXT.uncertainLine], actions: ['open', 'copy', 'discard'], item })
     } else if (item.kind === 'deleted') {
       rows.push({ id: item.id, title: 'Deleted chat', text: item.text, lines: [SEND_TEXT.upload404], actions: ['copy', 'discard', 'move'], item })
     } else if (key !== openKey) {

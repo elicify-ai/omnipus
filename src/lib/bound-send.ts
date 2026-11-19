@@ -564,7 +564,7 @@ export function sendCommand(input: CommandInput): boolean {
   const turnId = runningTurnId(useChatStore.getState().sessionsById[input.target])
   const record: CommandRecord = {
     clientFrameId, kind: input.kind, origin, originKey: canonical(input.originKey), target: input.target,
-    text: input.text, connection, connectionGeneration: generation, turnId, state: 'sent',
+    text: input.text, connection, connectionGeneration: generation, turnId, ...originChatOf(input.originKey), state: 'sent',
   }
   setRecord(record)
   const frame = input.kind === 'redirect'
@@ -581,6 +581,14 @@ export function sendCommand(input: CommandInput): boolean {
     establishNotStopped(input.target)
   }
   return ok
+}
+
+/** The workspace and agent of a command's origin: K's own, else the open chat's (typed commands come from the open chat). */
+function originChatOf(originKey: string): Pick<CommandRecord, 'workspaceId' | 'agentId'> {
+  const key = canonical(originKey)
+  const newChat = isNewChatKey(key) ? useDraftStore.getState().newChats[key] : undefined
+  if (newChat) return { workspaceId: newChat.workspaceId, agentId: newChat.agentId }
+  return { workspaceId: useWorkspacesStore.getState().activeWorkspaceId, agentId: useSessionStore.getState().activeAgentId ?? null }
 }
 
 function setRecord(record: CommandRecord): void {
@@ -718,7 +726,7 @@ subscribeConnectionEvents((event) => {
       if (record.state !== 'sent' || record.connection !== event.connection || record.connectionGeneration !== event.generation) continue
       setRecord({ ...record, state: 'unconfirmed' })
       if (record.text) {
-        addUnsentItem({ kind: 'uncertain', key: record.originKey, text: record.text, files: [], libraryPicks: [], reason: SEND_TEXT.uncertainLine, agentId: null, workspaceId: null })
+        addUnsentItem({ kind: 'uncertain', key: record.originKey, text: record.text, files: [], libraryPicks: [], reason: SEND_TEXT.uncertainLine, agentId: record.agentId, workspaceId: record.workspaceId })
       }
     }
     return

@@ -68,6 +68,9 @@ export interface CommandRecord { // not-wire-format: client-side command record
   connection: unknown
   connectionGeneration: number | null
   turnId: string | null
+  /** The origin chat's workspace and agent at capture, so its uncertain item can open it (4.9). */
+  workspaceId: string | null
+  agentId: string | null
   state: 'sent' | 'unconfirmed'
   /** Set once the target-running reconciliation showed the notice. */
   reconciled?: boolean
