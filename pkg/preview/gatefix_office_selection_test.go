@@ -22,7 +22,7 @@ func TestOfficePreview_RegistrationChangeDropsCachedSelection(t *testing.T) {
 	home := t.TempDir()
 	rootA := gatefixInstallOffice(t, "gatefix-office-a")
 	rootB := gatefixInstallOffice(t, "gatefix-office-b")
-	gatefixRegisterOffice(t, home, rootA)
+	gatefixRegisterOffice(t, home, rootA, "gatefix-office-a")
 	svc, err := New(Config{Home: home, Self: self, Resolver: &component.Resolver{Home: home, Executable: self}})
 	require.NoError(t, err)
 
@@ -33,7 +33,7 @@ func TestOfficePreview_RegistrationChangeDropsCachedSelection(t *testing.T) {
 	removed, err := component.Unregister(home, component.KindOffice)
 	require.NoError(t, err)
 	require.True(t, removed, "instrument: the first registration must be gone before the second is written")
-	gatefixRegisterOffice(t, home, rootB)
+	gatefixRegisterOffice(t, home, rootB, "gatefix-office-b")
 
 	second, problem := svc.officeComponent(nil)
 	require.Nil(t, problem)
@@ -70,21 +70,19 @@ func gatefixInstallProgram(t *testing.T, exeName string) string {
 	return resolved
 }
 
-func gatefixRegisterOffice(t *testing.T, home, root string) {
+func gatefixRegisterOffice(t *testing.T, home, root, exeName string) {
 	t.Helper()
-	gatefixRegisterComponent(t, home, root, "gatefix-office-a", component.KindOffice, "", 0)
+	gatefixRegisterComponent(t, home, root, exeName, component.KindOffice, "", 0)
 }
 
+// gatefixRegisterComponent fingerprints the executable the caller linked and
+// writes that name into the registration. The name is the manifest's
+// Executable; guessing it from the directory would register a different file
+// than the one the caller installed.
 func gatefixRegisterComponent(t *testing.T, home, root, exeName string, kind component.Kind, buildID string, protocolVersion int) {
 	t.Helper()
-	// The installed name is the file in the root; callers pass the name they
-	// linked. Office uses gatefix-office-a or gatefix-office-b, which is the
-	// directory's only executable.
-	matches, err := filepath.Glob(filepath.Join(root, "gatefix-*"))
-	require.NoError(t, err)
-	require.Len(t, matches, 1, "instrument: one program in %s", root)
-	exeName = filepath.Base(matches[0])
-	data, err := os.ReadFile(matches[0])
+	installed := filepath.Join(root, exeName)
+	data, err := os.ReadFile(installed)
 	require.NoError(t, err)
 	sum := sha256.Sum256(data)
 	files := map[string]string{exeName: hex.EncodeToString(sum[:])}
