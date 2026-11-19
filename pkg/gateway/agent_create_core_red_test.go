@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -720,6 +721,37 @@ func TestImportFieldCoverage_ResolvesEveryEditableName(t *testing.T) {
 	require.Empty(t, unresolved, "field names with no import decision (FR-048): %v", unresolved)
 	require.Empty(t, rowless, "alias resolutions pointing at rows that do not exist: %v", rowless)
 
+	// Nested leaves come from the generated schemas, not from a fixed list.
+	// A new field inside fallback_models, model_params, executor or tools_cfg
+	// fails until it has a row, an alias leaf or a control decision (FR-048).
+	decided := map[string]bool{}
+	for leaf := range rows {
+		decided[leaf] = true
+	}
+	for name := range controls {
+		decided[name] = true
+	}
+	for name, leaves := range alias {
+		decided[name] = true
+		for _, leaf := range leaves {
+			decided[leaf] = true
+		}
+	}
+	var unseen []string
+	for _, variant := range []any{
+		gen.AgentCreateRequestMain{}, gen.AgentCreateRequestSubagent{}, gen.AgentCreateRequestSubagent3p{},
+		gen.AgentUpdateRequest{},
+	} {
+		for _, leaf := range schemaNestedLeaves(reflect.TypeOf(variant)) {
+			if nestedLeafDecided(leaf, decided, controls) {
+				continue
+			}
+			unseen = append(unseen, leaf)
+		}
+	}
+	sort.Strings(unseen)
+	require.Empty(t, unseen, "FR-048: nested editable leaves with no import decision: %v", unseen)
+
 	// Instrument checks (skill: test the instrument). The nested leaves the
 	// spec names must reuse the existing agentmutation vocabulary rather than
 	// a second spelling (FR-048), and the control names must stay listed as
@@ -768,4 +800,119 @@ func schemaTopLevelNames(t *testing.T, v any) map[string]bool {
 		}
 	}
 	return names
+}
+
+// schemaNestedLeaves reflects nested JSON leaves under the field groups whose
+// import decision is per leaf. Maps and slices of scalars stay one leaf. The
+// names are the generated schema's, so a new nested property cannot hide
+// behind the group's top-level name (FR-048).
+func schemaNestedLeaves(typ reflect.Type) []string {
+	if typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	var out []string
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name := jsonName(field)
+		if name == "" || !nestedGroup(name) {
+			continue
+		}
+		collectNested(field.Type, name, &out)
+	}
+	return out
+}
+
+func nestedGroup(name string) bool {
+	switch name {
+	case "fallback_models", "model_params", "executor", "tools_cfg":
+		return true
+	default:
+		return false
+	}
+}
+
+func collectNested(typ reflect.Type, path string, out *[]string) {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	switch typ.Kind() {
+	case reflect.Struct:
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			name := jsonName(field)
+			if name == "" {
+				continue
+			}
+			collectNested(field.Type, path+"."+name, out)
+		}
+	case reflect.Slice, reflect.Array:
+		elem := typ.Elem()
+		for elem.Kind() == reflect.Pointer {
+			elem = elem.Elem()
+		}
+		if elem.Kind() == reflect.Struct && (path == "fallback_models" || strings.HasPrefix(path, "fallback_models[]")) {
+			collectNested(elem, path+"[]", out)
+			return
+		}
+		*out = append(*out, path)
+	default:
+		*out = append(*out, path)
+	}
+}
+
+func jsonName(field reflect.StructField) string {
+	if field.PkgPath != "" {
+		return ""
+	}
+	tag := field.Tag.Get("json")
+	if tag == "" || tag == "-" {
+		return ""
+	}
+	name := strings.Split(tag, ",")[0]
+	if name == "-" {
+		return ""
+	}
+	return name
+}
+
+// nestedLeafDecided reports whether path is a stored row, an alias leaf,
+// the same dotted suffix as one of those (executor.cli matches
+// subagents.executor.cli; tools_cfg.builtin.policies matches
+// tools.builtin.policies), or a control named by its last segment
+// (executor.env_overrides_remove is the control env_overrides_remove).
+// A short alias such as cli does not decide every field whose tail is cli.
+func nestedLeafDecided(path string, decided map[string]bool, controls map[string]string) bool {
+	if decided[path] {
+		return true
+	}
+	last := path
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		last = path[i+1:]
+	}
+	if _, ok := controls[last]; ok {
+		return true
+	}
+	for leaf := range decided {
+		if leaf == path || boundedSuffix(leaf, path) {
+			return true
+		}
+		if strings.Contains(path, ".") && strings.Contains(leaf, ".") && nestedTail(leaf) == nestedTail(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func boundedSuffix(leaf, path string) bool {
+	if !strings.HasSuffix(leaf, path) || len(leaf) == len(path) {
+		return false
+	}
+	return leaf[len(leaf)-len(path)-1] == '.'
+}
+
+func nestedTail(path string) string {
+	if i := strings.Index(path, "."); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
