@@ -70,6 +70,12 @@ func resolveMediaRefsWithOffload(
 	result := make([]providers.Message, len(messages))
 	copy(result, messages)
 	var nativePDFs []nativePDFPart
+	// Per message: the resolved media and content injections, finished
+	// after the upload page images are rendered (newest uploads first).
+	outMedia := make([][]string, len(result))
+	outInj := make([][]string, len(result))
+	touched := make([]bool, len(result))
+	var uploadJobs []uploadPageJob
 
 	for i, m := range result {
 		if len(m.Media) == 0 {
@@ -219,9 +225,13 @@ func resolveMediaRefsWithOffload(
 						offInj = buildOffloadInjection(dest, detectFileClass(mime, meta.Filename), model)
 					}
 					if modelSupportsImage(cat, provider, model) {
-						pages := uploadPDFPageImagesCtx(sink.turnContext(), localPath, meta.Filename, resizeBudgetForModel(cat, provider, model, maxSize))
-						resolved = append(resolved, pages.images...)
-						textInj = pages.note(dest, offErr) + textInj
+						// Pages are rendered after this pass, newest
+						// uploads first, within one request allowance.
+						uploadJobs = append(uploadJobs, uploadPageJob{
+							msg: i, mediaAt: len(resolved), injAt: len(contentInjections), noteAt: len(offInj),
+							localPath: localPath, name: meta.Filename, dest: dest, offErr: offErr,
+							limits: resizeBudgetForModel(cat, provider, model, maxSize),
+						})
 					}
 					contentInjections = append(contentInjections, offInj+textInj)
 				}
@@ -233,9 +243,17 @@ func resolveMediaRefsWithOffload(
 			contentInjections = append(contentInjections, inj)
 		}
 
-		result[i].Media = resolved
-		if len(contentInjections) > 0 {
-			result[i].Content = injectDocumentContent(result[i].Content, contentInjections)
+		outMedia[i], outInj[i], touched[i] = resolved, contentInjections, true
+	}
+
+	renderUploadPageJobs(sink.turnContext(), uploadJobs, outMedia, outInj)
+	for i := range result {
+		if !touched[i] {
+			continue
+		}
+		result[i].Media = outMedia[i]
+		if len(outInj[i]) > 0 {
+			result[i].Content = injectDocumentContent(result[i].Content, outInj[i])
 		}
 	}
 

@@ -223,8 +223,16 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 		return messages, nil
 	}
 	live := append([]providers.Message(nil), messages...)
-	budget := previewRequestBudget
+	// The request's 32 MiB decoded media and the provider's native-document
+	// count are one budget for the whole request (AD-6, SF-06): media the
+	// request already carries (uploaded PDFs, their page images, inspection
+	// images) is taken first, and tool previews get what is left.
+	carried, carriedPDFs := requestDataMedia(live)
+	budget := max(previewRequestBudget-carried, 0)
 	pdfsLeft := forms.maxPDFs
+	if forms.maxPDFs > 0 {
+		pdfsLeft = max(forms.maxPDFs-carriedPDFs, 0)
+	}
 	for i := len(live) - 1; i >= 0; i-- {
 		d, ok := p.byID[live[i].ToolCallID]
 		if !ok {
@@ -251,6 +259,37 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 		}
 	}
 	return live, nil
+}
+
+// requestDataMedia is the decoded size of the inline (data URL) media the
+// messages already carry, and how many of those are native PDFs.
+func requestDataMedia(messages []providers.Message) (decoded, pdfs int) {
+	for _, m := range messages {
+		for _, ref := range m.Media {
+			if !strings.HasPrefix(ref, "data:") {
+				continue
+			}
+			decoded += dataURLDecodedSize(ref)
+			if strings.HasPrefix(ref, "data:application/pdf;") {
+				pdfs++
+			}
+		}
+	}
+	return decoded, pdfs
+}
+
+// dataURLDecodedSize is the payload size of a data URL: the decoded length
+// of a base64 payload, the raw length otherwise.
+func dataURLDecodedSize(ref string) int {
+	comma := strings.IndexByte(ref, ',')
+	if comma < 0 {
+		return 0
+	}
+	payload := ref[comma+1:]
+	if !strings.HasSuffix(ref[:comma], ";base64") {
+		return len(payload)
+	}
+	return len(payload)/4*3 - (len(payload) - len(strings.TrimRight(payload, "=")))
 }
 
 // attachDocumentPreview adds one call's form and returns the decoded bytes
