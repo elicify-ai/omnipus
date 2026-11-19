@@ -4,7 +4,7 @@
 // - enterNewChat: a new chat the person can type into, with a fresh key K
 //   (or the given K when "Open and send" re-enters an unsaved new chat);
 // - enterBlockedNoChat: a screen with no chat and no composer to send from
-//   (unavailable workspace entry, a stuck placeholder). It holds no K: whether
+//   (unavailable or failed workspace entry, a stuck placeholder). It holds no K: whether
 //   the blocked state should hold one is parked as C5 / #1896.
 // scripts/check-bound-send.sh fails any other setActiveSession(null…) call.
 
@@ -31,7 +31,7 @@ export function enterNewChat(
   return key
 }
 
-export function enterBlockedNoChat(reason: 'unavailable' | 'empty-team' | 'stuck-pending'): void {
+export function enterBlockedNoChat(reason: 'unavailable' | 'empty-team' | 'failed-attempt' | 'stuck-pending'): void {
   void reason
   useSessionStore.setState({ newChatKey: null })
   useSessionStore.getState().setActiveSession(null)

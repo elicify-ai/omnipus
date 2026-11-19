@@ -52,6 +52,7 @@ interface Row {
   lines: string[]
   actions: Action[]
   item?: UnsentItem
+  queued?: { id: string; key: string; workspaceId: string | null; agentId: string | null }
 }
 
 const NARROW_PX = 640
@@ -101,16 +102,20 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
   const drafts = useDrafts((s) => s.drafts)
   const newChats = useDrafts((s) => s.newChats)
   const pending = useChatStore((s) => s.pendingFirstSend)
+  const outbound = useChatStore((s) => s.outboundQueue)
+  const held = useChatStore((s) => s.pendingDrainQueue)
   const names = useNames()
   const rows: Row[] = []
   for (const item of unsent) {
+    const key = canonical(item.key)
+    const chatName = isNewChatKey(key) ? `New chat with ${names.agent(item.agentId)} in ${names.workspace(item.workspaceId)}` : names.chat(key)
     if (item.kind === 'uncertain') {
-      rows.push({ id: item.id, title: 'May not have been delivered', text: item.text, lines: [SEND_TEXT.uncertainLine], actions: ['copy', 'discard'], item })
+      // Spec 4.7 close row / 4.9: the item names its origin chat; it is listed in every chat.
+      rows.push({ id: item.id, title: 'May not have been delivered', text: item.text, lines: [chatName, SEND_TEXT.uncertainLine], actions: ['copy', 'discard'], item })
     } else if (item.kind === 'deleted') {
       rows.push({ id: item.id, title: 'Deleted chat', text: item.text, lines: [SEND_TEXT.upload404], actions: ['copy', 'discard', 'move'], item })
-    } else if (canonical(item.key) !== openKey) {
-      const key = canonical(item.key)
-      const title = isNewChatKey(key) ? `New chat with ${names.agent(item.agentId)} in ${names.workspace(item.workspaceId)}` : names.chat(key)
+    } else if (key !== openKey) {
+      const title = chatName
       rows.push({ id: item.id, title, text: item.text, lines: item.reason ? [item.reason] : [], actions: ['open', 'copy', 'discard'], item })
     }
   }
@@ -127,6 +132,22 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
       actions: unsaved ? ['openAndSend', 'copy', 'discard'] : ['open', 'copy', 'discard'],
     })
   }
+  // 4.11 / UAT-16: a first message for K queued while the socket was down is
+  // held in the queue (never sent while K is not open); it is listed here.
+  for (const queued of [...held, ...outbound]) {
+    if (typeof queued === 'string' || queued.submission?.origin.kind !== 'new_chat') continue
+    const sub = queued.submission
+    const key = canonical(sub.origin.new_chat_key ?? null)
+    if (key === openKey) continue
+    rows.push({
+      id: `queued-${queued.id}`,
+      title: `New chat with ${names.agent(sub.agentId)}, not saved yet`,
+      text: queued.content,
+      lines: [],
+      actions: ['openAndSend', 'copy', 'discard'],
+      queued: { id: queued.id, key, workspaceId: sub.workspaceId, agentId: sub.agentId },
+    })
+  }
   if (unsupported) {
     for (const [key, draft] of Object.entries(drafts)) {
       if (!hasDraftInput(draft)) continue
@@ -139,6 +160,12 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
 function openRow(row: Row, sessionOf: (id: string) => Session | undefined): void {
   const session = useSessionStore.getState()
   const pending = useChatStore.getState().pendingFirstSend
+  if (row.queued) {
+    // 4.11: re-enter K with its original workspace and agent; the queue then drains it.
+    enterNewChat(row.queued.workspaceId, row.queued.agentId, undefined, row.queued.key)
+    useChatStore.getState().drainOutboundQueue()
+    return
+  }
   if (!row.item) {
     const key = pending?.payload.origin?.new_chat_key
     if (!pending || !key) return
@@ -162,6 +189,10 @@ function openRow(row: Row, sessionOf: (id: string) => Session | undefined): void
 }
 
 function discardRow(row: Row): void {
+  if (row.queued) {
+    useChatStore.getState().discardQueuedMessage(row.queued.id)
+    return
+  }
   if (row.item) {
     discardUnsentItem(row.item.id)
     return

@@ -18,6 +18,7 @@ import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { clearPendingAutoApproveOnSessionChange, knownSessionDescriptor, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
 import { enterBlockedNoChat } from '@/store/session/newChatKey'
+import { useDraftStore } from '@/store/chat/drafts'
 
 export type WorkspaceEntryView = (
   | { status: 'exact'; acknowledged: false }
@@ -278,6 +279,21 @@ function clearResolving(workspaceId: string): void {
   })
 }
 
+/**
+ * UAT-16 run B (Option A): the open chat is a new, unsaved chat that belongs
+ * to another workspace. Every entry that ends blocked (failed, refused
+ * attach, unavailable, empty team, or an entry that threw) closes it: its
+ * queued first message would otherwise go out while this workspace is on
+ * screen. Closing it lists that message in Unsent instead (4.11). A saved
+ * chat is never affected (FR-004 keeps it open).
+ */
+function closeForeignNewChat(workspaceId: string, reason: 'unavailable' | 'empty-team' | 'failed-attempt'): void {
+  const { activeSessionId, newChatKey } = useSessionStore.getState()
+  if (activeSessionId !== null || !newChatKey) return
+  const info = useDraftStore.getState().newChats[newChatKey]
+  if (info !== undefined && info.workspaceId !== workspaceId) enterBlockedNoChat(reason)
+}
+
 function applyEntry(
   workspaceId: string,
   result: EntryResult,
@@ -291,6 +307,7 @@ function applyEntry(
 
   if (result.status === 'failed-attempt') {
     if (stillViewing) {
+      closeForeignNewChat(workspaceId, 'failed-attempt')
       useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
       useUiStore.getState().addToast({
         message: 'Could not restore your last conversation. Retry to try again.',
@@ -310,6 +327,7 @@ function applyEntry(
     if (!stillViewing) return
     useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
     if (useSessionStore.getState().activeSessionId !== null) enterBlockedNoChat(result.status)
+    closeForeignNewChat(workspaceId, result.status)
     return
   }
 
@@ -347,6 +365,7 @@ function applyEntry(
       retry: true,
       fellBack: false,
     }
+    closeForeignNewChat(workspaceId, 'failed-attempt')
     useSessionStore.setState({ workspaceEntry: { ...failed, ...linkedTarget } })
     return
   }
@@ -430,6 +449,7 @@ async function execute(workspaceId: string, linkedSessionId?: string): Promise<v
       errorName: error instanceof Error ? error.name : 'UnknownError',
     })
     if (navigationIntentCurrent(token) && useWorkspacesStore.getState().activeWorkspaceId === workspaceId) {
+      closeForeignNewChat(workspaceId, 'unavailable')
       useSessionStore.setState({
         workspaceEntry: { status: 'unavailable', sessionId: null, sendEnabled: false, acknowledged: false, retry: true, ...(linked ? { linkedSessionId: linked } : {}) },
       })
