@@ -24,7 +24,7 @@
 // not decided (kept or cleared) — no test asserts it; see the RED report.
 import { useEffect, act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -50,6 +50,20 @@ const SESSION_B = 'main-mia-beta'
 // Arbitrary user-chosen draft content; only the issue's required behaviour
 // (the other chat's box holds none of it) is the oracle.
 const DRAFT = 'Draft for the Alpha quarterly numbers'
+// Revision 1 (CHECK F1): the sentinel is a second, known send after the
+// checked Send click. Its frame must reach workspace B's session, which
+// proves the recorded socket log observed activity strictly after the click —
+// a clean log is never vacuously true.
+const MARKER = 'workspace B marker sent after the checked send'
+// Virtual-time windows for the fake-timer proof. The first settles the checked
+// Send (a build that merely delays the submit — CHECK mutant M5 added 250 ms —
+// fires inside it); the second runs every remaining pending timer before the
+// recorded log is read. An unbounded runAllTimersAsync cannot be used because
+// the real WsConnection keeps self-rescheduling its heartbeat timer, so the
+// timer queue never drains; both windows are generous multiples of the known
+// scheduling delays while staying bounded.
+const SENTINEL_SETTLE_MS = 1_000
+const QUEUED_SUBMIT_FLUSH_MS = 120_000
 
 const originalScrollTo = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTo')
 let net: Network
@@ -130,6 +144,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // A revised send test enables fake timers mid-test; never leak them into
+  // the next test (or into stopHarness's waits).
+  vi.useRealTimers()
   stopHarness()
   if (originalScrollTo) Object.defineProperty(Element.prototype, 'scrollTo', originalScrollTo)
   else Reflect.deleteProperty(Element.prototype, 'scrollTo')
@@ -297,13 +314,41 @@ describe('#1853 an unsent chat draft must not follow the user into another works
     await screen.findByTestId('chat-input')
     emitSessionReplay(SESSION_B)
     await waitFor(() => expect(chatInput()).toBeEnabled())
-    await user.click(screen.getByRole('button', { name: /^send/i }))
-    // Give the real submit path its microtasks, then read the recorded edge.
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
-    // Issue requirement: a Send from the other chat can never post that text
-    // there. With a clean box nothing is sent; no message frame may carry the
-    // draft into workspace B's session (or anywhere else).
-    const messageFrames = socket.sent.filter((frame) => frame.type === 'message')
-    expect(messageFrames, '1853: no send from the other chat may post the draft text').toEqual([])
+    // Revision 1 (CHECK F1): the submit path runs under fake timers so the
+    // proof is not "not within 50 ms". The clicks and the flush run on the
+    // fake clock (fireEvent — the suite's established way to act under fake
+    // timers, because @testing-library/react's asyncWrapper drains a faked
+    // setTimeout that only `jest` would advance), a SECOND known send (the
+    // sentinel) proves the log observed activity after the click, and then
+    // every remaining pending timer runs before the whole recorded log is
+    // read — a build that merely delays the submit (M5: 250 ms) still fires
+    // inside the flush and dies.
+    vi.useFakeTimers()
+    try {
+      const sendButton = () => screen.getByRole('button', { name: /^send/i })
+      fireEvent.click(sendButton())
+      await act(async () => { await vi.advanceTimersByTimeAsync(SENTINEL_SETTLE_MS) })
+      // The sentinel: a second, known send after the checked Send.
+      fireEvent.change(chatInput(), { target: { value: MARKER } })
+      fireEvent.click(sendButton())
+      await act(async () => { await vi.advanceTimersByTimeAsync(QUEUED_SUBMIT_FLUSH_MS) })
+      // Instrument control: the sentinel reached workspace B's session.
+      // Without it, a log holding nothing could also mean the transport
+      // recorded nothing at all.
+      const markerFrame = (socket.sent.filter((frame) => frame.type === 'message') as Array<{ session_id: string; content: string }>)
+        .find((frame) => frame.session_id === SESSION_B && frame.content.includes(MARKER))
+      expect(markerFrame, 'instrument: the sentinel send reached workspace B\'s session after the checked Send').toBeDefined()
+      // Issue requirement: NO message frame anywhere in the recorded log —
+      // before, up to and including the sentinel, or after the full flush —
+      // may carry the draft text into workspace B's session (or anywhere
+      // else). With a clean box the checked Send is disabled and nothing at
+      // all is sent.
+      const draftFrames = socket.sent.filter((frame) => frame.type === 'message')
+        .map((frame) => frame as unknown as { content?: string })
+        .filter((frame) => (frame.content ?? '').includes(DRAFT))
+      expect(draftFrames, '1853: no send may post the draft text (every message frame checked, not only the sentinel\'s)').toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

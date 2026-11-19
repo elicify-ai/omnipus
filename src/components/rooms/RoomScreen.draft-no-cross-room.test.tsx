@@ -14,8 +14,8 @@
 // Brief item 3: what the box holds when the user RETURNS to room A is not
 // decided (kept or cleared) — no test asserts it; see the RED report.
 import { act } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   QueryClientProvider,
@@ -42,6 +42,25 @@ const ROOM_B_NAME = 'Beta'
 const DRAFT_TEXT = 'Plan the offsite, '
 const DRAFT_WITH_MENTION = 'Plan the offsite, @Jim '
 const FILE_NAME = 'offsite-notes.txt'
+// The mention id the real @-picker binds (Jim is a room member) and the
+// media ref the real upload adapter registers — the send body must carry
+// neither anywhere in the recorded transport log.
+const MENTIONED_MEMBER_ID = 'jim'
+const MEDIA_REF = 'media://workspace/sales/upl-offsite-1'
+// Revision 1 (CHECK F1): the sentinel is a second, known send after the
+// checked Send click. Its POST must reach room B, which proves the recorded
+// log observed activity strictly after the click — a clean log is never
+// vacuously true.
+const MARKER = 'room B marker sent after the checked send'
+// Virtual-time windows for the fake-timer proof. The first settles the checked
+// Send (a build that merely delays the submit — CHECK mutant M4 added 250 ms —
+// fires inside it); the second runs every remaining pending timer before the
+// recorded log is read. An unbounded runAllTimersAsync cannot be used because
+// the real WsConnection keeps self-rescheduling its heartbeat timer, so the
+// timer queue never drains; both windows are generous multiples of the known
+// scheduling delays while staying bounded.
+const SENTINEL_SETTLE_MS = 1_000
+const QUEUED_SUBMIT_FLUSH_MS = 120_000
 // UploadFilesResponse (contracts): the room attachment adapter reads
 // files[0].ref and files[0].content_type off this body.
 const UPLOAD_RESPONSE = {
@@ -50,7 +69,7 @@ const UPLOAD_RESPONSE = {
     path: `uploads/${ROOM_A}/${FILE_NAME}`,
     size: 27,
     content_type: 'text/plain',
-    ref: 'media://workspace/sales/upl-offsite-1',
+    ref: MEDIA_REF,
   }],
 }
 
@@ -74,7 +93,12 @@ beforeEach(() => {
   connection = undefined
 })
 
-afterEach(() => stopHarness(connection))
+afterEach(() => {
+  // A revised send test enables fake timers mid-test; never leak them into
+  // the next test (or into stopHarness's waits).
+  vi.useRealTimers()
+  stopHarness(connection)
+})
 
 /**
  * The real room route shape (src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx):
@@ -222,16 +246,47 @@ describe('#1849 an unsent room draft must not follow the user into another room'
     await goToRoom((opts) => harness.router.navigate(opts), harness.socket, harness.emit, ROOM_B)
     await goToRoom((opts) => harness.router.navigate(opts), harness.socket, harness.emit, ROOM_A)
     await typeDraftInRoomA(user)
-    const writesBefore = net.writes().filter((write) => write.path.endsWith('/messages')).length
     await goToRoom((opts) => harness.router.navigate(opts), harness.socket, harness.emit, ROOM_B)
-    await user.click(screen.getByRole('button', { name: /^send/i }))
-    // Give the real submit path its microtasks, then read the recorded edge.
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
-    // Issue requirement: no send to room B carries room A's draft. With a
-    // clean box the Send is disabled and nothing is posted at all; the
-    // recorded message writes after arriving in room B must stay empty, for
-    // room B's endpoint (target id) and for room A's.
-    const messageWrites = net.writes().filter((write) => write.path.endsWith('/messages'))
-    expect(messageWrites.slice(writesBefore), '1849: no send after arriving in room B may carry room A\'s draft (checked body and target room)').toEqual([])
+    // Revision 1 (CHECK F1): the submit path runs under fake timers so the
+    // proof is not "not within 50 ms". The clicks and the flush run on the
+    // fake clock (fireEvent — the suite's established way to act under fake
+    // timers, because @testing-library/react's asyncWrapper drains a faked
+    // setTimeout that only `jest` would advance), a SECOND known send (the
+    // sentinel) proves the log observed activity after the click, and then
+    // every remaining pending timer runs before the whole recorded log is
+    // read — a build that merely delays the submit (M4: 250 ms) still fires
+    // inside the flush and dies.
+    vi.useFakeTimers()
+    try {
+      const sendButton = () => screen.getByRole('button', { name: /^send/i })
+      fireEvent.click(sendButton())
+      await act(async () => { await vi.advanceTimersByTimeAsync(SENTINEL_SETTLE_MS) })
+      // The sentinel: a second, known send after the checked Send.
+      fireEvent.change(groupInput(), { target: { value: MARKER } })
+      fireEvent.click(sendButton())
+      await act(async () => { await vi.advanceTimersByTimeAsync(QUEUED_SUBMIT_FLUSH_MS) })
+      // Instrument control: the sentinel reached room B. Without it, a log
+      // holding nothing could also mean the transport recorded nothing at all.
+      const markerWrite = net.writes().find((write) =>
+        write.path === `/api/v1/rooms/${ROOM_B}/messages`
+        && ((write.body as { text?: string } | null)?.text ?? '').includes(MARKER))
+      expect(markerWrite, 'instrument: the sentinel send reached room B after the checked Send').toBeDefined()
+      // Issue requirement: NO send anywhere in the recorded log — before,
+      // up to and including the sentinel, or after the full flush — may carry
+      // room A's draft: not its text, not its picked mention id, not its
+      // staged media ref, at room B's endpoint (the target room checked) or
+      // anywhere else. With a clean box the checked Send is disabled and
+      // nothing at all is posted.
+      const draftWrites = net.writes().filter((write) => {
+        const body = write.body as { text?: string; mentions?: string[]; media?: string[] } | null
+        return write.path.endsWith('/messages')
+          && ((body?.text ?? '').includes(DRAFT_TEXT.trim())
+            || body?.mentions?.includes(MENTIONED_MEMBER_ID) === true
+            || body?.media?.includes(MEDIA_REF) === true)
+      })
+      expect(draftWrites, '1849: no send may carry room A\'s draft (text, mention id, media ref — every endpoint checked, not only room B\'s)').toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
