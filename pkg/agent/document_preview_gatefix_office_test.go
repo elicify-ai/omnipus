@@ -6,14 +6,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,44 +120,60 @@ func TestOfficePreview_LazyPagesCountTowardLiveBytes(t *testing.T) {
 	require.Equal(t, int64(doc.LiveBytes()), previewGatewayBytes.Load(), "AD-6: page images rendered after the preview was recorded still count toward the live-byte budgets")
 }
 
-// D3 / SF W-01. The 256 MiB gateway budget is one reservation. Two turns
-// that both observe 192 MiB in use must not both add 64 MiB.
+// D3 / SF W-01. The 256 MiB gateway budget is one reservation. Many turns,
+// released together, each try to take the last free chunk. Exactly one may
+// succeed, and the reserved total must never pass the cap. A plain load,
+// check and add lets more than one through; compare-and-swap does not.
 func TestOfficePreview_GatewayReservationIsAtomic(t *testing.T) {
 	require.Zero(t, previewGatewayBytes.Load(), "instrument: gateway counter must start at 0")
-	blob := bytes.Repeat([]byte{7}, previewTurnBudget)
-	var maxSeen int64
-	for attempt := 0; attempt < 40; attempt++ {
-		var held []*turnDocumentPreviews
-		for n := 0; n < 3; n++ {
-			p := &turnDocumentPreviews{}
-			p.add(fmt.Sprintf("held-%d-%d", attempt, n), gatefixLiveDoc(blob))
-			held = append(held, p)
+	t.Cleanup(func() { previewGatewayBytes.Store(0) })
+	if runtime.GOMAXPROCS(0) < 2 {
+		t.Fatal("BLOCKED: D3 needs at least two processors; one processor hides the load/check/add race")
+	}
+	const (
+		goroutines = 64
+		rounds     = 500
+		n          = int64(1 << 20) // 1 MiB; the counter starts with room for exactly one
+	)
+	startAt := int64(previewGatewayBudget) - n
+	for round := 0; round < rounds; round++ {
+		previewGatewayBytes.Store(startAt)
+		var goNow atomic.Bool
+		var ready atomic.Int32
+		var won atomic.Int32
+		var done sync.WaitGroup
+		done.Add(goroutines)
+		for i := 0; i < goroutines; i++ {
+			go func() {
+				defer done.Done()
+				ready.Add(1)
+				// Yield often enough that the starter can set the flag, but
+				// stay on a core so the goroutines already running enter the
+				// reservation together. A blocking wait staggers them and
+				// hides the load/check/add gap.
+				var spins int
+				for !goNow.Load() {
+					spins++
+					if spins&63 == 0 {
+						runtime.Gosched()
+					}
+				}
+				if reservePreviewGatewayBytes(n) {
+					won.Add(1)
+				}
+			}()
 		}
-		require.Equal(t, int64(3*previewTurnBudget), previewGatewayBytes.Load(), "instrument: three 64 MiB turns must hold 192 MiB before the race")
-		var wg sync.WaitGroup
-		for n := 0; n < 2; n++ {
-			p := &turnDocumentPreviews{}
-			held = append(held, p)
-			wg.Add(1)
-			go func(p *turnDocumentPreviews, id string) {
-				defer wg.Done()
-				p.add(id, gatefixLiveDoc(blob))
-			}(p, fmt.Sprintf("race-%d-%d", attempt, n))
+		for ready.Load() < goroutines {
+			runtime.Gosched()
 		}
-		wg.Wait()
+		goNow.Store(true)
+		done.Wait()
 		got := previewGatewayBytes.Load()
-		if got > maxSeen {
-			maxSeen = got
-		}
-		for _, p := range held {
-			p.release()
-		}
-		require.Zero(t, previewGatewayBytes.Load())
-		if got > int64(previewGatewayBudget) {
-			t.Fatalf("gateway live media is %d bytes, over the 256 MiB budget, after two concurrent 64 MiB reservations at 192 MiB (AD-6)", got)
+		winners := int64(won.Load())
+		if winners != 1 || got != startAt+n || got > int64(previewGatewayBudget) {
+			t.Fatalf("round %d: %d reservations of %d bytes succeeded and the gateway holds %d; the cap is %d and exactly one fits (AD-6)", round, winners, n, got, previewGatewayBudget)
 		}
 	}
-	t.Logf("gateway reservation attempts stayed at or under the budget; max seen %d", maxSeen)
 }
 
 // G12 / CR W1, PTA F2, B-10. A provider that rejects a PDF attached from a
@@ -248,10 +265,6 @@ func gatefixPNG() []byte {
 		panic(err)
 	}
 	return buf.Bytes()
-}
-
-func gatefixLiveDoc(pdf []byte) *tools.DocumentPreview {
-	return &tools.DocumentPreview{PDF: pdf, Reauthorize: func(context.Context) error { return nil }}
 }
 
 func gatefixNativePDFTotals(t *testing.T, messages []providers.Message) (count int, decoded int) {
