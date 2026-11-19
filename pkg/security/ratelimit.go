@@ -70,11 +70,19 @@ type SlidingWindow struct {
 }
 
 // NewSlidingWindow creates a SlidingWindow that allows at most limit events
-// within window. scope, scopeID, and resource are used to construct policy rule
-// messages in denied results.
+// within window. A limit of 0 or less means unlimited: every Allow is allowed
+// and is still recorded, so a later positive limit counts those events.
+// scope, scopeID, and resource are used to construct policy rule messages in
+// denied results.
 func NewSlidingWindow(limit int, window time.Duration, scope RateLimitScope, scopeID, resource string) *SlidingWindow {
+	// limit+1 is the historical prealloc. A negative limit makes that capacity
+	// negative and panics in make; start empty and let append grow.
+	capacity := 0
+	if limit >= 0 {
+		capacity = limit + 1
+	}
 	return &SlidingWindow{
-		events:     make([]time.Time, 0, limit+1),
+		events:     make([]time.Time, 0, capacity),
 		maxCount:   limit,
 		windowSize: window,
 		scope:      scope,
@@ -104,7 +112,12 @@ func (sw *SlidingWindow) allowAt(now time.Time) RateLimitResult {
 		sw.events = sw.events[i:]
 	}
 
-	if len(sw.events) < sw.maxCount {
+	// A limit of 0 or less means unlimited (docs/settings.md: enter 0 for
+	// no limit; the contracts say "0 = unlimited"). Record the event: a
+	// later raise to a positive limit must count calls that happened while
+	// unlimited, the same way events already in the window are kept.
+	// maxCount is read only under sw.mu, the same lock setLimit writes it under.
+	if sw.maxCount <= 0 || len(sw.events) < sw.maxCount {
 		sw.events = append(sw.events, now)
 		return RateLimitResult{Allowed: true}
 	}
@@ -160,8 +173,11 @@ func NewRateLimiterRegistry() *RateLimiterRegistry {
 // setLimit applies a changed limit to a live window (#1882). It takes the
 // same lock as allowAt, so the limit and the recorded events change together
 // and a concurrent Allow sees either the old or the new limit, never a mix.
-// Events already recorded are kept: raising lets the next call through,
-// lowering refuses calls until enough of them age out of the window.
+// Events already recorded are kept. Raising to a higher positive limit lets
+// the next call through once the kept count is under it; lowering to a smaller
+// positive limit refuses calls until enough of them age out. A limit of 0 or
+// less means unlimited (allowAt); calls made then are still recorded, so
+// raising back to a positive limit counts them.
 func (sw *SlidingWindow) setLimit(limit int) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()

@@ -133,6 +133,16 @@ func TestSettingsNeutralVoice1857(t *testing.T) {
 			map[string]string{"cli": "Codex", "model": "test-model-1857"}},
 		{"turn_limit_n_from_the_cap", "turn cap exceeded: 3 turns (max 2)", "codex", "", "external_cli_turn_limit", "",
 			map[string]string{"cli": "Codex", "n": "2"}},
+		// F-PTA-4 (#1882 follow-up): the upstream-refused row. Its catalogue
+		// sentence carries {cli} (one sentence serves both voices, no neutral
+		// twin), so this row is the pin that makes a fail-open bug scoped to
+		// exactly this code's Settings render — a literal {cli} left in the
+		// result — fail the slot assertion instead of passing green. The raw
+		// input is the C9 classifier case verbatim
+		// (failure_kinds_1857_test.go::TestCLIFailureAdaptersEndToEnd/
+		// cli_relayed_limit_gets_the_cli_classifier_answer).
+		{"upstream_refused_cli_relays_limit", "API Error: 429 rate limit exceeded, please retry later", "codex", "", "external_cli_upstream_refused", "",
+			map[string]string{"cli": "Codex"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
