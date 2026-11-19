@@ -411,10 +411,11 @@ type fakeGateway struct {
 	// Export behaviour: when exportErrCode is empty the endpoint serves
 	// exportPkg as 200 application/octet-stream with a Content-Disposition
 	// attachment header; otherwise it answers exportStatus/exportErrCode.
-	exportPkg     []byte
-	exportStatus  int
-	exportErrCode string
-	exportMsg     string
+	exportPkg      []byte
+	exportStatus   int
+	exportErrCode  string
+	exportMsg      string
+	exportTruncate bool
 
 	// Upload behaviour: previewJSON served as 201, or the coded error.
 	previewStatus int
@@ -485,6 +486,15 @@ func (f *fakeGateway) serveExportPackage(pkg []byte) *fakeGateway {
 	return f
 }
 
+// serveExportTruncate commits a 200 whose body ends before Content-Length,
+// so the client sees a partial package (FR-050 atomic write).
+func (f *fakeGateway) serveExportTruncate() *fakeGateway {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.exportTruncate = true
+	return f
+}
+
 // servePreview scripts POST /api/v1/packages/import (the upload).
 func (f *fakeGateway) servePreview(body string) *fakeGateway {
 	f.mu.Lock()
@@ -546,8 +556,22 @@ func (f *fakeGateway) serveWorkspaces(w http.ResponseWriter, r *http.Request) {
 func (f *fakeGateway) serveExport(w http.ResponseWriter, r *http.Request) {
 	f.record(&f.exports, r)
 	f.mu.Lock()
-	status, code, msg, pkg := f.exportStatus, f.exportErrCode, f.exportMsg, f.exportPkg
+	status, code, msg, pkg, truncate := f.exportStatus, f.exportErrCode, f.exportMsg, f.exportPkg, f.exportTruncate
 	f.mu.Unlock()
+	if truncate {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			panic("fake gateway: export response cannot be hijacked")
+		}
+		conn, bufrw, herr := hj.Hijack()
+		if herr != nil {
+			panic(herr)
+		}
+		_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 4096\r\n\r\nnot-a-full-package")
+		_ = bufrw.Flush()
+		_ = conn.Close()
+		return
+	}
 	if code != "" {
 		f.writeError(w, status, code, msg)
 		return

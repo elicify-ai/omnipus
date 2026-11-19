@@ -135,6 +135,40 @@ func TestPkgCmd_UsageLookupsExitCodes(t *testing.T) {
 		assert.Equal(t, pkg, written, "--force writes the new package (old bytes replaced)")
 	})
 
+	// FR-050: a partial export body must not replace an existing file, and
+	// must not leave the temporary name writeAtomic creates beside it.
+	t.Run("FR-050 --force partial body keeps the old bytes and no temp file", func(t *testing.T) {
+		f := newFakeGateway(t).withRoster(rosterWriter()...).serveExportTruncate()
+		out := writeFixtureFile(t, dir, "w6-partial.omnpkg", []byte("OLD-BYTES"))
+		_, stderr, err := runCommand(t, exportCmd(f, Options{Token: "tok"}), "",
+			"export", "--agent", "Writer", "-o", out, "--force")
+		require.Equal(t, 1, exitCodeOf(t, err), "a short body is a failed export; stderr=%s", stderr)
+		kept, readErr := os.ReadFile(out)
+		require.NoError(t, readErr)
+		assert.Equal(t, "OLD-BYTES", string(kept), "FR-050: the previous file is unchanged")
+		assertNoExportTemp(t, dir)
+	})
+
+	// FR-050: --force renames into place. A rename that cannot replace the
+	// existing path leaves that path and removes the temporary file.
+	t.Run("FR-050 --force failed rename keeps the old path and no temp file", func(t *testing.T) {
+		pkg := buildPackage(t, pkgFixture{})
+		f := newFakeGateway(t).withRoster(rosterWriter()...).serveExportPackage(pkg)
+		out := filepath.Join(dir, "w6-rename.omnpkg")
+		require.NoError(t, os.Mkdir(out, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(out, "keep"), []byte("OLD-BYTES"), 0o600))
+		_, stderr, err := runCommand(t, exportCmd(f, Options{Token: "tok"}), "",
+			"export", "--agent", "Writer", "-o", out, "--force")
+		require.Equal(t, 1, exitCodeOf(t, err), "a rename onto a directory fails; stderr=%s", stderr)
+		kept, readErr := os.ReadFile(filepath.Join(out, "keep"))
+		require.NoError(t, readErr)
+		assert.Equal(t, "OLD-BYTES", string(kept), "FR-050: the previous path is unchanged")
+		info, statErr := os.Stat(out)
+		require.NoError(t, statErr)
+		assert.True(t, info.IsDir(), "the existing directory was not replaced by a partial file")
+		assertNoExportTemp(t, dir)
+	})
+
 	t.Run("D10 row 6: unwritable output path exits 1, file absent", func(t *testing.T) {
 		f := newFakeGateway(t).withRoster(rosterWriter()...).serveExportPackage(buildPackage(t, pkgFixture{}))
 		// Root-proof equivalent of the read-only directory: the parent folder
@@ -592,4 +626,18 @@ func TestPkgCmd_ImportOutcomeLines(t *testing.T) {
 		assert.Contains(t, stdout, "orphan-id-5", "FR-044: the warning names the agent ID")
 		assert.Contains(t, stdout, "staging-orphan", "FR-044: …and the staging folder")
 	})
+}
+
+// assertNoExportTemp fails when writeAtomic left a temporary file beside the
+// output. The name pattern is the one writeAtomic passes to CreateTemp.
+func assertNoExportTemp(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.Contains(name, ".tmp-") {
+			t.Errorf("FR-050: temporary export file %s was left behind", name)
+		}
+	}
 }

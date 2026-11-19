@@ -92,6 +92,38 @@ func nonTerminalCharDeviceChild(t *testing.T) {
 	assert.Equal(t, 0, f.counts().applies, "nothing is imported")
 }
 
+// TestPkgCmd_NonTerminalAffirmativeCancelsWithoutYes is the case /dev/zero
+// does not prove. confirm must cancel when stdin is a non-terminal file whose
+// contents are an affirmative answer. A guard that only rejects an endless
+// device, then reads a normal file, would import.
+func TestPkgCmd_NonTerminalAffirmativeCancelsWithoutYes(t *testing.T) {
+	dev, err := os.CreateTemp(t.TempDir(), "stdin-yes-")
+	require.NoError(t, err)
+	_, err = dev.WriteString("y\n")
+	require.NoError(t, err)
+	_, err = dev.Seek(0, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = dev.Close() })
+	info, err := dev.Stat()
+	require.NoError(t, err)
+	require.Zero(t, info.Mode()&os.ModeCharDevice, "instrument: the affirmative answer is a regular file")
+	_, termErr := unix.IoctlGetTermios(int(dev.Fd()), unix.TCGETS)
+	require.Error(t, termErr, "instrument: the file must not be a terminal")
+
+	dir := t.TempDir()
+	file := defaultImportSetup(t, dir)
+	f := newFakeGateway(t).
+		withWorkspaces(map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"}).
+		servePreview(previewBody(t, nil))
+
+	stdout, stderr, runErr := runCommandFile(t, importCmd(f, Options{Token: "tok"}), dev,
+		"import", file, "--workspace", "Research")
+
+	require.Equal(t, 1, exitCodeOf(t, runErr), "BDD: non-terminal stdin without --yes exits 1 even when it contains y; stderr: %s", stderr)
+	assert.Contains(t, stdout, "Import cancelled", "BDD: the owner is told the import was cancelled")
+	assert.Equal(t, 0, f.counts().applies, "an affirmative answer on a non-terminal must not import")
+}
+
 // runCommandFile is runCommand with a real *os.File for stdin, so confirm's
 // terminal check sees the file mode instead of an in-memory reader.
 func runCommandFile(t *testing.T, cmd *cobra.Command, in *os.File, args ...string) (string, string, error) {
