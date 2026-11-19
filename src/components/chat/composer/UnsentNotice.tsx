@@ -52,6 +52,7 @@ interface Row {
   lines: string[]
   actions: Action[]
   item?: UnsentItem
+  queued?: { id: string; key: string; workspaceId: string | null; agentId: string | null }
 }
 
 const NARROW_PX = 640
@@ -101,6 +102,8 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
   const drafts = useDrafts((s) => s.drafts)
   const newChats = useDrafts((s) => s.newChats)
   const pending = useChatStore((s) => s.pendingFirstSend)
+  const outbound = useChatStore((s) => s.outboundQueue)
+  const held = useChatStore((s) => s.pendingDrainQueue)
   const names = useNames()
   const rows: Row[] = []
   for (const item of unsent) {
@@ -129,6 +132,22 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
       actions: unsaved ? ['openAndSend', 'copy', 'discard'] : ['open', 'copy', 'discard'],
     })
   }
+  // 4.11 / UAT-16: a first message for K queued while the socket was down is
+  // held in the queue (never sent while K is not open); it is listed here.
+  for (const queued of [...held, ...outbound]) {
+    if (typeof queued === 'string' || queued.submission?.origin.kind !== 'new_chat') continue
+    const sub = queued.submission
+    const key = canonical(sub.origin.new_chat_key ?? null)
+    if (key === openKey) continue
+    rows.push({
+      id: `queued-${queued.id}`,
+      title: `New chat with ${names.agent(sub.agentId)}, not saved yet`,
+      text: queued.content,
+      lines: [],
+      actions: ['openAndSend', 'copy', 'discard'],
+      queued: { id: queued.id, key, workspaceId: sub.workspaceId, agentId: sub.agentId },
+    })
+  }
   if (unsupported) {
     for (const [key, draft] of Object.entries(drafts)) {
       if (!hasDraftInput(draft)) continue
@@ -141,6 +160,12 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
 function openRow(row: Row, sessionOf: (id: string) => Session | undefined): void {
   const session = useSessionStore.getState()
   const pending = useChatStore.getState().pendingFirstSend
+  if (row.queued) {
+    // 4.11: re-enter K with its original workspace and agent; the queue then drains it.
+    enterNewChat(row.queued.workspaceId, row.queued.agentId, undefined, row.queued.key)
+    useChatStore.getState().drainOutboundQueue()
+    return
+  }
   if (!row.item) {
     const key = pending?.payload.origin?.new_chat_key
     if (!pending || !key) return
@@ -164,6 +189,10 @@ function openRow(row: Row, sessionOf: (id: string) => Session | undefined): void
 }
 
 function discardRow(row: Row): void {
+  if (row.queued) {
+    useChatStore.getState().discardQueuedMessage(row.queued.id)
+    return
+  }
   if (row.item) {
     discardUnsentItem(row.item.id)
     return
