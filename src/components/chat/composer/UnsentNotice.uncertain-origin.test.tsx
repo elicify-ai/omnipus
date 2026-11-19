@@ -87,4 +87,37 @@ describe('Defect 3: an uncertain item names its origin chat wherever it is liste
     expect(within(notice).getByText('May not have been delivered'), 'the item is listed (spec 4.9)').toBeTruthy()
     expect(within(notice).getByText('Nova chat'), 'spec 4.7/4.9: the item names its origin chat').toBeTruthy()
   })
+
+  // Team B, a86b8f92e6: the validator's uncertain redirect item read only
+  // "Chat". A chat whose list entry carries no title of its own (a main chat:
+  // its name is derived from its agent, sessionDisplayTitle.ts) fell through
+  // to the generic word. Oracle: the name the sidebar gives the same chat.
+  it('an uncertain redirect from Mia\'s main chat names "Mia - Main Session", not "Chat"', async () => {
+    resetBindingWorld()
+    apiMocks.fetchWorkspaces.mockResolvedValue([makeWorkspace({ id: 'w1', name: 'My Workspace' })])
+    apiMocks.fetchAgents.mockResolvedValue([makeAgent({ id: 'mia', name: 'Mia' })])
+    const sessions = [makeSession({ id: 'main-mia', agent_id: 'mia', workspace_id: 'w1', title: '', type: 'main' })]
+    apiMocks.fetchSessions.mockResolvedValue(sessions)
+    apiMocks.fetchSessionPage.mockResolvedValue({ sessions })
+    act(() => {
+      useWorkspacesStore.getState().setActiveWorkspaceId('w1')
+      useSessionStore.getState().setActiveSession('main-mia', 'mia', 'core')
+    })
+    const socket = openLive()
+    mountComposer()
+    await typeIntoComposer('/stop-redirect x-main')
+    const user = userEvent.setup()
+    await user.keyboard('{Enter}')
+    expect(socket.sent.some((frame) => frame.type === 'redirect'), 'the redirect was handed over').toBe(true)
+    act(() => { socket.close(4008, 'catch-up required') })
+    const next = FakeSocket.instances.at(-1)
+    if (!next || next === socket) throw new Error('the close opens the next connection')
+    act(() => { next.open() })
+    act(() => { next.receive({ type: 'server_capabilities', send_origin: true }) })
+    await flushInbound()
+    const notice = screen.getByTestId('unsent-notice')
+    expect(within(notice).getByText('May not have been delivered'), 'the close made the uncertain item').toBeTruthy()
+    expect(await within(notice).findByText('Mia - Main Session'), 'spec 4.7/4.9: the item names its origin chat').toBeTruthy()
+    expect(within(notice).queryByText('Chat'), 'not the generic word').toBeNull()
+  })
 })

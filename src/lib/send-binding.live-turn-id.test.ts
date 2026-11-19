@@ -111,3 +111,34 @@ describe('UAT-15: the redirect record captures the live turn id', () => {
     expect(screen.getByText(NOT_STOPPED), 'the captured turn-9 is still running').toBeTruthy()
   })
 })
+
+// Team B, a86b8f92e6 (UAT-15 main run, W1 Mia chat, x-p4r9k): the positive
+// control redirect was applied (mia-turn-2 stopped, mia-turn-3 started from
+// its instruction); the second redirect left while mia-turn-3 had not yet
+// sent a token, so nothing on the wire had named it to the page (the gateway
+// names a turn started after the attach only in its token/done frames). Its
+// command_received was withheld, the socket closed, the reattach snapshot
+// showed the applied redirect's new turn mia-turn-4. Spec UAT-15 main run:
+// uncertain item, NO notice (F-tt).
+describe('UAT-15 main run: the second redirect leaves before the new turn names itself', () => {
+  it('an applied redirect shows the uncertain item and no notice', async () => {
+    resetBindingWorld()
+    const socket = openLive()
+    mountComposer()
+    await liveTurn(socket, 'chat-a', 'mia-turn-2')
+    await typeRedirect('/stop-redirect continue-1')
+    const control = socket.sent.filter((frame) => frame.type === 'redirect').at(-1) as { client_frame_id: string } | undefined
+    if (!control) throw new Error('the control redirect was not handed over')
+    act(() => { socket.receive({ type: 'command_received', command: 'redirect', client_frame_id: control.client_frame_id, session_id: 'chat-a' }) })
+    act(() => {
+      socket.receive({ type: 'error', session_id: 'chat-a', message: 'Stopped', payload: { llm_error: { code: 'turn_canceled', message: 'Stopped', retryable: true } } })
+    })
+    act(() => { socket.receive({ type: 'done', session_id: 'chat-a', turn_id: 'mia-turn-2' }) })
+    await flushInbound()
+    await typeRedirect('/stop-redirect x-p4r9k')
+    expect(socket.sent.filter((frame) => frame.type === 'redirect'), 'both redirects were handed over').toHaveLength(2)
+    await closeThenSnapshot(socket, 'chat-a', 'mia-turn-4')
+    expect(screen.getByText('May not have been delivered'), 'the uncertain item stays').toBeTruthy()
+    expect(screen.queryByText(NOT_STOPPED), 'F-tt: mia-turn-4 is the applied redirect\'s new turn').toBeNull()
+  })
+})
