@@ -5,16 +5,16 @@
 // Two process-edge doubles only:
 //   - fakeGateway: an httptest server standing in for the real gateway REST
 //     surface (the spec's own test plan prescribes "a fake server"); response
-//     JSON follows the spec's "Contract Changes" schema descriptions, since the
-//     T-1 YAML does not exist in this worktree yet (see the UNVERIFIED note in
-//     the RED report — GREEN reconciles fakes against the final contracts).
+//     Error/result JSON follows ErrorResponse.yaml and PackageImportResult.yaml.
+//     Element type ("agent") is distinct from the stored agent type
+//     ("custom" for Main, "worker" for native Subagent).
 //   - buildPackage: a real spec-shaped .omnpkg builder (tar + zstd, manifest
 //     first), so inspect/verify fixtures are valid by construction and any
 //     tampering is explicit.
 //
 // Expected values everywhere come from the spec (FR-050…FR-055, D4, D10, D11,
-// the CLI rows of "UI Screens and States", SC-002/003/006), never from running
-// production code — none of it exists yet (stub_for_red.go).
+// the CLI rows of "UI Screens and States", SC-002/003/006) and the final
+// contracts, never from observed CLI output.
 
 package pkgcmd
 
@@ -70,7 +70,9 @@ const fixtureResearchWorkspaceID = "ws-research-1"
 // pkg/app/internal/pkgcmd/command.go), so the args passed to runCommand are
 // the real CLI argv and cobra resolves the subcommand itself.
 func testRoot(f *fakeGateway, opts Options) *cobra.Command {
-	opts.GatewayURL = f.srv.URL
+	if opts.GatewayURL == "" {
+		opts.GatewayURL = f.srv.URL
+	}
 	root := &cobra.Command{Use: "omnipus"}
 	root.AddCommand(NewExportCommand(opts), NewImportCommand(opts), NewPackageCommand(opts))
 	return root
@@ -128,6 +130,9 @@ type pkgFixture struct {
 	AgentID string
 	// AgentName overrides the agent name (default "Writer").
 	AgentName string
+	// AgentType is the stored record type: "custom" (Main, default) or
+	// "worker" (native Subagent), not the UI label or manifest element type.
+	AgentType string
 	// FormatVersion overrides the manifest's format_version (default 1;
 	// 2 is "made by a newer Omnipus", D1 row 7 / SC-003).
 	FormatVersion int
@@ -139,10 +144,15 @@ type pkgFixture struct {
 	// TamperAfterHash changes file bytes AFTER the manifest hashes were
 	// computed — the one-byte-change case SC-002 asks for.
 	TamperAfterHash func(map[string][]byte)
-	// LargeZstdWindow encodes with a 512 MiB zstd window (D1 row 26 offline:
-	// FR-008 caps the decoder window at 8 MiB). zstd.MaxWindowSize is 512 MiB,
-	// so the encoder can emit such a frame.
+	// LargeZstdWindow declares a 512 MiB zstd window (D1 row 26 offline:
+	// FR-008 caps the decoder window at 8 MiB). The header is hand-written:
+	// WithWindowSize alone does not force a small frame to declare that window.
 	LargeZstdWindow bool
+	// DeclaredWindow hand-writes a zstd window descriptor of exactly this
+	// size. Only sizes the descriptor can name exactly are used: 8 MiB
+	// (FR-008's cap), 9 MiB (the next representable window above that cap)
+	// and 512 MiB (D1 row 26, also set by LargeZstdWindow).
+	DeclaredWindow int
 }
 
 // buildPackage writes a spec-shaped .omnpkg (tar + zstd, manifest.json first,
@@ -160,6 +170,11 @@ func buildPackage(t *testing.T, fx pkgFixture) []byte {
 		name = "Writer"
 	}
 
+	agentType := fx.AgentType
+	if agentType == "" {
+		agentType = "custom"
+	}
+
 	agentJSONPath := fmt.Sprintf("omnipus/agents/%s/agent.json", agentID)
 	soulPath := fmt.Sprintf("omnipus/agents/%s/SOUL.md", agentID)
 	agentMDPath := fmt.Sprintf("omnipus/agents/%s/AGENT.md", agentID)
@@ -168,7 +183,7 @@ func buildPackage(t *testing.T, fx pkgFixture) []byte {
 		agentJSONPath: mustJSON(t, map[string]any{
 			"id":          agentID,
 			"name":        name,
-			"type":        "Main",
+			"type":        agentType,
 			"description": "Drafts",
 			"model":       map[string]any{"provider": "openrouter", "primary": "deepseek/deepseek-v4.1-flash"},
 		}),
@@ -226,9 +241,9 @@ func buildPackage(t *testing.T, fx pkgFixture) []byte {
 		entries = append(entries, tarEntry{name: path, data: files[path]})
 	}
 
-	windowSize := 0
+	windowSize := fx.DeclaredWindow
 	if fx.LargeZstdWindow {
-		windowSize = zstd.MaxWindowSize // 512 MiB: the frame D1 row 26 refuses
+		windowSize = 512 << 20 // D1 row 26: a declared 512 MiB window
 	}
 	return tarZstd(t, entries, windowSize)
 }
@@ -241,7 +256,8 @@ type tarEntry struct {
 
 // tarZstd tars the entries (in order — the manifest must come first, FR-001)
 // and zstd-compresses the stream. windowSize 0 uses the library default;
-// zstd.MaxWindowSize encodes a 512 MiB-window frame (D1 row 26).
+// a non-zero size hand-writes a frame that declares that window (RFC 8878),
+// carrying the same valid tar in one raw block, as in the engine's limit test.
 func tarZstd(t *testing.T, entries []tarEntry, windowSize int) []byte {
 	t.Helper()
 
@@ -261,12 +277,11 @@ func tarZstd(t *testing.T, entries []tarEntry, windowSize int) []byte {
 	}
 	require.NoError(t, tw.Close())
 
-	opts := []zstd.EOption(nil)
 	if windowSize != 0 {
-		opts = append(opts, zstd.WithWindowSize(windowSize))
+		return declaredWindowFrame(t, tarBuf.Bytes(), windowSize)
 	}
 	var zbuf bytes.Buffer
-	enc, err := zstd.NewWriter(&zbuf, opts...)
+	enc, err := zstd.NewWriter(&zbuf)
 	require.NoError(t, err)
 	_, err = enc.Write(tarBuf.Bytes())
 	require.NoError(t, err)
@@ -276,6 +291,50 @@ func tarZstd(t *testing.T, entries []tarEntry, windowSize int) []byte {
 
 // soulSHA returns the SHA-256 the manifest records for SOUL.md of a default
 // fixture, so inspect-output assertions can name the exact expected checksum.
+// zstdWindowDescriptor is the RFC 8878 window-descriptor byte for a size
+// the 5-bit exponent and 3-bit mantissa can name exactly:
+// size = 2^(10+exp) + mantissa * 2^(10+exp-3).
+func zstdWindowDescriptor(t *testing.T, window int) byte {
+	t.Helper()
+	switch window {
+	case 8 << 20: // FR-008 cap: exp 13, mantissa 0 → 2^23 = 8 MiB
+		return 13 << 3
+	case 9 << 20: // next representable above the cap: exp 13, mantissa 1 → 8 MiB + 1 MiB
+		return (13 << 3) | 1
+	case 512 << 20: // D1 row 26: exp 19, mantissa 0 → 2^29 = 512 MiB
+		return 19 << 3
+	default:
+		t.Fatalf("declared window %d is not an exact zstd window these fixtures use", window)
+		return 0
+	}
+}
+
+// declaredWindowFrame hand-writes magic + FHD 0x00 + a window descriptor,
+// then one final raw block holding payload. Header checks are independent
+// of the package reader under test.
+func declaredWindowFrame(t *testing.T, payload []byte, window int) []byte {
+	t.Helper()
+	require.LessOrEqual(t, len(payload), 128<<10, "RFC 8878: a raw block is at most 128 KiB")
+	desc := zstdWindowDescriptor(t, window)
+	// 4 magic + FHD + window descriptor + 3-byte block header + payload.
+	frame := make([]byte, 0, 9+len(payload))
+	frame = append(frame, 0x28, 0xB5, 0x2F, 0xFD, 0x00, desc)
+	// FHD 0: no single-segment flag, no frame-content size, no checksum, no dictionary.
+	hdr := uint32(1) | uint32(len(payload))<<3 // last block, raw, payload length
+	frame = append(frame, byte(hdr), byte(hdr>>8), byte(hdr>>16))
+	frame = append(frame, payload...)
+
+	var header zstd.Header
+	require.NoError(t, header.Decode(frame))
+	require.False(t, header.SingleSegment, "fixture must declare a window, not just a content size")
+	require.Equal(t, uint64(window), header.WindowSize)
+	require.True(t, header.FirstBlock.OK)
+	require.True(t, header.FirstBlock.Last)
+	require.False(t, header.FirstBlock.Compressed, "raw block: the window is not implied by a content size")
+	require.Equal(t, len(payload), header.FirstBlock.DecompressedSize)
+	return frame
+}
+
 func soulSHA(t *testing.T) string {
 	t.Helper()
 	sum := sha256.Sum256([]byte("Answer in rhyme.\n"))
@@ -290,11 +349,16 @@ func writeFixtureFile(t *testing.T, dir, name string, data []byte) string {
 	return path
 }
 
-// emptyHome makes a fresh empty OMNIPUS_HOME for FR-055/SC-006 assertions:
-// the commands must leave it empty (no data-folder reads or writes).
+// emptyHome makes a fresh empty OMNIPUS_HOME for FR-055/SC-006 assertions
+// and binds it as the process home. package inspect/verify ignore Options
+// (NewPackageCommand drops them), so checking an unbound TempDir would stay
+// green if a regression wrote the resolved real home. The directory asserted
+// empty is the one OmnipusHomeDir returns.
 func emptyHome(t *testing.T) string {
 	t.Helper()
-	return t.TempDir()
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	return home
 }
 
 // requireDirEmpty fails unless dir holds no entries at all.
@@ -336,8 +400,9 @@ type applyReply struct {
 // records its requests so tests can assert the CLI's wire behaviour (what it
 // sent, in which order, and what it did NOT send).
 type fakeGateway struct {
-	t   *testing.T
-	srv *httptest.Server
+	t       *testing.T
+	srv     *httptest.Server
+	handler http.Handler // same mux as srv; a retry test serves it on its own listener
 
 	mu         sync.Mutex
 	agents     []map[string]any
@@ -378,6 +443,7 @@ func newFakeGateway(t *testing.T) *fakeGateway {
 	mux.HandleFunc("POST /api/v1/packages/export", f.serveExport)
 	mux.HandleFunc("POST /api/v1/packages/import", f.serveUpload)
 	mux.HandleFunc("POST /api/v1/packages/import/", f.serveApply)
+	f.handler = mux
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close) // Server.Close returns nothing; it waits for handlers
 	return f
@@ -517,7 +583,7 @@ func (f *fakeGateway) serveApply(w http.ResponseWriter, r *http.Request) {
 		// server aborts the response, the client sees a transport error.
 		panic(http.ErrAbortHandler)
 	}
-	reply := applyReply{status: http.StatusInternalServerError, body: `{"code":"fake_gateway_bug","message":"apply answer not scripted"}`}
+	reply := applyReply{status: http.StatusInternalServerError, body: `{"code":"fake_gateway_bug","error":"apply answer not scripted"}`}
 	if len(replies) > 0 {
 		reply = replies[0]
 		replies = replies[1:]
@@ -536,7 +602,7 @@ func (f *fakeGateway) writeError(w http.ResponseWriter, status int, code, msg st
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(mustJSON(f.t, map[string]any{"code": code, "message": msg}))
+	_, _ = w.Write(mustJSON(f.t, map[string]any{"code": code, "error": msg}))
 }
 
 // counts returns how many requests hit each recorded surface. Zero-request
@@ -596,10 +662,10 @@ func previewBody(t *testing.T, warnings []map[string]any) string {
 	return string(mustJSON(t, body))
 }
 
-// resultBody builds a PackageImportResult JSON body. activation follows the
-// contract description ("active"/"pending" + message); see the UNVERIFIED note
-// in the RED report — GREEN reconciles the fake against the final YAML.
-func resultBody(t *testing.T, agentType, finalName, workspaceID, activation string, warnings []map[string]any) string {
+// resultBody builds a PackageImportResult JSON body: created[].type is the
+// element type; activation is a string with separate activation_message.
+// Worker classification comes from the package's own agent.json (FR-036b).
+func resultBody(t *testing.T, finalName, workspaceID, activation string, warnings []map[string]any) string {
 	t.Helper()
 	if warnings == nil {
 		warnings = []map[string]any{}
@@ -611,12 +677,13 @@ func resultBody(t *testing.T, agentType, finalName, workspaceID, activation stri
 	body := map[string]any{
 		"mode": "new",
 		"created": []map[string]any{{
-			"type": agentType, "source_id": fixtureAgentID, "new_id": fixtureNewID,
+			"type": "agent", "source_id": fixtureAgentID, "new_id": fixtureNewID,
 			"name": finalName, "workspace_id": workspaceID,
 		}},
-		"warnings":      warnings,
-		"needs_secrets": []any{},
-		"activation":    map[string]any{"status": activation, "message": activationMsg},
+		"warnings":           warnings,
+		"needs_secrets":      []any{},
+		"activation":         activation,
+		"activation_message": activationMsg,
 	}
 	return string(mustJSON(t, body))
 }

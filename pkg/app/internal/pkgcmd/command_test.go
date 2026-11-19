@@ -239,26 +239,34 @@ func TestPkgCmd_UsageLookupsExitCodes(t *testing.T) {
 			"import", file, "--workspace", "Nope", "--yes")
 		require.Equal(t, 1, exitCodeOf(t, err))
 		assert.Contains(t, stderr, "Nope", "the message names the problem")
+		assert.Contains(t, stderr, "workspace_not_found", "D10 row 13 requires the coded refusal")
 		assert.Equal(t, 0, f.counts().uploads, "resolution precedes the upload (FR-051)")
 	})
 
-	t.Run("unknown workspace ID surfaces the gateway 404 workspace_not_found", func(t *testing.T) {
+	t.Run("workspace removed after CLI lookup surfaces the gateway 404 workspace_not_found", func(t *testing.T) {
 		f := newFakeGateway(t).withWorkspaces(
 			map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"},
+			// FR-051 resolves first; FR-035 rechecks at apply. Only the
+			// scripted apply sees this workspace as gone, not the CLI lookup.
+			map[string]any{"id": "ws-unknown", "name": "Gone before apply", "status": "active"},
 		).servePreview(previewBody(t, nil)).
-			scriptApply([]applyReply{{status: 404, body: `{"code":"workspace_not_found","message":"unknown workspace"}`}}, false)
+			scriptApply([]applyReply{{status: 404, body: `{"code":"workspace_not_found","error":"unknown workspace"}`}}, false)
 		file := defaultImportSetup(t, dir)
 		_, stderr, err := runCommand(t, importCmd(f, Options{Token: "tok"}), "",
 			"import", file, "--workspace", "ws-unknown", "--yes")
 		require.Equal(t, 1, exitCodeOf(t, err))
 		assert.Contains(t, stderr, "workspace_not_found", "the coded refusal surfaces to the CLI user")
+		assert.Contains(t, stderr, "unknown workspace", "the reason comes from ErrorResponse.error")
+		require.Equal(t, 1, f.counts().uploads, "this case must get past the CLI lookup")
+		require.Len(t, f.applies, 1, "the scripted 404 must actually be consumed")
+		assert.Equal(t, "ws-unknown", applyBody(t, f.last(f.applies).body)["workspace_id"])
 	})
 
 	t.Run("D10 row 14: --mode replace is refused with import_mode_not_available", func(t *testing.T) {
 		f := newFakeGateway(t).withWorkspaces(
 			map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"},
 		).servePreview(previewBody(t, nil)).
-			scriptApply([]applyReply{{status: 422, body: `{"code":"import_mode_not_available","message":"only new mode is available"}`}}, false)
+			scriptApply([]applyReply{{status: 422, body: `{"code":"import_mode_not_available","error":"only new mode is available"}`}}, false)
 		file := defaultImportSetup(t, dir)
 		_, stderr, err := runCommand(t, importCmd(f, Options{Token: "tok"}), "",
 			"import", file, "--workspace", "Research", "--yes", "--mode", "replace")
@@ -281,7 +289,7 @@ func TestPkgCmd_UsageLookupsExitCodes(t *testing.T) {
 
 	t.Run("FR-035: no default workspace surfaces 409 default_workspace_missing", func(t *testing.T) {
 		f := newFakeGateway(t).servePreview(previewBody(t, nil)).
-			scriptApply([]applyReply{{status: 409, body: `{"code":"default_workspace_missing","message":"name a workspace"}`}}, false)
+			scriptApply([]applyReply{{status: 409, body: `{"code":"default_workspace_missing","error":"name a workspace"}`}}, false)
 		file := defaultImportSetup(t, dir)
 		_, stderr, err := runCommand(t, importCmd(f, Options{Token: "tok"}), "",
 			"import", file, "--yes")
@@ -302,7 +310,7 @@ func TestPkgCmd_PromptAndLostConnection(t *testing.T) {
 		f := newFakeGateway(t).
 			withWorkspaces(map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"}).
 			servePreview(previewBody(t, nil)).
-			scriptApply([]applyReply{{status: 200, body: resultBody(t, "Main", "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
+			scriptApply([]applyReply{{status: 200, body: resultBody(t, "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
 		file := defaultImportSetup(t, dir)
 
 		stdout, _, err := runCommand(t, importCmd(f, Options{Token: "tok"}), "y\n",
@@ -319,6 +327,7 @@ func TestPkgCmd_PromptAndLostConnection(t *testing.T) {
 		// The result line, exactly as the CLI row spells it.
 		wantLine := fmt.Sprintf("Imported %q as %s into workspace %q", "Writer", fixtureNewID, "Research")
 		assert.Contains(t, stdout, wantLine)
+		assert.NotContains(t, stdout, "reached by delegation", "FR-036b guidance belongs to workers, not Main agents")
 
 		// Wire contract: the file is uploaded verbatim; the apply targets the
 		// preview's staging id and carries mode new + the resolved workspace.
@@ -382,7 +391,7 @@ func TestPkgCmd_PromptAndLostConnection(t *testing.T) {
 		f := newFakeGateway(t).
 			withWorkspaces(map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"}).
 			servePreview(previewBody(t, nil)).
-			scriptApply([]applyReply{{status: 200, body: resultBody(t, "Main", "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
+			scriptApply([]applyReply{{status: 200, body: resultBody(t, "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
 		file := defaultImportSetup(t, dir)
 
 		_, _, err := runCommand(t, importCmd(f, Options{Token: "tok"}), "",
@@ -488,19 +497,20 @@ func TestPkgCmd_ImportOutcomeLines(t *testing.T) {
 			"import", file, "--workspace", "Research")
 	}
 
-	t.Run("FR-036b: a worker result adds the reached-by-delegation line", func(t *testing.T) {
+	t.Run("FR-036b: a worker package adds the reached-by-delegation line", func(t *testing.T) {
 		f := baseFake().scriptApply([]applyReply{{status: 200,
-			body: resultBody(t, "Subagent", "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
-		file := defaultImportSetup(t, dir)
+			body: resultBody(t, "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
+		file := writeFixtureFile(t, dir, "worker.omnpkg", buildPackage(t, pkgFixture{AgentType: "worker"}))
 		stdout, _, err := runImport(t, f, file)
 		require.Equal(t, 0, exitCodeOf(t, err))
 		assert.Contains(t, stdout, "reached by delegation",
 			"CLI row: for a worker, plus the reached-by-delegation line (US-3 AS-11)")
+		assert.Contains(t, stdout, "Main agent in the Team graph", "FR-036b explains how to reach the worker")
 	})
 
 	t.Run("FR-036: activation pending prints the restart guidance and exits 0", func(t *testing.T) {
 		f := baseFake().scriptApply([]applyReply{{status: 200,
-			body: resultBody(t, "Main", "Writer", fixtureResearchWorkspaceID, "pending", nil)}}, false)
+			body: resultBody(t, "Writer", fixtureResearchWorkspaceID, "pending", nil)}}, false)
 		file := defaultImportSetup(t, dir)
 		stdout, _, err := runImport(t, f, file)
 		require.Equal(t, 0, exitCodeOf(t, err), "pending activation is a success with guidance (CLI row)")
@@ -511,7 +521,7 @@ func TestPkgCmd_ImportOutcomeLines(t *testing.T) {
 
 	t.Run("FR-037: import_rolled_back prints that nothing was imported", func(t *testing.T) {
 		f := baseFake().scriptApply([]applyReply{{status: 500,
-			body: `{"code":"import_rolled_back","message":"the pending record write failed"}`}}, false)
+			body: `{"code":"import_rolled_back","error":"the pending record write failed"}`}}, false)
 		file := defaultImportSetup(t, dir)
 		_, stderr, err := runImport(t, f, file)
 		require.Equal(t, 1, exitCodeOf(t, err))
@@ -521,7 +531,7 @@ func TestPkgCmd_ImportOutcomeLines(t *testing.T) {
 
 	t.Run("[r7] FR-037: incomplete rollback prints the never-visible guidance with IDs", func(t *testing.T) {
 		f := baseFake().scriptApply([]applyReply{{status: 500, body: `{"code":"import_rollback_incomplete",
-			"message":"rollback failed",
+			"error":"rollback failed",
 			"details":{"failed_step":"C2","agent_id":"55555555-4444-3333-2222-111111111111","staging_id":"staging-7","leftovers":["agents/55555555-4444-3333-2222-111111111111/"]}}`}}, false)
 		file := defaultImportSetup(t, dir)
 		_, stderr, err := runImport(t, f, file)
@@ -543,7 +553,7 @@ func TestPkgCmd_ImportOutcomeLines(t *testing.T) {
 			withWorkspaces(map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"}).
 			servePreview(previewBody(t, warnings)).
 			scriptApply([]applyReply{{status: 200,
-				body: resultBody(t, "Main", "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
+				body: resultBody(t, "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
 		file := defaultImportSetup(t, dir)
 		stdout, _, err := runImport(t, f, file)
 		require.Equal(t, 0, exitCodeOf(t, err))

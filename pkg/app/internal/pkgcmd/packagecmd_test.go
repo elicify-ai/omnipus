@@ -13,6 +13,9 @@
 package pkgcmd
 
 import (
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -122,6 +125,40 @@ func TestPkgCmd_PackageInspectOffline(t *testing.T) {
 		// T-2's TestArchive_DecoderLimits ground; here only the CLI refusal.
 	})
 
+	t.Run("FR-008 declared window at the 8 MiB cap is accepted offline", func(t *testing.T) {
+		// At the cap: the decoder refuses WindowSize > max, so 8 MiB must still inspect.
+		pkg := buildPackage(t, pkgFixture{DeclaredWindow: 8 << 20})
+		path := writeFixtureFile(t, dir, "window-8mib.omnpkg", pkg)
+
+		f := newFakeGateway(t)
+		home := emptyHome(t)
+		stdout, stderr, err := runCommand(t, packageCmd(f, Options{Home: home}), "",
+			"package", "inspect", path)
+
+		require.Equal(t, 0, exitCodeOf(t, err),
+			"FR-008: an 8 MiB declared window is the maximum allowed, not over it; stderr: %s", stderr)
+		assert.Contains(t, stdout, "Writer", "the manifest was actually read")
+		requireOffline(t, f, home)
+	})
+
+	t.Run("FR-008 next representable window above the cap (9 MiB) is refused offline", func(t *testing.T) {
+		// Next zstd window after 8 MiB is 8 MiB + 1 MiB (exponent 13, mantissa 1).
+		// Removing WithDecoderMaxWindow(8 MiB) leaves the clamp at max memory
+		// (256 MiB), so a 9 MiB frame would be accepted and this case goes green.
+		pkg := buildPackage(t, pkgFixture{DeclaredWindow: 9 << 20})
+		path := writeFixtureFile(t, dir, "window-9mib.omnpkg", pkg)
+
+		f := newFakeGateway(t)
+		home := emptyHome(t)
+		_, stderr, err := runCommand(t, packageCmd(f, Options{Home: home}), "",
+			"package", "inspect", path)
+
+		require.Equal(t, 1, exitCodeOf(t, err),
+			"FR-008: 9 MiB is the first representable window above the 8 MiB cap")
+		assert.Contains(t, stderr, "too large", "refused as too large, same wording as the 512 MiB case")
+		requireOffline(t, f, home)
+	})
+
 	t.Run("D10 row 10: inspect on a folder exits 2", func(t *testing.T) {
 		f := newFakeGateway(t)
 		_, _, err := runCommand(t, packageCmd(f, Options{}), "",
@@ -227,4 +264,53 @@ func TestPkgCmd_AutoStartSeam(t *testing.T) {
 	require.Equal(t, 1, autoStartCalls,
 		"FR-054: the shared auto-start step runs exactly once, then one retry")
 	assert.Equal(t, 0, f.counts().uploads, "no upload reached the fake (the URL pointed nowhere)")
+}
+
+// TestPkgCmd_AutoStartRetryCompletesImport is the FR-054 case the seam test
+// does not cover: the import can succeed only because send retries once
+// after AutoStart binds the address that just refused the connection.
+// Dropping that retry (and keeping the one AutoStart call) still satisfies
+// TestPkgCmd_AutoStartSeam and fails here.
+func TestPkgCmd_AutoStartRetryCompletesImport(t *testing.T) {
+	dir := t.TempDir()
+	file := defaultImportSetup(t, dir)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	f := newFakeGateway(t).
+		withWorkspaces(map[string]any{"id": fixtureResearchWorkspaceID, "name": "Research", "status": "active"}).
+		servePreview(previewBody(t, nil)).
+		scriptApply([]applyReply{{status: 200, body: resultBody(t, "Writer", fixtureResearchWorkspaceID, "active", nil)}}, false)
+
+	autoStartCalls := 0
+	opts := Options{
+		Token:      "tok",
+		GatewayURL: "http://" + addr,
+		AutoStart: func() error {
+			autoStartCalls++
+			srvLn, listenErr := net.Listen("tcp", addr)
+			if listenErr != nil {
+				return listenErr
+			}
+			srv := &http.Server{Handler: f.handler}
+			go func() { _ = srv.Serve(srvLn) }()
+			t.Cleanup(func() { _ = srv.Close() })
+			return nil
+		},
+	}
+
+	stdout, stderr, runErr := runCommand(t, testRoot(f, opts), "",
+		"import", file, "--workspace", "Research", "--yes")
+
+	require.Equal(t, 0, exitCodeOf(t, runErr),
+		"FR-054 / BDD gateway-not-running: the import completes through the retry; stderr: %s", stderr)
+	require.Equal(t, 1, autoStartCalls, "the shared auto-start step runs once, then one retry")
+	wantLine := fmt.Sprintf("Imported %q as %s into workspace %q", "Writer", fixtureNewID, "Research")
+	assert.Contains(t, stdout, wantLine, "success is the retried conversation, not a local fake URL")
+	require.Equal(t, 1, f.counts().uploads, "the upload reached the gateway AutoStart started")
+	require.Equal(t, 1, f.counts().applies)
+	assert.Equal(t, fixtureResearchWorkspaceID, applyBody(t, f.last(f.applies).body)["workspace_id"])
 }
