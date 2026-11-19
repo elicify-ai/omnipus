@@ -412,6 +412,12 @@ function deliver(sub: Submission, target: string | null, files: DraftFile[]): vo
     mediaRefs.push(pick.ref)
     attachments.push({ type: isImageAttachment(pick.filename, pick.contentType) ? 'image' : 'file', url: mediaRefURL(pick.ref), filename: pick.filename, contentType: pick.contentType })
   }
+  // The workspace-entry gate (its own toast) refuses the send before it
+  // starts; the submission then goes back to its box instead of vanishing.
+  if (blockSendForWorkspaceEntry('send')) {
+    restoreSubmission(sub, null, files)
+    return
+  }
   const bound = target === sub.target ? sub : Object.freeze({ ...sub, target })
   sentMessages.set(sub.clientMessageId, { submission: bound, files })
   useChatStore.getState().sendMessage(sub.text, {
