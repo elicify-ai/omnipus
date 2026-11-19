@@ -206,8 +206,10 @@ func TestOfficePreview_UploadPageImagesShareTwentyPagesNewestFirst(t *testing.T)
 func TestOfficePreview_UploadOverRequestBudgetFallsBackToText(t *testing.T) {
 	var doc map[string]any
 	require.NoError(t, json.Unmarshal(catalogDocJSON(t, "gatefix-provider", "gatefix-model", "text", "pdf"), &doc))
-	rows := doc["providers"].([]any)
-	row := rows[0].(map[string]any)
+	rows, ok := doc["providers"].([]any)
+	require.True(t, ok && len(rows) > 0, "catalog providers must be a non-empty list, got %T", doc["providers"])
+	row, ok := rows[0].(map[string]any)
+	require.True(t, ok, "catalog provider row must be an object, got %T", rows[0])
 	row["pdf_limits"] = map[string]any{"max_document_bytes": 50 << 20, "max_documents_per_request": 8}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
