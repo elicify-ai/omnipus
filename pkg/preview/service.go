@@ -77,6 +77,9 @@ type Service struct {
 
 	officeMu sync.Mutex
 	office   *component.Component
+	// officeSelection identifies the operator registration office was
+	// resolved under (registrationIdentity); a different value drops it.
+	officeSelection string
 
 	// memoryUnenforced is the §3.1 D1.4 reason, "" when the memory limit is
 	// enforced (computed once at New).
@@ -492,10 +495,17 @@ func (s *Service) rendererComponent(caller []component.WriteRoot) (*component.Co
 }
 
 // officeComponent resolves LibreOffice once and re-verifies it when a
-// fingerprinted file's size or modification time changed (AD-4).
+// fingerprinted file's size or modification time changed (AD-4). A changed
+// operator registration (registered, unregistered or re-registered elsewhere)
+// drops the cached selection, so the next preview uses the current one
+// without a gateway restart (SF-11).
 func (s *Service) officeComponent(caller []component.WriteRoot) (*component.Component, *failure) {
 	s.officeMu.Lock()
 	defer s.officeMu.Unlock()
+	selection := registrationIdentity(s.cfg.Home, component.KindOffice)
+	if s.office != nil && selection != s.officeSelection {
+		s.office = nil
+	}
 	if s.office != nil {
 		if problem := s.office.VerifyIfChanged(); problem != nil {
 			s.office = nil
@@ -506,12 +516,27 @@ func (s *Service) officeComponent(caller []component.WriteRoot) (*component.Comp
 		if problem != nil {
 			return nil, officeProblem(problem)
 		}
-		s.office = comp
+		s.office, s.officeSelection = comp, selection
 	}
 	if overlap := component.FirstOverlap(s.office.Root, s.writeRoots(caller)); overlap != nil {
 		return nil, docFailure(fmt.Sprintf("Office preview is in a folder an agent can write (%s); disabled until that access is removed.", overlap.Grant))
 	}
 	return s.office, nil
+}
+
+// registrationIdentity is the identity of kind's operator registration: the
+// SHA-256 of its manifest, "none" when there is none, or the read error. The
+// manifest is small and read once per preview.
+func registrationIdentity(home string, kind component.Kind) string {
+	data, err := os.ReadFile(filepath.Join(component.RegisteredDir(home, kind), component.ManifestFile))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "none"
+	case err != nil:
+		return "unreadable: " + err.Error()
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func officeProblem(p *component.ComponentError) *failure {
