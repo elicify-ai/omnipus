@@ -121,3 +121,58 @@ describe('Defect 3: an uncertain item names its origin chat wherever it is liste
     expect(within(notice).queryByText('Chat'), 'not the generic word').toBeNull()
   })
 })
+
+// Chief ruling 2026-11-19 19:46Z (Team B, a86b8f92e6, first-s2k4 and V): the
+// uncertain redirect item must lead back to its origin chat with an Open
+// action, and an untitled or unlisted origin must still be reachable; its name
+// falls back to the sidebar's "Untitled session". Oracle: the fixture's ids
+// and the sidebar wording (SessionRow.tsx).
+describe('Defect 3: Open on an uncertain redirect item returns to its origin chat', () => {
+  async function uncertainRedirectFromNovaThenMia(listed: boolean): Promise<HTMLElement> {
+    resetBindingWorld()
+    apiMocks.fetchWorkspaces.mockResolvedValue([makeWorkspace({ id: 'w1', name: 'My Workspace' }), makeWorkspace({ id: 'w2', name: 'W2' })])
+    apiMocks.fetchAgents.mockResolvedValue([makeAgent({ id: 'mia', name: 'Mia' }), makeAgent({ id: 'nova', name: 'Nova' })])
+    const sessions = [
+      makeSession({ id: 'chat-a', agent_id: 'mia', workspace_id: 'w1', title: 'Mia chat' }),
+      ...(listed ? [makeSession({ id: 'chat-n', agent_id: 'nova', workspace_id: 'w2', title: '' })] : []),
+    ]
+    apiMocks.fetchSessions.mockResolvedValue(sessions)
+    apiMocks.fetchSessionPage.mockResolvedValue({ sessions })
+    act(() => {
+      useWorkspacesStore.getState().setActiveWorkspaceId('w2')
+      useSessionStore.getState().setActiveSession('chat-n', 'nova', 'core')
+    })
+    const socket = openLive()
+    mountComposer()
+    await typeIntoComposer('/stop-redirect nova only')
+    const user = userEvent.setup()
+    await user.keyboard('{Enter}')
+    expect(socket.sent.some((frame) => frame.type === 'redirect'), 'the redirect was handed over').toBe(true)
+    act(() => { socket.close(4008, 'catch-up required') })
+    const next = FakeSocket.instances.at(-1)
+    if (!next || next === socket) throw new Error('the close opens the next connection')
+    act(() => { next.open() })
+    act(() => { next.receive({ type: 'server_capabilities', send_origin: true }) })
+    await flushInbound()
+    act(() => {
+      useWorkspacesStore.getState().setActiveWorkspaceId('w1')
+      useSessionStore.getState().setActiveSession('chat-a', 'mia', 'core')
+    })
+    await flushInbound()
+    const notice = screen.getByTestId('unsent-notice')
+    expect(within(notice).getByText('May not have been delivered'), 'the close made the uncertain item').toBeTruthy()
+    return notice
+  }
+
+  for (const listed of [true, false]) {
+    it(`an ${listed ? 'untitled' : 'unlisted'} Nova chat in W2: named "Untitled session", Open goes back to it`, async () => {
+      const notice = await uncertainRedirectFromNovaThenMia(listed)
+      expect(await within(notice).findByText('Untitled session'), 'the sidebar\'s name for an untitled chat').toBeTruthy()
+      const user = userEvent.setup()
+      await user.click(within(notice).getByRole('button', { name: 'Open' }))
+      expect(useSessionStore.getState().activeSessionId, 'Open returns to the origin chat').toBe('chat-n')
+      expect(useWorkspacesStore.getState().activeWorkspaceId, 'in the origin chat\'s own workspace').toBe('w2')
+      expect(useSessionStore.getState().activeAgentId, 'with the origin chat\'s agent').toBe('nova')
+    })
+  }
+})
