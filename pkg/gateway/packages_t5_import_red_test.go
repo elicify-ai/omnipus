@@ -17,7 +17,6 @@ import (
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
 	"github.com/stretchr/testify/require"
 )
@@ -372,14 +371,17 @@ var zstdMagic = []byte{0x28, 0xB5, 0x2F, 0xFD}
 
 // TestPackagesAudit_OffIsHonoured is Decision D (ARCH-RULING-T5-A-D;
 // FR-016, FR-040, FR-062). With audit_log false, package operations succeed
-// and write no audit file. Current production falls back to audit.NewLogger.
+// and write no audit file. The harness logger is cleared first.
 func TestPackagesAudit_OffIsHonoured(t *testing.T) {
 	t.Run("audit_log false writes nothing and refuses nothing", func(t *testing.T) {
 		api := packageAPI(t)
 		usePackageSeams(t)
 		packageT5.Reload = func() (bool, error) { return true, nil }
 		setPackageAuditLog(t, api, false)
-		require.Nil(t, api.auditor)
+		api.auditor = nil
+		removePackageAuditFiles(t, api.homePath)
+		require.Nil(t, api.auditor, "audit off: the shared logger stays nil")
+		require.False(t, api.agentLoop.GetConfig().Sandbox.AuditLog)
 		require.Nil(t, api.agentLoop.AuditLogger(), "the agent loop's logger is nil when audit was off at loop start")
 
 		id := createMainAgent(t, api, "Writer", "Answer in rhyme.")
@@ -401,9 +403,9 @@ func TestPackagesAudit_OffIsHonoured(t *testing.T) {
 		dir := filepath.Join(api.homePath, "backups", ".staging", "stg-audit-off")
 		writeStagingJournal(t, api.homePath, "stg-audit-off", recoveryAgentID, "ws-missing", omnpkg.JournalStarted)
 		bootRecoverImports(packageCtx(t), api.homePath, api.agentLoop.GetConfig(), nil)
-		journal, err := omnpkg.ReadJournal(dir)
-		require.NoError(t, err)
-		require.Equal(t, omnpkg.JournalRolledBack, journal.State, "bootRecoverImports rolls a started journal back")
+		// Spec lines 323-324: the staging folder, journal included, is deleted.
+		t5RequireAbsent(t, dir)
+		requireNoRecoveryAgent(t, api.homePath)
 
 		matches, gerr := filepath.Glob(filepath.Join(api.homePath, "system", "audit*.jsonl"))
 		require.NoError(t, gerr)
@@ -415,21 +417,11 @@ func TestPackagesAudit_OffIsHonoured(t *testing.T) {
 		usePackageSeams(t)
 		packageT5.Reload = func() (bool, error) { return true, nil }
 		setPackageAuditLog(t, api, true)
-		lg, err := audit.NewLogger(audit.LoggerConfig{
-			Dir:               filepath.Join(api.homePath, "system"),
-			RedactEnabled:     true,
-			AuditLogRequested: true,
-			RetentionDays:     90,
-		})
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = lg.Close() })
+		require.NotNil(t, api.auditor, "audit on: the harness wires the shared logger")
 		// The agent and workspace are fixture, not one of the four audited steps.
-		// Wire the logger after they exist so a workspace-create entry is not counted.
 		id := createMainAgent(t, api, "Writer", "Answer in rhyme.")
 		ws := createWorkspaceViaAPI(t, api, "Research", "notes")
-		api.auditor = lg
-
-		n := 0
+		n := len(auditJSONLLines(t, api.homePath))
 		exp := callPackageExport(t, api, `{"agent_ids":["`+id+`"]}`)
 		require.Equal(t, http.StatusOK, exp.Code, "body=%s", exp.Body)
 		require.True(t, bytes.HasPrefix(exp.Body, zstdMagic))
@@ -443,14 +435,13 @@ func TestPackagesAudit_OffIsHonoured(t *testing.T) {
 		applied := callPackageApply(t, api, prev.StagingId, applyBody("new", ws))
 		require.Equal(t, http.StatusOK, applied.Code, "body=%s", applied.Body)
 		require.NotContains(t, resultWarningCodes(decodeResult(t, applied.Body)), "audit_failed")
-		n = requireOneNewAudit(t, api.homePath, n, "apply")
+		n = requireOneNewAudit(t, api.homePath, n, "import")
 
 		dir := filepath.Join(api.homePath, "backups", ".staging", "stg-audit-on")
 		writeStagingJournal(t, api.homePath, "stg-audit-on", recoveryAgentID, "ws-missing", omnpkg.JournalStarted)
 		bootRecoverImports(packageCtx(t), api.homePath, api.agentLoop.GetConfig(), nil)
-		journal, rerr := omnpkg.ReadJournal(dir)
-		require.NoError(t, rerr)
-		require.Equal(t, omnpkg.JournalRolledBack, journal.State)
+		t5RequireAbsent(t, dir)
+		requireNoRecoveryAgent(t, api.homePath)
 		requireOneNewAudit(t, api.homePath, n, "recovery")
 	})
 }
@@ -498,4 +489,13 @@ func auditJSONLLines(t *testing.T, home string) []string {
 		}
 	}
 	return lines
+}
+
+func removePackageAuditFiles(t *testing.T, home string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(home, "system", "audit*.jsonl"))
+	require.NoError(t, err)
+	for _, path := range matches {
+		require.NoError(t, os.Remove(path))
+	}
 }

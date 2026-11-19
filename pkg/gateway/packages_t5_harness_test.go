@@ -24,6 +24,7 @@ import (
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
@@ -69,7 +70,29 @@ func packageAPI(t *testing.T) *restAPI {
 	t.Helper()
 	api := newTestRestAPIWithHome(t)
 	t.Setenv("OMNIPUS_BEARER_TOKEN", packageTestBearer)
+	// ARCH-RULING-T5-A-D: the harness uses the reconciled ceiling. Seeded agents
+	// ride it. There is no per-agent backfill and no production bypass.
+	cfg := api.agentLoop.GetConfig()
+	gaps := repairAndValidateToolPolicyCoverage(cfg)
+	require.Empty(t, gaps, "a reconciled ceiling with no uncovered agents must have no gaps")
+	wirePackageAuditLogger(t, api)
 	return api
+}
+
+// wirePackageAuditLogger gives package operations the shared logger tests read
+// under <home>/system/audit.jsonl. Audit-off tests clear it again.
+func wirePackageAuditLogger(t *testing.T, api *restAPI) {
+	t.Helper()
+	lg, err := audit.NewLogger(audit.LoggerConfig{
+		Dir:               filepath.Join(api.homePath, "system"),
+		RedactEnabled:     true,
+		AuditLogRequested: true,
+		RetentionDays:     90,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lg.Close() })
+	api.auditor = lg
+	api.agentLoop.GetConfig().Sandbox.AuditLog = true
 }
 
 func packageAuthRequest(t *testing.T, method, path string, body io.Reader) *http.Request {
