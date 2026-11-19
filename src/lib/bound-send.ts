@@ -40,6 +40,7 @@ import { isImageAttachment } from '@/components/chat/AttachmentCard'
 import { mediaRefURL } from '@/lib/library-attachment'
 import { registerOwningChatCapture } from '@/lib/owning-chat-capture'
 import { createForNewChat, resetNewChatCreations } from '@/lib/new-chat-creation'
+import { runningTurnId } from '@/lib/running-turn-id'
 import {
   NO_CHAT_KEY,
   addUnsentItem,
@@ -560,7 +561,7 @@ export function sendCommand(input: CommandInput): boolean {
   }
   const origin = originForKey(input.originKey)
   const clientFrameId = generateId()
-  const turnId = useChatStore.getState().sessionsById[input.target]?.activeTurnId ?? null
+  const turnId = runningTurnId(useChatStore.getState().sessionsById[input.target])
   const record: CommandRecord = {
     clientFrameId, kind: input.kind, origin, originKey: canonical(input.originKey), target: input.target,
     text: input.text, connection, connectionGeneration: generation, turnId, state: 'sent',
