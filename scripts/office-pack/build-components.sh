@@ -3,11 +3,15 @@
 # separate release downloads the installer fetches (office-preview spec §10,
 # founder decisions 2026-11-19):
 #
-#   omnipus-pdf-renderer_<Os>_<arch>.tar.gz   pdfium/  (Windows: .zip)
-#   omnipus-office_<Os>_<arch>.tar.gz         office/  (Linux and macOS only)
+#   pdfium_<os>_<arch>.tar.gz   the renderer folder's contents
+#   office_<os>_<arch>.tar.gz   the LibreOffice folder's contents (Linux, macOS)
+#   pdfium_windows_amd64.zip    a pdfium/ folder, for `omnipus pdf-renderer
+#                               register` (Windows registers, AD-12)
 #
-# <Os>_<arch> follows the main archives: Linux_x86_64, Linux_arm64,
-# Darwin_arm64, Darwin_x86_64, Windows_x86_64.
+# <os>_<arch> are Go's names: linux_amd64, linux_arm64, darwin_arm64,
+# darwin_amd64 (the names install.sh and check-release-contents.sh expect).
+# A tarball holds the folder's contents at its top level: install.sh unpacks
+# it straight into the §10 folder.
 #
 # usage: build-components.sh <platform> <out-dir> <download-dir>
 #   platform: linux-amd64 linux-arm64 darwin-arm64 darwin-amd64 windows-amd64
@@ -41,11 +45,9 @@ die() {
 }
 
 case "$platform" in
-  linux-amd64) os=Linux; arch=x86_64; office=yes ;;
-  linux-arm64) os=Linux; arch=arm64; office=yes ;;
-  darwin-arm64) os=Darwin; arch=arm64; office=yes ;;
-  darwin-amd64) os=Darwin; arch=x86_64; office=yes ;;
-  windows-amd64) os=Windows; arch=x86_64; office=no ;;
+  linux-amd64|linux-arm64) os=Linux; office=yes ;;
+  darwin-arm64|darwin-amd64) os=Darwin; office=yes ;;
+  windows-amd64) os=Windows; office=no ;;
   *) die "unknown platform $platform" ;;
 esac
 key="${platform/-/_}"
@@ -175,15 +177,15 @@ fi
 # ── Release files ────────────────────────────────────────────────────────────
 # COPYFILE_DISABLE keeps macOS tar from adding AppleDouble (._*) entries.
 pack_tar() { # <name> <folder>
-  COPYFILE_DISABLE=1 tar -czf "$release/$1" -C "$stage" "$2"
+  COPYFILE_DISABLE=1 tar -czf "$release/$1" -C "$stage/$2" .
 }
 if [ "$os" = Windows ]; then
-  (cd "$stage" && python -m zipfile -c "$release/omnipus-pdf-renderer_${os}_${arch}.zip" pdfium)
+  (cd "$stage" && python -m zipfile -c "$release/pdfium_$key.zip" pdfium)
 else
-  pack_tar "omnipus-pdf-renderer_${os}_${arch}.tar.gz" pdfium
+  pack_tar "pdfium_$key.tar.gz" pdfium
 fi
 if [ "$office" = yes ]; then
-  pack_tar "omnipus-office_${os}_${arch}.tar.gz" office
+  pack_tar "office_$key.tar.gz" office
 fi
 
 echo "office-pack: release files for $platform:"

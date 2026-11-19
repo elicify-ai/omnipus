@@ -14,16 +14,14 @@ components="${1:?components dir}"
 release="$components/release"
 [ -d "$release" ] || { echo "office-pack: $release missing" >&2; exit 1; }
 
-for pair in amd64:x86_64 arm64:arm64; do
-  goarch="${pair%%:*}"
-  arch="${pair##*:}"
+for goarch in amd64 arm64; do
   dest="$components/linux_$goarch"
   rm -rf "$dest"
-  mkdir -p "$dest"
-  for part in office pdf-renderer; do
-    file="$release/omnipus-${part}_Linux_${arch}.tar.gz"
+  for part in office pdfium; do
+    file="$release/${part}_linux_${goarch}.tar.gz"
     [ -f "$file" ] || { echo "office-pack: $(basename "$file") missing from $release" >&2; exit 1; }
-    tar -xzf "$file" -C "$dest"
+    mkdir -p "$dest/$part"
+    tar -xzf "$file" -C "$dest/$part"
   done
   for f in office/manifest.json office/program/soffice.bin pdfium/manifest.json pdfium/omnipus-pdfium; do
     [ -f "$dest/$f" ] || { echo "office-pack: linux_$goarch/$f missing after unpacking" >&2; exit 1; }

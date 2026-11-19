@@ -5,8 +5,9 @@ name: Office preview components
 # one artifact per platform, "office-components-<platform>", holding only the
 # release files:
 #
-#   omnipus-pdf-renderer_<Os>_<arch>.tar.gz  (Windows: .zip)
-#   omnipus-office_<Os>_<arch>.tar.gz        (Linux and macOS)
+#   pdfium_<os>_<arch>.tar.gz  (linux/darwin amd64/arm64)
+#   office_<os>_<arch>.tar.gz  (same four)
+#   pdfium_windows_amd64.zip
 #
 # Called by release.yml, nightly.yml and office-packaging-dryrun.yml before
 # GoReleaser runs; GoReleaser adds the files to the release and to
