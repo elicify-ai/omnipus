@@ -1,4 +1,4 @@
-// #1428 step 2 RED. Spec 4.7 BR-23, BR-23e, BR-23f.
+// #1428 step 2 RED. Spec 4.7 BR-23, BR-23e, BR-23f, BR-23g.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
@@ -625,3 +625,52 @@ function registerCommandFailureCases(): void {
   })
 }
 
+
+// BR-23g (UAT-15 option A, turn_started): a turn the page has not yet heard a
+// token from is named by the server's live turn_started frame, so a typed
+// /stop-redirect captures that turn. (V) Team B's main run: the control
+// redirect's turn ended (its done), the redirected instruction started turn-3
+// with no token yet. (T) An ordinary message started mia-turn-2 with no token.
+// Oracle: spec 4.7 target-running reconciliation and UAT-15 main run (F-tt).
+describe('BR-23g turn_started names the running turn before its first token', () => {
+  async function redirectAfterTurnStarted(variant: 'V' | 'T'): Promise<FakeSocket> {
+    resetBindingWorld()
+    const socket = openLive()
+    mountComposer()
+    if (variant === 'V') {
+      seedStreamingAnswer('chat-a', '')
+      act(() => { socket.receive({ type: 'token', session_id: 'chat-a', content: 'Working', turn_id: 'mia-turn-2', agent_id: 'mia' }) })
+      act(() => { socket.receive({ type: 'done', session_id: 'chat-a', turn_id: 'mia-turn-2' }) })
+    } else {
+      act(() => {
+        socket.receive({ type: 'user_message', session_id: 'chat-a', id: 'u-1', content: 'do the thing', timestamp: EMITTED, agent_id: 'mia' })
+      })
+    }
+    const started = variant === 'V' ? 'turn-3' : 'mia-turn-2'
+    act(() => {
+      socket.receive({ type: 'turn_started', session_id: 'chat-a', active_turn: { turn_id: started, agent_id: 'mia', started_at: EMITTED } })
+    })
+    await flushInbound()
+    await typeRedirect('/stop-redirect x-p4r9k')
+    expect(socket.sent.some((frame) => frame.type === 'redirect'), 'BR-23g: the redirect was handed over').toBe(true)
+    return socket
+  }
+
+  for (const [variant, started, next] of [['V', 'turn-3', 'turn-4'], ['T', 'mia-turn-2', 'mia-turn-3']] as const) {
+    it(`(${variant}) an applied redirect's new turn ${next} shows the uncertain item and no notice`, async () => {
+      const socket = await redirectAfterTurnStarted(variant)
+      await closeThenSnapshot(socket, sessionSnapshot('chat-a', next))
+      expectSnapshotApplied('chat-a')
+      expect(screen.getByText('May not have been delivered'), 'BR-23g: the uncertain item stays').toBeTruthy()
+      expect(screen.queryByText(NOT_STOPPED), `BR-23g: ${next} is not the captured ${started}`).toBeNull()
+    })
+
+    it(`(${variant}) the captured turn ${started} still running shows the notice`, async () => {
+      const socket = await redirectAfterTurnStarted(variant)
+      await closeThenSnapshot(socket, sessionSnapshot('chat-a', started))
+      expectSnapshotApplied('chat-a')
+      expect(screen.getByText('May not have been delivered'), 'BR-23g: the uncertain item stays').toBeTruthy()
+      expect(screen.getByText(NOT_STOPPED), `BR-23g: ${started} is still running`).toBeTruthy()
+    })
+  }
+})
