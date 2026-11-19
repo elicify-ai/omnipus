@@ -40,7 +40,8 @@ If one page cannot be loaded in the viewer, the viewer shows "Page n could not b
 | Some page images and the note "thumbnails stored: k of N" | Only k of the N requested page images could be saved | Ask the agent to preview the file again |
 | A page image replaced by "Image unavailable" | That image could not be loaded into your browser (for example a dropped connection) | Use **Retry** on that image. A failure is reported once for the group, not once per image |
 | The card "Page previews unavailable — the PDF renderer is not installed" | The program that turns pages into images is not installed. The agent still received the document or its text; you just get no page images | Follow the instructions on the card: re-run the Omnipus installer with the PDF renderer component, or register it with `omnipus pdf-renderer register <folder>`. This card has no Retry button |
-| The card "Page previews unavailable — the PDF renderer is damaged", "… rendering the pages failed" or "… the page images could not be stored" | The page images could not be made or saved this time. The agent may still have received the document itself, but no pages were rendered, so nothing was shown or checked visually | Select **Retry** on the card |
+| The card "Page previews unavailable — the PDF renderer is damaged" or "… rendering the pages failed" | The page images could not be made this time. The agent may still have received the document itself, but no pages were rendered, so nothing was shown or checked visually | Select **Retry** on the card |
+| The card "Page previews could not be saved" | The page images could not be saved this time, so none are shown. The agent may still have received the document itself | Select **Retry** on the card |
 
 After you select **Retry**:
 
@@ -51,7 +52,7 @@ After you select **Retry**:
 | "Retry failed: …" | The retry could not start, with the reason. For example "Retry failed: the PDF renderer is not available." You can try again unless you no longer have access to the chat or the file |
 | "This file is outside the workspace Library, so its previews can't be retried here. Ask the agent to preview it again." | Retry works only for files in the chat's workspace Library (its work folder and mounted folders). The card then hides its Retry button |
 | "This preview is no longer available." | The chat or this preview could not be found, for example because the chat was deleted. The card then hides its Retry button |
-| The new page images, together with the card "Page previews unavailable — the page images could not be stored" | The retry rendered the pages and shows them now, but they could not be saved to the chat, so they will not be there after you reload the page. Select **Retry** again later to save them |
+| The new page images, together with the card "Page previews could not be saved" | The retry rendered the pages and shows them now, but they could not be saved to the chat, so they will not be there after you reload the page. Select **Retry** again later to save them |
 
 Retry works for files in the workspace Library: it renders the file you could open in the Library, checks that it is still the previewed version, and shows the page images to you only. The agent's model receives nothing from a retry.
 

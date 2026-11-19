@@ -67,7 +67,14 @@ export function PreviewUnavailableCard({ sessionId, toolCallId, sourceName, reas
   const state = retry.marker === marker ? retry.state : { kind: 'idle' as const }
 
   const reasonText = unavailableReasonText(reason)
-  const headline = reasonText ? `Page previews unavailable — ${reasonText}` : 'Page previews unavailable'
+  // storage_failed: the pages were rendered but not saved — a Retry may
+  // show them now — so the headline does not call them "unavailable".
+  const headline =
+    reason === 'storage_failed'
+      ? 'Page previews could not be saved'
+      : reasonText
+        ? `Page previews unavailable — ${reasonText}`
+        : 'Page previews unavailable'
   const retryable =
     reason !== 'renderer_missing' &&
     !!toolCallId &&
