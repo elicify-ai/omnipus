@@ -107,6 +107,7 @@ func TestArchive_ManifestFirstAndUniversalChecks(t *testing.T) {
 
 	// D2 6–8: non-regular entry types are refused. These are raw tar entries
 	// with unsafe typeflags, listed in the manifest.
+	// Defect fixed: header-only types carry no body — archive/tar zeros their size and Write returns "write too long" before the engine runs (D2-6, D2-7, D2-8).
 	t.Run("D2-6 symlink entry refused as unsafe_entry_type", func(t *testing.T) {
 		pkg := pkgWithTypedEntry(t, tar.TypeSymlink, "creds.json")
 		_, _, err := omnpkg.ReadPackage(bytes.NewReader(pkg))
@@ -177,13 +178,14 @@ func pkgWithTypedEntry(t *testing.T, typeflag byte, linkTarget string) []byte {
 	m, files := validManifest(testSourceID, true)
 	bad := "omnipus/agents/" + testSourceID + "/linked"
 	m.Elements[0].Files = append(m.Elements[0].Files, bad)
-	m.Files[bad] = omnpkg.FileInfo{SHA256: sha256hex([]byte("x")), Size: 1}
+	// Listed so the reader reaches the type check. No bytes: types '1'-'6' are header-only, so a body dies in the fixture writer.
+	m.Files[bad] = omnpkg.FileInfo{SHA256: sha256hex(nil), Size: 0}
 	entries := make([]tarEntry, 0, 5)
 	entries = append(entries, manifestEntry(t, m, nil, nil, 0))
 	for _, name := range []string{recordPath(testSourceID), soulPath(testSourceID), instructionsPath(testSourceID)} {
 		entries = append(entries, tarEntry{Name: name, Body: files[name]})
 	}
-	entries = append(entries, tarEntry{Name: bad, Body: []byte("x"), Typeflag: typeflag, Linkname: linkTarget})
+	entries = append(entries, tarEntry{Name: bad, Typeflag: typeflag, Linkname: linkTarget})
 	return buildArchive(t, entries)
 }
 

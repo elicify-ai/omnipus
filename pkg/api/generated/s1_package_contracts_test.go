@@ -9,8 +9,9 @@ package generated
 // Spec: export-import-s1-spec.md §Contract — five new component schemas
 // (PackageManifest, PackageExportRequest, PackageImportPreview,
 // PackageImportApplyRequest, PackageImportResult), three openapi operations
-// (POST /api/v1/packages/export, POST /api/v1/packages/import,
-// POST /api/v1/packages/import/{staging_id}/apply), and ErrorResponse's code
+// (client URLs POST /api/v1/packages/export, POST /api/v1/packages/import,
+// POST /api/v1/packages/import/{staging_id}/apply — openapi paths are relative
+// to the server URL, which already ends in /api/v1), and ErrorResponse's code
 // description extended with the new codes (§Machine-Verifiable Constraints).
 //
 // Fixtures are built from the spec's field tables, never from the engine's
@@ -19,6 +20,7 @@ package generated
 // missing file and the spec section that requires it (never t.Skip).
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -186,22 +188,40 @@ func TestPackageContracts_S1Schemas(t *testing.T) {
 			"mode is required")
 	})
 
+	// §Contract names the client URLs (POST /api/v1/packages/...). The server
+	// URL already includes /api/v1, and path keys are relative to it.
+	// Defect fixed: asserted the relative path keys, and that server URL + path is still the §Contract client URL.
 	t.Run("openapi.yaml carries the three package operations", func(t *testing.T) {
 		raw, err := os.ReadFile(filepath.Join(contractsDir(), "openapi.yaml"))
 		require.NoError(t, err, "openapi.yaml must be readable")
 		var doc map[string]any
 		require.NoError(t, yaml.Unmarshal(raw, &doc), "openapi.yaml must parse as YAML")
+		servers, ok := doc["servers"].([]any)
+		require.True(t, ok, "openapi.yaml must declare servers")
+		require.NotEmpty(t, servers, "openapi.yaml must declare a server URL")
+		first, ok := servers[0].(map[string]any)
+		require.True(t, ok, "servers[0] must be an object")
+		serverURL, _ := first["url"].(string)
+		parsed, err := url.Parse(serverURL)
+		require.NoError(t, err, "server URL must parse")
+		require.Equal(t, "/api/v1", parsed.Path,
+			"server URL path must be /api/v1 so a client still calls /api/v1/packages/... (§Contract)")
 		paths, ok := doc["paths"].(map[string]any)
 		require.True(t, ok, "openapi.yaml must have paths")
-		for _, p := range []string{
+		for _, clientPath := range []string{
 			"/api/v1/packages/export",
 			"/api/v1/packages/import",
 			"/api/v1/packages/import/{staging_id}/apply",
 		} {
-			ops, has := paths[p].(map[string]any)
-			require.True(t, has, "openapi.yaml must declare path %s (§Contract)", p)
+			rel := clientPath[len("/api/v1"):]
+			require.NotContains(t, paths, clientPath,
+				"path keys are relative to the server URL; %s must not repeat /api/v1", clientPath)
+			ops, has := paths[rel].(map[string]any)
+			require.True(t, has, "openapi.yaml must declare path %s (client URL %s, §Contract)", rel, clientPath)
 			_, hasPost := ops["post"]
-			require.True(t, hasPost, "path %s must be a POST operation (§Contract)", p)
+			require.True(t, hasPost, "path %s must be a POST operation (§Contract)", rel)
+			require.Equal(t, clientPath, parsed.Path+rel,
+				"the URL a client calls stays %s", clientPath)
 		}
 	})
 

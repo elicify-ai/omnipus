@@ -99,11 +99,14 @@ func TestFieldMapping_Import(t *testing.T) {
 		require.NotEmpty(t, warningsOf(plan, "mcp_binding_dropped"), "the drop is listed")
 	})
 
-	// D5 5: a known tool's policy is kept unchanged, no warning.
+	// D5 5: a known tool's policy is kept unchanged, no warning (Dataset D5 row 5, warning "—").
+	// Defect fixed: dropped baseRecord's uninstalled skill "writing" (D5-2) and marked provider "openrouter" configured (D5-10); those rows require warnings, this row does not.
 	t.Run("D5-5 known tool deny kept without warning", func(t *testing.T) {
 		target := newFakeTarget()
 		target.knownTools["bash"] = true
+		target.providers["openrouter"] = true
 		rec := baseRecord(testSourceID)
+		delete(rec, "skills")
 		rec["tools"] = map[string]any{"builtin": map[string]any{"policies": map[string]any{"bash": "deny"}}}
 		plan, err := omnpkg.MapAgentForImport(importRecord(t, rec), testSourceID, target)
 		require.NoError(t, err)
@@ -151,13 +154,16 @@ func TestFieldMapping_Import(t *testing.T) {
 		require.NotEmpty(t, warningsOf(plan, "tool_policy_tightened"))
 	})
 
-	// D5 9: a tool missing from the map gets the type's seed value, no warning.
+	// D5 9: a tool missing from the map gets the type's seed value, no warning (Dataset D5 row 9, warning "—").
+	// Defect fixed: dropped baseRecord's uninstalled skill "writing" (D5-2) and marked provider "openrouter" configured (D5-10); a seeded default is still not a warning.
 	t.Run("D5-9 tool missing from the map gets the seed value", func(t *testing.T) {
 		target := newFakeTarget()
 		target.knownTools["bash"] = true
 		target.knownTools["web_search"] = true
+		target.providers["openrouter"] = true
 		target.seeds["custom"] = map[string]string{"bash": "ask", "web_search": "ask"}
 		rec := baseRecord(testSourceID)
+		delete(rec, "skills")
 		rec["tools"] = map[string]any{"builtin": map[string]any{"policies": map[string]any{"bash": "deny"}}}
 		plan, err := omnpkg.MapAgentForImport(importRecord(t, rec), testSourceID, target)
 		require.NoError(t, err)

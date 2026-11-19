@@ -186,6 +186,8 @@ func TestStaging_StateMachine(t *testing.T) {
 			"D13-2: the second apply of the same staging is 409 or 404, got %v", err)
 	})
 
+	// D13-3: exactly one of two concurrent uploads wins the last free slot.
+	// Defect fixed: the waiter no longer wg.Add(1)s itself and then Wait()s before Done, which deadlocked the race before either Reserve returned.
 	t.Run("D13-3 two uploads compete for the last free slot", func(t *testing.T) {
 		clk := newClock()
 		reg := omnpkg.NewStagingRegistry(t.TempDir(), clk.Now)
@@ -210,10 +212,8 @@ func TestStaging_StateMachine(t *testing.T) {
 			}()
 		}
 		close(start)
-		wg.Add(1)
 		done := make(chan struct{})
 		go func() {
-			defer wg.Done()
 			wg.Wait()
 			close(done)
 		}()
