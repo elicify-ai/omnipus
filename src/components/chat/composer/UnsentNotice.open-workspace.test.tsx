@@ -17,7 +17,7 @@ import { act } from 'react'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
-  apiMocks, makeAgent, makeSession, makeWorkspace, mountComposer, resetBindingWorld, typeIntoComposer,
+  apiMocks, framesOf, makeAgent, makeSession, makeWorkspace, mountComposer, resetBindingWorld, sent, typeIntoComposer,
 } from '@/test/sendBinding1428'
 // After the harness: its vi.mock of the router is then the module this import gets.
 import { useNavigate } from '@tanstack/react-router'
@@ -57,11 +57,18 @@ describe('DEFECT 2: Unsent Open lands on the chat\'s own workspace', () => {
     })
     const navigate = useNavigate() as unknown as { mock: { calls: unknown[][] }; mockClear: () => void }
     navigate.mockClear()
+    const attachesBefore = framesOf('attach_session', sent()).length
 
     await user.click(screen.getByRole('button', { name: 'Open' }))
 
     expect(useSessionStore.getState().activeSessionId, 'Open opens chat-a').toBe('chat-a')
     expect(useWorkspacesStore.getState().activeWorkspaceId, 'Open switches to chat-a\'s workspace w1').toBe('w1')
+    // Grok review: the chat route's entry skips an already-active session, so
+    // Open itself must send the attach (as a sidebar selection does), or the
+    // transcript never loads on a live connection.
+    expect(framesOf('attach_session', sent()).slice(attachesBefore), 'Open attaches chat-a').toEqual([
+      expect.objectContaining({ type: 'attach_session', session_id: 'chat-a' }),
+    ])
     expect(navigate.mock.calls, 'Open navigates to w1\'s chat route naming chat-a').toContainEqual([
       expect.objectContaining({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'w1' }, search: { open: 'chat-a' } }),
     ])

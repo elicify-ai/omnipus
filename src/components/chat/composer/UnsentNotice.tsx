@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button'
 import { CopyButton } from '@/components/ui/copy-button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { fetchAgents, fetchSessions, fetchWorkspaces } from '@/lib/api'
+import { fetchAgents, fetchSessions, fetchWorkspaces, type Session } from '@/lib/api'
 import { SEND_TEXT, currentSendCapability } from '@/lib/bound-send'
 import { subscribeConnectionEvents } from '@/lib/ws'
 import { useChatStore } from '@/store/chat'
@@ -93,7 +93,7 @@ function useNames() {
     agent: (id: string | null) => agents.find((a) => a.id === id)?.name ?? id ?? 'the agent',
     workspace: (id: string | null) => workspaces.find((w) => w.id === id)?.name ?? id ?? 'this workspace',
     chat: (id: string) => sessions.find((s) => s.id === id)?.title || 'Chat',
-    workspaceOf: (id: string) => sessions.find((s) => s.id === id)?.workspace_id ?? null,
+    sessionOf: (id: string) => sessions.find((s) => s.id === id),
   }
 }
 
@@ -137,7 +137,7 @@ function useRows(openKey: string, unsupported: boolean): Row[] {
   return rows
 }
 
-function openRow(row: Row, navigate: OpenChatNavigate, workspaceOf: (id: string) => string | null): void {
+function openRow(row: Row, navigate: OpenChatNavigate, sessionOf: (id: string) => Session | undefined): void {
   const session = useSessionStore.getState()
   const pending = useChatStore.getState().pendingFirstSend
   if (!row.item) {
@@ -157,7 +157,8 @@ function openRow(row: Row, navigate: OpenChatNavigate, workspaceOf: (id: string)
     const info = useChatStore.getState().draftState.newChats[key]
     enterNewChat(info?.workspaceId ?? row.item.workspaceId, info?.agentId ?? row.item.agentId, undefined, key)
   } else {
-    openSavedChat(key, row.item.workspaceId ?? workspaceOf(key), row.item.agentId ?? session.activeAgentId ?? undefined, navigate)
+    const saved = sessionOf(key)
+    openSavedChat({ sessionId: key, workspaceId: row.item.workspaceId ?? saved?.workspace_id ?? null, type: saved?.type, title: saved?.title }, row.item.agentId ?? session.activeAgentId ?? undefined, navigate)
   }
 }
 
@@ -191,7 +192,7 @@ export function UnsentNotice({ focusComposer }: { focusComposer: () => void }) {
   const recovery = useDrafts((s) => s.drafts[openKey]?.recovery)
   const rows = useRows(openKey, unsupported)
   const navigate = useNavigate()
-  const { workspaceOf } = useNames()
+  const { sessionOf } = useNames()
   const narrow = useNarrow()
   const [expanded, setExpanded] = useState(false)
   const [discarding, setDiscarding] = useState<Row | null>(null)
@@ -237,7 +238,7 @@ export function UnsentNotice({ focusComposer }: { focusComposer: () => void }) {
       ? () => setDiscarding(row)
       : action === 'move'
         ? () => moveHere(row, openKey)
-        : () => { openRow(row, navigate, workspaceOf); focusComposer() }
+        : () => { openRow(row, navigate, sessionOf); focusComposer() }
     return (
       <Button key={action} ref={ref as never} size="sm" variant={action === 'discard' ? 'ghost' : 'outline'} onClick={onClick}>
         {ACTION_LABEL[action]}

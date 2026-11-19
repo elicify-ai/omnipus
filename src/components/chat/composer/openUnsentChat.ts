@@ -9,15 +9,35 @@
 import type { useNavigate } from '@tanstack/react-router'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useUiStore } from '@/store/ui'
+import type { Session } from '@/lib/api'
 import { supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
 
 export type OpenChatNavigate = ReturnType<typeof useNavigate>
 
-/** Opens saved chat `sessionId`; with a known `workspaceId`, in that workspace. */
-export function openSavedChat(sessionId: string, workspaceId: string | null, agentId: string | undefined, navigate: OpenChatNavigate): void {
+/** The saved chat to open: its id, workspace and, when the list knows it, its type and title. */
+export interface SavedChatTarget {
+  sessionId: string
+  workspaceId: string | null
+  type?: Session['type']
+  title?: string
+}
+
+/**
+ * Attaches first, then navigates (useSelectSession's order): the chat route's
+ * entry skips a session that is already active, so only this attach loads the
+ * transcript. A failed attach switches nothing and is reported.
+ */
+export function openSavedChat(target: SavedChatTarget, agentId: string | undefined, navigate: OpenChatNavigate): void {
+  const { sessionId, workspaceId } = target
   const workspaces = useWorkspacesStore.getState()
-  if (workspaceId && workspaceId !== workspaces.activeWorkspaceId) workspaces.setActiveWorkspaceId(workspaceId)
-  useSessionStore.getState().setActiveSession(sessionId, agentId)
+  const previousWorkspaceId = workspaces.activeWorkspaceId
+  if (workspaceId && workspaceId !== previousWorkspaceId) workspaces.setActiveWorkspaceId(workspaceId)
+  if (!useSessionStore.getState().attachToSession(sessionId, target.type ?? 'chat', target.title, agentId)) {
+    if (workspaceId && workspaceId !== previousWorkspaceId) workspaces.setActiveWorkspaceId(previousWorkspaceId)
+    useUiStore.getState().addToast({ message: "Connection lost — couldn't open that session. It will not be switched.", variant: 'error' })
+    return
+  }
   if (!workspaceId) return
   supersedeNavigationIntent()
   void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId }, search: { open: sessionId } })
