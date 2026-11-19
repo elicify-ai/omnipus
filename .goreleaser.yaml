@@ -1,10 +1,21 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # vim: set ts=2 sw=2 tw=0 fo=cnqoj
 #
-# v0.1 release matrix — Tier 1 platforms only:
-#   - linux/amd64, linux/arm64, darwin/arm64
-# Deferred (planned, not in v0.1): darwin/amd64 (Intel), windows/amd64 (#113),
-# linux/{riscv64,loong64,arm,mipsle}, freebsd/*, netbsd/*.
+# Release matrix:
+#   - linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 (Intel Mac,
+#     founder decision 2026-11-19: an installer target)
+# Not released: windows/amd64 (#113; Windows gets the PDF renderer zip for
+# registration), linux/{riscv64,loong64,arm,mipsle}.
+#
+# Office preview components (office-preview spec §10): the LibreOffice and
+# PDF renderer folders are built per platform by
+# .github/workflows/office-components.yml BEFORE GoReleaser runs, and arrive
+# in build/components/ (scripts/office-pack/unpack-linux.sh lays out the Linux
+# folders). They ship as separate release downloads listed in checksums.txt,
+# inside the deb/rpm packages, and inside the Docker image. Every component
+# path below is a literal file or folder name, never a wildcard that could
+# silently match nothing; scripts/office-pack/check-release-contents.sh lists
+# what the produced files really contain and fails on anything missing.
 #
 # Module path is github.com/elicify-ai/omnipus (go.mod), matching the repo's
 # actual GitHub org — LDFLAGS below target that path.
@@ -83,12 +94,6 @@ builds:
       - amd64
       - arm64
     main: ./cmd/omnipus
-    ignore:
-      # darwin/amd64 (Intel Mac) is deferred to v0.1.1. Cross-compile target
-      # works, but we haven't smoke-tested it in CI (cross-platform.yml uses
-      # macos-latest = arm64). Adding macos-13 runner is a v0.1.1 task.
-      - goos: darwin
-        goarch: amd64
     hooks:
       pre:
         # ADR-052 Phase 1: per-arch bundled-Chrome-for-Testing payload.
@@ -110,6 +115,10 @@ dockers_v2:
     dockerfile: docker/Dockerfile.goreleaser
     extra_files:
       - docker/entrypoint.sh
+      # Office preview components per image platform (Dockerfile.goreleaser
+      # copies build/components/<os>_<arch>/{office,pdfium}).
+      - build/components/linux_amd64
+      - build/components/linux_arm64
     ids:
       - omnipus
     images:
@@ -169,6 +178,63 @@ nfpms:
         dst: /usr/bin/omnipus
       - src: ./dist/chromium/**/*
         dst: /usr/share/omnipus/chromium
+      # Office preview components (spec §10): /usr/share/omnipus/{office,pdfium}
+      # is the resolver's <exe>/../share/omnipus/<slot> for /usr/bin/omnipus.
+      - src: build/components/linux_{{ .Arch }}/office/
+        dst: /usr/share/omnipus/office
+        type: tree
+      - src: build/components/linux_{{ .Arch }}/pdfium/
+        dst: /usr/share/omnipus/pdfium
+        type: tree
+    # The system libraries LibreOffice links against (the set pr.yml's
+    # "Office preview real programs" job installs). The renderer needs none.
+    overrides:
+      deb:
+        dependencies:
+          - libx11-6
+          - libxext6
+          - libxinerama1
+          - libcairo2
+          - libcups2t64 | libcups2
+          - libdbus-1-3
+          - libfontconfig1
+          - libfreetype6
+          - libglib2.0-0t64 | libglib2.0-0
+          - libnss3
+          - libnspr4
+        recommends:
+          - fonts-liberation
+      rpm:
+        dependencies:
+          - libX11
+          - libXext
+          - libXinerama
+          - cairo
+          - cups-libs
+          - dbus-libs
+          - fontconfig
+          - freetype
+          - glib2
+          - nss
+          - nspr
+        recommends:
+          - liberation-fonts
+
+# install.sh reads checksums.txt (GoReleaser's default name carries the
+# version, which the installer cannot know). The Office preview component
+# files are not GoReleaser artifacts, so each one is listed by name.
+checksum:
+  name_template: checksums.txt
+  extra_files:
+    - glob: ./build/components/release/omnipus-office_Linux_x86_64.tar.gz
+    - glob: ./build/components/release/omnipus-office_Linux_arm64.tar.gz
+    - glob: ./build/components/release/omnipus-office_Darwin_arm64.tar.gz
+    - glob: ./build/components/release/omnipus-office_Darwin_x86_64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Linux_x86_64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Linux_arm64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Darwin_arm64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Darwin_x86_64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Windows_x86_64.zip
 
 changelog:
   sort: asc
@@ -179,6 +245,17 @@ changelog:
 
 release:
   disable: '{{ isEnvSet "NIGHTLY_BUILD" }}'
+  # The Office preview components, as separate downloads (spec §10).
+  extra_files:
+    - glob: ./build/components/release/omnipus-office_Linux_x86_64.tar.gz
+    - glob: ./build/components/release/omnipus-office_Linux_arm64.tar.gz
+    - glob: ./build/components/release/omnipus-office_Darwin_arm64.tar.gz
+    - glob: ./build/components/release/omnipus-office_Darwin_x86_64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Linux_x86_64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Linux_arm64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Darwin_arm64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Darwin_x86_64.tar.gz
+    - glob: ./build/components/release/omnipus-pdf-renderer_Windows_x86_64.zip
   footer: >-
 
     ---
