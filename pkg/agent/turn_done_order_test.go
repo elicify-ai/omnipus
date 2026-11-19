@@ -61,7 +61,8 @@ type doneOrderProbe struct {
 }
 
 func (p *doneOrderProbe) record(al *AgentLoop, sessionID string, atDone bool) {
-	_, _, _, active := al.ActiveForegroundTurnInfo(sessionID)
+	turnID, _, _, active := al.ActiveForegroundTurnInfo(sessionID)
+	_ = turnID // This observer pins liveness, not the identity returned alongside it.
 	sample := doneOrderObservation{sessionID: sessionID, active: active}
 	al.activeTurnStates.Range(func(_, value any) bool {
 		if ts, ok := value.(*turnState); ok && ts.transcriptSessionID == sessionID {

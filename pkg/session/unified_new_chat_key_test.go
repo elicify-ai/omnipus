@@ -130,7 +130,7 @@ func TestNewChatKey_ColdOpenRetainsKeyAcrossIdentityUpdate(t *testing.T) {
 		t.Fatalf("SETUP: first store: %v", err)
 	}
 	meta := newChatKeyTestMeta(t, sessionID)
-	if _, err := first.persistNewSessionLocked(sessionID, meta); err != nil {
+	if _, err = first.persistNewSessionLocked(sessionID, meta); err != nil {
 		t.Fatalf("SETUP: persist fixture session: %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestNewChatKey_ColdOpenRetainsKeyAcrossIdentityUpdate(t *testing.T) {
 
 	// Unrelated identity update: a title rename must not disturb the key.
 	newTitle := "renamed by an unrelated identity update"
-	if err := cold1.SetMeta(sessionID, MetaPatch{Title: &newTitle}); err != nil {
+	if err = cold1.SetMeta(sessionID, MetaPatch{Title: &newTitle}); err != nil {
 		t.Fatalf("unrelated identity update: SetMeta: %v", err)
 	}
 
