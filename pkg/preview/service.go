@@ -241,6 +241,11 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 	defer c.finish()
 
 	pdf := req.Data
+	// pdfSum keys the rendered-page cache: the SHA-256 of the PDF actually
+	// rendered (AD-9). For Office input that is the converted PDF, which can
+	// differ between conversions of the same source (formulas are
+	// recalculated on load); the source digest stays the SourceVersion.
+	pdfSum := sum
 	maxInput := int64(protocol.MaxInputPDF)
 	if IsOffice(req.Ext) {
 		office, problem := s.officeComponent(req.CallerWriteRoots)
@@ -261,6 +266,7 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 			return nil, convErr
 		}
 		pdf = converted
+		pdfSum = sha256.Sum256(converted)
 		maxInput = protocol.MaxInputConverted
 	}
 	res.PDF = pdf
@@ -295,7 +301,7 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 		return nil, err
 	}
 	if render != nil {
-		if renderErr := s.renderPages(ctx, render, pdf, sum, res); renderErr != nil {
+		if renderErr := s.renderPages(ctx, render, pdf, pdfSum, res); renderErr != nil {
 			var f *failure
 			if errors.As(renderErr, &f) && f.Kind == failStopped {
 				return nil, renderErr
