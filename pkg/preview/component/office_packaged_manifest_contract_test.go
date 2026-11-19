@@ -2,8 +2,6 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-//go:build omnipus_packaged_office
-
 package component_test
 
 // Office installer packaging P2 (#1713) — BEHAVIOURAL contract for the
