@@ -425,15 +425,11 @@ func (b *agentCreateBuild) buildToolConfig() *agentCreateRefusalError {
 // *requestRefusalError and a store failure a *configurationMutationError, as
 // before the extraction. The caller MUST hold a.configMu.
 func (a *restAPI) persistAgentCreateLocked(p *agentCreatePlan) (agentstore.MutationResult, error) {
-	if p.Agent.MaxToolIterations > 0 {
-		if err := config.ValidateAgentMaxToolIterations(p.Agent.MaxToolIterations,
-			&a.agentLoop.GetConfig().Agents.Defaults); err != nil {
-			return agentstore.MutationResult{
-					PersistenceStatus: agentstore.PersistenceNone,
-					ActivationStatus:  agentstore.ActivationNotAttempted,
-				},
-				&requestRefusalError{msg: err.Error(), field: maxToolIterationsFieldName}
-		}
+	if err := a.recheckAgentMaxToolIterationsLocked(p); err != nil {
+		return agentstore.MutationResult{
+			PersistenceStatus: agentstore.PersistenceNone,
+			ActivationStatus:  agentstore.ActivationNotAttempted,
+		}, err
 	}
 	result, err := agentstore.New(a.homePath).CreateState(p.Agent.ID, &p.Agent, p.Soul)
 	if err != nil {
@@ -442,18 +438,53 @@ func (a *restAPI) persistAgentCreateLocked(p *agentCreatePlan) (agentstore.Mutat
 	return result, nil
 }
 
+// recheckAgentMaxToolIterationsLocked is the #904 D10 re-check of the plan's
+// own max_tool_iterations against the global in force, as a
+// *requestRefusalError. The caller MUST hold a.configMu.
+func (a *restAPI) recheckAgentMaxToolIterationsLocked(p *agentCreatePlan) error {
+	if p.Agent.MaxToolIterations <= 0 {
+		return nil
+	}
+	if err := config.ValidateAgentMaxToolIterations(p.Agent.MaxToolIterations,
+		&a.agentLoop.GetConfig().Agents.Defaults); err != nil {
+		return &requestRefusalError{msg: err.Error(), field: maxToolIterationsFieldName}
+	}
+	return nil
+}
+
 // withToolPolicyCoverageCheck is the import-path sibling of
 // withToolPolicyCoverageGuard: under a.configMu it runs
 // validateCandidateToolPolicyCoverage against the live config, then persist.
 // It never calls updateConfigJSONLocked, so config.json is not read,
 // rewritten or reapplied. Gaps come back as *toolPolicyCoverageGapError and
 // stop persist from running.
+//
+// Only gaps the mutation introduces count: config.ValidateToolPolicyCoverage
+// checks every agent on the roster, and a pre-existing agent with an
+// incomplete map (an old record, a bare fixture) must not refuse an
+// unrelated import (the same reason withToolPolicyCoverageGuard skips the
+// check for writes that do not touch tools).
 func (a *restAPI) withToolPolicyCoverageCheck(mutate func(*config.Config), persist func() error) error {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
-	gaps, err := a.validateCandidateToolPolicyCoverage(a.agentLoop.GetConfig(), mutate)
+	live := a.agentLoop.GetConfig()
+	baseline, err := a.validateCandidateToolPolicyCoverage(live, func(*config.Config) {})
 	if err != nil {
 		return fmt.Errorf("tool policy coverage check: %w", err)
+	}
+	candidate, err := a.validateCandidateToolPolicyCoverage(live, mutate)
+	if err != nil {
+		return fmt.Errorf("tool policy coverage check: %w", err)
+	}
+	existing := make(map[config.CoverageGap]bool, len(baseline))
+	for _, gap := range baseline {
+		existing[gap] = true
+	}
+	var gaps []config.CoverageGap
+	for _, gap := range candidate {
+		if !existing[gap] {
+			gaps = append(gaps, gap)
+		}
 	}
 	if len(gaps) > 0 {
 		return &toolPolicyCoverageGapError{Gaps: gaps}

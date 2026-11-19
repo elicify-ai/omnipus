@@ -755,6 +755,11 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 		return fmt.Errorf("error creating provider: %w", rc.err), true
 	}
 
+	// Agent package imports (epic #1094 FR-062): finish or roll back any
+	// import a previous run left unfinished, BEFORE the first roster load, so
+	// nothing loads or lists a half-imported agent. Never fatal.
+	bootRecoverImports(context.Background(), rc.homePath, rc.cfg, nil)
+
 	// ADR-054 D2/D3 + SeedConfig + its one-time migrations, persisted. The
 	// whole sequence lives in seedAndPersistAgentRoster (boot_agent_roster.go)
 	// so the upgrade path can be tested against a real on-disk fixture with
