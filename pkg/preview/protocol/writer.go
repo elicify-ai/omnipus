@@ -57,6 +57,8 @@ func (fw *FrameWriter) Meta(m Meta) error {
 
 // Text writes one TEXT frame. Text that would exceed the per-frame or
 // per-call ceiling is cut at a UTF-8 boundary; the returned bool reports a cut.
+// A per-frame cut leaves room for later pages; TextBudgetSpent reports when
+// the per-call ceiling is used up.
 func (fw *FrameWriter) Text(page uint32, text string) (bool, error) {
 	cut := false
 	room := MaxTextTotalBytes - fw.text
@@ -76,6 +78,12 @@ func (fw *FrameWriter) Text(page uint32, text string) (bool, error) {
 	copy(payload[textHeaderBytes:], text)
 	fw.text += len(text)
 	return cut, fw.frame(FrameText, payload)
+}
+
+// TextBudgetSpent reports that the per-call text ceiling has no room left
+// for even one more character, so later pages cannot be sent.
+func (fw *FrameWriter) TextBudgetSpent() bool {
+	return MaxTextTotalBytes-fw.text < utf8.UTFMax
 }
 
 // Error writes the terminal ERROR frame.

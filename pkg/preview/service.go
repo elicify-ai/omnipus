@@ -201,7 +201,8 @@ type Result struct {
 	Pages                         []Page
 	// Text is the extracted text of First..Last (≤ 4 MiB).
 	Text []protocol.TextPage
-	// TextTruncated reports that the 4 MiB text budget cut the text.
+	// TextTruncated reports that a text limit cut the text: one page's frame
+	// limit (about 1 MiB) or the 4 MiB budget of the call (protocol.TextCut).
 	TextTruncated bool
 	// TextProblem is why no text could be extracted at all (Text is then
 	// nil); "" otherwise. A single page that failed is named in Text instead.
@@ -343,11 +344,7 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 		res.TextProblem = textErr.Error()
 	} else {
 		res.Text = text
-		total := 0
-		for _, t := range text {
-			total += len(t.Text)
-		}
-		res.TextTruncated = total >= protocol.MaxTextTotalBytes
+		res.TextTruncated = protocol.TextCut(text)
 	}
 	res.Unconfined = c.unconfinedReason()
 	res.MemoryUnenforced = s.memoryUnenforced

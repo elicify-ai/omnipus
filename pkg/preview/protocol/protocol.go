@@ -199,6 +199,24 @@ type TextPage struct {
 	Text   string
 }
 
+// TextCut reports whether a producer may have cut the extracted text: a
+// producer cuts a page at the frame room (MaxTextFrameBytes minus the page
+// header) and the whole call at MaxTextTotalBytes, each at a UTF-8 boundary
+// that drops at most utf8.UTFMax-1 bytes, and sends no flag. A page or a
+// total within that slack of its limit therefore counts as cut; a page whose
+// natural length lands exactly there is over-reported, never under-reported.
+func TextCut(pages []TextPage) bool {
+	const slack = utf8.UTFMax - 1
+	total := 0
+	for _, p := range pages {
+		if len(p.Text) >= MaxTextFrameBytes-textHeaderBytes-slack {
+			return true
+		}
+		total += len(p.Text)
+	}
+	return total >= MaxTextTotalBytes-slack
+}
+
 // CodeTextFailed is the ERROR code a program sends when one page's text
 // cannot be extracted; its message names the page.
 const CodeTextFailed = "text_failed"

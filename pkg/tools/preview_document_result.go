@@ -252,7 +252,7 @@ func previewTextForm(res *preview.Result) string {
 		return "[no extractable text — the PDF may be scanned]"
 	}
 	if res.TextTruncated {
-		b.WriteString("[text truncated at the 4 MiB limit]\n")
+		b.WriteString("[text truncated: a page exceeded the 1 MiB per-page text limit or the call reached the 4 MiB text limit; use page images for the rest]\n")
 	}
 	return b.String()
 }
