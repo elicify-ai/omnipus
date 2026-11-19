@@ -121,12 +121,22 @@ Rendering those page images may take at most 20 seconds per PDF, including
 waiting for a free renderer; after that the model gets the text alone and the
 note `page images unavailable: page rendering did not finish within 20 s`.
 **Stop** ends the rendering at once.
-One request carries at most 20 such page images (and at most 32 MiB of
-attached media in all), newest attachments first: an older PDF past that
-limit reaches the model as its text with the note `page images unavailable:
-newer uploads used this request's 20 page images or 32 MiB`. Attached PDFs
-and PDFs the agent opened itself share the model's limit on PDF documents
-per request.
+One request carries at most 20 such page images, newest attachments first:
+an older PDF past that limit reaches the model as its text with the note
+`page images unavailable: newer uploads used this request's 20 page images or
+32 MiB`.
+
+The documents of the current message share 32 MiB per request: the PDFs (or
+their page images) you attached to this message come first, then the
+documents the agent opened with `preview_document` or `read_file` during its
+answer, newest first. An attached PDF that does not fit reaches the model as
+its text, with a note saying so. The newest document the agent opened always
+reaches the model, at least as its text with a note naming the limit; older
+ones that no longer fit say `pages not re-sent; call preview_document again`.
+Screenshots and files from earlier messages do not count toward these
+32 MiB. The model's limit on PDF documents per request counts every PDF in
+the request, earlier messages included; past it, a document the agent opened
+goes as page images and an attached PDF as its text.
 
 If the provider rejects a request because it carries a PDF (for example
 `PDF input for model 'm' is not available.`), Omnipus retries once with the

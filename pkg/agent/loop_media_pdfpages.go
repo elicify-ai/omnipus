@@ -83,13 +83,16 @@ type uploadPageJob struct {
 	localPath, name, dest       string
 	offErr                      error
 	limits                      catalog.ResizeLimits
+	turn                        bool // one of this turn's own uploads
 }
 
 // renderUploadPageJobs renders the jobs newest first within one request
 // allowance and places each one's images and note. Jobs are in request
 // order, so placing them in reverse keeps every earlier job's indices valid.
-func renderUploadPageJobs(ctx context.Context, jobs []uploadPageJob, media, injections [][]string) {
+// It returns the decoded bytes of the page images of this turn's uploads.
+func renderUploadPageJobs(ctx context.Context, jobs []uploadPageJob, media, injections [][]string) int {
 	allowance := newUploadPageAllowance()
+	turnBytes := 0
 	for j := len(jobs) - 1; j >= 0; j-- {
 		job := jobs[j]
 		pages := uploadPDFPageImagesWithin(ctx, allowance, job.localPath, job.name, job.limits)
@@ -97,7 +100,13 @@ func renderUploadPageJobs(ctx context.Context, jobs []uploadPageJob, media, inje
 		media[job.msg] = append(m[:job.mediaAt:job.mediaAt], append(pages.images, m[job.mediaAt:]...)...)
 		inj := injections[job.msg][job.injAt]
 		injections[job.msg][job.injAt] = inj[:job.noteAt] + pages.note(job.dest, job.offErr) + inj[job.noteAt:]
+		if job.turn {
+			for _, img := range pages.images {
+				turnBytes += dataURLDecodedSize(img)
+			}
+		}
 	}
+	return turnBytes
 }
 
 // uploadPDFPageImages renders an uploaded PDF's first pages without a turn

@@ -651,11 +651,13 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 	// with no decoder) be copied into work/ and surfaced as a filesystem path +
 	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
 	turnProvider, turnModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
+	turnSink := rp.rc.rx.rr.rq.ri.rf.rt.turnOffloadSink(rp.rc.rx.rr.rq.ri.wsDir)
 	rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
 		rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, turnProvider, turnModel,
-		&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir, ctx: rp.rc.rx.rr.rq.ri.rf.rt.turnCtx}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
+		turnSink, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
 	)
+	rp.rc.rx.rr.rq.ri.rf.rt.turnUploadMedia = turnSink.turnMedia
 
 	// ADR-067 FR-016/FR-038 pre-turn gate (FIRST of the three). An agent whose
 	// PRIMARY provider id is unknown cannot reach any upstream at all, so it
@@ -808,11 +810,13 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 				activeSkillNames(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.opts),
 			)
 			trimProvider, trimModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
+			trimSink := rp.rc.rx.rr.rq.ri.rf.rt.turnOffloadSink(rp.rc.rx.rr.rq.ri.wsDir)
 			rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
 				rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, trimProvider, trimModel,
-				&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir, ctx: rp.rc.rx.rr.rq.ri.rf.rt.turnCtx}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
+				trimSink, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
 			)
+			rp.rc.rx.rr.rq.ri.rf.rt.turnUploadMedia = trimSink.turnMedia
 		}
 	}
 
