@@ -23,13 +23,13 @@ S1 agent round trip (CLI, demo) ──┬─► S2 skills ──┐
 
 | Slice | One sentence | Size | Depends on | Waits on |
 |---|---|---|---|---|
-| S1a | Export one custom agent (Main or native worker) to a `.omnpkg` file and import it into a clean install from the command line (founder demo) | above L (~5,380 lines incl. tests) | — | — (Q1 only words the refusal) |
+| S1a | Export one custom agent (Main or native worker) to a `.omnpkg` file and import it into a clean install from the command line (founder demo); all-or-nothing, invisible until committed, start-up recovery | above L (~5,570 lines incl. tests, revision 7) | — | — (Q1 decided: B) |
 | S1b | External workers in packages, unknown element types skipped | M (~480) | S1a | — |
 | S2 | Skills travel with the package | M | S1 | — |
 | S3 | MCP server definitions travel, secrets stripped | M | S1 | — |
 | S4 | An agent's private memory travels | S–M | S1 | — |
-| S5 | A whole workspace travels: record, team, delegation, instructions, shared memory, work files, knowledge bases inside it | L | S1, S4 | Q4 |
-| S6 | Replace (default) and Merge modes, with warning, confirmation and pre-import snapshot | M–L | S1 (S5 for full value) | Q1, Q2 |
+| S5 | A whole workspace travels: record, team, delegation, instructions, shared memory, work files, knowledge bases inside it | L | S1, S4 | — (Q4 decided: C) |
+| S6 | Replace (default) and Merge modes, with warning, confirmation and pre-import snapshot | M–L | S1 (S5 for full value) | Q2 |
 | S7 | "Whole system" and "Custom" scopes | S–M | S2–S5 | Q3 |
 | S8 | Settings → Data screen: export picker, import preview and confirm dialog | M–L | S6, S7 | Q3 |
 | S9 | Session history (opt-in) | L | S5 | — |
@@ -43,6 +43,8 @@ Recommended order: **S1 → S2 ∥ S3 ∥ S4 → S5 → S6 → S7 → S8**, then
 
 **Demo:** on install A, `omnipus export --agent "Writer" -o writer.omnpkg`; copy the file; on a fresh install B, `omnipus package inspect writer.omnpkg` shows the agent name, file list and checksums; `omnipus import writer.omnpkg` adds "Writer" (a Main agent) with a **new ID**; it appears at once in the Agents screen and can chat with the same SOUL prompt and settings. (An imported native worker appears in the Team and is reached by delegation once the owner draws a line to it.)
 
+**Revision 7, 2026-11-19 (founder decisions; review cap reached, nothing else reopened).** **P-QR B:** the import is all-or-nothing. The agent is written as an invisible pending record (`entities/agents/<id>.pending`); the team entry, the self-delegation row and one atomic rename to `<id>.json` (the commit point) run in one workspace-lock hold. Until then no list, chat, session, tool or screen can see or use the agent. Rollback is C1 (leave, inside the lock hold) then C2 (discard record and folder); no rollback reload. Start-up recovery from the journal moves into S1a: the next gateway start finishes or rolls back an unfinished import before any agent is loaded. Withdrawn: the residue from other screens (sessions, chats, main chat, home notes, other workspaces), the final clean-up and its session and workspace recovery steps. Still not guaranteed: lock-free workspace readers can see the ID during the commit step; a power cut is safe only where storage honours flushes (Windows cannot sync a directory). **P-Q1 B:** built-in agents never travel; export refuses them ("cannot be exported"), import never targets them. Size: S1a about 5,570 lines (+190), about +2 to +4 working hours net (🔶 inferred). Spec: revision 7 sections of `export-import-s1-spec.md`; ADR amendments A9–A11.
+
 **Final spec 2026-11-19 after grill round 5 (spec revision 6, review cap reached; ADR A7 revised): build S1a.** The rollback's membership and edge removal covers the import workspace only; references other requests added in other workspaces are repaired by a manual step that uses the existing revision-checked workspace update. Session clean-up is complete only with other session activity paused and a fresh verification scan, otherwise it is reported unverified. The after-deletion home test accepts exactly the real memory writer's note plus its derived index files. Sizes unchanged.
 
 **Revised a fourth time 2026-11-19 after grill round 4 (spec revision 5; ADR A7 revised).** Rollback is defined by the places and records it removes, not by who wrote them: the agent record, its home folder with everything inside it (including content other requests saved there, such as a private memory note), its team entry and every delegation edge involving it. Chats and sessions outside that boundary stay. Work already running can recreate home content after the folder is deleted; the final clean-up (stop the gateway, delete the folder, start, delete every session found over all pages) removes it. A protected main chat cannot be deleted and is not removed by retention, so it can remain indefinitely in S1. The delegation-save fault case now persists a removable edge first (partial C1). Founder acceptance is still pending with the chief.
@@ -54,22 +56,23 @@ Recommended order: **S1 → S2 ∥ S3 ∥ S4 → S5 → S6 → S7 → S8**, then
 **Revised 2026-11-19 after grill round 1 (spec: `SPEC-S1.md` revision 2; ADR amendments A1–A6).** S1 is split into **S1a** (the founder demo) and **S1b** (hardening the demo does not need). The original estimate of about 1,800 lines was too low: the grill found the shared create function with its field mapping, the workspace-join extraction, the coverage-check extraction, real-store rollback, the staging lifecycle, decoder limits and a small frontend refresh fix.
 
 **Scope S1a**
-- `pkg/omnpkg` engine: manifest v1 with relationship checks, tar + zstd writer/reader with bounded decoding, SHA-256 per file, `Inspect` (manifest only), `Verify`, universal path and entry-type checks (yes/no predicates moved from `extractTarGz` / `isProtectedRestoreNamespace`; restore keeps skipping), staging lifecycle under `backups/.staging/`, journal and in-process rollback with a commit point (ADR A2).
+- `pkg/omnpkg` engine: manifest v1 with relationship checks, tar + zstd writer/reader with bounded decoding, SHA-256 per file, `Inspect` (manifest only), `Verify`, universal path and entry-type checks (yes/no predicates moved from `extractTarGz` / `isProtectedRestoreNamespace`; restore keeps skipping), staging lifecycle under `backups/.staging/`, journal, in-process rollback with a commit point, and start-up recovery (ADR A9).
 - Element: **custom agent** (Main or native worker) = record cleaned per the spec's Field mapping, `SOUL.md`, `AGENT.md`. `subagents.allow_agents` and `subagents.model` are removed (retired / unused, ADR A3); connector assignments are dropped and listed.
 - Import is a create under the existing create rules (shared function), plus `AGENT.md`; `voice`, `memory_enabled` and `context_window_override` with the `create_agent` tool's rule. Field-coverage test across REST and agent-tool field lists.
-- Publication by full reload after commit (`agent_created` and main chat only when confirmed, otherwise `activation: "pending"`); rollback C1 membership → C2 record → C3 folder → C4 reload, a failed C1 stops C2/C3; rollback removes the record, the home folder with everything inside it, the team entry and the edges involving the agent in the import workspace; main chat only for the imported Main (`ensureMainSession`).
-- Manual recovery documented and tested, including the final clean-up, the record-absent repair of other workspaces through the existing workspace update (step 5), and deleting every session for the ID through the sessions API over all pages, with a stable list and a verification scan (step 4); deleting a staging folder retires it and frees its slot; the next upload warns `unfinished_import_found` with the agent ID.
+- **Revision 7:** invisible pending record (`agentstore` `CreatePendingState` / `PublishPending` / `DiscardPending`, task T-11); join, self-row and the commit rename in one workspace-lock hold (`JoinWorkspaceTeamAndPublish`, T-4); rollback C1 (inside the lock hold) → C2 (record and folder), no rollback reload; start-up recovery before the first roster load.
+- Publication by full reload after commit (`agent_created` and main chat only when confirmed, otherwise `activation: "pending"`); main chat only for the imported Main (`ensureMainSession`).
+- Manual recovery (short, only when start-up recovery keeps failing) documented and tested; the next upload warns `unfinished_import_found` with the agent ID only after a failed recovery.
 - Import mode **New** only (new ID, suffix on name clash). Replace/Merge come in S6.
 - REST (contract first): `POST /api/v1/packages/export`, `POST /api/v1/packages/import` (upload → provisional preview + `staging_id`, 64 MiB route limit), `POST /api/v1/packages/import/{staging_id}/apply`. Local mode only, authenticated, refused under developer bypass. **No password re-entry in New mode** (ADR A5).
 - CLI: `omnipus export`, `omnipus import`, `omnipus package inspect|verify` (inspect/verify offline). ADR-024 amended (ADR A1).
 - Frontend: `agent_created` also refreshes workspace detail and delegation, so an open Team tab shows the new member.
-- Core agents: excluded from export with a clear message (Q1 decides S6 behaviour). External workers (on export **and upload**) and unknown element types are refused with a clear message until S1b.
+- Core (built-in) agents: never in a package (founder P-Q1 B, ADR A10): export refuses them with a clear message, import never targets them. External workers (on export **and upload**) and unknown element types are refused with a clear message until S1b.
 
 **Scope S1b**
 - External workers (Subagent External): `env_overrides`, `cli_args`, `cli_path` removed; the `create_agent` per-runtime check (`agentmutation.ValidateFields`) runs before the shared applier, so `memory_enabled` and `context_window_override` are refused for them; env names listed as secrets to re-enter; the existing "program not set" text surfaced after import.
 - Unknown element types pass the universal checks and checksums and are skipped (forward compatibility; **S2 needs this before it ships**).
 
-**Named tasks (from the spec)**: T-1 contracts · T-2 format engine · T-3 shared create function, coverage check without the config write, exported tool field applier, field-coverage test · **T-4 workspace-join extraction from the `create_agent` tool, plus a leave helper for rollback** · T-5 handlers, staging, journal, rollback with reload, single-agent main chat, audit rules, unfinished-import warning, recovery slot release · T-6 CLI · T-7 frontend refresh · T-8 docs (with recovery procedure) · T-9 external workers [S1b] · T-10 unknown elements [S1b].
+**Named tasks (from the spec)**: T-1 contracts · T-2 format engine · T-3 shared create function, coverage check without the config write, exported tool field applier, field-coverage test · **T-4 workspace-join extraction from the `create_agent` tool, plus a leave helper and the join-and-publish helper** · T-5 handlers, staging, journal, rollback C1–C2, single-agent main chat, audit rules, unfinished-import warning, start-up recovery · T-6 CLI · T-7 frontend refresh · T-8 docs (with recovery procedure) · T-9 external workers [S1b] · T-10 unknown elements [S1b] · **T-11 pending agent record in `pkg/agentstore` (revision 7)**.
 
 **Files**
 
@@ -83,18 +86,19 @@ Recommended order: **S1 → S2 ∥ S3 ∥ S4 → S5 → S6 → S7 → S8**, then
 | `pkg/gateway/rest_agents_create.go` (`validateCreateFields`, `validateAndBuildConfig`, `buildToolConfig`, `persistAgent`, `publishResponse`) | pull the non-HTTP part out into one function the import also calls (no copy); domain input, not the REST request type (T-3) |
 | `pkg/gateway/rest_agents.go` (`withToolPolicyCoverageGuard`) and `pkg/gateway/rest_config.go` (`writeConfigJSONLocked`) | split "check coverage under the config lock" from the config-file write, so import never writes `config.json` (T-3) |
 | `pkg/sysagent/tools/agent_apply_args.go` (`applySharedConfigArgs`) | exported unchanged, so import stores `voice`, `memory_enabled`, `context_window_override` with the `create_agent` rule (T-3) |
-| `pkg/sysagent/tools/agent.go` (`joinWorkspaceTeam`, `seedSelfEdgeLocked`, `cascadeCleanOneWorkspaceLocked`) | extract join (team entry + self-row, one workspace lock) into a shared helper with a matching leave helper; `create_agent` keeps identical behaviour (T-4) |
+| `pkg/sysagent/tools/agent.go` (`joinWorkspaceTeam`, `seedSelfEdgeLocked`, `cascadeCleanOneWorkspaceLocked`) | extract join (team entry + self-row, one workspace lock) into a shared helper with a matching leave helper, plus `JoinWorkspaceTeamAndPublish` (revision 7); `create_agent` keeps identical behaviour (T-4) |
 | `pkg/gateway/main_session.go` (`ensureMainSession`, `mainSessionPairEligible`) | main chat for the imported Main only, after the commit point (not `ensureWorkspaceMains`) |
-| `pkg/gateway/rest_auth.go` (`triggerReloadAndWaitOutcome`) | publication after commit and live-list resync after rollback |
-| `pkg/agentstore/state.go` (`CreateState`, `MutateStateWithAgentMD`, `DeleteState`) | used as is; export uses its own bounded, link-refusing read instead of `readOptional` |
+| `pkg/gateway/rest_auth.go` (`triggerReloadAndWaitOutcome`) | publication after commit (revision 7: no reload after a rollback) |
+| `pkg/gateway/gateway.go` (before `seedAndPersistAgentRoster`) | call start-up recovery once (revision 7; moved from S6) |
+| `pkg/agentstore/state.go` (`CreateState`, `MutateStateWithAgentMD`, `DeleteState`) | unchanged; **revision 7** adds `CreatePendingState`, `PublishPending`, `DiscardPending` beside them (T-11); export uses its own bounded, link-refusing read instead of `readOptional` |
 | `src/lib/api/agents.ts` (`invalidateAfterAgentCreate`) | also invalidate workspace detail and delegation queries (T-7) |
 | `pkg/gateway/rest_settings.go` (`extractTarGz`, `isProtectedRestoreNamespace`) | safety checks moved to `pkg/omnpkg`, backup keeps calling them |
 | `pkg/app/app.go` (`NewRootCommand`, `AddCommand` list at 503) | add commands |
 | `pkg/app/internal/pkgcmd/command.go` (**new**) | CLI, reusing `clitoken.LoadCLIToken` and the auto-start path in `pkg/app/app.go` (`autoStartAndRetry`) |
 | `tests/e2e/` or Go integration test (**new**) | two-home round trip |
 
-**Size (re-estimated 2026-11-19, updated in revision 5):** S1a about 5,380 changed lines including tests (about 2,580 production and docs, 2,800 tests; generated contract code excluded). Revision 4 added about 280 for the round-3 fixes, revision 5 about 170 for the round-4 fixes. Revision 2's "4,050" was an arithmetic error (its own task numbers added up to 4,530); revision 3 added about 400 for the round-2 fixes. S1b about 480 (size M). Do not cut S1a further: a format-only slice cannot be demoed. Per-task numbers are in `SPEC-S1.md` "Size and split". Estimates, not measurements.
-**Done when (S1a):** the two-home round trip matches the spec's Field mapping, with a new ID; a tampered file fails `verify` and upload with the file name; a higher `format_version` is refused; for every fault point before the commit point the rollback oracle holds: the record, the home folder with everything inside it (including a private memory note another request saved there before the folder was deleted), the team entry and every edge involving the agent in the import workspace are gone; other team and delegation edges are unchanged except references other requests added in other workspaces, which manual recovery step 5 repairs, `config.json` is byte-identical, only the listed harmless markers differ; the live list matches only when the rollback reload is confirmed, otherwise the answer says pending; chats and sessions other requests created outside the home folder remain as documented, a home note written after the folder was deleted (with its derived index files, exactly) is removed by the final clean-up, and manual recovery step 4 finds and deletes every ordinary session over all pages under a stable list, confirmed by a verification scan (otherwise reported unverified), leaving only a protected main chat; a failed or partial membership/edge removal leaves the record as the recovery handle; manual recovery frees every leftover and the upload slot; the exact-64 MiB upload is read in full and limit + 1 is 413 with and without a declared length; an imported Main chats once publication is confirmed and an imported native worker is reachable once a delegation line is drawn; an external-worker package is refused at upload; an open Team tab shows the imported agent without reload.
+**Size (re-estimated 2026-11-19, updated in revision 7):** S1a about 5,570 changed lines including tests (about 2,710 production and docs, 2,860 tests; generated contract code excluded); revision 7 added about +190 net (pending record, join-and-publish helper, start-up recovery; minus the withdrawn other-writer cases, rollback reload and long recovery docs), 🔶 about +2 to +4 working hours net. Revision 5 figure: 5,380 (2,580 + 2,800). Revision 4 added about 280 for the round-3 fixes, revision 5 about 170 for the round-4 fixes. Revision 2's "4,050" was an arithmetic error (its own task numbers added up to 4,530); revision 3 added about 400 for the round-2 fixes. S1b about 480 (size M). Do not cut S1a further: a format-only slice cannot be demoed. Per-task numbers are in `SPEC-S1.md` "Size and split". Estimates, not measurements.
+**Done when (S1a, revision 7):** the two-home round trip matches the spec's Field mapping, with a new ID; a tampered file fails `verify` and upload with the file name; a higher `format_version` is refused; before the commit point the agent is in no list, reload, agent tool, session or chat, at every hook point; for every fault point before the commit point the rollback oracle holds (no record, pending record, folder, team entry or edge for the agent; every workspace as before plus others' completed edits; `config.json` byte-identical; only the four harmless markers differ; no session or chat names the agent); an incomplete rollback is finished by the next start; a crash at every step is finished or rolled back by the next start, before any agent is loaded, and running recovery twice changes nothing; the exact-64 MiB upload is read in full and limit + 1 is 413 with and without a declared length; an imported Main chats once publication is confirmed and an imported native worker is reachable once a delegation line is drawn; built-in agents are refused at export; an external-worker package is refused at upload; an open Team tab shows the imported agent without reload.
 **Done when (S1b):** an external worker round-trips without any runtime value or secret, `memory_enabled` and `context_window_override` on it are refused as `create_agent` refuses them, and a package with an unknown element type imports its agent and skips the rest.
 
 ---
@@ -157,7 +161,8 @@ Recommended order: **S1 → S2 ∥ S3 ∥ S4 → S5 → S6 → S7 → S8**, then
 **Demo:** export a workspace with three agents, delegation between two of them, shared memory, a knowledge base in `work/`, and project instructions; import into a clean install; the Team tab shows the same team and arrows, the knowledge base is searchable, and all IDs are new.
 
 - Workspace record (`core_team`, `member_configs` remapped; `is_default` forced false), `AGENT.md` instructions, delegation edges (remapped, unknown ends dropped, re-validated), shared memory room, `carry-forward/<agentID>.md` renamed, `work/` files including knowledge-base folders (`.omnipus-vault/` markers). Derived `knowledge/<hash>/` index **not** exported; rebuilt.
-- Mounts are not exported (host paths and write permissions). Mounted knowledge bases: per Q4.
+- Mounts are not exported (host paths and write permissions). Mounted knowledge bases: **founder P-Q4 C (2026-11-19, ADR A11): ask per mounted folder, default off.** Recorded only; not built before S5.
+- Built-in agents in the team (Mia, Jim, Omnipus, …): never exported (founder P-Q1 B, ADR A10); they and their delegation edges are left out and listed, and import never targets the target install's built-ins.
 - Agents of the workspace come along automatically (reuses S1, S2, S3, S4 elements).
 
 | File | Change |
@@ -168,7 +173,7 @@ Recommended order: **S1 → S2 ∥ S3 ∥ S4 → S5 → S6 → S7 → S8**, then
 | `pkg/memrooms/rooms.go` (`ResolveWorkspaceSharedRoom`), `pkg/agent/memory.go:986` (carry-forward naming) | used as is |
 | `pkg/knowledge/index.go`, `pkg/knowledge/detect.go` | used as is (index rebuild check) |
 
-**Size:** L. **Depends on:** S1, S4 (S2/S3 for full content). **Waits on:** Q4.
+**Size:** L. **Depends on:** S1, S4 (S2/S3 for full content). **Waits on:** — (Q4 decided: C).
 
 ---
 
@@ -179,17 +184,17 @@ Recommended order: **S1 → S2 ∥ S3 ∥ S4 → S5 → S6 → S7 → S8**, then
 - Name-based clash detection per element type; preview lists clashes.
 - Replace: snapshot (reuses Export) → add new → retire old (per Q2) → on failure re-import snapshot.
 - Merge: add only non-clashing items.
-- Core agents: behaviour per Q1.
-- Crash recovery: leftover journal rolled back at gateway start.
+- Core agents: never in a package, never replaced (founder P-Q1 B).
+- Crash recovery: S1a's start-up recovery (revision 7) is extended to the Replace and Merge steps (snapshot, retire old).
 
 | File | Change |
 |---|---|
 | `pkg/omnpkg/import.go`, `journal.go`, `modes.go` (**new**) + tests | modes and recovery |
 | `pkg/gateway/rest_packages.go` | apply with mode + confirmation |
-| `pkg/gateway/gateway_boot.go` | call journal recovery once at start |
+| `pkg/omnpkg/journal.go` recovery | extend S1a's start-up recovery to Replace/Merge (the boot call already exists from S1a) |
 | `pkg/skills/pipeline.go` (`KindInstallReplace`) | used as is |
 
-**Size:** M–L. **Depends on:** S1 (S5 for workspaces). **Waits on:** Q1, Q2.
+**Size:** M–L. **Depends on:** S1 (S5 for workspaces). **Waits on:** Q2.
 
 ---
 
@@ -197,7 +202,7 @@ Recommended order: **S1 → S2 ∥ S3 ∥ S4 → S5 → S6 → S7 → S8**, then
 
 **Demo:** `omnipus export --system -o all.omnpkg` and `omnipus export --agent A --workspace W --skill s1 --no-memory`; inspect shows exactly the chosen items.
 
-- Selection model: scope + element toggles + chosen IDs. Whole system = all custom agents, workspaces, registry skills, MCP servers (ADR D9). Custom = any subset.
+- Selection model: scope + element toggles + chosen IDs. Whole system = all custom agents, workspaces, registry skills, MCP servers (ADR D9). Custom = any subset. Built-in agents are skipped with a clear message (founder P-Q1 B).
 
 | File | Change |
 |---|---|

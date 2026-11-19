@@ -1,10 +1,10 @@
-`Status: Final (review cap reached, revision 6), build S1a`
+`Status: Final (review cap reached, revision 6), amended by revision 7 (founder decisions P-QR B and P-Q1 B, 2026-11-19), build S1a`
 
 `ADR: [ADR — Export / Import packages (.omnpkg), epic elicify-ai/omnipus#1094](ADR.md)` (status Proposed, 2026-11-19, with the 2026-11-19 amendments for S1; slice plan in [SLICES.md](SLICES.md), founder questions in [QUESTIONS.md](QUESTIONS.md))
 
 # Feature Specification: S1 — Move one custom agent to another install (command line)
 
-**Created**: 2026-11-19. **Revised**: 2026-11-19 (revision 2) after grill round 1 (`GRILL-S1-r1.md`: FAIL, 2 blockers, 11 should-fixes, 3 polish), and 2026-11-19 (revision 3) after grill round 2 (`GRILL-S1-r2.md`: FAIL, 2 blockers, 7 should-fixes, 2 polish). Revision 6 (final), 2026-11-19, after grill round 5 (`GRILL-S1-r5.md`: PASS, 3 should-fixes; review cap reached). Revision 5, 2026-11-19, after grill round 4 (`GRILL-S1-r4.md`: FAIL, 1 blocker, 3 should-fixes). Revision 4, 2026-11-19, after grill round 3 (`GRILL-S1-r3.md`: FAIL, 1 blocker, 5 should-fixes; plus the S1b runtime-validation point from a second, overwritten round-3 report the chief relayed). Every finding is either fixed or declined, with its reason, in "Grill r1 resolution", "Grill r2 resolution", "Grill r3 resolution", "Grill r4 resolution" and "Grill r5 resolution" at the end. Revision 3 follows the team lead's direction: keep the promises small and testable, and move what the code cannot keep into Known Limits with the slice that will fix it, rather than adding machinery.
+**Created**: 2026-11-19. **Revised**: 2026-11-19 (revision 2) after grill round 1 (`GRILL-S1-r1.md`: FAIL, 2 blockers, 11 should-fixes, 3 polish), and 2026-11-19 (revision 3) after grill round 2 (`GRILL-S1-r2.md`: FAIL, 2 blockers, 7 should-fixes, 2 polish). Revision 6 (final), 2026-11-19, after grill round 5 (`GRILL-S1-r5.md`: PASS, 3 should-fixes; review cap reached). Revision 5, 2026-11-19, after grill round 4 (`GRILL-S1-r4.md`: FAIL, 1 blocker, 3 should-fixes). Revision 4, 2026-11-19, after grill round 3 (`GRILL-S1-r3.md`: FAIL, 1 blocker, 5 should-fixes; plus the S1b runtime-validation point from a second, overwritten round-3 report the chief relayed). Every finding is either fixed or declined, with its reason, in "Grill r1 resolution", "Grill r2 resolution", "Grill r3 resolution", "Grill r4 resolution" and "Grill r5 resolution" at the end. Revision 3 follows the team lead's direction: keep the promises small and testable, and move what the code cannot keep into Known Limits with the slice that will fix it, rather than adding machinery. **Revision 7**, 2026-11-19, applies two founder decisions without reopening review (cap reached): **P-QR B**, an import is all-or-nothing and the new agent stays invisible until it has fully succeeded, with start-up recovery in S1a (this replaces DA-5's "no isolation" and the revision-6 rollback boundary, AD-5/AD-6, L16 and the final clean-up); **P-Q1 B**, built-in agents never go into a package and import never targets them. Changed parts carry the marker "revision 7" or [r7 …]; see "Clarifications → revision 7" for the list.
 **Input**: `ADR.md`, `SLICES.md` (section S1), `QUESTIONS.md` and `GRILL-S1-r1.md` in `/workspace/omnipus-coordination/designs-20261119-export-import/`, plus the team lead's rulings of 2026-11-19 (section "Decided assumptions"). There is no interview-me output for this epic, and the founder's answers to Q1–Q5 are still open; S1 does not need them.
 **Code base read**: `origin/release/v0.1.1` at `7faff5291` (the same commit the ADR and the grill used). Every existing file and symbol named below was checked at that commit with `git show` / `git grep`. Files marked **new** do not exist yet. GitNexus was not available, so the codebase context comes from direct reads (an allowed fallback).
 **Output location note**: the repo's plan-spec skill puts specs in `docs/internal/specs/`. This draft lives in the coordination repo as the chief asked, and moves to `docs/internal/specs/export-import-s1-spec.md` when the epic's specs are committed.
@@ -20,9 +20,8 @@
 
 **What is promised, plainly (small on purpose).**
 - Import is a normal agent *create*. The same rules apply as when you create an agent today, so what arrives is the source agent **as the create rules would store it**. For example, spaces at the start and end of the prompt are trimmed, and settings that do not fit the new install are left out and listed. The section "Field mapping" says, field by field, what is kept, what changes and what is left out.
-- If the import fails while the gateway is running, the rollback removes a fixed set of **places and records**, whoever wrote into them: the new agent's record, its home folder with everything inside it, its team entry and the delegation lines to or from it in the import's workspace. Then it asks the gateway to reload the live agent list; the answer says whether that reload was confirmed. Every other agent, workspace team and delegation rule is as before. A few harmless internal markers may differ (listed in "Rollback contract").
-- The import is **not hidden** from the rest of the gateway while it runs. For a short time, another screen, script or reload can already see the new agent and use it: open a chat or a session with it, send it a message, or start work that saves a note in its home folder. **Rollback is not an undo for those requests.** A note saved in the agent's home folder is deleted with that folder. Chats and sessions live outside the folder and stay. Work that was already running can write into the home folder again after it was deleted. The docs give the final clean-up (stop the gateway, delete what is left, start it, delete the leftover chats) and say which chat cannot be deleted. That is Known Limit L16; S6 brings the automatic clean-up.
-- If the gateway itself stops in the middle of an import, S1 does **not** clean up automatically (that comes in S6). The next upload shows a warning naming the half-imported agent, and the docs give a complete manual clean-up that also frees the upload slot.
+- **All or nothing (revision 7).** Until the import has fully succeeded, the new agent is **invisible**: it is not in the agent list, chat routing, the sessions API, the agent tools or any other screen, so nobody can open a chat or a session with it, send it a message or start work for it. The agent becomes visible in one atomic step (the commit point) after its record, prompt files, team entry and delegation row are all written. If anything fails before that step, the import's own writes are removed and the install is as before (a few harmless internal markers aside, listed in "Rollback contract").
+- **Crash-safe (revision 7).** If the gateway stops in the middle of an import, the next gateway start finishes it (when the commit step had happened) or rolls it back (when it had not), from the journal, before anything can see the agent. The two limits that remain are stated in "Rollback contract → Not guaranteed" (N1–N5): for example, a lock-free workspace list can show the new agent's ID for the few milliseconds of the commit step, and a power cut is only as safe as the disk's flush.
 
 **Why it matters.** This is the first, smallest slice of epic #1094 and the founder demo. It builds the shared engine every later slice adds to: the file format, the safety and integrity checks, the step-by-step import that can be undone, and the new-ID rule. Skills, connectors (MCP servers), memory, workspaces, Replace and Merge, and the Settings screen come in S2–S10.
 
@@ -55,16 +54,18 @@ The founder demo uses a **Main** agent. A native worker is part of S1a too, with
 | DA-2 | **Extracting the workspace-join code from the `create_agent` tool is part of S1**, as named task T-4. S1 is re-estimated and split into S1a (the founder demo) and S1b (hardening the demo does not need). | Without team membership an agent cannot chat (`pkg/sysagent/tools/agent.go` create flow). | "Size and split"; FR-035 |
 | DA-3 | **ADR.md gets a dated amendment** to CLI Minimization ("a thin one-shot task-runner over the engine"): the CLI may also run `export`, `import` and `package` commands, as gateway clients (`inspect`/`verify` read only the package file). No founder decision is needed. | The `records` command is the precedent for an owner one-shot command. | ADR.md "Amendments 2026-11-19" |
 | DA-4 | **Smaller, testable guarantees for the two grill blockers.** Import follows the create rules (B-01). Rollback promises the logical state, with a listed set of allowed internal differences, and covers in-process failures only (B-02, S-04). | A promise the code cannot keep is worse than a smaller promise that is tested. | "Field mapping"; "Rollback contract"; Known Limits L4 |
-| DA-5 | **Round 2 direction: no new machinery.** No isolation of an in-flight import from other readers, no new notifier, no change to REST create's existing behaviour. What the code cannot keep is a Known Limit with the slice that fixes it (L16, L17). | The team lead's direction after grill round 2. | "Rollback contract"; "Field mapping"; Known Limits |
+| DA-5 | **Round 2 direction: no new machinery.** No isolation of an in-flight import from other readers, no new notifier, no change to REST create's existing behaviour. What the code cannot keep is a Known Limit with the slice that fixes it (L16, L17). **Superseded for import visibility and crash recovery by DA-6 (revision 7)**; still in force for "no new notifier" and "REST create unchanged". | The team lead's direction after grill round 2. | "Rollback contract"; "Field mapping"; Known Limits |
+| DA-6 | **Founder P-QR B (2026-11-19, revision 7): all-or-nothing import.** The new agent is invisible until the commit point (pending record, join and publish under one workspace lock, one atomic rename); start-up recovery from the journal is in S1a. | The founder's decision; the grill-r3 gap (other screens could create chats with the new agent before the commit) is closed by construction | "Rollback contract" (revision 7); FR-037, FR-037a, FR-044, FR-049, FR-062 |
+| DA-7 | **Founder P-Q1 B (2026-11-19, revision 7): built-in agents never travel.** Export refuses them (S1 exports one chosen agent, so it refuses rather than skips), a package can never declare one, and import never targets one (it always creates a new custom agent with a new ID). | The founder's decision | FR-011, FR-020; Dataset D4; ADR A10 |
 
 ## Dependence on founder questions (Q1–Q5)
 
 | Question | Could it change S1? | What S1 does now |
 |---|---|---|
-| Q1 Built-in agents | No. S1 refuses to export built-in agents whatever the answer. | Refused with a clear message (FR-011). **[ASSUMED-Q1 = A]** affects only the word "yet" in that message. |
+| Q1 Built-in agents | **Decided: P-Q1 B** (revision 7). | Built-in agents are never exported and never targeted by import (DA-7). The refusal message says they **cannot** be exported (no "yet"). |
 | Q2 What Replace does | No. S1 has New mode only. | Replace and Merge are refused (FR-030). |
 | Q3 Keep Backup & Restore | No. | **[ASSUMED-Q3 = A]** Backup & Restore is unchanged (regression tests). |
-| Q4 Mounted folders | No. | Not applicable. |
+| Q4 Mounted folders | No. **Decided for later slices: P-Q4 C** (ask per mounted folder, default off; slice S5). | Not applicable in S1; not built. |
 | Q5 Claude Code plugins | Only the layout, which ADR D2 already fixes. | **[ASSUMED-Q5 = A]** The S1 layout is ADR D2's; nothing plugin-shaped is written. |
 
 ---
@@ -78,16 +79,17 @@ The original estimate of about 1,800 changed lines was too low. The grill found 
 | T-1 | Contracts: five schemas, three operations, error codes, regenerate | ~250 (YAML) | — | S1a |
 | T-2 | `pkg/omnpkg` format: manifest, tar+zstd writer/reader, decoder limits, universal checks, agent layout checks, external-worker refusal (S1a), verify, inspect | ~670 | ~740 | S1a |
 | T-3 | Shared create function: split HTTP input handling from validation and persistence; coverage check without the config-file rewrite; field mapping; control and alias table; export the tools' shared field applier; field-coverage test | ~350 | ~470 | S1a |
-| T-4 | Workspace-join extraction from `create_agent` (join + self-row under one workspace lock), plus a matching leave helper for rollback | ~150 | ~200 | S1a |
-| T-5 | Gateway handlers, staging lifecycle (including manual-recovery slot release), journal, rollback with live-list reload, single-agent main chat, audit rules, "unfinished import" warning, route with 64 MiB limit, reload outcomes (confirmed/pending), C1-failure branch (including partial C1), neutral C4 line, synchronised rollback cases (including the two home-writer cases) | ~630 | ~1,080 | S1a |
-| T-6 | CLI: `export`, `import`, `package inspect|verify`, shared auto-start step | ~300 | ~250 | S1a |
+| T-4 | Workspace-join extraction from `create_agent` (join + self-row under one workspace lock), plus a matching leave helper for rollback; **revision 7:** plus `JoinWorkspaceTeamAndPublish` (join, self-row, publish callback and on-failure leave in one lock hold) | ~190 | ~300 | S1a |
+| T-5 | Gateway handlers, staging lifecycle, journal, rollback C1–C2 (revision 7: no rollback reload), single-agent main chat, audit rules, "unfinished import" warning, route with 64 MiB limit, publication outcomes (confirmed/pending), C1-failure branch (including partial C1), invisibility probes, **start-up recovery** (`RecoverImports`, boot wiring, orphan sweep, crash seam) | ~710 | ~910 | S1a |
+| T-11 | **Revision 7:** pending agent record in `pkg/agentstore` (`CreatePendingState`, `PublishPending` with directory sync, `DiscardPending`), readers unchanged | ~90 | ~150 | S1a |
+| T-6 | CLI: `export`, `import`, `package inspect|verify`, shared auto-start step (revision 7: no neutral C4 line) | ~290 | ~230 | S1a |
 | T-7 | Frontend: refresh workspace detail and delegation on `agent_created` | ~20 | ~60 | S1a |
-| T-8 | Docs DOC-001…003, including the manual recovery procedure (with the final clean-up and complete session enumeration) | ~210 | — | S1a |
+| T-8 | Docs DOC-001…003, including the (revision 7: much shorter) manual recovery procedure | ~140 | — | S1a |
 | T-9 | External workers (Subagent External): strip runtime values, `needs_secrets`, program-not-set warning; per-runtime field check before the shared applier; replaces the S1a refusal | ~130 | ~190 | **S1b** |
 | T-10 | Unknown element types skipped (forward compatibility) | ~60 | ~100 | **S1b** |
-| | **Total** | **~2,770** | **~3,090** | |
+| | **Total** | **~2,900** | **~3,150** | |
 
-- **S1a ≈ 5,380 lines** (about 2,580 production and docs plus 2,800 tests). Revision 5 adds about 170 lines for the round-4 fixes (partial-C1 setup, the two real home-writer cases, the paged session-recovery test and its documentation). Revision 4 adds about 280 lines for the round-3 fixes (reload outcomes, the C1-failure branch, the alias table, upload-consumption tests, D7 rows 12–18, recovery step 4). Revision 2 said 4,050; that was an arithmetic error (its own numbers added up to 4,530, as grill round 2 noted), and revision 3 adds about 400 lines for the round-2 fixes. That is about twice size L (1,200–2,500). It is not split further, because every task in it is needed for the demo or for safe failure. It delivers the full founder demo for Main agents plus native workers. Until S1b lands, S1a refuses external workers on export **and on upload**, and refuses unknown element types on upload, each with a clear message.
+- **S1a ≈ 5,570 lines after revision 7** (about 2,710 production and docs plus 2,860 tests; revision 6 said 5,380). Revision 7 adds the pending record (T-11), the join-and-publish helper and start-up recovery (about +300 production, +550 tests) and removes the rollback reload, the neutral C4 line, the synchronised other-writer cases (D7 rows 10 old form, 12, 15, 16, 19–21), the session-paging and second-workspace recovery (D15 rows 5–12) and most of the recovery documentation (about −170 production and docs, −490 tests). 🔶 Inferred effort: about +6 to +8 working hours for the new mechanisms and about −4 hours for the withdrawn cases, so roughly +2 to +4 hours net for S1a. Revision 6 S1a figure for reference: 5,380 lines (2,580 production and docs plus 2,800 tests). Revision 5 adds about 170 lines for the round-4 fixes (partial-C1 setup, the two real home-writer cases, the paged session-recovery test and its documentation). Revision 4 adds about 280 lines for the round-3 fixes (reload outcomes, the C1-failure branch, the alias table, upload-consumption tests, D7 rows 12–18, recovery step 4). Revision 2 said 4,050; that was an arithmetic error (its own numbers added up to 4,530, as grill round 2 noted), and revision 3 adds about 400 lines for the round-2 fixes. That is about twice size L (1,200–2,500). It is not split further, because every task in it is needed for the demo or for safe failure. It delivers the full founder demo for Main agents plus native workers. Until S1b lands, S1a refuses external workers on export **and on upload**, and refuses unknown element types on upload, each with a clear message.
 - **S1b ≈ 480 lines (size M)**: external workers (including the per-runtime field check) and forward-compatible skipping. It can land in the same train or the next, and S2 needs T-10 before it ships. The "unfinished import" warning moved from S1b into S1a (T-5), so S1a's manual recovery works without S1b.
 - These are estimates, not measurements.
 - Do not cut further. A "format-only" slice cannot be used, and the demo needs T-1…T-8.
@@ -108,11 +110,15 @@ Requirements and scenarios that belong to S1b are tagged **[S1b]**. Everything e
 | `pkg/gateway/rest_omnipus_guards.go::refuseReservedAgentName`, `refuseAlwaysAskAllow`; `pkg/gateway/submitted_builtin_policy.go::validateSubmittedBuiltinToolPolicyMap`; `pkg/agentmutation/tool_policy.go::ToolPolicyChanges`; `pkg/gateway/gateway_sandbox.go::buildKnownBuiltinToolNames`; `pkg/coreagent/seed.go::NewCustomAgentToolsCfg`, `RestrictForWorkerTier` | calls | Name and tool-policy rules used through the shared function. |
 | `pkg/agentstore/state.go::Store.CreateState`, `Store.MutateStateWithAgentMD`, `Store.DeleteState`, `ValidateAgentID`, `readOptional` | calls | Create writes the record and `SOUL.md`; `AGENT.md` is written separately; delete removes the record and `SOUL.md` but **not** `AGENT.md`. `readOptional` uses `os.ReadFile`, with no size limit and following links, so export needs its own bounded read (FR-018). |
 | `pkg/skills/identity.go::BindGrants`, `EnsureGeneration`, `IsBuiltin`; `pkg/skills/loader.go::ValidSlug` | calls (through `CreateState`) | Binding a skill can stamp a generation marker on an installed skill that has none. This is harmless metadata, and it is an allowed difference after rollback. |
+| `pkg/entity/store.go::Store.scanIDs`, `Store.Get` (revision 7) | reads | `List` scans only `*.json` and `Get` reads only `<id>.json`, so a record stored as `<id>.pending` is invisible to every store reader and every reload without changing them. Basis of the pending record (T-11). |
+| `pkg/agentstore/state.go::CreateState`, `publishStaged`, `stage`, `replace` (revision 7) | **modifies (add siblings)** | T-11 adds `CreatePendingState`, `PublishPending` (rename plus directory sync) and `DiscardPending`, built on the same staging helpers; `CreateState`, `DeleteState` and every reader stay unchanged. |
+| `pkg/gateway/gateway.go` (RunContext: the `seedAndPersistAgentRoster` call), `pkg/gateway/boot_agent_roster.go::seedAndPersistAgentRoster` (revision 7) | **modifies (call added before)** | Start-up recovery (`omnpkg.RecoverImports`) runs once immediately before the first roster load, so before any reload, `ensureBootMains`, `ValidateAgentConfigs` and the HTTP listener. |
+| `pkg/gateway/rest_workspaces.go::handleWorkspaceGet` (locks W), `handleWorkspaceList` (no lock); `src/components/workspaces/team/TeamListView.tsx` (unknown member shown as a removable card) (revision 7) | reads | Why the join and publish run in one lock hold, and the remaining lock-free view N1. |
 | `pkg/entity/store.go::Store.lockPath` | reads | Permanent lock files beside entity records; never deleted (allowed difference). |
-| `pkg/sysagent/tools/agent.go::AgentCreateTool.joinWorkspaceTeam`, `AgentCreateTool.seedSelfEdgeLocked`, `cascadeCleanOneWorkspaceLocked`, `RunAgentDeleteCascade` | **modifies (extract)** / calls | Join and self-row in one workspace lock; `cascadeCleanOneWorkspaceLocked` removes one agent from one workspace's team and edges, re-reading fresh state. Both change the workspace's `updated_at`. `RunAgentDeleteCascade` cleans sessions and tasks for agents with history and is what Delete agent runs (Manual recovery step 1). Rollback does not use it (it keeps home files and stops before record deletion on its own warnings); rollback uses the boundary-based steps C1–C4 in "Rollback contract". `cascadeCleanOneWorkspaceLocked` can fail removing membership or saving delegation, which is why a C1 failure stops the rollback. |
-| `pkg/gateway/rest_sessions.go::restAPI.createSessionHTTP`, `deleteSession`; `pkg/gateway/websocket_chat.go::persistUserMessage` | reads | Other requests can create ordinary sessions and messages for any registered agent, including a provisionally visible import. They live in the shared session store, outside the agent's home, so rollback does not remove them (L16). Ordinary sessions can be deleted by hand; a main chat is protected (409). Note for the chief: the 409 message says the main is "kept until normal retention", which does not match the retention code (next rows); that pre-existing text is not changed in S1. |
-| `pkg/tools/memory.go::RememberTool.Execute`; `pkg/agent/memory_adapter.go::MemoryStoreAdapter.AppendLongTermToRoom`; `pkg/agent/memory.go::NewMemoryStore`, `MemoryStore.AppendLongTermToScope`; `pkg/memrooms/rooms.go::ResolveAgentPrivateRoom`; `pkg/memrooms/memory_file.go::WriteMemoryFile`; `pkg/fileutil/file.go::WriteFileAtomic`; `pkg/agent/loop_config.go::AgentLoop.ReloadProviderAndConfig` | reads (real writer in tests) | A turn's `remember` with room `private` saves a note under the agent's home `agents/X/`. `WriteFileAtomic` creates missing parent folders, so a write after C3 recreates the home. A reload keeps the old registry open for turns in flight, so a confirmed reload does not stop them. Basis for the location-based rollback boundary, AD-6 and D7 rows 19–20. |
-| `pkg/gateway/rest_sessions.go::restAPI.listSessions`, `u18DefaultSessionPageLimit`; `pkg/agent/loop_session.go::AgentLoop.ListAllSessions`; `pkg/session/retention_sweep.go::UnifiedStore.RetentionSweep`, `retentionProtected` | reads | `GET /api/v1/sessions` returns 50 rows by default, applies the `agent_id` filter **after** paging, lists child sessions only with `flat=true`, and returns `next_cursor` while more rows exist. Retention never deletes a protected main chat's identity or newest content; it only expires older rolled content. Basis for Manual recovery step 4. |
+| `pkg/sysagent/tools/agent.go::AgentCreateTool.joinWorkspaceTeam`, `AgentCreateTool.seedSelfEdgeLocked`, `cascadeCleanOneWorkspaceLocked`, `RunAgentDeleteCascade` | **modifies (extract)** / calls | Join and self-row in one workspace lock; `cascadeCleanOneWorkspaceLocked` removes one agent from one workspace's team and edges, re-reading fresh state. Both change the workspace's `updated_at`. `RunAgentDeleteCascade` cleans sessions and tasks for agents with history and is what Delete agent runs (Manual recovery step 1). Rollback does not use it (it keeps home files and stops before record deletion on its own warnings); rollback uses C1–C2 in "Rollback contract" (revision 7). `cascadeCleanOneWorkspaceLocked` can fail removing membership or saving delegation, which is why a C1 failure stops the rollback. |
+| `pkg/gateway/rest_sessions.go::restAPI.createSessionHTTP`, `deleteSession`; `pkg/gateway/websocket_chat.go::persistUserMessage` | reads | Other requests can create ordinary sessions and messages for any registered agent, including a provisionally visible import. They live in the shared session store, outside the agent's home, so rollback does not remove them (L16). Ordinary sessions can be deleted by hand; a main chat is protected (409). Note for the chief: the 409 message says the main is "kept until normal retention", which does not match the retention code (next rows); that pre-existing text is not changed in S1. **Revision 7:** these paths refuse an agent the roster does not have, which is why a pending agent cannot get a session or chat; the invisibility probe (D7 row 10) calls them. |
+| `pkg/tools/memory.go::RememberTool.Execute`; `pkg/agent/memory_adapter.go::MemoryStoreAdapter.AppendLongTermToRoom`; `pkg/agent/memory.go::NewMemoryStore`, `MemoryStore.AppendLongTermToScope`; `pkg/memrooms/rooms.go::ResolveAgentPrivateRoom`; `pkg/memrooms/memory_file.go::WriteMemoryFile`; `pkg/fileutil/file.go::WriteFileAtomic`; `pkg/agent/loop_config.go::AgentLoop.ReloadProviderAndConfig` | reads (real writer in tests) | A turn's `remember` with room `private` saves a note under the agent's home `agents/X/`. `WriteFileAtomic` creates missing parent folders, so a write after C3 recreates the home. A reload keeps the old registry open for turns in flight, so a confirmed reload does not stop them. Basis for the location-based rollback boundary, AD-6 and D7 rows 19–20.  **Revision 7:** basis of withdrawn cases only; kept for history. |
+| `pkg/gateway/rest_sessions.go::restAPI.listSessions`, `u18DefaultSessionPageLimit`; `pkg/agent/loop_session.go::AgentLoop.ListAllSessions`; `pkg/session/retention_sweep.go::UnifiedStore.RetentionSweep`, `retentionProtected` | reads | `GET /api/v1/sessions` returns 50 rows by default, applies the `agent_id` filter **after** paging, lists child sessions only with `flat=true`, and returns `next_cursor` while more rows exist. Retention never deletes a protected main chat's identity or newest content; it only expires older rolled content. Basis for Manual recovery step 4.  **Revision 7:** basis of withdrawn cases only; kept for history. |
 | `pkg/gateway/main_session.go::restAPI.ensureMainSession`, `mainSessionPairEligible` | calls | Creates **one** agent's main chat in one workspace, only when the pair is eligible. Import does **not** use `ensureWorkspaceMains`, which provisions every member of the team. |
 | `pkg/gateway/rest_auth.go::restAPI.triggerReloadAndWaitOutcome`; `pkg/gateway/rest_agents.go::restAPI.deleteAgent` (uses the same reload after a delete); `pkg/gateway/agent_created_broadcast.go::restAPI.emitAgentCreated` | calls | The live agent list is rebuilt from the store by a full reload. Import uses that reload to publish after the commit point, and again after a rollback. `fastAgentUpsert` is not used: it expects the config write that import skips, and would fall back to the same reload anyway. |
 | `pkg/agentstore/store.go::Store.SetNotifier` | reads | The store's change notifier is optional and **not wired** in production at `7faff5291`, so writing or deleting a record does not change the live list by itself. |
@@ -182,9 +188,9 @@ No existing route starts with `/api/v1/packages`. The backup schemas and routes 
 ## API and Data
 
 - **Package file**: tar + zstd. `manifest.json` comes first. In S1 the agent element owns `omnipus/agents/<source-id>/agent.json`, plus `SOUL.md` (native agents) and, when present, `AGENT.md` (ADR D2).
-- **What an import stores** (the complete list, with its compensation in "Rollback contract"): one agent record, its `SOUL.md` and `AGENT.md`, its agent folder, one `core_team` entry and one self-delegation row in one workspace, (Main only) its main chat, an audit entry, and internal markers (a lock file, possibly a skill generation stamp, the workspace's `updated_at`).
+- **What an import stores** (the complete list, with its compensation in "Rollback contract"): one agent record (first as `entities/agents/<id>.pending`, renamed to `<id>.json` at the commit point; revision 7), its `SOUL.md` and `AGENT.md`, its agent folder, one `core_team` entry and one self-delegation row in one workspace, (Main only) its main chat, an audit entry, and internal markers (a lock file, possibly a skill generation stamp, the workspace's `updated_at`).
 - **What an import never stores**: anything in `config.json`, credentials, connectors, other agents, other workspaces' records.
-- **Temporary data**: `$OMNIPUS_HOME/backups/.staging/<staging_id>/` (package payload plus `journal.json`). Agents cannot read or write it.
+- **Temporary data**: `$OMNIPUS_HOME/backups/.staging/<staging_id>/` (package payload plus `journal.json`, states `started` → `committed` → `done`, or `rolled_back` / `rollback_incomplete`). Agents cannot read or write it. Start-up recovery reads every journal there (revision 7).
 
 ---
 
@@ -254,95 +260,109 @@ Columns (all checked at `7faff5291`):
 
 ---
 
-## Rollback contract — resolves B-02, S-04, R2-B-02, R2-S-01
+## Rollback contract — revision 7 (founder P-QR B: all-or-nothing, invisible until committed)
 
-**How the live agent list works today (the basis for this contract).** The list the app and `GET /api/v1/agents` show is the gateway's in-memory roster. It changes only when a reload rebuilds it from the store (`triggerReloadAndWaitOutcome`, the same reload `deleteAgent` uses). The store's own change notifier is not wired in production, so writing a record does **not** add it to the list, and deleting a record does not remove it.
+> **Revision 7 replaces this whole section.** The revision-6 contract (no isolation, rollback by places and records, AD-5/AD-6 residue, final clean-up, compensations C1–C4 with a reload) is withdrawn. The founder decided on 2026-11-19 (P-QR B) that an import behaves like a database transaction: the new agent stays **invisible** until the import has fully succeeded, and an unfinished import is rolled back or completed from the journal at the next gateway start, inside S1a.
 
-**Commit point.** An import is *committed* once the self-delegation row is written. Before that, any failure is rolled back. After it, the steps that remain can only add warnings; they never undo the import.
+**How visibility works today (the basis for the mechanism, read at `a7a2592a8`).** There are three ways the rest of the gateway can see an agent, and each has one entry point:
 
-**Effect inventory and compensation** (in the order of the writes):
+| Who sees an agent | Through | Checked in the code |
+|---|---|---|
+| The live agent list (agent picker, `GET /api/v1/agents`, chat routing, `POST /api/v1/sessions`, WebSocket chat, main-chat eligibility) | the in-memory roster, rebuilt only by a reload from `agentstore.Store.List()` | `pkg/gateway/gateway_boot_roster.go::populateAgentsListFromEntityStoreStrict`; `pkg/gateway/main_session.go::mainAgentEligible` (an ID absent from the live config is not eligible); `pkg/gateway/rest_sessions.go::createSessionHTTP`, `websocket_chat.go::resolveTargetAgent` (registered agents only) |
+| Direct store readers (the `list_agents`/`get_agent` tools, workspace tools checking a member exists, delegation checks, the CLI's agent lookup) | `agentstore.Store.List`, `Get`, `ReadState`, `PeekRevision` | `pkg/sysagent/tools/agent_read.go`, `pkg/sysagent/tools/workspace.go` (`Get(id)`), `pkg/agent/loop_delegation.go`, `pkg/app/app.go` |
+| Workspace readers (Team tab, workspace detail, delegation graph) | the workspace file's `core_team` and the delegation store | `pkg/gateway/rest_workspaces.go::handleWorkspaceGet` (under `workspace.LockID`), `handleWorkspaceList` (no lock); `src/components/workspaces/team/TeamListView.tsx` shows an unknown member ID as a removable card |
 
-| # | Durable effect | Compensation on rollback (run in this order) | After rollback |
+`entity.Store.List` only scans files ending in `.json` (`pkg/entity/store.go::scanIDs`), and `Get` reads `<id>.json` only. So a record under another file name is invisible to the first two rows **without changing any reader**.
+
+### Mechanism (the smallest one that fits the code)
+
+1. **Pending record.** Import writes the agent record as `entities/agents/<X>.pending` (not `.json`), with `agents/X/SOUL.md` and `agents/X/AGENT.md`, in **one** new store call `agentstore.Store.CreatePendingState(id, agent, soul, agentMD)`. It is `CreateState` with a different entity file name and `AGENT.md` staged in the same call (old E4 and E5 become one step). Same locks (skills lock, then the entity lock for X), same skill binding, same staging and verify. No reader of the store can see it: `List`, `Get`, `ReadState`, `PeekRevision` and every reload ignore it, and nothing can run a turn, open a session or a chat, or write into `agents/X/` for an agent the roster does not have.
+2. **Join and publish under one workspace lock.** A new T-4 helper `JoinWorkspaceTeamAndPublish(opts, W, X, publish)` takes `workspace.LockID(W)` **once** and, inside that one lock hold: re-reads W (missing → failure), appends X to `core_team` and writes it, runs the `AfterMembershipWrite` hook, re-reads (X must be a member), seeds X's self-row, then calls `publish`. If any of these fails, it runs the private leave core (`leaveWorkspaceLocked`, the same core `LeaveWorkspaceTeam` and the delete cascade use) **under the same lock hold**, then releases the lock. Every other writer of W (`handleWorkspacePut`, `handleWorkspaceDelegationPut`, the `create_agent` join, workspace detail's main-chat preparation) takes the same lock, so none of them can interleave: nobody can draw an edge to X, prepare a chat for X, or keep an edit that depends on X's membership.
+3. **The commit point is one rename.** `publish` = `agentstore.Store.PublishPending(X)`: refuse if `<X>.json` exists, then `os.Rename(<X>.pending, <X>.json)`, then sync the `entities/agents/` directory (Linux and macOS; see "Not guaranteed" N2 for Windows). Before it, the workspace and delegation directories are synced too, so the membership is durable before the record appears. The rename is atomic: the record is either fully pending or fully published. **This rename is the commit point.** It does not take the entity lock for X (only the import knows X's ID before the rename, applies are serialised by the import lock, and taking an entity stripe while holding `LockID(W)` could deadlock against a path that holds a stripe and then a workspace lock).
+4. **After the commit point** nothing changes from revision 6: P1 live publish by reload (confirmed → P2 `agent_created` → P3 main chat for a Main; error or timeout → `activation: "pending"`), P4 audit. These are warnings, never "nothing imported". `activation: "pending"` means the stored agent is complete but the live list has not confirmed it yet; it is not a partial import.
+
+Lock rule (unchanged from the T-3/T-4 sign-off and extended): no step holds `configMu` together with `LockID(W)`; `CreatePendingState` runs under `configMu` (coverage check E2, then the pending write) and releases it before the join; no reload runs under any of these locks.
+
+### Effect inventory (revision 7)
+
+| # | Durable effect | Visible to others? | Compensation |
 |---|---|---|---|
-| E1 | Journal entry "started, new ID X" | marked "rolled back" (or "incomplete" with leftovers) | Kept until the staging is retired |
-| E2 | Coverage check under `configMu` (no file write) | none needed | `config.json` byte-identical |
-| E3 | Skill generation stamp on an installed skill that had none (through `BindGrants`) | **not undone** | Allowed difference AD-1 |
-| E4 | Agent record `entities/agents/X.json` + `agents/X/SOUL.md` (`CreateState`). Not in the live list. | step C2: `DeleteState` | Absent |
-| E5 | `agents/X/AGENT.md` | step C3: the folder is deleted | Absent |
-| E6 | Agent folder `agents/X/` | step C3: deleted **with everything inside it, whoever wrote it**: the import's files and anything another request wrote there while X was visible (for example a private memory note). The rollback boundary is the folder, not the writer | Absent; a request already running for X can recreate it after C3 (AD-6) |
-| E7 | Entity lock file for X | **never deleted** (it keeps locking correct) | Allowed difference AD-2 |
-| E8 | X added to the workspace's `core_team` | step C1: removed by the shared leave helper (T-4), re-reading the workspace under its lock, so other people's edits are kept | Team identical except AD-3 |
-| E9 | X's self-delegation row | step C1: the same helper removes **every** delegation edge involving X in that workspace, including one another request added while X was visible | Edges identical, except that no edge involves X |
-| — | **Commit point** | — | — |
-| P1 | Live publish: `triggerReloadAndWaitOutcome` | not rolled back. Three outcomes: **confirmed** → go on to P2; **error** or **timeout** (not confirmed) → `activation: "pending"`, **no** `agent_created`, and the result tells the caller to restart the gateway (or wait and check the agent list) before using the agent | — |
-| P2 | `agent_created` (`emitAgentCreated`) | sent **only after P1 is confirmed**; not rolled back | — |
-| P3 | Main chat for X only (`ensureMainSession`, when `mainSessionPairEligible`; Main agents only; only after P1 is confirmed) | not rolled back; failure → warning `main_chat_pending` | — |
-| P4 | Audit entry | failure → warning `audit_failed` | — |
+| E1 | Journal `started` (`staging_id`, `new_agent_id`, `workspace_id`), synced before any other write | No (`backups/` is protected from agents, F13) | marked `rolled_back`, `rollback_incomplete` or `done` |
+| E2 | Coverage check under `configMu`, no file write | — | none |
+| E3 | Skill generation stamp on an installed skill that had none | Harmless marker | not undone (AD-1) |
+| E4 | `entities/agents/X.pending` + `agents/X/SOUL.md` + `agents/X/AGENT.md` (`CreatePendingState`) | **No** | C2 |
+| E7 | Entity lock file for X | Harmless marker | never deleted (AD-2) |
+| E8 | X in W's `core_team` (inside the one lock hold) | Lock-taking readers: no. Lock-free readers: only for the length of the publish step (N1) | C1, under the same lock hold |
+| E9 | X's self-row in W's delegation store (same lock hold) | as E8 | C1, same lock hold |
+| — | **Commit point: `PublishPending(X)` rename** (same lock hold) | from here on X is an ordinary stored agent | — |
+| J | Journal `committed` | — | — |
+| P1–P4 | as revision 6 (reload, `agent_created` only when confirmed, main chat for a Main, audit) | yes | warnings only |
+| J | Journal `done`, staging folder deleted, then the answer | — | — |
 
-**Compensation steps and their failure rules** (no new recovery framework; each rule just says when to stop):
-- **C1**: remove X's team entry and every delegation edge involving X in the workspace, with the shared leave helper (membership first, then the delegation save, which only happens when an edge involving X exists). **If C1 fails**, the rollback **stops here**: C2 and C3 are skipped, so the record and folder stay. C1 can fail in two places: the membership removal fails (X is still a member), or the membership is removed and then the delegation save fails (**partial C1**: X is no longer a member, but an edge involving X remains). Either way X stays deletable by the normal Delete agent, which cleans team entries and edges naming X in every workspace (`cascadeCleanAgentWorkspaceReferences`). The answer is `import_rollback_incomplete` with `details.failed_step: "C1"`.
-- **C2**: `DeleteState` for the record and `SOUL.md`. `DeleteState` removes the entity first and `SOUL.md` second, so a **partial C2** leaves at most `SOUL.md` in the folder and no readable record. In that case the rollback continues with C3 (the folder is inside the rollback boundary), and only reports incomplete if C3 also fails.
-- **C3**: delete the folder `agents/X/` with everything in it, whoever wrote it. If it fails, the leftover is folder-only.
-- **C4**: always attempted, whatever happened in C1–C3: a full reload (`triggerReloadAndWaitOutcome`). Confirmed → the live list matches the disk. **Error or timeout** → the answer says so (`details.activation: "pending"`), and the CLI adds, after the outcome line (complete or incomplete rollback), the neutral line "The gateway did not confirm that it reloaded its agent list. Restart the gateway, then check the agent list." It never says "nothing was imported" by itself, because after a C1 failure the record is still there.
+(E5 and E6 of revision 6 are folded into E4. Numbering is kept so test names and journal fields stay stable.)
 
-So a leftover inside the rollback boundary is always one of these shapes, each covered by Manual recovery: **(a)** record and folder present, X still a member (C1 membership removal failed) or not (C2 failed); **(a2)** record and folder present, X not a member, an edge involving X remains (partial C1); **(b)** only the folder `agents/X/`, possibly with `SOUL.md` (partial C2, or C3 failed); **(c)** nothing; **(d)** after a complete rollback, `agents/X/` recreated by a request that was already running for X (AD-6).
+### Rollback (gateway running)
 
-The broad `RunAgentDeleteCascade` is not used during rollback. It keeps unrelated agent-home files (leaving E5/E6 behind) and stops before record deletion when its own clean-up warns. The absence of `agent_created` is **not** proof that X has no history: other requests may have used X while it was visible (next paragraph).
+| Step | What | When it runs | Failure rule |
+|---|---|---|---|
+| C1 | Remove X from W's `core_team` and every edge involving X from W's delegation store, with the shared leave core | Only when the membership write (E8) was attempted. It runs **inside** `JoinWorkspaceTeamAndPublish`, under the same lock hold, before the lock is released | A failure (membership removal, or partial: membership removed then the delegation save fails) gives `import_rollback_incomplete`, `failed_step: "C1"`. **C2 still runs** (the record is invisible, so it is no longer needed as a recovery handle) |
+| C2 | `agentstore.Store.DiscardPending(X)`: delete `X.pending`, then delete `agents/X/` with everything in it. Refuses if `X.json` exists (it never deletes a published agent). Idempotent | Always, when E4 was attempted | A failure gives `import_rollback_incomplete`, `failed_step: "C2"` (leftovers named) |
 
-**What rollback covers, and what it does not (Known Limit L16).** The rollback is defined by the **places and records it removes, not by who wrote them**. An import is not hidden from other requests while it runs (DA-5: no isolation layer). Between E4 and C4, any reload can put X in the live list, and then other requests can use X like any agent. So the rule is:
-- **Inside the boundary, removed whoever wrote it:** X's record (`entities/agents/X.json`, C2), X's home folder `agents/X/` **with everything inside it** (C3; that includes content other requests wrote there while X was visible, for example a private memory note saved by a turn's `remember` tool), X's team entry and every delegation edge involving X in the import's workspace (C1).
-- **Outside the boundary, kept:** everything other requests created for X elsewhere. At `7faff5291` that includes at least:
-  - **ordinary sessions** for X created through the sessions API (`POST /api/v1/sessions`, `createSessionHTTP`; it needs a registered agent, not workspace membership), with their folders, metadata and history, in the shared session store;
-  - **new chats with messages**: a chat message sent to X over the WebSocket starts a new session in the shared store and saves the message before the agent is asked to answer (`websocket_chat.go`: `resolveTargetAgent`, `mintSession`, `persistUserMessage`), so the leftover can be a **populated** chat;
-  - **X's main chat** in a workspace, if an open workspace view prepared it after E8 (`handleWorkspaceGet` → main-session preparation), plus any messages sent to it;
-  - anything else such a request writes for X outside `agents/X/` (for example membership or edges for X in a workspace other than the import's, task or audit entries, or files a tool call wrote elsewhere).
-- **Writers already running can come back after C3:** a turn admitted before compensation keeps running with X's in-memory settings (a reload, even a confirmed one, keeps the old registry for turns in flight and does not stop them). If it writes into X's home after C3, for example a private memory note, the writer recreates `agents/X/` (it creates missing parent folders). That content is AD-6. It is removed by the **final clean-up** (Manual recovery), which first stops the gateway so that no writer for X is left.
+- **C3 and C4 are retired.** The folder is part of C2. No rollback reload is needed: X was never in the live list, so there is nothing to remove from it, and the rollback answer never carries `activation`.
+- **Because X was never visible, nothing outside the import's own writes can refer to X.** No session, chat, main chat, transcript, memory note, task, audit entry by others, or membership or edge in any other workspace can exist for X (no reader could see it; W's writers were held off by the lock). So **AD-5 and AD-6 disappear, and so do the "what other screens created" manual-recovery list (revision-6 steps 4 and 5), the final clean-up, and Known Limit L16 as written.**
+- An incomplete rollback leaves only invisible leftovers (a pending record, a folder with no record) or, after a C1 failure, X's ID in W's `core_team` or an edge involving X **with no record behind it** (an unknown member, N3). The staging moves to `needs-cleanup` and the journal stays; the next gateway start finishes the rollback (below).
 
-What the owner can do: once C4 is confirmed (or after a restart) X is no longer in the live list, so **no new work** can start for X; work already running ends on its own or with the gateway stop of the final clean-up; then the leftover folder (if any) and the ordinary sessions are deleted (Manual recovery steps 2 and 4). A protected main chat cannot be deleted in S1 and is **not** removed by normal retention either: its identity and newest content can remain indefinitely (L16). S6 adds the automatic clean-up. These limits apply only when another request used X during the short window; the normal CLI import with nobody else using the install leaves no such residue. **Founder acceptance of this narrower promise is still open** (Clarifications, open founder question; the chief owns it).
+Shapes of a leftover (all finished by start-up recovery): **(a)** C1 failed: X's ID (and possibly its self-row) still in W, record and folder discarded; **(b)** C2 failed: pending record and/or folder present, nothing in W; **(c)** nothing.
 
-**Allowed differences after a rollback** (the complete list):
-- **AD-1**: a skill generation stamp added to an installed skill that had none.
-- **AD-2**: an entity lock file for the new ID.
-- **AD-3**: the workspace's `updated_at` timestamp.
-- **AD-4**: the audit log, the gateway log, and the staging folder's journal.
-- **AD-5**: **residue outside the rollback boundary** that requests other than the import wrote for X while X was visible (L16): sessions in the shared session store (ordinary sessions and chats, with or without messages), transcripts, main chats, membership or delegation edges for X in workspaces other than W, task or audit entries, files written outside `agents/X/`. Not removed by the rollback; ordinary sessions are removed by Manual recovery step 4 and other workspaces' references by step 5; a protected main chat stays (L16).
-- **AD-6**: **home content recreated after C3** by a request already running for X (for example a private memory note written after the folder was deleted). Only possible when such a request was admitted while X was visible. Removed by the final clean-up (Manual recovery).
+### Start-up recovery (in S1a; replaces revision 6's "no automatic recovery", L4)
 
-Content another request wrote **inside** `agents/X/` **before** C3 is not a difference: C3 deletes it, by design.
+`omnpkg.RecoverImports(home, opts)` runs **once at gateway start, immediately before the first roster load** (`pkg/gateway/gateway.go`, before `seedAndPersistAgentRoster`), so before any reload, `ensureBootMains`, `ValidateAgentConfigs` or HTTP listener. Nothing can see or use a half-imported agent while it runs. For every `backups/.staging/*/journal.json` whose state is not `done` or `rolled_back`, it decides from the disk, not from the journal state:
 
-**What the rollback oracle checks** (`TestPackagesApply_Rollback`, real store, **wired** reload; a test setup where the reload pipeline is not configured counts as "confirmed" by design and cannot prove roster synchronisation, so it is not used for checks 1 and 7):
-1. The set of agent IDs in the store equals the set before. **If** C4 was confirmed, `GET /api/v1/agents` after the answer equals the set before; if it was not confirmed, the answer carries `details.activation: "pending"` and the oracle checks that instead.
-2. Every pre-existing agent's record, `SOUL.md` and `AGENT.md` are byte-identical to before.
-3. The import workspace W's `core_team` and delegation edges equal what they were before, plus any edit another writer completed during the import, **minus** X's team entry and every edge involving X. **Every other workspace** equals what it was before plus any edit another writer completed during the import; X references another request added there (membership or edges) are AD-5 residue, not removed by the rollback (D7 row 21).
+| On disk | Meaning | Recovery |
+|---|---|---|
+| `entities/agents/X.json` absent | Not committed | **Roll back**: `LeaveWorkspaceTeam(W, X)` (W missing counts as done, sign-off C-7), then `DiscardPending(X)`; audit "import rolled back at start-up"; journal `rolled_back`; staging folder deleted |
+| `X.json` present, X in W's team with its self-row | Committed; only P1–P4 or the journal update were lost | **Finish**: journal `done`; audit "import completed at start-up"; staging deleted. The roster load that follows lists X; `ensureBootMains` creates a Main's chat. No `agent_created` (nobody is connected yet) |
+| `X.json` present, membership or self-row missing | Committed, but storage lost the earlier workspace write (only possible when the disk reorders writes despite the syncs, N2) | **Re-join** with `JoinWorkspaceTeam(W, X)` (idempotent). If that fails, **roll back** the published record too (`LeaveWorkspaceTeam`, then delete `X.json` and `agents/X/`): this is safe because recovery runs before anything has loaded X, and no success answer was ever sent (the answer is sent only after the staging is deleted) |
+| `entities/agents/*.pending` with no journal naming it | Orphan (for example restored from a backup taken during an import) | `DiscardPending`; log line |
+
+A recovery step that fails is logged, the staging stays `needs-cleanup`, and boot continues. X stays invisible (no `X.json`), except that a C1 leftover keeps X's ID as an unknown member of W until a later start succeeds. The next upload shows `unfinished_import_found` with the agent ID (FR-044). The next start tries again. Recovery is idempotent: running it twice, or after a partial run, gives the same end state.
+
+### What the rollback oracle checks (revision 7; `TestPackagesApply_Rollback`, `TestPackages_StartupRecovery`; real store, wired reload)
+
+1. The set of agent IDs in the store equals the set before; no `entities/agents/*.pending` file remains; after a **forced and confirmed** reload, `GET /api/v1/agents` equals the set before.
+2. Every pre-existing agent's record, `SOUL.md` and `AGENT.md` are byte-identical.
+3. **Every** workspace's `core_team` and delegation edges equal what they were before, plus any edit another writer completed during the import (that writer waited for W's lock). No workspace names X.
 4. `config.json` is byte-identical.
-5. `entities/agents/X.json` does not exist, and `agents/X/` does not exist, **including anything another request wrote there before C3** (D7 row 19). Only exception: when the test itself lets an already-admitted writer write after C3 (D7 row 20), `agents/X/` holds exactly the note file with the expected content in X's private room `agents/X/.omnipus/`, plus the derived artifacts that this real write creates: the persistent search index under `agents/X/.omnipus/.index/bleve/` (cold index, opened on this write) and any signature bookkeeping file the writer keeps in the room. The test identifies that exact list from a control run of the same writer into an empty folder; it does not accept any other file. In particular the record, `SOUL.md`, `AGENT.md` and any other home content must be absent (AD-6). After the final clean-up, the whole `agents/X/` does not exist.
-6. Every other file under the data folder is byte-identical, except AD-1…AD-4, the AD-5 residue that the test itself created through other requests outside the boundary, and AD-6 in D7 row 20 (and nothing else for X).
-7. No `agent_created` frame for X was sent.
+5. `entities/agents/X.json`, `entities/agents/X.pending` and `agents/X/` do not exist.
+6. Every other file under the data folder is byte-identical, except AD-1…AD-4.
+7. No `agent_created` frame for X was sent, and **no session, main chat or transcript names X** (scan of the session store).
 
-**Synchronised cases for the non-isolated window** (lock-compatible; test hooks, no sleeps, the production lock never bypassed):
-- **D7 row 10 (reader)**: E4 done; an unrelated reload is forced and confirmed (X is now listed); the self-row write fails; the join helper releases W's lock; a hook holds C1; the test then sends the real workspace-detail request for W and **waits for its HTTP response** (it may prepare X's main chat); only then is C1 released. Expected: `import_rolled_back`; checks 1–7; the residue is exactly X's main chat in W (if the read prepared one), reported by the test as AD-5. The test asserts the read actually completed before C1 (response received, hook order recorded), so it cannot pass without exercising the race.
-- **D7 row 12 (populated session)**: same start (E4, confirmed reload, self-row fails, join lock released, C1 held). The test then (a) creates an **ordinary** session for X through `POST /api/v1/sessions`, and (b) sends one real chat message to X over the WebSocket and waits until that message is saved in the transcript; then C1 is released. Expected: `import_rolled_back`; checks 1–7 pass; both sessions and the saved message **still exist** (AD-5), and the answer's note says other requests' sessions are not removed. After C4 is confirmed, a new chat message to X is refused because X is no longer a registered agent. Following Manual recovery step 4 deletes both sessions with `DELETE /api/v1/sessions/<id>`, after which no session for X except a protected main chat remains.
-- **D7 row 14 (partial C1, reachable delegation-save fault)**: E4 and E8 done; the self-row write fails; the join helper releases W's lock; a hook holds C1. The test then makes a **separate valid graph edit** through `PUT /api/v1/workspaces/W/delegation` with the current graph plus an edge A → X (A an existing member of W; the architect confirms the exact valid edit when fixing the T-4 shapes) and waits for its 200, so an edge the leave helper must remove is persisted. A fault is injected into C1's own delegation save; C1 is released. Expected: `import_rollback_incomplete`, `failed_step: "C1"`; the test asserts that the save fault was actually reached (hook counter), that the membership removal had already succeeded (X not in W's team), that the edge A → X is still stored, that C2 and C3 did not run (record and folder present), and that C4 was attempted. This is shape (a2); D15 row 8 recovers it.
-- **D7 row 19 (home write before C3)**: E4, unrelated reload confirmed, self-row fails, join lock released, C1 held. The test constructs X's writer while the home exists and saves a private memory note for X with the **real writer chain a turn uses** (`RememberTool.Execute` with room `private`, over `MemoryStoreAdapter` and `NewMemoryStore` for X's home; no model call) and asserts that the tool reported success and the note file exists under `agents/X/`. Then C1 is released. Expected: `import_rolled_back`; checks 1–7; the note was deleted with `agents/X/` (check 5); the answer's note says content in the agent's home folder is deleted.
-- **D7 row 20 (home write after C3)**: same start. The test **constructs and keeps** X's writer (`NewMemoryStore` for X's home, `MemoryStoreAdapter`, `RememberTool`) **before C3**, with no index opened yet (cold index; constructing it after C3 would itself recreate folders and prove nothing). A hook holds the rollback after C3 and before C4; the test asserts `agents/X/` is absent at that moment, then makes the private `remember` call through the kept writer and asserts the tool reported success; the write recreates `agents/X/`. Then C4 runs (confirmed). Expected: `import_rolled_back`; checks 1–7 with the check-5 exception: `agents/X/` holds exactly the note file with the expected content in X's private room `agents/X/.omnipus/`, plus the derived artifacts that this real write creates: the persistent search index under `agents/X/.omnipus/.index/bleve/` (cold index, opened on this write) and any signature bookkeeping file the writer keeps in the room. The test identifies that exact list from a control run of the same writer into an empty folder; it does not accept any other file. In particular the record, `SOUL.md`, `AGENT.md` and any other home content must be absent (AD-6). Final clean-up: the writer's work and index handles are test-owned, so the test stops its work and closes those handles itself when it simulates the gateway stop (a real gateway stop is not claimed to close a test-owned store); then Manual recovery step 2 deletes the folder, and the test asserts the whole `agents/X/` is absent. No fake or file-only writer is used, and no production memory-writer change is needed.
+For an incomplete rollback the oracle runs after the simulated restart and start-up recovery (D7 rows 6, 13, 14, 18).
 
-**Incomplete rollback.** If a compensation step fails, the response is 500 `import_rollback_incomplete` with `details.failed_step`, `details.leftovers`, `details.agent_id`, `details.staging_id` and (when C4 was not confirmed) `details.activation`. The CLI prints "Import failed and could not be fully undone. Agent <id>, staging <staging_id>. Other screens may also have used this agent. See 'Recover from a failed import' in the CLI guide." The staging moves to `needs-cleanup`; it is kept, never expires, and holds an upload slot until it is retired (below).
+**Invisibility probe** (asserted at every hook point before the commit point: after E4, after the membership write, after the self-row, before the rename; D7 row 10): a forced, confirmed reload does not list X; `GET /api/v1/agents/X` is 404; `POST /api/v1/sessions` with `agent_id` X and a WebSocket chat to X are refused as an unknown agent; `agentstore.List` and the `list_agents` tool lack X; a workspace-detail request for W sent while the helper holds W's lock completes only after the helper returned (recorded order). Then the fault is injected and the oracle runs.
 
-**Gateway stop during apply (S1 limit, L4).** No automatic recovery; start-up recovery belongs to S6. The journal stays in the staging folder. On every upload, the gateway checks the staging folders under its registry lock. A folder whose journal is unfinished produces the preview warning `unfinished_import_found`, with the agent ID and the staging folder name (S1a). Such a staging is never cleaned up automatically.
+**Allowed differences after a rollback** (complete list): **AD-1** a skill generation stamp; **AD-2** the entity lock file for X; **AD-3** W's `updated_at` and revision (a client that read W before the import gets a revision conflict on its next save and must reload W); **AD-4** the audit log, the gateway log and the journal. AD-5 and AD-6 are withdrawn.
 
-### Manual recovery (S1a; documented in DOC-001)
+### Not guaranteed (stated plainly)
 
-Where to find the agent ID: the `import_rollback_incomplete` answer, the `unfinished_import_found` warning on the next upload, the audit log, or `new_agent_id` in `$OMNIPUS_HOME/backups/.staging/<staging_id>/journal.json`.
+| # | What is not guaranteed | Why | Test seam |
+|---|---|---|---|
+| N1 | **Lock-free workspace readers can see X's ID during the publish step.** `GET /api/v1/workspaces` (list) and the delegation GET read without W's lock. Between the membership write and the rename (one lock hold, normally milliseconds) they can return W with X's ID in `core_team` and X's self-row. If the publish then fails, the ID disappears again with C1. Nothing can act on it: X has no readable record, so no chat, session or main chat can start, and every writer of W waits for the lock. An open Team tab is not prompted to refetch (no `agent_created`), but a refetch that happens exactly then would show one unknown-member card briefly. | Making these readers filter pending IDs means touching every lock-free workspace reader; the founder's harm case (chats created before the commit) is closed without it | `AfterMembershipWrite` hook holds the step; the test asserts session create, WebSocket chat and main-chat preparation for X are refused at that moment (D7 row 10) |
+| N2 | **A power cut is safe only as far as the storage honours flushes.** The rename is atomic and the directories are synced before the answer, so after a crash the record is either pending (rolled back at start) or published (finished at start). Not guaranteed: a drive or virtual disk that acknowledges a flush it has not done, and **Windows**, where Go cannot sync a directory: there, an import answered as successful could, after a power cut, come back as not committed and be rolled back at the next start. | Operating-system and hardware limits, shared by every Omnipus write | Crash seam `crashAt(step)` (nil in production): the apply stops at the named step without running compensations, as a crash would; the test then runs `RecoverImports` on the same home (D7 rows 23a–23f). A `syncDir` seam counts the directory syncs and asserts they happen before the answer. A real power cut is not simulated |
+| N3 | **An incomplete rollback can leave X's ID as an unknown member of W until the next successful start** (C1 failed because W's file or the delegation store could not be written). The agent itself stays invisible. | The disk refused the write; there is nothing else to write to | Leave seams `WriteWorkspace` / `SaveDelegation` (D7 rows 13–14), then a restart without the fault |
+| N4 | **If start-up recovery cannot finish a committed import** (the re-join and the roll-back both fail), the published agent is loaded as an ordinary agent without its team entry, and the upload warning stays. | Same disk failure | Recovery seams (D7 row 23g) |
+| N5 | After the commit point, `activation: "pending"`, `main_chat_pending` and `audit_failed` stay warnings (revision 6, unchanged). The agent is complete and durable; only its live listing or its chat may lag. | Live publication is a separate step by design | D7 rows 7–9, 17 |
 
-1. **Record present** (shapes a and a2; the agent shows in the agent list; if not, restart the gateway, which reloads the list from the store): delete it with **Delete agent** on the Team tab. From a script: `GET /api/v1/agents/<id>` to read its `revision`, then `DELETE /api/v1/agents/<id>?revision=<revision>`. The normal delete also removes team entries and delegation edges naming X in every workspace, and the sessions it owns (its usual cascade). It keeps unrelated home files, so continue with step 2 if `agents/<id>/` is still there.
-2. **Only the folder is left** (shape b; shape d, a folder recreated after a complete rollback; or the folder left after step 1): with the gateway **stopped**, delete the folder `$OMNIPUS_HOME/agents/<id>/`, then start the gateway. Stopping the gateway ends every running turn, so no writer for X can recreate the folder afterwards; X is not loaded again because its record is gone. Because C2 only runs after C1 succeeded, no membership is left to clean in shape b.
-3. **Retire the journal and free the slot**: delete the staging folder `$OMNIPUS_HOME/backups/.staging/<staging_id>/`. On the next upload, the registry drops every `needs-cleanup` or orphan entry whose folder is gone, so the slot is free without a restart.
-4. **Sessions outside the rollback boundary** (AD-5; only after a rollback that removed the record, so step 1 cannot run). Run it after step 2's gateway stop and start (or, if step 2 was not needed, once C4 is confirmed and no work for X is still running). **Precondition: a stable session list for the whole enumeration.** The list is paged by numeric offset over the current, recency-ordered set, so any session created, deleted or updated by anyone (other screens, scripts, background work), not only by X, can shift rows between pages and hide one of X's sessions while every answer still succeeds. So first pause other session activity on the install (close other screens and scripts; do not chat). Then enumerate **every** session for X with the existing API and **collect the IDs before deleting anything**: request `GET /api/v1/sessions?flat=true&agent_id=<id>&offset=0`; keep the listed IDs; if the answer has `next_cursor`, request again with `offset=<next_cursor>`; continue until an answer has no `next_cursor`. `flat=true` is needed so child sessions are listed too. Do **not** stop because a page lists nothing for X: the agent filter is applied after paging. If any request fails, or an answer reports degradation, stop and report that the clean-up is not complete. Then delete each collected session with `DELETE /api/v1/sessions/<session_id>` (or its Delete in the app); a 404 for a child already removed with its parent counts as deleted. Then run a **fresh verification scan** the same way from `offset=0`. If it finds a session for X, repeat the pass. The clean-up is **complete only when a verification scan under the stable-list condition finds none**; if other activity could not be paused, report it as **incomplete/unverified**, however many answers succeeded. A **main chat** for X is protected: it is hidden from the list once X is no longer a member, the sessions API refuses to delete it (409), and normal retention does **not** remove it: retention only expires older rolled content, so its identity and newest messages can remain **indefinitely** in S1. It belongs to an agent that no longer exists and cannot be chatted with. This is the remaining residue S1 accepts (L16).
-5. **Workspace references outside the import workspace** (AD-5; only when the record is gone, because `DELETE /api/v1/agents/<id>` answers 404 for an agent that is no longer loaded, so step 1 cannot clean them). Another request may have added X to a second workspace, or drawn an edge to or from X there, while X was visible. With the existing workspace API: list every workspace with `GET /api/v1/workspaces?status=all`; for each one, read it and its current graph and revision; where X is in `core_team` or in an edge, save it with `PUT /api/v1/workspaces/<id>` carrying that `revision`, the `core_team` without X and the `delegation` without the edges involving X, everything else unchanged. Unrelated members and edges stay. An error, a partial save or a revision conflict means the clean-up is not complete: read the workspace again and retry. Never delete or replace the workspace, and never recreate X's record. No new endpoint is used.
+### Manual recovery (S1a; documented in DOC-001; revision 7)
 
-**Final clean-up** (when the answer says other screens may have used X, or `agents/<id>/` is there after a rollback): step 1 if the record is present, then step 2 (gateway stopped), then step 5 (if the record was already gone), then step 4 (stable list, verification scan), then step 3. Its end state covers only the named places: no record, no home folder, no team entry or edge for X in any workspace, no ordinary session for X (verified by a scan under the stable-list condition, otherwise reported unverified), the slot free; a protected main chat (if one was prepared) remains. It is **not** an all-data guarantee: task, audit or tool-output effects other requests made for X elsewhere (AD-5) are not cleaned in S1.
+Normally nothing is manual: restarting the gateway finishes or rolls back any unfinished import, and frees its upload slot. Manual steps are only for a start-up recovery that keeps failing (for example a read-only disk). Where to find the agent ID: the `import_rollback_incomplete` answer, the `unfinished_import_found` warning, the gateway log, or `new_agent_id` in `$OMNIPUS_HOME/backups/.staging/<staging_id>/journal.json`.
 
-Test `TestPackages_ManualRecovery` runs every shape of Dataset D15 (record present after a C1 failure, after a partial C1, after a `DeleteState` failure; folder-only after a partial C2; folder recreated after a complete rollback; retained staging after a restart; ordinary-session residue, including a session beyond the first page and a child session; an unrelated session deleted between page requests; X references in a second workspace after the record is gone). It follows the documented steps through the REST API (not direct store enumeration), then asserts that a new upload is admitted (201) with all 5 slots available, and that only a protected main chat (if any) remains for X.
+1. Fix the cause the gateway log names, then restart the gateway. Check the log line "import rolled back at start-up" or "import completed at start-up".
+2. Only if it still fails: with the gateway **stopped**, delete `$OMNIPUS_HOME/entities/agents/<id>.pending` (if present), the folder `$OMNIPUS_HOME/agents/<id>/` (only if `entities/agents/<id>.json` does **not** exist) and the staging folder `$OMNIPUS_HOME/backups/.staging/<staging_id>/`. Start the gateway.
+3. If the import's workspace still lists the ID as an unknown member (shape a): remove it on the Team tab (an unknown member shows as a removable card), or with `PUT /api/v1/workspaces/<id>` carrying the current `revision`, the `core_team` without the ID and the `delegation` without edges naming it.
+4. If `entities/agents/<id>.json` exists (N4), delete the agent with **Delete agent**, which also cleans its team entries and edges.
+
+Test `TestPackages_ManualRecovery` runs Dataset D15 (revision 7).
 
 ---
 
@@ -360,7 +380,7 @@ The owner of install A wants their agent "Writer" on another computer. One comma
 1. **Given** a custom agent "Writer", **When** the owner exports it, **Then** the file holds the manifest followed by Writer's record, prompt and (if present) instructions, and the command reports success.
 2. **Given** Writer's record has a home path, timestamps, skill grants and retired delegation fields, **When** it is exported, **Then** those are absent, and every field marked "kept" in Field mapping is present.
 3. **[S1b]** **Given** Writer is an external worker with environment overrides, extra arguments and a program path, **When** it is exported, **Then** none of those values are in the file, and the manifest lists the override names as secrets to re-enter.
-4. **Given** a built-in, system or shipped subagent agent, **When** the owner exports it, **Then** export is refused, saying built-in agents cannot be exported yet, and no file is written.
+4. **Given** a built-in, system or shipped subagent agent, **When** the owner exports it, **Then** export is refused, saying built-in agents cannot be exported (revision 7, P-Q1 B: never, so no "yet"), and no file is written.
 5. **Given** an agent that does not exist, a name two agents share, or a native agent with a blank prompt, **When** the owner exports, **Then** export is refused with a message naming the problem, and no file is written.
 6. **Given** the output file exists, **When** the owner exports without `--force`, **Then** export is refused and the existing file is unchanged. With `--force`, the old file is replaced only when the new one is complete.
 7. **Given** an agent's prompt or instructions file is a link, unreadable, or larger than 1 MiB, **When** the owner exports, **Then** export is refused naming the file, and no package is produced that the import would refuse anyway.
@@ -381,18 +401,18 @@ The owner wants to see what a file contains, and whether it was damaged or chang
 
 ### User Story 3 — Import the agent as a new agent (Priority: P0)
 
-On install B the owner imports `writer.omnpkg`, sees what will be added, confirms, and gets Writer with a new ID, in the default workspace (or a named one). A Main agent is ready to chat; a native worker is a team member that a Main can delegate to once the owner draws that line. If the import fails while the gateway is running, the import's own writes are removed and the agent list matches the disk again (Rollback contract, with its limits).
+On install B the owner imports `writer.omnpkg`, sees what will be added, confirms, and gets Writer with a new ID, in the default workspace (or a named one). A Main agent is ready to chat; a native worker is a team member that a Main can delegate to once the owner draws that line. Until the import has fully succeeded nobody else can see the agent; if it fails, the import's own writes are removed, and if the gateway stops in the middle, the next start finishes or rolls it back (Rollback contract, revision 7).
 
 **Why this priority**: The other half of the demo, and where data could be damaged.
 
-**Independent Test**: Two data folders. Export from one and import into the other. Compare against "Field mapping". Inject a fault after each write E4–E9 and apply the rollback oracle.
+**Independent Test**: Two data folders. Export from one and import into the other. Compare against "Field mapping". Inject a fault after each write E4–E9 and at the commit rename, and apply the rollback oracle (revision 7); stop the apply with the crash seam at each step and check start-up recovery.
 
 **Acceptance Scenarios**:
 1. **Given** a valid package, **When** the owner uploads it, **Then** they see a provisional preview (agent to add, proposed name, references that will be dropped, secrets to re-enter), and nothing on B has changed.
 2. **Given** the preview, **When** the owner confirms in New mode, **Then** Writer exists on B with a new ID, a record matching "Field mapping", the default workspace's team membership and its own delegation row. **When the live-publish reload is confirmed**, it is in the agent list at once; when it is not (error or timeout), the result says `activation: pending` and tells the owner to restart the gateway or wait and check the list (the agent is stored and is not reported as absent).
 3. **Given** B already has a "Writer" (any letter case), **When** the owner imports, **Then** the new agent is "Writer (imported)" and the existing Writer is untouched.
 4. **Given** the owner names a workspace, **When** they confirm, **Then** the agent joins that workspace.
-5. **Given** a write fails after the import has started writing, **When** the gateway is still running, **Then** the rollback removes the new agent's record, its home folder with everything inside it (whoever wrote it), its team entry and the delegation lines to or from it in the import workspace, a reload is requested, and the owner is told nothing was imported, whether the reload was confirmed, and that chats or sessions other screens may have created for the agent stay and that work already running may write into the home folder again (Rollback contract, L16, final clean-up).
+5. **[r7 CHANGED]** **Given** a write fails before the commit point, **When** the gateway is still running, **Then** the rollback removes the pending record, the home folder, the team entry and the delegation row, and the owner is told nothing was imported. Nothing else can refer to the agent, because it was never visible (Rollback contract, revision 7).
 6. **Given** the package refers to skills, connectors or tools B does not have, **When** the owner imports, **Then** those are left out, the agent is still imported, and each left-out item is listed.
 7. **Given** a damaged, changed, too large, unsafe, newer or non-creatable package, **When** the owner uploads it, **Then** it is refused with a reason, and nothing is kept or changed.
 8. **Given** the owner asks for Replace or Merge, **When** they confirm, **Then** the import is refused: only New mode is available.
@@ -401,7 +421,8 @@ On install B the owner imports `writer.omnpkg`, sees what will be added, confirm
 11. **Given** a package with a native worker (Subagent), **When** the owner imports it, **Then** the worker is in the workspace team with only its own delegation row, it gets **no** main chat, no other agent gains a delegation line to it, and the result says "This worker is reached by delegation: draw a line to it from a Main agent in the Team graph." **And when** the owner then adds that line with the existing Team graph edit, **Then** that Main's delegation directory lists the worker.
 12. **Given** a Main agent is imported into a workspace where another member Y has no main chat, **When** the import completes, **Then** the imported agent has exactly one main chat in that workspace, and Y's chat state is unchanged. A failure to create the main chat is a warning (`main_chat_pending`); the chat is created when the owner opens it.
 13. **[S1a only]** **Given** a valid, checksummed package whose agent is an external worker (with or without environment overrides, extra arguments or a program path), **When** it is uploaded to S1a, **Then** it is refused before the preview with 422 `external_worker_not_supported_yet`, and nothing is kept.
-14. **Given** an import left something behind (incomplete rollback or a gateway stop), **When** the owner follows the manual recovery in the docs, **Then** the agent and its folder are gone, the staging is retired, and a new upload is admitted.
+14. **[r7 CHANGED]** **Given** an incomplete rollback, **When** the gateway is restarted (or, if start-up recovery keeps failing, the owner follows the short manual recovery), **Then** the leftovers are gone, the staging is retired, and a new upload is admitted.
+15. **[r7 NEW]** **Given** an import in progress, **When** any other screen, script, reload or agent tool looks for agents before the commit point, **Then** the new agent is not there and cannot be chatted with or used; **and given** the gateway stops before the import ends, **When** it starts again, **Then** the import is finished (commit step done) or rolled back (not done) before any agent is loaded.
 
 ### User Story 4 — Same steps through the REST API (Priority: P1)
 
@@ -430,8 +451,8 @@ No new screen in S1 (Settings → Data is S8). There is **one small change to an
 | `omnipus export` | "Exporting Writer…" | `error: <reason>`, exit 1/2; an existing output file is untouched | n/a (atomic) | `Exported "Writer" (1 agent, 3 files, 4.2 KB) to writer.omnpkg` + the notice "SOUL.md and AGENT.md are copied as they are; check them for pasted secrets before sharing" |
 | `omnipus package inspect` | — | `error:` line, exit 1 | — | Elements and files; "Checksums not verified; run `omnipus package verify`" |
 | `omnipus package verify` | — | `FAILED: <file>: <reason>`, exit 1 | — | `OK: 3 files verified` |
-| `omnipus import` | "Uploading…", provisional preview (including `unfinished_import_found` with agent ID and staging folder), `Import 1 agent as new? [y/N]` | `error:` line; for a rollback "Import failed; nothing was imported: <reason>. If another screen used this agent meanwhile, its chats are not removed and anything saved in the agent's folder was deleted; see 'Recover from a failed import' for the final clean-up."; for an incomplete rollback the line below; in both cases, when the reload was not confirmed, the neutral C4 line "The gateway did not confirm that it reloaded its agent list. Restart the gateway, then check the agent list."; for an incomplete rollback "Import failed and could not be fully undone. Agent <id>, staging <staging_id>. Other screens may also have used this agent. See 'Recover from a failed import' in the CLI guide." | Warnings (dropped items, changed since preview, main chat pending, program not set) with exit 0. **Activation pending** (reload error or timeout): exit 0 with "Imported "<name>" as <id>, but the gateway did not confirm that it is live yet. Restart the gateway, or wait and check the agent list, before chatting with it." | `Imported "Writer (imported)" as <new-id> into workspace "<name>"`; for a worker, plus the "reached by delegation" line |
-| Lost connection during apply | — | "The import may or may not have completed (staging <staging_id>). Check the agent list for "<name>" before importing again; if it is there and incomplete, follow 'Recover from a failed import'." | — | — |
+| `omnipus import` | "Uploading…", provisional preview (including `unfinished_import_found` with agent ID and staging folder), `Import 1 agent as new? [y/N]` | `error:` line; for a rollback "Import failed; nothing was imported: <reason>."; for an incomplete rollback (revision 7) "Import failed and could not be fully undone. The agent was never visible. Agent <id>, staging <staging_id>. Restart the gateway to finish the clean-up; see 'Recover from a failed import' in the CLI guide." | Warnings (dropped items, changed since preview, main chat pending, program not set) with exit 0. **Activation pending** (reload error or timeout): exit 0 with "Imported "<name>" as <id>, but the gateway did not confirm that it is live yet. Restart the gateway, or wait and check the agent list, before chatting with it." | `Imported "Writer (imported)" as <new-id> into workspace "<name>"`; for a worker, plus the "reached by delegation" line |
+| Lost connection during apply | — | "The import may or may not have completed (staging <staging_id>). Check the agent list for "<name>" before importing again. If the gateway stopped, it finishes or rolls back the import when it starts." | — | — |
 | Team tab (existing) | unchanged | unchanged | — | New member appears without reload |
 
 ## User Journey
@@ -473,9 +494,10 @@ Primary flows:
 
 Error flows:
 - When an upload check fails, the system refuses with a named reason and keeps no staging for it.
-- When an apply fails before the commit point, the system removes the new agent's record, its home folder with everything inside it, its team entry and every delegation edge involving it in the import workspace, requests a reload, and reports that nothing was imported, whether the reload was confirmed, and that chats and sessions other requests created for the agent stay and that work already running may write into the home folder again (final clean-up).
-- When undoing fails, the system reports what is left, with the agent ID, and keeps the staging until the owner retires it.
-- When the gateway stops during an apply, the system does not undo anything automatically; the next upload warns about it with the agent ID.
+- Until the commit point, the system keeps the new agent invisible to every other reader (revision 7).
+- When an apply fails before the commit point, the system removes the pending record, the home folder, the team entry and the delegation row, and reports that nothing was imported.
+- When undoing fails, the system reports what is left, with the agent ID, keeps the staging, and finishes the rollback at the next gateway start.
+- When the gateway stops during an apply, the next gateway start finishes the import (commit step done) or rolls it back (not done) before any agent is loaded; a recovery that cannot finish leaves the upload warning with the agent ID.
 
 Boundary conditions:
 - When the name is taken at apply time, the system adds " (imported)", " (imported 2)" … " (imported 99)", keeping the name within 100 characters.
@@ -494,7 +516,9 @@ Boundary conditions:
 - The default workspace is missing and no workspace is named: 409 `default_workspace_missing`, asking for `--workspace`.
 - A `--workspace` name matching two workspaces: refused, listing both IDs.
 - The target workspace is deleted between preview and apply: 404 before any write.
-- Gateway restart between upload and apply: the staging ID is unknown (404); the folder is removed by the next upload's cleanup unless its journal is unfinished.
+- Gateway restart between upload and apply: the staging ID is unknown (404); the folder is removed by the next upload's cleanup. A staging with an unfinished journal is handled by start-up recovery first (revision 7).
+- A backup taken during an import contains a pending record; after a restore, start-up recovery removes it as an orphan (revision 7).
+- A package whose agent has the same **name** as a built-in agent (for example "Mia") imports as a new custom agent with a new ID and a suffixed name (Dataset D6); it never targets the built-in (P-Q1 B).
 - A native worker import: no main chat; reached by delegation once the owner draws the line (US-3 AS-11).
 - **[S1a only]** A package whose agent is an external worker: refused at upload (`external_worker_not_supported_yet`), whether or not it carries runtime values.
 - **[S1b]** An external worker whose tool has no program set on B: imports, and the result shows the existing "cannot run: no program path is set for …" text.
@@ -514,10 +538,10 @@ Boundary conditions:
 - The system must not create or change any other agent's main chat during an import (only the imported Main's own, through `ensureMainSession`).
 - The system must not add a delegation line from any other agent to the imported agent; the owner draws it.
 - The system must not change REST create's behaviour (including that it does not store `voice` today; L17).
-- The system must not add an isolation layer, a new store notifier or a whole-install transaction for S1 (DA-5).
+- The system must not add a new store notifier or a whole-install transaction for S1 (DA-5). It must not make the new agent visible before the commit point (DA-6, revision 7); the pending record, the one-lock join and publish, and start-up recovery are the only additions for this.
 - The system must not assign connectors by matching names, because ADR-090 ("Built-in agent configuration, skills, and visual file reading") requires explicit assignment.
-- The system must not export or import built-in, system or shipped subagent agents in S1.
-- The system must not add skills, connectors, memory, workspaces, sessions, Replace, Merge or start-up recovery in S1.
+- The system must not export built-in, system or shipped subagent agents, accept a package that declares one, or let an import target one (DA-7, P-Q1 B; never, not only in S1).
+- The system must not add skills, connectors, memory, workspaces, sessions, Replace or Merge in S1. (Start-up recovery of an unfinished New-mode import **is** in S1a since revision 7.)
 - The system must not add an agent tool for export or import, because moving data off an install is the owner's action. The precedent is FR-100/FR-103 of the Vault records specification (`docs/internal/specs/vault-records-spec-2026-08-25.md`).
 - The system must not change Backup & Restore behaviour (it keeps skipping where it skips today).
 - The CLI must not touch the data folder for export or import (ADR-024 amendment, DA-3).
@@ -563,8 +587,8 @@ Boundary conditions:
 | Workspace ID unknown | apply | 404 | `workspace_not_found` |
 | No workspace named and no default workspace | apply | 409 | `default_workspace_missing` |
 | Suffixes exhausted | apply | 409 | `name_suffix_exhausted` |
-| Failure before the commit point, rollback complete (everything inside the rollback boundary removed) | apply | 500 | `import_rolled_back` (`details.activation: "pending"` when the C4 reload errored or timed out; `details.note`: the agent's record, home folder (with anything saved in it), team entry and delegation lines are removed; chats and sessions other screens created stay; work already running can write into the home folder again, which the final clean-up removes) |
-| Rollback incomplete | apply | 500 | `import_rollback_incomplete` (`details.failed_step`, `details.leftovers`, `details.agent_id`, `details.staging_id`, `details.activation` when C4 was not confirmed, `details.note` as above) |
+| Failure before the commit point, rollback complete | apply | 500 | `import_rolled_back` (revision 7: no `details.activation`, no `details.note`) |
+| Rollback incomplete | apply | 500 | `import_rollback_incomplete` (`details.failed_step` `C1` or `C2`, `details.leftovers`, `details.agent_id`, `details.staging_id`; revision 7: no `activation`; the agent was never visible and the next start finishes the rollback) |
 
 An audit failure never changes an upload refusal or a rollback answer (gateway log only); after the commit point it is the warning `audit_failed`.
 
@@ -582,8 +606,8 @@ States: `receiving` → `ready` → `applying` → (`done` | `needs-cleanup`). O
 |---|---|
 | Admission | Upload reserves a slot (counting `receiving` + `ready` + `applying` + `needs-cleanup` + kept orphans; max 5) **before** decoding, atomically. A failed upload releases its slot and deletes its folder. |
 | Expiry | The 30-minute clock starts when the staging becomes `ready`. At 30:00 exactly or later, a `ready` staging is expired. `applying` and `needs-cleanup` never expire. |
-| Cleanup | Each upload, under the registry lock, first drops every `needs-cleanup` entry whose folder no longer exists (the owner retired it, Manual recovery step 3), then deletes expired `ready` stagings and orphan folders (left by a restart) whose journal is absent or finished. Orphans with an unfinished journal are kept, take a slot, and produce the `unfinished_import_found` warning with the agent ID and staging folder name (S1a). |
-| Retirement | The only way to retire a `needs-cleanup` staging or a kept orphan is to delete its folder (Manual recovery). Nothing else releases its slot. |
+| Cleanup | Each upload, under the registry lock, first drops every `needs-cleanup` entry whose folder no longer exists, then deletes expired `ready` stagings and orphan folders (left by a restart) whose journal is absent or finished. Orphans with an unfinished journal exist only when start-up recovery could not finish them (revision 7); they are kept, take a slot, and produce the `unfinished_import_found` warning with the agent ID and staging folder name. |
+| Retirement | A `needs-cleanup` staging or a kept orphan is retired by a successful start-up recovery (revision 7), or by deleting its folder with the gateway stopped (Manual recovery step 2). Nothing else releases its slot. |
 | Apply | `ready` → `applying` atomically under the registry lock. Any other state gives 404 `staging_not_found`, or 409 `import_in_progress` when an apply is already running anywhere. |
 | End | Success or complete rollback → `done`: folder deleted, ID consumed. Incomplete rollback → `needs-cleanup`: folder kept. A refusal that wrote nothing (404 workspace, 409 default missing, 409 suffix, 422 not creatable at apply) → back to `ready`, with the clock unchanged. |
 
@@ -594,24 +618,24 @@ The preview is **provisional**. Apply re-runs the name-clash, reference, workspa
 ## Integration Boundaries
 
 ### Agent store
-- **In/out**: `CreateState` (record + SOUL), `MutateStateWithAgentMD` (AGENT.md), `DeleteState` on rollback.
-- **On failure**: before the commit point → rollback; partial persistence (`PersistencePartial`) → rollback of whatever exists.
-- **Development**: real store on a temporary home; faults injected through a store interface in `pkg/omnpkg`, plus real-filesystem faults (a read-only folder) for at least E4 and E8.
+- **In/out (revision 7)**: `CreatePendingState` (pending record + SOUL + AGENT.md in one call), `PublishPending` (the commit rename, inside the workspace lock hold), `DiscardPending` on rollback and recovery. `CreateState`, `MutateStateWithAgentMD` and `DeleteState` are not used by import.
+- **On failure**: before the commit point → rollback; partial persistence (`PersistencePartial`) → `DiscardPending` removes whatever exists.
+- **Development**: real store on a temporary home; faults through the store's existing `stageFile`/`replaceFile`/`removeFile` seams and the T-4 option seams (sign-off C-5), plus one real-filesystem case (skipped with a message when running as root).
 
 ### Workspace membership (T-4 helpers)
-- **In/out**: join (team entry + self-row, one lock); leave (remove X's entry and every edge involving X in the import workspace, fresh re-read, one lock).
-- **On failure**: join failure → rollback; leave failure → `import_rollback_incomplete`.
-- **Development**: real workspace files. The concurrency test respects the production lock: it fails the self-row, lets the join helper release the workspace lock, lets a competing writer finish its own edit of the same workspace, then runs compensation, and asserts the competing edit survives. It never bypasses the lock.
+- **In/out (revision 7)**: `JoinWorkspaceTeamAndPublish(opts, W, X, publish)`: one `LockID(W)` hold covering the membership write, the re-read, the self-row, the `publish` callback and, on any failure, the leave core (C1). `LeaveWorkspaceTeam` (takes the lock itself) is used by start-up recovery. `JoinWorkspaceTeam` stays for the `create_agent` tool and for recovery's re-join. This amends the T-4 sign-off (`ARCH-SIGNOFF-T3-T4.md`): the import's commit is no longer "`JoinWorkspaceTeam` returned `(true, nil)`" but "`publish` returned nil inside the helper", and C1 runs inside the helper instead of after the lock was released; types, seams and the leave core are unchanged.
+- **On failure**: any stage before or at `publish` → C1 inside the lock, then C2; a C1 failure → `import_rollback_incomplete`, C2 still runs.
+- **Development**: real workspace files. The concurrency test respects the production lock: a competing writer started during the hold finishes only after the helper releases the lock, and its edit survives. It never bypasses the lock.
 
 ### Config lock (T-3)
 - **In/out**: coverage check under `configMu` against a candidate snapshot; no write.
 - **Development**: a test asserts `config.json` is byte-identical and its modification time unchanged after an import.
 
 ### Live list, `agent_created`, main chat
-- Publication is a full reload (`triggerReloadAndWaitOutcome`, outcomes confirmed / error / timeout) after the commit point. Only **confirmed** leads to `agent_created` and the main chat; error or timeout → `activation: pending`, no event, restart guidance, the agent stays. The rollback runs the same reload as step C4, with the same three outcomes reported.
+- Publication is a full reload (`triggerReloadAndWaitOutcome`, outcomes confirmed / error / timeout) after the commit point. Only **confirmed** leads to `agent_created` and the main chat; error or timeout → `activation: pending`, no event, restart guidance, the agent stays. The rollback runs **no** reload (revision 7: the agent was never listed).
 - Tests use a **wired** reload pipeline: an unwired one reports "confirmed" by design (`ErrReloadNotConfigured`) and cannot prove publication or removal.
 - Main chat: `ensureMainSession` for the imported Main and its workspace only, when `mainSessionPairEligible` allows it. Failure → warning `main_chat_pending`; the chat is created when the owner opens it.
-- No isolation from other readers during the import (L16).
+- The agent is invisible to other readers until the commit point (revision 7); the one remaining lock-free view is N1.
 
 ### CLI ↔ gateway
 - `cli.token` bearer; generated client types; auto-start through the shared steps; a lost apply connection gives the "may or may not have completed" message.
@@ -631,10 +655,11 @@ The preview is **provisional**. Apply re-runs the name-clash, reference, workspa
 | 4 | CLI default mode | Replace | The API has no default; S1's CLI sends `new`; S6 changes the CLI default (documented) |
 | 5 | Size caps and decoder limits | Library defaults | FR-008 values |
 | 6 | ADR-024 scope | Ignore it | DA-3 amendment |
-| 7 | How to publish without the config write | Call `fastAgentUpsert` | Full reload after commit and after rollback (Rollback contract); `agent_created` and the main chat only when that reload is confirmed, otherwise `activation: "pending"` |
+| 7 | How to publish without the config write | Call `fastAgentUpsert` | Full reload after commit only (revision 7: none after a rollback); `agent_created` and the main chat only when that reload is confirmed, otherwise `activation: "pending"` |
 | 8 | Main chat for the import | Call `ensureWorkspaceMains` | `ensureMainSession` for the imported Main only |
 | 9 | `voice` at import | Follow REST create (drop it) | Follow `create_agent` (keep it for Main); REST create unchanged |
-| 10 | What a rollback removes | Everything about X, or only what the import itself wrote | Defined by places and records: the record, the home folder with everything inside it (whoever wrote it), the team entry and every edge involving X in the import workspace. Chats, sessions and other records outside that boundary stay (AD-5); a writer already running can recreate home content after C3 (AD-6), removed by the final clean-up |
+| 10 | What a rollback removes | Everything about X, or only what the import itself wrote | Revision 7: the two are the same, because X is invisible until the commit point. C1 removes the team entry and every edge involving X in W (inside the lock hold); C2 removes the pending record and the home folder |
+| 11 | How to hide an agent before the commit (revision 7) | A `hidden` flag in the record, filtered in every reader | A record file named `<id>.pending`, which no reader opens; one rename publishes it |
 
 ---
 
@@ -695,7 +720,8 @@ Examples: Dataset D3.
 **Traces to**: User Story 1, Acceptance Scenario 4 — **Category**: Error Path
 - **Given** the shipped agents
 - **When** the owner exports `<id>`
-- **Then** 422 `core_agent_not_exportable`, and no file is written
+- **Then** 422 `core_agent_not_exportable` with a message saying built-in agents cannot be exported (revision 7, P-Q1 B: no "yet"), and no file is written
+- **And** importing a custom agent that merely has a built-in's name never touches the built-in (D4 row 10)
 
 Examples: Dataset D4.
 
@@ -885,84 +911,85 @@ Examples: Dataset D6.
 
 Examples: unknown ID → 404 `workspace_not_found`; no workspace named and no default → 409 `default_workspace_missing`; workspace deleted after preview → 404 `workspace_not_found` (Dataset D14).
 
-#### Scenario Outline: Failure before the commit point is rolled back
+> **Revision 7 (BDD for rollback and recovery).** Markers for the test author: **[r7 CHANGED]** the scenario's expected result changed; **[r7 NEW]** a new scenario; **[r7 REMOVED]** a revision-6 scenario that no longer applies, kept here as a heading only so its old trace is visibly closed. Scenarios without a marker are unchanged.
+
+#### Scenario Outline: Failure before the commit point is rolled back [r7 CHANGED]
 **Traces to**: User Story 3, Acceptance Scenario 5 — **Category**: Error Path
-- **Given** a fault injected right after write `<step>`
+- **Given** a fault injected at `<step>`
 - **When** the owner applies
-- **Then** 500 `import_rolled_back` with "nothing was imported"
-- **And** the rollback oracle (Rollback contract, checks 1–7, with a wired reload) passes
+- **Then** 500 `import_rolled_back` with "nothing was imported" (no `details.activation`, no note about other screens)
+- **And** the rollback oracle (Rollback contract revision 7, checks 1–7) passes
 - **And** exactly one audit entry with the outcome "rolled_back"; if the audit write fails, the answer is still `import_rolled_back`
 
-Examples: Dataset D7 rows 1–4, 10, 11, 12, 21.
+Examples: Dataset D7 rows 1–4, 11, 22.
 
-#### Scenario: A competing workspace edit survives a rollback
+#### Scenario: The imported agent is invisible until the commit point [r7 NEW]
+**Traces to**: User Story 3, Acceptance Scenario 5 and 15 — **Category**: Edge Case
+- **Given** a Main agent import into W, held by a test hook at `<point>` (after E4; after the membership write, inside W's lock; after the self-row; just before the rename)
+- **When** the test forces a reload and waits until it is confirmed, then calls `GET /api/v1/agents`, `GET /api/v1/agents/X`, `POST /api/v1/sessions` with `agent_id` X, a WebSocket chat message to X, and the `list_agents` tool
+- **Then** X is in none of the lists, `GET /api/v1/agents/X` is 404, and the session and the chat message are refused as an unknown agent, with no session or transcript written
+- **And** at the points inside W's lock, a workspace-detail request for W sent during the hold completes only after the join-and-publish helper returned (recorded order), and prepares no chat for X
+- **When** the hook is released with a fault before the rename, **Then** `import_rolled_back` and oracle checks 1–7 pass; **when** it is released without a fault, **Then** the import completes and X is listed after the confirmed publish reload
+
+Examples: Dataset D7 row 10.
+
+#### Scenario: A competing workspace edit waits for the import and survives a rollback [r7 CHANGED]
 **Traces to**: User Story 3, Acceptance Scenario 5 — **Category**: Edge Case
-- **Given** the import has joined workspace W, and the self-row write fails
-- **And** the join helper has released W's lock, and another writer then adds agent Z to W and finishes (synchronised with test hooks; the production lock is not bypassed)
-- **When** compensation runs
-- **Then** W's team contains Z and not the imported agent
+- **Given** the import holds W's lock after the membership write, and the self-row write is set to fail
+- **And** another writer starts adding agent Z to W (synchronised with test hooks; the production lock is not bypassed)
+- **When** the helper runs C1 under the same lock hold and releases the lock
+- **Then** the other writer's save completes only after that, W's team contains Z and not X, and no edge names X
 
-#### Scenario: Another reader sees the import while it runs (documented limit)
-**Traces to**: User Story 3, Acceptance Scenario 5 — **Category**: Edge Case
-- **Given** a Main agent import into W; E4 is done and an unrelated reload is forced and confirmed, so X is listed
-- **And** the self-row write fails, the join helper releases W's lock, and a hook holds C1
-- **When** a real workspace-detail request for W is sent and its HTTP response has been received, and only then C1 is released (all steps ordered by test hooks; the production lock is never bypassed; no sleeps)
-- **Then** `import_rolled_back`, checks 1–7 of the rollback oracle pass, the recorded order shows the read completed before C1, and the only state left for X is the main chat the read prepared (if any), reported as AD-5 residue (L16)
+Examples: Dataset D7 row 5.
 
-#### Scenario: Sessions and messages created during the import are not rolled back (documented limit)
-**Traces to**: User Story 3, Acceptance Scenario 5 — **Category**: Edge Case
-- **Given** a Main agent import; E4 is done and an unrelated reload is forced and confirmed, so X is listed; the self-row write fails, the join lock is released and a hook holds C1
-- **And** the test creates an ordinary session for X with `POST /api/v1/sessions`, and sends one real chat message to X over the WebSocket and waits until it is saved in the transcript
-- **When** C1 is released and the rollback finishes with C4 confirmed
-- **Then** `import_rolled_back`, and checks 1–7 pass
-- **And** both sessions and the saved message still exist (AD-5 residue), and the answer's note says chats and sessions other screens created stay
-- **And** a new chat message to X is now refused (X is no longer a registered agent)
-- **And when** the owner follows Manual recovery step 4 (all pages, IDs collected first), **Then** both sessions are deleted with `DELETE /api/v1/sessions/<id>`, and no session for X remains except a protected main chat (if one was created), which stays (it is not removed by retention)
+#### Scenario: Another reader sees the import while it runs (documented limit) [r7 REMOVED]
+Replaced by "The imported agent is invisible until the commit point". The remaining lock-free view of X's ID during the publish step is Not-guaranteed item N1.
 
-#### Scenario Outline: Content in the agent's home folder follows the folder, not its writer (documented limit)
-**Traces to**: User Story 3, Acceptance Scenario 5 — **Category**: Edge Case
-- **Given** a Main agent import; E4 is done and an unrelated reload is forced and confirmed, so X is listed; the self-row write fails and the join lock is released
-- **And** a hook holds the rollback `<when>`, and the test saves a private memory note for X with the real writer a turn uses (`RememberTool.Execute`, room `private`, over `MemoryStoreAdapter` for X's home; no model call), and asserts the tool reported success and the note file exists under `agents/X/`
-- **When** the hook is released and the rollback finishes with C4 confirmed
-- **Then** `import_rolled_back`, and checks 1–7 of the rollback oracle pass
-- **And** `<home>`
-- **And when** the owner follows the final clean-up (stop the gateway, Manual recovery step 2, start), **Then** `agents/X/` does not exist
+#### Scenario: Sessions and messages created during the import are not rolled back (documented limit) [r7 REMOVED]
+No session or chat can be created for an invisible agent (asserted by the invisibility scenario).
 
-Examples (Dataset D7 rows 19–20): `<when>` before C3 (C1 held) → `<home>` the note (and its index files) were deleted together with `agents/X/`, which does not exist (check 5); `<when>` after C3 and before C4, writer constructed and kept before C3, home asserted absent before the write → `<home>` `agents/X/` exists again and holds exactly the note with its expected content plus the derived index and bookkeeping artifacts of that write, identified by a control run, and no record, `SOUL.md`, `AGENT.md` or other file (AD-6); the answer's note mentions that running work can write into the home folder again; the test closes its own writer before the final clean-up.
+#### Scenario Outline: Content in the agent's home folder follows the folder, not its writer (documented limit) [r7 REMOVED]
+No turn can run for an invisible agent, so nothing else writes into `agents/X/` before the commit point. D7 rows 19–20 are withdrawn.
 
-#### Scenario: A failed membership removal stops the rollback before the record is deleted
+#### Scenario: A failed membership removal is reported, and the next start finishes the rollback [r7 CHANGED]
 **Traces to**: User Story 3, Acceptance Scenario 5 — **Category**: Error Path
 - **Given** the self-row write fails, and then C1 fails `<how>`
 - **When** the rollback runs
-- **Then** 500 `import_rollback_incomplete` with `details.failed_step: "C1"`; C2 and C3 did **not** run, so X's record and folder still exist; C4 was attempted
-- **And** for the delegation-save case, the test asserts that the save fault was actually reached, that X is already out of W's team, and that the edge A → X another request added is still stored (partial C1)
-- **And** following Manual recovery step 1 (Delete agent) removes X, its team entries and every edge naming X, step 2 removes a remaining folder, step 3 frees the slot, and a new upload is admitted
+- **Then** 500 `import_rollback_incomplete` with `details.failed_step: "C1"`, the agent ID and the staging ID; C2 **did** run, so no `X.pending`, `X.json` or `agents/X/` exists; the staging is `needs-cleanup`
+- **And** X is invisible (a forced, confirmed reload does not list it); W still shows `<leftover>`
+- **And when** the gateway is restarted without the fault, **Then** start-up recovery removes the leftover, oracle checks 1–7 pass, the staging is deleted, and a new upload is admitted with all 5 slots
 
-Examples: membership removal fails; membership removed, then the delegation save fails while an edge A → X added by a separate valid graph edit is stored (Dataset D7 rows 13–14).
+Examples: membership removal fails → `<leftover>` X's ID in W's team and X's self-row; membership removed, then the delegation save fails (save fault reached, hook counter) → `<leftover>` X's self-row only (Dataset D7 rows 13–14).
 
-#### Scenario: Incomplete rollback is reported and kept
+#### Scenario: Incomplete rollback is reported and kept [r7 CHANGED]
 **Traces to**: User Story 3, Acceptance Scenario 5 — **Category**: Error Path
-- **Given** a fault after E4 and a second fault that makes `DeleteState` fail
+- **Given** a fault after E4 and a second fault that makes `DiscardPending` fail `<how>`
 - **When** the owner applies
-- **Then** 500 `import_rollback_incomplete`, with `details.failed_step`, `details.leftovers`, `details.agent_id` and `details.staging_id`
-- **And** the staging is in `needs-cleanup`, kept past 30 minutes, and counted in the 5 slots
+- **Then** 500 `import_rollback_incomplete`, with `details.failed_step: "C2"`, `details.leftovers`, `details.agent_id` and `details.staging_id`
+- **And** X is invisible; the staging is in `needs-cleanup`, kept past 30 minutes, and counted in the 5 slots
+- **And when** the gateway is restarted without the fault, **Then** start-up recovery removes the leftovers and the oracle passes
 
-#### Scenario Outline: The rollback reload is not confirmed
-**Traces to**: User Story 3, Acceptance Scenario 5 — **Category**: Error Path
-- **Given** X is in the live list (an unrelated reload loaded it after E4), the self-row write fails, and the C4 reload `<outcome>` (wired reload pipeline)
-- **When** the rollback finishes
-- **Then** `import_rolled_back` with `details.activation: "pending"`; the store has no X; no `agent_created` was sent
-- **And** the CLI prints the "did not confirm that it reloaded … Restart the gateway" neutral line after the rollback line, exit 1; after a C1 failure (D7 row 14 combined with a C4 error) the CLI prints the incomplete-rollback line and the neutral C4 line, never "nothing was imported"
+Examples: the pending record cannot be deleted; the pending record is deleted and the folder removal fails (Dataset D7 rows 6, 18).
 
-Examples: returns an error; times out (Dataset D7 rows 15–16).
+#### Scenario Outline: The rollback reload is not confirmed [r7 REMOVED]
+The rollback runs no reload (C4 retired); D7 rows 15–16 are withdrawn.
 
-#### Scenario Outline: Manual recovery frees everything
+#### Scenario Outline: An unfinished import is finished or rolled back at the next start [r7 NEW]
+**Traces to**: User Story 3, Acceptance Scenario 15 — **Category**: Error Path
+- **Given** an apply stopped by the crash seam at `<step>` (no compensation ran, journal left as a crash leaves it)
+- **When** the gateway starts on the same home (or `RecoverImports` runs, then the roster load)
+- **Then** `<outcome>`
+- **And** recovery ran before the first roster load (recorded order), the staging folder is gone, its slot is free, and running recovery a second time changes nothing
+
+Examples: Dataset D7 rows 23a–23g and 24.
+
+#### Scenario Outline: Manual recovery frees everything [r7 CHANGED]
 **Traces to**: User Story 3, Acceptance Scenario 14 — **Category**: Alternate Path
 - **Given** `<leftover>`
-- **When** the owner follows the Manual recovery steps
-- **Then** no record or folder for X remains, no workspace lists X and no delegation edge names X (step 5 for workspaces outside W when the record is gone), no ordinary session for X is found by a verification scan under the stable-list condition (or, when the list changed during enumeration, the procedure re-lists and still finds X, or reports the clean-up as unverified instead of complete), only a protected main chat (if one was prepared) remains, and the next upload is admitted (201) with all 5 slots available
+- **When** the owner follows the Manual recovery steps (revision 7)
+- **Then** no `X.json`, `X.pending` or `agents/X/` remains, no workspace lists X and no edge names X, and the next upload is admitted (201) with all 5 slots available
 
-Examples: Dataset D15.
+Examples: Dataset D15 (revision 7).
 
 #### Scenario Outline: Failures after the commit point are warnings
 **Traces to**: User Story 3, Acceptance Scenario 2 — **Category**: Alternate Path
@@ -1158,7 +1185,7 @@ S1 does not touch `pkg/agent` or `pkg/session`, so exact-commit hands-on UAT is 
 
 ### Test Implementation Order
 
-Test names are placeholders; qa-lead names the real tests in RED.
+Test names are placeholders; qa-lead names the real tests in RED. **Revision 7 markers in the first column of the description: [r7 CHANGED], [r7 NEW]; rows without a marker are unchanged.**
 
 | Order | Test Name | Level | Traces to BDD Scenario | Description |
 |---|---|---|---|---|
@@ -1172,27 +1199,30 @@ Test names are placeholders; qa-lead names the real tests in RED.
 | 8 | TestExportSourceRead | Unit | Unsafe or oversized source files… | D11 rows |
 | 9 | TestFieldMapping_Export | Unit | The exported record follows Field mapping | D3 export column |
 | 10 | TestFieldMapping_Import | Unit | Confirmed import creates…; References the target lacks | D3 import column, D5 |
-| 11 | TestExportSelection_Refusals | Unit | Built-in agents are refused; Export refusals… | D4 |
+| 11 | TestExportSelection_Refusals | Unit | Built-in agents are refused; Export refusals… | D4; **[r7 CHANGED]** the message says built-in agents cannot be exported (no "yet"), and D4 row 10 |
 | 12 | TestRemap_NewIDNeverCollides (property) | Unit | Confirmed import creates… | New ID ∉ existing ∪ {source} |
 | 13 | TestNameSuffix | Unit | Name clash gets a suffix | D6 |
-| 14 | TestJournal_CompensationOrder | Unit | Failure before the commit point…; A failed membership removal stops the rollback… | Order C1 → C2 → C3 → C4; C1 failure (membership removal, or partial C1 after the membership was removed) skips C2/C3 and still attempts C4; partial C2 continues to C3; leftovers and `failed_step` reported |
+| 14 | TestJournal_CompensationOrder | Unit | Failure before the commit point…; A failed membership removal is reported… | **[r7 CHANGED]** C1 only when the membership write was attempted, inside the helper's lock hold; then C2 (`DiscardPending`: record and folder). A C1 failure (membership removal, or partial C1) does **not** skip C2. No reload step. Journal states `started` → `committed` → `done`, or `rolled_back` / `rollback_incomplete`; leftovers and `failed_step` (`C1`/`C2`) reported |
 | 15 | TestStaging_StateMachine | Unit | Staging that is not usable; Staging races | D9, D13 with fake clock |
 | 16 | TestPkgCmd_UsageLookupsExitCodes | Unit | CLI usage and lookup errors; Export refusals… | D10 |
 | 17 | TestPkgCmd_PromptAndLostConnection | Unit | Interactive confirm; Declined…; Lost connection… | Prompt and lost connection |
 | 18 | TestAgentCreatedInvalidatesTeamViews | Unit (vitest) | Team tab refreshes while open | Detail and delegation keys invalidated |
 | 19 | TestCreateExtraction_RESTUnchanged | Integration | REST create unchanged, and #1440 checked | Existing tests + fallback GET |
 | 20 | TestCreateAgentTool_JoinUnchanged | Integration | create_agent tool unchanged… | Existing tool tests |
+| 20a | TestJoinAndPublish_OneLockHold | Unit (`pkg/sysagent/tools`) | The imported agent is invisible…; A competing workspace edit waits…; A failed membership removal is reported… | **[r7 NEW]** Each stage (read, membership write, re-read, seed, publish) fails in turn; on failure the leave core runs before the lock is released; a competing writer started during the hold finishes after it; publish runs only after the seed succeeded; `(false, nil)`-style re-read loss counts as failure; production options have nil seams |
+| 20b | TestAgentstore_PendingRecord | Unit (`pkg/agentstore`) | The imported agent is invisible… | **[r7 NEW]** `CreatePendingState` writes `<id>.pending`, `SOUL.md`, `AGENT.md` (partial-write cases); `List`, `Get`, `ReadState`, `PeekRevision` do not see it; `PublishPending` refuses an existing `<id>.json`, renames, and calls the directory-sync seam; `DiscardPending` refuses a published record and is idempotent |
 | 21 | TestImportCreateParity | Integration | Import and the create paths give the same result… | Two tables: versus REST create, versus `create_agent` |
 | 21a | TestImportFieldCoverage | Unit | Every editable field has an import decision | Resolves aliases and nested leaves; control names need a listed decision; fails on any unresolved name; reuses `MappingRows`/`ExcludedRows` vocabulary |
 | 21b | TestPackagesApply_MainChatScope | Integration | The main chat is created for the imported Main only | Y and V untouched |
 | 21c | TestPackagesApply_NativeWorkerReachable | Integration | A native worker is imported and reached by delegation | No main chat, no edge, then directory lists it after the edge |
-| 21d | TestPackages_ManualRecovery | Integration | Manual recovery frees everything; A failed membership removal stops the rollback… | D15 rows 1–12 (unstable list with verification scan, second-workspace repair, C1 failure, partial C1, recreated folder, AD-5 residue with a session beyond the first page and a child session); steps run through the REST API as documented, IDs collected before deleting; slot released |
+| 21d | TestPackages_ManualRecovery | Integration | Manual recovery frees everything | **[r7 CHANGED]** D15 (revision 7) rows 1–4 only: restart finishes the rollback; the manual fallback with the gateway stopped; slots released. Session paging, second-workspace repair and recreated-folder cases are withdrawn |
 | 21e | TestPackagesExport_AuditFailure | Integration | Export is refused when it cannot be audited | No bytes |
 | 22 | TestBackupRestore_UnchangedAfterMove | Integration | Backup and Restore unchanged | Skip-not-refuse kept |
 | 23 | TestPackagesExport_Route | Integration | Export a Main agent…; Structured secrets…; A secret pasted…; Export via REST… | Headers, bytes, scan, audit |
 | 24 | TestPackagesImport_Route | Integration | Upload gives a provisional preview…; Damaged…; Upload size through the real route; Package declares a core agent | Registered route; valid ~2 MiB package → 201; exactly 64 MiB random body through a counting body → 422 (not 413) with all bytes consumed; 64 MiB + 1 with declared length and chunked → 413; snapshot oracle allows only staging, staging maintenance and audit; audit failure keeps the refusal |
 | 25 | TestPackagesApply_NewMode | Integration | Confirmed import creates…; Import into a named workspace; Workspace selection problems; Changes between preview and apply… | D14 |
-| 26 | TestPackagesApply_Rollback | Integration | Failure before the commit point…; A competing workspace edit survives…; Another reader sees the import…; Sessions and messages created during the import…; Content in the agent's home folder follows the folder…; A failed membership removal stops the rollback…; Incomplete rollback…; The rollback reload is not confirmed | D7 rows 1–6, 10–16, 18–21; oracle 1–7; real store and **wired** reload; every race ordered by hooks after the join lock is released, with completion recorded; row 12 asserts the session residue; row 14 persists a removable edge and asserts the save fault was reached (partial C1); rows 19–20 use the real private-memory writer before and after C3 (row 20: writer kept from before C3, cold index, home absent asserted before the write, recreated home = note + identified derived index artifacts only, test closes its writer before the final clean-up); row 21 adds X to a second workspace V during the window and asserts the V residue is allowed (scoped check 3) |
+| 26 | TestPackagesApply_Rollback | Integration | Failure before the commit point…; The imported agent is invisible…; A competing workspace edit waits…; A failed membership removal is reported…; Incomplete rollback… | **[r7 CHANGED]** D7 (revision 7) rows 1–6, 10, 11, 13, 14, 18, 22; oracle revision 7 (no AD-5/AD-6; check 7 also scans the session store); real store and **wired** reload; the invisibility probe at every hook point (row 10); incomplete rows finish with a simulated restart. Revision-6 rows 12, 15, 16, 19–21 and their writer, session and second-workspace setups are withdrawn |
+| 26a | TestPackages_StartupRecovery | Integration | An unfinished import is finished or rolled back at the next start | **[r7 NEW]** D7 rows 23a–23g, 24 with the crash seam; recovery before the first roster load (recorded order); idempotent second run; row 23e also through a real gateway boot (roster lists X, a Main has one main chat from `ensureBootMains`, no `agent_created`) |
 | 27 | TestPackagesApply_PostCommitWarnings | Integration | Failures after the commit point are warnings | D7 rows 7–9, 17; no `agent_created` and no main chat on pending publication; wired reload |
 | 28 | TestPackagesApply_ModesConcurrency | Integration | Replace and Merge…; One apply at a time | |
 | 29 | TestPackages_AccessRules | Integration | Access rules…; CLI token works… | D8 |
@@ -1282,6 +1312,7 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 |---|---|---|---|
 | 1–8 | `mia`, `jim`, `omnipus`, `worker`, `planner`, `researcher`, `judge`, `plansupervisor` | 422 `core_agent_not_exportable` | BDD: Built-in agents are refused |
 | 9 | A user-created Subagent (UUID) | 200 | BDD: Export a Main agent… |
+| 10 | **[r7 NEW]** A custom agent named "Mia" (UUID), exported and imported where the built-in Mia exists | 200 on export; import creates a new agent "Mia (imported)" with a new ID; the built-in Mia's record, prompt and memory folder are byte-identical | BDD: Built-in agents are refused; Name clash gets a suffix |
 
 #### Dataset D5: Reference rules on import (target = fresh install unless stated)
 
@@ -1317,50 +1348,55 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 | 11 | "Mia" | "Mia" | "Mia (imported)" | same |
 | 12 | "作家" | "作家" | "作家 (imported)" | same |
 
-#### Dataset D7: Fault points (real store unless stated)
+#### Dataset D7: Fault points (real store unless stated) — revision 7
 
-| # | Fault after | Expected | Oracle | Traces to |
-|---|---|---|---|---|
-| 1 | E4 partly written (record written, `SOUL.md` replace fails: `PersistencePartial`) | 500 `import_rolled_back` | Rollback checks 1–6 | BDD: Failure before the commit point… |
-| 2 | E4 complete | same | same | same |
-| 3 | E5 (`AGENT.md`) | same | same, `AGENT.md` gone | same |
-| 4 | E8 (team entry) | same | same | same |
-| 5 | E8, self-row fails; the join helper releases the lock; a competing writer adds Z to the same workspace and finishes; then compensation runs | same | Z kept, X gone | BDD: A competing workspace edit… |
-| 6 | E4 + `DeleteState` fails | 500 `import_rollback_incomplete` | leftover named with agent ID and staging ID; C4 reload ran; `needs-cleanup` | BDD: Incomplete rollback… |
-| 7 | Commit, then the live-publish reload returns an **error** (wired pipeline) | 200 `activation: pending` | agent kept; **no** `agent_created`; no main chat attempted; CLI restart line | BDD: Failures after the commit point… |
-| 8 | Commit, then main chat fails | 200, `main_chat_pending` | agent kept | same |
-| 9 | Commit, then audit fails | 200, `audit_failed` | agent kept | same |
-| 10 | Reader race, lock-compatible: E4; unrelated reload forced and confirmed; the self-row fails; the join releases W's lock; C1 held by a hook; a real workspace-detail request for W is sent and its response received; then C1 released | 500 `import_rolled_back` | checks 1–7; recorded order proves the read completed before C1; residue exactly X's main chat in W if the read prepared one (AD-5) | BDD: Another reader sees the import… |
-| 11 | E8 fails and the rollback audit write also fails | 500 `import_rolled_back` (unchanged) | checks 1–7; audit failure in the gateway log | BDD: Failure before the commit point… |
-| 12 | **Populated sessions**: E4; unrelated reload forced and confirmed; the self-row fails; join lock released; C1 held; `POST /api/v1/sessions` for X, plus one real WebSocket chat message to X saved in its transcript; then C1 released | 500 `import_rolled_back` with the note | checks 1–7; both sessions and the saved message **remain** (AD-5); a new message to X is refused after C4; after Manual recovery step 4 only a protected main chat (if any) remains | BDD: Sessions and messages created during the import… |
-| 13 | Self-row fails, then C1 **membership removal** fails | 500 `import_rollback_incomplete`, `failed_step: "C1"` | record and folder kept (C2, C3 skipped); C4 attempted; `needs-cleanup` | BDD: A failed membership removal stops the rollback… |
-| 14 | **Partial C1**: E8 done; self-row fails; join lock released; C1 held; a separate valid graph edit persists an edge A → X in W (200); C1 released; C1's delegation save fails | 500 `import_rollback_incomplete`, `failed_step: "C1"` | save fault reached (hook counter); X no longer in W's team; edge A → X still stored; record and folder kept (C2, C3 skipped); C4 attempted; `needs-cleanup` | BDD: A failed membership removal stops the rollback… |
-| 15 | X listed by an earlier reload; self-row fails; C4 reload returns an **error** | 500 `import_rolled_back`, `activation: "pending"` | store has no X; no `agent_created`; CLI restart line | BDD: The rollback reload is not confirmed |
-| 16 | Same, C4 reload **times out** | same | same | same |
-| 17 | Commit, then the live-publish reload **times out** | 200 `activation: pending` | as row 7 | BDD: Failures after the commit point… |
-| 18 | **Partial C2**: `DeleteState` removes the entity, then fails on `SOUL.md`; C3 then deletes the folder | 500 `import_rolled_back` | checks 1–7 | BDD: Failure before the commit point… |
-| 19 | **Home write before C3**: E4; unrelated reload confirmed; self-row fails; join lock released; C1 held; a private memory note saved for X with the real writer (success asserted, file present under `agents/X/`); C1 released | 500 `import_rolled_back` with the note | checks 1–7; the note is gone with `agents/X/` (check 5) | BDD: Content in the agent's home folder… |
-| 20 | **Home write after C3**: same start; hook after C3, before C4; writer kept from before C3 (cold index); home absent asserted; a private memory note saved for X through it (success asserted); C4 confirmed | 500 `import_rolled_back` with the note | checks 1–7 with the check-5 exception: `agents/X/` holds exactly the note plus the derived index and bookkeeping artifacts of that write (identified by a control run; no record, `SOUL.md`, `AGENT.md` or other file) (AD-6); after the test closes its writer and runs the final clean-up, the whole folder is absent | same |
-| 21 | **Second workspace**: E4, E8 in W; unrelated reload confirmed; self-row fails; join lock released; C1 held; a valid `PUT /api/v1/workspaces/V` adds X to V's team with an edge involving X (200); C1 released; C4 confirmed | 500 `import_rolled_back` with the note | checks 1–7 with check 3 scoped: W has no X entry or edge; V keeps X's entry and edge (AD-5); D15 row 12 repairs V | BDD: Failure before the commit point… |
+Column "r7": **=** unchanged, **C** changed, **N** new, **X** withdrawn. "Oracle" means Rollback contract revision 7, checks 1–7.
 
-(A fault after E9 is a post-commit fault by definition. All rows run with a wired reload pipeline.)
+| # | r7 | Fault | Expected | Oracle | Traces to |
+|---|---|---|---|---|---|
+| 1 | C | E4 partly written: `X.pending` written, the `SOUL.md` replace fails (`PersistencePartial`) | 500 `import_rolled_back` | Oracle (C2 discards both) | BDD: Failure before the commit point… |
+| 2 | C | E4 complete (pending), fault before the join | same | same | same |
+| 3 | C | The `AGENT.md` replace fails inside `CreatePendingState` (old E5, now part of E4) | same | same | same |
+| 4 | C | The membership write (E8) fails inside the helper | same | same; C1 has nothing to remove | same |
+| 5 | C | Membership written; the self-row fails; a competing writer adding Z to W is started during the hold | same | Z kept, X gone; the competing save completed only after the helper released W's lock (recorded order) | BDD: A competing workspace edit waits… |
+| 6 | C | E4 done, fault before the join, then `DiscardPending` fails on `X.pending` | 500 `import_rollback_incomplete`, `failed_step: "C2"` | X invisible (forced reload); `needs-cleanup`; after a restart without the fault, oracle | BDD: Incomplete rollback… |
+| 7 | = | Commit, then the live-publish reload returns an **error** (wired pipeline) | 200 `activation: pending` | agent kept; **no** `agent_created`; no main chat attempted; CLI restart line | BDD: Failures after the commit point… |
+| 8 | = | Commit, then main chat fails | 200, `main_chat_pending` | agent kept | same |
+| 9 | = | Commit, then audit fails | 200, `audit_failed` | agent kept | same |
+| 10 | C | **Invisibility probe**: hook at each of: after E4; after the membership write (inside W's lock); after the self-row; just before the rename. At each: forced and confirmed reload; `GET /api/v1/agents`, `GET /api/v1/agents/X`, `POST /api/v1/sessions` (`agent_id` X), a WebSocket chat to X, `list_agents`; inside the lock also a workspace-detail request for W. Then (a) release with a fault, (b) release without | (a) 500 `import_rolled_back`; (b) 200 | X never listed, 404, session and chat refused, nothing written for X; the detail request completed only after the helper returned and prepared no chat for X; (a) oracle; (b) X listed after the publish reload | BDD: The imported agent is invisible… |
+| 11 | = | E8 fails and the rollback audit write also fails | 500 `import_rolled_back` (unchanged) | Oracle; audit failure in the gateway log | BDD: Failure before the commit point… |
+| 12 | X | (Populated sessions during the window) | — | Impossible now; covered by row 10's refused session and chat | — |
+| 13 | C | Self-row fails, then C1's **membership removal** fails (seam `WriteWorkspace`) | 500 `import_rollback_incomplete`, `failed_step: "C1"` | C2 ran (no pending record, no folder); X invisible; W still has X's ID and self-row; restart without the fault → oracle | BDD: A failed membership removal is reported… |
+| 14 | C | **Partial C1**: membership and self-row written; the publish rename fails (seam); C1 removes the membership, then C1's delegation save fails (seam `SaveDelegation`: call 1, the seed, succeeds; call 2, the leave, fails) | same | save fault reached (counter); X not in W's team; the self-row X → X still stored; C2 ran; restart without the fault → oracle. (Revision 6's competing `PUT …/delegation` adding A → X is gone: during the hold that request waits for W's lock, and afterwards it is refused because X is not a member) | same |
+| 15 | X | (Rollback reload error) | — | No rollback reload exists | — |
+| 16 | X | (Rollback reload timeout) | — | same | — |
+| 17 | = | Commit, then the live-publish reload **times out** | 200 `activation: pending` | as row 7 | BDD: Failures after the commit point… |
+| 18 | C | **Partial C2**: `X.pending` deleted, then deleting `agents/X/` fails | 500 `import_rollback_incomplete`, `failed_step: "C2"`, leftover `agents/X/` | X invisible; restart without the fault → oracle | BDD: Incomplete rollback… |
+| 19 | X | (Home write before C3) | — | No writer can reach an invisible agent | — |
+| 20 | X | (Home write after C3) | — | same | — |
+| 21 | X | (X added to a second workspace during the window) | — | `PUT /api/v1/workspaces/V` with X needs X's record (`agentstore.Get`) and X's ID is not exposed before the commit | — |
+| 22 | N | The publish rename fails (seam in `PublishPending`) | 500 `import_rolled_back` | Oracle; C1 ran under the same lock hold, then C2 | BDD: Failure before the commit point… |
+| 23a | N | Crash seam after E1 only | Start: journal `rolled_back`, staging gone | Oracle | BDD: An unfinished import is finished or rolled back… |
+| 23b | N | Crash seam after E4 | Start: rolled back | Oracle | same |
+| 23c | N | Crash seam after the membership write (inside the lock; the seam releases the lock as a dying process would) | Start: rolled back | Oracle; W equals before | same |
+| 23d | N | Crash seam after the self-row, before the rename | Start: rolled back | Oracle | same |
+| 23e | N | Crash seam after the rename, before journal `committed` (and a second case after `committed`, before P1) | Start: finished; journal `done`; audit "import completed at start-up" | X in the store and, after boot, in `GET /api/v1/agents`; X in W with its self-row; a Main has exactly one main chat (from `ensureBootMains`); no `agent_created` | same |
+| 23f | N | As 23e, then the test restores W's file and delegation store to their pre-import bytes (simulates a lost, reordered workspace write) | Start: re-joined, finished | as 23e | same |
+| 23g | N | As 23c, with the recovery's leave seam failing on the first start | First start: boot continues, X invisible, W still lists X's ID, staging `needs-cleanup`, next upload warns `unfinished_import_found`; second start without the fault: rolled back | Oracle after the second start | same |
+| 24 | N | `entities/agents/Y.pending` and `agents/Y/` present with no journal naming Y | Start: both removed; log line | No Y anywhere | same |
 
-#### Dataset D15: Manual recovery
+(All rows run with a wired reload pipeline. The crash seam `crashAt` and the leave/publish seams are nil in production; a guard test asserts that.)
+
+#### Dataset D15: Manual recovery — revision 7
+
+Revision-6 rows 5–12 (Delete-agent recovery, session paging, second-workspace repair, recreated folder) are withdrawn: those shapes cannot occur when the agent is invisible until the commit.
 
 | # | Leftover | Steps | Expected | Traces to |
 |---|---|---|---|---|
-| 1 | Incomplete rollback, record present (D7 row 6) | Delete agent (Team tab, or GET for `revision` then `DELETE …?revision=`), delete `agents/<id>/` if it is still there, delete the staging folder | No record, folder or membership for X; next upload 201; 5 slots free | BDD: Manual recovery frees everything |
-| 2 | Folder-only leftover (`DeleteState` done, folder removal failed) | With the gateway stopped, delete `agents/<id>/`; delete the staging folder | same | same |
-| 3 | Gateway stopped after E8 (simulated restart), unfinished journal kept as an orphan | Next upload shows `unfinished_import_found` with the ID; Delete agent; delete the staging folder | same; the warning no longer appears | same |
-| 4 | Five retained stagings fill every slot | Retire each by deleting its folder | The next upload is admitted without a restart | same |
-| 5 | C1 membership removal failed (D7 row 13): record, folder and membership present | Restart if X is not listed; Delete agent (removes team entries and edges naming X in every workspace); delete `agents/<id>/` if left (gateway stopped); delete the staging folder | No record, folder, membership or edge; next upload 201 | same |
-| 6 | Folder with only `SOUL.md` left after a partial C2 whose C3 also failed | With the gateway stopped, delete `agents/<id>/`; delete the staging folder | same | same |
-| 7 | AD-5 residue: ordinary session and populated chat for X from D7 row 12 | Manual recovery step 4: all pages with `flat=true`, IDs collected first, then `DELETE /api/v1/sessions/<id>` for each; delete the staging folder if still there | No ordinary session for X; only a protected main chat may remain | same |
-| 8 | Partial C1 (D7 row 14): record and folder present, X not a member, edge A → X stored | Delete agent (its cascade removes edges naming X in every workspace); delete `agents/<id>/` if left (gateway stopped); delete the staging folder | No record, folder or edge naming X; next upload 201 | same |
-| 9 | AD-5 residue spread over pages: 60 other sessions newer than X's ordinary session, plus a child session for X under another agent's surviving parent session | Manual recovery step 4 as documented: `flat=true`, follow every `next_cursor` as `offset`, do not stop on a page with no X rows, collect IDs, then delete | Both X sessions found and deleted; no session for X remains; the other agent's parent session untouched | same |
-| 10 | Folder recreated after a complete rollback (D7 row 20) | Test closes its kept writer (simulated gateway stop); delete `agents/<id>/`; start; step 4; delete the staging folder | No `agents/<id>/`; next upload 201 | same |
-| 11 | Unstable list: as row 9, and the test deletes one unrelated session on the first page between the first and second page requests | Step 4 as documented: the verification scan from `offset=0` after the deletions | The procedure finds X's session on a re-scan and deletes it; or, if the list keeps changing, it reports the clean-up as unverified, never complete | same |
-| 12 | X added to a second workspace V during the window (D7 row 21), record already gone | Step 5: `GET /api/v1/workspaces?status=all`; read V with its revision; `PUT /api/v1/workspaces/V` with `revision`, `core_team` without X, `delegation` without X's edges | V has no X entry or edge; V's other members and edges unchanged; no new endpoint used | same |
+| 1 | Incomplete rollback, C2 failed (D7 row 6 or 18) | Restart the gateway (manual step 1) | Start-up recovery removes it; no `X.pending`, `X.json` or `agents/X/`; next upload 201; 5 slots free | BDD: Manual recovery frees everything |
+| 2 | Incomplete rollback, C1 failed (D7 row 13 or 14) | Restart the gateway | W equals before; next upload 201 | same |
+| 3 | Start-up recovery keeps failing (seam stays on) | Manual step 2 with the gateway stopped (delete `X.pending`, `agents/X/` because `X.json` is absent, the staging folder), start; manual step 3 removes X's ID from W through the existing workspace update with `revision` | same; the `unfinished_import_found` warning no longer appears | same |
+| 4 | Five retained stagings fill every slot | Restart (or retire each by deleting its folder, gateway stopped) | The next upload is admitted | same |
 
 #### Dataset D8: Access (through registered routes)
 
@@ -1443,7 +1479,7 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 | 2 | Two applies of the same X at once | One 200; the other 409 `import_in_progress` or 404 | same |
 | 3 | Two uploads compete for the last free slot | One 201; the other 409 `too_many_staged_imports` | same |
 | 4 | Upload fails while decoding | Slot released; the next upload is admitted | same |
-| 5 | Restart leaves an orphan folder with a finished journal, and one with an unfinished journal | The first is deleted on the next upload; the second is kept, holds a slot and produces `unfinished_import_found` (S1a) | same |
+| 5 | **[r7 CHANGED]** Restart leaves an orphan folder with a finished journal, and one with an unfinished journal whose start-up recovery failed (recovery seam) | The first is deleted on the next upload; the second is kept, holds a slot and produces `unfinished_import_found` (S1a); after a start where recovery succeeds it is gone | same |
 | 6 | A `needs-cleanup` staging whose folder the owner deleted | The next upload drops the entry and admits the new upload | same |
 
 #### Dataset D14: Preview freshness and workspaces
@@ -1489,7 +1525,7 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 
 **Export**
 - **FR-010**: Export MUST accept exactly one user-created agent (Main or Subagent; Subagent External in **[S1b]**; refused with `external_worker_not_supported_yet` in S1a) and return the package bytes with a safe filename.
-- **FR-011**: Export MUST refuse the agents in Dataset D4 with `core_agent_not_exportable`.
+- **FR-011**: Export MUST refuse the agents in Dataset D4 with `core_agent_not_exportable`; the message says they cannot be exported (P-Q1 B, revision 7). Import MUST never target a built-in agent: it always creates a new custom agent with a new ID, and a package declaring a `core`/`system` type is refused at upload (`invalid_element`).
 - **FR-012**: The packaged record MUST follow the "Export" column of Field mapping.
 - **FR-013**: Export MUST NOT open `credentials.json`, `master.key`, `cli.token`, `auth.json` or `config.json`. Values from those files that are not also present in the agent's free text MUST NOT appear in the package. It does not promise that free text is secret-free.
 - **FR-014** **[S1b]**: Removed environment-override names MUST be listed in `needs_secrets`.
@@ -1515,15 +1551,17 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 - **FR-036**: After the commit point, the agent MUST be published by a full reload (`triggerReloadAndWaitOutcome`). Only when that reload is **confirmed** MUST `agent_created` be sent and P3 run. On **error or timeout**, the result MUST say `activation: "pending"`, MUST NOT send `agent_created`, MUST keep the stored agent (never report it absent), and the CLI MUST tell the owner to restart the gateway or wait and check the agent list.
 - **FR-036a**: After confirmed publication, a Main agent MUST get its own main chat through `ensureMainSession` for that agent and workspace only, when `mainSessionPairEligible` allows it. No other member's main chat is created or changed. A failure is the warning `main_chat_pending`.
 - **FR-036b**: A native worker MUST get no main chat. The result MUST say that it is reached by delegation once the owner draws a line to it from a Main agent.
-- **FR-037**: A failure before the commit point MUST remove everything inside the **rollback boundary**, defined by places and records, not by who wrote them: X's record, X's home folder `agents/X/` with everything inside it (including content other requests wrote there before C3), X's team entry and every delegation edge involving X in the import's workspace. It does so with compensations C1 → C2 → C3, then always attempts the C4 reload, and answers `import_rolled_back`. **If C1 fails (including a partial C1, after the membership was removed), C2 and C3 MUST NOT run** (the record and folder stay as the recovery handle). A partial C2 continues with C3. The rollback oracle checks 1–7 MUST hold, with the allowed differences AD-1…AD-6; the live-list part of check 1 applies only when C4 is confirmed, otherwise the answer MUST carry `details.activation: "pending"` and the CLI MUST print the neutral C4 line after the outcome line. Rollback MUST NOT claim to remove anything outside the boundary that other requests created while X was visible (AD-5: sessions with or without messages, main chats, task or audit entries, files outside `agents/X/`), and MUST NOT claim that `agents/X/` stays absent while work admitted for X may still run (AD-6). The answer MUST carry a note saying so and pointing to the final clean-up. A failed compensation answers `import_rollback_incomplete` with `failed_step`, leftovers, agent ID and staging ID; C4 is still attempted, and the staging moves to `needs-cleanup`.
-- **FR-037a**: The manual recovery procedure in "Rollback contract" MUST work for every leftover shape inside the boundary (a, a2, b, c, d: including a C1 failure, a partial C1, a partial C2 and a folder recreated after a complete rollback) and for the deletable AD-5 residue (ordinary sessions and chats). Its session step MUST enumerate every session for X through the existing API (`flat=true`, every `next_cursor` followed, no stop on a page without X rows, IDs collected before deleting, errors reported as incomplete), under a stable-list precondition, with a fresh verification scan after deleting; without a stable list the result MUST be reported as incomplete/unverified. For a record-absent rollback it MUST include the workspace repair through the existing `PUT /api/v1/workspaces/<id>` with revision (step 5). It MUST state that a protected main chat remains and is not removed by retention in S1. After it a new upload MUST be admitted (Dataset D15 rows 1–12).
+- **FR-037** **[r7 CHANGED]**: A failure before the commit point MUST be rolled back with C1 (only when the membership write was attempted; inside the same `LockID(W)` hold as the join; removes X's team entry and every edge involving X in W) and then C2 (`DiscardPending`: the pending record, `SOUL.md`, `AGENT.md` and `agents/X/`), and answer `import_rolled_back`. A C1 failure (including a partial C1) MUST NOT stop C2. No rollback reload runs. The rollback oracle checks 1–7 (revision 7) MUST hold, with the allowed differences AD-1…AD-4 only. A failed compensation answers `import_rollback_incomplete` with `failed_step` (`C1` or `C2`), leftovers, agent ID and staging ID, and the staging moves to `needs-cleanup`.
+- **FR-037a** **[r7 CHANGED]**: Every leftover shape of an incomplete rollback (a: X's ID or self-row left in W; b: pending record or folder left) MUST be removed by the next successful start-up recovery, which also frees the slot. The manual recovery (revision 7, steps 1–4) MUST work when start-up recovery keeps failing (Dataset D15 revision 7).
+- **FR-049** **[r7 NEW]**: Until the commit point, the new agent MUST NOT be visible to any other reader: not in any reload of the live list, not readable through `agentstore` `List`/`Get`/`ReadState`/`PeekRevision`, not accepted by the sessions API, WebSocket chat or main-chat preparation, and not in any workspace seen by a lock-taking reader. The record MUST be written as `entities/agents/<id>.pending`; the membership write, the self-row and the commit rename (`PublishPending`) MUST happen in one `LockID(W)` hold (`JoinWorkspaceTeamAndPublish`); the commit is that rename, followed by a sync of the `entities/agents/` directory (the workspace and delegation directories are synced before it) before any answer. The lock-free view N1 is the only exception and MUST stay limited to the publish step.
+- **FR-062** **[r7 NEW]**: At every gateway start, before the first roster load, `RecoverImports` MUST, for every unfinished journal, roll the import back when `<id>.json` is absent, and finish it when present (re-joining W when the membership or self-row is missing; rolling the published record back when that re-join fails). It MUST remove orphan `*.pending` records that no journal names. It MUST be idempotent, MUST NOT abort boot on a failure (the staging stays `needs-cleanup` and FR-044 applies), and MUST write one audit entry per recovered import.
 - **FR-038**: One apply at a time per install (409 `import_in_progress`).
 - **FR-039**: State transitions as in "Staging lifecycle".
 - **FR-040**: Exactly one audit entry per apply outcome and per safety refusal at upload. An audit failure never changes an upload refusal or a rollback answer (it goes to the gateway log); after the commit point it is the warning `audit_failed`, never "nothing imported".
 - **FR-041**: The result MUST list the created elements (source ID, new ID, final name, workspace), warnings including `changed_since_preview`, and `needs_secrets`.
 - **FR-042**: Apply MUST re-run the preview checks on the current state before its first write ("Preview freshness").
 - **FR-043** **[S1b]**: An imported external worker's result MUST carry the existing "cannot run" text when its tool has no program set, and `runtime_settings_removed` pointing to Edit → Runtime for environment overrides and additional arguments.
-- **FR-044**: An upload that finds an orphan staging with an unfinished journal MUST warn `unfinished_import_found`, naming the agent ID, the staging folder and the recovery section (moved from S1b to S1a in revision 3).
+- **FR-044**: An upload that finds an orphan staging with an unfinished journal MUST warn `unfinished_import_found`, naming the agent ID, the staging folder and the recovery section (moved from S1b to S1a in revision 3). Since revision 7 this only happens when start-up recovery could not finish that journal.
 - **FR-047**: Import MUST store `voice`, `memory_enabled` and `context_window_override` with the `create_agent` tool's rules: first its runtime check (`agentmutation.ValidateFields`, which refuses `memory_enabled` and `context_window_override` for external workers **[S1b]**), then the shared applier (`applySharedConfigArgs`). REST create's behaviour MUST stay unchanged.
 - **FR-048**: Every field name of the agent tools' create and update lists, the REST create schemas and `AgentUpdateRequest` MUST resolve, through the alias table, to Field mapping rows (nested leaves included), or be a listed control name with its decision (`TestImportFieldCoverage`). No unlisted ignore set.
 
@@ -1549,8 +1587,8 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 - **SC-001**: The two-home round trip passes against Dataset D3's expected record (export column, then import column), with a new ID and the listed warnings.
 - **SC-002**: A one-byte change in any packaged file fails `verify` and upload, naming the file.
 - **SC-003**: `format_version` 2 is refused by `inspect`, `verify` and upload.
-- **SC-004**: For every Dataset D7 row 1–5, 10–12 and 18–21 (wired reload), the rollback oracle checks 1–7 pass: X's record, home folder (with anything another request saved there before C3), team entry and every edge involving X **in W** are gone, other workspaces keep completed edits (X references there are AD-5, D7 row 21); when C4 is confirmed `GET /api/v1/agents` lacks the new ID after the answer; the only other state for X is the AD-5 residue outside the boundary that the test itself created (D7 rows 10 and 12), and in D7 row 20 the AD-6 home content written after C3, which the final clean-up removes. Manual recovery step 4 then removes the ordinary sessions; a protected main chat remains. For D7 rows 15–16 the answer carries `activation: "pending"` and the neutral restart line.
-- **SC-010**: After the manual recovery of each Dataset D15 row, a new upload is admitted.
+- **SC-004** **[r7 CHANGED]**: For every Dataset D7 (revision 7) row 1–5, 10, 11, 22 and 23a–23d (wired reload), the rollback oracle checks 1–7 pass with only AD-1…AD-4, and the invisibility probe of row 10 finds X at no hook point. For rows 6, 13, 14, 18 and 23g the same holds after a restart without the fault. For rows 23e–23f the import is complete after the start.
+- **SC-010**: After the recovery of each Dataset D15 (revision 7) row, a new upload is admitted.
 - **SC-005**: The structured-secret scan finds zero seeded values (none of them present in free text).
 - **SC-006**: `inspect`/`verify` leave an empty `OMNIPUS_HOME` empty.
 - **SC-007**: The regression table passes, with only `TestNewRootCommand_KeptCommandsPresent` changed.
@@ -1574,8 +1612,8 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 
 | TODO | Change | Page | Update |
 |---|---|---|---|
-| DOC-001 | New commands | `docs/using-omnipus-cli.md` (new section "How to move an agent to another install"; "Limits and things to watch") | Commands, flags, exit codes, preview and confirm, New mode only (the default becomes Replace later), the free-text notice, the suffix rule, the reserved names `export`/`import`/`package`. **"Recover from a failed import"**: the full Manual recovery procedure from "Rollback contract" (where to find the agent ID; record present → Delete agent, or GET for `revision` then DELETE with it; folder only → stop the gateway and delete `agents/<id>/`; then delete the staging folder to free the upload slot), plus what to do after a lost connection (check the agent list before importing again). Also say plainly that an import is visible to other screens and scripts while it runs; that a failed import removes the agent's record, its home folder **with everything inside it, whoever saved it there** (for example a private memory note), its team entry and its delegation lines; that chats and sessions other screens created for the agent stay; that work already running can write into the home folder again after the rollback; and the **final clean-up**: stop the gateway, delete `agents/<id>/` if it is there, start the gateway, then, if the record was already gone, remove the agent from other workspaces with the workspace API (`GET /api/v1/workspaces?status=all`, then `PUT /api/v1/workspaces/<id>` with the revision, without the agent in the team or its edges), then, with other session activity paused, find every session for the agent (`GET /api/v1/sessions?flat=true&agent_id=<id>`, following every `next_cursor`, not stopping on an empty page, collecting the IDs first), delete them, and run a fresh check from the start; if activity could not be paused, the clean-up is unverified. A main chat cannot be deleted and is **not** removed by normal retention: it can remain indefinitely (L16). Explain "activation pending" as **an unconfirmed reload only**: after a successful import, the agent is stored but may not be live yet (restart the gateway or wait and check the agent list); after a rollback, whether anything is left comes from the rollback line (complete or incomplete), not from the pending line. Also reconcile the page's outdated statements (the retired Ava/Admin roster, "a down gateway needs a manual start"), as the grill noted. |
-| DOC-002 | Agents can move between installs | `docs/agents.md` (after "How to create your own agent") | What travels and what changes (Field mapping, in plain words: prompt trimmed, connectors and missing skills dropped, retired delegation list not carried); the new ID; the default workspace; that pasted secrets in prompt files travel. An imported Main agent has its main chat; an imported worker is reached by drawing a delegation line to it from a Main agent in the Team graph. **[S1b]** external workers: the program comes from Settings → Third-party agents on the new install; environment overrides and additional arguments are re-entered in Edit → Runtime; a durable import does not mean the worker can run. The same recovery steps as DOC-001. |
+| DOC-001 | New commands | `docs/using-omnipus-cli.md` (new section "How to move an agent to another install"; "Limits and things to watch") | Commands, flags, exit codes, preview and confirm, New mode only (the default becomes Replace later), the free-text notice, the suffix rule, the reserved names `export`/`import`/`package`. **"Recover from a failed import"** (revision 7): the agent is invisible until the import has fully succeeded; a failed import leaves nothing that other screens could have used; if the gateway stopped during an import, the next start finishes or rolls it back; the Manual recovery steps 1–4 from "Rollback contract" for a start-up recovery that keeps failing; what to do after a lost connection (check the agent list before importing again). State the limits N1 and N2 in plain words. Explain "activation pending" as an unconfirmed reload after a successful import. Also reconcile the page's outdated statements (the retired Ava/Admin roster, "a down gateway needs a manual start"), as the grill noted. |
+| DOC-002 | Agents can move between installs | `docs/agents.md` (after "How to create your own agent") | What travels and what changes (Field mapping, in plain words: prompt trimmed, connectors and missing skills dropped, retired delegation list not carried); the new ID; the default workspace; that pasted secrets in prompt files travel. An imported Main agent has its main chat; an imported worker is reached by drawing a delegation line to it from a Main agent in the Team graph. **[S1b]** external workers: the program comes from Settings → Third-party agents on the new install; environment overrides and additional arguments are re-entered in Edit → Runtime; a durable import does not mean the worker can run. The same recovery steps as DOC-001. Built-in agents cannot be exported (P-Q1 B). |
 | DOC-003 | New REST endpoints | `docs/agents.md` "Without the app" | One sentence pointing to the three endpoints |
 
 ## Traceability Matrix
@@ -1592,7 +1630,7 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 | FR-008 | US-2, US-3, US-4 | Damaged… (D1 11–16, 26); Oversized decoder window…; Upload size through the real route | TestArchive_SizeCaps; TestArchive_DecoderLimits; TestPackagesImport_Route | DOC-001 |
 | FR-009 | US-3 | Damaged… (D12) | TestManifest_Relationships | none: error text only |
 | FR-010 | US-1, US-4 | Export a Main agent…; Export an agent with no AGENT.md; Export via REST…; [S1a only] External worker export… | TestPackagesExport_Route; TestPackages_S1aRefusals | DOC-001, DOC-003 |
-| FR-011 | US-1 | Built-in agents are refused | TestExportSelection_Refusals | DOC-002 |
+| FR-011 | US-1, US-3 | Built-in agents are refused; Package declares a core agent | TestExportSelection_Refusals; TestPackagesImport_Route | DOC-002 |
 | FR-012 | US-1 | The exported record follows Field mapping; [S1b] External worker runtime values… | TestFieldMapping_Export | DOC-002 |
 | FR-013 | US-1 | Structured secrets…; A secret pasted into the prompt travels | TestPackagesExport_Route | DOC-002 |
 | FR-014 | US-1 | [S1b] External worker runtime values… | TestPackages_S1bExternalAndUnknown | DOC-002 |
@@ -1614,8 +1652,10 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 | FR-036 | US-3 | Confirmed import creates…; Failures after the commit point… (pending publication, D7 rows 7, 17); Team tab refreshes while open | TestPackagesApply_NewMode; TestPackagesApply_PostCommitWarnings | DOC-001 |
 | FR-036a | US-3 | The main chat is created for the imported Main only; Failures after the commit point… | TestPackagesApply_MainChatScope; TestPackagesApply_PostCommitWarnings | DOC-002 |
 | FR-036b | US-3 | A native worker is imported and reached by delegation | TestPackagesApply_NativeWorkerReachable | DOC-002 |
-| FR-037 | US-3 | Failure before the commit point…; A competing workspace edit survives…; Another reader sees the import…; Sessions and messages created during the import are not rolled back…; Content in the agent's home folder follows the folder…; A failed membership removal stops the rollback…; Incomplete rollback…; The rollback reload is not confirmed | TestJournal_CompensationOrder; TestPackagesApply_Rollback | DOC-001 |
-| FR-037a | US-3 | Manual recovery frees everything (D15 rows 1–10, including C1 failure, partial C1, recreated folder and paged session residue); A failed membership removal stops the rollback… | TestPackages_ManualRecovery | DOC-001 |
+| FR-037 | US-3 | Failure before the commit point…; A competing workspace edit waits…; A failed membership removal is reported…; Incomplete rollback… | TestJournal_CompensationOrder; TestPackagesApply_Rollback; TestJoinAndPublish_OneLockHold | DOC-001 |
+| FR-037a | US-3 | Manual recovery frees everything (D15 revision 7); A failed membership removal is reported…; Incomplete rollback… | TestPackages_ManualRecovery; TestPackages_StartupRecovery | DOC-001 |
+| FR-049 | US-3 | The imported agent is invisible until the commit point | TestPackagesApply_Rollback (D7 row 10); TestAgentstore_PendingRecord; TestJoinAndPublish_OneLockHold | DOC-001 |
+| FR-062 | US-3 | An unfinished import is finished or rolled back at the next start | TestPackages_StartupRecovery | DOC-001 |
 | FR-038 | US-4 | One apply at a time | TestPackagesApply_ModesConcurrency | none |
 | FR-039 | US-4 | Staging that is not usable; Workspace selection problems | TestStaging_StateMachine | none |
 | FR-040 | US-3 | Failure before the commit point… (audit); Failures after the commit point… (audit row); Damaged… (audit) | TestPackagesApply_Rollback; TestPackagesApply_PostCommitWarnings; TestPackagesImport_Route | none: audit only |
@@ -1646,7 +1686,7 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 | D1 engine, REST, offline inspect/verify, local mode | As decided | FR-010, FR-020, FR-030, FR-045, FR-052, FR-054, FR-055, FR-060 |
 | D2 format, manifest, versions, SHA-256 | As decided, plus relationship rules | FR-001–FR-009 |
 | D3 libraries, reused checks, caps | Predicates moved (restore's skip policy kept); caps and decoder limits set | FR-007, FR-008 |
-| D4 stage → preview → add, journal rollback, one import at a time | **Narrowed (amended in ADR.md A2, A7):** rollback covers in-process failures before the commit point and resyncs the live list by reload; no isolation from other readers (L16); start-up recovery stays in S6; manual recovery documented; logical-state oracle with allowed differences; rollback boundary defined by places and records (record, home folder with everything inside it, team entry, edges involving X in the import workspace); outside it other requests' sessions and chats stay (AD-5); a running writer can recreate home content (AD-6), removed by the final clean-up | FR-020–FR-023, FR-034, FR-036–FR-040, FR-037a |
+| D4 stage → preview → add, journal rollback, one import at a time | **Revision 7 (ADR A9, founder P-QR B):** all-or-nothing as D4 intended: the agent is invisible until one atomic commit rename; in-process rollback C1–C2; start-up recovery from the journal in S1a; logical-state oracle with AD-1…AD-4; the remaining limits N1–N5 are stated | FR-020–FR-023, FR-034, FR-036–FR-040, FR-037a, FR-049, FR-062 |
 | D5 new IDs and remapping | **Amended:** `allow_agents` is not remapped but removed (retired by ADR-037); connector bindings dropped until S3; create rules applied (Field mapping) | FR-031, FR-033 |
 | D6 secrets | Structured sources excluded; **amended:** `cli_args` and `cli_path` also stripped; free-text redaction deferred, stated plainly | FR-012–FR-014, FR-018 |
 | D7 modes | New only | FR-030, FR-032 |
@@ -1663,10 +1703,10 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 
 | # | Limit | Why | Fixed in |
 |---|---|---|---|
-| L1 | One custom agent per package; no built-in agents | Scope; Q1 | S7, S6 |
+| L1 | One custom agent per package; built-in agents never travel (P-Q1 B) | Scope; founder decision | S7 (more agents); built-ins: by design |
 | L2 | Skills, connectors, memory, workspaces and chats do not travel; connector assignments always dropped | Later slices | S2–S5, S9 |
 | L3 | New mode only; the CLI default changes to Replace in S6 | Q2 | S6 |
-| L4 | **No automatic recovery when the gateway stops during an apply.** The record itself is always whole, but team membership may be missing. The journal is kept and the next upload warns about it; the owner follows the Manual recovery procedure, which also frees the upload slot | Start-up recovery is S6 | S6 |
+| L4 | **[r7 CHANGED]** Start-up recovery is in S1a. What it cannot do is listed as N2 (storage that does not honour flushes; Windows directory sync) and N4 (a committed import whose re-join and roll-back both fail) in "Rollback contract" | OS and disk limits | By design |
 | L5 | A staging is lost on restart (upload again) | In-memory registry | S6 if needed |
 | L6 | Prompt files are copied as they are; pasted secrets travel | Free text cannot be proven secret-free | Open |
 | L7 | **[S1b]** External workers arrive without environment overrides and additional arguments (re-enter them in Edit → Runtime). The program comes from the new install's Settings → Third-party agents. A durable import does not mean the worker can run | Host-specific, possibly secret | By design |
@@ -1676,15 +1716,15 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 | L11 | No new screen | S8 | S8 |
 | L12 | Caps sized for agent-only packages | Proportionate | S5, S9 |
 | L13 | The prompt is stored trimmed; legacy `model.fallbacks`, `subagents.allow_agents` and `subagents.model` are not carried; non-canonical colours, figures or roles in a hand-made package are refused | Import follows the create rules (DA-4) | By design |
-| L14 | After a rollback, harmless markers may differ (AD-1…AD-4); AD-5 (residue outside the boundary) and AD-6 (home content recreated after C3) are not markers but other requests' effects (L16) | Real side effects of the store | By design |
+| L14 | After a rollback, harmless markers may differ (AD-1…AD-4). AD-5 and AD-6 are withdrawn in revision 7 | Real side effects of the store | By design |
 | L15 | **[S1a until S1b lands]** External workers cannot be exported or imported; packages with unknown element types are refused | Split | S1b |
-| L16 | **An import is not isolated while it runs, and rollback is defined by the places and records it removes, not by who wrote them.** For a short window, another reload can list the new agent, and other requests can then use it: create ordinary sessions, send chat messages (saved to transcripts), start turns that run to completion (including tool calls such as saving a private memory note), or prepare its main chat. Rollback removes X's record, X's home folder with **everything inside it** (including content those requests saved there), X's team entry and every delegation edge involving X **in the import's workspace**, and requests a reload. It does **not** remove what those requests wrote outside that boundary (AD-5: sessions, chats, main chat, membership or edges for X in other workspaces, task or audit entries). A turn already running is not stopped by the reload and can recreate home content after C3 (AD-6); the final clean-up (stop the gateway, delete the folder, start, repair other workspaces, delete the sessions with a stable list and a verification scan) removes it. A protected main chat cannot be deleted and is not removed by retention: its identity and newest content can remain **indefinitely** in S1. Founder acceptance of this narrower promise is pending | No isolation machinery in S1 (DA-5, team-lead rulings r3 and r4) | S6 (journal-based clean-up) |
+| L16 | **[r7 CHANGED]** The import is invisible until its commit point, except that lock-free workspace readers (the workspace list, the delegation graph read) can show the new agent's ID during the commit step itself (N1); nothing can act on it then. Revision 6's text (no isolation, AD-5/AD-6 residue, final clean-up, indefinite main chat) is withdrawn | Filtering every lock-free workspace reader is out of proportion to a millisecond view that permits no action | By design |
 | L17 | **REST create does not store `voice` today** (the field is accepted and dropped). S1 keeps that behaviour; import stores `voice` the way the `create_agent` tool does. So an agent made through REST create and then exported carries an empty voice | Existing behaviour, outside S1; changing it is a REST behaviour change | Separate issue (chief to file); not a rider |
 | L18 | A native worker is not a chat partner after import: the owner draws a delegation line to it, or assigns it a workspace task | Existing product model | By design |
 
 ## Assumptions
 
-- **[ASSUMED-Q1 = A]**, **[ASSUMED-Q3 = A]**, **[ASSUMED-Q5 = A]**; DA-1…DA-5.
+- **Q1 decided: P-Q1 B**; **Q4 decided for S5: P-Q4 C** (not built in S1); **[ASSUMED-Q3 = A]**, **[ASSUMED-Q5 = A]**; DA-1…DA-7.
 - The default workspace normally exists but is **not** guaranteed (boot logs a failure and continues), hence `default_workspace_missing`.
 - The target build must ship S1; older builds lack the endpoints.
 - No template section was removed. The UI sections say "no new screen" and describe the T-7 change.
@@ -1735,6 +1775,16 @@ The rows are exactly the rows of the "Field mapping" table. Each row is tested w
 - Session clean-up is complete only under a stable session list with a fresh verification scan; otherwise it is reported unverified.
 - The after-C3 home oracle accepts exactly the real writer's note plus its identified derived index artifacts; the test keeps the writer from before C3 and closes it itself.
 - **Still not founder-approved (Q1 open):** the acceptance request must also say that references in other workspaces and sessions need the manual steps, and that the clean-up is not an all-data guarantee.
+
+### 2026-11-19 (revision 7, founder decisions; no review round, cap reached)
+- **P-QR B (founder, 2026-11-19 08:16Z): an import is all-or-nothing.** The agent is written as a pending record (`entities/agents/<id>.pending`), which no reader or reload opens; the team entry, the self-row and the commit rename happen in one workspace-lock hold; the rename is the commit point. Start-up recovery from the journal is in S1a. This closes the grill-r3 gap (other screens creating chats with the agent before the commit) by construction.
+- Rollback simplifies from C1–C4 to C1 (inside the lock hold) and C2 (discard the pending record and folder). C3 and C4 are retired; a C1 failure no longer stops C2; no rollback reload.
+- Withdrawn: AD-5, AD-6, the final clean-up, Manual recovery steps 4–5 (sessions, other workspaces), Known Limit L16 as written, the "founder acceptance pending" notes, D7 rows 12, 15, 16, 19, 20, 21 and D15 rows 5–12, BDD scenarios "Another reader sees the import…", "Sessions and messages…", "Content in the agent's home folder…", "The rollback reload is not confirmed".
+- Added: FR-049 (invisibility), FR-062 (start-up recovery), US-3 AS-15, D4 row 10, D7 rows 22–24, BDD "The imported agent is invisible…" and "An unfinished import is finished or rolled back…", tests 20a, 20b, 26a, task T-11. Changed: FR-011, FR-037, FR-037a, FR-044, D7 rows 1–6, 10, 13, 14, 18, D15, tests 11, 14, 21d, 26, SC-004, L1, L4, L14, L16, T-4, T-5, T-6, T-8 sizes.
+- Not guaranteed, stated in "Rollback contract": N1 (lock-free workspace readers during the commit step), N2 (power cut on storage that ignores flushes, and Windows directory sync), N3 (unknown member left in W until the next successful start), N4 (committed import whose recovery cannot finish), N5 (post-commit warnings, unchanged).
+- The T-4 sign-off (`ARCH-SIGNOFF-T3-T4.md`) is amended in one point: the import commits inside `JoinWorkspaceTeamAndPublish` (publish callback under the same lock hold) and runs C1 there; `JoinWorkspaceTeam`, `LeaveWorkspaceTeam`, the options, seams and the leave core are unchanged. Its row-14 edit (`PUT …/delegation` adding A → X) no longer applies: that request now waits for the lock and is then refused. The T-3 shape is unchanged except that import's persist step calls `CreatePendingState` (with `AGENT.md`) instead of `CreateState` plus `MutateStateWithAgentMD`.
+- **P-Q1 B (founder): built-in agents never go into a package**, export refuses them with "cannot be exported", and import never targets them. S1 never handled built-in settings or memory, so only the wording, FR-011, D4 row 10 and the Q1 rows change.
+- **P-Q4 C (founder), for slice S5 only:** ask per mounted folder, default off. Recorded in the slice plan; not built in S1.
 
 ---
 
