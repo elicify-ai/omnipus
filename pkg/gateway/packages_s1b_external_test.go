@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -202,6 +203,12 @@ func s1bRequireStoredExternal(t *testing.T, api *restAPI, ws string, res gen.Pac
 }
 
 func TestPackagesS1b_ExternalFieldsRejectedBeforeSharedApplier(t *testing.T) {
+	// Architect ruling sections 1/4A: inspect the raw record, before skills or
+	// MCP bindings can disappear during mapping. Installed/missing is not a
+	// runtime-policy distinction. The native controls below test the fixture.
+	skillsRoot := t.TempDir()
+	t.Setenv(config.EnvBuiltinSkills, skillsRoot)
+	writeFixtureSkill(t, skillsRoot, "writing")
 	for _, tc := range []struct {
 		name, field string
 		value       any
@@ -213,13 +220,30 @@ func TestPackagesS1b_ExternalFieldsRejectedBeforeSharedApplier(t *testing.T) {
 		// runtime must refuse BOTH before that value rule (FR-047).
 		{"zero cannot reach native applier", "context_window_override", 0},
 		{"one still unsupported", "context_window_override", 1},
+		{"D1-35 installed skill still unsupported", "skills", []string{"writing"}},
+		{"D1-35 missing skill refused before it can be dropped", "skills", []string{"missing-on-target"}},
+		{"D1-36 valid fallback still unsupported", "fallback_models", []any{map[string]any{"model": "m-fb", "provider": "openrouter"}}},
+		{"D1-37 populated model params", "model_params", map[string]any{"temperature": 0.25, "max_tokens": 2048}},
+		{"D1-37 empty model params is still supplied", "model_params", map[string]any{}},
+		{"D1-38 effort uses external CLI refusal", "reasoning_effort", "high"},
+		{"MCP binding refused before it can be dropped", "mcp_servers", []any{map[string]any{"id": "github"}}},
+		{"voice still unsupported", "voice", "alloy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := packageAPI(t)
+			installed := api.installedSkillIDs()
+			require.Contains(t, installed, "writing", "positive control: real skill registry sees the fixture")
+			require.NotContains(t, installed, "missing-on-target", "missing-skill case must exercise pre-mapping validation")
 			rec := s1bWorkerRecord(false)
-			rec[tc.field] = tc.value
+			if tc.field == "mcp_servers" {
+				rec["tools"] = map[string]any{"mcp": map[string]any{"servers": tc.value}}
+			} else {
+				rec[tc.field] = tc.value
+			}
 			before := snapshotHome(t, api.homePath)
 			slots := packageStagingIDs(t, api.homePath)
+			agents := agentEntityNames(t, api.homePath)
+			live := listedAgentIDs(t, api)
 			audits := len(auditJSONLLines(t, api.homePath))
 			pkg := buildAgentPackage(t, specSourceID, "Coder", rec, nil, nil, 0)
 			got := callPackageImport(t, api, pkg)
@@ -227,9 +251,15 @@ func TestPackagesS1b_ExternalFieldsRejectedBeforeSharedApplier(t *testing.T) {
 			assert.Equal(t, tc.field, packageErrField(er), "FR-047: the unsupported field, not a generic worker refusal")
 			// The spec requires the runtime refusal create_agent gets from
 			// agentmutation.ValidateFields, not the native integer error.
-			assert.Contains(t, er.Error, "unsupported by this runtime")
+			if tc.field == "reasoning_effort" {
+				assert.Contains(t, er.Error, agentmutation.ExternalCLIEffortRefusal, "same pinned reasoning-effort rule as create_agent")
+			} else {
+				assert.Contains(t, er.Error, "unsupported by this runtime")
+			}
 			assert.NotContains(t, er.Error, "must be >= 1", "runtime validation must win over the shared value applier")
 			assert.Equal(t, slots, packageStagingIDs(t, api.homePath), "refused upload releases its slot")
+			assert.Equal(t, agents, agentEntityNames(t, api.homePath), "no published or pending agent record")
+			assert.Equal(t, live, listedAgentIDs(t, api), "no agent reaches the live roster")
 			requireHomeUnchangedExcept(t, before, snapshotHome(t, api.homePath))
 			requireUploadRefusalAudit(t, api.homePath, audits)
 		})
@@ -254,6 +284,8 @@ func TestPackagesS1b_ExternalFieldsRejectedBeforeSharedApplier(t *testing.T) {
 		require.NotNil(t, stored.Agent.ContextWindowOverride)
 		assert.Equal(t, 64000, *stored.Agent.ContextWindowOverride)
 	})
+
+	t.Run("native capabilities still import with their own mapping rules", s1bFix2NativeCapabilities)
 }
 
 func TestPackagesS1b_ExternalSoulRejectedAsInvalidElement(t *testing.T) {
