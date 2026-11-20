@@ -78,6 +78,14 @@ async function expectSection(name: string) {
 
 beforeEach(() => {
   window.localStorage.setItem('omnipus_auth_username', 'legacy-tabs-tester')
+  // jsdom has no ResizeObserver — the same per-file stub ProfileSection
+  // .test.tsx uses (Radix Slider inside Profile needs it; the `chat` case of
+  // D-3 row 10 lands on Profile). Environment provisioning, not an oracle.
+  global.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
   // jsdom has no matchMedia — the same per-file stub AppShell.test.tsx and
   // -library.deep-link.test.tsx use (AppShell/Sidebar pin breakpoints).
   Object.defineProperty(window, 'matchMedia', {
