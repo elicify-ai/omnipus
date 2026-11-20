@@ -571,6 +571,21 @@ func DefaultPolicyForModel(
 	return policy
 }
 
+// DefaultBootPolicyForModel is the gateway startup's sibling of
+// DefaultPolicyForModel (office-preview spec §3.8 BR-2.2). RED STUB (spec
+// §13 staging): it ignores startupGrants until the GREEN commit.
+func DefaultBootPolicyForModel(
+	model FilesystemModel,
+	homePath string,
+	allowedPaths []string,
+	allowedExecPaths []string,
+	warnFn func(msg string, path string),
+	bindPorts []uint16,
+	startupGrants []string,
+) SandboxPolicy {
+	return DefaultPolicyForModel(model, homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
+}
+
 // confinedBootExtraReads are the reads the Linux confined BOOT set adds for
 // the Office preview converter (issue #1713, founder decision "Q1 B",
 // 2026-11-18). Landlock domains stack, so a converter started from a thread
