@@ -91,11 +91,10 @@ func (a *restAPI) stageUpload(r *http.Request, stagingID string, unfinished []om
 	if err = copyUploadToFile(body, path); err != nil {
 		return nil, err
 	}
-	m, payload, err := readStagedPackage(path)
+	m, el, payload, err := readStagedPackage(path)
 	if err != nil {
 		return nil, err
 	}
-	el := m.Elements[0]
 	plan, err := a.planPackageAgent(el, payload, a.liveAgentNames(), true)
 	if err != nil {
 		return nil, err
@@ -130,21 +129,31 @@ func copyUploadToFile(body io.Reader, path string) error {
 }
 
 // readStagedPackage runs every format check (omnpkg.ReadPackage) and the
-// element checks (omnpkg.ValidateElements) on a staged package file.
-func readStagedPackage(path string) (*omnpkg.Manifest, map[string][]byte, error) {
+// element checks (omnpkg.ValidateElements) on a staged package file, and
+// returns its agent element, selected by type (FR-006: an unknown element
+// may come first). Unknown elements' files stay in the payload map only; they
+// are never written outside staging.
+func readStagedPackage(path string) (*omnpkg.Manifest, omnpkg.ManifestElement, map[string][]byte, error) {
+	var none omnpkg.ManifestElement
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open staged package: %w", err)
+		return nil, none, nil, fmt.Errorf("open staged package: %w", err)
 	}
 	defer f.Close()
 	m, payload, err := omnpkg.ReadPackage(f)
 	if err != nil {
-		return nil, nil, err
+		return nil, none, nil, err
 	}
 	if err := omnpkg.ValidateElements(m, payload); err != nil {
-		return nil, nil, err
+		return nil, none, nil, err
 	}
-	return m, payload, nil
+	el, ok := omnpkg.AgentElement(m)
+	if !ok {
+		// ReadPackage refuses a package without an agent element; reaching
+		// this is an engine defect, not a client error.
+		return nil, none, nil, errors.New("staged package has no agent element after the format checks")
+	}
+	return m, el, payload, nil
 }
 
 // packageAgentPlan is one package agent mapped and built by the shared create
@@ -184,8 +193,10 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 	if err != nil {
 		return nil, err
 	}
+	// An external worker has no native prompt (ValidateElements refuses a
+	// SOUL.md in its element), so the blank-prompt rule is native-only.
 	soul := string(payload[packageAgentPath(el.SourceID, omnpkg.AgentSoulName)])
-	if strings.TrimSpace(soul) == "" {
+	if !rec.IsExternalCLIWorker() && strings.TrimSpace(soul) == "" {
 		return nil, &omnpkg.PackageError{Code: omnpkg.CodeElementNotCreatable, Field: "soul",
 			Detail: map[string]string{"reason": "the prompt is empty"}}
 	}
@@ -224,7 +235,14 @@ func packageAgentPath(sourceID, file string) string {
 // context_window_override are applied afterwards (FR-047).
 func packageCreateInput(rec *config.AgentConfig, name, soul string) agentCreateInput {
 	in := agentCreateInput{WireType: string(gen.AgentTypeMain), Name: name, Soul: soul}
-	if rec.Type == config.AgentTypeWorker {
+	switch {
+	case rec.IsExternalCLIWorker():
+		// Subagent (External): only the CLI travels. The mapping already
+		// removed the program path, environment overrides and CLI arguments
+		// (Field mapping executor rows), so the create sets none of them.
+		in.WireType = string(gen.AgentTypeSubagent3p)
+		in.Executor = &executorRequestInput{Cli: rec.Subagents.Executor.CLI}
+	case rec.Type == config.AgentTypeWorker:
 		in.WireType = string(gen.AgentTypeSubagent)
 	}
 	desc := rec.Description
@@ -296,8 +314,9 @@ func (a *restAPI) liveAgentNames() []string {
 	return names
 }
 
-// buildPackagePreview fills the generated preview (FR-021). S1a lists no
-// secrets and skips no element.
+// buildPackagePreview fills the generated preview (FR-021): the manifest's
+// needs_secrets (source IDs) and every element of a type this install does
+// not import as skipped (FR-006).
 func buildPackagePreview(m *omnpkg.Manifest, stagingID string, el omnpkg.ManifestElement, plan *packageAgentPlan,
 	unfinished []omnpkg.UnfinishedImport,
 ) (*gen.PackageImportPreview, error) {
@@ -312,8 +331,19 @@ func buildPackagePreview(m *omnpkg.Manifest, stagingID string, el omnpkg.Manifes
 	if prev.Manifest.NeedsSecrets == nil {
 		prev.Manifest.NeedsSecrets = resized(prev.Manifest.NeedsSecrets, 0)
 	}
-	prev.NeedsSecrets = resized(prev.NeedsSecrets, 0)
-	prev.SkippedElements = resized(prev.SkippedElements, 0)
+	prev.NeedsSecrets = resized(prev.NeedsSecrets, len(m.NeedsSecrets))
+	for i, s := range m.NeedsSecrets {
+		prev.NeedsSecrets[i].Name, prev.NeedsSecrets[i].UsedBy, prev.NeedsSecrets[i].Kind = s.Name, s.UsedBy, s.Kind
+	}
+	skipped := omnpkg.SkippedElements(m)
+	prev.SkippedElements = resized(prev.SkippedElements, len(skipped))
+	for i, sk := range skipped {
+		prev.SkippedElements[i].Type, prev.SkippedElements[i].SourceId = sk.Type, sk.SourceID
+		if sk.Name != "" {
+			name := sk.Name
+			prev.SkippedElements[i].Name = &name
+		}
+	}
 	prev.WillAdd = resized(prev.WillAdd, 1)
 	prev.WillAdd[0].Type = omnpkg.ElementTypeAgent
 	prev.WillAdd[0].SourceId = el.SourceID

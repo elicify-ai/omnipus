@@ -134,10 +134,13 @@ func (p *packageApplyRun) mainChatPending(err error) {
 	})
 }
 
-// fillResult puts created[] and warnings[] on the generated result. S1a
-// lists no secrets.
+// fillResult puts created[], warnings[] and needs_secrets[] on the generated
+// result; a secret's used_by is the created element's new ID (FR-041).
 func (p *packageApplyRun) fillResult(res *gen.PackageImportResult) {
-	res.NeedsSecrets = resized(res.NeedsSecrets, 0)
+	res.NeedsSecrets = resized(res.NeedsSecrets, len(p.needsSecrets))
+	for i, s := range p.needsSecrets {
+		res.NeedsSecrets[i].Name, res.NeedsSecrets[i].UsedBy, res.NeedsSecrets[i].Kind = s.Name, p.agentID(), s.Kind
+	}
 	res.Created = resized(res.Created, 1)
 	res.Created[0].Type = omnpkg.ElementTypeAgent
 	res.Created[0].SourceId = p.sourceID

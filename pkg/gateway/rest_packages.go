@@ -50,6 +50,7 @@ const (
 	packageCodeMainChatPending     = "main_chat_pending"
 	packageCodeUnfinishedImport    = "unfinished_import_found"
 	packageCodePublishNotDurable   = "publish_not_durable"
+	packageCodeProgramNotSet       = "program_not_set"
 )
 
 // packageT5Seams is the fault-injection surface for the package handlers.

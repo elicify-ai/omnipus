@@ -31,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -136,7 +137,26 @@ type packageApplyRun struct {
 	packageSHA  string // hex SHA-256 of the staged package (the success audit)
 	plan        *packageAgentPlan
 	warnings    []packageWarning
-	notDurable  bool
+	// needsSecrets are the manifest's needs_secrets rows of the agent element
+	// (used_by = source ID); the result rewrites used_by to the new ID.
+	needsSecrets []omnpkg.NeedsSecret
+	notDurable   bool
+}
+
+// importedProgramWarning is FR-043: an imported external worker whose CLI has
+// no program path set in this install's Settings → Third-party agents gets
+// the existing cannot-run text verbatim. The package never supplies the
+// program (Field mapping row cli_path).
+func (a *restAPI) importedProgramWarning(agent config.AgentConfig, sourceID string) (packageWarning, bool) {
+	if !agent.IsExternalCLIWorker() {
+		return packageWarning{}, false
+	}
+	cli := agent.Subagents.Executor.CLI
+	if strings.TrimSpace(a.agentLoop.GetConfig().Sandbox.ThirdPartyCLI(cli).Path) != "" {
+		return packageWarning{}, false
+	}
+	return packageWarning{Code: packageCodeProgramNotSet, ElementSourceID: sourceID,
+		Message: thirdpartycli.NoPathText(cli)}, true
 }
 
 func (p *packageApplyRun) agentID() string { return p.plan.Create.Agent.ID }
@@ -151,7 +171,7 @@ func (p *packageApplyRun) prepare(workspaceID *string) error {
 	}
 	p.stagingDir = dir
 	path := filepath.Join(dir, packageFileInStaging)
-	m, payload, err := readStagedPackage(path)
+	m, el, payload, err := readStagedPackage(path)
 	if err != nil {
 		return err
 	}
@@ -161,12 +181,21 @@ func (p *packageApplyRun) prepare(workspaceID *string) error {
 	if p.workspaceID, err = p.a.packageTargetWorkspace(workspaceID); err != nil {
 		return err
 	}
-	el := m.Elements[0]
 	p.sourceID = el.SourceID
 	if p.plan, err = p.a.planPackageAgent(el, payload, p.a.liveAgentNames(), false); err != nil {
 		return err
 	}
+	for _, s := range m.NeedsSecrets {
+		// The result names the created element (FR-041); a row about an
+		// element that is not created (a skipped one) has no such ID.
+		if s.UsedBy == el.SourceID {
+			p.needsSecrets = append(p.needsSecrets, s)
+		}
+	}
 	p.warnings = append(p.warnings, p.plan.Warnings...)
+	if w, ok := p.a.importedProgramWarning(p.plan.Create.Agent, el.SourceID); ok {
+		p.warnings = append(p.warnings, w)
+	}
 	if snap, ok := p.a.previewSnapshot(p.stagingID); ok {
 		p.warnings = append(p.warnings, changedSincePreview(el.SourceID, snap, previewSnapshotOf(p.plan))...)
 	}
