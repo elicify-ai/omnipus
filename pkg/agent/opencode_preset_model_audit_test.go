@@ -22,7 +22,7 @@ func TestOpenCodePresetModelAudit_RunAuditNamesOnlyDroppedOptionsAndFiltersThem(
 			} {
 				t.Run(cli.name, func(t *testing.T) {
 					f := t8RunFixture(t)
-					f.setProgram(t, cli.name, l11274Executable(t, f.home, cli.name, true))
+					f.setProgram(t, cli.name, opencodeTrustedProgram(t, cli.name))
 					require.NoError(t, f.al.MutateConfig(func(cfg *config.Config) error {
 						cfg.Tools.FilterSensitiveData = enabled
 						return nil
