@@ -1,6 +1,6 @@
 Status: Approved
 
-Status note: final after the review cap (revision 6), amended by revision 7 (founder decisions P-QR B and P-Q1 B, 2026-11-19), build S1a
+Status note: final after the review cap (revision 6), amended by revision 7 (founder decisions P-QR B and P-Q1 B, 2026-11-19), builds S1a and S1b
 
 `ADR: [ADR — Export / Import packages (.omnpkg), epic elicify-ai/omnipus#1094](ADR.md)` (status Proposed, 2026-11-19, with the 2026-11-19 amendments for S1; slice plan in [SLICES.md](SLICES.md), founder questions in [QUESTIONS.md](QUESTIONS.md))
 
@@ -125,7 +125,7 @@ Requirements and scenarios that belong to S1b are tagged **[S1b]**. Everything e
 | `pkg/gateway/rest_auth.go::restAPI.triggerReloadAndWaitOutcome`; `pkg/gateway/rest_agents.go::restAPI.deleteAgent` (uses the same reload after a delete); `pkg/gateway/agent_created_broadcast.go::restAPI.emitAgentCreated` | calls | The live agent list is rebuilt from the store by a full reload. Import uses that reload to publish after the commit point, and again after a rollback. `fastAgentUpsert` is not used: it expects the config write that import skips, and would fall back to the same reload anyway. |
 | `pkg/agentstore/store.go::Store.SetNotifier` | reads | The store's change notifier is optional and **not wired** in production at `7faff5291`, so writing or deleting a record does not change the live list by itself. |
 | `pkg/sysagent/tools/agent_apply_args.go::applySharedConfigArgs` (and `agentCreateArgNames`, `agentUpdateArgNames`) | **modifies (export only)** | The agent tools' rules for `memory_enabled`, `voice`, `context_window_override` and `model_params`. Import calls it (exported, unchanged) for the three fields REST create does not carry. |
-| `pkg/config/config_agents.go::AgentConfig.IsChatTarget`, `IsExternalCLIWorker` | calls | Only Main agents are chat targets; external workers are refused on upload in S1a. |
+| `pkg/config/config_agents.go::AgentConfig.IsChatTarget`, `IsExternalCLIWorker` | calls | Only Main agents are chat targets; external workers are refused on upload in S1a and accepted without their runtime settings from S1b. |
 | `pkg/gateway/rest_agent_executor.go::refuseForbiddenExecutorFields`; `contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`, `ExecutorConfigCreate.yaml` | calls / reads **[S1b]** | An external worker's program is set in Settings → Third-party agents, never per agent. Per agent it has only `cli`, `env_overrides` and `cli_args`. |
 | `pkg/agent/loop_wire.go` (ADR-037 comment); Remove the Global Per-Agent Delegation Policy (`docs/internal/architecture/ADR-037-remove-global-delegation-policy.md`) | reads | `subagents.allow_agents` is retired and has no effect; delegation is the per-workspace graph. |
 | `pkg/gateway/rest.go::restAPI.withAuth`, `withAuthAndBodyLimit`, `adminWrap`; `pkg/gateway/middleware/bypass_gate.go::RequireNotBypass` | calls | `withAuth` caps every body at 1 MiB. The upload route uses `withAuthAndBodyLimit` with 64 MiB plus `RequireNotBypass` (FR-045). |
