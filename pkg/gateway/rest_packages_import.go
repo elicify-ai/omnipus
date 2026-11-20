@@ -172,6 +172,10 @@ type packageAgentPlan struct {
 // are not a refusal (the error table places 409 name_suffix_exhausted at
 // apply): the preview proposes the source name and apply decides.
 func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string][]byte, existing []string, preview bool) (*packageAgentPlan, error) {
+	// Only the files the agent element itself declares are read: a file
+	// another (skipped) element owns can never become this agent's record,
+	// prompt or instructions (FR-006).
+	payload = elementPayload(el, payload)
 	raw := payload[packageAgentPath(el.SourceID, omnpkg.AgentRecordName)]
 	// Sign-off C-2: the REST raw-body effort rule on the record bytes, so a
 	// JSON null or an over-long value is refused, not silently dropped.
@@ -224,6 +228,17 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 	}, nil
 }
 
+// elementPayload is the view of payload restricted to the files el declares.
+func elementPayload(el omnpkg.ManifestElement, payload map[string][]byte) map[string][]byte {
+	owned := make(map[string][]byte, len(el.Files))
+	for _, f := range el.Files {
+		if body, ok := payload[f]; ok {
+			owned[f] = body
+		}
+	}
+	return owned
+}
+
 // refuseExternalUnsupportedFields is FR-047 (amended): an external worker's
 // record is checked with create_agent's runtime rule
 // (agentmutation.ValidateFields) on the raw record, before mapping, so the
@@ -231,31 +246,18 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 // The fields are listed in a fixed order; the first refused one is named.
 // tools.builtin.policies is not checked: the mapping replaces it with the
 // target's worker seed. A native record passes unchecked.
+//
+// The kind and the fields are read with the same typed decode the created
+// record goes through (config.AgentConfig, which accepts any letter case of
+// a field name), so a spelling such as "Type" or "Kind" cannot make the
+// check see a native record while the create sees an external one.
 func refuseExternalUnsupportedFields(raw []byte, sourceID string) error {
-	wrongType := func() error {
-		return packageErr(omnpkg.CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
-	}
-	// Decide the kind from the type-deciding fields only, so a native record
-	// reaches the mapping exactly as before (ValidateElements has already
-	// refused those fields when they have the wrong JSON type).
-	var top map[string]any
-	if err := json.Unmarshal(raw, &top); err != nil {
-		return wrongType()
-	}
-	agentType, _ := top["type"].(string)
-	probe := config.AgentConfig{Type: config.AgentType(agentType)}
-	if sub, ok := top["subagents"].(map[string]any); ok {
-		if exec, ok := sub["executor"].(map[string]any); ok {
-			execKind, _ := exec["kind"].(string)
-			probe.Subagents = &config.SubagentsConfig{Executor: &config.ExecutorConfig{Kind: config.ExecutorKind(execKind)}}
-		}
-	}
-	if !probe.IsExternalCLIWorker() {
-		return nil
-	}
 	var rec config.AgentConfig
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return wrongType()
+		return packageErr(omnpkg.CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
+	}
+	if !rec.IsExternalCLIWorker() {
+		return nil
 	}
 	var supplied []string
 	add := func(present bool, field string) {
@@ -274,7 +276,7 @@ func refuseExternalUnsupportedFields(raw []byte, sourceID string) error {
 	if len(supplied) == 0 {
 		return nil
 	}
-	err := agentmutation.ValidateFields(probe, supplied)
+	err := agentmutation.ValidateFields(rec, supplied)
 	if err == nil {
 		return nil
 	}
@@ -355,7 +357,11 @@ func packageCreateInput(rec *config.AgentConfig, name, soul string) agentCreateI
 	if rec.ModelParams != nil {
 		in.ModelParams = &agentModelParamsInput{Temperature: rec.ModelParams.Temperature, MaxTokens: rec.ModelParams.MaxTokens}
 	}
-	if rec.Tools != nil && len(rec.Tools.Builtin.Policies) > 0 {
+	// An external worker gets the target's worker seed, as REST create and
+	// create_agent give it: its packaged policies are never an input. This is
+	// decided on the typed record, so no spelling or duplicate of the policy
+	// keys can reach the create (architect ruling 4B, security finding F2).
+	if !rec.IsExternalCLIWorker() && rec.Tools != nil && len(rec.Tools.Builtin.Policies) > 0 {
 		policies := make(map[string]string, len(rec.Tools.Builtin.Policies))
 		for k, v := range rec.Tools.Builtin.Policies {
 			policies[k] = string(v)
