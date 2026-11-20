@@ -1532,6 +1532,12 @@ describe('ProvidersSection — ADR-068 sign-in row states', () => {
 // ===========================================================================
 // ADR-068 T068-25 (TDD row 27) — the Default model card, the row action, and
 // the Remove-provider flow.
+//
+// Settings redesign #1519 (FR-010; User Story 2, "Only one gold button while
+// the Save bar shows"): picking a default model is a DRAFT — it is shown on
+// the card, the Providers Save bar counts it, and nothing is stored until
+// Save changes sends PUT /providers/default-model. The card's read oracles
+// (pair display, window/source, the O11 error states) are unchanged.
 // ===========================================================================
 
 const CONNECTED_ANTHROPIC = {
@@ -1676,7 +1682,7 @@ describe('ProvidersSection — Default model card (FR-019)', () => {
     })
   })
 
-  it('Change offers models of connected/signed-in providers only, and PUTs the pick', async () => {
+  it('Change offers models of connected/signed-in providers only; the pick waits for Save changes, which PUTs it (FR-010)', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
       CONNECTED_ANTHROPIC,
       { ...CONNECTED_OPENROUTER, status: 'error' },
@@ -1699,14 +1705,24 @@ describe('ProvidersSection — Default model card (FR-019)', () => {
     expect(screen.getByTestId('default-model-option-claude-sonnet-4-5')).toBeInTheDocument()
     expect(screen.queryByTestId('default-model-option-anthropic/claude-sonnet-4.6')).not.toBeInTheDocument()
 
+    // FR-010: the pick is a draft — the card shows the picked pair, the bar
+    // counts it, and nothing is stored until Save changes.
     fireEvent.click(screen.getByTestId('default-model-option-claude-sonnet-4-5'))
+    await waitFor(() => expect(screen.queryByTestId('default-model-select')).not.toBeInTheDocument())
+    expect(screen.getByTestId('default-model-provider')).toHaveTextContent('Anthropic')
+    expect(screen.getByTestId('default-model-model')).toHaveTextContent('claude-sonnet-4-5')
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(api.putDefaultModel).not.toHaveBeenCalled()
 
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() =>
       expect(api.putDefaultModel).toHaveBeenCalledWith({
         provider: 'anthropic',
         model: 'claude-sonnet-4-5',
       }),
     )
+    // FR-018: the saved signal replaces the old immediate-PUT toast flow.
+    await screen.findByText(/Saved at/)
   })
 
   it('marks the row that backs the default, and only that row', async () => {
@@ -1724,7 +1740,7 @@ describe('ProvidersSection — Default model card (FR-019)', () => {
 })
 
 describe('ProvidersSection — Set as default from the provider row (FR-019)', () => {
-  it('opens the selector pre-filtered to that provider and performs the same PUT', async () => {
+  it('opens the selector pre-filtered to that provider; the pick waits for Save changes, which PUTs it (FR-010)', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
       CONNECTED_ANTHROPIC,
       CONNECTED_OPENROUTER,
@@ -1744,13 +1760,19 @@ describe('ProvidersSection — Set as default from the provider row (FR-019)', (
     expect(screen.getByTestId('default-model-option-claude-sonnet-4-5')).toBeInTheDocument()
     expect(screen.queryByTestId('default-model-option-anthropic/claude-sonnet-4.6')).not.toBeInTheDocument()
 
+    // FR-010: picking drafts — nothing is stored until Save changes.
     fireEvent.click(screen.getByTestId('default-model-option-claude-sonnet-4-5'))
+    expect(api.putDefaultModel).not.toHaveBeenCalled()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() =>
       expect(api.putDefaultModel).toHaveBeenCalledWith({
         provider: 'anthropic',
         model: 'claude-sonnet-4-5',
       }),
     )
+    await screen.findByText(/Saved at/)
   })
 
   it('offers no row action for a provider that cannot serve a turn', async () => {
