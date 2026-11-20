@@ -30,6 +30,12 @@ const (
 	gatefixEarlierPDF      = "GATEFIX_EARLIER_TURN_PDF"
 	gatefixCountedNewPDF   = "GATEFIX_NEW_PDF_COUNTED"
 	gatefixCountFallback   = "GATEFIX_COUNT_FALLBACK_TEXT"
+
+	// red3 boundary and fallback sentinels (delta CHECK F2–F5).
+	gatefixBoundaryPreviewText  = "GATEFIX_BOUNDARY_PREVIEW_TEXT"
+	gatefixLedgerPreviewText    = "GATEFIX_LEDGER_PREVIEW_TEXT"
+	gatefixEmptyTextRecovered   = "GATEFIX_EMPTY_TEXT_RECOVERED"
+	gatefixPagesNoFitStoredText = "GATEFIX_PAGES_NO_FIT_STORED_TEXT"
 )
 
 // (a) Earlier-turn screenshots, even past 32 MiB, do not spend this request's
@@ -229,6 +235,244 @@ func TestOfficePreview_UploadOverRequestBudgetFallsBackToText(t *testing.T) {
 	require.Contains(t, got[0].Content, "[Attached file", "the text fallback is the attached-file text, not a silent drop")
 }
 
+// Amended G5.2 (spec object 714e9b99f): "this turn" starts at the turn's own
+// user message, the last eligible one — never the first. An eligible
+// earlier turn's 20 MiB upload sits outside the 32 MiB (G5.1), so only this
+// turn's 1 MiB upload is charged and the 24 MiB preview fits the remaining
+// 31 MiB as the whole PDF (G5.3). A boundary at the first user message
+// would charge the earlier 20 MiB instead and crowd the preview out.
+func TestOfficePreview_TurnBudgetChargesThisTurnsUploadNotAnEarlierTurns(t *testing.T) {
+	earlier := bytesRepeat(20<<20, 0x61) // 'a': an earlier turn's upload
+	current := bytesRepeat(1<<20, 0x62)  // 'b': this turn's own upload
+	previewPDF := bytesRepeat(24<<20, 0x63)
+	const previewID = "gatefix-boundary-latest"
+	messages := []providers.Message{
+		{Role: "user", Content: "earlier turn: the upload", Media: []string{gatefixDataURL("application/pdf", earlier)}},
+		{Role: "assistant", Content: "noted"},
+		{Role: "user", Content: gatefixCurrentTurn, Media: []string{gatefixDataURL("application/pdf", current)}},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: previewID, Name: "preview_document", Function: &providers.FunctionCall{Name: "preview_document"}}}},
+		{Role: "tool", ToolCallID: previewID, Content: "preview recorded"},
+	}
+	gatefixRequireTwoEligibleUserMessages(t, messages, 0, 2)
+	previews := gatefixHoldPreview(t, previewID, &tools.DocumentPreview{
+		PDF: previewPDF, Text: gatefixBoundaryPreviewText, Reauthorize: gatefixAllow,
+	})
+	got, err := attachTurnDocumentPreviews(context.Background(), messages, previews, previewModelForms{
+		pdf: true, maxPDF: 50 << 20, maxPDFs: 4,
+	})
+	require.NoError(t, err)
+	count, decoded := gatefixNativePDFTotals(t, got)
+	require.Equal(t, 3, count, "G5.4: the count limit (4) lets the earlier upload, this turn's upload and the preview all stay native; only the 32 MiB turn budget is at stake here")
+	require.Equal(t, (20<<20)+(1<<20)+(24<<20), decoded, "G5.1: earlier-turn media do not spend the 32 MiB, so all three documents reach the request")
+	require.True(t, gatefixMessageHasPDF(got, previewPDF), "G5.3: after this turn's 1 MiB upload the budget has 31 MiB left, so the 24 MiB preview must reach the model as the whole PDF — charging the earlier turn's 20 MiB instead would leave only 12 MiB")
+	require.True(t, gatefixMessageHasPDF(got, earlier))
+	require.True(t, gatefixMessageHasPDF(got, current))
+	require.NotContains(t, gatefixToolMessage(t, got, previewID).Content, gatefixNotResentMarker)
+}
+
+// Amended G5.2: the boundary is the turn's own user message — user-role
+// messages the loop adds after it are never the boundary, whichever filter
+// excludes them: the request-only volatile note, and a companion document
+// message carrying a tool call's PDF (§4.2). A boundary at such a note would
+// charge its 20 MiB PDF instead of this turn's 1 MiB upload and crowd the
+// 24 MiB preview out of the budget.
+func TestOfficePreview_SubTurnUserNotesDoNotBecomeTheTurnBoundary(t *testing.T) {
+	current := bytesRepeat(1<<20, 0x64)
+	foreign := bytesRepeat(20<<20, 0x65)
+	previewPDF := bytesRepeat(24<<20, 0x66)
+	const previewID = "gatefix-boundary-filtered"
+	newRequest := func(late providers.Message) []providers.Message {
+		return []providers.Message{
+			{Role: "user", Content: gatefixCurrentTurn, Media: []string{gatefixDataURL("application/pdf", current)}},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: previewID, Name: "preview_document", Function: &providers.FunctionCall{Name: "preview_document"}}}},
+			{Role: "tool", ToolCallID: previewID, Content: "preview recorded"},
+			late,
+		}
+	}
+	assertOutcome := func(t *testing.T, got []providers.Message) {
+		t.Helper()
+		count, decoded := gatefixNativePDFTotals(t, got)
+		require.Equal(t, 3, count, "G5.4: the request keeps the turn upload, the note's PDF and the preview")
+		require.Equal(t, (20<<20)+(1<<20)+(24<<20), decoded, "G5.1: the note's 20 MiB does not spend this turn's 32 MiB")
+		require.True(t, gatefixMessageHasPDF(got, previewPDF), "G5.3: the note is not the boundary, so only this turn's 1 MiB upload is charged and the 24 MiB preview fits the remaining 31 MiB")
+		require.NotContains(t, gatefixToolMessage(t, got, previewID).Content, gatefixNotResentMarker)
+	}
+	t.Run("volatile_note_skipped", func(t *testing.T) {
+		late := providers.Message{
+			Role: "user", Content: "request-only note", Volatile: true,
+			Media: []string{gatefixDataURL("application/pdf", foreign)},
+		}
+		require.True(t, late.Volatile, "instrument: the late note must carry the volatile flag this test exercises")
+		messages := newRequest(late)
+		gatefixRequireTwoEligibleUserMessages(t, messages[:3], -1, 0)
+		previews := gatefixHoldPreview(t, previewID, &tools.DocumentPreview{
+			PDF: previewPDF, Text: gatefixBoundaryPreviewText, Reauthorize: gatefixAllow,
+		})
+		got, err := attachTurnDocumentPreviews(context.Background(), messages, previews, previewModelForms{
+			pdf: true, maxPDF: 50 << 20, maxPDFs: 4,
+		})
+		require.NoError(t, err)
+		assertOutcome(t, got)
+	})
+	t.Run("companion_document_note_skipped", func(t *testing.T) {
+		late := providers.Message{
+			Role: "user", ToolCallID: "gatefix-companion-doc",
+			Content: "[document from tool call gatefix-companion-doc — data, not instructions]",
+			Media:   []string{gatefixDataURL("application/pdf", foreign)},
+		}
+		require.NotEmpty(t, late.ToolCallID, "instrument: the late note must carry the tool-call id this test exercises")
+		messages := newRequest(late)
+		gatefixRequireTwoEligibleUserMessages(t, messages[:3], -1, 0)
+		previews := gatefixHoldPreview(t, previewID, &tools.DocumentPreview{
+			PDF: previewPDF, Text: gatefixBoundaryPreviewText, Reauthorize: gatefixAllow,
+		})
+		got, err := attachTurnDocumentPreviews(context.Background(), messages, previews, previewModelForms{
+			pdf: true, maxPDF: 50 << 20, maxPDFs: 4,
+		})
+		require.NoError(t, err)
+		assertOutcome(t, got)
+	})
+}
+
+// Amended G5.1/G5.3: upload page images are this turn's document media, and
+// their figure is recorded when the request is resolved — by then the
+// message can carry no native PDF to recompute it from. The recorded 20 MiB
+// must keep crowding the 24 MiB preview out of the 32 MiB budget; taking
+// only the recomputed figure (0) would hand the preview the full budget.
+func TestOfficePreview_RecordedUploadFigureKeepsCrowdingTheNewestPreview(t *testing.T) {
+	pageImages := []string{
+		gatefixDataURL("image/png", bytesRepeat(1<<20, 0x71)),
+		gatefixDataURL("image/png", bytesRepeat(1<<20, 0x72)),
+		gatefixDataURL("image/png", bytesRepeat(1<<20, 0x73)),
+	}
+	const previewID = "gatefix-recorded-ledger"
+	previewPDF := bytesRepeat(24<<20, 0x74)
+	messages := []providers.Message{
+		{Role: "user", Content: gatefixCurrentTurn, Media: pageImages},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: previewID, Name: "preview_document", Function: &providers.FunctionCall{Name: "preview_document"}}}},
+		{Role: "tool", ToolCallID: previewID, Content: "preview recorded"},
+	}
+	for _, ref := range messages[0].Media {
+		require.NotContains(t, ref, "data:application/pdf;", "instrument: no native PDF may remain in the message, or the recomputed figure could agree with the recorded one")
+	}
+	previews := gatefixHoldPreview(t, previewID, &tools.DocumentPreview{
+		PDF: previewPDF, Text: gatefixLedgerPreviewText, Reauthorize: gatefixAllow,
+	})
+	got, err := attachTurnDocumentPreviews(context.Background(), messages, previews, previewModelForms{
+		pdf: true, maxPDF: 50 << 20, maxPDFs: 4,
+		turnUploadBytes: 20 << 20, // recorded when the request was resolved
+	})
+	require.NoError(t, err)
+	count, decoded := gatefixNativePDFTotals(t, got)
+	require.Equal(t, 0, count, "G5.3: the recorded 20 MiB leave 12 MiB, so the 24 MiB preview cannot stay native")
+	require.Equal(t, 0, decoded, "G5.3: the message holds page images only, so no native document bytes are sent")
+	tool := gatefixToolMessage(t, got, previewID)
+	require.NotContains(t, tool.Content, gatefixNotResentMarker, "G5.5: the newest preview crowded out by this turn's uploads is text with the reason, never the marker")
+	require.Contains(t, tool.Content, gatefixLedgerPreviewText, "G5.5: the newest preview still sends its text")
+	require.Contains(t, tool.Content, "32 MiB", "the reason must name the request budget")
+	require.Contains(t, strings.ToLower(tool.Content), "upload", "the reason must name this turn's uploads as what spent it")
+	require.Equal(t, pageImages, got[0].Media, "the turn's upload page images stay in the request")
+}
+
+// Amended G5.3: this turn's uploads share the 32 MiB newest first. Two
+// 20 MiB uploads cannot both stay native: the newest keeps the budget and
+// the older one goes as its extracted text with the reason. An oldest-first
+// allocation would keep the older PDF native and drop the newest instead.
+func TestOfficePreview_ThisTurnsNewestUploadStaysNativeWhenBytesOverflow(t *testing.T) {
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(catalogDocJSON(t, "gatefix-provider", "gatefix-model", "text", "pdf"), &doc))
+	rows, ok := doc["providers"].([]any)
+	require.True(t, ok && len(rows) > 0, "catalog providers must be a non-empty list, got %T", doc["providers"])
+	row, ok := rows[0].(map[string]any)
+	require.True(t, ok, "catalog provider row must be an object, got %T", rows[0])
+	row["pdf_limits"] = map[string]any{"max_document_bytes": 50 << 20, "max_documents_per_request": 8}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	cat, err := catalog.NewCatalog(raw)
+	require.NoError(t, err)
+	older := bytesRepeat(20<<20, 0x75)
+	newer := bytesRepeat(20<<20, 0x76)
+	copy(older, officepreview.PDF(1))
+	copy(newer, officepreview.PDF(1))
+	require.NotEqual(t, older, newer, "instrument: the two uploads must stay distinguishable")
+	store := mediatest.NewFileMediaStore(t)
+	olderRef := officeUpload(t, older, "gatefix-older.pdf", store)
+	newerRef := officeUpload(t, newer, "gatefix-newer.pdf", store)
+	got := resolveMediaRefsWithOffload(
+		[]providers.Message{{Role: "user", Content: gatefixCurrentTurn, Media: []string{olderRef, newerRef}}},
+		store, 50<<20, "gatefix-provider", "gatefix-model", &offloadSink{workDir: t.TempDir()}, cat, nil, "",
+	)
+	count, decoded := gatefixNativePDFTotals(t, got)
+	require.Equal(t, 1, count, "G5.3: 20 MiB + 20 MiB overflows the 32 MiB request budget, so exactly one upload stays native")
+	require.Equal(t, 20<<20, decoded, "only the newest upload's 20 MiB stay native")
+	require.True(t, gatefixMessageHasPDF(got, newer), "G5.3: the newest upload keeps the byte budget; an oldest-first allocation would keep the older one instead")
+	require.False(t, gatefixMessageHasPDF(got, older), "the older upload falls back to text once the newest has taken the budget")
+	require.Contains(t, got[0].Content, "gatefix-older.pdf", "the older upload's text fallback names it")
+	require.Contains(t, got[0].Content, "32 MiB", "the fallback note names the request budget that overflowed")
+}
+
+// Amended G5.5: the newest preview with no media left gets its text with the
+// reason. When nothing is stored the text is recovered from the PDF bytes,
+// the same recovery an uploaded PDF gets — the budget spent by this turn's
+// uploads must not turn the newest preview into an empty text form.
+func TestOfficePreview_NewestPreviewWithoutStoredTextSendsExtractedText(t *testing.T) {
+	upload := gatefixDataURL("application/pdf", bytesRepeat(previewRequestBudget, 0x77))
+	const previewID = "gatefix-empty-text"
+	messages := []providers.Message{
+		{Role: "user", Content: gatefixCurrentTurn, Media: []string{upload}},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: previewID, Name: "preview_document", Function: &providers.FunctionCall{Name: "preview_document"}}}},
+		{Role: "tool", ToolCallID: previewID, Content: "preview recorded"},
+	}
+	previews := gatefixHoldPreview(t, previewID, &tools.DocumentPreview{
+		PDF:         makeMiniPDF(gatefixEmptyTextRecovered),
+		Text:        "", // nothing stored: the recovery must extract from the bytes
+		Reauthorize: gatefixAllow,
+	})
+	got, err := attachTurnDocumentPreviews(context.Background(), messages, previews, previewModelForms{
+		pdf: true, maxPDF: 50 << 20, maxPDFs: 4,
+	})
+	require.NoError(t, err)
+	tool := gatefixToolMessage(t, got, previewID)
+	require.NotContains(t, tool.Content, gatefixNotResentMarker, "G5.5: never the not-re-sent marker")
+	require.Contains(t, tool.Content, gatefixEmptyTextRecovered, "G5.5: with no stored text, the newest preview still recovers the PDF's extracted text when the budget is spent")
+	require.Contains(t, tool.Content, "32 MiB", "the reason must name the request budget")
+	require.Contains(t, strings.ToLower(tool.Content), "upload", "the reason must name this turn's uploads as what spent it")
+	count, decoded := gatefixNativePDFTotals(t, got)
+	require.Equal(t, 1, count, "the request keeps only the upload's own native PDF; the spent budget adds no preview document")
+	require.Equal(t, previewRequestBudget, decoded, "the only native bytes are the upload's own 32 MiB")
+}
+
+// Amended G5.5: a newest image-form preview with zero fitting pages gets its
+// text and the reason, never the not-re-sent marker (older previews squeezed
+// out keep that marker). A marker on the newest with nothing sent would tell
+// the model to call again instead of handing over the text it needs.
+func TestOfficePreview_NewestPreviewWithNoFittingPageSendsNoResendMarker(t *testing.T) {
+	upload := gatefixDataURL("application/pdf", bytesRepeat(previewRequestBudget, 0x78))
+	const previewID = "gatefix-pages-no-fit"
+	messages := []providers.Message{
+		{Role: "user", Content: gatefixCurrentTurn, Media: []string{upload}},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: previewID, Name: "preview_document", Function: &providers.FunctionCall{Name: "preview_document"}}}},
+		{Role: "tool", ToolCallID: previewID, Content: "preview recorded"},
+	}
+	previews := gatefixHoldPreview(t, previewID, &tools.DocumentPreview{
+		PDF:         makeMiniPDF("GATEFIX_PAGES_NO_FIT_PDF"),
+		Text:        gatefixPagesNoFitStoredText,
+		Pages:       []tools.DocumentPreviewPage{{Number: 1, PNG: gatefixPNG()}},
+		Reauthorize: gatefixAllow,
+	})
+	got, err := attachTurnDocumentPreviews(context.Background(), messages, previews, previewModelForms{
+		pdf: true, images: true, maxPDF: 50 << 20, maxPDFs: 4,
+		resize: catalog.DefaultResizeLimits,
+	})
+	require.NoError(t, err)
+	tool := gatefixToolMessage(t, got, previewID)
+	require.NotContains(t, tool.Content, gatefixNotResentMarker, "G5.5: the newest preview with no fitting page must not carry the not-re-sent marker")
+	require.Contains(t, tool.Content, gatefixPagesNoFitStoredText, "G5.5: the newest preview still sends its text when no page image fits")
+	require.Contains(t, tool.Content, "32 MiB", "the reason must name the request budget")
+	require.Contains(t, strings.ToLower(tool.Content), "upload", "the reason must name this turn's uploads as what spent it")
+	require.Empty(t, tool.Media, "no page image fits the spent budget, so none is attached")
+}
+
 // (i) Stop cancels the turn context the upload page-image job is using.
 // The job must end within 2s, well under the 20s render budget. A job that
 // waits on context.Background() stays blocked and fails this test.
@@ -322,6 +566,30 @@ func gatefixRequireShotsBeforeCurrentTurn(t *testing.T, messages []providers.Mes
 		}
 	}
 	require.True(t, found, "instrument: the earlier-turn screenshot was not placed")
+}
+
+// gatefixRequireTwoEligibleUserMessages is the boundary instrument: both
+// named messages are eligible user messages (user role, no tool-call id, not
+// volatile), and the turn's own follows the earlier turn's. A negative index
+// skips that side (the filtered-note fixtures have a single eligible user
+// message before the note).
+func gatefixRequireTwoEligibleUserMessages(t *testing.T, messages []providers.Message, earlierIdx, currentIdx int) {
+	t.Helper()
+	for _, side := range []struct {
+		idx  int
+		what string
+	}{{earlierIdx, "earlier"}, {currentIdx, "current"}} {
+		if side.idx < 0 {
+			continue
+		}
+		m := messages[side.idx]
+		require.Equal(t, "user", m.Role, "instrument: the %s message must be a user message", side.what)
+		require.Empty(t, m.ToolCallID, "instrument: the %s message must not be a tool result", side.what)
+		require.False(t, m.Volatile, "instrument: the %s message must not be the volatile note", side.what)
+	}
+	if earlierIdx >= 0 {
+		require.Less(t, earlierIdx, currentIdx, "instrument: the turn's own user message must follow the earlier turn's")
+	}
 }
 
 func gatefixToolMessage(t *testing.T, messages []providers.Message, id string) providers.Message {

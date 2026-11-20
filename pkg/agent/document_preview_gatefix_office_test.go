@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -130,6 +131,26 @@ func TestOfficePreview_GatewayReservationIsAtomic(t *testing.T) {
 	if runtime.GOMAXPROCS(0) < 2 {
 		t.Fatal("BLOCKED: D3 needs at least two processors; one processor hides the load/check/add race")
 	}
+	// Premise, through the real paths (AD-6): a turn's real preview store
+	// charges the gateway counter when it admits (turnDocumentPreviews.add →
+	// reserveLocked → reservePreviewGatewayBytes), and releasing the turns
+	// returns exactly what was charged. Setting the counter by hand, as the
+	// contention round below does, cannot see an admission that never
+	// charges or a release that never returns.
+	blob := bytes.Repeat([]byte{7}, previewTurnBudget)
+	var held []*turnDocumentPreviews
+	for n := 0; n < 3; n++ {
+		p := &turnDocumentPreviews{}
+		p.add(fmt.Sprintf("gatefix-d3-held-%d", n), gatefixLiveDoc(blob))
+		held = append(held, p)
+	}
+	require.Equal(t, int64(3*previewTurnBudget), previewGatewayBytes.Load(),
+		"instrument: three real 64 MiB preview turns must hold 192 MiB of the gateway budget; an admission that never charges it leaves the counter at 0")
+	for _, p := range held {
+		p.release()
+	}
+	require.Zero(t, previewGatewayBytes.Load(),
+		"instrument: releasing the held preview turns must return the gateway counter to zero; a no-op release leaves 192 MiB held")
 	const (
 		goroutines = 64
 		rounds     = 500
