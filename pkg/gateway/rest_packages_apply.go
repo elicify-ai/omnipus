@@ -395,7 +395,14 @@ func (p *packageApplyRun) joinAndPublish() (leave systools.LeaveResult, crashed 
 		if pathErr != nil {
 			return pathErr
 		}
-		for _, dir := range []string{filepath.Join(p.a.homePath, "workspaces"), filepath.Dir(delegationPath)} {
+		// The prompt folder (SOUL.md, AGENT.md) and its entry in agents/ are
+		// made durable before the commit rename: a failure here is an import
+		// failure and rolls back, never a published agent without its prompt.
+		agentsDir := filepath.Join(p.a.homePath, "agents")
+		for _, dir := range []string{
+			filepath.Join(agentsDir, id), agentsDir,
+			filepath.Join(p.a.homePath, "workspaces"), filepath.Dir(delegationPath),
+		} {
 			if syncErr := syncPackageDir(dir); syncErr != nil {
 				return fmt.Errorf("sync before publish: %w", syncErr)
 			}

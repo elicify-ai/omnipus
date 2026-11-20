@@ -51,7 +51,7 @@ func WriteJournal(dir string, j JournalFile) error {
 	if err != nil {
 		return fmt.Errorf("omnpkg: encode journal: %w", err)
 	}
-	if err := fileutil.WriteFileAtomic(filepath.Join(dir, JournalName), raw, 0o600); err != nil {
+	if err := fileutil.WriteFileAtomicSyncDir(filepath.Join(dir, JournalName), raw, 0o600); err != nil {
 		return fmt.Errorf("omnpkg: write journal: %w", err)
 	}
 	return nil

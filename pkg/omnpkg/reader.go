@@ -2,7 +2,6 @@ package omnpkg
 
 import (
 	"archive/tar"
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -89,6 +89,9 @@ func readManifestEntry(s *boundedStream, tr *tar.Reader) (*Manifest, error) {
 	}
 	if hdr.Name != ManifestEntry || (hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA) { //nolint:staticcheck // TypeRegA: old regular-file flag
 		return nil, newErr(CodeNotAPackage, "reason", "the first entry is not manifest.json")
+	}
+	if isSparse(hdr) {
+		return nil, newErr(CodeUnsafeEntryType, "file", hdr.Name, "reason", "sparse entry")
 	}
 	if hdr.Size > MaxManifestBytes {
 		return nil, tooLarge(LimitManifest)
@@ -231,8 +234,8 @@ func readPayload(s *boundedStream, tr *tar.Reader, m *Manifest) (map[string][]by
 			if firstUnlisted == "" {
 				firstUnlisted = hdr.Name
 			}
-			if _, err = io.Copy(io.Discard, tr); err != nil {
-				return nil, s.classify(err)
+			if err = discardEntry(s, tr); err != nil {
+				return nil, err
 			}
 			continue
 		}
@@ -259,11 +262,14 @@ func readPayload(s *boundedStream, tr *tar.Reader, m *Manifest) (map[string][]by
 }
 
 // checkEntryHeader applies the universal checks to one entry header: safe
-// type, safe path, no duplicate path, and the per-file cap for agent-owned
-// paths.
+// type, not sparse, safe path, no duplicate path, and the declared size
+// against the entry's FR-008 cap, all before any byte of the entry is read.
 func checkEntryHeader(hdr *tar.Header, seen map[string]bool) error {
 	if !SafeEntryType(hdr.Typeflag) {
 		return newErr(CodeUnsafeEntryType, "file", hdr.Name)
+	}
+	if isSparse(hdr) {
+		return newErr(CodeUnsafeEntryType, "file", hdr.Name, "reason", "sparse entry")
 	}
 	if UnsafeEntryPath(hdr.Name) {
 		return newErr(CodeUnsafePath, "file", hdr.Name)
@@ -272,8 +278,71 @@ func checkEntryHeader(hdr *tar.Header, seen map[string]bool) error {
 		return newErr(CodeUnsafeEntryType, "file", hdr.Name, "reason", "duplicate path")
 	}
 	seen[hdr.Name] = true
-	if len(hdr.Name) > len(AgentsPrefix) && hdr.Name[:len(AgentsPrefix)] == AgentsPrefix && hdr.Size > MaxAgentFileBytes {
-		return tooLarge(LimitAgentFile)
+	if hdr.Size > entryCap(hdr.Name) {
+		return tooLarge(entryLimit(hdr.Name))
+	}
+	return nil
+}
+
+// isSparse reports a sparse entry: the old GNU 'S' typeflag, or a PAX header
+// carrying GNU.sparse.* records (formats 0.0, 0.1 and 1.0). archive/tar
+// expands a sparse entry's holes into zero bytes that never pass through the
+// decoded stream, so the decoded-stream counter cannot bound them; FR-003
+// allows only regular files and directories, and a sparse file is neither.
+func isSparse(hdr *tar.Header) bool {
+	if hdr.Typeflag == tar.TypeGNUSparse {
+		return true
+	}
+	for k := range hdr.PAXRecords {
+		if strings.HasPrefix(k, "GNU.sparse.") {
+			return true
+		}
+	}
+	return false
+}
+
+// entryCap is the largest size an entry at name may declare or yield
+// (FR-008): 1 MiB for an agent-owned file, otherwise the 256 MiB decoded
+// stream, which no single entry can exceed.
+func entryCap(name string) int64 {
+	if strings.HasPrefix(name, AgentsPrefix) && len(name) > len(AgentsPrefix) {
+		return MaxAgentFileBytes
+	}
+	return MaxDecodedBytes
+}
+
+// entryLimit names the FR-008 limit entryCap applies to name.
+func entryLimit(name string) string {
+	if entryCap(name) == MaxAgentFileBytes {
+		return LimitAgentFile
+	}
+	return LimitDecoded
+}
+
+// readEntryBounded reads the current entry through a reader capped at its
+// FR-008 cap plus one byte, so an entry that yields more than its cap is
+// refused without buffering the excess.
+func readEntryBounded(s *boundedStream, tr *tar.Reader, name string) ([]byte, error) {
+	limit := entryCap(name)
+	body, err := io.ReadAll(io.LimitReader(tr, limit+1))
+	if err != nil {
+		return nil, s.classify(err)
+	}
+	if int64(len(body)) > limit {
+		return nil, tooLarge(entryLimit(name))
+	}
+	return body, nil
+}
+
+// discardEntry reads an unlisted entry to its end under the same bound as a
+// listed one; its bytes are counted, never kept.
+func discardEntry(s *boundedStream, tr *tar.Reader) error {
+	n, err := io.Copy(io.Discard, io.LimitReader(tr, MaxDecodedBytes+1))
+	if err != nil {
+		return s.classify(err)
+	}
+	if n > MaxDecodedBytes {
+		return tooLarge(LimitDecoded)
 	}
 	return nil
 }
@@ -284,15 +353,15 @@ func readListedEntry(s *boundedStream, tr *tar.Reader, hdr *tar.Header, fi FileI
 	if hdr.Size != fi.Size {
 		return nil, newErr(CodeChecksumMismatch, "file", hdr.Name, "reason", "size differs from the manifest")
 	}
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, tr); err != nil {
-		return nil, s.classify(err)
+	body, err := readEntryBounded(s, tr, hdr.Name)
+	if err != nil {
+		return nil, err
 	}
-	sum := sha256.Sum256(buf.Bytes())
+	sum := sha256.Sum256(body)
 	if hex.EncodeToString(sum[:]) != fi.SHA256 {
 		return nil, newErr(CodeChecksumMismatch, "file", hdr.Name, "reason", "sha256 differs from the manifest")
 	}
-	return buf.Bytes(), nil
+	return body, nil
 }
 
 func sortedFileNames(files map[string]FileInfo) []string {
