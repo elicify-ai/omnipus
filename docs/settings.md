@@ -142,7 +142,7 @@ Each section and neighbor screen has one job.
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Third-party agents | The program and standard parameters Omnipus uses for each external command-line tool (Claude Code, Codex, opencode) |
 | Settings, Limits | Three groups, each closed until you open it: **Context and tool results** (context budget), **Model overrides** (context length per model) and **Agents and goals** (tool calls per turn, agents at once, goal timers; every value there asks for your password) |
-| Settings, Protection | Security health, Auto-approve (saved with **Save changes**, Password badge), the **Turn on God Mode…** button (acts at once, never part of a Save), prompt-injection defense, per-agent rate limits, the audit log |
+| Settings, Protection | Security health, Auto-approve (saved with **Save changes**, Password badge), the **Turn on God Mode…** button (acts at once, never part of a Save), prompt-injection **Defense level** (Low, Medium or High, saved with **Save changes**; it applies without a restart), per-agent rate limits, the audit log |
 | Settings, Sandbox & network | Sandbox mode, filesystem model, shell workspace limit, allowed folders, internal network addresses (all asking for your password, on one Save), and the network proxy for shell commands |
 | Settings, Keys & secrets | The credential vault |
 | Settings, Gateway | Bind address, port, gateway token, preview server, log level; restarting the gateway |

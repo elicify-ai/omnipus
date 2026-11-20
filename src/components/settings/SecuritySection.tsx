@@ -23,7 +23,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { AuditLogViewer } from './AuditLogViewer'
-import { PromptGuardSection } from './PromptGuardSection'
+import { PromptGuardSection, type PromptGuardDraft } from './PromptGuardSection'
 import { ExecProxyStatusCard } from './ExecProxyStatusCard'
 import { SkillTrustSection } from './SkillTrustSection'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -64,8 +64,11 @@ import {
   fetchSandboxConfig,
   updateSandboxConfig,
   fetchSandboxStatus,
+  fetchPromptGuardLevel,
+  updatePromptGuardLevel,
   getErrorMessage,
 } from '@/lib/api'
+import type { PromptInjectionLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { DiagnosticsSection } from './DiagnosticsSection'
 import { SandboxSection } from './SandboxSection'
@@ -187,6 +190,9 @@ function GlobalToolPoliciesSection() {
 // Exported (not just used locally) so AutoApproveControl.stories.tsx can
 // mount this one card in isolation for a visual check, without seeding
 // every query the rest of SecuritySection needs.
+/** Config key of the Defense level (pending-restart names it this way). */
+const PROMPT_GUARD_KEY = 'sandbox.prompt_injection_level'
+
 export interface AutoApproveDraft { // not-wire-format: React props from Protection's Save bar
   /** The value shown: the draft, or the saved value. */
   value: boolean
@@ -408,6 +414,13 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
     queryFn: fetchSandboxConfig,
     enabled: view === 'protection',
   })
+  // Defense level is a draft on the same Save bar too (FR-010): Save sends it
+  // with PUT /security/prompt-guard, which needs no password.
+  const { data: promptGuard } = useQuery({
+    queryKey: ['prompt-guard-k'],
+    queryFn: fetchPromptGuardLevel,
+    enabled: view === 'protection',
+  })
 
   // Rate limits wait for Save changes (FR-010, #346: no auto-save in Settings).
   // An empty field means "Unlimited", which the route spells as 0.
@@ -428,6 +441,15 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
         disabled: !sandboxConfig,
       },
       {
+        key: PROMPT_GUARD_KEY,
+        label: 'Defense level',
+        value: promptGuard?.level ?? null,
+        kind: 'select',
+        options: ['low', 'medium', 'high'],
+        target: 'prompt-guard',
+        disabled: !promptGuard,
+      },
+      {
         key: 'max_agent_llm_calls_per_hour',
         label: 'Model calls per hour',
         value: rateLimits?.max_agent_llm_calls_per_hour || '',
@@ -446,13 +468,15 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
         disabled: !rateLimits,
       },
     ]
-  }, [rateLimits, sandboxConfig])
+  }, [rateLimits, sandboxConfig, promptGuard])
   const rateLimitState = useSaveBar({
     section: 'protection',
     fields: rateLimitFields,
     onSave: (body, ctx) =>
       ctx.target === 'sandbox-config'
         ? toWriteResponse(() => updateSandboxConfig({ auto_approve: body.auto_approve === true }, ctx.reauthToken))
+        : ctx.target === 'prompt-guard'
+        ? toWriteResponse(() => updatePromptGuardLevel(body[PROMPT_GUARD_KEY] as PromptInjectionLevel))
         : toWriteResponse(() =>
         updateRateLimits({
           max_agent_llm_calls_per_hour: Number(body.max_agent_llm_calls_per_hour ?? rateLimits?.max_agent_llm_calls_per_hour ?? 0) || 0,
@@ -461,6 +485,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       ),
     readBack: async (key) => {
       if (key === 'auto_approve') return (await fetchSandboxConfig()).auto_approve === true
+      if (key === PROMPT_GUARD_KEY) return (await fetchPromptGuardLevel()).level
       const fresh = await fetchRateLimits()
       return (fresh as unknown as Record<string, unknown>)[key]
     },
@@ -469,10 +494,12 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
         void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
         void queryClient.invalidateQueries({ queryKey: ['sandbox-status'] })
       }
+      if (keys.includes(PROMPT_GUARD_KEY)) void queryClient.invalidateQueries({ queryKey: ['prompt-guard-k'] })
       void queryClient.invalidateQueries({ queryKey: ['security', 'rate-limits'] })
     },
   })
   const autoApproveField = rateLimitFields[0]
+  const promptGuardField = rateLimitFields[1]
   const autoApproveDraft: AutoApproveDraft | undefined =
     view === 'protection'
       ? {
@@ -480,6 +507,17 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
           onChange: (next) => rateLimitState.setDraft('auto_approve', next),
           message: rateLimitState.message('auto_approve'),
           fieldId: fieldDomId('protection', 'auto_approve'),
+        }
+      : undefined
+  const promptGuardDraft: PromptGuardDraft | undefined =
+    view === 'protection'
+      ? {
+          // Null only before the level is read; the control then shows its
+          // own loading or error state instead of the choices.
+          value: rateLimitState.value(PROMPT_GUARD_KEY) as PromptInjectionLevel,
+          onChange: (next) => rateLimitState.setDraft(PROMPT_GUARD_KEY, next),
+          message: rateLimitState.message(PROMPT_GUARD_KEY),
+          fieldId: fieldDomId('protection', PROMPT_GUARD_KEY),
         }
       : undefined
 
@@ -600,7 +638,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       />
       </div>
     )}
-    {rateLimitFields.filter((f) => f !== autoApproveField).map((f) => (
+    {rateLimitFields.filter((f) => f !== autoApproveField && f !== promptGuardField).map((f) => (
       <SettingRow key={f.key} state={rateLimitState} field={f} />
     ))}
     {view !== 'protection' && <SaveBarPanel {...rateLimitState.bar} />}
@@ -756,7 +794,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
         <>
           <section aria-label="Prompt injection defense" className="space-y-[var(--space-2)]">
             <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Prompt injection defense</h3>
-            <PromptGuardSection />
+            <PromptGuardSection draft={promptGuardDraft} />
           </section>
           <section aria-label="Rate limits per agent" className="space-y-[var(--space-2)]">
             <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Rate limits per agent</h3>
@@ -775,7 +813,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
               </Button>
             </CalloutActions>
           </Callout>
-          {/* One Save bar for the section: Auto-approve and the rate limits. */}
+          {/* One Save bar for the section: Auto-approve, Defense level and the rate limits. */}
           <SaveBarPanel {...rateLimitState.bar} />
         </>
       )}

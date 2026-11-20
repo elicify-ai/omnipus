@@ -315,7 +315,7 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
   }
 
   // ── View ───────────────────────────────────────────────────────────────
-  const numberRow = (k: Key, description: React.ReactNode, opts: { unit?: string; placeholder?: string; testId: string; disabled?: boolean }) => (
+  const numberRow = (k: Key, description: React.ReactNode, opts: { unit?: string; placeholder?: string; testId: string; disabled?: boolean; allowsEmpty?: boolean }) => (
     <FormRow key={k} label={LABELS[k]} description={description} error={errors[k]} password fieldId={`settings-limits-${k}`}>
       {({ id, describedBy, invalid, fieldId }) => (
         <div className="flex items-center gap-[var(--space-2)]">
@@ -323,7 +323,8 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
             id={id}
             data-settings-field={fieldId}
             data-testid={opts.testId}
-            type="text"
+            // A field where empty means "no limit" stays text; the others are numbers.
+            type={opts.allowsEmpty ? 'text' : 'number'}
             inputMode="numeric"
             value={String(value(k))}
             placeholder={opts.placeholder}
@@ -392,6 +393,7 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
           {numberRow('max_parallel_agents', 'Empty means no fixed limit. 1 or more. Above 2,000 the server may run out of threads.', {
             placeholder: 'No limit',
             testId: 'performance-max-agents-input',
+            allowsEmpty: true,
           })}
           {parallel !== null && parallel > PHYSICAL_THREAD_CEILING && (
             <p data-testid="performance-high-value-warning" className="flex items-start gap-[var(--space-1)] pb-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
