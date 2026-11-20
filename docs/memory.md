@@ -54,7 +54,7 @@ Omnipus provides these four memory tools. Which an agent can use depends on its 
 
 ## What happens when a session ends
 
-With Auto recap on (Settings → Memory; it is on by default on a new install):
+With Auto recap on (Settings → Memory & recaps; it is on by default on a new install):
 
 1. The idle timer triggers recap after the timeout you set — 30 minutes by default. After a gateway restart, catch-up runs only when **Bootstrap recap** is also enabled. That one-time pass considers sessions with no retrospective marker and a usable owning agent. It requires a readable transcript with at least one valid, nonzero entry timestamp, and the newest such timestamp must be at least 30 minutes old, independently of your configured idle timeout. This is a transcript-entry time check, not a file-modification-age check. Sessions without a usable transcript timestamp are skipped, and delegated sessions do not get an automatic recap. Starts are spread out according to the bootstrap rate limit — five per minute by default.
 2. A background model call uses recent user messages and is asked for a recap of at most 150 words, up to five wins, up to five items to improve, and up to five items worth remembering. These are instructions to the model, not validated word or list-size limits; a successful response can be longer.
@@ -118,13 +118,13 @@ Cancellation is not proof that an action never happened: a tool may have acted b
 |---|---|
 | Search matches words, not meaning | A note saved as "invoice" will not surface for "billing" unless the words overlap. There is no meaning-based search. |
 | No memory browser | No screen in the app lists saved notes, and no tool deletes one. To remove a note, delete its file under `~/.omnipus/`. |
-| Retrospectives expire | A nightly sweep deletes retrospectives older than the retention setting — 180 days by default. |
-| Transcripts expire | Session retention defaults to 90 days (Settings → Data). The sweep removes eligible transcript files by file-modification age, not a strict per-message read cutoff. A main chat's current transcript file is protected, while eligible older rolled files can expire. `recall_conversation` can read content that remains in the archive, including content older than 90 days; it cannot recover files the sweep removed. |
+| Retrospectives expire | A nightly clean-up deletes retrospectives older than **Keep memory for** in Settings → Data & retention: 180 days by default, from 1 to 730 days. With **Keep memory forever** on, nothing is deleted. Recall reads reflections as far back as they are kept. |
+| Transcripts expire | Chat history is kept 90 days by default (Settings → Data & retention, 1 to 365 days). The sweep removes eligible transcript files by file-modification age, not a strict per-message read cutoff. A main chat's current transcript file is protected, while eligible older rolled files can expire. `recall_conversation` can read content that remains in the archive, including content older than 90 days; it cannot recover files the sweep removed. |
 | Saved notes never expire | Nothing prunes them; a workspace in use for years keeps every note. |
 | Writes are rate-limited | An agent can save at most 60 notes per minute, and one caller at most 600. Beyond that the save is rejected and the agent is told to wait. |
 | Sharing needs a workspace | The shared room exists only for work in a workspace. Outside one, every note is saved privately and the agent is told so. |
 
-Recap settings live in Settings → Memory: the Auto recap switch, the idle timeout in minutes, the restart catch-up pass and its per-minute cap, and the summarization model with its fallbacks.
+Recap settings live in Settings → Memory & recaps: the Auto recap switch, the idle timeout in minutes, the restart catch-up pass and its per-minute cap, and the summarization model with its fallbacks.
 
 ## Related pages
 

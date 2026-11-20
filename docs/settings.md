@@ -18,7 +18,7 @@ Personal things are not sections here. Profile is its own screen, holding your n
 
 A changed value is not stored until you press **Save changes**. As soon as a value differs from the saved one, a Save bar appears with the number of unsaved changes, **Discard** and **Save changes**. Buttons that act at once (Test, Check, Rotate, Restart, God Mode, Delete, Clear) are not part of a Save.
 
-- Leaving a section, or following a link elsewhere in the app, with unsaved changes asks **Leave without saving?** first. Closing or reloading the tab gets the browser's own question.
+- Leaving a section, or following a link elsewhere in the app, with unsaved changes asks **Leave without saving 2 changes?** (with your number) first. **Stay** keeps you where you were; **Leave** drops the changes. On a phone the **Settings** back button asks the same. Closing or reloading the tab gets the browser's own question.
 - Settings marked **Password** ask for your password once per Save, listing what the Save stores. If you cancel, nothing is stored and your changes stay on the page. When you sign in through omnipus.ai, a confirmation replaces the password field.
 - Settings marked **Needs restart** are stored at once but used only after a gateway restart. Right after such a Save, **Restart now?** offers to restart. **Later** keeps a banner at the top of every section, "N saved changes wait for a gateway restart", with **Restart now** and **Show changes** (each change with its running and saved value; "saved, not applied" means the gateway could not apply it).
 
@@ -63,7 +63,7 @@ API keys are stored encrypted on this server, never in the main configuration fi
 
 ## Web search
 
-In **Settings** → **Integrations**, **Web Search** says: "Your agents search with the default service. If it fails, the fallback takes over." When the search roles are available, two cards appear:
+In **Settings → Providers**, **Web Search** says: "Your agents search with the default service. If it fails, the fallback takes over." When the search roles are available, two cards appear:
 
 | Card | What you can do |
 |---|---|
@@ -135,13 +135,13 @@ Each section and neighbor screen has one job.
 
 | Screen or section | What it is for |
 |---|---|
-| Settings, Providers | Connect providers, manage keys and sign-ins, set the default model; voice input and web-search providers |
+| Settings, Providers | Connect providers, manage keys and sign-ins, set the default model; **Voice input**: the Active transcriber and a key for each voice service; web-search providers |
 | Settings, Memory & recaps | What the team remembers: recap settings. How long memory is kept is in Data & retention |
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Third-party agents | The program and standard parameters Omnipus uses for each external command-line tool (Claude Code, Codex, opencode) |
-| Settings, Limits | Context budget and model context-length overrides; tool calls per turn, agents at once, goal timers |
+| Settings, Limits | Three groups, each closed until you open it: **Context and tool results** (context budget), **Model overrides** (context length per model) and **Agents and goals** (tool calls per turn, agents at once, goal timers; every value there asks for your password) |
 | Settings, Protection | Security health, Auto-approve, God Mode, prompt-injection defense, per-agent rate limits, the audit log |
-| Settings, Sandbox & network | Sandbox mode and the network proxy for shell commands |
+| Settings, Sandbox & network | Sandbox mode, filesystem model, shell workspace limit, allowed folders, internal network addresses (all asking for your password, on one Save), and the network proxy for shell commands |
 | Settings, Keys & secrets | The credential vault |
 | Settings, Gateway | Bind address, port, gateway token, preview server, log level; restarting the gateway |
 | Settings, Data & retention | How long chat history and memory are kept, storage numbers, clearing all chat history |
@@ -161,6 +161,10 @@ Old links keep working. An old `?tab=` name opens the section that holds those s
 | `devices`, `signin`, or a name Settings does not know | Providers |
 
 Device pairing and signed-in browsers are not in Settings at the moment. Tool permissions and whether unverified skills may load are set in [Skills & Tools](skills.md).
+
+**Voice input**, under **Settings → Providers**, holds the **Active transcriber**: the one service that turns your voice messages into text. Only services that have a key are offered. Changing it is part of the Providers Save and asks for your password. Each voice service has its own row where you add or change its key. The default model on the same page is saved by the same **Save changes**; it does not ask for the password.
+
+**Settings → Limits** opens with its three groups closed. The **No context length** link on a model opens Limits with **Model overrides** open and a new row filled in for that model; it is stored only when you press **Save changes**. If one group cannot be loaded, only that group shows the error and **Retry**; the other groups still save.
 
 **Tool-result share limit**, under **Settings → Limits**, sets the maximum share of the active model's context window that all tool results together may occupy before trimming is needed. The context window is how much information the model can read at once. This is a percentage of the whole window, not the smaller budget left after reserving space for output and instructions, and it replaces the absolute character count. The default is **50%**. Enter a percentage **greater than 0% and no more than 100%**; fractional percentages are accepted.
 
@@ -417,16 +421,16 @@ The gateway token, under Gateway → Access, is used by apps and programs to sig
 ## Limits and things to watch
 
 - Usage is measured in tokens. If a provider bill surprises you, the Usage screen tells you which agent and which model drove it, not what it cost.
-- Session retention is 90 days by default, adjustable from 1 to 365 days on the Data tab. Older transcripts are deleted automatically, and that deletion is permanent.
-- **Clear all sessions** on the Data tab deletes every ordinary chat at once. There is no undo; if you need to keep the history, copy the data folder outside the app before clearing it. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
+- Session retention is 90 days by default, adjustable from 1 to 365 days in Data & retention. Older transcripts are deleted automatically, and that deletion is permanent.
+- **Clear all chat history** in Data & retention deletes every ordinary chat at once. There is no undo; if you need to keep the history, copy the data folder outside the app before clearing it. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
 - **Backup and Restore has been removed** from Settings → Data & retention and the API. Existing backup files on disk are not deleted. Use agent packages (export/import) to move agents between installations; packages are not a full backup of the data folder.
 - A sign-in can expire. The provider row shows the state, and signing in again the same way restores it.
-- Model changes on the Models tab apply on the next turn, with no restart; gateway port changes do need a restart.
+- Changes in Limits apply on the next turn, with no restart; gateway port changes do need a restart.
 - Your Profile display settings stay in this browser. The workspace context, by contrast, lives on the server, so every browser and agent sees the same text.
 
 ## Related pages
 
-- [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, and the audit log.
+- [security](security.md) — Protection, Sandbox & network and Keys & secrets: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
 - [agents](agents.md) — giving one agent its own model instead of the default, the agent roster, and external workers.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.

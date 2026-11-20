@@ -126,7 +126,7 @@ Omnipus also removes built-in skills it has retired, together with their names i
 Every change to a skill you own is saved as a version of the whole folder. The history is kept under Omnipus's own data, outside the skill folder, where agents cannot reach it.
 
 - **Undo.** Each change an agent makes reports the version it can go back to. An agent restores an old version with `edit_skill` and `action=restore`; it can read the list of versions with `get_skill`, asking for the `versions` field. A deleted skill can be brought back the same way.
-- **How long.** The retention setting you already use for sessions (**Settings**, Data tab, 90 days by default) now covers skill versions too. The clock starts when a version stopped being the live one, not when it was created. A skill you delete stays restorable for the full window counted from the deletion, however old it was.
+- **How long.** The retention setting you already use for sessions (**Settings → Data & retention**, 90 days by default) now covers skill versions too. The clock starts when a version stopped being the live one, not when it was created. A skill you delete stays restorable for the full window counted from the deletion, however old it was.
 - **Outside changes.** If a program or your own editor changes a skill folder, Omnipus notices at the next load or change. It records the new state as a version marked "changed outside Omnipus".
 - **Not every version can be restored.** A version taken from a broken state (no valid `SKILL.md`), or one that holds a stored secret value, is kept but refused on restore. The refusal says why.
 - **Built-ins** have no history. They are put back at every start.

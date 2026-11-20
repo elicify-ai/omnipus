@@ -55,7 +55,7 @@ If browser storage fails, a warning explains whether Omnipus could not **save** 
 
 Two limits to know:
 
-- Some values the picker restores rather than you picking carry no provider record — for example the recap model saved under Settings → Memory (that setting stores the bare model name), or the model a conversation was last answered with. For such a value, when exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it. A restored default that was saved together with a provider does carry it, and that provider's row is marked.
+- Some values the picker restores rather than you picking carry no provider record — for example the recap model saved under Settings → Memory & recaps (that setting stores the bare model name), or the model a conversation was last answered with. For such a value, when exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it. A restored default that was saved together with a provider does carry it, and that provider's row is marked.
 - In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the **Default model** card, and fallback entries do save the chosen provider. There is no create form in the app: new agents are created by asking Omnipus or through the REST API (see [agents](agents.md)).
 
 ## Model requirements
