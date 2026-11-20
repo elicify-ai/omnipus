@@ -1,0 +1,24 @@
+title: PackageImportApplyRequest
+description: >
+  Request body of POST /api/v1/packages/import/{staging_id}/apply. mode is
+  required and has no default; S1 accepts only "new" (replace and merge are
+  refused with 422 import_mode_not_available).
+type: object
+required:
+  - mode
+additionalProperties: false
+properties:
+  mode:
+    type: string
+    enum:
+      - replace
+      - merge
+      - new
+    description: How to import; S1 supports new (add as new items) only.
+    example: new
+  workspace_id:
+    type: string
+    description: >
+      Workspace the imported agent joins. Absent: the default workspace
+      (409 default_workspace_missing when there is none).
+    example: ws-1
