@@ -141,6 +141,55 @@ export function SettingsScreen({
   const [query, setQuery] = useState('')
   const results = useMemo(() => searchSettings(query), [query])
   const searching = query.trim().length > 0
+  const resultsRef = useRef<HTMLUListElement>(null)
+  const navRef = useRef<HTMLElement>(null)
+
+  // A list link or search result only says where the person wants to go; the
+  // phone shows the section and the search clears once the section really
+  // changed, so Stay in the leave prompt keeps the list and the typed search
+  // (FR-014 exit table). Stay returns focus to the control that was used.
+  const navIntent = useRef<'list' | 'search' | null>(null)
+  const stayFocus = useRef<HTMLElement | null>(null)
+  const prevSection = useRef(section)
+  useEffect(() => {
+    if (prevSection.current === section) return
+    prevSection.current = section
+    if (navIntent.current) setPhoneShowsSection(true)
+    if (navIntent.current === 'search') setQuery('')
+    navIntent.current = null
+    stayFocus.current = null
+  }, [section])
+
+  const searchInput = () => navRef.current?.querySelector<HTMLInputElement>('#settings-search-input') ?? null
+  const resultLinks = () => Array.from(resultsRef.current?.querySelectorAll<HTMLElement>('a[href]') ?? [])
+
+  // Arrow keys move between the search box and its results; Escape in a
+  // result goes back to the search box (the box itself clears on Escape).
+  const onSearchKeyDown = (e: React.KeyboardEvent) => {
+    const links = resultLinks()
+    if (!links.length) return
+    const inBox = e.target === searchInput()
+    const at = links.indexOf(e.target as HTMLElement)
+    let next: HTMLElement | null | undefined
+    if (e.key === 'ArrowDown') next = inBox ? links[0] : links[Math.min(at + 1, links.length - 1)]
+    else if (e.key === 'ArrowUp' && at >= 0) next = at === 0 ? searchInput() : links[at - 1]
+    else if (e.key === 'Home' && at >= 0) next = links[0]
+    else if (e.key === 'End' && at >= 0) next = links[links.length - 1]
+    else if (e.key === 'Escape' && at >= 0) next = searchInput()
+    if (!next) return
+    e.preventDefault()
+    next.focus()
+  }
+
+  // ── Phone back button (FR-008, FR-014) ─────────────────────────────────
+  const [phoneBackAsk, setPhoneBackAsk] = useState(false)
+  const [bodyKey, setBodyKey] = useState(0)
+  const phoneBackRef = useRef<HTMLButtonElement>(null)
+  const showPhoneList = useCallback(() => {
+    setPhoneShowsSection(false)
+    // Focus lands on the open section's entry in the list.
+    setTimeout(() => navRef.current?.querySelector<HTMLElement>(`[data-testid="settings-nav-${section}"]`)?.focus(), 0)
+  }, [section])
 
   // Focus the heading when the open section changes (not on first paint).
   const firstPaint = useRef(true)
@@ -160,9 +209,10 @@ export function SettingsScreen({
   const gatewayDown = about.isError
 
   const nav = (
-    <nav aria-label="Settings sections" className="space-y-[var(--space-3)]">
+    <nav ref={navRef} aria-label="Settings sections" className="space-y-[var(--space-3)]" onKeyDown={onSearchKeyDown}>
       <div>
         <SearchField
+          id="settings-search-input"
           value={query}
           onValueChange={setQuery}
           placeholder="Search settings"
@@ -175,7 +225,7 @@ export function SettingsScreen({
       </div>
       {searching ? (
         results.length ? (
-          <ul className="space-y-[var(--space-1)]" data-testid="settings-search-results">
+          <ul ref={resultsRef} className="space-y-[var(--space-1)]" data-testid="settings-search-results">
             {results.map((r, i) => (
               <li key={`${r.label}-${i}`}>
                 {r.section ? (
@@ -183,8 +233,12 @@ export function SettingsScreen({
                     to="/settings"
                     search={{ tab: r.section }}
                     onClick={() => {
-                      setQuery('')
-                      setPhoneShowsSection(true)
+                      navIntent.current = 'search'
+                      stayFocus.current = searchInput()
+                      if (r.section === section) {
+                        setQuery('')
+                        setPhoneShowsSection(true)
+                      }
                     }}
                     className="block rounded-md px-[var(--space-2)] py-[var(--space-2)] hover:bg-[var(--color-surface-2)]"
                   >
@@ -230,7 +284,11 @@ export function SettingsScreen({
                     search={{ tab: s.id }}
                     aria-current={s.id === section ? 'page' : undefined}
                     data-testid={`settings-nav-${s.id}`}
-                    onClick={() => setPhoneShowsSection(true)}
+                    onClick={(e) => {
+                      navIntent.current = 'list'
+                      stayFocus.current = e.currentTarget
+                      if (s.id === section) setPhoneShowsSection(true)
+                    }}
                     className={cn(
                       'flex min-h-[var(--target-touch-minimum)] items-center justify-between rounded-md px-[var(--space-2)] text-[length:var(--type-body-compact-size)]',
                       s.id === section
@@ -293,7 +351,15 @@ export function SettingsScreen({
                 className={cn('min-w-0 outline-none', phoneShowsSection ? 'block' : 'hidden md:block')}
               >
                 <div className="mb-[var(--space-2)] md:hidden">
-                  <Button variant="ghost" size="sm" onClick={() => setPhoneShowsSection(false)}>
+                  <Button
+                    ref={phoneBackRef}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      if (draftCount > 0) setPhoneBackAsk(true)
+                      else showPhoneList()
+                    }}
+                  >
                     <CaretLeft size={13} aria-hidden="true" />
                     Settings
                   </Button>
@@ -325,7 +391,7 @@ export function SettingsScreen({
                 </div>
 
                 <SettingsSectionBody
-                  key={section}
+                  key={`${section}-${bodyKey}`}
                   section={section}
                   prefillOverride={prefillOverride}
                   focusGodMode={focusGodMode}
@@ -353,9 +419,21 @@ export function SettingsScreen({
         />
 
         <ConfirmDialog
-          open={blocker.status === 'blocked'}
+          open={blocker.status === 'blocked' || phoneBackAsk}
           onOpenChange={(open) => {
-            if (!open && blocker.status === 'blocked') blocker.reset()
+            if (open) return
+            if (blocker.status === 'blocked') {
+              // Stay: nothing moves; focus goes back to the control used.
+              blocker.reset()
+              navIntent.current = null
+              const back = stayFocus.current
+              stayFocus.current = null
+              if (back) setTimeout(() => back.focus(), 0)
+            }
+            if (phoneBackAsk) {
+              setPhoneBackAsk(false)
+              setTimeout(() => phoneBackRef.current?.focus(), 0)
+            }
           }}
           title={`Leave without saving ${draftCount} ${draftCount === 1 ? 'change' : 'changes'}?`}
           description={`${draftCount} unsaved ${draftCount === 1 ? 'change' : 'changes'} on this page will be lost.`}
@@ -364,6 +442,12 @@ export function SettingsScreen({
           destructive
           onConfirm={() => {
             if (blocker.status === 'blocked') blocker.proceed()
+            if (phoneBackAsk) {
+              // Leave: the section's drafts are dropped and the list shows.
+              setPhoneBackAsk(false)
+              setBodyKey((k) => k + 1)
+              showPhoneList()
+            }
           }}
         />
       </div>
