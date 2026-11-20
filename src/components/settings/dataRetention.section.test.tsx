@@ -10,9 +10,11 @@
  * "Memory & recaps holds only a link to retention").
  *
  * Oracles (spec, never code):
- *   - S-Q13 A defaults: 90 / 180 / Keep forever off.
- *   - Saving 30 + 365 sends ONE update with both values; they show after a
- *     reload (the section re-reads).
+ *   - S-Q13 A defaults: 90 / 180 / Keep forever off; the group sits under the
+ *     UI table's block heading "How long data is kept"; the switch's exact
+ *     label is "Keep forever" (US-5 AS1, wireframe).
+ *   - Saving 30 + 365 sends ONE update with both values; they show after the
+ *     save (the section re-reads; a reload shows the same numbers).
  *   - FR-040: while Keep forever is on, "Keep memory for" is disabled, not
  *     validated and NOT SENT — the body carries memory_retros_forever only.
  *   - D-1 row 6 / FR-042: 366 → "Enter a whole number from 1 to 365." and
@@ -109,12 +111,16 @@ beforeEach(() => {
 describe('US-5 — Data & retention shows and saves the retention values', () => {
   it('a fresh install shows 90 / 180 with Keep forever off (S-Q13 A)', async () => {
     renderSection(<DataSection />)
+    // The retention group sits under the block heading the UI table names
+    // ("Counts, How long data is kept, Danger zone"; wireframe block).
+    expect(screen.getByText('How long data is kept')).toBeInTheDocument()
     expect(await screen.findByLabelText('Keep chat history for')).toHaveValue(90)
     expect(screen.getByLabelText('Keep memory for')).toHaveValue(180)
-    expect(screen.getByRole('switch', { name: /keep forever/i })).not.toBeChecked()
+    // US-5 AS1's exact label: the switch is "Keep forever".
+    expect(screen.getByRole('switch', { name: 'Keep forever' })).not.toBeChecked()
   })
 
-  it('saving 30 and 365 sends one update carrying both values (one write path, FR-043)', async () => {
+  it('saving 30 and 365 sends one update carrying both values, and they show after the section re-reads (one write path, FR-043)', async () => {
     renderSection(<DataSection />)
     const chat = await screen.findByLabelText('Keep chat history for')
     await userEvent.clear(chat)
@@ -125,6 +131,10 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
     expect(apiAny.updateRetentionSettings).toHaveBeenCalledTimes(1)
     expect(retentionOf()).toEqual({ session_days: 30, memory_retros_days: 365 })
+    // BDD "Saving both day counts": after the save the fields show the saved
+    // values (the section re-reads; a reload shows the same numbers).
+    expect(await screen.findByLabelText('Keep chat history for')).toHaveValue(30)
+    expect(screen.getByLabelText('Keep memory for')).toHaveValue(365)
   })
 
   it('366 is blocked with the exact range text and Save stays unavailable (D-1 row 6)', async () => {
