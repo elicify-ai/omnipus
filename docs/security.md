@@ -49,7 +49,7 @@ Auto-approve can be set in two places. On a new installation it is **on** global
 
 | Where | What it does | Example |
 |---|---|---|
-| **Settings → Protection → Auto-approve** | The default for every agent and chat. It carries a **Password** badge: changing it asks you to re-type your password. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
+| **Settings → Protection → Auto-approve** | The default for every agent and chat. It carries a **Password** badge: a change waits for **Save changes**, which asks you to re-type your password once (with the rate limits, if you changed them too). Turning God Mode on or off does not save it. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
 | The **Auto** switch next to the message box in a chat | Turns Auto-approve on or off for that chat. You can flip it before typing anything — a brand-new chat has no conversation yet, so the switch records your choice and applies it from your very first message, before any tool call in that first turn runs. In a chat that is already running, a flip applies from the agent's very next tool call, not just your next typed message — even mid-turn, while the agent is still working. A prompt that is already open when you flip the switch is not resolved for you; it has already asked, and stays open until you answer it. | Auto-approve is off globally, but you are watching this chat closely. You switch it on before typing your first message, and that first message already runs under it. In a chat that is already going, you switch it on mid-turn and the agent's next tool call already runs under it. |
 
 On the Security screen, the switch carries this description:
