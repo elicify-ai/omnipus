@@ -318,7 +318,8 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
       const outcomes: { keys: string[]; outcome: WriteOutcome }[] = []
       for (const [target, group] of targets) {
         const body: Record<string, SaveBarValue> = {}
-        for (const f of group) body[f.key] = sentDrafts[f.key]
+        // A number field's draft is the typed text; it is sent as a number.
+        for (const f of group) body[f.key] = f.kind === 'number' ? Number(sentDrafts[f.key]) : sentDrafts[f.key]
         const usesToken = group.some((f) => f.password)
         const outcome = await classifyWrite(() => onSave(body, { target, reauthToken: usesToken ? token : undefined }))
         outcomes.push({ keys: group.map((f) => f.key), outcome })
@@ -337,7 +338,6 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
     } finally {
       setSaving(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saving, invalidKeys, changedKeys, byKey, drafts, savedValue, preSave, shell, onSave, applyOutcomes, runCheck, finish])
 
   const retry = useCallback(async () => {

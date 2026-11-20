@@ -19,7 +19,10 @@
 
 import { z } from 'zod'
 import { isApiError } from '@/lib/api'
-import type { ErrorResponse, PendingRestartEntry } from '@/lib/api'
+import type { PendingRestartEntry } from '@/lib/api'
+import type { components } from '@/lib/api/generated/openapi-types'
+
+type ErrorResponse = components['schemas']['ErrorResponse']
 import { BASE_URL, buildHeaders } from '@/lib/api/http'
 import { PendingRestartEntry as PendingRestartEntrySchema } from '@/lib/api/generated/schemas'
 
@@ -78,7 +81,7 @@ export async function classifyWrite(write: () => Promise<WriteResponse>): Promis
   const err = isRecord(body) ? (body as Partial<ErrorResponse>) : undefined
   if (err?.code === 'saved_not_refreshed') {
     const details = isRecord(err.details) ? err.details : {}
-    const keys = Array.isArray(details.keys) ? details.keys.filter((k): k is string => typeof k === 'string') : []
+    const keys = Array.isArray(details.keys) ? details.keys.filter((k: unknown): k is string => typeof k === 'string') : []
     return { kind: 'saved-not-in-use', keys, body, requiresRestart: true }
   }
   if (res.status >= 200 && res.status < 300) {
@@ -110,7 +113,7 @@ export async function toWriteResponse(call: () => Promise<unknown>): Promise<Wri
     return { ok: true, status: 200, json: async () => body }
   } catch (err) {
     if (isApiError(err) && err.status > 0) {
-      let parsed: unknown = undefined
+      let parsed: unknown
       try {
         parsed = err.body ? JSON.parse(err.body) : undefined
       } catch {

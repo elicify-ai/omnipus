@@ -20,7 +20,7 @@
  *   - Block / Warn-unverified / Allow-all radio already built; imported here.
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { AuditLogViewer } from './AuditLogViewer'
 import { PromptGuardSection } from './PromptGuardSection'
@@ -28,10 +28,16 @@ import { ExecProxyStatusCard } from './ExecProxyStatusCard'
 import { SkillTrustSection } from './SkillTrustSection'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash, Key, Lock } from '@phosphor-icons/react'
+import { Link } from '@tanstack/react-router'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Callout, CalloutActions, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
+import { SaveBarPanel, SettingRow } from './SaveBar'
+import { toWriteResponse } from './saveOutcome'
+import { useSaveBar, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -314,9 +320,24 @@ export function AutoApproveControl() {
 // ── SecuritySection ────────────────────────────────────────────────────────────
 
 /** #1882: DOM id of the rate-limit save-status live region. */
-const RATE_LIMITS_SAVE_STATUS_ID = 'security-rate-limits-save-status'
 
-export function SecuritySection() {
+/**
+ * Settings redesign #1519 splits this section in two: `protection` (health,
+ * Approvals with Auto-approve and God Mode, prompt injection defense, rate
+ * limits, audit log, and the notice that tool and skill permissions moved to
+ * Skills & Tools — FR-051, FR-060) and `keys` (the stored keys and the master
+ * key — Keys & secrets). Without `view` the old combined layout renders.
+ */
+export interface SecuritySectionProps { // not-wire-format: React props
+  view?: 'protection' | 'keys'
+  /** Protection: the God Mode control, placed after Approvals (FR-051). */
+  godMode?: React.ReactNode
+}
+
+export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
+  const showProtection = view !== 'keys'
+  const showKeys = view !== 'protection'
+  const legacy = view === undefined
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
@@ -342,24 +363,51 @@ export function SecuritySection() {
     retry: false,
   })
 
-  const isDirtyRef = useRef(false)
-  const markDirty = () => { isDirtyRef.current = true }
-
-  // ADR-053 D12: dailyCostCap state retired alongside the SEC-26 USD cap.
-  // #1882 (chief ruling Q1 A): the exec timeout and background timeout fields
-  // are not offered until a server reads them (issue #1900).
-  const [agentLlmCallsPerHour, setAgentLlmCallsPerHour] = useState('')
-  const [agentToolCallsPerMin, setAgentToolCallsPerMin] = useState('')
-  // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
-  // `!rateLimits` check useAutoSave's `disabled` option would key off of.
-  // `rateLimits` turns truthy in the SAME commit the hydration effect below is
-  // SCHEDULED, but the effect's own setState calls don't land until the
-  // NEXT commit — so `disabled: !config` flipped false one render too
-  // early, letting useAutoSave capture the hardcoded useState defaults as
-  // its baseline instead of the real persisted values. `securityHydrated`
-  // is set at the END of the hydration effect, so it flips true in the
-  // same commit the real values land.
-  const [securityHydrated, setSecurityHydrated] = useState(false)
+  // Rate limits wait for Save changes (FR-010, #346: no auto-save in Settings).
+  // An empty field means "Unlimited", which the route spells as 0.
+  const rateLimitFields = useMemo<SaveBarField[]>(() => {
+    const validate = (v: SaveBarValue) => {
+      if (v === '' || v === null) return null
+      const n = Number(v)
+      return Number.isInteger(n) && n >= 0 ? null : 'Enter a whole number, or leave it empty for no limit.'
+    }
+    return [
+      {
+        key: 'max_agent_llm_calls_per_hour',
+        label: 'Model calls per hour',
+        value: rateLimits?.max_agent_llm_calls_per_hour || '',
+        kind: 'number',
+        description: 'Default limit for each agent. Empty means no limit.',
+        validate,
+        disabled: !rateLimits,
+      },
+      {
+        key: 'max_agent_tool_calls_per_minute',
+        label: 'Tool calls per minute',
+        value: rateLimits?.max_agent_tool_calls_per_minute || '',
+        kind: 'number',
+        description: 'Default limit for each agent. Empty means no limit.',
+        validate,
+        disabled: !rateLimits,
+      },
+    ]
+  }, [rateLimits])
+  const rateLimitState = useSaveBar({
+    section: 'protection',
+    fields: rateLimitFields,
+    onSave: (body) =>
+      toWriteResponse(() =>
+        updateRateLimits({
+          max_agent_llm_calls_per_hour: Number(body.max_agent_llm_calls_per_hour ?? rateLimits?.max_agent_llm_calls_per_hour ?? 0) || 0,
+          max_agent_tool_calls_per_minute: Number(body.max_agent_tool_calls_per_minute ?? rateLimits?.max_agent_tool_calls_per_minute ?? 0) || 0,
+        }),
+      ),
+    readBack: async (key) => {
+      const fresh = await fetchRateLimits()
+      return (fresh as unknown as Record<string, unknown>)[key]
+    },
+    onSaved: () => void queryClient.invalidateQueries({ queryKey: ['security', 'rate-limits'] }),
+  })
 
   // Audit log dialog state
   const [auditLogOpen, setAuditLogOpen] = useState(false)
@@ -375,33 +423,6 @@ export function SecuritySection() {
   // platform mode). Deleting and re-keying the vault are among the
   // highest-blast-radius operations in the product; "the vault is one
   // control" is a UI grouping, not a licence to gate once (spec FR-OB-040).
-
-  useEffect(() => {
-    if (!rateLimits) return
-    if (isDirtyRef.current) return
-    setAgentLlmCallsPerHour(rateLimits.max_agent_llm_calls_per_hour.toString())
-    setAgentToolCallsPerMin(rateLimits.max_agent_tool_calls_per_minute.toString())
-    setSecurityHydrated(true)
-  }, [rateLimits])
-
-  const securityFormData = useMemo(() => ({
-    agent_llm_calls_per_hour: agentLlmCallsPerHour,
-    agent_tool_calls_per_min: agentToolCallsPerMin,
-  }), [agentLlmCallsPerHour, agentToolCallsPerMin])
-
-  const { status: saveStatus, error: saveError } = useAutoSave(
-    securityFormData,
-    async () => {
-      // An empty field means "Unlimited", which the route spells as 0.
-      await updateRateLimits({
-        max_agent_llm_calls_per_hour: agentLlmCallsPerHour ? parseInt(agentLlmCallsPerHour, 10) : 0,
-        max_agent_tool_calls_per_minute: agentToolCallsPerMin ? parseInt(agentToolCallsPerMin, 10) : 0,
-      })
-      isDirtyRef.current = false
-      queryClient.invalidateQueries({ queryKey: ['security', 'rate-limits'] })
-    },
-    { disabled: !securityHydrated },
-  )
 
   const { mutateAsync: doAddCred, isPending: isAddingCred } = useMutation({
     mutationFn: (vars: { token?: string }) => addCredential(credKey.trim(), credValue, vars.token),
@@ -459,19 +480,11 @@ export function SecuritySection() {
       })
   }
 
+  // B7 / FR-056 (S-Q11 B): deleting a stored key asks one confirm, not the
+  // password — the server no longer requires a consent token for it.
+  const [deleteKey, setDeleteKey] = useState<string | null>(null)
   function requestDeleteCredential(key: string) {
-    void stepUp
-      .gate(
-        (token) => doDeleteCred({ key, token }),
-        {
-          title: 'Remove this credential?',
-          body: `${key} is permanently removed from the vault. Anything using it stops working until you store it again.`,
-          confirmLabel: 'Remove credential',
-        },
-      )
-      .catch((err: unknown) => {
-        if (isReAuthCancelled(err)) return
-      })
+    setDeleteKey(key)
   }
 
   function requestRotate() {
@@ -499,22 +512,56 @@ export function SecuritySection() {
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.
 
+  const rateLimitsCard = (
+  <Card className="px-[var(--space-3)]">
+    {rateLimitsError && (
+      <p className="pt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-text-error)]">
+        The current limits could not be loaded, so they cannot be changed here. Reload the page to try again.
+      </p>
+    )}
+    {rateLimitFields.map((f) => (
+      <SettingRow key={f.key} state={rateLimitState} field={f} />
+    ))}
+    <SaveBarPanel {...rateLimitState.bar} />
+  </Card>
+  )
+
+  const auditBlock = (
+  <section>
+    <div className="flex items-center justify-between mb-[var(--space-2-5)]">
+      <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+        Audit Log
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
+        onClick={() => setAuditLogOpen(true)}
+      >
+        View Log
+      </Button>
+    </div>
+    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+      Security events, policy decisions, and tool executions.
+    </p>
+  </section>
+  )
+
   return (
     <div className="space-y-[var(--space-4)]">
-      <div className="flex items-center justify-between">
+      {legacy && (
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Security & Policy</h2>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Control how protected your setup is and adjust agent boundaries.
           </p>
         </div>
-        {/* #1882: the rate-limit inputs name this live region with
-            aria-describedby, so their save status has a stable identity. */}
-        <AutoSaveIndicator id={RATE_LIMITS_SAVE_STATUS_ID} status={saveStatus} error={saveError} />
-      </div>
+      )}
 
       {/* ── PRIMARY LAYER (US-B1): Security health + plain outcome controls ──── */}
 
+      {showProtection && (
+      <>
       {/* Security Health — score always visible at top */}
       <section
         className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]"
@@ -534,10 +581,19 @@ export function SecuritySection() {
             whether a tool resolved to "ask" still prompts. */}
         <AutoApproveControl />
 
-        {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level */}
-        <SkillTrustSection />
+        {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level. In the
+            redesign it moved to Skills & Tools (FR-060). */}
+        {legacy && <SkillTrustSection />}
+
+        {/* God Mode sits after Approvals in Protection (FR-051). */}
+        {view === 'protection' && godMode}
       </section>
 
+      </>
+      )}
+
+      {legacy && (
+      <>
       {/* ── ADVANCED LAYER (US-B1): all jargon behind one collapsed section ── */}
       <AdvancedDisclosure
         title="Advanced / technical details"
@@ -603,72 +659,46 @@ export function SecuritySection() {
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
               Per-Agent Rate Limits
             </p>
-            <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
-              {rateLimitsError && (
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-text-error)]">
-                  The current limits could not be loaded, so changes here are not saved. Reload the page to try again.
-                </p>
-              )}
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="agent-llm-calls-per-hour">LLM calls / hour</Label>
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Default limit per agent</p>
-                </div>
-                <Input
-                  id="agent-llm-calls-per-hour"
-                  aria-describedby={RATE_LIMITS_SAVE_STATUS_ID}
-                  type="number"
-                  min="0"
-                  value={agentLlmCallsPerHour}
-                  onChange={(e) => { markDirty(); setAgentLlmCallsPerHour(e.target.value) }}
-                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
-                  placeholder="Unlimited"
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="agent-tool-calls-per-minute">Tool calls / minute</Label>
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Default limit per agent</p>
-                </div>
-                <Input
-                  id="agent-tool-calls-per-minute"
-                  aria-describedby={RATE_LIMITS_SAVE_STATUS_ID}
-                  type="number"
-                  min="0"
-                  value={agentToolCallsPerMin}
-                  onChange={(e) => { markDirty(); setAgentToolCallsPerMin(e.target.value) }}
-                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
-                  placeholder="Unlimited"
-                />
-              </div>
-            </Card>
+            {rateLimitsCard}
           </section>
 
           <Separator />
 
-          {/* Audit Log */}
-          <section>
-            <div className="flex items-center justify-between mb-[var(--space-2-5)]">
-              <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
-                Audit Log
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
-                onClick={() => setAuditLogOpen(true)}
-              >
-                View Log
-              </Button>
-            </div>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-              Security events, policy decisions, and tool executions.
-            </p>
-          </section>
+          {auditBlock}
 
         </div>
       </AdvancedDisclosure>
+      </>
+      )}
 
+      {view === 'protection' && (
+        <>
+          <section aria-label="Prompt injection defense" className="space-y-[var(--space-2)]">
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Prompt injection defense</h3>
+            <PromptGuardSection />
+          </section>
+          <section aria-label="Rate limits per agent" className="space-y-[var(--space-2)]">
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Rate limits per agent</h3>
+            {rateLimitsCard}
+          </section>
+          {auditBlock}
+          <Callout variant="info" data-testid="protection-moved-permissions">
+            <CalloutTitle>Tool and skill permissions moved</CalloutTitle>
+            <CalloutDescription>
+              Allow, Ask or Deny for each tool, and whether unverified skills may load, are set in Skills &amp; Tools.
+              An agent can still be stricter on its own profile.
+            </CalloutDescription>
+            <CalloutActions>
+              <Button asChild variant="outline" size="sm">
+                <Link to="/skills">Open Skills &amp; Tools</Link>
+              </Button>
+            </CalloutActions>
+          </Callout>
+        </>
+      )}
+
+      {showKeys && (
+      <>
       {/* ── Credential Vault (US-B4) — always visible with reassurance line ─── */}
       <section>
         <div className="flex items-center justify-between mb-[var(--space-2-5)]">
@@ -734,6 +764,27 @@ export function SecuritySection() {
           ))}
         </Card>
       </section>
+
+      </>
+      )}
+
+      <ConfirmDialog
+        open={deleteKey !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteKey(null)
+        }}
+        title="Delete this key?"
+        description={`${deleteKey ?? ''}: agents and connectors that use it stop working until you add it again. This cannot be undone.`}
+        confirmLabel="Delete key"
+        destructive
+        onConfirm={() => {
+          const key = deleteKey
+          setDeleteKey(null)
+          // The mutation's onError already shows the failure as a toast;
+          // this catch only stops an unhandled rejection.
+          if (key) void doDeleteCred({ key }).catch(() => undefined)
+        }}
+      />
 
       <AuditLogViewer open={auditLogOpen} onOpenChange={setAuditLogOpen} />
 

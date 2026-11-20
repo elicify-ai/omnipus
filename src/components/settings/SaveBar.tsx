@@ -177,7 +177,7 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
               )
             case 'select':
               return (
-                <select
+                <select tabIndex={0}
                   id={controlId}
                   data-settings-field={id}
                   value={value == null ? '' : String(value)}
@@ -227,16 +227,13 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
   )
 }
 
-export interface SaveBarProps extends UseSaveBarOptions { // not-wire-format: React props
-  /** Optional heading-free wrapper class for the rows. */
-  className?: string
-}
+export type SaveBarProps = UseSaveBarOptions // not-wire-format: React props
 
 /** A simple section: its setting rows plus the Save bar. */
-export function SaveBar({ className, ...options }: SaveBarProps) {
+export function SaveBar(options: SaveBarProps) {
   const state = useSaveBar(options)
   return (
-    <div className={className}>
+    <div>
       {options.fields.map((f) => (
         <SettingRow key={f.key} state={state} field={f} />
       ))}

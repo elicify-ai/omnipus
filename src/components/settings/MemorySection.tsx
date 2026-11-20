@@ -128,8 +128,6 @@ type FormState = {
   /** Recap effort: '' rides the recap default, Off (FD-19). */
   recap_reasoning_effort: string
   recap_fallback_models: FallbackModel[]
-  session_days: number
-  memory_retros_days: number
   /** The ten "Recap limits" as typed drafts (S-82). */
   limits: RecapLimitDrafts
 }
@@ -145,8 +143,6 @@ const DEFAULT_SETTINGS: FormState = {
   bootstrap_recap_max_per_minute: 5,
   recap_model: '',
   recap_fallback_models: [],
-  session_days: 90,
-  memory_retros_days: 180,
   recap_provider: '',
   recap_reasoning_effort: '',
   limits: defaultRecapLimitDrafts(),
@@ -170,8 +166,6 @@ function formFromSettings(data: MemorySettings): FormState {
     recap_provider: data.recap_provider ?? '',
     recap_reasoning_effort: data.recap_reasoning_effort ?? '',
     recap_fallback_models: data.recap_fallback_models ?? DEFAULT_SETTINGS.recap_fallback_models,
-    session_days: data.session_days ?? DEFAULT_SETTINGS.session_days,
-    memory_retros_days: data.memory_retros_days ?? DEFAULT_SETTINGS.memory_retros_days,
     limits,
   }
 }
@@ -196,8 +190,6 @@ const SCALAR_KEYS: ScalarKey[] = [
   'recap_provider',
   'recap_reasoning_effort',
   'recap_fallback_models',
-  'session_days',
-  'memory_retros_days',
 ]
 
 /** The dirty/save state: the drafts compared with the latest acknowledged baseline (FR-054). */
@@ -346,8 +338,6 @@ export function MemorySection(): React.ReactElement {
       idle_timeout_minutes: submitted.idle_timeout_minutes,
       bootstrap_recap_enabled: submitted.bootstrap_recap_enabled,
       bootstrap_recap_max_per_minute: submitted.bootstrap_recap_max_per_minute,
-      session_days: submitted.session_days,
-      memory_retros_days: submitted.memory_retros_days,
       // Only include recap_model when non-empty (server-side "" = "use default")
       recap_model: submitted.recap_model !== '' ? submitted.recap_model : undefined,
       recap_provider: submitted.recap_model !== '' && submitted.recap_provider !== '' ? submitted.recap_provider : undefined,
@@ -590,7 +580,7 @@ export function MemorySection(): React.ReactElement {
 
       <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
-          Global settings for automatic session recap (context compaction) and memory retention.
+          Global settings for automatic session recap (context compaction).
           These settings apply across all workspaces and agents.
         </p>
 
@@ -853,28 +843,16 @@ export function MemorySection(): React.ReactElement {
           />
         </div>
 
-        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]">
-          <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Retention</p>
-
-          <NumberRow
-            id="session-days"
-            label="Session retention"
-            description="Number of days to retain session JSONL files before the retention sweep removes them. Set 0 to use the system default (90 days)."
-            value={form.session_days}
-            min={0}
-            unit="days"
-            onChange={(v) => setField('session_days', Math.max(0, Math.round(v)))}
-          />
-
-          <NumberRow
-            id="memory-retros-days"
-            label="Memory retrospective retention"
-            description="Number of days to retain memory retrospective files."
-            value={form.memory_retros_days}
-            min={0}
-            unit="days"
-            onChange={(v) => setField('memory_retros_days', Math.max(0, Math.round(v)))}
-          />
+        {/* Retention moved to Data & retention, its one write path (Settings redesign #1519, FR-044). */}
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+          <div className="min-w-0">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">How long memory is kept</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Set with chat history in Data &amp; retention.</p>
+          </div>
+          <Button asChild variant="link" size="sm">
+            {/* A plain hash link (the app uses hash history): this section also renders outside a router. */}
+            <a href="#/settings?tab=data" tabIndex={0}>Open Data &amp; retention</a>
+          </Button>
         </div>
 
         <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] flex justify-end">
