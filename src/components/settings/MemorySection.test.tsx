@@ -38,6 +38,10 @@ vi.mock('@/store/ui', () => ({
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Settings redesign #1519, FR-045: MemorySettings drops `session_days` and
+// `memory_retros_days` (retention moved to Data & retention's one write
+// path), and `PUT /settings/memory` carrying either must answer 400 naming
+// it — so the section's fixture and save payloads must never carry them.
 const DEFAULT_SETTINGS = {
   auto_recap_enabled: false,
   idle_timeout_minutes: 30,
@@ -45,8 +49,6 @@ const DEFAULT_SETTINGS = {
   bootstrap_recap_max_per_minute: 5,
   recap_model: '',
   recap_fallback_models: [] as Array<{ model: string; provider?: string }>,
-  session_days: 90,
-  memory_retros_days: 180,
 }
 
 const MOCK_PROVIDERS: Provider[] = [
@@ -101,9 +103,19 @@ describe('MemorySection', () => {
     expect(screen.getByText('Summarization model')).toBeInTheDocument()
     expect(screen.getByText(/recap runs a background summarization call/i)).toBeInTheDocument()
 
-    // Session retention and memory retros are always visible
-    expect(screen.getByLabelText('Session retention')).toBeInTheDocument()
-    expect(screen.getByLabelText('Memory retrospective retention')).toBeInTheDocument()
+    // FR-052 (Settings redesign #1519): Memory & recaps shows NO retention
+    // field — the day counts moved to Data & retention; only the "How long
+    // memory is kept" row remains, with its link there.
+    expect(screen.queryByLabelText('Session retention')).toBeNull()
+    expect(screen.queryByLabelText('Memory retrospective retention')).toBeNull()
+    expect(screen.queryByLabelText('Keep chat history for')).toBeNull()
+    expect(screen.queryByLabelText('Keep memory for')).toBeNull()
+    expect(screen.queryByRole('switch', { name: /keep.*forever/i })).toBeNull()
+    expect(screen.getByText('How long memory is kept')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /open data & retention/i })).toHaveAttribute(
+      'href',
+      expect.stringContaining('tab=data'),
+    )
 
     // Removed fields must NOT be present
     expect(screen.queryByText(/recap model allow-list/i)).toBeNull()
@@ -246,8 +258,12 @@ describe('MemorySection', () => {
     expect(saved).toHaveProperty('idle_timeout_minutes')
     expect(saved).toHaveProperty('bootstrap_recap_enabled')
     expect(saved).toHaveProperty('bootstrap_recap_max_per_minute')
-    expect(saved).toHaveProperty('session_days')
-    expect(saved).toHaveProperty('memory_retros_days')
+
+    // FR-045: the retired retention fields must not ride along — PUT
+    // /settings/memory carrying either must be refused with 400, so the
+    // section never sends them (their home is Data & retention, FR-043).
+    expect(saved).not.toHaveProperty('session_days')
+    expect(saved).not.toHaveProperty('memory_retros_days')
 
     // Removed fields must NOT appear
     expect(saved).not.toHaveProperty('bootstrap_recap_daily_budget_usd')
@@ -365,8 +381,6 @@ describe('MemorySection', () => {
       bootstrap_recap_max_per_minute: 10,
       recap_model: '',
       recap_fallback_models: [],
-      session_days: 60,
-      memory_retros_days: 180,
     })
 
     renderSection()
@@ -380,13 +394,10 @@ describe('MemorySection', () => {
     const idleInput = screen.getByLabelText('Idle timeout')
     expect(idleInput).toHaveValue(45)
 
-    // session_days
-    const sessionDaysInput = screen.getByLabelText('Session retention')
-    expect(sessionDaysInput).toHaveValue(60)
-
-    // memory_retros_days
-    const retrosInput = screen.getByLabelText('Memory retrospective retention')
-    expect(retrosInput).toHaveValue(180)
+    // FR-045/FR-052: no retention fields hydrate here — their values live in
+    // Data & retention now.
+    expect(screen.queryByLabelText('Session retention')).toBeNull()
+    expect(screen.queryByLabelText('Memory retrospective retention')).toBeNull()
   })
 })
 
