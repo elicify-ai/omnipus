@@ -96,7 +96,10 @@ describe('FR-058/FR-072 — Limits holds three collapsed groups', () => {
     const LimitsSection = await loadLimits()
     renderLimits(<LimitsSection prefillOverride={undefined} />)
     for (const name of GROUP_NAMES) {
-      const trigger = await screen.findByRole('button', { name, timeout: 5000 })
+      // findByRole's wait options are the third argument, not the query object —
+// the earlier position made { timeout } part of the query and the call
+// stopped type-checking (harness fix).
+      const trigger = await screen.findByRole('button', { name }, { timeout: 5000 })
       expect(
         trigger,
         `FR-058 RED: the group "${name}" must exist in Limits`,

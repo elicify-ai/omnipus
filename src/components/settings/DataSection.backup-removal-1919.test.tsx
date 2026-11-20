@@ -69,7 +69,9 @@ import { fetchStorageStats, fetchAppState } from '@/lib/api'
 // The Data & retention section body exists only on the redesign tree; a
 // missing module is a loud per-case failure, not a skipped test or an
 // import/collection error.
-const sectionModules = import.meta.glob<{ DataRetentionSection: ComponentType }>('./DataRetentionSection.tsx')
+// ComponentType<P> defaults to P = {} — the bare type rejects the
+// backupRemoved prop the section really takes (DataRetentionSection.tsx).
+const sectionModules = import.meta.glob<{ DataRetentionSection: ComponentType<{ backupRemoved?: boolean }> }>('./DataRetentionSection.tsx')
 async function loadDataRetentionSection() {
   const load = sectionModules['./DataRetentionSection.tsx']
   if (!load) {
