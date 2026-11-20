@@ -3,6 +3,7 @@ package systools
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -60,6 +61,24 @@ var agentCreateArgNames = map[string]struct{}{
 	workspaceIDParam: {}, // destination workspace (FR-040), not an agent field
 }
 
+// AgentCreateArgNames returns the create_agent field vocabulary
+// (agentCreateArgNames) as a sorted copy, for the import field coverage test
+// (epic #1094 FR-048, sign-off C-8).
+func AgentCreateArgNames() []string { return sortedArgNames(agentCreateArgNames) }
+
+// AgentUpdateArgNames returns the update_agent field vocabulary
+// (agentUpdateArgNames) as a sorted copy (sign-off C-8).
+func AgentUpdateArgNames() []string { return sortedArgNames(agentUpdateArgNames) }
+
+func sortedArgNames(names map[string]struct{}) []string {
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) error {
 	for name := range args {
 		if _, ok := allowed[name]; !ok {
@@ -94,7 +113,7 @@ func applyAgentToolArgs(a *config.AgentConfig, args map[string]any, known map[st
 	if err := applyCapabilityArgs(a, args, known, inv); err != nil {
 		return err
 	}
-	return applySharedConfigArgs(a, args)
+	return ApplySharedConfigArgs(a, args)
 }
 
 func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defaults *config.AgentDefaults) error {
@@ -249,7 +268,11 @@ func applyCapabilityArgs(a *config.AgentConfig, args map[string]any, known map[s
 	return nil
 }
 
-func applySharedConfigArgs(a *config.AgentConfig, args map[string]any) error {
+// ApplySharedConfigArgs applies the create_agent/update_agent rule for
+// memory_enabled, voice, context_window_override and model_params. Exported
+// for the package import (epic #1094 FR-047), which stores voice,
+// memory_enabled and context_window_override with this same rule.
+func ApplySharedConfigArgs(a *config.AgentConfig, args map[string]any) error {
 	if raw, present := args["memory_enabled"]; present {
 		b, ok := raw.(bool)
 		if !ok {

@@ -852,10 +852,11 @@ func createJoinSeedPartialResult(id, revision string, fields []string, wsID stri
 }
 
 // joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
-// and persists the change, then seeds agentID's ordinary self-delegation row.
-// Used exclusively by create_agent's creation-in-context join (ADR-046 P1,
-// US-3 AS-2): a custom agent created from within a workspace's turn context
-// joins THAT workspace's team only — never any other.
+// and persists the change, then seeds agentID's ordinary self-delegation row,
+// in one workspace critical section (JoinWorkspaceTeam, which documents the
+// result tuple). Used exclusively by create_agent's creation-in-context join
+// (ADR-046 P1, US-3 AS-2): a custom agent created from within a workspace's
+// turn context joins THAT workspace's team only — never any other.
 //
 // session-core C-DELEGATE (FR-014/015, BDD-05.7): an authorized
 // creation-with-membership seeds the new agent's ordinary {id→id} self-row
@@ -873,59 +874,26 @@ func createJoinSeedPartialResult(id, revision string, fields []string, wsID stri
 // execution/work-dir purposes; the two can diverge, exactly as pkg/agent/loop.go's
 // runTurn documents for its own mirrored resolution.
 func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) (joined bool, seedErr error) {
-	// U5A-FIX-R1 / N1: the authoritative membership read-and-decision and the
-	// self-row seed publication run in ONE workspace critical section
-	// (workspacepkg.LockID + the authoritative re-read below). The membership
-	// write used to be unlocked: a concurrent explicit delegation graph PUT
-	// (which holds LockID and replaces the whole edge set) could land after the
-	// membership became visible but before the seed acquired its own lock, and
-	// the late implicit seed then re-added the self-row the operator had just
-	// excluded — reversing a successful explicit policy decision. Holding one
-	// lock across both phases means a competing writer lands wholly before or
-	// wholly after this join, never between.
-	unlock := workspacepkg.LockID(wsID)
-	defer unlock()
+	return JoinWorkspaceTeam(t.membershipOptions(), wsID, agentID)
+}
 
-	w, err := readWorkspaceFromDisk(t.deps.Home, wsID)
-	if err != nil {
-		return false, fmt.Errorf("read workspace %s: %w", wsID, err)
+// membershipOptions is the tool's WorkspaceMembershipOptions: its deps, and its
+// existing package seams (saveWorkspaceDelegation,
+// joinWorkspaceMembershipTestHook), each read when the join calls it.
+func (t *AgentCreateTool) membershipOptions() WorkspaceMembershipOptions {
+	return WorkspaceMembershipOptions{
+		Home:             t.deps.Home,
+		SelfEdgeExcluded: func() map[string]bool { return selfEdgeExcludedAgentIDs(t.deps) },
+		DepthCeiling:     func() int { return workspaceDelegationDepthCeiling(t.deps) },
+		SaveDelegation: func(home, wsID string, edges []workspacepkg.DelegationEdge) error {
+			return saveWorkspaceDelegation(home, wsID, edges)
+		},
+		AfterMembershipWrite: func(wsID, agentID string) {
+			if hook := joinWorkspaceMembershipTestHook; hook != nil {
+				hook(wsID, agentID)
+			}
+		},
 	}
-	if !teamContains(w.CoreTeam, agentID) {
-		w.CoreTeam = append(w.CoreTeam, agentID)
-		w.UpdatedAt = nowISO()
-		if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
-			return false, fmt.Errorf("write workspace %s: %w", wsID, err)
-		}
-	}
-
-	// Deterministic test seam (always nil in production): fires with LockID
-	// held, AFTER the membership write and BEFORE the authoritative re-read, so
-	// a test can land a competing membership/graph edit at exactly this point.
-	if joinWorkspaceMembershipTestHook != nil {
-		joinWorkspaceMembershipTestHook(wsID, agentID)
-	}
-
-	// Re-read the AUTHORITATIVE membership (fresh from disk) and seed ONLY when
-	// the agent is genuinely on the team. A member that is no longer on the team
-	// (a competing removal that landed) gets no self-row: seeding one would
-	// invent a delegation row for a non-member. The re-read is what turns "this
-	// call appended a member" into "the member is actually on the team now".
-	fresh, readErr := readWorkspaceFromDisk(t.deps.Home, wsID)
-	if readErr != nil {
-		// The membership write above already landed; only the confirm failed.
-		return true, fmt.Errorf("re-read workspace %s membership: %w", wsID, readErr)
-	}
-	if !teamContains(fresh.CoreTeam, agentID) {
-		return false, nil
-	}
-
-	// Seed the new agent's ordinary self-row. A failure here means the agent IS
-	// a workspace member but its required self-row was not written — the caller
-	// reports the truthful partial result (never a metadata_only success).
-	if err := t.seedSelfEdgeLocked(wsID, agentID); err != nil {
-		return true, err
-	}
-	return true, nil
 }
 
 // teamContains reports whether agentID is a (non-empty) entry of team.
@@ -946,34 +914,6 @@ func teamContains(team []string, agentID string) bool {
 // that the seed never fires for a member that is no longer on the team. Always
 // nil in production; never set outside a _test.go file.
 var joinWorkspaceMembershipTestHook func(wsID, agentID string)
-
-// seedSelfEdgeLocked writes agentID's ordinary self-delegation row into
-// workspace wsID's delegation store, preserving every existing edge. It uses
-// the shared workspace.SelfEdgeSeedRows computation, so the row is identical to
-// the install-seed and team-growth rows, and it threads the OPERATOR exclusion
-// data (config.workspace_seed_defaults.self_edge.exclude_agent_ids) through
-// selfEdgeExcludedAgentIDs — the exclusion is config DATA, never a Go identity
-// predicate. Idempotent: an agent already carrying a self-row is left untouched.
-//
-// The caller MUST already hold workspacepkg.LockID(wsID) (joinWorkspaceTeam
-// does, for its whole membership-plus-seed span): the lock pool is not
-// reentrant, so this must NOT acquire it again.
-func (t *AgentCreateTool) seedSelfEdgeLocked(wsID, agentID string) error {
-	existing, ok := workspacepkg.LoadDelegation(t.deps.Home, wsID)
-	if !ok {
-		return fmt.Errorf("workspace %s delegation record is unreadable — refusing to seed a self-row over it", wsID)
-	}
-	rows := workspacepkg.SelfEdgeSeedRows(
-		[]string{agentID}, existing, selfEdgeExcludedAgentIDs(t.deps), workspaceDelegationDepthCeiling(t.deps))
-	if len(rows) == 0 {
-		return nil
-	}
-	merged := append(append([]workspacepkg.DelegationEdge(nil), existing...), rows...)
-	if err := saveWorkspaceDelegation(t.deps.Home, wsID, merged); err != nil {
-		return fmt.Errorf("seed self-row for %s in workspace %s: %w", agentID, wsID, err)
-	}
-	return nil
-}
 
 // ---- system.agent.update ----
 
@@ -1824,7 +1764,7 @@ func cascadeCleanAgentWorkspaceReferences(home, agentID string) (workspacesUpdat
 		wsID := e.Name()[:len(e.Name())-5]
 
 		unlock := workspacepkg.LockID(wsID)
-		wsUpdated, wsEdgesRemoved, wsWarn := cascadeCleanOneWorkspaceLocked(home, dir, wsID, agentID)
+		wsUpdated, wsEdgesRemoved, wsWarn := cascadeCleanOneWorkspaceLocked(home, wsID, agentID)
 		unlock()
 
 		if wsWarn != "" {
@@ -1840,59 +1780,33 @@ func cascadeCleanAgentWorkspaceReferences(home, agentID string) (workspacesUpdat
 
 // cascadeCleanOneWorkspaceLocked performs the actual core_team + delegation
 // cleanup for a single workspace. Caller MUST already hold
-// workspacepkg.LockID(wsID) for the duration of this call — split out of
-// cascadeCleanAgentWorkspaceReferences only for readability, not as an
-// independently-lockable entry point.
-func cascadeCleanOneWorkspaceLocked(home, workspaceDir, wsID, agentID string) (updated bool, edgesRemoved int, warning string) {
-	w, err := readWorkspaceFromDisk(home, wsID)
-	if err != nil {
-		return false, 0, fmt.Sprintf("could not read workspace %s for cascade reference cleanup: %v", wsID, err)
-	}
-
-	newTeam := make([]string, 0, len(w.CoreTeam))
-	teamChanged := false
-	for _, member := range w.CoreTeam {
-		if member == agentID {
-			teamChanged = true
-			continue
+// workspacepkg.LockID(wsID) for the duration of this call. It is an adapter
+// over the shared leave core (leaveWorkspaceLocked, sign-off C-6) that keeps
+// the cascade's best-effort contract and warning texts: every failure is a
+// warning, and an unreadable delegation store is FAIL SAFE, not fail closed
+// (the core_team edit, if any, already succeeded and stays; the operator is
+// told a dangling edge for the deleted agent may remain in that workspace).
+func cascadeCleanOneWorkspaceLocked(home, wsID, agentID string) (updated bool, edgesRemoved int, warning string) {
+	res, err := leaveWorkspaceLocked(WorkspaceMembershipOptions{Home: home}, wsID, agentID)
+	updated = res.MembershipRemoved || res.EdgesRemoved > 0
+	// Each core failure wraps the failing step's own error exactly once.
+	cause := errors.Unwrap(err)
+	switch res.FailedStage {
+	case LeaveStageNone:
+		if res.WorkspaceMissing {
+			return updated, res.EdgesRemoved, fmt.Sprintf(
+				"could not read workspace %s for cascade reference cleanup: NOT_FOUND: %s", wsID, wsID)
 		}
-		newTeam = append(newTeam, member)
-	}
-	if teamChanged {
-		w.CoreTeam = newTeam
-		w.UpdatedAt = nowISO()
-		if err := writeEntity(workspaceDir, wsID, w); err != nil {
-			return false, 0, fmt.Sprintf("could not remove agent %s from workspace %s core_team: %v", agentID, wsID, err)
-		}
-		updated = true
-	}
-
-	edges, ok := workspacepkg.LoadDelegation(home, wsID)
-	if !ok {
-		// FAIL SAFE, not fail closed: the delegation store being unreadable
-		// here must not block the rest of this best-effort cascade (the
-		// core_team edit above, if any, already succeeded and stays). It is
-		// reported so the operator knows a dangling edge for the deleted
-		// agent may remain in that one workspace's graph.
-		return updated, 0, fmt.Sprintf(
+		return updated, res.EdgesRemoved, ""
+	case LeaveStageReadWorkspace:
+		return false, 0, fmt.Sprintf("could not read workspace %s for cascade reference cleanup: %v", wsID, cause)
+	case LeaveStageWriteMembership:
+		return false, 0, fmt.Sprintf("could not remove agent %s from workspace %s core_team: %v", agentID, wsID, cause)
+	case LeaveStageReadDelegation:
+		return res.MembershipRemoved, 0, fmt.Sprintf(
 			"workspace %s delegation store unreadable — any edges naming the deleted agent were left in place",
 			wsID)
+	default: // LeaveStageSaveDelegation
+		return res.MembershipRemoved, 0, fmt.Sprintf("could not save workspace %s delegation edges: %v", wsID, cause)
 	}
-	var kept []workspacepkg.DelegationEdge
-	removedHere := 0
-	for _, edge := range edges {
-		if edge.FromAgent == agentID || edge.ToAgent == agentID {
-			removedHere++
-			continue
-		}
-		kept = append(kept, edge)
-	}
-	if removedHere > 0 {
-		if err := workspacepkg.SaveDelegation(home, wsID, kept); err != nil {
-			return updated, 0, fmt.Sprintf("could not save workspace %s delegation edges: %v", wsID, err)
-		}
-		updated = true
-		edgesRemoved = removedHere
-	}
-	return updated, edgesRemoved, ""
 }

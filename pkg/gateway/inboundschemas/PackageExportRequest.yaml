@@ -1,0 +1,16 @@
+title: PackageExportRequest
+description: >
+  Request body of POST /api/v1/packages/export. S1 accepts exactly one agent
+  ID; any other count is refused with 400 export_selection_invalid.
+type: object
+required:
+  - agent_ids
+additionalProperties: false
+properties:
+  agent_ids:
+    type: array
+    description: IDs of the agents to export (exactly one in S1).
+    items:
+      type: string
+    example:
+      - 5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c
