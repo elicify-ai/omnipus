@@ -34,13 +34,38 @@ const (
 )
 
 // previewGatewayBytes counts the live preview bytes held by every running
-// turn of this gateway.
+// turn of this gateway. It changes only through reservePreviewGatewayBytes
+// (a compare-and-swap reservation, so two turns cannot both take the last
+// room) and releasePreviewGatewayBytes.
 var previewGatewayBytes atomic.Int64
+
+// reservePreviewGatewayBytes takes n bytes of the gateway budget in one
+// atomic step, or nothing when they do not fit (AD-6, SF W-01): a separate
+// load, check and add lets two turns that both see room overshoot together.
+func reservePreviewGatewayBytes(n int64) bool {
+	for {
+		used := previewGatewayBytes.Load()
+		if used+n > previewGatewayBudget {
+			return false
+		}
+		if previewGatewayBytes.CompareAndSwap(used, used+n) {
+			return true
+		}
+	}
+}
+
+func releasePreviewGatewayBytes(n int64) { previewGatewayBytes.Add(-n) }
 
 // turnDocumentPreviews holds one turn's live preview_document forms. Safe
 // for concurrent use (parallel tool calls record into it).
+//
+// mu serializes recording (add), request assembly (attachTurnDocumentPreviews)
+// and release. acct guards the accounting (held, markers, bytes, and the byID
+// entries eviction frees) and is also taken alone by the lazy-page charge,
+// which runs inside request assembly while mu is held (SF-10).
 type turnDocumentPreviews struct {
 	mu      sync.Mutex
+	acct    sync.Mutex
 	order   []string // tool call ids, oldest first
 	byID    map[string]*tools.DocumentPreview
 	held    map[string]int // live bytes per call
@@ -50,13 +75,16 @@ type turnDocumentPreviews struct {
 
 // add records a call's preview, evicting the oldest batches to stay within
 // the per-turn and per-gateway budgets; an item larger than the per-turn
-// budget is refused (its forms freed, a marker kept).
+// budget is refused (its forms freed, a marker kept). Page images a lazy
+// renderer (read_file) produces later are charged when they arrive.
 func (p *turnDocumentPreviews) add(id string, d *tools.DocumentPreview) {
 	if p == nil || d == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.acct.Lock()
+	defer p.acct.Unlock()
 	if p.byID == nil {
 		p.byID, p.held, p.markers = map[string]*tools.DocumentPreview{}, map[string]int{}, map[string]string{}
 	}
@@ -68,22 +96,63 @@ func (p *turnDocumentPreviews) add(id string, d *tools.DocumentPreview) {
 		p.markers[id] = previewMarkerRefused
 		return
 	}
-	for len(p.order) > 1 && (p.bytes+n > previewTurnBudget || previewGatewayBytes.Load()+int64(n) > previewGatewayBudget) {
-		if !p.evictOldestLocked(id) {
-			break
-		}
-	}
-	if previewGatewayBytes.Load()+int64(n) > previewGatewayBudget {
+	if !p.reserveLocked(id, n) {
 		d.FreeLiveForms()
 		p.markers[id] = previewMarkerEvicted
 		return
 	}
 	p.held[id] = n
-	p.bytes += n
-	previewGatewayBytes.Add(int64(n))
+	if render := d.RenderPages; render != nil {
+		d.RenderPages = func(ctx context.Context) ([]tools.DocumentPreviewPage, string, string) {
+			pages, unavailable, note := render(ctx)
+			if len(pages) > 0 && !p.chargeLazyPages(id, pages) {
+				return nil, previewLazyPagesNotKept, note
+			}
+			return pages, unavailable, note
+		}
+	}
 }
 
-// evictOldestLocked frees the oldest held batch other than keep.
+// previewLazyPagesNotKept is the "page images unavailable" reason when
+// lazily rendered pages do not fit the live media budgets.
+const previewLazyPagesNotKept = "the page images do not fit this turn's live media budget"
+
+// reserveLocked takes n bytes of the per-turn and gateway budgets for keep,
+// evicting this turn's oldest other batches while they do not fit. False
+// when they cannot fit; nothing is taken then. Caller holds acct.
+func (p *turnDocumentPreviews) reserveLocked(keep string, n int) bool {
+	for {
+		if p.bytes+n <= previewTurnBudget && reservePreviewGatewayBytes(int64(n)) {
+			p.bytes += n
+			return true
+		}
+		if !p.evictOldestLocked(keep) {
+			return false
+		}
+	}
+}
+
+// chargeLazyPages charges page images rendered after id was recorded (the
+// read_file renderer runs on first send) to the same budgets, so the
+// retained forms never exceed what the accounting says. False when they do
+// not fit or id is no longer held; the caller then drops the pages.
+func (p *turnDocumentPreviews) chargeLazyPages(id string, pages []tools.DocumentPreviewPage) bool {
+	delta := 0
+	for _, page := range pages {
+		delta += len(page.PNG)
+	}
+	p.acct.Lock()
+	defer p.acct.Unlock()
+	held, ok := p.held[id]
+	if !ok || held+delta > previewTurnBudget || !p.reserveLocked(id, delta) {
+		return false
+	}
+	p.held[id] = held + delta
+	return true
+}
+
+// evictOldestLocked frees the oldest held batch other than keep. Caller
+// holds acct.
 func (p *turnDocumentPreviews) evictOldestLocked(keep string) bool {
 	for _, id := range p.order {
 		if id == keep {
@@ -97,7 +166,7 @@ func (p *turnDocumentPreviews) evictOldestLocked(keep string) bool {
 		delete(p.held, id)
 		p.markers[id] = previewMarkerEvicted
 		p.bytes -= n
-		previewGatewayBytes.Add(-int64(n))
+		releasePreviewGatewayBytes(int64(n))
 		return true
 	}
 	return false
@@ -110,13 +179,23 @@ func (p *turnDocumentPreviews) release() {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.acct.Lock()
+	defer p.acct.Unlock()
 	for id, n := range p.held {
 		if d := p.byID[id]; d != nil {
 			d.FreeLiveForms()
 		}
-		previewGatewayBytes.Add(-int64(n))
+		releasePreviewGatewayBytes(int64(n))
 	}
 	p.held, p.bytes = map[string]int{}, 0
+}
+
+// marker is id's eviction or refusal marker, if any.
+func (p *turnDocumentPreviews) marker(id string) (string, bool) {
+	p.acct.Lock()
+	defer p.acct.Unlock()
+	m, ok := p.markers[id]
+	return m, ok
 }
 
 // previewModelForms is what the active model reads (catalog only, AD-11).
@@ -127,6 +206,29 @@ type previewModelForms struct {
 	// maxPDFs is the most native PDFs per request (0 = no recorded limit).
 	maxPDFs int
 	resize  catalog.ResizeLimits
+	// pdfRejected: a provider rejected a native PDF this turn; pdf is then
+	// false and a preview without text sends the PDF's extracted text.
+	pdfRejected bool
+	// turnUploadBytes is the decoded document media of this turn's own
+	// uploads as recorded when the request was resolved (native PDFs and
+	// upload page images); the assembler takes the larger of it and the
+	// native PDFs it finds in the turn's user message, from the 32 MiB first
+	// (AD-6, architect rule G5).
+	turnUploadBytes int
+	// newest marks the newest live preview of the request: when the 32 MiB
+	// has no room for it, it gets its text and a note, not the not-re-sent
+	// marker (architect rule G5 §5). Set per call by the assembler.
+	newest bool
+}
+
+// noBudgetNote is the note on the newest preview when the request's 32 MiB
+// document media budget has no room for its PDF or pages: this turn's
+// uploads took it, or the preview alone does not fit.
+func (f previewModelForms) noBudgetNote() string {
+	if f.turnUploadBytes > 0 {
+		return fmt.Sprintf("; this turn's uploads use the request's %d MiB media budget", previewRequestBudget>>20)
+	}
+	return fmt.Sprintf("; the preview's media does not fit the request's %d MiB media budget", previewRequestBudget>>20)
 }
 
 // attachTurnDocumentPreviews builds each preview_document result's model
@@ -144,18 +246,29 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 		return messages, nil
 	}
 	live := append([]providers.Message(nil), messages...)
-	budget := previewRequestBudget
+	// The request's 32 MiB covers this turn's document media only (AD-6,
+	// architect rule G5): this turn's own uploads first, then the previews,
+	// newest call first. Screenshots, inspection images and earlier turns'
+	// media keep their own limits. The provider's native-document count
+	// covers every PDF in the request, earlier turns included.
+	forms.turnUploadBytes = max(forms.turnUploadBytes, turnMessagePDFBytes(live))
+	budget := max(previewRequestBudget-forms.turnUploadBytes, 0)
 	pdfsLeft := forms.maxPDFs
+	if forms.maxPDFs > 0 {
+		pdfsLeft = max(forms.maxPDFs-requestNativePDFCount(live), 0)
+	}
+	newest := true
 	for i := len(live) - 1; i >= 0; i-- {
 		d, ok := p.byID[live[i].ToolCallID]
 		if !ok {
 			continue
 		}
-		if marker, gone := p.markers[live[i].ToolCallID]; gone {
+		if marker, gone := p.marker(live[i].ToolCallID); gone {
 			live[i].Content += marker
 			continue
 		}
 		callForms := forms
+		callForms.newest, newest = newest, false
 		if forms.maxPDFs > 0 && pdfsLeft == 0 {
 			// The provider's per-request document count is used up by newer
 			// calls: this one goes as page images (or text).
@@ -174,6 +287,49 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 	return live, nil
 }
 
+// turnMessagePDFBytes is the decoded size of the native PDFs in the turn's
+// own user message (turnUserMessageIndex).
+func turnMessagePDFBytes(messages []providers.Message) int {
+	i := turnUserMessageIndex(messages)
+	if i < 0 {
+		return 0
+	}
+	n := 0
+	for _, ref := range messages[i].Media {
+		if strings.HasPrefix(ref, "data:application/pdf;") {
+			n += dataURLDecodedSize(ref)
+		}
+	}
+	return n
+}
+
+// requestNativePDFCount is how many native PDFs the messages carry.
+func requestNativePDFCount(messages []providers.Message) int {
+	n := 0
+	for _, m := range messages {
+		for _, ref := range m.Media {
+			if strings.HasPrefix(ref, "data:application/pdf;") {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// dataURLDecodedSize is the payload size of a data URL: the decoded length
+// of a base64 payload, the raw length otherwise.
+func dataURLDecodedSize(ref string) int {
+	comma := strings.IndexByte(ref, ',')
+	if comma < 0 {
+		return 0
+	}
+	payload := ref[comma+1:]
+	if !strings.HasSuffix(ref[:comma], ";base64") {
+		return len(payload)
+	}
+	return len(payload)/4*3 - (len(payload) - len(strings.TrimRight(payload, "=")))
+}
+
 // attachDocumentPreview adds one call's form and returns the decoded bytes
 // it put into the request.
 func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools.DocumentPreview, forms previewModelForms, budget int) (int, error) {
@@ -185,11 +341,17 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 		msg.Content += denied
 		return 0, nil
 	}
-	if forms.pdf && len(d.PDF) > 0 && len(d.PDF) <= forms.maxPDF {
-		if len(d.PDF) > budget {
+	noBudget := ""
+	if forms.pdf && len(d.PDF) > 0 && len(d.PDF) <= forms.maxPDF && len(d.PDF) > budget {
+		if !forms.newest {
 			msg.Content += previewMarkerNotResent
 			return 0, nil
 		}
+		// The newest preview is never left with only the marker: page
+		// images if they fit, else its text (architect rule G5 §5).
+		forms.pdf, noBudget = false, forms.noBudgetNote()
+	}
+	if forms.pdf && len(d.PDF) > 0 && len(d.PDF) <= forms.maxPDF {
 		msg.Media = append(msg.Media, "data:application/pdf;base64,"+base64.StdEncoding.EncodeToString(d.PDF))
 		if d.NativeContent != "" {
 			msg.Content = d.NativeContent
@@ -215,10 +377,15 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 		}
 	}
 	if forms.images && len(d.Pages) > 0 {
-		return attachPreviewPages(msg, d, forms.resize, budget, sizeNote)
+		used, sent, err := attachPreviewPages(msg, d, forms.resize, budget, sizeNote, forms.newest)
+		if err != nil || sent > 0 || !forms.newest {
+			return used, err
+		}
+		noBudget = forms.noBudgetNote()
 	}
-	reason := sizeNote
+	reason := sizeNote + noBudget
 	switch {
+	case noBudget != "":
 	case d.ImagesUnavailable != "":
 		reason = "; page images unavailable: " + d.ImagesUnavailable + reason
 	case !forms.images:
@@ -227,16 +394,30 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 	if d.ModelOnly {
 		// The retained result text already is the text form (today's
 		// read_file path); only say why images did not go.
-		if forms.images && d.ImagesUnavailable != "" {
+		if forms.images && (d.ImagesUnavailable != "" || noBudget != "") {
 			msg.Content += "\n[model received: extracted text" + reason + d.PagesNote + "]"
 		}
+		return 0, nil
+	}
+	if d.Text == "" && len(d.PDF) > 0 && (forms.pdfRejected || noBudget != "") {
+		// No stored text: recover with the text extracted from the same
+		// bytes, as an uploaded PDF does (provider rejection, or no budget
+		// for the newest preview's media).
+		why := "; the provider rejected the native PDF"
+		if !forms.pdfRejected {
+			why = reason
+		}
+		msg.Content += "\n[model received: extracted text" + why + "]" + pdfFallbackText(d.PDF)
 		return 0, nil
 	}
 	msg.Content += "\n[model received: extracted text" + reason + "]\n" + d.Text
 	return 0, nil
 }
 
-func attachPreviewPages(msg *providers.Message, d *tools.DocumentPreview, limits catalog.ResizeLimits, budget int, sizeNote string) (int, error) {
+// attachPreviewPages adds d's page images within budget and returns the
+// bytes and pages sent. When newest and no page fits, it adds nothing (the
+// caller sends the text form instead of the not-re-sent marker).
+func attachPreviewPages(msg *providers.Message, d *tools.DocumentPreview, limits catalog.ResizeLimits, budget int, sizeNote string, newest bool) (int, int, error) {
 	used := 0
 	sent := 0
 	notResent := false
@@ -246,11 +427,11 @@ func attachPreviewPages(msg *providers.Message, d *tools.DocumentPreview, limits
 		}
 		decoded, _, err := image.Decode(bytes.NewReader(page.PNG))
 		if err != nil {
-			return used, fmt.Errorf("invalid preview page %d: %w", page.Number, err)
+			return used, sent, fmt.Errorf("invalid preview page %d: %w", page.Number, err)
 		}
 		normalized, err := resize.ResizeToFit(decoded, limits)
 		if err != nil {
-			return used, fmt.Errorf("preview page %d cannot fit model limits: %w", page.Number, err)
+			return used, sent, fmt.Errorf("preview page %d cannot fit model limits: %w", page.Number, err)
 		}
 		if used+len(normalized.Data) > budget {
 			notResent = true
@@ -266,10 +447,10 @@ func attachPreviewPages(msg *providers.Message, d *tools.DocumentPreview, limits
 		}
 		msg.Content += fmt.Sprintf("\n[model received: page images %d–%d%s%s]", d.Pages[0].Number, d.Pages[sent-1].Number, sizeNote, d.PagesNote)
 	}
-	if notResent {
+	if notResent && (sent > 0 || !newest) {
 		msg.Content += previewMarkerNotResent
 	}
-	return used, nil
+	return used, sent, nil
 }
 
 // previewForms resolves the active model's preview forms from the catalog.
@@ -280,12 +461,20 @@ func (rt *agentLoopRunTurn) previewForms(cat *catalog.Catalog, provider, model s
 		maxSize = cfg.Agents.Defaults.GetMaxMediaSize()
 	}
 	maxPDF, maxDocs := nativePDFLimits(cat, provider, model, maxSize)
+	rejected := rt.ts != nil && rt.ts.pdfRejected.Load()
+	uploads := rt.turnUploadMedia.pageImageBytes
+	if !rejected {
+		// After a rejection this turn's uploaded PDFs go as text.
+		uploads += rt.turnUploadMedia.nativePDFBytes
+	}
 	return previewModelForms{
-		pdf:     modelSupportsPDF(cat, provider, model),
-		images:  modelSupportsImage(cat, provider, model),
-		maxPDF:  maxPDF,
-		maxPDFs: maxDocs,
-		resize:  limits,
+		pdf:             modelSupportsPDF(cat, provider, model) && !rejected,
+		images:          modelSupportsImage(cat, provider, model),
+		maxPDF:          maxPDF,
+		maxPDFs:         maxDocs,
+		resize:          limits,
+		pdfRejected:     rejected,
+		turnUploadBytes: uploads,
 	}
 }
 

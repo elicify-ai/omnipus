@@ -108,13 +108,21 @@ func serve(req protocol.Request, data []byte, out io.Writer, parentGone *atomic.
 			}
 			text, textErr := pageText(reader, n)
 			if textErr != nil {
-				text = ""
+				// A page whose text cannot be read is a typed failure that
+				// names the page, never an empty successful page (spec
+				// AD-15: "no extractable text" is only for a page that has
+				// none). The parent then extracts the other pages one by one.
+				fmt.Fprintf(os.Stderr, "extract-text: page %d: %v\n", n, textErr)
+				_ = fw.Error(protocol.CodeTextFailed, fmt.Sprintf("text extraction failed on page %d: %v", n, textErr))
+				return 4
 			}
-			cut, writeErr := fw.Text(uint32(n), text)
-			if writeErr != nil {
+			if _, writeErr := fw.Text(uint32(n), text); writeErr != nil {
 				return 1
 			}
-			if cut {
+			// A page cut at its frame limit does not end the call: later
+			// pages still fit the per-call budget (AD-6, SF-03). Only a spent
+			// per-call budget does.
+			if fw.TextBudgetSpent() {
 				break
 			}
 		}

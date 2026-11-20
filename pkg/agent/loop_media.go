@@ -8,6 +8,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -69,6 +70,13 @@ func resolveMediaRefsWithOffload(
 	result := make([]providers.Message, len(messages))
 	copy(result, messages)
 	var nativePDFs []nativePDFPart
+	// Per message: the resolved media and content injections, finished
+	// after the upload page images are rendered (newest uploads first).
+	turnIdx := turnUserMessageIndex(result)
+	outMedia := make([][]string, len(result))
+	outInj := make([][]string, len(result))
+	touched := make([]bool, len(result))
+	var uploadJobs []uploadPageJob
 
 	for i, m := range result {
 		if len(m.Media) == 0 {
@@ -200,6 +208,7 @@ func resolveMediaRefsWithOffload(
 						nativePDFs = append(nativePDFs, nativePDFPart{
 							msg: i, part: len(resolved) - 1, path: localPath,
 							mime: mime, name: meta.Filename, size: info.Size(),
+							turn: i == turnIdx,
 						})
 					} else {
 						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
@@ -218,9 +227,14 @@ func resolveMediaRefsWithOffload(
 						offInj = buildOffloadInjection(dest, detectFileClass(mime, meta.Filename), model)
 					}
 					if modelSupportsImage(cat, provider, model) {
-						pages := uploadPDFPageImages(localPath, meta.Filename, resizeBudgetForModel(cat, provider, model, maxSize))
-						resolved = append(resolved, pages.images...)
-						textInj = pages.note(dest, offErr) + textInj
+						// Pages are rendered after this pass, newest
+						// uploads first, within one request allowance.
+						uploadJobs = append(uploadJobs, uploadPageJob{
+							msg: i, mediaAt: len(resolved), injAt: len(contentInjections), noteAt: len(offInj),
+							localPath: localPath, name: meta.Filename, dest: dest, offErr: offErr,
+							limits: resizeBudgetForModel(cat, provider, model, maxSize),
+							turn:   i == turnIdx,
+						})
 					}
 					contentInjections = append(contentInjections, offInj+textInj)
 				}
@@ -232,14 +246,25 @@ func resolveMediaRefsWithOffload(
 			contentInjections = append(contentInjections, inj)
 		}
 
-		result[i].Media = resolved
-		if len(contentInjections) > 0 {
-			result[i].Content = injectDocumentContent(result[i].Content, contentInjections)
+		outMedia[i], outInj[i], touched[i] = resolved, contentInjections, true
+	}
+
+	turnPages := renderUploadPageJobs(sink.turnContext(), uploadJobs, outMedia, outInj)
+	for i := range result {
+		if !touched[i] {
+			continue
+		}
+		result[i].Media = outMedia[i]
+		if len(outInj[i]) > 0 {
+			result[i].Content = injectDocumentContent(result[i].Content, outInj[i])
 		}
 	}
 
 	_, maxDocs := nativePDFLimits(cat, provider, model, maxSize)
-	capNativePDFParts(result, nativePDFs, maxDocs)
+	turnPDFs := limitNativePDFParts(result, nativePDFs, maxDocs)
+	if sink != nil {
+		sink.turnMedia = turnUploadMedia{nativePDFBytes: turnPDFs, pageImageBytes: turnPages}
+	}
 	return result
 }
 
@@ -344,6 +369,18 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 	return "\n\n[user uploaded: " + workPath + "]"
 }
 
+// pdfFallbackText is a PDF's text-fallback injection: its extracted text,
+// or why none could be extracted.
+func pdfFallbackText(data []byte) string {
+	const fallbackName = "attachment.pdf"
+	text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
+	if ok {
+		return fmt.Sprintf("\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text)
+	}
+	return fmt.Sprintf("\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
+		fallbackName, len(data), reason)
+}
+
 // downgradePDFMediaToText converts any native PDF data URL in each message's
 // Media array back into extracted text injected into Content. It is the recovery
 // path for providers that reject native PDF blocks at request time: text input
@@ -352,7 +389,6 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 // block was downgraded.
 func downgradePDFMediaToText(messages []providers.Message) bool {
 	const pdfPrefix = "data:application/pdf;base64,"
-	const fallbackName = "attachment.pdf"
 	anyChanged := false
 
 	for i := range messages {
@@ -375,15 +411,7 @@ func downgradePDFMediaToText(messages []providers.Message) bool {
 					"\n\n[Attached PDF could not be decoded for text fallback]")
 				continue
 			}
-			text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
-			if ok {
-				injections = append(injections, fmt.Sprintf(
-					"\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text))
-			} else {
-				injections = append(injections, fmt.Sprintf(
-					"\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
-					fallbackName, len(data), reason))
-			}
+			injections = append(injections, pdfFallbackText(data))
 		}
 
 		if msgChanged {
@@ -1294,6 +1322,48 @@ func fallbackName(filename, alt string) string {
 // failing the turn.
 type offloadSink struct {
 	workDir string
+	// ctx is the turn's context: work the resolver starts for an upload
+	// (PDF page rendering) ends on Stop. Nil means no turn (background).
+	ctx context.Context
+	// turnMedia is filled by the resolver: the decoded document media of
+	// this turn's uploads in the request it returned.
+	turnMedia turnUploadMedia
+}
+
+// turnOffloadSink is the resolver sink of this turn: its work folder and
+// its Stop.
+func (rt *agentLoopRunTurn) turnOffloadSink(workDir string) *offloadSink {
+	return &offloadSink{workDir: workDir, ctx: rt.turnCtx}
+}
+
+// turnUserMessageIndex is the index of the turn's own user message: the
+// last user message that is neither a tool result nor the request-only
+// volatile note; -1 when there is none. "This turn" starts there
+// (architect rule G5). Messages the loop adds later in the turn with the
+// user role (sub-turn results, repairs) can sit after it, so callers that
+// keep a figure across the turn record it when the request is resolved.
+func turnUserMessageIndex(messages []providers.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if m := messages[i]; m.Role == "user" && m.ToolCallID == "" && !m.Volatile {
+			return i
+		}
+	}
+	return -1
+}
+
+// turnUploadMedia is the decoded document media of a turn's own uploads in
+// one resolved request (AD-6, architect rule G5): native PDFs, and page
+// images rendered from uploaded PDFs.
+type turnUploadMedia struct {
+	nativePDFBytes, pageImageBytes int
+}
+
+// turnContext is the sink's turn context, or Background without one.
+func (s *offloadSink) turnContext() context.Context {
+	if s == nil || s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
 }
 
 // offload performs step-5 offload (ADR-051 Rev 4): it copies the file into the

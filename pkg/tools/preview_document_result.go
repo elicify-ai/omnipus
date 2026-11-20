@@ -244,13 +244,15 @@ func previewTextForm(res *preview.Result) string {
 		fmt.Fprintf(&b, "--- page %d ---\n%s\n", p.Number, p.Text)
 	}
 	switch {
+	case res.Text == nil && res.TextProblem != "":
+		return "[text extraction unavailable for this document: " + res.TextProblem + "]"
 	case res.Text == nil:
 		return "[text extraction unavailable for this document]"
 	case empty:
 		return "[no extractable text — the PDF may be scanned]"
 	}
 	if res.TextTruncated {
-		b.WriteString("[text truncated at the 4 MiB limit]\n")
+		b.WriteString("[text truncated: a page exceeded the 1 MiB per-page text limit or the call reached the 4 MiB text limit; use page images for the rest]\n")
 	}
 	return b.String()
 }
