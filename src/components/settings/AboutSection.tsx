@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Wordmark } from '@/components/shared/Wordmark'
-import { fetchAboutInfo } from '@/lib/api'
+import { fetchAboutInfo, fetchVersion, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { OMNIPUS_MARK_URL as omnipusLogo } from '@/lib/brandAssets'
 
@@ -27,10 +27,19 @@ export function AboutSection() {
     retry: 1,
   })
 
+  // FR-105: the build commit comes from GET /version (build_sha).
+  const { data: versionInfo, isError: versionIsError, error: versionError } = useQuery({
+    queryKey: ['version'],
+    queryFn: fetchVersion,
+    retry: 1,
+  })
+  const buildCommit = versionInfo ? (versionInfo.build_sha === 'dev' ? 'development build' : versionInfo.build_sha) : null
+
   async function copySystemInfo() {
     if (!info) return
     const text = [
       `Omnipus ${info.version}`,
+      ...(buildCommit ? [`Build commit: ${buildCommit}`] : []),
       `Go: ${info.go_version}`,
       `OS: ${info.os}`,
       `Arch: ${info.arch}`,
@@ -94,6 +103,17 @@ export function AboutSection() {
                 value={info.version === 'dev' ? 'development build' : info.version}
                 mono
                 testId="build-version"
+              />
+              <InfoRow
+                label="Build commit"
+                value={
+                  buildCommit ??
+                  (versionIsError
+                    ? `Could not read the build commit: ${getErrorMessage(versionError, 'no answer')}`
+                    : 'Loading…')
+                }
+                mono={!!buildCommit}
+                testId="build-commit"
               />
               <InfoRow label="Go version" value={info.go_version} mono />
               <InfoRow label="Operating system" value={info.os} mono />
