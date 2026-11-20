@@ -29,6 +29,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/tests/officepreview"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,4 +76,48 @@ func TestOfficePreview_CountLimitNoteNamesTheCountNotTextOnly(t *testing.T) {
 		"G12: the note must name the per-request scope of the count limit (AD-6 wording); got %q", note)
 	require.True(t, strings.Contains(lower, "count") || strings.Contains(lower, "limit"),
 		"G12: the note must name the count limit as the reason (AD-6 wording); got %q", note)
+}
+
+// G12 companion (AD-6 and the fallback rules): the count-exhausted preview
+// with NO stored text. AD-6: "if the newest preview gets no media it
+// receives its extracted text with the reason …, never 'call again'". With
+// no stored text, "its extracted text" is the fallback extraction of the
+// same bytes — the recovery the provider-rejection and no-budget cases
+// already take (document_preview_media.go's pdfFallbackText branch). The
+// count case must not end the note at "[model received: extracted text …]"
+// with nothing after it: the model would receive no content at all.
+//
+// RED on 56cd9ca03: the recovery condition tests only pdfRejected and
+// noBudget, so the count case falls through to the empty-text final branch.
+func TestOfficePreview_CountLimitWithoutStoredTextSendsFallbackText(t *testing.T) {
+	const toolID = "g12-empty-text-preview"
+	toolPDF := officepreview.PDF(1)
+	carried := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(officepreview.PDF(1))
+
+	previews := &turnDocumentPreviews{}
+	previews.add(toolID, &tools.DocumentPreview{
+		PDF:         toolPDF,
+		Text:        "", // nothing stored: the recovery branch is the only source of text
+		Reauthorize: func(context.Context) error { return nil },
+	})
+	t.Cleanup(previews.release)
+
+	messages := []providers.Message{
+		{Role: "user", Content: "the carried PDF", Media: []string{carried}},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: toolID, Name: "preview_document", Function: &providers.FunctionCall{Name: "preview_document"}}}},
+		{Role: "tool", ToolCallID: toolID, Content: "preview recorded"},
+	}
+	got, err := attachTurnDocumentPreviews(context.Background(), messages, previews, previewModelForms{
+		pdf: true, images: false, maxPDF: 50 << 20, maxPDFs: 1,
+	})
+	require.NoError(t, err)
+
+	tool := got[len(got)-1]
+	noteStart := strings.Index(tool.Content, "[model received:")
+	require.GreaterOrEqual(t, noteStart, 0, "G12 companion instrument: the model-facing note must be present")
+	note := tool.Content[noteStart:]
+	require.Contains(t, note, "per-request PDF count limit",
+		"AD-6: the no-media preview receives its extracted text WITH the reason — the count limit")
+	require.Contains(t, tool.Content, "[Attached file",
+		"AD-6: the count-exhausted preview with no stored text must send the fallback extraction of its own bytes, not an empty result")
 }
