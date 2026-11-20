@@ -820,9 +820,12 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       if (ownedIds.length > 0) {
         bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, prevOpenId, draft.textAtToolCallStart)
       }
-      prevMsg.isStreaming = false
-      prevMsg.status = 'done'
-      prevMsg.pendingTextBoundary = false
+      // #1895: the bake replaces the bubble object, so close the current one;
+      // the earlier `prevMsg` reference would no longer reach the bucket.
+      const closing = draft.messagesById[prevOpenId]
+      closing.isStreaming = false
+      closing.status = 'done'
+      closing.pendingTextBoundary = false
     }
   }
   // R-J's collision case (see the "cross-turn id collision" comment on
