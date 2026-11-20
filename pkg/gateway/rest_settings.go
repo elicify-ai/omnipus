@@ -22,6 +22,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -147,6 +148,24 @@ func (a *restAPI) HandleCredentials(w http.ResponseWriter, r *http.Request) {
 		a.deleteCredential(w, r, sub)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// credentialDeleteBypassGate applies the dev-mode-bypass guard
+// (middleware.RequireNotBypass, 503) to DELETE of a stored credential and
+// passes every other method straight through. Deleting a key needs only the
+// screen's confirm, no password (FR-056 / C-5), but it keeps the bypass
+// exclusion, so the synthetic _dev_bypass identity cannot delete vault
+// entries. It runs after withAuth, which writes the config snapshot the guard
+// reads.
+func credentialDeleteBypassGate(next http.HandlerFunc) http.HandlerFunc {
+	guarded := middleware.RequireNotBypass(next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			guarded(w, r)
+			return
+		}
+		next(w, r)
 	}
 }
 
