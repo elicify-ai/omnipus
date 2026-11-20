@@ -84,7 +84,7 @@ func WritePackagedOfficeManifest(dir string, opts PackagedOfficeOptions) error {
 	}
 	m.Trust = TrustPackaged
 	if registry != nil {
-		if err := writePackagedRegistry(filepath.Join(root, m.Registry), registry); err != nil {
+		if err = writePackagedRegistry(filepath.Join(root, m.Registry), registry); err != nil {
 			return err
 		}
 	}
