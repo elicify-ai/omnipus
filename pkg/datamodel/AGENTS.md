@@ -5,11 +5,11 @@ What it does not own: Ongoing config reconciliation or the credentials store.
 
 ## Run its tests
 
-`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestDirectoryInit_BackupsDirGuardedByEditionAuthMode$' -v -p 1 ./pkg/datamodel/`
+`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestDirectoryInitialization$' -v -p 1 ./pkg/datamodel/`
 
 ## Pitfalls here
 
-- Creating a local backup directory in other authentication modes risks placing key and backup together. `init_test.go::TestDirectoryInit_BackupsDirGuardedByEditionAuthMode` checks conditional creation.
+- Backup and Restore was removed. Initialization does not create a backups directory or delete existing archives. The filesystem-policy protections for existing archives stay in place; the gateway boot-control test pins preservation through startup and shutdown.
 
 ## Never bring back
 

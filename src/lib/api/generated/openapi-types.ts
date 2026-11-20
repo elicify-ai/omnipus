@@ -1573,7 +1573,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/backup": {
+    "/packages/export": {
         parameters: {
             query?: never;
             header?: never;
@@ -1583,37 +1583,17 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Create a backup archive
-         * @description Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories. The archive is written atomically to ~/.omnipus/backups/.
+         * Export one custom agent as an .omnpkg package
+         * @description Packs exactly one user-created agent (its cleaned record, SOUL.md and, when present, AGENT.md) into a zstd-compressed tar whose first entry is manifest.json. Built-in agents are refused, and so are external workers until S1b. Stored credentials, keys, tokens and config.json are never read; SOUL.md and AGENT.md are copied as they are. Local mode only; refused while developer bypass mode is on. One audit entry per export; if it cannot be written the export is refused and no bytes are sent.
          */
-        post: operations["createBackup"];
+        post: operations["exportPackage"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/backups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List backup archives
-         * @description Lists all .tar.gz files in ~/.omnipus/backups/ with filename, size, and creation time. Returns an empty array when no backups exist.
-         */
-        get: operations["listBackups"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/restore": {
+    "/packages/import": {
         parameters: {
             query?: never;
             header?: never;
@@ -1623,10 +1603,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Restore from a backup archive
-         * @description Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
+         * Upload an .omnpkg package and get a provisional preview
+         * @description Copies the whole body (at most 64 MiB) into a staging folder, then runs every format check (bounded zstd decoding, manifest, checksums, entry paths and types, agent layout) and a dry run of the create rules. Nothing outside the staging folder, staging maintenance and the audit log is changed. The preview is provisional; the staging expires 30 minutes after it became ready. At most 5 stagings are kept at once.
          */
-        post: operations["restoreBackup"];
+        post: operations["uploadPackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packages/import/{staging_id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply a staged package import
+         * @description Re-runs the preview checks on the current state, then imports in the requested mode (S1: new only). The new agent stays invisible until the commit point; a failure before it is rolled back (import_rolled_back), and a rollback that could not finish is reported with its leftovers (import_rollback_incomplete) and finished at the next gateway start. Only one apply runs at a time.
+         */
+        post: operations["applyPackageImport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4258,7 +4258,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed. The package routes (/packages/export, /packages/import, /packages/import/{staging_id}/apply) use: export_selection_invalid, agent_not_found, core_agent_not_exportable, agent_prompt_missing, agent_file_unreadable (details.file, details.check one of link, not_regular, unreadable, too_large), audit_failed, not_a_package, package_too_new, element_schema_too_new, package_too_large (details.limit one of window, decoded, entries, manifest, agent_file, body), checksum_mismatch (details.file), manifest_mismatch (details.file or details.element), unsafe_path (details.file), unsafe_entry_type (details.file), no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable (field, details.reason), external_worker_not_supported_yet, too_many_staged_imports, import_mode_not_available, staging_not_found, import_in_progress, workspace_not_found, default_workspace_missing, name_suffix_exhausted, import_rolled_back and import_rollback_incomplete (details.failed_step C1 or C2, details.leftovers, details.agent_id, details.staging_id).
              * @example csrf_missing
              */
             code?: string;
@@ -12726,29 +12726,6 @@ export interface components {
             paired: components["schemas"]["DevicePaired"][];
         };
         /**
-         * BackupEntry
-         * @description A single backup archive entry returned by GET /api/v1/backups.
-         */
-        BackupEntry: {
-            /**
-             * @description Backup archive filename (e.g. "omnipus-backup-2026-05-16.tar.gz").
-             * @example omnipus-backup-2026-05-16T10-00-00Z.tar.gz
-             */
-            filename: string;
-            /**
-             * Format: int64
-             * @description Archive size in bytes.
-             * @example 1048576
-             */
-            size_bytes: number;
-            /**
-             * Format: date-time
-             * @description RFC3339 timestamp when the backup was created.
-             * @example 2026-05-16T10:00:00Z
-             */
-            created_at: string;
-        };
-        /**
          * StorageStats
          * @description Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
          */
@@ -14396,27 +14373,280 @@ export interface components {
             cleanup_intent: string;
         };
         /**
-         * BackupCreateResponse
-         * @description Response from POST /api/v1/backup. Returns the path, size, and creation time of the new backup archive.
+         * PackageManifest
+         * @description The manifest of an .omnpkg package: the first entry (manifest.json) of the zstd-compressed tar, and the `manifest` field of PackageImportPreview. Readers refuse a higher format_version (package_too_new) and a higher agent element schema (element_schema_too_new), and ignore unknown properties (export-import S1 spec, FR-001 to FR-005).
          */
-        BackupCreateResponse: {
+        PackageManifest: {
             /**
-             * @description Absolute path to the backup file.
-             * @example /home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz
+             * @description Always "omnpkg".
+             * @example omnpkg
+             * @enum {string}
              */
-            path: string;
+            format: "omnpkg";
             /**
-             * Format: int64
-             * @description Size of the backup file in bytes.
-             * @example 1048576
+             * @description Package format version; S1 writes 1.
+             * @example 1
              */
-            size_bytes: number;
+            format_version: number;
+            /**
+             * @description What the package was made from; S1 writes custom.
+             * @example custom
+             * @enum {string}
+             */
+            scope: "workspace" | "system" | "custom";
+            /** @description The elements in the package (S1 exports exactly one agent). */
+            elements: ({
+                /**
+                 * @description Element type. Open string: S1 knows "agent"; later Omnipus versions add more types.
+                 * @example agent
+                 */
+                type: string;
+                /**
+                 * @description Version of the element's record format; agent records are 1.
+                 * @example 1
+                 */
+                schema: number;
+                /**
+                 * @description The element's ID on the install it was exported from.
+                 * @example 5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c
+                 */
+                source_id: string;
+                /**
+                 * @description The element's display name (equals the agent record's name).
+                 * @example Writer
+                 */
+                name: string;
+                /**
+                 * @description Package paths this element owns; every path is listed in `files`.
+                 * @example [
+                 *       "omnipus/agents/5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c/agent.json"
+                 *     ]
+                 */
+                files: string[];
+            } & {
+                [key: string]: unknown;
+            })[];
+            /**
+             * @description Number of elements per element type.
+             * @example {
+             *       "agent": 1
+             *     }
+             */
+            counts: {
+                [key: string]: number;
+            };
+            /** @description Every payload entry (all entries except manifest.json) with its SHA-256 and size. */
+            files: {
+                [key: string]: {
+                    /** @description Lowercase hex SHA-256 of the entry's bytes. */
+                    sha256: string;
+                    /**
+                     * Format: int64
+                     * @description Entry size in bytes.
+                     */
+                    size: number;
+                };
+            };
+            /**
+             * @description Version of the Omnipus build that made the package.
+             * @example v0.1.1
+             */
+            source_build: string;
             /**
              * Format: date-time
-             * @description RFC3339 timestamp when the backup was created.
-             * @example 2026-05-16T10:30:00Z
+             * @description When the package was made (UTC).
+             * @example 2026-11-19T12:00:00Z
              */
             created_at: string;
+            /**
+             * @description Whether the package carries chat sessions; S1 writes false.
+             * @example false
+             */
+            includes_sessions: boolean;
+            /** @description Secrets the importer must enter again (S1a writes none). */
+            needs_secrets: {
+                /**
+                 * @description Secret name, for example an environment variable name.
+                 * @example OPENAI_API_KEY
+                 */
+                name: string;
+                /** @description Source ID of the element that uses the secret. */
+                used_by: string;
+                /**
+                 * @description Kind of secret (S1b writes executor_env).
+                 * @example executor_env
+                 */
+                kind: string;
+            }[];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * PackageExportRequest
+         * @description Request body of POST /api/v1/packages/export. S1 accepts exactly one agent ID; any other count is refused with 400 export_selection_invalid.
+         */
+        PackageExportRequest: {
+            /**
+             * @description IDs of the agents to export (exactly one in S1).
+             * @example [
+             *       "5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c"
+             *     ]
+             */
+            agent_ids: string[];
+        };
+        /**
+         * PackageImportPreview
+         * @description Response of POST /api/v1/packages/import (201). The upload was checked in full and kept in a staging folder until expires_at (30 minutes after it became ready). Everything in the preview is provisional: apply re-runs the checks on the current state and lists each difference as the warning changed_since_preview (FR-021, FR-042).
+         */
+        PackageImportPreview: {
+            /**
+             * @description ID of the staged upload; pass it to the apply operation.
+             * @example 0b6f3c1e-2d4a-4e5f-9a8b-7c6d5e4f3a2b
+             */
+            staging_id: string;
+            /**
+             * Format: date-time
+             * @description When the staged upload expires (ready time + 30 minutes).
+             * @example 2026-11-19T12:30:00Z
+             */
+            expires_at: string;
+            manifest: components["schemas"]["PackageManifest"];
+            /** @description The elements New mode would add, with their proposed (provisional) names. */
+            will_add: {
+                /**
+                 * @description Element type (agent in S1).
+                 * @example agent
+                 */
+                type: string;
+                /** @description The element's ID in the package. */
+                source_id: string;
+                /**
+                 * @description The element's name in the package.
+                 * @example Writer
+                 */
+                source_name: string;
+                /**
+                 * @description The name the element would get now (a suffix is added on a name clash).
+                 * @example Writer (imported)
+                 */
+                proposed_name: string;
+                /** @description Whether proposed_name differs from source_name. */
+                renamed: boolean;
+            }[];
+            /** @description Elements that would not be imported (unknown element types, from S1b). */
+            skipped_elements: {
+                /**
+                 * @description Element type.
+                 * @example skill
+                 */
+                type: string;
+                /** @description The element's ID in the package. */
+                source_id: string;
+                /** @description The element's name in the package. */
+                name?: string;
+            }[];
+            /** @description Items the import changes or leaves out (for example skill_dropped, mcp_binding_dropped, tool_policy_tightened, provider_not_configured, field_not_carried, unfinished_import_found). */
+            warnings: {
+                /**
+                 * @description Machine-readable warning code.
+                 * @example skill_dropped
+                 */
+                code: string;
+                /** @description Source ID of the element the warning is about, when it is about one. */
+                element_source_id?: string;
+                /** @description Plain-language explanation. */
+                message: string;
+                /** @description The items concerned (skill names, tool names, connector IDs). */
+                items?: string[];
+            }[];
+            /** @description Secrets to enter again after the import (S1a lists none). */
+            needs_secrets: {
+                /** @description Secret name. */
+                name: string;
+                /** @description Source ID of the element that uses it. */
+                used_by: string;
+                /** @description Kind of secret. */
+                kind: string;
+            }[];
+        };
+        /**
+         * PackageImportApplyRequest
+         * @description Request body of POST /api/v1/packages/import/{staging_id}/apply. mode is required and has no default; S1 accepts only "new" (replace and merge are refused with 422 import_mode_not_available).
+         */
+        PackageImportApplyRequest: {
+            /**
+             * @description How to import; S1 supports new (add as new items) only.
+             * @example new
+             * @enum {string}
+             */
+            mode: "replace" | "merge" | "new";
+            /**
+             * @description Workspace the imported agent joins. Absent: the default workspace (409 default_workspace_missing when there is none).
+             * @example ws-1
+             */
+            workspace_id?: string;
+        };
+        /**
+         * PackageImportResult
+         * @description Response of POST /api/v1/packages/import/{staging_id}/apply (200): the import is committed. activation "active" means the live agent list confirmed the new agent; "pending" means it is stored and complete but the live list has not confirmed it yet (restart the gateway, or wait and check the agent list). A pending activation is never a partial import (FR-036, FR-041).
+         */
+        PackageImportResult: {
+            /**
+             * @description The mode that was applied (new in S1).
+             * @example new
+             * @enum {string}
+             */
+            mode: "replace" | "merge" | "new";
+            /** @description The elements the import created. */
+            created: {
+                /**
+                 * @description Element type (agent in S1).
+                 * @example agent
+                 */
+                type: string;
+                /** @description The element's ID in the package. */
+                source_id: string;
+                /** @description The new ID on this install (never the source ID). */
+                new_id: string;
+                /**
+                 * @description The final name, including any clash suffix.
+                 * @example Writer (imported)
+                 */
+                name: string;
+                /** @description The workspace the agent joined. */
+                workspace_id: string;
+            }[];
+            /** @description Items the import changed or left out, including changed_since_preview, main_chat_pending and audit_failed. */
+            warnings: {
+                /**
+                 * @description Machine-readable warning code.
+                 * @example changed_since_preview
+                 */
+                code: string;
+                /** @description Source ID of the element the warning is about, when it is about one. */
+                element_source_id?: string;
+                /** @description Plain-language explanation. */
+                message: string;
+                /** @description The items concerned. */
+                items?: string[];
+            }[];
+            /** @description Secrets to enter again (S1a lists none). */
+            needs_secrets: {
+                /** @description Secret name. */
+                name: string;
+                /** @description ID of the created element that uses it. */
+                used_by: string;
+                /** @description Kind of secret. */
+                kind: string;
+            }[];
+            /**
+             * @description Whether the live agent list confirmed the new agent (see the schema description).
+             * @example active
+             * @enum {string}
+             */
+            activation: "active" | "pending";
+            /** @description Plain-language guidance when activation is pending. */
+            activation_message?: string;
         };
         /**
          * OnboardingStatusResponse
@@ -15385,17 +15615,6 @@ export interface components {
              * @example correct-horse-battery-staple
              */
             new_passphrase: string;
-        };
-        /**
-         * RestoreBackupRequest
-         * @description Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
-         */
-        RestoreBackupRequest: {
-            /**
-             * @description Name of the backup file (without path). Must not contain path separators or traversal sequences. Must end with .tar.gz.
-             * @example omnipus-backup-20260516T103000Z.tar.gz
-             */
-            filename: string;
         };
         /**
          * BearerToken
@@ -23591,80 +23810,7 @@ export interface operations {
             };
         };
     };
-    createBackup: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Backup created. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackupCreateResponse"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            /** @description Method not allowed. */
-            405: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    listBackups: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description List of backup archive entries. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        /** @example backup-20260516T103000Z.tar.gz */
-                        filename: string;
-                        /**
-                         * Format: int64
-                         * @example 1048576
-                         */
-                        size_bytes: number;
-                        /**
-                         * Format: date-time
-                         * @example 2026-05-16T10:30:00Z
-                         */
-                        created_at: string;
-                    }[];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            /** @description Method not allowed. */
-            405: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    restoreBackup: {
+    exportPackage: {
         parameters: {
             query?: never;
             header?: never;
@@ -23673,28 +23819,22 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RestoreBackupRequest"];
+                "application/json": components["schemas"]["PackageExportRequest"];
             };
         };
         responses: {
-            /** @description Backup restored. */
+            /** @description The package bytes. */
             200: {
                 headers: {
+                    /** @description attachment; filename="<safe-name>.omnpkg" */
+                    "Content-Disposition"?: string;
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /**
-                         * @example restored
-                         * @enum {string}
-                         */
-                        status: "restored";
-                        /** @example backup-20260516T103000Z.tar.gz */
-                        filename: string;
-                    };
+                    "application/octet-stream": string;
                 };
             };
-            /** @description Invalid filename (path traversal, missing .tar.gz). */
+            /** @description agent_ids does not hold exactly one ID (export_selection_invalid). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -23704,7 +23844,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            /** @description Backup file not found. */
+            /** @description Agent not found (agent_not_found). */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -23713,8 +23853,179 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Filename field is required. */
+            /** @description JSON body over 1 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The agent cannot be exported (core_agent_not_exportable, agent_prompt_missing, element_not_creatable, agent_file_unreadable, external_worker_not_supported_yet). */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The audit entry could not be written (audit_failed); no bytes were sent. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    uploadPackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The package passed every check and is staged. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageImportPreview"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description All 5 upload slots are taken (too_many_staged_imports). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Body over 64 MiB, or a decoded size limit was passed (package_too_large, details.limit). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The package was refused (not_a_package, package_too_new, element_schema_too_new, package_too_large with details.limit window, checksum_mismatch, manifest_mismatch, unsafe_path, unsafe_entry_type, no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable, external_worker_not_supported_yet). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    applyPackageImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The staging_id from the upload's preview. */
+                staging_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackageImportApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description The import is committed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageImportResult"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description Staging unknown, expired or used (staging_not_found), or the workspace is unknown (workspace_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Another apply is running (import_in_progress), no workspace named and no default workspace (default_workspace_missing), or every name suffix is taken (name_suffix_exhausted). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description JSON body over 1 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Mode replace or merge (import_mode_not_available), or the record now breaks a create rule (element_not_creatable). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The import failed before the commit point and was rolled back (import_rolled_back), or the rollback could not finish (import_rollback_incomplete). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -29558,7 +29869,6 @@ export type DoctorResult = components["schemas"]["DoctorResult"];
 export type DevicePending = components["schemas"]["DevicePending"];
 export type DevicePaired = components["schemas"]["DevicePaired"];
 export type DevicesResponse = components["schemas"]["DevicesResponse"];
-export type BackupEntry = components["schemas"]["BackupEntry"];
 export type StorageStats = components["schemas"]["StorageStats"];
 export type AuditLogToggleRequest = components["schemas"]["AuditLogToggleRequest"];
 export type AuditLogUpdateResponse = components["schemas"]["AuditLogUpdateResponse"];
@@ -29622,7 +29932,11 @@ export type MailReplyContextRequest = components["schemas"]["MailReplyContextReq
 export type MailReplyContextResponse = components["schemas"]["MailReplyContextResponse"];
 export type MailboxRemovalResult = components["schemas"]["MailboxRemovalResult"];
 export type MailboxCleanupRequest = components["schemas"]["MailboxCleanupRequest"];
-export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
+export type PackageManifest = components["schemas"]["PackageManifest"];
+export type PackageExportRequest = components["schemas"]["PackageExportRequest"];
+export type PackageImportPreview = components["schemas"]["PackageImportPreview"];
+export type PackageImportApplyRequest = components["schemas"]["PackageImportApplyRequest"];
+export type PackageImportResult = components["schemas"]["PackageImportResult"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];
 export type ToolApprovalResponse = components["schemas"]["ToolApprovalResponse"];
@@ -29654,7 +29968,6 @@ export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStat
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
 export type CredentialRotateRequest = components["schemas"]["CredentialRotateRequest"];
-export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"];
 export type BearerToken = components["schemas"]["BearerToken"];
 export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
 export type CliDetect = components["schemas"]["CliDetect"];

@@ -80,7 +80,7 @@ tags:
 - name: Agents
   description: Agent management endpoints
 - name: Settings
-  description: Credentials, backup/restore, and storage management
+  description: Credentials and storage management
 - name: Workspaces
   description: Workspace management — create, list, update, delete, and session linking.
 - name: Tasks
@@ -1772,8 +1772,6 @@ components:
       $ref: ./components/schemas/DevicePaired.yaml
     DevicesResponse:
       $ref: ./components/schemas/DevicesResponse.yaml
-    BackupEntry:
-      $ref: ./components/schemas/BackupEntry.yaml
     StorageStats:
       $ref: ./components/schemas/StorageStats.yaml
     AuditLogToggleRequest:
@@ -1900,8 +1898,16 @@ components:
       $ref: ./components/schemas/MailboxRemovalResult.yaml
     MailboxCleanupRequest:
       $ref: ./components/schemas/MailboxCleanupRequest.yaml
-    BackupCreateResponse:
-      $ref: ./components/schemas/BackupCreateResponse.yaml
+    PackageManifest:
+      $ref: ./components/schemas/PackageManifest.yaml
+    PackageExportRequest:
+      $ref: ./components/schemas/PackageExportRequest.yaml
+    PackageImportPreview:
+      $ref: ./components/schemas/PackageImportPreview.yaml
+    PackageImportApplyRequest:
+      $ref: ./components/schemas/PackageImportApplyRequest.yaml
+    PackageImportResult:
+      $ref: ./components/schemas/PackageImportResult.yaml
     OnboardingStatusResponse:
       $ref: ./components/schemas/OnboardingStatusResponse.yaml
     OperationResult:
@@ -1976,8 +1982,6 @@ components:
       $ref: ./components/schemas/CredentialSetRequest.yaml
     CredentialRotateRequest:
       $ref: ./components/schemas/CredentialRotateRequest.yaml
-    RestoreBackupRequest:
-      $ref: ./components/schemas/RestoreBackupRequest.yaml
     BearerToken:
       $ref: ./components/schemas/BearerToken.yaml
     ChannelConfigureRequest:
@@ -6774,78 +6778,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /backup:
+  /packages/export:
     post:
-      operationId: createBackup
-      summary: Create a backup archive
-      description: 'Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories. The archive is written atomically to ~/.omnipus/backups/.
-
-        '
-      tags:
-      - Settings
-      responses:
-        '200':
-          description: Backup created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BackupCreateResponse'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '405':
-          description: Method not allowed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /backups:
-    get:
-      operationId: listBackups
-      summary: List backup archives
-      description: 'Lists all .tar.gz files in ~/.omnipus/backups/ with filename, size, and creation time. Returns an empty array when no backups exist.
-
-        '
-      tags:
-      - Settings
-      responses:
-        '200':
-          description: List of backup archive entries.
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  required:
-                  - filename
-                  - size_bytes
-                  - created_at
-                  properties:
-                    filename:
-                      type: string
-                      example: backup-20260516T103000Z.tar.gz
-                    size_bytes:
-                      type: integer
-                      format: int64
-                      minimum: 0
-                      example: 1048576
-                    created_at:
-                      type: string
-                      format: date-time
-                      example: '2026-05-16T10:30:00Z'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '405':
-          description: Method not allowed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /restore:
-    post:
-      operationId: restoreBackup
-      summary: Restore from a backup archive
-      description: 'Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
+      operationId: exportPackage
+      summary: Export one custom agent as an .omnpkg package
+      description: 'Packs exactly one user-created agent (its cleaned record, SOUL.md and, when present, AGENT.md) into a zstd-compressed tar whose first entry is manifest.json. Built-in agents are refused, and so are external workers until S1b. Stored credentials, keys, tokens and config.json are never read; SOUL.md and AGENT.md are copied as they are. Local mode only; refused while developer bypass mode is on. One audit entry per export; if it cannot be written the export is refused and no bytes are sent.
 
         '
       tags:
@@ -6855,28 +6792,22 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RestoreBackupRequest'
+              $ref: '#/components/schemas/PackageExportRequest'
       responses:
         '200':
-          description: Backup restored.
-          content:
-            application/json:
+          description: The package bytes.
+          headers:
+            Content-Disposition:
+              description: attachment; filename="<safe-name>.omnpkg"
               schema:
-                type: object
-                required:
-                - status
-                - filename
-                properties:
-                  status:
-                    type: string
-                    enum:
-                    - restored
-                    example: restored
-                  filename:
-                    type: string
-                    example: backup-20260516T103000Z.tar.gz
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
         '400':
-          description: Invalid filename (path traversal, missing .tar.gz).
+          description: agent_ids does not hold exactly one ID (export_selection_invalid).
           content:
             application/json:
               schema:
@@ -6884,13 +6815,149 @@ paths:
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
-          description: Backup file not found.
+          description: Agent not found (agent_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: JSON body over 1 MiB.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: Filename field is required.
+          description: The agent cannot be exported (core_agent_not_exportable, agent_prompt_missing, element_not_creatable, agent_file_unreadable, external_worker_not_supported_yet).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: The audit entry could not be written (audit_failed); no bytes were sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Developer bypass mode is on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /packages/import:
+    post:
+      operationId: uploadPackage
+      summary: Upload an .omnpkg package and get a provisional preview
+      description: 'Copies the whole body (at most 64 MiB) into a staging folder, then runs every format check (bounded zstd decoding, manifest, checksums, entry paths and types, agent layout) and a dry run of the create rules. Nothing outside the staging folder, staging maintenance and the audit log is changed. The preview is provisional; the staging expires 30 minutes after it became ready. At most 5 stagings are kept at once.
+
+        '
+      tags:
+      - Settings
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: The package passed every check and is staged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageImportPreview'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '409':
+          description: All 5 upload slots are taken (too_many_staged_imports).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Body over 64 MiB, or a decoded size limit was passed (package_too_large, details.limit).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The package was refused (not_a_package, package_too_new, element_schema_too_new, package_too_large with details.limit window, checksum_mismatch, manifest_mismatch, unsafe_path, unsafe_entry_type, no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable, external_worker_not_supported_yet).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Developer bypass mode is on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /packages/import/{staging_id}/apply:
+    post:
+      operationId: applyPackageImport
+      summary: Apply a staged package import
+      description: 'Re-runs the preview checks on the current state, then imports in the requested mode (S1: new only). The new agent stays invisible until the commit point; a failure before it is rolled back (import_rolled_back), and a rollback that could not finish is reported with its leftovers (import_rollback_incomplete) and finished at the next gateway start. Only one apply runs at a time.
+
+        '
+      tags:
+      - Settings
+      parameters:
+      - name: staging_id
+        in: path
+        required: true
+        description: The staging_id from the upload's preview.
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackageImportApplyRequest'
+      responses:
+        '200':
+          description: The import is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageImportResult'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Staging unknown, expired or used (staging_not_found), or the workspace is unknown (workspace_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Another apply is running (import_in_progress), no workspace named and no default workspace (default_workspace_missing), or every name suffix is taken (name_suffix_exhausted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: JSON body over 1 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Mode replace or merge (import_mode_not_available), or the record now breaks a create rule (element_not_creatable).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: The import failed before the commit point and was rolled back (import_rolled_back), or the rollback could not finish (import_rollback_incomplete).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Developer bypass mode is on.
           content:
             application/json:
               schema:
