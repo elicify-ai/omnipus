@@ -44,8 +44,11 @@ func opencodeFix1895Process() int {
 			resumeAddr = strings.TrimPrefix(arg, "--fixture-resume-address=")
 		}
 	}
-	if mode == "live_followup" || mode == "live_followup_pending" {
-		return opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID, mode == "live_followup_pending")
+	if mode == "queued_followup_pending" {
+		return opencode1895QueuedFollowupProcess(addr, resumeAddr, nativeID)
+	}
+	if mode == "live_followup" || mode == "live_followup_pending" || mode == "live_followup_text" {
+		return opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID, mode != "live_followup")
 	}
 	if mode == "startup_followup" && nativeID != "" {
 		prompt := os.Args[len(os.Args)-1]

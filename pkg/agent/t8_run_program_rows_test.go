@@ -113,7 +113,7 @@ func t8SetPreset(t *testing.T, f *l11274Fixture, cli, preset string) {
 // 6.7: get_agent reports the Settings program, no warning, no soul.
 func TestGetAgent_ExternalWorker_SettingsProgram_6_7(t *testing.T) {
 	f := t8RunFixture(t)
-	program := l11274Executable(t, f.home, "codex", true)
+	program := opencodeTrustedProgram(t, "codex")
 	f.setProgram(t, "codex", program)
 	id, _ := t8CreateCodexWorker(t, f)
 
