@@ -1,4 +1,4 @@
-Status: In review (round-1 fix applied 2026-11-20)
+Status: In review (round-2 fix applied 2026-11-20; final fix round)
 
 ADR: none — no open design decision. The founder settled the design in the wireframe answers (S-Q1 to S-Q14, #1096 Q1 to Q4). The contract shapes this spec needs, including the B4 choice, are architect decisions recorded in "Contract Changes" below. One existing ADR needs a dated correction because of S-Q11 B: [ADR-022 — Re-auth Consent Gate: Credential-Vault Scope Expansion to v0.1.0](../architecture/ADR-022-credential-vault-reauth.md) (see FQ-2 and DOC-012).
 
@@ -104,9 +104,9 @@ Code facts that correct the design notes (code wins):
 |---|---|---|---|
 | `PendingRestartEntry` | changed | `contracts/components/schemas/PendingRestartEntry.yaml` | New required `reason`: `restart_required` (a `RestartGatedKeys` key whose saved value differs from the boot value — today's entries) or `apply_failed` (a hot-reloaded key whose last save did not apply). For `apply_failed`, `applied_value` is the value still in force, or `null` when unknown |
 
-The gateway keeps, in memory, the keys whose last hot apply failed since boot, with the saved value. A later successful apply of that key, or a restart, removes the entry. Every Settings-section writer that answers `requires_restart: true` after a failed apply adds its key (today `rest_prompt_guard.go` and `rest_rate_limits.go`); the #995 rider makes `PUT /config` (on a `configRefreshError`) and `PUT /settings/context` report and record it the same way, and `PUT /performance` records its existing `PerformancePendingApply` state. God Mode stays out. The banner therefore survives Later, a section switch and a page reload, and its Restart now button is always the focus target after Later (FR-035).
+The gateway keeps, in memory, the keys whose last hot apply failed since boot, with the saved value. A later successful apply of that key, or a restart, removes the entry. Every Settings-section writer that answers `requires_restart: true` after a failed apply adds its key (today `rest_prompt_guard.go` and `rest_rate_limits.go`); the #995 rider makes `PUT /config` (on a `configRefreshError`), `PUT /settings/context` (on a `configRefreshError` or a failed `triggerReloadAndWait`) and `PUT /settings/third-party-agents` (its existing `saved_not_refreshed`) record it the same way, with the response contract of C-6 (round 2, review R2-MAJ-006), and `PUT /performance` records its existing `PerformancePendingApply` state. **The record is made inside the config write lock, before the response is sent** (so a lost response can never leave a saved, unapplied key unlisted), and the entry's `persisted_value` is read from `config.json` at `GET` time, as today's entries are (`HandlePendingRestart` loads the file with `config.LoadConfig`), never from a copy kept in memory. The entry key is the dotted config path of each stored field (for example `gateway.log_level`, `context.mcp_result_cap`, `sandbox.third_party_agents.clis.codex.path`). God Mode stays out. The banner therefore survives Later, a section switch and a page reload, and its Restart now button is always the focus target after Later (FR-035).
 
-**Restart completion (round 1, review MAJ-007).** No contract change. The screen proves a restart finished by reading `GET /about` (`AboutResponse.uptime_seconds`, `pid`) before and after: done means the gateway answers and its `uptime_seconds` is smaller than the seconds since Restart now was pressed (so an old process that is still answering never counts), and then `GET /config/pending-restart` no longer lists the restarted keys. `GatewayRestartModal.tsx::pollUntilOnline` (first 2xx from `/health`) is not enough and changes. When `gateway.host` or `gateway.port` changed, FR-063 applies.
+**Restart completion (round 1, review MAJ-007; round 2, review R2-MAJ-003).** No contract change. Every check the page makes is a **same-origin** request: the page's Content Security Policy allows `connect-src 'self'` only (`embed.go::spaBaseContentSecurityPolicy`) and `rest.go::setCORSHeaders` grants credentialed access only to the configured origin, so the page cannot read a different port. Neither policy is widened for this. When the page's own address keeps serving the gateway (no host or port change, or a proxy), the screen proves a restart finished by reading its own `GET /about` (`AboutResponse.uptime_seconds`, `pid`): done means the gateway answers and its `uptime_seconds` is smaller than the seconds since Restart now was pressed (so an old process that is still answering never counts), and then `GET /config/pending-restart` no longer lists the restarted keys. `GatewayRestartModal.tsx::pollUntilOnline` (first 2xx from `/health`) is not enough and changes. When the restart moves the gateway away from the page's own address, the page cannot see the new process; the hand-over is a top-level navigation chosen by the person, and the check runs on the new address after it loads (FR-063).
 
 ### C-3 B3 + B6 — retention: one write path, protected against every other writer, and "Keep forever" for memory
 
@@ -167,7 +167,9 @@ properties:
 
 **Endpoint.** `GET /settings/retention` (`getRetentionSettings`) returns `RetentionSettings`. `PUT /settings/retention` (`updateRetentionSettings`) takes `RetentionSettingsUpdate`, applies the sent fields to the stored values read **inside** the config write lock, and answers 200 with `RetentionSettings`. Auth: `withAuth` + `RequireNotBypass`, like `/settings/memory`; no password. **Validation is unconditional** (review MAJ-004): the handler decodes strictly (unknown fields refused) and checks every range, type and the empty body itself, whether or not `gateway.validate_inbound` is on; schema validation, when on, is a second layer, not the only one. 400 names the field and its range (messages in Machine-Verifiable Constraints).
 
-**Every other writer is refused, by effect** (review CRIT-002). Adding `storage.retention` to `blockedPaths` would not catch `{"storage": null}` or `{"storage": {"other": 1}}`: `blocked_paths.go::collectPaths` records only `storage`, and `rest_config.go::updateConfig` replaces a top-level key's value (it merges only one level deep). So the guard compares **effective values**, the pattern `updateConfig` already uses for the tool-iteration limit (`protectedAgentDefaultsFingerprint` / `checkProtectedAgentDefaultsUnchanged`): before the merge, decode the stored map into `config.Config` and take the four effective retention values (`RetentionSessionDays()`, `RetentionMemoryRetrosDays()`, `memory_retros_forever`, `IsDisabled()`); after the merge, decode again the same way (so every key spelling encoding/json accepts is covered); if any of the four differs, return a `requestRefusalError` → **400** `retention settings can only be changed through PUT /api/v1/settings/retention`, and nothing is written. A body that leaves the effective values as they are (an unrelated sibling, a whole-config round trip that echoes them) is accepted. `storage.retention` is **not** added to `blockedPaths`, so a whole-config round trip keeps working. `set_config` already cannot write `storage.*` (not in `knownConfigPrefixes`).
+**Every other writer is refused, by effect** (review CRIT-002). Adding `storage.retention` to `blockedPaths` would not catch `{"storage": null}` or `{"storage": {"other": 1}}`: `blocked_paths.go::collectPaths` records only `storage`, and `rest_config.go::updateConfig` replaces a top-level key's value (it merges only one level deep). So the guard compares **effective values**, the pattern `updateConfig` already uses for the tool-iteration limit (`protectedAgentDefaultsFingerprint` / `checkProtectedAgentDefaultsUnchanged`): before the merge, decode the stored map into `config.Config` and take the four effective retention values (`RetentionSessionDays()`, `RetentionMemoryRetrosDays()`, `memory_retros_forever`, `IsDisabled()`); after the merge, decode again the same way (so every key spelling encoding/json accepts is covered); if any of the four differs, return a `requestRefusalError` → **400** `retention settings can only be changed through PUT /api/v1/settings/retention`, and nothing is written. A body that leaves the effective values as they are (an unrelated sibling, a permitted multi-section write that echoes the stored retention values) is accepted. If the merged result does not decode into `config.Config` at all (for example `{"storage":"x"}`), the guard refuses with 400 `this write does not decode: <cause>` and nothing is written. `storage.retention` is **not** added to `blockedPaths`. `set_config` already cannot write `storage.*` (not in `knownConfigPrefixes`).
+
+**The existing generic-config fences stay exactly as they are** (round 2, review R2-MAJ-001). `updateConfig` refuses a body carrying `providers` or a credential-like key with 403 before any merge, then `blockedPaths` (`sandbox`, `security`, `credentials`, `gateway.users`, …) with 403. A raw echo of `GET /config` carries `providers` (`getConfig` serializes `config.Config` and does not strip it), so it is refused with 403 by the credential fence **before** the retention guard runs; it still leaves Keep forever on, but it is evidence for that fence, not for the retention guard. No requirement in this spec asks for a whole-`GET` echo to answer 200, and none may be met by loosening a fence. The guard sits **after** those fences and next to `checkProtectedAgentDefaultsUnchanged`. The bytes it decodes are the merged map that `writeConfigJSONLocked` / `prepareConfigJSONLocked` serialize with `json.MarshalIndent` (sorted keys), so the guard sees exactly what a fresh load of the written file will see.
 
 Server meaning of the stored values (B6):
 
@@ -219,7 +221,29 @@ Set (`POST /credentials`) and rotate (`POST /credentials/rotate`) keep the passw
 
 **Section writers merge under the lock.** `rest_context_settings.go::putContextSettings` builds `next := cfg.Context` **before** `safeUpdateConfigJSON` and writes every context field from that early copy, so two Saves that change different fields can lose one change. Decision: every writer the Save bar uses MUST apply only the fields present in the request to the stored values read **inside** the write lock (FR-021). Known to need the change: `putContextSettings` (verified). backend-lead checks the other Save-bar writers (`/performance`, `/settings/memory`, `/security/sandbox-config`, `/security/prompt-guard`, `/security/rate-limits`, `/providers/default-model`, `/settings/retention`) and records each as "already merges under the lock" or "changed", with the FR-021 test. Same-field saves: last writer wins. A list value (Allowed folders, Model overrides, internal network addresses) is one field and is replaced as a whole.
 
-**A failed response does not prove nothing was saved.** `rest_config.go::updateConfigJSONLocked` can fail with `configRefreshError` **after** `config.json` is written ("the write stands on disk"); `putThirdPartyAgentSettings` already answers `saved_not_refreshed` for that case; `PUT /performance` has `PerformancePendingApply`. So the screen tracks four outcomes per write (FR-020): not saved, saved and in use, saved but not in use, and unknown. No contract change; the screen uses each endpoint's existing signals and, for "unknown", re-reads the endpoint.
+**A failed response does not prove nothing was saved.** `rest_config.go::updateConfigJSONLocked` can fail with `configRefreshError` **after** `config.json` is written ("the write stands on disk"); `putThirdPartyAgentSettings` already answers `saved_not_refreshed` for that case; `PUT /performance` has `PerformancePendingApply`. So the screen tracks four outcomes per write (FR-020): not saved, saved and in use, saved but not in use, and unknown.
+
+**Write outcome contract (round 2, review R2-MAJ-006).** Contract change, descriptions only: no new schema. `ErrorResponse.code` already defines `saved_not_refreshed` ("a 500 whose write reached disk but whose running settings could not be refreshed") for Third-party agents; this package extends the same code to the two #995 writers and adds one optional detail. Exact responses:
+
+| Endpoint | Stage | Status | Body (generated type) | `code` | Screen outcome (FR-020) |
+|---|---|---|---|---|---|
+| `PUT /config` | refused before any write: credential field or blocked path | 403 | `ErrorResponse` | none (unchanged) | not saved |
+| `PUT /config` | refused before any write: retention or Performance guard (C-3, C-7), decode failure, protected agent defaults | 400 | `ErrorResponse` | none | not saved |
+| `PUT /config` | failed before `config.json` was written (read, parse, serialize, atomic write) | 500 | `ErrorResponse` | none | unknown → saved-state check |
+| `PUT /config` | written, then `configRefreshError` | **500** (was a generic 500) | `ErrorResponse` | **`saved_not_refreshed`**, `details.keys`: the dotted keys the body changed | saved, not in use |
+| `PUT /config` | written and refreshed | 200 | the `GET /config` map (unchanged) | — | saved and in use |
+| `PUT /settings/context` | validation refusal | 400 | `ErrorResponse` | none (unchanged) | not saved |
+| `PUT /settings/context` | failed before `config.json` was written | 500 | `ErrorResponse` | none | unknown → saved-state check |
+| `PUT /settings/context` | written, then `configRefreshError`, or `triggerReloadAndWait` fails | **500** (today "failed to update context settings" or "context settings written but the reload failed") | `ErrorResponse` | **`saved_not_refreshed`**, `details.keys` (`context.<field>` paths) | saved, not in use |
+| `PUT /settings/context` | written and reloaded | 200 | `ContextSettings` (unchanged, closed schema) | — | saved and in use |
+| `PUT /settings/third-party-agents` | refusal (`cli_path_invalid`, `cli_preset_invalid`, schema) | 400 | `ErrorResponse` (unchanged) | as today | not saved |
+| `PUT /settings/third-party-agents` | written, refresh failed | 500 (unchanged) | `ErrorResponse` | `saved_not_refreshed` (unchanged) + new `details.keys` | saved, not in use |
+| `PUT /security/prompt-guard`, `PUT /security/rate-limits` | written, hot apply failed | 200 (unchanged) | their existing response with `requires_restart: true` | — | saved, not in use |
+| `PUT /performance` | written, apply pending | 200 (unchanged) | `PerformanceSettings` with `pending_apply` | — | saved, not in use |
+
+Every `saved_not_refreshed` answer and every saved-but-not-applied 200 above also adds `apply_failed` entries for its keys to `GET /config/pending-restart` (C-2 addition), inside the write lock, before answering. Files changed: `contracts/components/schemas/ErrorResponse.yaml` (`code` description names the three endpoints; `details` description adds `keys`, an array of dotted config keys, for `saved_not_refreshed`) and `contracts/openapi.yaml` (the `PUT /config` and `PUT /settings/context` operations list their 400/403/500 responses with `ErrorResponse` and say when `saved_not_refreshed` is used). The generated client is regenerated; the screen reads `code` and `details.keys` only through the generated `ErrorResponse` type. A recognized saved-not-applied signal takes precedence over the HTTP status: a 500 with `saved_not_refreshed` is **saved, not in use**, never "unknown".
+
+**Where the saved value is read (round 2, review R2-MAJ-002).** `GET /config`, `GET /settings/context` and `thirdPartySettingsView` read the **running** settings (`agentLoop.GetConfig()`), which lag behind `config.json` after a failed refresh, so they alone can never prove that a value was not saved. The saved-state check therefore uses one source that reads the file: `GET /config/pending-restart`. Rule, which holds because of the recording promise above and because a restart loads `config.json`: **for a key the gateway lists, the saved value is the entry's `persisted_value` (read from `config.json`); for a key it does not list, the saved value equals the running value.** The screen applies this rule only to keys written by the Save-bar writers in the table above (all of which record failed applies after this package); it never concludes "not saved" for any other writer. No new endpoint is added.
 
 ### C-7 #936 rider — Performance values have one write path
 
@@ -249,9 +273,10 @@ New names `RetentionSettings` and `RetentionSettingsUpdate` match no existing fi
 | `GET/PUT /settings/retention` | new (B3, B6) | `RetentionSettings` (read), `RetentionSettingsUpdate` (write) |
 | `GET/PUT /settings/memory` | changed (B3) | no retention fields; retired fields refused unconditionally |
 | `GET/PUT /security/retention` | deleted (B3) | — |
-| `PUT /config` | behaviour (B3, #936) | refuses any write that changes effective retention or Performance values (400) |
-| `PUT /settings/context` | behaviour (FR-021, #995) | merges under the lock; reports a failed rebuild |
-| `PUT /settings/third-party-agents` | unchanged | whole-section replace, used as such (C-6) |
+| `PUT /config` | behaviour (B3, #936, #995) | refuses any write that changes effective retention or Performance values (400); a failed refresh after the write answers 500 `saved_not_refreshed` with `details.keys` (C-6 outcome table) |
+| `PUT /settings/context` | behaviour (FR-021, #995) | merges under the lock; a failed refresh or reload after the write answers 500 `saved_not_refreshed` with `details.keys` |
+| `PUT /settings/third-party-agents` | behaviour (#995 recording only) | whole-section replace, used as such (C-6); its existing `saved_not_refreshed` gains `details.keys` and an `apply_failed` record |
+| `ErrorResponse` | changed (descriptions) | `saved_not_refreshed` used by three endpoints; `details.keys` |
 | `DELETE /credentials/{key}` | behaviour (B7) | no password token |
 | `GET /audit-log` handler | behaviour (#1742) | reads the writer's directory |
 | `set_config` tool | behaviour (#936) | refuses `tools.manifest.compressed` |
@@ -344,7 +369,7 @@ A person wants one clear signal when a saved change only takes effect after a ga
 6. **Given** Protection, **When** the person changes Defense level and saves, **Then** no restart badge, window or banner appears, because the change applies at once.
 7. **Given** the banner, **When** the restart finishes, **Then** the banner disappears and focus moves to the section heading.
 8. **Given** a saved Port change waiting for a restart, **When** the person saves the old Port again, **Then** the banner disappears without a restart.
-9. **Given** the person changed Port and opened Settings directly at the gateway's address, **When** they choose Restart now, **Then** they are told the new address first and taken there once the gateway answers on it.
+9. **Given** the person changed Port and opened Settings directly at the gateway's address, **When** they choose Restart now, **Then** they are told the new address first, can open it with one button once the old address stops answering, and Settings at the new address confirms the restart.
 10. **Given** a setting that applies at once could not be applied after it was saved, **When** the person chooses Later and later reloads the page, **Then** the banner still lists it as "saved, not applied".
 
 ### User Story 5 — Decide how long chats and memory are kept (Priority: P1)
@@ -366,7 +391,7 @@ A person wants chat history cleaned up sooner than memory, set in one place, wit
 7. **Given** a script, **When** it tries to change retention through the general configuration write, **Then** it is refused with a message naming the retention address, and nothing changes.
 8. **Given** a script, **When** it sends a retention value to the memory settings, **Then** it is refused, and nothing changes.
 9. **[Pending FQ-1]** **Given** memory kept for 730 days and a reflection 400 days old, **When** an agent recalls something that reflection holds, **Then** the reflection can be found.
-10. **Given** Keep forever is on, **When** a script replaces `storage.retention`, `storage` or the whole configuration through the general configuration write, **Then** it is refused and Keep forever stays on.
+10. **Given** Keep forever is on, **When** a script replaces `storage.retention`, `storage` or the whole configuration through the general configuration write, **Then** it is refused (a raw echo of the whole configuration by the existing credential fence, every other shape by the retention guard) and Keep forever stays on; a write that leaves retention as it is still saves.
 
 ### User Story 6 — Find moved controls, and see nothing that does not work (Priority: P1)
 
@@ -432,7 +457,7 @@ A person using Settings wants the known small defects on these screens fixed whi
 
 - **Two browser tabs editing the same section.** Each tab saves only the fields it changed and the server merges them under its lock, so neither overwrites the other's untouched fields; on the same field the later save wins. Third-party agents is the exception: it saves all three rows, last save wins (C-6).
 - **The gateway restarts while the Save bar shows.** Drafts stay on the page; the next Save goes to the restarted gateway.
-- **A Save during a running restart.** The write fails with a connection error; the result is unknown, so the screen re-reads once the gateway answers (FR-020); the draft stays until then.
+- **A Save during a running restart.** The write fails with a connection error; the result is unknown, so the screen runs the saved-state check of C-6 once the gateway answers (FR-020); the draft stays until then.
 - **Keep forever turned off again.** The memory day count applies again from the next nightly sweep, and reflections older than it are then deleted. The switch's description says so before saving.
 - **A day count stored outside the new range by hand-editing the config file.** It is shown as stored, marked invalid, and Save is unavailable until it is fixed.
 - **A side panel (Configure provider, Add key) is open with a typed key when the password prompt is cancelled.** The panel and the typed key stay (#1153).
@@ -528,7 +553,7 @@ Every element uses a catalogued component, checked in `design-system/catalog.jso
 - **God Mode** keeps its own password prompt and restart signal and never travels in a Save batch (FR-051).
 - **Auto-approve** keeps its password; the help text says each chat can still turn it off with its Auto button (ADR-092).
 - **Tool permissions and skill trust** leave Settings because Skills & Tools lands first (S-Q3 A, FR-060); the two-layer policy (Hard Constraint #6) is not changed by this package.
-- **Retention deletes data.** The server enforces the ranges unconditionally (FR-042); every other writer is refused by effect, including a replace of `storage` or of the whole config (FR-044); the screen never sends a day count while Keep forever is on (FR-040); the legacy keep-everything switch is honoured, never silently dropped (FR-048).
+- **Retention deletes data.** The server enforces the ranges unconditionally (FR-042); every other writer is refused by effect, including a replace of `storage` or a permitted multi-section write, and a raw whole-config echo still meets the existing credential fence (FR-044); the screen never sends a day count while Keep forever is on (FR-040); the legacy keep-everything switch is honoured, never silently dropped (FR-048).
 - **Performance values** can no longer be raised without the password through `PUT /config` or `set_config` (#936, C-7).
 - **Signed-in browsers** are not in this package (`signed-in-browsers-spec.md`).
 
@@ -548,7 +573,7 @@ Primary flows:
 Error flows:
 - When a value is outside its range, the system names the range under the field and keeps Save unavailable until it is fixed.
 - When one of several writes fails, the system keeps the failed value as a change, shows the server's message under it, and marks the others saved.
-- When a write's result is unknown, the system re-reads the value and shows what the server holds; Discard never claims to undo a stored value.
+- When a write's result is unknown, the system reads the saved value from `config.json` (through `GET /config/pending-restart`, C-6) and shows what the server holds; a read of the running settings alone never marks a value as not saved; Discard never claims to undo a stored value.
 - When the password is wrong, the system says so in the prompt and keeps every change.
 - When the password prompt is cancelled, the system stores nothing and keeps every change, including keys typed in side panels.
 - When one read of a section fails, the system blocks only the groups that need it.
@@ -609,6 +634,7 @@ Boundary conditions:
 
 ### Gateway restart (B2)
 - **Data in / out**: `POST` restart, `GET /about` (uptime, pid), `GET /config/pending-restart`.
+- **Browser boundary**: every check is a same-origin request (`connect-src 'self'`, `rest.go::setCORSHeaders`); after a port or host change the hand-over to the new address is a top-level link the person follows (FR-063). Neither policy is widened.
 - **On failure**: the window says the gateway did not come back within 60 s, keeps Restart now, and names one thing to check (FR-063).
 
 ### Skills & Tools page (prerequisite, S-Q3 A)
@@ -737,7 +763,7 @@ Expected values below come from this spec, the cited contract schemas, the wiref
 |---|---|---|
 | Omnipus chat header | Omnipus settings gear | System agents |
 | Agent profile of a third-party worker | Change in Settings | Third-party agents |
-| Skills screen | permissions link (old `tab=security`) | Protection |
+| Skills screen | permissions link | Skills & Tools, permissions area (Settings no longer holds the grid; FR-009, FR-060) |
 | Default model card | No context length → Set it in Limits | Limits, Model overrides expanded |
 | `/app/policies` | (redirect) | Settings, Providers |
 
@@ -859,9 +885,10 @@ Expected values below come from this spec, the cited contract schemas, the wiref
 #### Scenario: A real server refusal is shown under its field
 **Traces to**: User Story 2, Acceptance Scenario 7
 **Category**: Error Path
-- **Given** Limits, and a Model overrides row whose context length the person sets to 0 (the screen checks only that it is a whole number; the server requires at least 1)
+- **Given** Third-party agents, and the person sets the Codex program path to `/opt/omnipus-test/no-such-codex`, an absolute path that passes every check the screen makes but names no file
 - **When** the person saves
-- **Then** the real `PUT /settings/context` answers 400 with the server's message, which shows under that row; nothing in that request is stored
+- **Then** the real `PUT /settings/third-party-agents` answers 400 with `code: cli_path_invalid`, `field: clis.codex.path` and `details.check: not_found`; the server's message (`thirdpartycli.CheckError::SaveRefusal`) shows under the Codex path row; the draft stays; `config.json` is unchanged
+- **And** the screen's own validation is not loosened for this: a Model overrides context length of 0 is still refused by the screen (D-10 row 11), and the server's own refusal of 0 is tested at the handler (`TestContextSettings_RefusesZeroOverride`)
 
 #### Scenario: A Save while the gateway is down keeps every change
 **Traces to**: User Story 2, Acceptance Scenario 7
@@ -903,14 +930,29 @@ Expected values below come from this spec, the cited contract schemas, the wiref
 **Category**: Error Path
 - **Given** Third-party agents with a changed Codex program path, and a failure seam that makes the live refresh fail after `config.json` is written
 - **When** the person saves
-- **Then** the answer is `saved_not_refreshed`; the row shows as saved with the warning "Saved, but not in use yet. Restart the gateway to apply it.", the restart banner lists it as "saved, not applied", and Discard is not offered for it
+- **Then** the answer is 500 with `code: saved_not_refreshed` and `details.keys` naming the Codex path; the row shows the new path as saved with the warning "Saved, but not in use yet. Restart the gateway to apply it.", the restart banner lists it as "saved, not applied", and Discard is not offered for it
+- **And** the section does **not** replace the shown rows with a re-read of the running settings (which still hold the old path)
 
 #### Scenario: An unknown result is checked by reading back
 **Traces to**: User Story 2, Acceptance Scenario 11
 **Category**: Error Path
-- **Given** Gateway with Log level changed from Info to Debug, and a seam that drops the response of `PUT /config` after the server has stored it
+- **Given** Gateway with Log level changed from Info to Debug, and a seam that drops the response of `PUT /config` after the server has stored and applied it
 - **When** the person saves
-- **Then** the screen re-reads `GET /config`, finds Debug, and shows the value as saved; if the re-read also fails, the bar says "1 change may not have been saved" with Retry, the field keeps Debug, and Discard's confirm says the server may already hold the new value
+- **Then** the screen runs the saved-state check (C-6): `GET /config/pending-restart` does not list `gateway.log_level` and `GET /config` shows Debug, so the value is shown as **saved and in use**; if either read fails, the bar says "1 change may not have been saved" with Retry, the field keeps Debug, and Discard's confirm says the server may already hold the new value
+
+#### Scenario: A stored write whose refresh failed and whose answer was lost is found by the saved-state check
+**Traces to**: User Story 2, Acceptance Scenario 11
+**Category**: Error Path
+- **Given** Gateway with Log level changed from Info to Debug, a seam that makes the live refresh fail after `config.json` is written, and a second seam that drops the response
+- **When** the person saves
+- **Then** `GET /config` still shows Info (running settings), but `GET /config/pending-restart` lists `gateway.log_level` with `reason: apply_failed` and `persisted_value` holding the stored Debug value; the screen shows Debug as **saved, not in use**, the banner lists it, and the value is never shown as "not saved" and never reset to Info
+
+#### Scenario: A value changed elsewhere while the answer was lost
+**Traces to**: User Story 2, Acceptance Scenario 11
+**Category**: Edge Case
+- **Given** Gateway with Log level changed from Info to Debug, a seam that drops the response, and another tab that saved Warn in between
+- **When** the saved-state check finds Warn (neither Info nor Debug)
+- **Then** the field keeps the draft Debug as an unsaved change, the saved value shown for Discard is Warn, the message under the field says "This setting was changed somewhere else while you were saving. Saved value: Warn.", and the bar counts 1 unsaved change
 
 #### Scenario: Third-party agents saves all three rows
 **Traces to**: User Story 2, Acceptance Scenario 12
@@ -1092,16 +1134,26 @@ Expected values below come from this spec, the cited contract schemas, the wiref
 #### Scenario: A changed port shows where the gateway will answer
 **Traces to**: User Story 4, Acceptance Scenario 9
 **Category**: Alternate Path
-- **Given** the page is opened directly at `http://127.0.0.1:8080` and Port is saved as 8081
+- **Given** the page is opened directly at `http://127.0.0.1:8080` (production-served page, real response headers) and Port is saved as 8081
 - **When** the person chooses Restart now
-- **Then** before restarting, the window says the gateway will answer at `http://127.0.0.1:8081` and offers Open the new address; after the new process answers there (checked with its `GET /about`), it opens that address
+- **Then** before restarting, the window says the gateway will answer at `http://127.0.0.1:8081` and that the current address will stop working, and adds "If you reach Omnipus through a proxy, point it at port 8081 instead."
+- **And** the page makes no request to port 8081 (its policy allows only its own address); it polls only its own `/health`, and once that stops answering it shows Open the new address, a plain link to `http://127.0.0.1:8081/settings?tab=gateway&restarted=1` that the person follows
+- **And** if the old address still answers after 60 s with an `uptime_seconds` older than the restart, the window says the gateway did not restart (FR-063)
+
+#### Scenario: The new address confirms the restart on its own origin
+**Traces to**: User Story 4, Acceptance Scenario 9
+**Category**: Alternate Path
+- **Given** the person followed Open the new address to `http://127.0.0.1:8081/settings?tab=gateway&restarted=1`
+- **When** the page loads there (asking the person to sign in first if that address has no session, then returning to the same link)
+- **Then** with same-origin requests only, it reads `GET /config/pending-restart`; with `gateway.port` no longer listed it says "The gateway restarted on port 8081" and shows no banner; with `gateway.port` still listed it shows the banner with Restart now
+- **And** if the new address does not load at all, the browser's own error page shows; the window had already shown the address and the instruction to check that the gateway is running and read its log (no in-page claim of success was made)
 
 #### Scenario: Behind a proxy the window gives an instruction instead of a new address
 **Traces to**: User Story 4, Acceptance Scenario 9
 **Category**: Alternate Path
-- **Given** the page is opened at an address whose port differs from the gateway's running port (a reverse proxy), and Port is saved as 8081
+- **Given** the page is opened at an address whose port differs from the gateway's running port (a reverse proxy in front of the gateway), and Port is saved as 8081
 - **When** the person chooses Restart now
-- **Then** the window says the gateway will listen on port 8081 and that the proxy must point there, and does not open any address by itself
+- **Then** the window says the gateway will listen on port 8081 and that the proxy must point there, offers no new address, and keeps polling only its own address; when its own `/about` shows a fresh `uptime_seconds` and `gateway.port` is no longer pending, it reports the restart as done
 
 #### Scenario: An old process still answering does not count as restarted
 **Traces to**: User Story 4, Acceptance Scenario 7
@@ -1189,12 +1241,30 @@ Expected values below come from this spec, the cited contract schemas, the wiref
 #### Scenario Outline: Keep forever survives any replace of its parent block
 **Traces to**: User Story 5, Acceptance Scenario 10
 **Category**: Error Path
-- **Given** `config.json` with `storage.retention.memory_retros_forever: true`, `storage.retention.disabled: true` in a second fixture, and `session_days: 30` in a third
+- **Given** `config.json` holding fixture `<fixture>` from Dataset D-12 (F1: legacy `disabled: true`; F2: `memory_retros_forever: true`; both with `session_days: 30` and `memory_retros_days: 400`)
 - **When** a signed-in script sends `<body>` to `PUT /config`
-- **Then** the answer is `<status>`, `config.json` is byte-identical to before, and after a fresh config load the four effective retention values are unchanged
-- **And** on today's code (`c2f8f8e735`) rows 1–6 store the change, so this test fails there (RED proof)
+- **Then** the answer is 400 with `<message>`, `config.json` is byte-identical to before, and after a fresh config load all four effective retention values (`RetentionSessionDays()`, `RetentionMemoryRetrosDays()`, `memory_retros_forever`, `IsDisabled()`) equal the fixture's
+- **And** no other key in the body is written
+- **And** for rows marked RED, the same test run against `c2f8f8e735` with fixture F1 fails (the change is stored); that failing run is saved during the failing-test step
 
-**Examples**: Dataset D-12.
+**Examples**: Dataset D-12, rows marked **Refused** only.
+
+#### Scenario Outline: Writes that leave retention unchanged still save
+**Traces to**: User Story 5, Acceptance Scenario 7
+**Category**: Edge Case
+- **Given** `config.json` holding fixture `<fixture>` from Dataset D-12
+- **When** a signed-in script sends `<body>` to `PUT /config`
+- **Then** the answer is 200, a fresh config load shows the intended change of `<body>`, and all four effective retention values equal the fixture's (no byte-equality check: the file changed on purpose)
+
+**Examples**: Dataset D-12, rows marked **Accepted** only.
+
+#### Scenario: A raw echo of the whole configuration meets the existing credential fence first
+**Traces to**: User Story 5, Acceptance Scenario 10
+**Category**: Edge Case
+- **Given** fixture F2, and the body is the object returned by `GET /config`, unchanged or with `storage.retention` replaced by `{}`
+- **When** a signed-in script sends it to `PUT /config`
+- **Then** the answer is 403 from the existing credential-field fence (the body carries `providers`), the retention guard is not reached, `config.json` is byte-identical, and Keep forever is still on
+- **And** this result counts as evidence for the credential fence only, not for the retention guard
 
 #### Scenario Outline: The memory settings refuse retention fields whatever the validation setting
 **Traces to**: User Story 5, Acceptance Scenario 8
@@ -1357,9 +1427,9 @@ Expected values below come from this spec, the cited contract schemas, the wiref
 #### Scenario: A section that cannot load
 **Traces to**: User Story 9, Acceptance Scenario 2
 **Category**: Error Path
-- **Given** `GET /settings/context` answers 500 with "context settings unreadable"
+- **Given** both Limits reads fail: `GET /settings/context` answers 500 with "context settings unreadable" and `GET /performance` answers 500 with "performance settings unreadable"
 - **When** Limits opens
-- **Then** an error Callout says the Limits settings could not be loaded, quotes "context settings unreadable", names one thing to do, offers Retry, and no value in Limits can be saved
+- **Then** each group shows an error Callout naming its failed read, quoting its cause, naming one thing to do and offering Retry, and no value in Limits can be saved (FR-066: every group's read failed)
 
 #### Scenario: The gateway does not answer
 **Traces to**: User Story 9, Acceptance Scenario 3
@@ -1475,9 +1545,10 @@ Expected values below come from this spec, the cited contract schemas, the wiref
 #### Scenario: Settings saves report a failed rebuild
 **Traces to**: User Story 10, Acceptance Scenario 7
 **Category**: Error Path
-- **Given** a seam that makes the live rebuild fail after `PUT /config` or `PUT /settings/context` wrote `config.json`
+- **Given** a seam that makes the live rebuild fail after `PUT /config` or `PUT /settings/context` wrote `config.json` (for Context also a failing `triggerReloadAndWait`)
 - **When** the person saves Gateway or Limits
-- **Then** the response says the value was saved but is not in use, and the banner lists it as "saved, not applied" (#995, Settings endpoints only)
+- **Then** the response is 500 `ErrorResponse` with `code: saved_not_refreshed` and `details.keys` listing exactly the changed keys, decoded through the generated client; `GET /config/pending-restart` already lists those keys with `reason: apply_failed` when the response arrives; the screen shows them as "saved, not in use" and the banner lists them as "saved, not applied" (#995, Settings endpoints only)
+- **And** a failure before `config.json` is written answers 500 without that code, and the screen treats it as unknown (C-6 outcome table)
 
 #### Scenario: The chat-history clear button says what it clears
 **Traces to**: User Story 10, Acceptance Scenario 8
@@ -1498,9 +1569,16 @@ Expected values below come from this spec, the cited contract schemas, the wiref
 #### Scenario: One failed read blocks only its group
 **Traces to**: User Story 9, Acceptance Scenario 8
 **Category**: Error Path
-- **Given** Limits with an unsaved Tries per goal change, and `GET /settings/context` answering 500
-- **When** Limits opens and the person presses Retry on the Context group after the read recovers
-- **Then** Context and tool results and Model overrides showed the error and could not be saved, Agents and goals saved normally, and Retry refilled only the Context group while the Tries per goal draft stayed
+- **Given** `GET /settings/context` answers 500 and `GET /performance` works, Limits is open, and the person changed Tries per goal from 6 to 8 without saving
+- **When** the Context read recovers and the person presses Retry on the Context group
+- **Then** before Retry, Context and tool results and Model overrides showed the error and offered no saveable field; after Retry, only the Context groups were refilled, and Tries per goal still shows the unsaved 8 with the bar saying "1 unsaved change"
+
+#### Scenario: A group whose read worked still saves while another group's read failed
+**Traces to**: User Story 9, Acceptance Scenario 8
+**Category**: Error Path
+- **Given** `GET /settings/context` answers 500, `GET /performance` works, and the person changed Tries per goal from 6 to 8
+- **When** the person presses Save changes and enters the right password
+- **Then** exactly one write is sent, `PUT /performance`; `GET /performance` returns `goal_max_rounds: 8`; no `PUT /settings/context` is sent; the Context groups still show their error
 
 #### Scenario: Data & retention keeps working when storage counts fail
 **Traces to**: User Story 9, Acceptance Scenario 8
@@ -1533,10 +1611,10 @@ Rows G-19 to G-24 moved to `signed-in-browsers-spec.md`.
 | G-04 | US-1 AS9, US-9 AS5 | 390 px: open each section | list first; back button; no sideways scroll; controls ≥ 44 px | layout | 3 sections | stable |
 | G-05 | US-2 AS1–AS5 | Gateway: change Port, Discard; change, type back; type 80; then 1024 and save | bar counts follow the values; 80 blocks Save with the range text; 1024 saves | Save bar | Port 80 only | stable |
 | G-06 | US-2 AS6 | Change a value; try every exit in both "way out" tables (in-app and leaving the page) | in-app exits show the app's question and Stay keeps the change and history; reload, another site and tab close show the browser's prompt | leave guard | section switch, Back, reload | stable for in-app rows; browser-prompt rows manual (the prompt cannot be scripted reliably in every browser) |
-| G-07 | US-2 AS7 | Limits: set a Model overrides context length to 0 and Tries per goal to 8; save | real partial failure: Tries per goal saved; the override shows the server's message | Save, Limits | same | stable (no seam needed: the server really refuses 0) |
+| G-07 | US-2 AS7 | (a) Limits: change Default context window to 32000 and Tries per goal to 8 (both valid on screen); the declared seam answers `PUT /settings/context` with 400; save. (b) Third-party agents: set the Codex path to `/opt/omnipus-test/no-such-codex`; save. (c) Limits: type 0 as a Model overrides context length | (a) Tries per goal saved, Default context window keeps 32000 with the seam's message, bar "1 change could not be saved"; (b) the real server's `cli_path_invalid` message under the Codex path; (c) the screen refuses 0 itself and sends nothing | Save, Limits, Third-party agents | (a) and (b) | stable: (a) uses the declared seam (Playwright route interception of `PUT /settings/context`); (b) and (c) need none |
 | G-08 | US-3 AS1–AS3 | Sandbox & network: change two password rows; save with wrong, then right password; repeat with Cancel | one prompt listing both; wrong keeps it open; Cancel keeps drafts | password flow | right-password path | stable |
 | G-09 | US-3 AS5, US-6 AS3 | Providers: change Active transcriber; save | Password badge; one prompt | Providers voice | same | stable |
-| G-10 | US-4 AS1–AS3, AS7, AS9 | Open the page directly on port 8080; change Port to 8081; save; Later; open About; Show changes; Restart now | window names `http://<host>:8081` before restarting; banner everywhere; running/saved values; after restart the new address opens and `/about` there shows a fresh uptime; banner gone | restart | Later + banner on About + new address | stable |
+| G-10 | US-4 AS1–AS3, AS7, AS9 | Production-served build (embedded SPA, real headers). Open the page directly on port 8080; change Port to 8081; save; Later; open About; Show changes; Restart now; follow Open the new address. Repeat behind a small forwarding proxy started by the spec file (proxy port fixed, gateway port changed, proxy re-pointed by the test) | window names `http://<host>:8081` and the proxy instruction before restarting; banner everywhere; running/saved values; the browser console shows no blocked request to port 8081; Open the new address appears only after port 8080 stops answering; on 8081 the page says the gateway restarted and shows no banner. Proxy run: no address offered; done reported from the proxy address | restart | Later + banner on About + new address | stable (direct and proxy) |
 | G-11 | US-4 AS4, AS5 | Save Filesystem model; then the network proxy | both appear in Show changes as "needs a restart" | B2 | Filesystem model | stable |
 | G-12 | US-4 AS6 | Protection: change Defense level; save | no badge, no window, no banner | restart | same | stable |
 | G-13 | US-5 AS1–AS4 | Data & retention: check defaults; set 30/365; save; reload; type 366; Keep forever on | defaults 90/180/off; values persist; 366 blocked; day field off | retention UI | 366 + Keep forever | stable |
@@ -1546,7 +1624,7 @@ Rows G-19 to G-24 moved to `signed-in-browsers-spec.md`.
 | G-17 | US-6 AS4–AS8 | Profile Chat display; Protection moved notice; pairing flag on; delete a key; rotate token | per scenarios | moved items | delete key | stable |
 | G-18 | US-6 AS10 | Walk all 88 map rows | each in its mapped place | whole page | 15 random rows | reason not yet: one-off walk; D-9 rows become stable checks |
 | G-25 | US-9 AS1–AS4, AS6, AS8 | Throttle network; stop gateway; make one Limits read fail (stop nothing else); keyboard-only and screen-reader pass | loading, error, offline and group-only error states; skip link; announcements | states, a11y | offline + group error + skip link | partly: states stable; screen-reader pass manual |
-| G-26 | US-5 AS10 (chief, CRIT-002) | With Keep forever on and an old reflection planted: send `PUT /config` with (a) `{"storage":{"retention":{}}}`, (b) `{"storage":null}`, (c) the whole config from `GET /config` with `storage.retention` replaced by `{}`; then (d) the whole config unchanged (positive control); reload Data & retention | (a)–(c) answer 400 and (d) 200; `config.json` unchanged (compare checksums before and after); Keep forever still on in the screen | retention guard | (b) | stable (scripted requests) |
+| G-26 | US-5 AS10 (chief, CRIT-002) | With Keep forever on (fixture F2) and an old reflection planted, record the `config.json` checksum, then send `PUT /config` with (a) `{"storage":{"retention":{}}}`, (b) `{"storage":null}`, (c) the permitted multi-section write `{"gateway":{"port":8081},"storage":{"retention":{"session_days":30,"memory_retros_days":400}}}`; (d) the raw `GET /config` object with `storage.retention` replaced by `{}` (existing fence); then (e) `{"gateway":{"port":8080},"storage":{"retention":{"session_days":30,"memory_retros_days":400,"memory_retros_forever":true}}}` (positive control, retention echoed as stored); reload Data & retention | (a)–(c) answer 400 with the retention message and the checksum is unchanged after each; (c) leaves Port at 8080; (d) answers 403 from the credential fence (counted for that fence only), checksum unchanged; (e) answers 200; Keep forever is still on in the screen after every step | retention guard | (b), (c) | stable (scripted requests) |
 | G-28 | US-10 AS1–AS5, AS8 | About build row; Approvals list text; open an `external_cli.run` audit row; audit log lists a fresh entry; fresh-install health; Danger zone wording | per scenarios | riders | audit row + health | stable |
 | G-29 | US-2 AS11, US-4 AS10 | Use the test build's apply-failure switch (named by backend-lead, test builds only) to fail the Defense level apply; save; Later; reload | banner lists Defense level as "saved, not applied" after the reload | failed apply | same | reason not yet: needs the test-only switch; covered by the Go and Vitest tests |
 
@@ -1556,7 +1634,7 @@ Rows 1–12 and 29 of the round-0 order moved to `signed-in-browsers-spec.md`.
 
 | Order | Test Name | Level | Traces to BDD Scenario | Description |
 |---|---|---|---|---|
-| 1 | TestUpdateConfig_RetentionGuardByEffect | Integration (Go) | Keep forever survives any replace of its parent block | D-12; must fail on `c2f8f8e735` (saved RED log) |
+| 1 | TestUpdateConfig_RetentionGuardByEffect (subtests per D-12 row and fixture) | Integration (Go) | Keep forever survives any replace of its parent block; Writes that leave retention unchanged still save; A raw echo of the whole configuration meets the existing credential fence first | D-12. Real `updateConfig` through `httptest`, fresh `config.LoadConfig` after each request. RED: rows marked RED with fixture F1 (which exists at the baseline) fail on `c2f8f8e735`; that run is saved as a log with its exit code before any guard code is written. F2 subtests are added once `memory_retros_forever` exists. Mutation check: deleting the guard call makes every Refused row fail while Accepted rows still pass |
 | 2 | TestRetentionSettings_Ranges (subtests validate_inbound on/off) | Integration (Go) | The server enforces the ranges; The retention write accepts each range end, whatever the validation setting | D-1, D-2 |
 | 3 | TestRetentionSettings_ReadsOutOfRangeStoredValue | Integration (Go) | A hand-edited value outside the range is shown and blocks Save | GET returns 500 as stored |
 | 4 | TestMemorySettings_RefusesRetentionFields (flag on/off, mixed body) | Integration (Go) | The memory settings refuse retention fields whatever the validation setting | MAJ-004 |
@@ -1569,21 +1647,21 @@ Rows 1–12 and 29 of the round-0 order moved to `signed-in-browsers-spec.md`.
 | 11 | TestContextSettings_ConcurrentDisjointEditsBothSurvive | Integration (Go) | Two tabs saving different Limits fields keep both changes | barrier, both orders |
 | 12 | TestSaveBarWriters_MergeUnderLock (one subtest per writer) | Integration (Go) | same | backend-lead's writer list (C-6) |
 | 13 | TestThirdPartySettings_OneRowEditKeepsOthers | Integration (Go) | Third-party agents saves all three rows | MAJ-001 |
-| 14 | TestSettingsWrites_RefreshFailureReported | Integration (Go) | Settings saves report a failed rebuild; A write that was stored but not applied says so | #995 seam |
+| 14 | TestSettingsWrites_RefreshFailureReported / TestContextSettings_RefusesZeroOverride | Integration (Go) | Settings saves report a failed rebuild; A write that was stored but not applied says so; A stored write whose refresh failed and whose answer was lost is found by the saved-state check; A real server refusal is shown under its field | #995 seam: every row of the C-6 outcome table, asserted through the generated `ErrorResponse` (status, `code`, `details.keys`) and `GET /config/pending-restart` read right after; the zero-override refusal at the real handler |
 | 15 | TestDeleteCredential_NoReauthNeeded / TestSetCredential_StillNeedsReauth | Integration (Go) | B7 scenarios | replaces ADR-022's `TestDeleteCredential_RequiresReAuth` |
 | 16 | TestSettingsAgentWriteParity | Unit (Go) | Every editable value has an agent path or a tested refusal | FR-101 |
 | 17 | TestHandleAuditLog_ReadsWriterDirectory / TestSecurityHealth_FreshInstallSandbox | Integration (Go) | audit viewer; fresh install health | #1742, #853 |
 | 18 | settingsRoute.legacyTabs.test | Unit (Vitest) | Old and new section links land in the right place; Sign-in is hidden in this package | D-3 |
 | 19 | saveBar.counting.test | Unit (Vitest) | Save bar scenarios; The saved signal stays long enough to read | D-10 |
 | 20 | saveBar.leaveGuard.test | Unit (Vitest) | Every way out inside the app asks; Leaving the page uses the browser's own prompt (`beforeunload` registered) | |
-| 21 | saveBar.outcomes.test | Unit (Vitest) | One of two writes fails; An unknown result is checked by reading back; A write that was stored but not applied says so | real-handler counterparts: orders 14 and E2E G-07 |
+| 21 | saveBar.outcomes.test | Unit (Vitest) | One of two writes fails; An unknown result is checked by reading back; A write that was stored but not applied says so; A stored write whose refresh failed and whose answer was lost is found by the saved-state check; A value changed elsewhere while the answer was lost | outcome classification in the order of FR-020 (recognized code before status); real-handler counterparts: orders 14 and E2E G-07 |
 | 22 | passwordOncePerSave.test | Unit (Vitest) | Password scenarios | D-11 |
 | 23 | sectionPasswordEndpoints.guard.test | Unit (Vitest) | Each section sends its password-marked values to at most one protected endpoint | runs the real save planner and counts requests at the network mock; an injected second protected endpoint must fail it |
-| 24 | restartBanner.test / restartCompletion.test | Unit (Vitest) | Restart scenarios incl. old process still answering, port change, proxy, no return | |
+| 24 | restartBanner.test / restartCompletion.test | Unit (Vitest) | Restart scenarios incl. old process still answering, port change, The new address confirms the restart on its own origin, proxy, no return | asserts the page requests only its own origin; the browser-policy proof is E2E G-10 on a production-served build, not this mock |
 | 25 | dataRetention.section.test | Unit (Vitest) | Retention UI scenarios | uses the generated response validator |
 | 26 | settingsSearch.test | Unit (Vitest) | Search scenarios | D-13 |
 | 27 | settingsMap.test | Unit (Vitest) | Every inventory control is where the map says; rider UI rows | D-9 |
-| 28 | sectionGroupErrors.test | Unit (Vitest) | One failed read blocks only its group; Data & retention keeps working when storage counts fail | |
+| 28 | sectionGroupErrors.test | Unit (Vitest) | A section that cannot load; One failed read blocks only its group; A group whose read worked still saves while another group's read failed; Data & retention keeps working when storage counts fail | |
 | 29 | settings-redesign.spec.ts | E2E (Playwright) | rows marked stable | targeted file only |
 
 ### Test Datasets
@@ -1714,7 +1792,7 @@ The screen's own checks. "Accepted" rows feed "A value inside its range can be s
 | 8 | Max tool calls per turn 0 / 1001 | Out of range | **Rejected**: "Enter a whole number from 1 to 1,000." | same | |
 | 9 | Max parallel agents (empty) | Empty allowed | **Accepted** (no fixed limit) | BDD Scenario: A value inside its range can be saved | empty means automatic |
 | 10 | Default context window 512 | Inside server range | **Accepted** | same | server accepts any value ≥ 1 (`validateContextSettingsUpdate`); round-0 row 9 ("server-refused 512") was false and is removed |
-| 11 | Model override context length 0 | Server range only | **Accepted by the screen**, refused by the server: its message shows under the row | BDD Scenario: A real server refusal is shown under its field | the screen checks "whole number" only; the server requires ≥ 1 |
+| 11 | Model override context length 0 | Min − 1 | **Rejected**: "Context length must be a whole number of at least 1." | BDD Scenario: An invalid value blocks saving and names the range | today's screen check (`ContextSection.tsx::validate`) and the wireframe's `min="1"` stay; the server's own refusal of 0 is tested at the handler only (order 14) |
 | 12 | Keep chat history for (empty) | Required | **Rejected**: "This cannot be empty." | BDD Scenario: An invalid value blocks saving and names the range | |
 | 13 | Port "80a" | Not a number | **Rejected**: "Enter a whole number from 1,024 to 65,535." | same | |
 
@@ -1732,23 +1810,42 @@ The screen's own checks. "Accepted" rows feed "A value inside its range can be s
 | 8 | late 409 with a changed affected-agents list | Second consent | first: 1 reauth + 1 protected write (409); then confirm, 1 more reauth + 1 more write; no other write of the Save before the second consent | BDD Scenario: A late change in the affected agents asks again | FR-031 |
 | 9 | platform mode, Cancel on the confirm | Platform cancel | 0 reauth, 0 writes | BDD Scenario: Platform mode asks for a confirmation instead | |
 
-#### Dataset D-12: Writers other than `/settings/retention` (CRIT-002)
+#### Dataset D-12: Writers other than `/settings/retention` (CRIT-002; rebuilt in round 2, review R2-MAJ-001)
 
-Fixture for every row: `storage.retention` = `{session_days: 30, memory_retros_days: 400, memory_retros_forever: true}`, and a second fixture with `disabled: true`. Expected: the four effective retention values and the bytes of `config.json` are unchanged on every refusal. Rows 1–6 store the change on today's code (`c2f8f8e735`), so the test is RED there.
+Fixtures, both valid `config.json` files that differ only in `storage.retention`:
 
-| # | Input (`PUT /config` body) | Boundary Type | Expected Output | Traces to | Notes |
+- **F1 (legacy, exists at the baseline):** `{"session_days": 30, "memory_retros_days": 400, "disabled": true}`. Effective values: 30, 400, Keep forever off, legacy keep-everything on.
+- **F2 (new switch, usable once `memory_retros_forever` exists):** `{"session_days": 30, "memory_retros_days": 400, "memory_retros_forever": true}`. Effective values: 30, 400, Keep forever on, legacy off.
+
+Each flag is tested in its own fixture, so one flag being true can never hide the loss of the other. After every request the test loads `config.json` fresh (`config.LoadConfig`) and reads all four effective values.
+
+Three kinds of row, each consumed by its own scenario:
+
+- **Refused** ("Keep forever survives any replace of its parent block"): 400 with the stated message, `config.json` byte-identical, and the four effective values equal to the fixture's.
+- **Accepted** ("Writes that leave retention unchanged still save"): 200, the body's intended change is stored, and the four effective values equal the fixture's. No byte-equality check.
+- **Fence** ("A raw echo of the whole configuration meets the existing credential fence first"): the existing fence's status. This is evidence for that fence only.
+
+**RED** marks a row whose body passes every fence on today's code (`c2f8f8e735`: no credential key, no blocked path, protected agent defaults untouched, and the merged file decodes). With fixture F1 such a row stores the change today, so the test fails there. This is a source-derived expectation (`rest_config.go::updateConfig`, `pairing_config_write.go::prepareConfigJSONLocked`, `config_retention.go::IsDisabled`). The proof is the run saved during the failing-test step, not this table.
+
+Message R = `retention settings can only be changed through PUT /api/v1/settings/retention`.
+
+| # | Input (`PUT /config` body; fixtures) | Boundary Type | Expected Output | Traces to | Notes |
 |---|---|---|---|---|---|
-| 1 | `{"storage":{"retention":{"session_days":90}}}` | Leaf change | 400 naming `PUT /api/v1/settings/retention`; file unchanged | BDD Scenario: Keep forever survives any replace of its parent block | |
-| 2 | `{"storage":{"retention":{}}}` | Replace of `storage.retention` | 400; Keep forever still true | same | chief's case 1 |
-| 3 | `{"storage":null}` | Replace of `storage` (null) | 400; Keep forever (and `disabled` in fixture 2) still true | same | chief's case 2; `collectPaths` sees only `storage` |
-| 4 | `{"storage":"x"}` / `{"storage":[]}` | Replace of `storage` (scalar, array) | 400 | same | |
-| 5 | the whole object from `GET /config` with `storage.retention` replaced by `{}` | Whole-config PUT | 400; no other key written either | same | chief's case 3 |
-| 6 | `{"Storage":{"RETENTION":{"memory_retros_forever":false}}}` | Key casing | 400 | same | encoding/json folds case |
-| 7 | `{"storage":{"retention.memory_retros_forever":false}}` | Dotted key | 400 if the loaded config changes; otherwise 200 and no effective change | same | the effect decides, not the spelling |
-| 8 | `{"gateway":{"port":8081},"storage":null}` | Mixed | 400; port **not** written | same | refusal before any write |
-| 9 | the whole object from `GET /config`, unchanged | Positive control | 200; effective retention unchanged | same | a round trip still works |
-| 10 | `{"storage":{"other":1}}` | Sibling only | 200; effective retention unchanged | same | merge keeps `retention` |
-| 11 | `{"gateway":{"port":8081}}` | Unrelated | 200 | BDD Scenario: Saving Gateway never sends retention | |
+| 1 | `{"storage":{"retention":{"session_days":90}}}`; F1, F2 | Leaf change (the one-level merge replaces the whole `retention` object) | **Refused**: 400 R | BDD Scenario: Keep forever survives any replace of its parent block | RED (F1): today `disabled` and `memory_retros_days` are dropped |
+| 2 | `{"storage":{"retention":{}}}`; F1, F2 | Replace of `storage.retention` | **Refused**: 400 R | same | RED (F1); chief's case 1 |
+| 3 | `{"storage":null}`; F1, F2 | Replace of `storage` (null) | **Refused**: 400 R | same | RED (F1); chief's case 2; `collectPaths` sees only `storage` |
+| 4 | `{"storage":"x"}` and `{"storage":[]}`; F1 | Replace of `storage` with a wrong type | **Refused**: 400 `this write does not decode: <cause>` | same | Pins how decode failures are handled. Not RED evidence: today these end in a 500 whose outcome depends on the write path |
+| 5 | `{"gateway":{"port":8081},"storage":{"retention":{"session_days":30,"memory_retros_days":400}}}`; F1, F2 | Permitted multi-section write (chief's whole-config case, inside the fences) | **Refused**: 400 R; Port stays 8080 | same | RED (F1) |
+| 6 | F1: `{"storage":{"retention":{"session_days":30,"memory_retros_days":400,"DISABLED":false}}}`; F2: the same with `"MEMORY_RETROS_FOREVER":false` | Key casing that changes the decoded value | **Refused**: 400 R | same | RED (F1); encoding/json matches field names without regard to case |
+| 7 | `{"gateway":{"port":8081},"storage":null}`; F1, F2 | Mixed: an allowed change plus a retention change | **Refused**: 400 R; Port stays 8080 | same | RED (F1); refused before any write |
+| 8 | `{"storage":{"retention":{"session_days":30,"memory_retros_days":400}}}`; F1, F2 separately | Day counts echoed, one flag silently lost | **Refused**: 400 R | same | RED (F1). F1 loses the legacy flag, F2 loses Keep forever |
+| 9 | `{"storage":{"other":1}}`; F1, F2 | Sibling key only | **Accepted**: 200; `config.json` holds `storage.other: 1` | BDD Scenario: Writes that leave retention unchanged still save | the merge keeps `retention` |
+| 10 | `{"gateway":{"port":8081}}`; F1, F2 | Unrelated section | **Accepted**: 200; a fresh load shows Port 8081 | same | also the body shape of "Saving Gateway never sends retention" |
+| 11 | F1: `{"gateway":{"port":8081},"storage":{"retention":{"session_days":30,"memory_retros_days":400,"disabled":true}}}`; F2: the same with `"memory_retros_forever":true` instead of `disabled` | Permitted multi-section write that echoes retention as stored | **Accepted**: 200; Port 8081 | same | the positive control for row 5 |
+| 12 | `{"storage":{"retention.memory_retros_forever":false}}`; F2 | Dotted key name (no config field has that name) | **Accepted**: 200; the four effective values are unchanged | same | Inferred: the decoder ignores an unknown member. The effect decides, not the spelling |
+| 13 | `{"Storage":{"Retention":{"memory_retros_forever":false}}}`; F2 | Harmless alternate casing | **Accepted**: 200; the four effective values are unchanged | same | Inferred (high confidence): the file is written with sorted keys, so `Storage` comes before `storage`, and the later canonical member, which holds `memory_retros_forever: true`, wins on decode. The guard decodes the same bytes |
+| 14 | the raw object from `GET /config`, unchanged; F2 | Whole-config echo | **Fence**: 403 from the credential-field fence (the body carries `providers`); byte-identical | BDD Scenario: A raw echo of the whole configuration meets the existing credential fence first | Not retention-guard evidence; the fence must stay |
+| 15 | the raw object from `GET /config` with `storage.retention` replaced by `{}`; F2 | Whole-config echo that removes retention | **Fence**: 403 as row 14; Keep forever still on | same | Chief's case 3. Keep forever survives, but because of the fence |
 
 #### Dataset D-13: Search queries
 
@@ -1777,7 +1874,7 @@ Fixture for every row: `storage.retention` = `{session_days: 30, memory_retros_d
 | 6 | `set_config` `planning.goal_max_rounds` = 99 | Tool | refused (pinned) | same | already refused today |
 | 7 | `set_config` `tools.manifest.compressed` = false | Tool | refused, message names Settings → Limits | same | **new** refusal |
 | 8 | `set_config` `tools.manifest` = `{}` | Tool, parent | refused | same | at or under the key |
-| 9 | `PUT /config` whole object from `GET /config`, unchanged | Positive control | 200 | same | |
+| 9 | `PUT /config` `{"performance":<stored performance object>,"planning":<stored planning object>}`, unchanged values | Positive control | 200; effective values unchanged | same | a permitted payload, not a raw `GET /config` echo (that meets the credential fence: 403) |
 
 ### Regression Test Requirements
 
@@ -1816,7 +1913,7 @@ Numbers are grouped by area; gaps are left on purpose. Numbers never move: requi
 
 - **FR-010**: A changed value MUST NOT be stored until Save changes is pressed (S-Q2 A) — including recap model slots, Gateway fields, rate limits and the Limits fields that today save after a delay (this removes `useAutoSave` from Settings, #346). Buttons (Test, Check, Rotate, Restart, God Mode, Delete, Clear, Add key, Connect a provider) MUST act at once and MUST NOT enter the Save batch.
 - **FR-011**: The Save bar MUST appear within 100 ms of a change and show "N unsaved change(s)", "N need(s) a gateway restart" and "N need(s) your password" for the changed values, with Discard and Save changes. A value typed back to its saved value MUST stop counting; text in an "Add …" field MUST count only after Add is pressed. With zero changes the bar MUST be hidden, except during the saved signal of FR-018.
-- **FR-012**: Discard MUST return every unsaved draft of the section to the last value read from the server and store nothing. It never claims to undo a stored value; for a write whose result is unknown, its confirm says the server may already hold the new value (FR-020).
+- **FR-012**: Discard MUST return every unsaved draft of the section to the last **saved** value known to the screen (from a successful write's answer or the saved-state check of C-6, never from a running-settings read that disagrees with a known saved value) and store nothing. It acts only on actual drafts: a value whose outcome is saved (in use or not) is not a draft and is not offered for Discard. For a write whose result is still unknown, its confirm says the server may already hold the new value (FR-020).
 - **FR-013**: The screen MUST validate each field with the range and message of Dataset D-10 (and D-1, D-2 for retention); while any value is invalid, Save changes MUST carry `aria-disabled="true"` and stay focusable, the bar MUST say "Fix N value(s) before saving", and pressing Save changes MUST move focus to the first invalid field and send nothing (`review-response.md::BC-D1`).
 - **FR-014**: With unsaved changes, every exit **inside the app** (section list, search result, Profile link, app sidebar, browser Back and Forward, a typed change after `#` only, the phone's back button) MUST ask "Leave without saving N change(s)?" with Stay and Leave; Stay MUST keep the section, its changes, the address and the history unchanged. Every way of **leaving the page** (reload, a typed address of another page, closing the tab) MUST register the browser's own leave prompt (`beforeunload`), whose wording the browser decides.
 - **FR-015**: Save MUST send each changed value to its own endpoint as a partial update carrying only the changed fields, except Third-party agents (FR-022). When some writes fail, each outcome is shown per FR-020; a refused write keeps its typed value with the server's message under its field, and the bar says "N change(s) could not be saved". A connection failure is an unknown result (FR-020).
@@ -1824,9 +1921,9 @@ Numbers are grouped by area; gaps are left on purpose. Numbers never move: requi
 - **FR-017**: While the Save bar shows, Save changes MUST be the only gold (primary) button on the screen; other primary buttons MUST render outlined.
 - **FR-018**: After a Save with no change left, the bar MUST show "Saved at HH:MM" (local time, 24-hour) for 8 seconds, then hide; a new edit replaces it at once; leaving the section hides it. The live region MUST announce "Changes saved." once, plus "Some need a gateway restart." when one does.
 - **FR-019**: Drafts MUST belong to one section; leaving it resolves them (FR-014). Two tabs editing the same section keep each other's untouched fields because only changed fields are sent (FR-015) and the server merges them under its lock (FR-021); Third-party agents is the stated exception (FR-022).
-- **FR-020**: Each write MUST end in one of four outcomes, shown per value: **not saved** (4xx refusal: draft kept, message under the field); **saved and in use** (2xx with no warning); **saved, not in use** (2xx with `requires_restart`, `saved_not_refreshed`, `pending_apply` or a refresh-failure answer: shown as saved with "Saved, but not in use yet. Restart the gateway to apply it." and listed in the banner); **unknown** (5xx, connection failure or lost response: the screen re-reads the endpoint; a value equal to the draft becomes saved, equal to the old value becomes not saved; if the read also fails, the bar says "N change(s) may not have been saved" with Retry, and the draft stays).
+- **FR-020**: Each write MUST end in one of four outcomes, shown per value, classified in this order (C-6 outcome table): (1) **saved, not in use** — a recognized signal, whatever the status: 500 with `code: saved_not_refreshed` (keys from `details.keys`), 200 with `requires_restart: true`, or 200 `PerformanceSettings` with `pending_apply`; shown as saved with "Saved, but not in use yet. Restart the gateway to apply it." and listed in the banner; (2) **saved and in use** — any other 2xx; (3) **not saved** — 4xx refusal: draft kept, message under the field; (4) **unknown** — any other 5xx, connection failure or lost response: the screen runs the saved-state check of C-6 (`GET /config/pending-restart` plus the section's read): saved value equal to the draft → saved (in use when the key is not listed, not in use when it is listed); equal to the value before the Save → not saved; equal to neither → the draft stays as an unsaved change, the newly read value becomes the saved value, and the field says "This setting was changed somewhere else while you were saving. Saved value: <value>."; if either read fails, the bar says "N change(s) may not have been saved" with Retry, and the draft stays. A running-settings read alone never turns a value into "not saved".
 - **FR-021**: Every writer the Save bar uses MUST apply only the fields present in the request to the stored values read inside the config write lock; `rest_context_settings.go::putContextSettings` changes accordingly, and backend-lead records the check for each writer named in C-6. Two Saves changing different fields MUST both survive in either order; on the same field the later write wins; a list value is one field.
-- **FR-022**: Third-party agents MUST save all three rows in one `PUT /settings/third-party-agents`, built from the values loaded when the section opened plus this tab's drafts, and re-read after the Save; two tabs saving this section at once is last-save-wins for the whole section (C-6).
+- **FR-022**: Third-party agents MUST save all three rows in one `PUT /settings/third-party-agents`, built from the values loaded when the section opened plus this tab's drafts; two tabs saving this section at once is last-save-wins for the whole section (C-6). After a 200 the section shows the response body; after `saved_not_refreshed` it shows the rows it sent as saved, not in use, and MUST NOT replace them with a read of the running settings; after an unknown result it runs the saved-state check (FR-020).
 
 ### Password once per Save (User Story 3, B4)
 
@@ -1849,7 +1946,7 @@ Numbers are grouped by area; gaps are left on purpose. Numbers never move: requi
 - **FR-038**: The banner MUST disappear when the list becomes empty — after a restart, after a key is saved back to its running value, or after a failed apply succeeds on a later save.
 - **FR-039**: When `GET /config/pending-restart` fails, the banner area MUST say the list of waiting changes could not be loaded, with Retry.
 - **FR-062**: `GET /config/pending-restart` MUST also list, with `reason: apply_failed`, every hot-reloaded key whose last save did not apply since boot (C-2 addition); the entry survives page reloads and section changes and is removed by a later successful apply of that key or by a restart.
-- **FR-063**: Restart completion MUST be proved by `GET /about` showing `uptime_seconds` smaller than the seconds since Restart now was pressed, then `GET /config/pending-restart` no longer listing the restarted keys; the first answer from the old process never counts. When `gateway.port` or `gateway.host` is among the restarted keys and the page's own port equals the running gateway port (a direct connection), the window MUST say before restarting where the gateway will answer and, once a new process answers there, open that address; otherwise (a proxy) it MUST say the new port and that the proxy must point there, and open nothing. With no new process within 60 s it MUST say the gateway did not come back, to check that it is running and read its log, keep Restart now, and keep the banner.
+- **FR-063**: Every restart check MUST be a same-origin request; the page's connection policy and the gateway's cross-origin rules MUST NOT be widened for it. When the page's own address keeps serving the gateway, completion MUST be proved by the page's own `GET /about` showing `uptime_seconds` smaller than the seconds since Restart now was pressed, then `GET /config/pending-restart` no longer listing the restarted keys; the first answer from the old process never counts. When `gateway.port` or `gateway.host` is among the restarted keys: if the page's own port equals the running gateway port, the window MUST say before restarting the derived new address **and** the proxy instruction ("If you reach Omnipus through a proxy, point it at port N instead"), because equal ports suggest but do not prove a direct connection; it polls only its own `/health`, and once that stops answering it MUST show Open the new address, a plain link to the derived address with `/settings?tab=gateway&restarted=1`, which the person follows; Settings at that address (after sign-in if needed) MUST check `GET /config/pending-restart` there and say the gateway restarted, or show the banner if the key is still listed. A new address is derived only when it needs no guess (a changed port with the page's own host; a changed host only when it is all interfaces or the page's own host); otherwise the window shows the listen address and the instruction only. If the page's port differs from the running port (a proxy), it MUST say the new port and that the proxy must point there, offer no address, and check completion on its own address. With no change within 60 s (no new process on its own address, or the old address still answering with an old uptime) it MUST say the gateway did not come back or did not restart, to check that it is running and read its log, keep Restart now, and keep the banner.
 
 ### Retention (User Story 5, B3 and B6)
 
@@ -1857,7 +1954,7 @@ Numbers are grouped by area; gaps are left on purpose. Numbers never move: requi
 - **FR-041**: `GET /settings/retention` MUST return `RetentionSettings` with all four fields: the stored day counts (0 or negative stored → the default 90 / 180), `memory_retros_forever` (default false), and `keep_everything_forever` mirroring `storage.retention.disabled`.
 - **FR-042**: `PUT /settings/retention` MUST accept only `RetentionSettingsUpdate`: `session_days` an integer 1–365, `memory_retros_days` an integer 1–730 (validated whenever sent, also while Keep forever is on), `memory_retros_forever` a boolean; it MUST answer 400 naming the field and range for anything else, for `keep_everything_forever`, for an unknown field, and for `{}`. These checks MUST run in the handler whatever `gateway.validate_inbound` is (review MAJ-004).
 - **FR-043**: `PUT /settings/retention` MUST apply the sent fields to the stored values read inside the config write lock, write once, answer 200 with `RetentionSettings`, and use `withAuth` plus `RequireNotBypass` with no password (C-3).
-- **FR-044**: `PUT /config` MUST refuse, with 400 `retention settings can only be changed through PUT /api/v1/settings/retention` and before writing anything, any body whose merged result changes any of the four effective retention values, whatever the shape — a leaf, a replaced `storage.retention`, a replaced or nulled `storage`, a whole-config PUT, any key casing (Dataset D-12). A body that leaves them unchanged is accepted. `storage.retention` is not added to `blockedPaths`.
+- **FR-044**: `PUT /config` MUST refuse, with 400 `retention settings can only be changed through PUT /api/v1/settings/retention` and before writing anything, any body that passes the existing fences and whose merged result changes any of the four effective retention values, whatever the shape — a leaf, a replaced `storage.retention`, a replaced or nulled `storage`, a permitted multi-section write, a key casing that changes the decoded value (Dataset D-12 Refused rows). A merged result that does not decode MUST be refused with 400 `this write does not decode: <cause>`, nothing written. A body that leaves the four values unchanged is accepted and its other changes are stored (D-12 Accepted rows). The existing credential-field and `blockedPaths` fences stay unchanged and run first; a raw `GET /config` echo stays a 403. `storage.retention` is not added to `blockedPaths`.
 - **FR-045**: `MemorySettings` MUST drop `session_days` and `memory_retros_days`, and `PUT /settings/memory` carrying either MUST answer 400 naming it and change nothing — including the other fields of that body — whatever `gateway.validate_inbound` is.
 - **FR-046**: A stored day count outside the new range (hand-edited) MUST be returned as stored by `GET` (the read schema has no range), applied as stored by the sweeps, and shown by the screen with the range error, with Save unavailable until fixed.
 - **FR-047**: `GET` and `PUT /security/retention`, their handlers and the schemas `RetentionConfig`, `RetentionUpdateRequest`, `RetentionUpdateResponse` MUST be removed; `POST /security/retention/sweep` MUST keep working unchanged.
@@ -1882,7 +1979,7 @@ Numbers are grouped by area; gaps are left on purpose. Numbers never move: requi
 ### States, accessibility and wording (User Story 9)
 
 - **FR-065**: Each section MUST show "Loading <section>…" with a spinner and Skeleton cards until its reads answer.
-- **FR-066**: When a section's reads fail, only the groups that need the failed read (the "Read dependencies" table) MUST show an error Callout naming what failed, quoting the server's cause, giving one thing to do and offering Retry, and only those groups MUST be blocked from saving; other groups and their drafts keep working, and Retry re-reads only the failed read. A section with one read is blocked as a whole.
+- **FR-066**: When a section's reads fail, only the groups that need the failed read (the "Read dependencies" table) MUST show an error Callout naming what failed, quoting the server's cause, giving one thing to do and offering Retry, and only those groups MUST be blocked from saving; other groups keep their drafts and still save, and Retry re-reads only the failed read and never replaces a draft. A section is blocked as a whole only when every one of its reads failed (a section with one read, or Limits with both reads failing).
 - **FR-067**: When the gateway does not answer, one error Callout MUST show between the page title and the sections (above the open section on a phone) saying values may be out of date, with Retry.
 - **FR-068**: "Skip to settings content" MUST be the first Tab stop and move focus to the section content without changing the address.
 - **FR-069**: Stacked dialogs MUST close one at a time on Escape or Cancel, returning focus to the control that opened each; when that control no longer exists, focus goes to the section heading.
@@ -1901,7 +1998,7 @@ Numbers are grouped by area; gaps are left on purpose. Numbers never move: requi
 
 - **FR-100** (#936): `PUT /config` MUST refuse, with 400 naming `PUT /api/v1/performance` and before writing anything, any body whose merged result changes the effective value of `performance.max_parallel_agents`, `planning.goal_max_rounds`, `planning.goal_reminder_quiet_seconds`, `planning.goal_stalled_checkin_enabled`, `planning.goal_stalled_checkin_minutes` or `tools.manifest.compressed` (Dataset D-16). `set_config` MUST refuse `tools.manifest.compressed` (added to `performanceOnlyConfigKeys`) and keep refusing the `performance.` and `planning.` keys; its description names Settings → Limits for these values.
 - **FR-101** (#936): `TestSettingsAgentWriteParity` MUST enumerate every value this spec lets a person edit and fail unless each has an agent setter or a listed user-only reason with a passing refusal through the real `set_config` tool (C-7 table; retention values: user-only, "deletes data on a schedule").
-- **FR-102** (#995, Settings endpoints only): `PUT /config` and `PUT /settings/context` MUST report a failed live rebuild after a successful write as saved-not-applied (and record it per FR-062), never as plain success. `rest_tool_policies.go` and `rest_agents.go` stay open on #995.
+- **FR-102** (#995, Settings endpoints only): `PUT /config` and `PUT /settings/context` MUST answer a failed live refresh or reload after `config.json` was written with 500 `ErrorResponse`, `code: saved_not_refreshed` and `details.keys` (the dotted keys written), and MUST record those keys per FR-062 inside the write lock before answering; a failure before the write answers 500 without that code. `PUT /settings/third-party-agents` adds `details.keys` and the record to its existing answer. `ErrorResponse.yaml` and `openapi.yaml` describe this before any code (C-6 outcome table). `rest_tool_policies.go` and `rest_agents.go` stay open on #995.
 - **FR-103** (#1742): `HandleAuditLog` MUST read the audit files from the directory the gateway's audit writer uses.
 - **FR-104** (#853, narrow): Protection's health check MUST read the running sandbox state (as `GET /security/sandbox-status` reports it) instead of the empty persisted `sandbox.mode`; `ResolvedMode` itself is not changed. security-lead reviews.
 - **FR-105** (#1560): About MUST show the build commit from `GET /version` (`build_sha`) and include it in Copy.
@@ -1939,7 +2036,7 @@ Chief-confirmed on 2026-11-20 (fix-round-1 brief). Riders that moved with #1096:
 - **SC-002**: 0 values stored without Save changes across every section (integration test counting writes per change).
 - **SC-003**: In local mode, every Save with password-marked changes makes exactly 1 password prompt, 1 `POST /auth/reauth` and 1 protected write; a late 409 adds exactly one more of each after the new confirm; in platform mode 0 `POST /auth/reauth`; a cancelled prompt makes 0 writes (Dataset D-8, D-11, guard FR-030).
 - **SC-004**: Every key of D-4 rows 1–7 appears in `/config/pending-restart` after a save that differs from the running value; rows 8–10 never appear as `restart_required`; a failed hot apply appears as `apply_failed`.
-- **SC-005**: 100 % of Datasets D-1, D-2, D-12 and D-16 rows produce the stated status with `validate_inbound` on and off, and leave `config.json` byte-identical on refusal; D-12 rows 1–6 fail on `c2f8f8e735` (saved RED log).
+- **SC-005**: 100 % of Datasets D-1, D-2, D-12 and D-16 rows produce the stated status with `validate_inbound` on and off. Refused rows leave `config.json` byte-identical and the four effective values unchanged after a fresh load; Accepted rows store their intended change and leave the four effective values unchanged; Fence rows give the existing fence's status. D-12 rows marked RED fail on `c2f8f8e735` with fixture F1 (saved RED log), and removing the guard makes every Refused row fail again (mutation check).
 - **SC-006**: 88 of 88 map rows found in their mapped place (hands-on G-18, D-9 automated).
 - **SC-009**: 0 serious or critical axe violations on each of the 11 sections; every control ≥ 44 × 44 px at 390 px.
 - **SC-012**: 0 lost changes in the two-tab test (both orders), and 0 "not saved" labels on values the server holds (unknown-result and saved-not-applied tests).
@@ -1970,7 +2067,7 @@ Chief-confirmed on 2026-11-20 (fix-round-1 brief). Riders that moved with #1096:
 |---|---|---|
 | DOC-001 | `docs/settings.md` | Rewrite the overview: 11 sections in three groups, what each holds, the search box |
 | DOC-002 | `docs/settings.md` | Rewrite the old-tab → new-place map table from FR-003 and the 88-row map (`devices` → Providers for now) |
-| DOC-003 | `docs/settings.md` | The save rule (Save bar, Discard, leave prompts), the four save outcomes and what "Saved, but not in use yet" means, the password once per Save, the Needs restart badge, the restart banner (including "saved, not applied"), and what the restart window does when the port changes; Third-party agents saves all three programs together |
+| DOC-003 | `docs/settings.md` | The save rule (Save bar, Discard, leave prompts), the four save outcomes and what "Saved, but not in use yet" means, the password once per Save, the Needs restart badge, the restart banner (including "saved, not applied"), and what the restart window does when the port changes (it shows the new address and the proxy instruction, and the person opens the new address once the old one stops answering; it cannot check the new address from the old page); what "This setting was changed somewhere else" means; Third-party agents saves all three programs together |
 | DOC-004 | `docs/settings.md` | Data & retention: two settings with ranges and defaults, Keep forever for memory, the legacy config-file switch and its notice, that `/settings/retention` is the only write path and `PUT /config` refuses retention changes; "Clear all chat history" wording |
 | DOC-005 | `docs/memory.md` | Replace the retention lines (today around lines 121–122) with a pointer to Data & retention, the 1–730 range, Keep forever, and the recall window per FQ-1 |
 | DOC-006 | `docs/settings.md`, `docs/providers-and-models.md` | Limits groups, Voice input under Providers, Active transcriber needs the password |
@@ -2009,9 +2106,9 @@ docs-verifier audits DOC-001 to DOC-011 and DOC-013 against the landed behaviour
 | FR-017 | US-2 | Only one gold button while the Save bar shows | saveBar.counting.test | — (visual only) |
 | FR-018 | US-2, US-9 | The saved signal stays long enough to read; Saving is announced | saveBar.counting.test | DOC-003 |
 | FR-019 | US-2 | Two tabs saving different Limits fields keep both changes | TestContextSettings_ConcurrentDisjointEditsBothSurvive | DOC-003 |
-| FR-020 | US-2 | A write that was stored but not applied says so; An unknown result is checked by reading back; A Save while the gateway is down keeps every change | saveBar.outcomes.test; TestSettingsWrites_RefreshFailureReported | DOC-003 |
+| FR-020 | US-2 | A write that was stored but not applied says so; An unknown result is checked by reading back; A Save while the gateway is down keeps every change; A stored write whose refresh failed and whose answer was lost is found by the saved-state check; A value changed elsewhere while the answer was lost | saveBar.outcomes.test; TestSettingsWrites_RefreshFailureReported | DOC-003 |
 | FR-021 | US-2 | Two tabs saving different Limits fields keep both changes | TestContextSettings_ConcurrentDisjointEditsBothSurvive; TestSaveBarWriters_MergeUnderLock | — (no user-visible change) |
-| FR-022 | US-2 | Third-party agents saves all three rows | TestThirdPartySettings_OneRowEditKeepsOthers | DOC-003 |
+| FR-022 | US-2 | Third-party agents saves all three rows; A write that was stored but not applied says so | TestThirdPartySettings_OneRowEditKeepsOthers; saveBar.outcomes.test | DOC-003 |
 | FR-025 | US-3 | Active transcriber needs the password | passwordOncePerSave.test | DOC-006 |
 | FR-026 | US-3 | Two password-marked changes need one password | passwordOncePerSave.test (D-11) | DOC-003 |
 | FR-027 | US-3 | Each section sends its password-marked values to at most one protected endpoint | sectionPasswordEndpoints.guard.test (D-8) | DOC-003 |
@@ -2031,7 +2128,7 @@ docs-verifier audits DOC-001 to DOC-011 and DOC-013 against the landed behaviour
 | FR-041 | US-5 | Fresh-install defaults | TestRetentionSettings_Ranges; dataRetention.section.test | DOC-004 |
 | FR-042 | US-5 | The server enforces the ranges; The retention write accepts each range end, whatever the validation setting | TestRetentionSettings_Ranges (D-1, D-2) | DOC-004 |
 | FR-043 | US-5 | Saving both day counts | TestRetentionSettings_Ranges | DOC-004 |
-| FR-044 | US-5 | Keep forever survives any replace of its parent block; Saving Gateway never sends retention | TestUpdateConfig_RetentionGuardByEffect (D-12); G-26 | DOC-004 |
+| FR-044 | US-5 | Keep forever survives any replace of its parent block; Writes that leave retention unchanged still save; A raw echo of the whole configuration meets the existing credential fence first; Saving Gateway never sends retention | TestUpdateConfig_RetentionGuardByEffect (D-12); G-26 | DOC-004 |
 | FR-045 | US-5 | The memory settings refuse retention fields whatever the validation setting | TestMemorySettings_RefusesRetentionFields | DOC-005 |
 | FR-046 | US-5 | A hand-edited value outside the range is shown and blocks Save | TestRetentionSettings_ReadsOutOfRangeStoredValue; dataRetention.section.test (D-1 row 10) | DOC-004 |
 | FR-047 | US-5 | The old retention route is gone | TestSecurityRetentionRoute_Removed | DOC-004 |
@@ -2050,9 +2147,9 @@ docs-verifier audits DOC-001 to DOC-011 and DOC-013 against the landed behaviour
 | FR-060 | US-6 | Moved items are announced in Protection | settingsMap.test; cut checklist | DOC-007 |
 | FR-061 | US-6 | Old and new section links land in the right place (D-3 row 11) | settingsRoute.legacyTabs.test | DOC-002 |
 | FR-062 | US-4 | A failed hot apply stays in the banner after Later; A later successful apply clears a failed one | TestPendingRestart_ApplyFailedEntries; restartBanner.test; G-29 | DOC-003 |
-| FR-063 | US-4 | A changed port shows where the gateway will answer; Behind a proxy the window gives an instruction; An old process still answering does not count as restarted; The gateway does not come back | restartCompletion.test; G-10 | DOC-003 |
+| FR-063 | US-4 | A changed port shows where the gateway will answer; The new address confirms the restart on its own origin; Behind a proxy the window gives an instruction; An old process still answering does not count as restarted; The gateway does not come back | restartCompletion.test; G-10 | DOC-003 |
 | FR-065 | US-9 | Every section has a loading state | settings-redesign.spec.ts; G-25 | — (states; no doc change needed) |
-| FR-066 | US-9 | A section that cannot load; One failed read blocks only its group; Data & retention keeps working when storage counts fail | sectionGroupErrors.test; G-25 | DOC-001 |
+| FR-066 | US-9 | A section that cannot load; One failed read blocks only its group; A group whose read worked still saves while another group's read failed; Data & retention keeps working when storage counts fail | sectionGroupErrors.test; G-25 | DOC-001 |
 | FR-067 | US-9 | The gateway does not answer | settings-redesign.spec.ts | DOC-001 |
 | FR-068 | US-9 | The skip link is the first Tab stop | settings-redesign.spec.ts | — (a11y) |
 | FR-069 | US-9 | Stacked dialogs return focus to their opener | settings-redesign.spec.ts | — (a11y) |
@@ -2063,7 +2160,7 @@ docs-verifier audits DOC-001 to DOC-011 and DOC-013 against the landed behaviour
 | FR-075 | US-9 | Reduced motion stops animations | settings-redesign.spec.ts | — (a11y) |
 | FR-100 | US-10 | Performance values cannot be changed around Settings | TestUpdateConfig_PerformanceGuardByEffect; TestSetConfig_RefusesPerformanceValues (D-16) | DOC-013 |
 | FR-101 | US-10 | Every editable value has an agent path or a tested refusal | TestSettingsAgentWriteParity | DOC-013 |
-| FR-102 | US-10 | Settings saves report a failed rebuild | TestSettingsWrites_RefreshFailureReported | DOC-003 |
+| FR-102 | US-10 | Settings saves report a failed rebuild; A stored write whose refresh failed and whose answer was lost is found by the saved-state check | TestSettingsWrites_RefreshFailureReported | DOC-003 |
 | FR-103 | US-10 | The audit viewer reads where the gateway writes | TestHandleAuditLog_ReadsWriterDirectory | — (bug fix; no doc change) |
 | FR-104 | US-10 | A fresh install does not claim the sandbox is off | TestSecurityHealth_FreshInstallSandbox | — (bug fix) |
 | FR-105 | US-10 | About shows the build | settingsMap.test (About) | — (bug fix) |
@@ -2135,3 +2232,19 @@ Review: `docs/internal/specs/settings-redesign-spec-review.md` (BLOCK; 2 CRITICA
 | Review Q1 / FQ-1, Q2 / FQ-2 | Kept open, written for A | Questions for the founder |
 | Review Q5 | A: wording only, #1265 not resolved | FR-108; Riders |
 | Source clarification: invalid Save `aria-disabled` | Kept and cited | FR-013; Accessibility |
+
+## Round-2 fix log
+
+Review: `docs/internal/specs/settings-redesign-spec-review-round2.md` (verdict REVISE, 6 MAJOR, 1 MINOR). This was the final fix round. FQ-1 and FQ-2 are still written for answer A.
+
+| Finding | What changed | Section |
+|---|---|---|
+| R2-MAJ-001 | D-12 rebuilt with 15 rows in three kinds (Refused, Accepted, Fence), each consumed by its own scenario. Two fixtures, F1 (legacy `disabled`, exists at the baseline) and F2 (Keep forever), so each flag is checked separately. RED rows (1–3 and 5–8) use F1, pass every current fence, and store the change on `c2f8f8e735`; the run is saved during the failing-test step, and a mutation check removes the guard. The raw `GET /config` echo is now a Fence row: 403 from the credential fence, which stays. The chief's "whole-config" case is covered twice: by the largest permitted multi-section write (refused by the guard) and by the raw echo (refused by the fence). The casing row now changes the decoded value, and harmless casing and dotted spellings are Accepted rows. A merged result that does not decode is refused with 400 before any write. Accepted rows assert the intended change, not byte equality. SC-005 corrected. D-16 row 9 now uses a permitted payload instead of the raw echo | C-3; FR-044; US-5 AS10; scenarios "Keep forever survives any replace of its parent block", "Writes that leave retention unchanged still save", "A raw echo of the whole configuration meets the existing credential fence first"; D-12; D-16; G-26; SC-005; order 1 |
+| R2-MAJ-002 | The saved-state check reads the file through `GET /config/pending-restart`. For a listed key, the saved value is its `persisted_value`, read from `config.json`; for an unlisted key, the saved value equals the running value. This holds because every Save-bar writer records failed applies inside the write lock before answering. A recognized saved-not-applied signal outranks the HTTP status. A running-settings read alone never means "not saved". Added a third-value outcome ("changed somewhere else"). Discard acts only on actual drafts, against the last known saved value. Third-party agents no longer re-reads running settings after `saved_not_refreshed` | C-2 addition; C-6 "Where the saved value is read"; FR-012, FR-020, FR-022; scenarios "An unknown result is checked by reading back", "A write that was stored but not applied says so", "A stored write whose refresh failed and whose answer was lost is found by the saved-state check", "A value changed elsewhere while the answer was lost"; orders 14, 21 |
+| R2-MAJ-003 | Every restart check is same-origin. The connection policy (`connect-src 'self'`) and the cross-origin rules are not widened. After a port change the page polls only its own `/health`; once that stops answering, the person follows Open the new address, and Settings there checks `/config/pending-restart` on its own origin (signing in first if needed). Equal ports count only as a hint: the window always adds the proxy instruction. A new address is derived only when no guess is needed. G-10 runs on a production-served build with real headers, in a direct case and a proxy case | C-2 "Restart completion"; FR-063; US-4 AS9; scenarios "A changed port shows where the gateway will answer", "The new address confirms the restart on its own origin", "Behind a proxy…"; G-10; order 24; DOC-003 |
+| R2-MAJ-004 | "A section that cannot load" now fails both Limits reads. The group-only scenario now checks only that Retry keeps the unsaved draft. A new scenario saves the Performance group explicitly while the Context read is failing. FR-066 states when a whole section is blocked | scenarios "A section that cannot load", "One failed read blocks only its group", "A group whose read worked still saves while another group's read failed"; FR-066; order 28 |
+| R2-MAJ-005 | The screen's minimum of 1 for the override context length stays, and D-10 row 11 is now a Rejected row with today's message. The real server refusal is now the Third-party agents path check (`cli_path_invalid`, `not_found`) on a path the screen accepts. The server's own refusal of 0 is tested at the handler (`TestContextSettings_RefusesZeroOverride`). G-07 uses valid input plus the declared seam for the partial failure, and its "no seam needed" claim is removed | scenario "A real server refusal is shown under its field"; D-10 row 11; G-07; order 14 |
+| R2-MAJ-006 | Write outcome contract added: for each endpoint and stage, the status, the generated envelope (`ErrorResponse`) and the `code`. `saved_not_refreshed` (500) is extended from Third-party agents to `PUT /config` and `PUT /settings/context`, with `details.keys`. Only descriptions change, in `ErrorResponse.yaml` and `openapi.yaml`, and they come before any code. FR-020 follows the table | C-2 addition; C-6 outcome table; API and Data; FR-020, FR-102; scenario "Settings saves report a failed rebuild"; order 14 |
+| R2-MIN-001 | The live Skills permissions link now lands on Skills & Tools, matching FR-009. The old `tab=security` bookmark keeps its own D-3 mapping | scenario "Links from other screens keep working" |
+
+**Escalation to the founder:** none. Every finding was fixed without a product decision. Two choices made here are the architect's and are recorded for the record. (1) After a port change, the person opens the new address with one click; the page does not open it on its own, because the old page cannot see the new port. (2) The chief's "whole-config PUT" proof is split: a raw `GET /config` echo is refused by the existing credential fence, and the largest permitted multi-section write is refused by the retention guard.
