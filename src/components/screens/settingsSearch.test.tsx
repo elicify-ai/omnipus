@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter, createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import userEvent from '@testing-library/user-event'
@@ -71,7 +71,10 @@ async function openSettings(search = '') {
 }
 
 async function typeQuery(q: string) {
-  const box = screen.getByRole('searchbox', { name: /search/i })
+  // The router renders the shell asynchronously (FR-065's loading state comes
+  // first); a sync getByRole runs before the search box exists. Wait for it,
+  // exactly like the keyboard file's passing helper (settingsSearch.keyboard).
+  const box = await screen.findByRole('searchbox', { name: /search/i })
   await userEvent.type(box, q)
 }
 
@@ -97,8 +100,13 @@ describe('D-13 — search answers', () => {
   it('D-13 rows 1-2: "port" and "PORT" find Gateway → Port (case-insensitive, label match)', async () => {
     await openSettings()
     await typeQuery('PORT')
-    expect(await screen.findByText('Port')).toBeInTheDocument()
-    expect(screen.getByText(/Gateway/)).toBeInTheDocument()
+    // Result rows are asserted inside the results panel: the section list in
+    // the sidebar always renders the same names, so a screen-wide lookup for
+    // "Gateway" matched the nav link too (locator fix; the oracle — the
+    // result lists the setting with its section — is unchanged).
+    const panel = await screen.findByTestId('settings-search-results')
+    expect(within(panel).getByText('Port')).toBeInTheDocument()
+    expect(within(panel).getByText('Gateway')).toBeInTheDocument()
   })
 
   it('D-13 row 3 / FR-007: "web search" says it moved to Skills & Tools, with a link', async () => {
@@ -111,11 +119,18 @@ describe('D-13 — search answers', () => {
   it('D-13 row 4: "backup" and "restore" answer the removal notice', async () => {
     await openSettings()
     await typeQuery('backup')
-    expect(await screen.findByText('Backup and restore were removed.')).toBeInTheDocument()
+    // "backup" matches BOTH the Backup and the Restore index rows and the
+    // notice is the removal answer under each — assert at least one notice,
+    // in the results panel (locator fix; the notice text is D-13's verbatim).
+    const panel = await screen.findByTestId('settings-search-results')
+    expect(within(panel).getAllByText('Backup and restore were removed.').length).toBeGreaterThan(0)
     cleanup()
     await openSettings()
     await typeQuery('restore')
-    expect(await screen.findByText('Backup and restore were removed.')).toBeInTheDocument()
+    // "restore" matches both rows the same way (Backup's description and the
+    // Restore label) — same at-least-one notice assertion, panel-scoped.
+    const panel2 = await screen.findByTestId('settings-search-results')
+    expect(within(panel2).getAllByText('Backup and restore were removed.').length).toBeGreaterThan(0)
   })
 
   it('D-13 row 5: "pair" answers that device pairing is not available', async () => {
@@ -127,15 +142,21 @@ describe('D-13 — search answers', () => {
   it('D-13 row 6: "retention" finds the Data & retention settings', async () => {
     await openSettings()
     await typeQuery('retention')
-    expect(await screen.findByText(/Data & retention/)).toBeInTheDocument()
-    expect(screen.getByText(/Keep chat history for|Keep memory for|How long/i)).toBeInTheDocument()
+    // The retention settings are found, each row carrying its section; the
+    // panel is the scope because the sidebar lists "Data & retention" too
+    // (locator fix; the oracle is D-13 row 6's answer, unchanged).
+    const panel = await screen.findByTestId('settings-search-results')
+    expect(within(panel).getByText('Keep chat history for')).toBeInTheDocument()
+    expect(within(panel).getByText('Keep memory for')).toBeInTheDocument()
+    expect(within(panel).getAllByText('Data & retention').length).toBeGreaterThan(0)
   })
 
   it('D-13 row 7: a word no setting contains shows the empty state with the typed text', async () => {
     await openSettings()
     await typeQuery('zzqx')
-    expect(await screen.findByText('No settings match')).toBeInTheDocument()
-    expect(screen.getByText(/zzqx/)).toBeInTheDocument()
+    // The empty state names "No settings match" WITH the typed text (D-13
+    // row 7); it renders them as one line: No settings match “zzqx”.
+    expect(await screen.findByText('No settings match “zzqx”')).toBeInTheDocument()
   })
 
   it('D-13 row 8: whitespace-only query shows the full section list and no results panel', async () => {
@@ -151,7 +172,7 @@ describe('D-13 — search answers', () => {
   it('D-13 row 9: typed markup is treated as text — no match, no execution', async () => {
     await openSettings()
     await typeQuery('<script>')
-    expect(await screen.findByText('No settings match')).toBeInTheDocument()
+    expect(await screen.findByText('No settings match “<script>”')).toBeInTheDocument()
     expect(document.querySelectorAll('script').length).toBe(0)
   })
 
@@ -164,8 +185,10 @@ describe('D-13 — search answers', () => {
   it('FR-006: results announce their count in a polite live region', async () => {
     await openSettings()
     await typeQuery('port')
-    const live = await screen.findByRole('status')
+    // The count live region is aria-live="polite" without a status role, so
+    // findByRole('status') could never see it (FR-006 names a polite live
+    // region, not a role). The announcement's content is the count itself.
+    const live = await screen.findByText(/^\d+ results?$/)
     expect(live).toHaveAttribute('aria-live', 'polite')
-    expect(live).toHaveTextContent(/\d/)
   })
 })
