@@ -181,6 +181,12 @@ type MemoryStore struct {
 	// persisted records instead of depending on wall-clock time at write (M6).
 	// Always returns UTC. Set via SetClock; never nil after NewMemoryStore.
 	now func() time.Time
+
+	// recallMu guards recallWindow, how far back recall reads reflections
+	// (FR-050; set by SetRetroRecallWindow, nil = never set). See
+	// memory_retro_recall.go.
+	recallMu     sync.Mutex
+	recallWindow *retroRecallWindow
 }
 
 // SetClock overrides the clock used to stamp persisted memory records
