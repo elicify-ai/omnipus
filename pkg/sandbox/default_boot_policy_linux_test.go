@@ -71,10 +71,6 @@ var (
 	}
 )
 
-func t123Boot(model FilesystemModel, home string, allowedPaths []string, grants []string, warn func(string, string)) SandboxPolicy {
-	return DefaultBootPolicyForModel(model, home, allowedPaths, nil, warn, nil, grants)
-}
-
 func t123BannedPaths() []string {
 	return []string{"/usr/share/omnipus", "/usr/share", "/usr/local/bin"}
 }
@@ -175,6 +171,16 @@ func TestT124_RefusedEntriesGetNoRuleAndOneWarn(t *testing.T) {
 	link := filepath.Join(linkDir, "office-link")
 	require.NoError(t, os.Symlink(underTmp, link))
 
+	// "contains a writable allowed path": the entry is a PARENT of an
+	// allowed path, in a second root with no rule of its own — home itself
+	// already carries a base rule, so a parent of a writable path under
+	// home could not tell the refusal from the base rule (finding D5).
+	otherRoot := t.TempDir()
+	writableAllowed := filepath.Join(otherRoot, "agent-write", "office")
+	require.NoError(t, os.MkdirAll(writableAllowed, 0700))
+	containsWritable := filepath.Dir(writableAllowed)
+	require.NotEqual(t, home, containsWritable, "instrument: the entry must not be home itself, which has a base rule")
+
 	cases := []struct {
 		name  string
 		entry string
@@ -190,7 +196,7 @@ func TestT124_RefusedEntriesGetNoRuleAndOneWarn(t *testing.T) {
 		{name: "inside_custom_tmpdir", entry: filepath.Join(tmpdir, "office"), setTmpdir: tmpdir},
 		{name: "contains_data_folder", entry: filepath.Dir(home)},
 		{name: "inside_writable_allowed_path", entry: filepath.Join(writable, "office"), allowedPaths: []string{writable}},
-		{name: "contains_writable_allowed_path", entry: filepath.Dir(writable), allowedPaths: []string{writable}},
+		{name: "contains_writable_allowed_path", entry: containsWritable, allowedPaths: []string{writableAllowed}},
 		{name: "resolves_into_writable", entry: link},
 	}
 	for _, tc := range cases {
@@ -215,7 +221,10 @@ func TestT124_RefusedEntriesGetNoRuleAndOneWarn(t *testing.T) {
 			// The warning names the refused entry in one of the forms the
 			// rule compares (BR-2.3 judges declared and resolved paths); its
 			// message is non-empty. Anything else is not a warning about it.
-			resolved, _ := filepath.EvalSymlinks(tc.entry)
+			resolved, resolveErr := filepath.EvalSymlinks(tc.entry)
+			if resolveErr != nil {
+				resolved = ""
+			}
 			named := 0
 			for _, w := range warns {
 				if w.path == tc.entry || w.path == filepath.Clean(tc.entry) || (resolved != "" && w.path == resolved) {

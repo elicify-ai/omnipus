@@ -281,22 +281,23 @@ func t126StagePrefix(t *testing.T, withOffice, withRenderer bool) *t126Layout {
 }
 
 // t126GrantsAndPolicy builds the startup rules with the production code,
-// exactly as the spec's T-126 mandates: the §3.8 grant helper, then the new
-// boot sibling (nil allowed paths — the Linux exec-path seed is empty).
-func t126GrantsAndPolicy(t *testing.T, layout *t126Layout) *sandbox.SandboxPolicy {
+// exactly as the spec's T-126 mandates (BR-2.2): the §3.8 grant helper, then
+// the new boot sibling (nil allowed paths — the Linux exec-path seed is
+// empty).
+func t126GrantsAndPolicy(t *testing.T, layout *t126Layout) ([]string, *sandbox.SandboxPolicy) {
 	t.Helper()
 	resolver := &component.Resolver{Home: layout.Home, Executable: layout.Bin}
-	grants := component.ConfinementStartupGrants(resolver)
-	t.Logf("T-126: startup grants=%v", grants)
+	grants, grantNotes := component.ConfinementStartupGrants(resolver)
+	t.Logf("§3.8: startup grants=%v notes=%v", grants, grantNotes)
 	policy := sandbox.DefaultBootPolicyForModel(sandbox.FilesystemModelConfined, layout.Home, nil, nil, nil, nil, grants)
-	return &policy
+	return grants, &policy
 }
 
 // t126ApplyAndReexec applies the startup rules to a locked thread and
 // re-execs through the production reExecProcess code path (unix.Exec of the
 // pre-resolved executable with the original argv and environment). Only
 // returns on failure.
-func t126ApplyAndReexec(t *testing.T, layout *t126Layout, policy *sandbox.SandboxPolicy, role string) {
+func t126ApplyAndReexec(t *testing.T, layout *t126Layout, grants []string, policy *sandbox.SandboxPolicy, role string) {
 	t.Helper()
 	require.NoError(t, os.Setenv("TMPDIR", filepath.Join(layout.Home, "scratch")))
 	require.NoError(t, os.Setenv(t126RoleEnv, role))
@@ -310,14 +311,24 @@ func t126ApplyAndReexec(t *testing.T, layout *t126Layout, policy *sandbox.Sandbo
 	t.Fatalf("§3.8 forced re-exec of %s: %v", layout.Bin, err)
 }
 
-// t126RequireEnforced is the re-exec'd image's first breath: the boot layer
-// must be enforcing, or every claim below is vacuous.
-func t126RequireEnforced(t *testing.T, layout *t126Layout) {
+// t126InstallStartupRules is the re-exec'd image's first breath, and it does
+// what the gateway does: the spec's T-126 and T-128(d) have the new image
+// APPLY its own startup rules, and BR-2.5 needs the grant record —
+// ConfinementStartupGrants → DefaultBootPolicyForModel →
+// RecordStartupGrants → ApplyWithMode → component.SetStartupGrants, the
+// gateway's exact sequence (pkg/gateway/sandbox_apply.go). A fresh backend
+// object enforces nothing until ApplyWithMode runs.
+func t126InstallStartupRules(t *testing.T, layout *t126Layout) {
 	t.Helper()
 	require.Equal(t, layout.Base, os.Getenv(t126BaseEnv), "instrument: staged base carried through the re-exec")
 	backend, ok := sandbox.NewLinuxBackend()
-	require.True(t, ok, "BLOCKED: enforcing Linux Landlock unavailable after re-exec")
-	require.True(t, backend.EnforcingChildren(), "§3.8: the re-exec'd image must still be enforcing")
+	require.True(t, ok, "BLOCKED: enforcing Linux Landlock unavailable — required by §3.8; an unconfined run fails, never skips")
+	grants, policy := t126GrantsAndPolicy(t, layout)
+	rec, recordNotes := RecordStartupGrants(*policy, grants)
+	require.NoError(t, backend.ApplyWithMode(*policy, sandbox.ModeEnforce))
+	require.True(t, backend.EnforcingChildren(), "§3.8: the re-exec'd image must re-apply its own startup rules and enforce them (no unconfined acceptance)")
+	component.SetStartupGrants(rec)
+	t.Logf("§3.8: startup rules re-applied and the BR-2.5 record installed; record notes=%v", recordNotes)
 }
 
 // t126SpawnHelper starts the unconfined helper process with an ops file and
@@ -465,13 +476,14 @@ func TestT125B_RealAgentPolicyNeverReachesTheGrants(t *testing.T) {
 		controlExec := t126RunExecProbe(t, nil, rendererProgram, layout.Home)
 		require.Equal(t, "ok", controlExec, "T-125(b) control: the renderer program starts unconfined")
 		require.NoError(t, os.WriteFile(filepath.Join(layout.Base, "control-ok"), []byte(controlRead.Errno+","+controlExec+"\n"), 0o600))
-		t126ApplyAndReexec(t, layout, t126GrantsAndPolicy(t, layout), "child")
+		grants, policy := t126GrantsAndPolicy(t, layout)
+		t126ApplyAndReexec(t, layout, grants, policy, "child")
 	}
 	// Enforced image: prove the controls really ran, then deny.
 	raw, err := os.ReadFile(filepath.Join(layout.Base, "control-ok"))
 	require.NoError(t, err, "T-125(b): the unconfined controls must have run before the rules")
 	require.Equal(t, "ok,ok\n", string(raw), "T-125(b): unconfined controls must succeed")
-	t126RequireEnforced(t, layout)
+	t126InstallStartupRules(t, layout)
 
 	work := filepath.Join(layout.Home, "scratch")
 	agentPolicy, err := sandbox.KernelPolicyForTurn(fspolicy.FSPolicy{WorkDir: work, Scope: fspolicy.FSScopeConfined})
@@ -513,9 +525,10 @@ func t126RendererProgram(t *testing.T, layout *t126Layout) string {
 func TestT126_RealPackagedComponentsPreviewUnderStartupGrants(t *testing.T) {
 	layout := t126StagePrefix(t, true, true)
 	if os.Getenv(t126RoleEnv) == "" {
-		t126ApplyAndReexec(t, layout, t126GrantsAndPolicy(t, layout), "child")
+		grants, policy := t126GrantsAndPolicy(t, layout)
+		t126ApplyAndReexec(t, layout, grants, policy, "child")
 	}
-	t126RequireEnforced(t, layout)
+	t126InstallStartupRules(t, layout)
 	resolver := &component.Resolver{Home: layout.Home, Executable: layout.Bin}
 	office, problem := resolver.Resolve(component.KindOffice)
 	require.Nil(t, problem, "T-126: the packaged office slot must resolve")
@@ -545,9 +558,10 @@ func TestT128A_InstalledAfterStartIsDeniedForBoth(t *testing.T) {
 			{Op: "install-office", Trigger: "a-office.trg", Done: "a-office.done"},
 			{Op: "install-renderer", Trigger: "a-renderer.trg", Done: "a-renderer.done"},
 		})
-		t126ApplyAndReexec(t, layout, t126GrantsAndPolicy(t, layout), "child")
+		grants, policy := t126GrantsAndPolicy(t, layout)
+		t126ApplyAndReexec(t, layout, grants, policy, "child")
 	}
-	t126RequireEnforced(t, layout)
+	t126InstallStartupRules(t, layout)
 	resolver := &component.Resolver{Home: layout.Home, Executable: layout.Bin}
 	svc, err := New(Config{Home: layout.Home, Self: layout.Bin, Resolver: resolver})
 	require.NoError(t, err)
@@ -555,6 +569,9 @@ func TestT128A_InstalledAfterStartIsDeniedForBoth(t *testing.T) {
 	starts := 0
 	testHookConverterStart = func(converterStart) { starts++ }
 	t.Cleanup(func() { testHookConverterStart = nil })
+	rendererStarts := 0
+	testHookRendererStart = func(converterStart) { rendererStarts++ }
+	t.Cleanup(func() { testHookRendererStart = nil })
 
 	t126Trigger(t, layout, "a-office.trg")
 	t126AwaitDone(t, layout, "a-office.done")
@@ -573,6 +590,7 @@ func TestT128A_InstalledAfterStartIsDeniedForBoth(t *testing.T) {
 	require.Equal(t, t128RendererText, res.RenderDetail,
 		"T-128(a): the renderer denial text must be the BR-2.5 sentence word for word; got %q", res.RenderDetail)
 	require.Empty(t, res.Pages, "T-128(a): no page image from an after-start renderer")
+	require.Zero(t, rendererStarts, "T-128(a): the renderer must never start for an after-start component")
 }
 
 // TestT128B_RegisteredAfterStartIsDenied (BR-2.5 b): the helper runs
@@ -584,9 +602,10 @@ func TestT128B_RegisteredAfterStartIsDenied(t *testing.T) {
 		t126SpawnHelper(t, layout, []t126HelperOp{
 			{Op: "register-office", Trigger: "b-register.trg", Done: "b-register.done"},
 		})
-		t126ApplyAndReexec(t, layout, t126GrantsAndPolicy(t, layout), "child")
+		grants, policy := t126GrantsAndPolicy(t, layout)
+		t126ApplyAndReexec(t, layout, grants, policy, "child")
 	}
-	t126RequireEnforced(t, layout)
+	t126InstallStartupRules(t, layout)
 	resolver := &component.Resolver{Home: layout.Home, Executable: layout.Bin}
 	svc, err := New(Config{Home: layout.Home, Self: layout.Bin, Resolver: resolver})
 	require.NoError(t, err)
@@ -614,9 +633,10 @@ func TestT128C_ReplaceInPlaceIsDenied(t *testing.T) {
 		t126SpawnHelper(t, layout, []t126HelperOp{
 			{Op: "replace-office", Trigger: "c-replace.trg", Done: "c-replace.done"},
 		})
-		t126ApplyAndReexec(t, layout, t126GrantsAndPolicy(t, layout), "child")
+		grants, policy := t126GrantsAndPolicy(t, layout)
+		t126ApplyAndReexec(t, layout, grants, policy, "child")
 	}
-	t126RequireEnforced(t, layout)
+	t126InstallStartupRules(t, layout)
 	resolver := &component.Resolver{Home: layout.Home, Executable: layout.Bin}
 	svc, err := New(Config{Home: layout.Home, Self: layout.Bin, Resolver: resolver})
 	require.NoError(t, err)
@@ -650,8 +670,8 @@ func TestT128D_RestartFromRestrictedThreadKeepsGrants(t *testing.T) {
 		runtime.LockOSThread()
 		backend, ok := sandbox.NewLinuxBackend()
 		require.True(t, ok, "BLOCKED: enforcing Linux Landlock unavailable — required by §3.8")
-		policy := *t126GrantsAndPolicy(t, layout)
-		require.NoError(t, backend.ApplyWithMode(policy, sandbox.ModeEnforce))
+		_, policy := t126GrantsAndPolicy(t, layout)
+		require.NoError(t, backend.ApplyWithMode(*policy, sandbox.ModeEnforce))
 		require.True(t, backend.EnforcingChildren(), "§3.8: no unconfined acceptance")
 		// The restarting thread is restricted: a readable file outside the
 		// startup rules must fail with EACCES on THIS thread.
@@ -667,7 +687,7 @@ func TestT128D_RestartFromRestrictedThreadKeepsGrants(t *testing.T) {
 			t.Fatalf("T-128(d) restart re-exec: %v", err)
 		}
 	case "restart-second":
-		t126RequireEnforced(t, layout)
+		t126InstallStartupRules(t, layout)
 		resolver := &component.Resolver{Home: layout.Home, Executable: layout.Bin}
 		svc, err := New(Config{Home: layout.Home, Self: layout.Bin, Resolver: resolver})
 		require.NoError(t, err)

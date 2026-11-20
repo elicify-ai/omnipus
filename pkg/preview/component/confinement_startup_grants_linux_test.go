@@ -74,7 +74,8 @@ func t122SHA256File(t *testing.T, path string) string {
 
 // t122WriteRegisteredManifest writes a registered manifest for kind naming
 // root. With valid = false the manifest is corrupted after writing (trailing
-// data), so ParseManifest must reject it.
+// data), so ParseManifest must reject it. The root itself must exist: the
+// executable it names is fingerprinted for real.
 func t122WriteRegisteredManifest(t *testing.T, home string, kind component.Kind, root string, valid bool) {
 	t.Helper()
 	dir := component.RegisteredDir(home, kind)
@@ -111,6 +112,37 @@ func t122WriteRegisteredManifest(t *testing.T, home string, kind component.Kind,
 	if !valid {
 		data = append(data, ' ', '{', '}')
 	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, component.ManifestFile), data, 0600))
+}
+
+// t122WriteRegisteredManifestWithoutRoot writes a registered manifest whose
+// root does not exist: nothing under root is created, and the fingerprint is
+// a synthetic SHA-256 (the manifest passes ParseManifest's format checks but
+// names a root that is missing, which is exactly the BR-2.1 skip case).
+func t122WriteRegisteredManifestWithoutRoot(t *testing.T, home string, kind component.Kind, root string) {
+	t.Helper()
+	dir := component.RegisteredDir(home, kind)
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	exeRel := "program/soffice.bin"
+	if kind == component.KindPDFRenderer {
+		exeRel = "omnipus-pdfium"
+	}
+	files := map[string]string{exeRel: strings.Repeat("ab", 32)}
+	m := map[string]any{
+		"schema":           component.ManifestSchema,
+		"component":        string(kind),
+		"version":          "26.8.1.1",
+		"platform":         "linux-amd64",
+		"executable":       exeRel,
+		"files":            files,
+		"file_list_sha256": t122ManifestFileListSHA256(files),
+		"trust":            component.TrustOperatorRegistered,
+		"root":             root,
+		"registered_by":    "t122",
+		"registered_at":    "2026-11-20T00:00:00Z",
+	}
+	data, err := json.Marshal(m)
+	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, component.ManifestFile), data, 0600))
 }
 
@@ -193,16 +225,14 @@ func TestT122_FirstLinuxSlotIsListedWhenItExists(t *testing.T) {
 	exe := t122Exe(t, filepath.Join(root, "bin", "omnipus"))
 	adjacent := t122Slot(t, filepath.Join(root, "office")) // <exe>/../office
 	share := t122Slot(t, filepath.Join(root, "share", "omnipus", "office"))
-	t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
+	pdfium := t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
 
 	grants, _ := component.ConfinementStartupGrants(&component.Resolver{
 		Home:       filepath.Join(r, "home"),
 		Executable: filepath.Join(root, "bin", "omnipus"),
 		GOOS:       "linux",
 	})
-	require.Len(t, grants, 4)
-	require.Equal(t, adjacent, grants[0], "T-122(d): <exe>/../office is PackagedCandidates slot 1 and comes first")
-	require.Equal(t, share, grants[1], "T-122(d): the share slot follows the adjacent one")
+	t122AssertExact(t, grants, []string{adjacent, share, pdfium, exe})
 }
 
 func TestT122_RegisteredRootLeadsPackagedSlots(t *testing.T) {
@@ -211,8 +241,8 @@ func TestT122_RegisteredRootLeadsPackagedSlots(t *testing.T) {
 	home := filepath.Join(r, "home")
 	exe := t122Exe(t, filepath.Join(root, "bin", "omnipus"))
 	registered := t122Slot(t, filepath.Join(r, "opt", "registered-office"))
-	t122Slot(t, filepath.Join(root, "share", "omnipus", "office"))
-	t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
+	office := t122Slot(t, filepath.Join(root, "share", "omnipus", "office"))
+	pdfium := t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
 	t122WriteRegisteredManifest(t, home, component.KindOffice, registered, true)
 
 	grants, _ := component.ConfinementStartupGrants(&component.Resolver{
@@ -220,8 +250,7 @@ func TestT122_RegisteredRootLeadsPackagedSlots(t *testing.T) {
 		Executable: filepath.Join(root, "bin", "omnipus"),
 		GOOS:       "linux",
 	})
-	require.Len(t, grants, 4, "registered root + two packaged slots + program file")
-	require.Equal(t, registered, grants[0], "T-122(e): the registered office root leads LibreOffice")
+	t122AssertExact(t, grants, []string{registered, office, pdfium, exe})
 }
 
 func TestT122_InvalidOrMissingRegisteredManifestAddsNothing(t *testing.T) {
@@ -232,8 +261,10 @@ func TestT122_InvalidOrMissingRegisteredManifestAddsNothing(t *testing.T) {
 	office := t122Slot(t, filepath.Join(root, "share", "omnipus", "office"))
 	pdfium := t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
 
-	// (1) valid manifest whose root does not exist.
-	t122WriteRegisteredManifest(t, home, component.KindOffice, filepath.Join(r, "gone", "office"), true)
+	// (1) valid manifest whose root does not exist: nothing under that root
+	// is created, so the root is genuinely missing.
+	t122WriteRegisteredManifestWithoutRoot(t, home, component.KindOffice, filepath.Join(r, "gone", "office"))
+	require.NoDirExists(t, filepath.Join(r, "gone"), "instrument: the missing-root case must not plant the root")
 	grants, _ := component.ConfinementStartupGrants(&component.Resolver{
 		Home: home, Executable: filepath.Join(root, "bin", "omnipus"), GOOS: "linux"})
 	t122AssertExact(t, grants, []string{office, pdfium, exe})
@@ -253,29 +284,31 @@ func TestT122_SymlinkedSlotListsItsTarget(t *testing.T) {
 	link := filepath.Join(root, "share", "omnipus", "office")
 	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0755))
 	require.NoError(t, os.Symlink(real, link))
-	t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
+	pdfium := t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
 
 	grants, _ := component.ConfinementStartupGrants(&component.Resolver{
 		Home:       filepath.Join(r, "home"),
 		Executable: filepath.Join(root, "bin", "omnipus"),
 		GOOS:       "linux",
 	})
-	require.Len(t, grants, 3)
-	require.Equal(t, real, grants[0], "T-122(f): the symlinked slot is granted as its resolved target")
+	t122AssertExact(t, grants, []string{real, pdfium, exe})
 }
 
 func TestT122_NeverGrantsParentFoldersOrBin(t *testing.T) {
 	r := t.TempDir()
 	root := filepath.Join(r, "usr", "local")
 	exe := t122Exe(t, filepath.Join(root, "bin", "omnipus"))
-	t122Slot(t, filepath.Join(root, "share", "omnipus", "office"))
-	t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
+	office := t122Slot(t, filepath.Join(root, "share", "omnipus", "office"))
+	pdfium := t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
 
 	grants, _ := component.ConfinementStartupGrants(&component.Resolver{
 		Home:       filepath.Join(r, "home"),
 		Executable: filepath.Join(root, "bin", "omnipus"),
 		GOOS:       "linux",
 	})
+	// The whole list is exactly the two slots and the program file: no
+	// parent folder and no bin folder can hide in it.
+	t122AssertExact(t, grants, []string{office, pdfium, exe})
 	banned := []string{
 		filepath.Join(root, "share", "omnipus"),
 		filepath.Join(root, "share"),

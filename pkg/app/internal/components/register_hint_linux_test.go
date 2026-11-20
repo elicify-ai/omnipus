@@ -24,13 +24,13 @@ package components_test
 // registration print it never; the exit code is unchanged (0); the command
 // restarts nothing.
 //
-// NOTE (spec conflict flagged to team-lead, not silently resolved): BR-2.7
-// also says "If the configuration cannot be read, the line is printed as
-// well". A configuration that cannot be read refuses the registration
-// itself (AD-4 writer exclusion fails closed, command.go::configuredWriteRoots),
-// so that case cannot reach a successful registration; this file pins the
-// compound behavior that IS reachable (refused loudly, no hint leak) and
-// reports the unreachable sentence rather than asserting it.
+// The "configuration cannot be read" case is settled by the spec amendment
+// (02f1aeca3, BR-2.7/B-88/T-129): registration is refused loudly before any
+// hint, because configuredWriteRoots then reports a write root that covers
+// everything and the AD-4 writer exclusion fails closed — a non-zero exit
+// status, an error naming the unreadable configuration, no Registered line
+// and no restart line. TestT129_UnreadableConfigRegistrationIsRefusedLoudly
+// pins exactly that.
 
 import (
 	"bytes"

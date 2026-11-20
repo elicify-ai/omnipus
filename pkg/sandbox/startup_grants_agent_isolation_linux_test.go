@@ -28,7 +28,10 @@ import (
 )
 
 // t125SixPaths is T-123(a)+(b)'s grant set; t125FourFolders are the folders
-// that contain them (BR-2.3: no parent folder rule may exist anywhere).
+// that contain them. T-125(a)'s oracle: no rule names ANY OF THE SIX PATHS,
+// or A PATH UNDER the four folders. The folders themselves are not
+// startup-grant space — /usr/bin is a readOnlySystem read in every agent
+// policy (sandbox.go), a pre-existing rule BR-2.4 does not forbid.
 var (
 	t125SixPaths = []string{
 		"/usr/share/omnipus/office",
@@ -48,8 +51,13 @@ var (
 
 func t125NamesGrantedSpace(path string) bool {
 	clean := filepath.Clean(path)
-	for _, banned := range append(append([]string{}, t125SixPaths...), t125FourFolders...) {
+	for _, banned := range t125SixPaths {
 		if clean == banned || strings.HasPrefix(clean, banned+"/") {
+			return true
+		}
+	}
+	for _, folder := range t125FourFolders {
+		if strings.HasPrefix(clean, folder+"/") {
 			return true
 		}
 	}
