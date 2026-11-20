@@ -423,9 +423,9 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
     <div className="space-y-[var(--space-4)]" data-testid="context-section">
       <div className="flex items-start justify-between gap-[var(--space-3)]">
         <div>
-          <h2 className="font-headline text-lg font-semibold text-[var(--color-secondary)] flex items-center gap-[var(--space-2)]">
+          <h3 className="font-headline text-lg font-semibold text-[var(--color-secondary)] flex items-center gap-[var(--space-2)]">
             <Sliders size={18} /> Models
-          </h2>
+          </h3>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] leading-relaxed">
             Context-window budget: how much of each tool result stays in the conversation, when the window is
             re-checked mid-turn, and which context length each model is assumed to have. Changes apply on the next

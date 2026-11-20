@@ -1135,7 +1135,7 @@ export function ProvidersSection() {
     <div className="space-y-[var(--space-3)]">
       <div className="flex items-start justify-between gap-[var(--space-2-5)]">
         <div>
-          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h2>
+          <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h3>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             API keys are stored encrypted in credentials.json — never in config.json.
           </p>

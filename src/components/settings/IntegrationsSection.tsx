@@ -488,7 +488,7 @@ export function IntegrationsSection() {
   return (
     <div className="space-y-[var(--space-4)]">
       <div>
-        <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Integrations</h2>
+        <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Integrations</h3>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
           Configure the web-search and voice-input providers your agents use. API keys are stored
           encrypted; changes require re-typing your password.

@@ -51,9 +51,9 @@ export function SystemAgentsSection(): React.ReactElement {
     <section className="space-y-[var(--space-3)]" data-testid="settings-system-agents" aria-labelledby="settings-system-agents-heading">
       <div className="flex items-center gap-[var(--space-2)]">
         <Robot size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
-        <h2 id="settings-system-agents-heading" className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
+        <h3 id="settings-system-agents-heading" className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
           System agents
-        </h2>
+        </h3>
       </div>
       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         The agents the system itself runs on. They are not part of any team and cannot be deleted.

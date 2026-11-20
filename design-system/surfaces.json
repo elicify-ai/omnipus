@@ -7615,6 +7615,42 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/DataRetentionSection.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/RestartBanner.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/SaveBar.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/SettingsSectionBody.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/SettingsShellContext.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/saveOutcome.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/settingsSections.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/useSaveBar.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/useSavePasswordPrompt.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/PerformanceSection.tsx",
       "lane": 6
     },

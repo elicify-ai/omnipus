@@ -1222,7 +1222,7 @@ export function PerformanceSection(): React.ReactElement {
       <div className="flex items-center justify-between gap-[var(--space-2)]">
         <div className="flex items-center gap-[var(--space-2)]">
           <Cpu size={18} className="text-[var(--color-secondary)]" />
-          <h2 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Agent Concurrency</h2>
+          <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Agent Concurrency</h3>
         </div>
         <AutoSaveIndicator status={saveStatus} />
       </div>
