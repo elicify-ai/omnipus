@@ -300,8 +300,8 @@ func TestRetentionSettings_ReadsOutOfRangeStoredValue(t *testing.T) {
 // fields of that body — whatever gateway.validate_inbound is.
 func TestMemorySettings_RefusesRetentionFields(t *testing.T) {
 	bodies := []struct {
-		name       string
-		body       string
+		name         string
+		body         string
 		wantInErrMsg string
 	}{
 		{"session_days only", `{"session_days":30}`, "session_days"},
