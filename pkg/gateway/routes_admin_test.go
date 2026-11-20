@@ -77,8 +77,13 @@ var allAdminRoutes = []bypassGatedRoute{
 	{http.MethodPut, "/api/v1/security/sandbox-config", `{"mode":"permissive"}`},
 	{http.MethodGet, "/api/v1/security/session-scope", ""},
 	{http.MethodPut, "/api/v1/security/session-scope", `{"dm_scope":"main"}`},
-	{http.MethodGet, "/api/v1/security/retention", ""},
-	{http.MethodPut, "/api/v1/security/retention", `{"session_days":30}`},
+	// GET/PUT /security/retention moved to /settings/retention (Settings
+	// redesign C-3): the old route is removed (FR-047) and the replacing one
+	// is withAuth + RequireNotBypass with no password (FR-043), registered
+	// with adminWrap like the rest of this table. The sweep route stays
+	// unchanged (FR-047).
+	{http.MethodGet, "/api/v1/settings/retention", ""},
+	{http.MethodPut, "/api/v1/settings/retention", `{"session_days":30}`},
 	{http.MethodPost, "/api/v1/security/retention/sweep", ""},
 }
 

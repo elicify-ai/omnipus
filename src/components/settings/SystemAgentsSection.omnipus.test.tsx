@@ -5,7 +5,8 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { SettingsScreen } from '@/components/screens/SettingsScreen'
+import { createRouter, createMemoryHistory, RouterProvider } from '@tanstack/react-router'
+import { routeTree } from '@/routeTree.gen'
 import { AgentProfile } from '@/components/agents/AgentProfile'
 import { useUiStore } from '@/store/ui'
 import { ApiError } from '@/lib/api-error'
@@ -18,10 +19,19 @@ vi.mock('@tanstack/react-router', async (original) => ({
 }))
 vi.mock('@/lib/api', async (original) => ({
   ...await original<typeof import('@/lib/api')>(),
-  fetchAgents: vi.fn(), fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchProviders: vi.fn(),
+  // The real route tree: _app.tsx beforeLoad + AppShell + Sidebar reads.
+  fetchAppState: vi.fn(), validateToken: vi.fn(async () => ({})),
+  fetchNotifications: vi.fn(async () => ({ notifications: [], unread_count: 0 })),
+  fetchTasks: vi.fn(async () => []), fetchAgents: vi.fn(), fetchAgent: vi.fn(),
+  updateAgent: vi.fn(), fetchProviders: vi.fn(),
+  fetchVersion: vi.fn(async () => ({ version: 'test', build_sha: 'test' })),
+  fetchWorkspaces: vi.fn(async () => [{ id: 'ws-1', name: 'UAT Build', status: 'active', is_default: true }]),
+  fetchSessions: vi.fn(async () => []),
+  fetchKnowledgeBaseInfo: vi.fn(async () => ({ workspace_id: 'ws-1', root_path: '', is_knowledge_base: false, marker: 'none' })),
+  // SettingsScreen + SystemAgentsSection reads:
   fetchActivity: vi.fn(), fetchSkills: vi.fn(), fetchAboutInfo: vi.fn(), fetchPerformanceSettings: vi.fn(),
 }))
-import { fetchAgents, fetchAgent, updateAgent, fetchProviders, fetchActivity, fetchSkills, fetchAboutInfo, fetchPerformanceSettings } from '@/lib/api'
+import { fetchAgents, fetchAgent, updateAgent, fetchProviders, fetchActivity, fetchSkills, fetchAboutInfo, fetchPerformanceSettings, fetchAppState } from '@/lib/api'
 
 // Module namespace is test-only, not a wire format. Missing implementation is a loud
 // per-case failure, not a skipped test or an import/collection error.
@@ -45,6 +55,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null, toasts: [] })
+  // The real _app route guard (used only by the navigation cases) needs an
+  // onboarded app state.
+  vi.mocked(fetchAppState).mockResolvedValue({ onboarding_complete: true } as never)
   vi.mocked(fetchAgents).mockResolvedValue([MIA, ...SYSTEM_AGENTS])
   vi.mocked(fetchAgent).mockImplementation(async (id) => SYSTEM_AGENTS.find((a) => a.id === id) ?? MIA)
   vi.mocked(updateAgent).mockImplementation(async (id, patch) => ({
@@ -87,21 +100,6 @@ async function editModel() {
   await user.type(input, 'replacement-model')
   return input
 }
-
-describe('WU-10 Settings navigation is reachable, not just a standalone section', () => {
-  it('FR-106 exposes the System agents tab in the real Settings screen', () => {
-    render(<QueryClientProvider client={client}><SettingsScreen initialTab="chat" /></QueryClientProvider>)
-    expect(screen.getByRole('tab', { name: /^system agents$/i })).toBeVisible()
-  })
-  it('BDD-12.14 enters System agents by keyboard from the real Settings screen', async () => {
-    render(<QueryClientProvider client={client}><SettingsScreen initialTab="chat" /></QueryClientProvider>)
-    const tab = screen.getByRole('tab', { name: /^system agents$/i })
-    tab.focus()
-    await userEvent.setup().keyboard('{Enter}')
-    expect(tab).toHaveAttribute('aria-selected', 'true')
-    expect(await screen.findByRole('button', { name: /edit omnipus/i })).toBeEnabled()
-  })
-})
 
 describe('WU-10 System agents through the shared editor', () => {
   it('FR-106 lists exactly the three system roles, not ordinary Mia', async () => {
@@ -189,5 +187,65 @@ describe('WU-10 System agents through the shared editor', () => {
     await renderSection()
     expect(screen.getByRole('status')).toHaveTextContent(/loading/i)
     expect(screen.queryByText(/no system agents/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('WU-10 Settings navigation is reachable, not just a standalone section', () => {
+  // Settings redesign #1519 reconciliation: the old tab bar and the
+  // `initialTab` prop are replaced by FR-001/FR-002 — 11 sections listed in
+  // three groups as links, the open one named in the address as `?tab=<id>`
+  // (D-3 row 2: `system-agents`) with `aria-current` on the open link. The
+  // cases run the REAL routeTree in a REAL router (the same harness as
+  // settingsRoute.legacyTabs.test.tsx), so the address rule is live.
+  async function openSettings(search: string) {
+    // AppShell pins breakpoints (matchMedia) and the _app guard wants a
+    // signed-in username — scoped here so the standalone editor cases below
+    // keep their plain environment.
+    window.localStorage.setItem('omnipus_auth_username', 'system-agents-tester')
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    })
+    const router = createRouter({
+      routeTree,
+      history: createMemoryHistory({ initialEntries: [`/settings${search}`] }),
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+  }
+
+  it('FR-106 exposes System agents in the section list and opens it from ?tab=system-agents', async () => {
+    await openSettings('?tab=system-agents')
+    // FR-001: the section list holds System agents as a link; FR-002/D-3
+    // row 2: the id names the open section, marked aria-current.
+    const link = await screen.findByRole('link', { name: /^system agents$/i })
+    expect(link).toHaveAttribute('aria-current', 'page')
+    // The section really opened: the system roster is reachable.
+    expect(await screen.findByRole('button', { name: /edit omnipus/i })).toBeEnabled()
+  })
+
+  it('BDD-12.14 enters System agents by keyboard from the section list', async () => {
+    await openSettings('') // no section named — Providers opens (FR-001)
+    const link = await screen.findByRole('link', { name: /^system agents$/i })
+    expect(link).not.toHaveAttribute('aria-current', 'page')
+    link.focus()
+    await userEvent.setup().keyboard('{Enter}')
+    // The Enter activation lands on System agents: the link becomes the
+    // current one and the roster renders.
+    await waitFor(() => expect(link).toHaveAttribute('aria-current', 'page'))
+    expect(await screen.findByRole('button', { name: /edit omnipus/i })).toBeEnabled()
   })
 })

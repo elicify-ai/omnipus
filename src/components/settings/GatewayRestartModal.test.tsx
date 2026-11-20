@@ -1,10 +1,23 @@
 /**
  * GatewayRestartModal.test.tsx — O4 gateway restart UX.
  *
+ * Settings redesign #1519 reconciliation: the completion check is FR-063 now.
+ * The old oracle (first 2xx from /health, "restarted successfully", "did not
+ * come back online") is replaced — completion must be proved by the page's
+ * own GET /about showing an `uptime_seconds` smaller than the seconds since
+ * Restart now was pressed (the first answer from the old process never
+ * counts), then GET /config/pending-restart no longer listing the restarted
+ * keys; a timeout must say the gateway did not come back or did not restart,
+ * to check that it is running and read its log.
+ *
  * Covers:
+ *  - the FR-033 window's Later and Restart now buttons render when open.
  *  - POST failure surfaces an error message in the modal.
- *  - Poll timeout branch: the "did not come back online" error path.
- *  - Happy path: down→up resolves + shows success toast + closes modal.
+ *  - Timeout branch: an old process that keeps answering never counts as
+ *    restarted (FR-063) — the modal says it did not come back, to check that
+ *    it is running and read its log.
+ *  - Happy path: old-process answer ignored → fresh uptime → pending-restart
+ *    no longer lists the keys → "The gateway restarted." + toast + closes.
  *  - The authed gatewayRestart() helper is used (not a raw fetch).
  */
 
@@ -18,6 +31,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     gatewayRestart: vi.fn(),
+    fetchAboutInfo: vi.fn(),
+    fetchPendingRestart: vi.fn(),
     isApiError: actual.isApiError,
   }
 })
@@ -37,8 +52,11 @@ vi.mock('@/store/ui', () => ({
 import * as api from '@/lib/api'
 import { GatewayRestartModal } from './GatewayRestartModal'
 
-// ── Fake /health poller ────────────────────────────────────────────────────────
-// The modal calls fetch('/health') to poll liveness. We control it via a spy.
+// ── Raw-fetch guard ────────────────────────────────────────────────────────────
+// FR-063 moved completion checking to the authed GET /about and
+// GET /config/pending-restart reads (mocked above). The stub stays as a
+// guard: no raw fetch may carry the restart request itself, and only the
+// port-change branch ("direct") may ever poll /health.
 const fetchSpy = vi.fn()
 vi.stubGlobal('fetch', fetchSpy)
 
@@ -53,8 +71,17 @@ function renderModal(props: { open: boolean; onClose: () => void }) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // By default, /health comes back up quickly.
-  fetchSpy.mockResolvedValue({ ok: true })
+  // By default the page's own /about answers with a fresh process (FR-063:
+  // uptime_seconds smaller than the seconds since Restart now was pressed)
+  // and nothing is listed as waiting for a restart any more.
+  vi.mocked(api.fetchAboutInfo).mockResolvedValue({
+    version: '0.1.1',
+    go_version: 'go1.24',
+    os: 'linux',
+    arch: 'amd64',
+    uptime_seconds: 0,
+  })
+  vi.mocked(api.fetchPendingRestart).mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -88,15 +115,11 @@ describe('GatewayRestartModal', () => {
     expect(addToast).not.toHaveBeenCalled()
   })
 
-  it('poll timeout branch: surfaces "did not come back online" error', async () => {
-    // Strategy: make /health immediately reject, then use vi.setSystemTime
-    // to place the clock 61 seconds ahead between the first and second
-    // Date.now() calls inside pollUntilOnline so the while-condition fails.
-    //
-    // pollUntilOnline flow:
-    //  1. deadline = Date.now() + 60_000      ← call at T
-    //  2. while (Date.now() < deadline)       ← call at T+61_000 → false → exit
-    //  3. throw new Error(...)
+  it('timeout branch: an old process that keeps answering never counts — says it did not come back, to check the gateway and read its log (FR-063)', async () => {
+    // Strategy: the page's own /about keeps answering with an OLD process's
+    // uptime (uptime_seconds far above the seconds since the press — FR-063:
+    // the first answer from the old process never counts), then the fake
+    // clock jumps past the 60-second deadline so the poll loop exits.
     //
     // We use vi.useFakeTimers({ toFake: ['Date'] }) to control only the Date
     // object, leaving setTimeout/setInterval real so waitFor continues to work.
@@ -107,45 +130,67 @@ describe('GatewayRestartModal', () => {
       restart_id: 'test-id',
       drain_seconds: 1,
     })
-    // /health always rejects — gateway never comes back.
-    fetchSpy.mockRejectedValue(new Error('ECONNREFUSED'))
+    // An old process, still answering with a huge uptime, forever.
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue({
+      version: '0.1.1',
+      go_version: 'go1.24',
+      os: 'linux',
+      arch: 'amd64',
+      uptime_seconds: 999_999,
+    })
 
     const onClose = vi.fn()
     renderModal({ open: true, onClose })
 
-    // Click restart. After the POST resolves, pollUntilOnline is called and
-    // performs its first Date.now() call to set the deadline.
+    // Click restart. After the POST resolves, the fresh-process poll starts
+    // and performs its first Date.now() call to set the deadline.
     fireEvent.click(screen.getByRole('button', { name: /restart now/i }))
 
-    // Wait briefly for gatewayRestart to resolve and pollUntilOnline to start
-    // (i.e. for the first Date.now() to be called and the deadline to be set).
     await act(async () => {
       await Promise.resolve()
       await Promise.resolve()
       await Promise.resolve()
       // Advance the fake clock by 61 seconds so the while-condition evaluates
-      // to false on the NEXT Date.now() call (the while check after the first
-      // failed /health attempt).
+      // to false on the next Date.now() call — the 60-second window is spent.
       vi.advanceTimersByTime(61_000)
     })
 
     await waitFor(() => {
-      expect(screen.getByText(/did not come back online/i)).toBeInTheDocument()
+      // FR-063: say the gateway did not come back or did not restart, to
+      // check that it is running and read its log.
+      expect(screen.getByText(/did not come back/i)).toBeInTheDocument()
+      expect(screen.getByText(/read its log/i)).toBeInTheDocument()
     }, { timeout: 5000 })
 
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('happy path: down→up resolves, shows success toast, closes modal', async () => {
+  it('happy path: old-process answer ignored, fresh uptime proves the restart, pending list clears, toast + close (FR-063)', async () => {
     vi.mocked(api.gatewayRestart).mockResolvedValue({
       status: 'restarting',
       restart_id: 'restart-abc',
       drain_seconds: 2,
     })
-    // /health: first call fails (gateway going down), second call succeeds.
-    fetchSpy
-      .mockRejectedValueOnce(new Error('ECONNREFUSED'))
-      .mockResolvedValue({ ok: true })
+    // The page's own /about: the FIRST answer is still the old process
+    // (uptime far above the elapsed seconds — it never counts, FR-063); the
+    // next answers come from the fresh process.
+    vi.mocked(api.fetchAboutInfo)
+      .mockResolvedValueOnce({
+        version: '0.1.1',
+        go_version: 'go1.24',
+        os: 'linux',
+        arch: 'amd64',
+        uptime_seconds: 100_000,
+      })
+      .mockResolvedValue({
+        version: '0.1.1',
+        go_version: 'go1.24',
+        os: 'linux',
+        arch: 'amd64',
+        uptime_seconds: 0,
+      })
+    // GET /config/pending-restart no longer lists the restarted keys.
+    vi.mocked(api.fetchPendingRestart).mockResolvedValue([])
 
     const onClose = vi.fn()
     renderModal({ open: true, onClose })
@@ -154,7 +199,7 @@ describe('GatewayRestartModal', () => {
 
     // Wait for the modal to reach the success state.
     await waitFor(() => {
-      expect(screen.getByText(/restarted successfully/i)).toBeInTheDocument()
+      expect(screen.getByText('The gateway restarted.')).toBeInTheDocument()
     }, { timeout: 5000 })
 
     // Success toast was shown.

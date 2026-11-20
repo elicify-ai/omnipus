@@ -1,25 +1,34 @@
 /**
- * GodModeControl.test.tsx — O14 god-mode switch (UI-driven enablement).
+ * GodModeControl.test.tsx — O14 god-mode control (UI-driven enablement).
+ *
+ * Settings redesign #1519 reconciliation (FR-051): God Mode is no longer a
+ * switch — it is a "Turn on God Mode…" / "Turn off God Mode…" button in
+ * Protection after Approvals, acting alone with its own password prompt and
+ * its own restart window, never entering or clearing the Save batch. The four
+ * former `aria-checked` switch assertions assert the button's label instead,
+ * citing FR-051; the restart-window case asserts the FR-033 "Restart now?"
+ * window instead of the old "Gateway restart required" title.
  *
  * Covers:
- *  - the toggle reflects live state from GodModeStatus ({ enabled, available, supported })
- *  - flipping the toggle opens the step-up (re-auth) dialog and does NOT call
+ *  - the button label follows the god-mode state from GodModeStatus
+ *    ({ enabled, available, supported, persisted }) — FR-051
+ *  - pressing the button opens the step-up (re-auth) dialog and does NOT call
  *    the god-mode endpoint until the password is confirmed
  *  - confirming the password replays the minted consent token into setGodMode
- *  - the toggle is clickable whenever `supported` is true, even when
+ *  - the button is clickable whenever `supported` is true, even when
  *    `available` is false (the UI-driven enablement flow)
- *  - a nogodmode build (supported=false) disables the toggle with an
+ *  - a nogodmode build (supported=false) disables the button with an
  *    explanatory "compiled out" note
  *  - a supported-but-unauthorized boot (supported=true, available=false)
  *    shows a "restart to activate" note instead of "compiled out"
- *  - enabling with restart_required=true opens GatewayRestartModal
- *  - disabling (restart_required=false) never opens GatewayRestartModal
+ *  - enabling with restart_required=true opens the FR-033 "Restart now?"
+ *    window (God Mode's own restart window, FR-051)
+ *  - disabling (restart_required=false) never opens the restart window
  *
  * The former GodModeActiveBanner (and its describe block) is deleted along
  * with the component (founder decision 2026-09-25) — its app-wide-indicator
  * successor, the sidebar God Mode pill, is covered in
- * src/components/layout/Sidebar.test.tsx; this file covers the Gateway
- * switch only.
+ * src/components/layout/Sidebar.test.tsx.
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
@@ -117,19 +126,21 @@ beforeEach(() => {
 })
 
 describe('GodModeControl', () => {
-  it('renders the toggle off when god-mode is disabled', async () => {
+  // FR-051: the switch is replaced by a "Turn on God Mode…" / "Turn off God
+  // Mode…" button, so the former aria-checked assertions assert the label.
+  it('shows the "Turn on God Mode…" button when god-mode is off (FR-051)', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
     renderControl()
     await waitFor(() => {
-      expect(screen.getByTestId('god-mode-toggle')).toHaveAttribute('aria-checked', 'false')
+      expect(screen.getByRole('button', { name: 'Turn on God Mode…' })).toBeInTheDocument()
     })
   })
 
-  it('renders the toggle on when god-mode is enabled', async () => {
+  it('shows the "Turn off God Mode…" button when god-mode is enabled (FR-051)', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
     renderControl()
     await waitFor(() => {
-      expect(screen.getByTestId('god-mode-toggle')).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByRole('button', { name: 'Turn off God Mode…' })).toBeInTheDocument()
     })
   })
 
@@ -171,14 +182,14 @@ describe('GodModeControl', () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S0_NEVER_ARMED)
     renderControl()
     await waitFor(() => {
-      expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
+      // FR-051: the control is the "Turn on God Mode…" button now.
+      expect(screen.getByRole('button', { name: 'Turn on God Mode…' })).toBeEnabled()
     })
     // D19: a fresh, never-touched install must not falsely claim god-mode is
     // "authorized but not yet active" — nothing has ever been armed.
     expect(screen.queryByTestId('god-mode-restart-note')).not.toBeInTheDocument()
     expect(screen.queryByTestId('god-mode-unavailable-note')).not.toBeInTheDocument()
     expect(screen.queryByTestId('god-mode-cancel-authorization')).not.toBeInTheDocument()
-    expect(screen.getByTestId('god-mode-toggle')).toHaveAttribute('aria-checked', 'false')
   })
 
   it('shows the restart note AND a disarm affordance when armed via the UI but not yet available (S1)', async () => {
@@ -187,10 +198,10 @@ describe('GodModeControl', () => {
     await waitFor(() => {
       expect(screen.getByTestId('god-mode-restart-note')).toBeInTheDocument()
     })
-    // D1: the switch reflects the persisted (armed) intent, not the inert
-    // `enabled` flag — otherwise an armed-pending switch looks OFF.
-    expect(screen.getByTestId('god-mode-toggle')).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
+    // D1: the button label follows the persisted (armed) intent, not the
+    // inert `enabled` flag (FR-051 labels it by the state it governs) —
+    // otherwise an armed-pending control would offer a second "Turn on".
+    expect(screen.getByRole('button', { name: 'Turn off God Mode…' })).toBeEnabled()
     expect(screen.queryByTestId('god-mode-unavailable-note')).not.toBeInTheDocument()
     expect(screen.getByTestId('god-mode-cancel-authorization')).toBeInTheDocument()
   })
@@ -311,12 +322,15 @@ describe('GodModeControl', () => {
     expect(api.setGodMode).not.toHaveBeenCalled()
   })
 
-  it('opens GatewayRestartModal when enabling returns restart_required=true', async () => {
+  // FR-051: God Mode keeps its own restart window; FR-033 names it the
+  // "Restart now?" window (Later / Restart now) — the old "Gateway restart
+  // required" title is replaced.
+  it('opens the FR-033 "Restart now?" window when enabling returns restart_required=true', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S0_NEVER_ARMED)
     vi.mocked(api.setGodMode).mockResolvedValue({ enabled: true, restart_required: true })
 
     renderControl()
-    await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn on God Mode…' })).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
     fireEvent.click(await screen.findByRole('button', { name: 'Enable god mode' }))
@@ -325,16 +339,19 @@ describe('GodModeControl', () => {
       expect(api.setGodMode).toHaveBeenCalledWith(true)
     })
     await waitFor(() => {
-      expect(screen.getByText(/gateway restart required/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Restart now?' })).toBeInTheDocument()
     })
+    // FR-033: the window offers Later and Restart now.
+    expect(screen.getByRole('button', { name: 'Later' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restart now' })).toBeInTheDocument()
   })
 
-  it('does NOT open GatewayRestartModal when disabling (restart_required=false)', async () => {
+  it('does NOT open the restart window when disabling (restart_required=false)', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
     vi.mocked(api.setGodMode).mockResolvedValue({ enabled: false, restart_required: false })
 
     renderControl()
-    await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn off God Mode…' })).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
     fireEvent.click(await screen.findByRole('button', { name: 'Disable god mode' }))
@@ -342,7 +359,7 @@ describe('GodModeControl', () => {
     await waitFor(() => {
       expect(api.setGodMode).toHaveBeenCalledWith(false)
     })
-    expect(screen.queryByText(/gateway restart required/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Restart now?' })).not.toBeInTheDocument()
   })
 })
 

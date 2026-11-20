@@ -1,214 +1,320 @@
-// SettingsScreen.test.tsx — about-info fetch-failure message (Wave 1 frontend-findings-fix).
+// SettingsScreen.test.tsx — the Settings shell, Settings redesign #1519.
 //
-// SettingsScreen (src/components/screens/SettingsScreen.tsx) fetches
-// `['about']` via useQuery and derives `devicePairingEnabled` from it via
-// `isDevicePairingEnabled`. A fetch failure must not silently look identical
-// to "device pairing is disabled" (both collapse `aboutInfo` to a falsy-ish
-// state) — the component renders an inline error message
-// (data-testid="settings-about-fetch-error") whenever `isError` is true.
+// The old shell contract — the `initialTab` prop and the role="tab" bar — is
+// replaced by the approved spec's address-based sections (Settings redesign
+// #1519, spec docs/internal/specs/settings-redesign-spec.md, Status:
+// Approved). The cases below run the REAL routeTree in a REAL router (memory
+// history) — the settingsRoute.legacyTabs.test.tsx harness — so the `?tab=`
+// address rule of FR-002 and the section list of FR-001 are live, not props.
 //
-// Traces to: src/components/screens/SettingsScreen.tsx L17-24 (aboutInfoError
-// derivation), L43-51 (rendered message). No pre-existing BDD scenario in a
-// wave spec for this component — inferred from the reviewer findings
-// (pr-test-analyzer, code-simplifier, code-reviewer) that flagged the missing
-// coverage during the Wave 1 7-reviewer gate; every sibling fix in the same
-// wave (GodModeControl, PerformanceSection, chat.ts, session.ts) shipped a
-// paired regression test.
-// CLARIFY: no BDD Given/When/Then exists for this message in any wave spec —
-// tests below are written directly against the implemented behavior.
+// Plan (elicify-test-writing step 1):
+//   behaviour under test : the shell's address/section list contract
+//     (FR-001, FR-002, D-3), the pre-fill link (FR-004, D-3 row 14), the God
+//     Mode focus link (FR-005, D-3 row 12) and the gateway-offline Callout
+//     (FR-067); hidden controls stay hidden (FR-055).
+//   specification source : settings-redesign-spec.md — FR-001 to FR-005,
+//     FR-055, FR-067, Datasets D-3 rows 1/2/12/14, the BDD scenarios "Person
+//     opens Settings…", "Reload keeps the open section", "Browser Back moves
+//     to the previous section", "The 'No context length' link pre-fills…",
+//     "The God Mode pill lands on the God Mode button", and the UI table's
+//     Settings-shell row. Expected values come from these, never from the
+//     implementation.
+//   unit boundary        : the real route tree, the real screen shell and the
+//     real section components render; `@/lib/api` is mocked at the API seam
+//     only (what the shell, AppShell and Sidebar read). Section reads left
+//     unmocked hit the test fetch guard and render their error states — the
+//     oracles below are the shell's own render (headings, list links,
+//     address, Callout), not section data.
+//   replaced assertions  : every old case in this file cited its old oracle;
+//     each replacement cites the FR that replaces it (per-case comments and
+//     the commit message). Old case 4's "Models tab" has no shell replacement:
+//     `?tab=models` → Limits is D-3 row 3, covered by
+//     settingsRoute.legacyTabs.test.tsx.
+//
+// Harness notes: every describe in this file renders the real route tree, so
+// the part-5 state-leakage rule ("route describes must run last in the file")
+// is satisfied trivially — nothing plain-rendered precedes them. jsdom
+// provisioning (signed-in username, matchMedia) is scoped to the openSettings
+// helper, the same as the harness this file copies.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { AboutInfo } from '@/lib/api'
+import { createRouter, createMemoryHistory, RouterProvider } from '@tanstack/react-router'
+import { routeTree } from '@/routeTree.gen'
+import { fetchAppState, fetchAboutInfo, getContextSettings, fetchPerformanceSettings } from '@/lib/api'
+import type { ContextSettings } from '@/lib/api'
+import { ContextSettings as ContextSettingsSchema } from '@/lib/api/generated/schemas'
 
-// SettingsScreen mounts real settings/*Section components under its default
-// "providers" tab (Radix Tabs only renders the active TabsContent). Those
-// sections carry their own useQuery/useMutation network calls unrelated to
-// the about-info fetch-error message under test here. Stub every section out
-// as a black box — keeps this test scoped to SettingsScreen's own isError
-// branch and its Tabs/ScreenHeader shell, consistent with how
-// src/test/screens.test.tsx scopes heavy screen trees in this repo.
-vi.mock('@/components/settings/ProvidersSection', () => ({ ProvidersSection: () => null }))
-vi.mock('@/components/settings/IntegrationsSection', () => ({ IntegrationsSection: () => null }))
-vi.mock('@/components/settings/SecuritySection', () => ({ SecuritySection: () => null }))
-// The GatewaySection stub echoes its props (ContextSection pattern) so the
-// ?focus=god-mode forwarding test below can observe what the shell passed.
-vi.mock('@/components/settings/GatewaySection', () => ({
-  GatewaySection: (props: { focusGodMode?: boolean }) => (
-    <div data-testid="gateway-section-stub">
-      {props.focusGodMode ? 'focus-god-mode' : 'no-focus'}
-    </div>
-  ),
-}))
-vi.mock('@/components/settings/DataSection', () => ({ DataSection: () => null }))
-vi.mock('@/components/settings/AboutSection', () => ({ AboutSection: () => null }))
-vi.mock('@/components/settings/DevicesSection', () => ({ DevicesSection: () => null }))
-vi.mock('@/components/settings/PerformanceSection', () => ({ PerformanceSection: () => null }))
-vi.mock('@/components/settings/ChatSection', () => ({ ChatSection: () => null }))
-vi.mock('@/components/settings/MemorySection', () => ({ MemorySection: () => null }))
-// T068-29 (ADR-066 D9): the Models tab hosts ContextSection; stub it so the
-// tab/prefill plumbing is tested without its network calls.
-vi.mock('@/components/settings/ContextSection', () => ({
-  ContextSection: (props: { prefillOverride?: { provider: string; model: string } }) => (
-    <div data-testid="context-section-stub">
-      {props.prefillOverride ? `${props.prefillOverride.provider}/${props.prefillOverride.model}` : 'no-prefill'}
-    </div>
-  ),
-}))
-
-// Mock only the fetch/derivation SettingsScreen touches directly.
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
+    // _app.tsx beforeLoad + AppShell + Sidebar:
+    fetchAppState: vi.fn(async () => ({ onboarding_complete: true })),
+    validateToken: vi.fn(async () => ({})),
+    fetchNotifications: vi.fn(async () => ({ notifications: [], unread_count: 0 })),
+    fetchTasks: vi.fn(async () => []),
+    fetchAgents: vi.fn(async () => []),
+    fetchVersion: vi.fn(async () => ({ version: 'test', build_sha: 'test' })),
+    fetchWorkspaces: vi.fn(async () => [
+      { id: 'ws-1', name: 'UAT Build', status: 'active', is_default: true },
+    ]),
+    fetchSessions: vi.fn(async () => []),
+    fetchKnowledgeBaseInfo: vi.fn(async () => ({
+      workspace_id: 'ws-1',
+      root_path: '',
+      is_knowledge_base: false,
+      marker: 'none',
+    })),
+    // The shell's own reads; each case pins the behaviour it needs.
     fetchAboutInfo: vi.fn(),
+    // FR-004's Limits read (only case 4 needs it to answer).
+    getContextSettings: vi.fn(),
+    fetchPerformanceSettings: vi.fn(),
+    // FR-005: the God Mode button is disabled while its status read is in
+    // flight and cannot take focus; the read must answer for the focus link
+    // to land (the status itself is not the oracle — either enabled state
+    // shows a "Turn on/off God Mode…" button). The Protection view also
+    // early-returns on a failed ['config'] read before God Mode renders, so
+    // that read must answer too (its values are not the oracle).
+    fetchGodMode: vi.fn(async () => ({ enabled: false, persisted: false, available: true, supported: true })),
+    fetchConfig: vi.fn(async () => ({
+      gateway: { bind_address: '127.0.0.1', port: 8080 },
+      security: { rate_limits: {} },
+      data: { session_retention_days: 30 },
+    })),
   }
 })
 
-import * as api from '@/lib/api'
-import { SettingsScreen } from './SettingsScreen'
+/** A fresh install's context settings — the generated schema's defaults. */
+const CONTEXT_DEFAULTS: ContextSettings = ContextSettingsSchema.parse({
+  mcp_result_cap: 62500,
+  builtin_success_cap: 64000,
+  builtin_failure_cap: 10000,
+  tool_result_share_fraction: 0.5,
+  ingest_bound_bytes: 8000000,
+  model_overrides: [],
+})
 
-const ABOUT_INFO_OK: AboutInfo = {
-  version: '0.1.0',
-  go_version: 'go1.24',
-  os: 'linux',
-  arch: 'amd64',
-  uptime_seconds: 100,
-}
+let history: ReturnType<typeof createMemoryHistory>
 
-function makeClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } })
-}
-
-function renderScreen(props: React.ComponentProps<typeof SettingsScreen> = {}) {
-  return render(
-    <QueryClientProvider client={makeClient()}>
-      <SettingsScreen {...props} />
+async function openSettings(search = '') {
+  // AppShell pins breakpoints (matchMedia) and the _app route guard wants a
+  // signed-in username — the same provisioning the copied harness uses.
+  window.localStorage.setItem('omnipus_auth_username', 'settings-screen-tester')
+  // jsdom has no scrollIntoView — the God Mode focus link scrolls its button
+  // into view before focusing (FR-005); the focus, not the scroll, is the
+  // oracle. Environment provisioning, the same class as the matchMedia stub.
+  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {})
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  })
+  history = createMemoryHistory({ initialEntries: [`/settings${search}`] })
+  const router = createRouter({ routeTree, history })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   )
 }
 
-describe('SettingsScreen — about-info fetch-error message', () => {
-  it('renders normally without the fetch-error message when the about fetch succeeds', async () => {
-    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+beforeEach(() => {
+  vi.clearAllMocks()
+  // The shell gates the offline Callout on the about read's error: by default
+  // the gateway answers; cases 1 and 7 pin the other two arms.
+  vi.mocked(fetchAboutInfo).mockResolvedValue({
+    version: '0.1.1',
+    go_version: 'go1.24',
+    os: 'linux',
+    arch: 'amd64',
+    uptime_seconds: 100,
+  })
+})
 
-    renderScreen()
+describe('FR-001 — 11 sections in three groups; no section named opens Providers', () => {
+  it('D-3 row 1: the list shows the three groups and the 11 sections, Providers open; no old tab, no Sign-in', async () => {
+    // The about read is still in flight: the UI table's Settings-shell row
+    // says the list shows at once (and FR-067's Callout is error-gated — the
+    // old "no error while loading" assertion, now resting on FR-067 itself).
+    vi.mocked(fetchAboutInfo).mockReturnValue(new Promise(() => {}))
+    await openSettings('')
+    // Providers is open (D-3 row 1) and marked current in the list.
+    expect(
+      await screen.findByRole('heading', { name: 'Providers', level: 2 }),
+      'BLOCKED RED (FR-001/D-3 row 1): with no section named, Providers must be open',
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('settings-nav-providers')).toHaveAttribute('aria-current', 'page')
+    // FR-001: three groups, eleven sections in this order.
+    for (const group of ['AI & agents', 'Security', 'System']) {
+      expect(screen.getByText(group), `group ${group} must be listed`).toBeInTheDocument()
+    }
+    const expectedIds = [
+      'providers', 'memory', 'system-agents', 'third-party-agents', 'limits',
+      'protection', 'sandbox', 'keys', 'gateway', 'data', 'about',
+    ] as const
+    for (const id of expectedIds) {
+      expect(screen.getByTestId(`settings-nav-${id}`), `section link ${id} must exist`).toBeInTheDocument()
+    }
+    // FR-001: the old tabs and Sign-in MUST NOT appear.
+    for (const retired of ['models', 'performance', 'integrations', 'security', 'chat', 'devices']) {
+      expect(screen.queryByTestId(`settings-nav-${retired}`), `retired tab ${retired} must not appear`).not.toBeInTheDocument()
+    }
+    expect(screen.queryByText('Sign-in')).not.toBeInTheDocument()
+  })
+})
 
-    await waitFor(() => {
-      expect(api.fetchAboutInfo).toHaveBeenCalled()
-    })
-    await waitFor(() => {
-      expect(screen.queryByTestId('settings-about-fetch-error')).not.toBeInTheDocument()
-    })
-    // The screen itself still renders its real heading/tabs regardless of the
-    // about-info outcome — proves this isn't a blank/crashed render.
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Settings')
+describe('FR-002 — the address names the open section', () => {
+  it('D-3 row 2: ?tab=sandbox reopens Sandbox & network, marked current in the list (BDD: reload keeps the open section)', async () => {
+    await openSettings('?tab=sandbox')
+    expect(
+      await screen.findByRole('heading', { name: 'Sandbox & network', level: 2 }),
+      'BLOCKED RED (FR-002/D-3 row 2): tab=sandbox must reopen Sandbox & network',
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('settings-nav-sandbox')).toHaveAttribute('aria-current', 'page')
+    // The address names the section (FR-002).
+    expect(history.location.search, 'BLOCKED RED (FR-002): the address must carry tab=sandbox').toContain('tab=sandbox')
   })
 
-  it('renders the settings-about-fetch-error message when the about fetch fails (isError)', async () => {
-    vi.mocked(api.fetchAboutInfo).mockRejectedValue(new Error('network error'))
+  it('BDD: a section switch adds one history entry, Back returns to the previous section, Forward returns again', async () => {
+    await openSettings('?tab=gateway')
+    expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
+    // With no unsaved changes the switch must not ask (FR-014 gates on drafts).
+    await userEvent.setup().click(screen.getByTestId('settings-nav-limits'))
+    expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
+    expect(history.location.search, 'BLOCKED RED (FR-002): the address must name the new section').toContain('tab=limits')
+    expect(history.length, 'BLOCKED RED (FR-002): each section switch adds ONE history entry').toBe(2)
+    history.back()
+    expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
+    history.forward()
+    expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
+  })
+})
 
-    renderScreen()
+describe('FR-004 — the pre-fill link opens Limits with a filled, unsaved row', () => {
+  it('D-3 row 14: ?provider=&model= with no tab opens Limits, Model overrides expanded, one new unsaved row', async () => {
+    vi.mocked(getContextSettings).mockResolvedValue(CONTEXT_DEFAULTS)
+    vi.mocked(fetchPerformanceSettings).mockResolvedValue({} as never)
+    await openSettings('?provider=openrouter&model=acme/m1')
+    expect(
+      await screen.findByRole('heading', { name: 'Limits', level: 2 }),
+      'BLOCKED RED (FR-004/D-3 row 14): the pre-fill link must open Limits',
+    ).toBeInTheDocument()
+    // Model overrides is expanded for the pre-fill (BDD: "the Model overrides
+    // group is expanded"; FR-072's start-collapsed rule is for the plain visit).
+    // aria-expanded lives on the ListGroup's DisclosureRow trigger inside the
+    // group's section element.
+    const group = screen.getByTestId('limits-group-overrides')
+    const trigger = group.querySelector('[aria-expanded]')
+    expect(trigger, 'the Model overrides group must render its disclosure trigger').not.toBeNull()
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    // One new unsaved row filled with the provider and model, empty context
+    // length (the row appears once the section's read hydrates the form).
+    expect(await screen.findByTestId('context-override-provider')).toHaveValue('openrouter')
+    expect(screen.getByTestId('context-override-model')).toHaveValue('acme/m1')
+    expect(screen.getByTestId('context-override-window')).toHaveValue('')
+    // The row is a draft: nothing is stored until Save changes (FR-010).
+    expect(screen.getByTestId('settings-save-bar')).toHaveTextContent('1 unsaved change')
+  })
+})
 
+describe('FR-005 — the God Mode focus link lands on the God Mode button', () => {
+  it('D-3 row 12: ?tab=gateway&focus=god-mode opens Protection with the button focused', async () => {
+    await openSettings('?tab=gateway&focus=god-mode')
+    expect(
+      await screen.findByRole('heading', { name: 'Protection', level: 2 }),
+      'BLOCKED RED (FR-005/D-3 row 12): focus=god-mode with any tab must open Protection',
+    ).toBeInTheDocument()
+    // The God Mode button has keyboard focus (FR-005; the button itself is
+    // FR-051's "Turn on/off God Mode…"). It renders once its status read
+    // settles — wait for it, then assert the focus.
+    const button = await screen.findByTestId('god-mode-toggle')
+    await waitFor(() => expect(document.activeElement).toBe(button))
+    expect(button).toHaveTextContent(/Turn (on|off) God Mode…/)
+  })
+
+  it('FR-005: after focus moved, the address no longer carries focus and no history entry was added', async () => {
+    await openSettings('?tab=gateway&focus=god-mode')
+    await screen.findByRole('heading', { name: 'Protection', level: 2 })
+    const button = await screen.findByTestId('god-mode-toggle')
+    await waitFor(() => expect(document.activeElement).toBe(button))
     await waitFor(() => {
-      expect(screen.getByTestId('settings-about-fetch-error')).toBeInTheDocument()
+      expect(history.location.search, 'BLOCKED RED (FR-005): focus must leave the address').not.toContain('focus=god-mode')
     })
-    const message = screen.getByTestId('settings-about-fetch-error')
-    expect(message).toHaveTextContent(/could not fetch gateway build info/i)
-    expect(message).toHaveTextContent(/gateway may be offline/i)
-    // devicePairingEnabled derives false on fetch failure (same as "disabled"),
-    // so the Devices tab must stay hidden — the fetch-error message is the one
-    // and only signal that the state is unknown rather than confirmed off.
+    // Removed without a new history entry (FR-005) — the replace consumed it.
+    expect(history.length, 'FR-005: consuming focus must not add a history entry').toBe(1)
+  })
+})
+
+describe('FR-067 — when the gateway does not answer', () => {
+  it('one error Callout shows between the page title and the sections, saying values may be out of date, with Retry', async () => {
+    vi.mocked(fetchAboutInfo).mockRejectedValue(new Error('connection refused'))
+    await openSettings('?tab=gateway')
+    const callout = await screen.findByTestId('settings-gateway-offline')
+    expect(callout.getAttribute('class') ?? '', 'FR-067: the Callout is an error').toMatch(/error/)
+    expect(callout).toHaveTextContent(/values may be out of date/i)
+    // One thing to do: Retry.
+    const retry = callout.querySelector('button')
+    expect(retry, 'BLOCKED RED (FR-067): the Callout must offer Retry').not.toBeNull()
+    expect(retry).toHaveTextContent(/retry/i)
+    // Between the page title and the sections: after the header, before the
+    // section content. The ScreenHeader is the banner holding the "Settings"
+    // title (the app shell's own header precedes it and is not the page
+    // title).
+    const header = screen.getByRole('heading', { name: 'Settings' }).closest('header')
+    const content = document.getElementById('settings-content')
+    expect(header, 'the page title header must render').not.toBeNull()
+    expect(content, 'the section content must render').not.toBeNull()
+    expect(
+      header && header.compareDocumentPosition(callout) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'FR-067: the Callout must sit after the page title',
+    ).toBeTruthy()
+    expect(
+      callout.compareDocumentPosition(content as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'FR-067: the Callout must sit before the sections',
+    ).toBeTruthy()
+  })
+
+  it('the gateway answers: no offline Callout; with pairing switched on, still no device-pairing or Sign-in control (FR-055)', async () => {
+    // The spec's edge case: device pairing switched on in the config file is
+    // still hidden (FR-055, #1916; D-9 row 11). The old shell showed the
+    // Devices tab whenever the flag was on — that is the replaced behaviour.
+    vi.mocked(fetchAboutInfo).mockResolvedValue({
+      version: '0.1.1',
+      go_version: 'go1.24',
+      os: 'linux',
+      arch: 'amd64',
+      uptime_seconds: 100,
+      device_pairing_enabled: true,
+    })
+    await openSettings('?tab=providers')
+    await screen.findByRole('heading', { name: 'Providers', level: 2 })
+    await waitFor(() => {
+      expect(screen.queryByTestId('settings-gateway-offline')).not.toBeInTheDocument()
+    })
+    // FR-055: no device pairing control and no Sign-in section anywhere.
+    expect(screen.queryByText(/device pairing/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: /devices/i })).not.toBeInTheDocument()
-  })
-
-  it('does not show the fetch-error message while the about fetch is still loading', () => {
-    // Never-resolving promise — the query stays in the loading state for the
-    // lifetime of this test; isError must remain false throughout.
-    vi.mocked(api.fetchAboutInfo).mockReturnValue(new Promise<AboutInfo>(() => {}))
-
-    renderScreen()
-
-    expect(screen.queryByTestId('settings-about-fetch-error')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sign-in')).not.toBeInTheDocument()
   })
 })
 
-// T068-29 — ADR-066 FR-037: Settings → Models tab; `?tab=models&provider=&model=`
-// (the ADR-068 X-08 link target) opens the tab with a pre-filled override row.
-describe('SettingsScreen — Models tab (ADR-066 D9)', () => {
-  it('exposes a Models tab that hosts ContextSection', async () => {
-    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
-    renderScreen({ initialTab: 'models' })
-    expect(screen.getByRole('tab', { name: /^models$/i })).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByTestId('context-section-stub')).toHaveTextContent('no-prefill'))
-  })
-
-  it('passes the provider/model pre-fill through to ContextSection', async () => {
-    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
-    renderScreen({ initialTab: 'models', prefillOverride: { provider: 'ollama', model: 'qwen3:8b' } })
-    await waitFor(() =>
-      expect(screen.getByTestId('context-section-stub')).toHaveTextContent('ollama/qwen3:8b'),
-    )
-  })
-})
-
-// Founder decision 2026-09-25: the sidebar God Mode pill and the app-shell
-// corner dot navigate to /settings?tab=gateway&focus=god-mode. This pins the
-// shell's half of that chain — the route parses the search params and
-// SettingsScreen forwards focusGodMode into the Gateway tab's section (the
-// scroll+focus landing itself is asserted in GodModeControl.test.tsx).
-describe('SettingsScreen — ?focus=god-mode forwarding', () => {
-  it('forwards focusGodMode to GatewaySection on the gateway tab', async () => {
-    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
-    renderScreen({ initialTab: 'gateway', focusGodMode: true })
-    await waitFor(() =>
-      expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('focus-god-mode'),
-    )
-  })
-
-  it('passes nothing through when the flag is absent — differentiation', async () => {
-    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
-    renderScreen({ initialTab: 'gateway' })
-    await waitFor(() =>
-      expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('no-focus'),
-    )
-  })
-})
-
-// Review round 2, finding 2: clicking the God Mode pill / corner dot while
-// ALREADY on /settings (on another tab) must switch to the Gateway tab.
-// TanStack Router re-renders — does NOT remount — the route component on a
-// search-only change, so this simulates exactly that shape: the same
-// SettingsScreen instance receiving changed initialTab/focusGodMode props.
-// Radix Tabs applies defaultValue only on mount, so without a remount key
-// the visible tab would silently stay on Providers.
-describe('SettingsScreen — tab switch on route search change', () => {
-  it('switches to the Gateway tab when initialTab changes on a search-only re-render', async () => {
-    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
-    const client = makeClient()
-
-    const { rerender } = render(
-      <QueryClientProvider client={client}>
-        <SettingsScreen initialTab="providers" />
-      </QueryClientProvider>,
-    )
-
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('Providers')
-    })
-    // Gateway content is not mounted while Providers is the active tab.
-    expect(screen.queryByTestId('gateway-section-stub')).not.toBeInTheDocument()
-
-    rerender(
-      <QueryClientProvider client={client}>
-        <SettingsScreen initialTab="gateway" focusGodMode />
-      </QueryClientProvider>,
-    )
-
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('Gateway')
-    })
-    expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('focus-god-mode')
-  })
-})
+// Every describe above renders the real route tree, so the part-5
+// state-leakage rule ("route describes must run last in the file") is
+// satisfied by construction — nothing plain-rendered follows or precedes
+// them, and setup.ts unmounts after each case.

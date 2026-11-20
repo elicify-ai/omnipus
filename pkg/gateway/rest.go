@@ -116,7 +116,8 @@ type restAPI struct {
 	// cannot form below the facade.
 	mailSessions     *email.MailSessions
 	mailSessionsOnce sync.Once
-	configMu         sync.Mutex // guards safeUpdateConfigJSON (read-modify-write cycle)
+	configMu         sync.Mutex   // guards safeUpdateConfigJSON (read-modify-write cycle)
+	packages         packageState // agent package staging registry and audit fallback (rest_packages.go)
 	// applyFailed lists hot-reloaded keys whose last save did not apply
 	// since boot (Settings redesign #1519, FR-062); read by
 	// HandlePendingRestart. Zero value is ready to use.
@@ -940,6 +941,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// Chain: withAuth (verifies token) → handler.
 	rae.cm.RegisterHTTPHandler("/api/v1/credentials", rae.a.withAuth(rae.a.HandleCredentials))
 	rae.cm.RegisterHTTPHandler("/api/v1/credentials/", rae.a.withAuth(rae.a.HandleCredentials))
+	// Agent packages (epic #1094 S1a, FR-045): local mode only.
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		rae.a.registerPackageRoutes(rae.cm)
+	}
 	// Option A keeps workspace and media IDs as separately validated path segments;
 	// the legacy global media route remains below for backward compatibility.
 	// Issue #716 (founder ruling 2026-09-15): the workspace-media route requires

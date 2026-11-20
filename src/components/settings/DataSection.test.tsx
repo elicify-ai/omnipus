@@ -1,19 +1,26 @@
 /**
- * DataSection.test.tsx — targeted coverage for a data-loss-adjacent settings
- * panel (clear-all-sessions, session retention) that had ZERO test coverage
- * before this file. `SettingsScreen.test.tsx` explicitly stubs DataSection
- * out (`vi.mock('@/components/settings/DataSection', () => ({ DataSection:
- * () => null }))`), so there was no incidental coverage either.
+ * DataSection.test.tsx — the Danger-zone row of Settings → Data & retention.
  *
- * Wave 2 converted this component's mutation `onError` handlers from a
- * hand-rolled ternary to the shared `getErrorMessage()` helper
- * (`src/lib/api-error.ts`). These tests pin that conversion: a rejected
- * mutation must surface `ApiError.userMessage` (or `Error.message` as the
- * fallback) via `addToast`, not a crash, not a generic "isError" flag, and
- * not the status-prefixed legacy `Error.message` string.
+ * Settings redesign #1519 changed two things this file covered:
+ *   1. FR-108 (#1265, wording only — Q5 A): the Danger-zone row and its
+ *      confirm say "Clear all chat history". The action, its confirm step
+ *      and who may see it stay as they are — so the Wave-2 error-surfacing
+ *      cases keep their oracles (getErrorMessage() text via addToast) and
+ *      only the button name follows FR-108.
+ *   2. FR-010/FR-043: session retention no longer lives in this section and
+ *      no longer autosaves through `updateConfig` — retention moved to the
+ *      Data & retention section's one write path (PUT /settings/retention,
+ *      covered by dataRetention.section.test.tsx). The old D3 describe
+ *      ("hydration must not trigger a spurious useAutoSave PUT") tested the
+ *      retired auto-save model; FR-010 replaces it ("this removes
+ *      useAutoSave from Settings", #346 — the spec's regression table row
+ *      "useAutoSave unmount flush swallows save errors → Fixed by removal →
+ *      FR-010"), and its "nothing is stored until Save changes" concern is
+ *      carried by dataRetention.section.test.tsx's FR-046 and FR-040 cases,
+ *      which send nothing until Save changes is pressed.
  *
- * Traces to: Wave 2 findings-fix (task #149, gap 1) — pr-test-analyzer,
- * hotfix/v0.1.1.
+ * Traces to: FR-108; Wave 2 findings-fix (task #149, gap 1) for the
+ * getErrorMessage() oracles, whose behaviour FR-108 keeps unchanged.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -26,8 +33,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchConfig: vi.fn(),
-    updateConfig: vi.fn(),
     fetchStorageStats: vi.fn(),
     clearAllSessions: vi.fn(),
   }
@@ -38,15 +43,9 @@ vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(() => ({ addToast: mockAddToast })),
 }))
 
-import {
-  fetchConfig,
-  updateConfig,
-  fetchStorageStats,
-  clearAllSessions,
-  ApiError,
-} from '@/lib/api'
+import { fetchStorageStats, clearAllSessions, ApiError } from '@/lib/api'
 import { DataSection } from './DataSection'
-import type { Config, StorageStats } from '@/lib/api'
+import type { StorageStats } from '@/lib/api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -66,12 +65,6 @@ function renderSection() {
   return { ...utils, client }
 }
 
-const baseConfig: Config = {
-  gateway: { bind_address: '0.0.0.0', port: 5000 },
-  security: { rate_limits: {} },
-  data: { session_retention_days: 90 },
-}
-
 const baseStats: StorageStats = {
   workspace_size_bytes: 1024,
   session_count: 3,
@@ -80,22 +73,20 @@ const baseStats: StorageStats = {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(fetchConfig).mockResolvedValue(baseConfig)
-  vi.mocked(updateConfig).mockResolvedValue(baseConfig)
   vi.mocked(fetchStorageStats).mockResolvedValue(baseStats)
 })
 
-// ── describe: rejected mutations render getErrorMessage() text ──────────────
+// ── FR-108 wording + Wave-2 error surfacing (behaviour unchanged) ────────────
 
-describe('DataSection — rejected mutations render getErrorMessage() text', () => {
-  it('clear-all-sessions failure (data-loss-adjacent) shows ApiError.userMessage, not the isError flag alone', async () => {
+describe('DataSection — the Danger-zone row says "Clear all chat history" (FR-108) and its failures surface getErrorMessage()', () => {
+  it('clear-all failure (data-loss-adjacent) shows ApiError.userMessage, not the isError flag alone', async () => {
     vi.mocked(clearAllSessions).mockRejectedValue(new ApiError(403, undefined))
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /clear sessions/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /clear all chat history/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole('button', { name: /clear sessions/i }))
+    fireEvent.click(screen.getByRole('button', { name: /clear all chat history/i }))
 
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: /^clear all$/i }))
@@ -113,9 +104,9 @@ describe('DataSection — rejected mutations render getErrorMessage() text', () 
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /clear sessions/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /clear all chat history/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole('button', { name: /clear sessions/i }))
+    fireEvent.click(screen.getByRole('button', { name: /clear all chat history/i }))
 
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: /^clear all$/i }))
@@ -126,35 +117,5 @@ describe('DataSection — rejected mutations render getErrorMessage() text', () 
         variant: 'error',
       })
     })
-  })
-})
-
-// D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
-//
-// Root cause: `retentionDays` starts at the hardcoded useState default
-// '90'. Before this fix, useAutoSave's `disabled` option here was
-// `!config` — but `config` turns truthy in the SAME commit the hydration
-// effect is SCHEDULED, one render before the effect's own `setState` call
-// actually lands. So `disabled` flipped false one render too early,
-// useAutoSave captured the hardcoded '90' default as its baseline, and the
-// LATER commit where the real persisted value hydrates looked like a
-// genuine edit — firing a spurious `updateConfig` that echoes the fetched
-// value straight back.
-describe('DataSection — D3: hydration must not trigger a spurious PUT', () => {
-  it('loading a retention value that differs from the hardcoded "90" default never calls updateConfig, even after the debounce window elapses (REVERT-PROOF: fails without the retentionHydrated gate)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue({
-      ...baseConfig,
-      data: { session_retention_days: 45 },
-    })
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByDisplayValue('45')).toBeInTheDocument()
-    })
-
-    // PASSIVE idle wait — no interaction at all — comfortably past the
-    // 500ms default debounce.
-    await new Promise((resolve) => setTimeout(resolve, 900))
-    expect(updateConfig).not.toHaveBeenCalled()
   })
 })

@@ -5,16 +5,60 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newRetentionHistoryAPI is newTestRestAPIWithAuditLog with the retention
+// window seeded in the RUNNING config (the sweep reads the config the loop
+// holds — pkg/gateway/retention_goroutine.go::executeRetentionSweepTick) and
+// in config.json. The old seeding went through PUT /security/retention, which
+// the Settings redesign removes (FR-047, C-3); the legacy disabled switch is
+// config-file only (FR-048), so the window is seeded here rather than written
+// through any endpoint.
+func newRetentionHistoryAPI(t *testing.T, sessionDays int) (*restAPI, string) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o700))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
+			},
+		},
+		Sandbox: config.OmnipusSandboxConfig{AuditLog: true},
+	}
+	cfg.Storage.Retention = config.OmnipusRetentionConfig{SessionDays: sessionDays}
+
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"sandbox":{"audit_log":true},"storage":{"retention":{"session_days":` + strconv.Itoa(sessionDays) + `}}}`)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), minimalCfg, 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir,
+	}
+	return api, tmpDir
+}
 
 // Fix-round-3's explicit HTTP policy: index-state unavailability is a per-chat
 // warning and the real manual sweep returns200 with its success audit. Actual
@@ -25,10 +69,19 @@ func TestRetentionHistoryGateway_ManualSweepPreservesHTTPAndAuditPolicy(t *testi
 	for _, reason := range []string{"catchup_limit", "index_inconsistent", "index_missing", "storage_error", "healthy"} {
 		t.Run(reason, func(t *testing.T) {
 			logs := retentionGatewayCapture(t)
-			api, home := newTestRestAPIWithAuditLog(t)
-			put := retentionPUT(t, api, `{"session_days":7,"disabled":false}`)
-			require.Equal(t, http.StatusOK, put.Code, "real config PUT sets the seven-day retention window")
-			controls := retentionGatewayAudit(t, home, "storage.retention")
+			api, home := newRetentionHistoryAPI(t, 7) // the seven-day window the sweep audit must report
+			// Positive control: a REAL handler-written security_setting_change,
+			// proving the audit scanner below sees real handler writes. The old
+			// control rode PUT /security/retention, which FR-047 removes; the
+			// audit-log toggle writes the same record kind under its own
+			// resource ("sandbox.audit_log"), so it is the control now.
+			put := httptest.NewRequest(http.MethodPut, "/api/v1/security/audit-log", strings.NewReader(`{"enabled":true}`))
+			put.Header.Set("Content-Type", "application/json")
+			put = withAdminRole(put)
+			putW := httptest.NewRecorder()
+			api.HandleSandboxAuditLog(putW, put)
+			require.Equal(t, http.StatusOK, putW.Code, "real handler PUT arms the positive control; body=%s", putW.Body)
+			controls := retentionGatewayAudit(t, home, "sandbox.audit_log")
 			require.Len(t, controls, 1, "positive control: audit scanner can see a REAL handler-written security change")
 			require.Equal(t, "admin", controls[0].Actor)
 			require.Empty(t, retentionGatewayAudit(t, home, "storage.retention.sweep"))

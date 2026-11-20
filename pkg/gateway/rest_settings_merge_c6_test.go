@@ -74,11 +74,12 @@ func putContextBody(api *restAPI, body string) *httptest.ResponseRecorder {
 }
 
 // seedContextValues sets both disjoint fields on the live config and on the
-// stored config.json so the merge base is unambiguous.
-func seedContextValues(t *testing.T, api *restAPI, cap, success int) {
+// stored config.json so the merge base is unambiguous. (`mcpCap` rather than
+// `cap`: the predeclared built-in name is lint-flagged when shadowed.)
+func seedContextValues(t *testing.T, api *restAPI, mcpCap, success int) {
 	t.Helper()
 	cfg := api.agentLoop.GetConfig()
-	cfg.Context.McpResultCap = cap
+	cfg.Context.McpResultCap = mcpCap
 	cfg.Context.BuiltinSuccessCap = success
 	persistedRaw, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)
@@ -88,7 +89,7 @@ func seedContextValues(t *testing.T, api *restAPI, cap, success int) {
 	if ctxMap == nil {
 		ctxMap = map[string]any{}
 	}
-	ctxMap["mcp_result_cap"] = cap
+	ctxMap["mcp_result_cap"] = mcpCap
 	ctxMap["builtin_success_cap"] = success
 	doc["context"] = ctxMap
 	out, err := json.Marshal(doc)
@@ -98,7 +99,7 @@ func seedContextValues(t *testing.T, api *restAPI, cap, success int) {
 
 // storedContextValues loads config.json fresh and returns the two fields —
 // the stored state a restart would see.
-func storedContextValues(t *testing.T, api *restAPI) (cap, success int) {
+func storedContextValues(t *testing.T, api *restAPI) (mcpCap, success int) {
 	t.Helper()
 	persistedRaw, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)

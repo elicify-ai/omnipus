@@ -799,13 +799,17 @@ describe('SecuritySection — credential vault confirmations', () => {
   it('delete: the confirmation has exactly Cancel and one confirm, and no input', async () => {
     await openDeleteConfirmation()
 
+    // Wireframe round 4 (app.js "delete-key" dialog): title "Delete this
+    // key?", ok "Delete key", destructive: true — FR-056 keeps exactly one
+    // confirm before the delete. The old "Remove this credential?" /
+    // non-destructive styling is replaced by the wireframe.
     const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent('Remove this credential?')
+    expect(dialog).toHaveTextContent('Delete this key?')
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
-    expect(within(dialog).getByRole('button', { name: 'Remove credential' })).toHaveTextContent('Remove credential')
+    expect(within(dialog).getByRole('button', { name: 'Delete key' })).toHaveTextContent('Delete key')
     expect(within(dialog).getAllByRole('button')).toHaveLength(2)
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(within(dialog).getByRole('button', { name: 'Remove credential' }).className).not.toMatch(/color-error/)
+    expect(within(dialog).getByRole('button', { name: 'Delete key' }).className).toMatch(/color-error/)
     expect(deleteCredential).not.toHaveBeenCalled()
   })
 
@@ -813,7 +817,8 @@ describe('SecuritySection — credential vault confirmations', () => {
     vi.mocked(deleteCredential).mockResolvedValue(undefined as never)
 
     await openDeleteConfirmation()
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove credential' }))
+    // Wireframe ok button "Delete key" (app.js delete-key dialog, FR-056).
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete key' }))
 
     await waitFor(() => {
       expect(vi.mocked(deleteCredential).mock.calls).toEqual([['MY_KEY', undefined]])
