@@ -206,35 +206,6 @@ type Config struct {
 	agentEnvValues []string
 }
 
-// OmnipusStorageConfig holds storage-related settings per Appendix E §E.5.4.
-type OmnipusStorageConfig struct {
-	Retention OmnipusRetentionConfig `json:"retention,omitempty"`
-}
-
-// OmnipusRetentionConfig controls session transcript retention per Appendix E §E.5.4.
-type OmnipusRetentionConfig struct {
-	// SessionDays is how many days transcript partitions are kept. 0 = use default (90 days).
-	SessionDays int `json:"session_days,omitempty"`
-	// Disabled means transcripts are kept forever (no retention enforcement).
-	// This is orthogonal to SessionDays: setting Disabled=true suppresses deletion
-	// regardless of what SessionDays says.
-	Disabled bool `json:"disabled,omitempty"`
-	// ArchiveBeforeDelete compresses old partitions to .jsonl.gz before deletion.
-	ArchiveBeforeDelete bool `json:"archive_before_delete,omitempty"`
-	// MemoryRetrosDays is how many days of retrospective files to keep per
-	// agent. 0 = use default (30 days). Used by MemoryStore.SweepRetros.
-	// Spec v7 FR-034.
-	MemoryRetrosDays int `json:"memory_retros_days,omitempty"`
-}
-
-// OmnipusCompactionConfig holds context compression settings per Appendix E §E.5.3.
-type OmnipusCompactionConfig struct {
-	Enabled        bool `json:"enabled,omitempty"`
-	ReserveTokens  int  `json:"reserve_tokens,omitempty"`
-	PreserveRecent int  `json:"preserve_recent,omitempty"`
-	MemoryFlush    bool `json:"memory_flush,omitempty"`
-}
-
 // OmnipusChannelPolicy holds per-channel Omnipus-specific policies.
 // Stored in config.json under channel_policies.<channel-name>.
 type OmnipusChannelPolicy struct {
