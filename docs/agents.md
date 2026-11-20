@@ -346,7 +346,7 @@ If nothing needs attention, the agent records an all-clear. The sidebar lists ch
 - Ordinary built-in agents' identity and base instructions are protected. Model and supported execution limits remain editable, as do tool policies, connector assignments and skills.
 - Workers are not chat targets and have no voice or heartbeat. Every chat names a conversation agent; there is no default agent.
 - Other agents need an appropriate workspace delegation edge to delegate to a worker. A worker on the workspace team can also be assigned a task by the user.
-- An external worker depends on its tool being installed and on a program saved for that tool in **Settings → Third-party agents**. If the tool is missing, the create menu shows it greyed out.
+- An external worker depends on its tool being installed and on a program saved for that tool in **Settings → Third-party agents**. The runtime choice offers Claude Code, Codex and opencode whether or not Omnipus finds them on the machine; nothing is greyed out. Omnipus looks for each tool only in the program search path of the Omnipus server and in a fixed list of common install folders, so a tool installed elsewhere, for example opencode under `~/.opencode/bin`, shows as not found: Settings has nothing to pre-fill. Type the program's full path in Settings and save it; runs use that saved path.
 - An agent's own tool-call limit can only be lower than or equal to the global limit in Settings, Performance.
 - Editing autosaves. A red save indicator means the last change failed; correct the field it names and the next change saves.
 
