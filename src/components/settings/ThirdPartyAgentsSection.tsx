@@ -7,13 +7,17 @@
 // saved on a refusal. Check CLI is optional, runs the typed path through
 // POST /system/cli-validate and saves nothing.
 //
+// Settings redesign #1519 (FR-022): the section is on the shared Save bar. A
+// Save still sends all three rows in one PUT; after a 200 the rows show the
+// answer, after saved_not_refreshed they show what was sent (never a re-read).
+//
 // Wire types come from the generated T8 contract only
 // (ThirdPartyAgentSettings / ThirdPartyAgentSettingsView). Detection arrives
 // inside the view (`detected`, already keyed by CLI), so this screen never
 // calls /system/cli-detect and never maps detection keys itself.
 
 import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Card } from '@/components/ui/card'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -24,10 +28,8 @@ import {
   fetchCliValidate,
   getErrorMessage,
   getThirdPartyAgentSettings,
-  isApiError,
   updateThirdPartyAgentSettings,
 } from '@/lib/api'
-import { parseServerErrorField } from '@/lib/api-error'
 import type {
   CliPreset,
   CliValidateResponse,
@@ -35,6 +37,9 @@ import type {
   ThirdPartyAgentSettingsView,
 } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
+import { SaveBarPanel, SaveOutcomeLine } from './SaveBar'
+import { toWriteResponse } from './saveOutcome'
+import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 
 type CliKey = keyof ThirdPartyAgentSettingsView['clis']
 type PresetField = keyof CliPreset
@@ -61,26 +66,6 @@ type Drafts = Partial<Record<CliKey, Partial<CliPreset>>> // not-wire-format: SP
 type RowRefusal = { cli: CliKey; field: PresetField; message: string } // not-wire-format: SPA-local view state parsed from the generated ErrorResponse
 
 const REFUSED_FIELD = /^clis\.(claude-code|codex|opencode)\.(path|preset_args)$/
-
-function rowRefusalFrom(err: unknown): RowRefusal | null {
-  if (!isApiError(err) || err.status !== 400 || !err.field) return null
-  const match = REFUSED_FIELD.exec(err.field)
-  if (!match) return null
-  return { cli: match[1] as CliKey, field: match[2] as PresetField, message: err.userMessage }
-}
-
-function saveFailureMessage(err: unknown): string {
-  if (isApiError(err) && err.status === 401) {
-    return 'Your session has ended. Sign in again, then save; your changes are still here.'
-  }
-  // The write reached disk, so "Could not save" would be false; the server's
-  // text says what happened and what to do. The client replaces every 5xx
-  // text with a generic one in userMessage, so read the sentence from the body.
-  if (isApiError(err) && err.code === 'saved_not_refreshed') {
-    return parseServerErrorField(err.body) ?? err.userMessage
-  }
-  return `Could not save: ${getErrorMessage(err, 'unknown error')}`
-}
 
 function draftsNotIn(drafts: Drafts, sent: ThirdPartyAgentSettings): Drafts {
   const remaining: Drafts = {}
@@ -141,7 +126,9 @@ export function ThirdPartyAgentsSection() {
   // save does not reset this, so an intentionally cleared path stays empty.
   const [touchedPaths, setTouchedPaths] = useState<ReadonlySet<CliKey>>(() => new Set())
   const [refusal, setRefusal] = useState<RowRefusal | null>(null)
-  const [saveFailure, setSaveFailure] = useState<string | null>(null)
+  // Rows a Save stored but the gateway did not take into use (FR-022).
+  const [knownSaved, setKnownSaved] = useState<ThirdPartyAgentSettings | null>(null)
+  const sentRef = useRef<ThirdPartyAgentSettings | null>(null)
   const [checkingCli, setCheckingCli] = useState<CliKey | null>(null)
   const inputRefs = useRef(new Map<string, HTMLInputElement>())
 
@@ -159,12 +146,7 @@ export function ThirdPartyAgentsSection() {
   function valueOf(view: ThirdPartyAgentSettingsView, cli: CliKey, field: PresetField): string {
     const draft = drafts[cli]?.[field]
     if (draft !== undefined) return draft
-    const saved = view.clis[cli]
-    if (field === 'path') {
-      if (saved.path !== '') return saved.path
-      return touchedPaths.has(cli) ? '' : detectedPrefill(saved)
-    }
-    return saved.preset_args
+    return shownOf(view, cli, field)
   }
 
   function edit(cli: CliKey, field: PresetField, value: string) {
@@ -173,33 +155,85 @@ export function ThirdPartyAgentsSection() {
     if (refusal?.cli === cli && refusal.field === field) setRefusal(null)
   }
 
-  const save = useMutation({
-    mutationFn: (body: ThirdPartyAgentSettings) => updateThirdPartyAgentSettings(body),
-    onMutate: () => {
+  // The rows as shown without this tab's drafts: saved values, or a detected
+  // program path offered as a pre-fill.
+  function shownOf(view: ThirdPartyAgentSettingsView, cli: CliKey, field: PresetField): string {
+    const saved = knownSaved?.clis[cli] ?? view.clis[cli]
+    if (field === 'path') {
+      if (saved.path !== '') return saved.path
+      return touchedPaths.has(cli) ? '' : detectedPrefill(view.clis[cli])
+    }
+    return saved.preset_args
+  }
+
+  const changedCount = data
+    ? CLI_ROWS.reduce(
+        (n, { cli }) =>
+          n +
+          (['path', 'preset_args'] as const).filter((f) => drafts[cli]?.[f] !== undefined && drafts[cli]![f] !== shownOf(data, cli, f)).length,
+        0,
+      )
+    : 0
+
+  // FR-022: one PUT carrying all three rows, built from the values loaded
+  // when the section opened plus this tab's drafts.
+  const fullBody = (): ThirdPartyAgentSettings | null =>
+    data
+      ? {
+          clis: {
+            'claude-code': { path: valueOf(data, 'claude-code', 'path'), preset_args: valueOf(data, 'claude-code', 'preset_args') },
+            codex: { path: valueOf(data, 'codex', 'path'), preset_args: valueOf(data, 'codex', 'preset_args') },
+            opencode: { path: valueOf(data, 'opencode', 'path'), preset_args: valueOf(data, 'opencode', 'preset_args') },
+          },
+        }
+      : null
+
+  const part: FormSavePart = {
+    id: 'third-party-agents',
+    count: changedCount,
+    invalidCount: 0,
+    write: async () => {
+      const body = fullBody()
+      sentRef.current = body
       setRefusal(null)
-      setSaveFailure(null)
+      if (!body) return { ok: false, status: 400, json: async () => ({ error: 'The third-party agent settings are not loaded.' }) }
+      return toWriteResponse(() => updateThirdPartyAgentSettings(body))
     },
-    onSuccess: (saved, sent) => {
-      queryClient.setQueryData(THIRD_PARTY_AGENTS_QUERY_KEY, saved)
-      // Every external-CLI agent's read view reports the effective program,
-      // standard parameters and program_warning from these settings, and a
-      // settings change does not touch the agent's updated_at. Refetch the
-      // agent detail and list queries so Runtime shows the new values (FR-8).
-      void queryClient.invalidateQueries({ queryKey: ['agent'] })
-      void queryClient.invalidateQueries({ queryKey: ['agents'] })
-      // Drop only the drafts this save carried; anything typed while the
-      // request was in flight stays as an unsaved draft.
-      setDrafts((prev) => draftsNotIn(prev, sent))
-      addToast({ message: 'Saved third-party agent settings.', variant: 'success' })
+    onOutcome: (outcome) => {
+      const sent = sentRef.current
+      if (!sent) return
+      if (outcome.kind === 'saved') {
+        // After a 200 the section shows the response body (FR-022).
+        const resp = outcome.body as ThirdPartyAgentSettingsView | undefined
+        if (resp && resp.clis) queryClient.setQueryData(THIRD_PARTY_AGENTS_QUERY_KEY, resp)
+        setKnownSaved(null)
+        setDrafts((prev) => draftsNotIn(prev, sent))
+        void queryClient.invalidateQueries({ queryKey: ['agent'] })
+        void queryClient.invalidateQueries({ queryKey: ['agents'] })
+      } else if (outcome.kind === 'saved-not-in-use') {
+        // Stored but not in use: show the rows it sent as saved, never a re-read.
+        setKnownSaved(sent)
+        setDrafts((prev) => draftsNotIn(prev, sent))
+      } else if (outcome.kind === 'not-saved') {
+        const match = outcome.field ? REFUSED_FIELD.exec(outcome.field) : null
+        if (match) setRefusal({ cli: match[1] as CliKey, field: match[2] as PresetField, message: outcome.message })
+      }
     },
-    onError: (err) => {
-      // The draft stays in place on every failure: drafts are only cleared
-      // on success, and untouched fields still show the same derived value.
-      const rowRefused = rowRefusalFrom(err)
-      if (rowRefused) setRefusal(rowRefused)
-      else setSaveFailure(saveFailureMessage(err))
+    check: async () => {
+      const sent = sentRef.current
+      const fresh = await getThirdPartyAgentSettings()
+      if (!sent) return 'not-saved'
+      const ok = CLI_ROWS.every(({ cli }) => fresh.clis[cli]?.path === sent.clis[cli]?.path && fresh.clis[cli]?.preset_args === sent.clis[cli]?.preset_args)
+      if (ok) queryClient.setQueryData(THIRD_PARTY_AGENTS_QUERY_KEY, fresh)
+      return ok ? 'saved' : 'not-saved'
     },
-  })
+    discard: () => {
+      setDrafts({})
+      setTouchedPaths(new Set())
+      setRefusal(null)
+    },
+  }
+  const { bar, message } = useFormSaveBar([part])
 
   async function checkCli(cli: CliKey, label: string, path: string) {
     setCheckingCli(cli)
@@ -304,22 +338,8 @@ export function ThirdPartyAgentsSection() {
         )
       })}
 
-      <div className="flex flex-col items-end gap-[var(--space-1)]">
-        <Button actionState={save.isPending ? 'pending' : 'idle'} onClick={() => save.mutate(body)}>
-          Save
-        </Button>
-        {/* FormError is not a public catalogue export; this mirrors its
-            role="alert" error-line contract with the same tokens. */}
-        {saveFailure && (
-          <p
-            role="alert"
-            data-testid="third-party-agents-save-error"
-            className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
-          >
-            {saveFailure}
-          </p>
-        )}
-      </div>
+      <SaveOutcomeLine message={message('third-party-agents')} />
+      <SaveBarPanel {...bar} />
     </section>
   )
 }

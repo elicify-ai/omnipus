@@ -42,9 +42,13 @@ function seed(status: SandboxStatus, autoApprove: boolean) {
   return queryClient
 }
 
+// The control is a draft on Protection's Save bar; the story shows it on.
+const STORY_DRAFT = { value: true, onChange: () => {}, fieldId: 'settings-protection-auto_approve' }
+
 const meta = {
   title: 'Settings/Auto-approve control',
   component: AutoApproveControl,
+  args: { draft: STORY_DRAFT },
 } satisfies Meta<typeof AutoApproveControl>
 export default meta
 type Story = StoryObj<typeof meta>
@@ -54,7 +58,7 @@ export const EnforcingSandbox: Story = {
     const queryClient = seed(sandboxStatus({ kernel_sandbox_active: true }), true)
     return (
       <QueryClientProvider client={queryClient}>
-        <AutoApproveControl />
+        <AutoApproveControl draft={STORY_DRAFT} />
       </QueryClientProvider>
     )
   },
@@ -74,7 +78,7 @@ export const NoSandboxCaution: Story = {
     const queryClient = seed(sandboxStatus({ kernel_sandbox_active: false }), true)
     return (
       <QueryClientProvider client={queryClient}>
-        <AutoApproveControl />
+        <AutoApproveControl draft={STORY_DRAFT} />
       </QueryClientProvider>
     )
   },

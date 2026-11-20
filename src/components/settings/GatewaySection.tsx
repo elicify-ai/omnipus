@@ -21,34 +21,39 @@
  * (which never sets `preview_enabled`) never clobbers the toggle either.
  */
 
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { SmartSelect } from '@/components/ui/smart-select'
-import { Switch } from '@/components/ui/switch'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
 import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, getErrorMessage, type Config } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { useAutoSave } from '@/hooks/useAutoSave'
-import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
-import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
-import { usePendingRestart, PENDING_RESTART_QUERY_KEY } from '@/hooks/restart'
+import { usePendingRestart } from '@/hooks/restart'
+import { SaveBarPanel, SettingRow } from './SaveBar'
+import { toWriteResponse } from './saveOutcome'
+import { useSaveBar, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { GatewayRestartModal } from './GatewayRestartModal'
-import { GodModeControl } from './GodModeControl'
 
 // ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
 
-const BIND_ADDRESS_COPY = {
-  dialogTitle: 'Listen on all network interfaces?',
-  dialogDescription:
-    'Setting bind address to 0.0.0.0 makes the gateway reachable from any network interface, not just your local machine. If this server is on a public network, other devices may be able to reach your Omnipus — make sure login is required and your firewall is configured.',
-  confirmLabel: 'Listen on all interfaces anyway',
-  cancelLabel: 'Keep localhost only (safer)',
+const LOCAL_ONLY = '127.0.0.1'
+const ALL_INTERFACES = '0.0.0.0'
+const BIND_LABELS: Record<string, string> = { [LOCAL_ONLY]: 'Localhost only', [ALL_INTERFACES]: 'All interfaces' }
+const LOG_LEVELS = ['debug', 'info', 'warn', 'error']
+
+function validatePort(v: SaveBarValue): string | null {
+  const n = typeof v === 'number' ? v : Number(v)
+  if (v === '' || !Number.isInteger(n) || n < 1024 || n > 65535) return 'Enter a whole number from 1,024 to 65,535.'
+  return null
+}
+
+/** The write body's dotted keys mapped onto the gateway config object. */
+function gatewayBody(body: Record<string, SaveBarValue>): Record<string, unknown> {
+  const g: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(body)) g[k.replace(/^gateway\./, '')] = v
+  return g
 }
 
 // ── UnauthenticatedBanner (FR-107b) ───────────────────────────────────────────
@@ -89,18 +94,15 @@ function UnauthenticatedBanner({ devModeBypass }: UnauthBannerProps) {
   )
 }
 
-export function GatewaySection({ focusGodMode }: { focusGodMode?: boolean }) {
+export function GatewaySection() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
   const [remoteAccessOpen, setRemoteAccessOpen] = useState(false)
-  // O4: restart modal state — shown ONCE when a save creates new pending changes.
-  // Subsequent visits to this tab while the same changes are pending show the
-  // persistent badge/banner in the section below instead of re-popping the modal.
   const [restartModalOpen, setRestartModalOpen] = useState(false)
-  // Track the last save count that triggered the modal so we only show it once
-  // per save action, not on every tab revisit while the change is pending.
-  const saveModalShownRef = useRef(0)
+  const [rotateConfirmOpen, setRotateConfirmOpen] = useState(false)
+  const [bindConfirmOpen, setBindConfirmOpen] = useState(false)
+  const bindResolver = useRef<((ok: boolean) => void) | null>(null)
   const { entries: pendingEntries } = usePendingRestart()
 
   const { data: config, isLoading, isError: isConfigError, refetch: refetchConfig } = useQuery({
@@ -114,147 +116,85 @@ export function GatewaySection({ focusGodMode }: { focusGodMode?: boolean }) {
     retry: false,
   })
 
-  // US-4 / FR-008: live "Preview" toggle — persisted value derives from the
-  // same ['config'] query above; tracked with its own dirty ref (mirroring
-  // the bindAddress/port pattern below) so an in-flight toggle isn't clobbered
-  // by a config refetch, but independently of the bind/port/log_level
-  // autosave so neither can clobber the other.
-  const [previewEnabled, setPreviewEnabled] = useState(true)
-  const previewDirtyRef = useRef(false)
-
-  useEffect(() => {
-    if (!config) return
-    if (previewDirtyRef.current) return
-    setPreviewEnabled(config.gateway.preview_enabled ?? true)
+  // Every Gateway value waits for Save changes (FR-010, #346: no auto-save).
+  const fields = useMemo<SaveBarField[]>(() => {
+    const g = config?.gateway
+    return [
+      {
+        key: 'gateway.bind_address',
+        label: 'Bind address',
+        value: g?.bind_address ?? LOCAL_ONLY,
+        kind: 'select',
+        options: [LOCAL_ONLY, ALL_INTERFACES],
+        description: 'Which network interfaces the gateway listens on. All interfaces asks you to confirm first.',
+        restart: true,
+      },
+      {
+        key: 'gateway.port',
+        label: 'Port',
+        value: g?.port ?? 8080,
+        kind: 'number',
+        description: '1024 to 65535.',
+        restart: true,
+        validate: validatePort,
+      },
+      {
+        key: 'gateway.preview_enabled',
+        label: 'Preview server',
+        value: g?.preview_enabled ?? true,
+        kind: 'switch',
+        description: 'Serves pages your agents build so you can open them. Takes effect as soon as it is saved.',
+      },
+      {
+        key: 'gateway.log_level',
+        label: 'Log level',
+        value: g?.log_level ?? 'info',
+        kind: 'select',
+        options: LOG_LEVELS,
+        description: 'How much detail the gateway writes to its log.',
+      },
+    ]
   }, [config])
 
-  const { mutate: savePreview, isPending: previewSaving } = useMutation({
-    mutationFn: (enabled: boolean) =>
-      updateConfig({ gateway: { preview_enabled: enabled } as unknown as Config['gateway'] }),
-    onSuccess: (_data, enabled) => {
-      previewDirtyRef.current = false
-      queryClient.invalidateQueries({ queryKey: ['config'] })
-      addToast({
-        message: enabled
-          ? 'Preview enabled — /preview/ is reachable again'
-          : 'Preview disabled — /preview/ now returns 404',
-        variant: 'success',
+  // FR-016: "Listen on all interfaces?" runs before any write; Cancel stores nothing.
+  const confirmBindAll = useCallback(
+    (changed: SaveBarField[], drafts: Record<string, SaveBarValue>) => {
+      const bind = changed.find((f) => f.key === 'gateway.bind_address')
+      if (!bind || drafts['gateway.bind_address'] !== ALL_INTERFACES) return Promise.resolve(true)
+      return new Promise<boolean>((resolve) => {
+        bindResolver.current = resolve
+        setBindConfirmOpen(true)
       })
     },
-    onError: (err: unknown, enabled) => {
-      // Revert the optimistic toggle so the UI reflects the persisted value.
-      previewDirtyRef.current = false
-      setPreviewEnabled(config?.gateway.preview_enabled ?? true)
-      addToast({
-        message: getErrorMessage(err, `Could not ${enabled ? 'enable' : 'disable'} preview`),
-        variant: 'error',
-      })
-    },
-  })
-
-  function handleTogglePreview(next: boolean) {
-    previewDirtyRef.current = true
-    setPreviewEnabled(next)
-    savePreview(next)
+    [],
+  )
+  const settleBind = (ok: boolean) => {
+    const r = bindResolver.current
+    bindResolver.current = null
+    setBindConfirmOpen(false)
+    r?.(ok)
   }
 
-  const isDirtyRef = useRef(false)
-  const markDirty = () => { isDirtyRef.current = true }
-
-  const [bindAddress, setBindAddress] = useState('127.0.0.1')
-  const [port, setPort] = useState('8080')
-  const [logLevel, setLogLevel] = useState('info')
-  // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
-  // `!config` check useAutoSave's `disabled` option used to key off of.
-  // `config` turns truthy in the SAME commit the hydration effect below is
-  // SCHEDULED, but the effect's own setState calls don't land until the
-  // NEXT commit — so `disabled: !config` flipped false one render too
-  // early, letting useAutoSave capture the hardcoded useState defaults
-  // ('127.0.0.1' / '8080' / 'info') as its baseline instead of the real
-  // persisted values. `gatewayHydrated` is set at the END of the hydration
-  // effect, so it flips true in the same commit the real values land.
-  const [gatewayHydrated, setGatewayHydrated] = useState(false)
-
-  useEffect(() => {
-    if (!config) return
-    if (isDirtyRef.current) return
-    const newBind = config.gateway.bind_address
-    const newPort = config.gateway.port.toString()
-    setBindAddress(newBind)
-    setPort(newPort)
-    setLogLevel(config.gateway.log_level ?? 'info')
-    // Sync prev refs to the loaded config values so the first autosave
-    // comparison starts from the real persisted value, not the useState default.
-    // This prevents the modal from re-opening on tab revisits while a restart
-    // is pending (the initial useEffect would otherwise look like a port change).
-    if (prevPortRef.current === null) prevPortRef.current = newPort
-    if (prevBindRef.current === null) prevBindRef.current = newBind
-    setGatewayHydrated(true)
-  }, [config])
-
-  const gatewayFormData = useMemo(() => ({
-    bind_address: bindAddress,
-    port,
-    log_level: logLevel,
-  }), [bindAddress, port, logLevel])
-
-  // O4: track which gateway fields are restart-gated so we can show the modal
-  // after saving. port and bind_address require a restart; log_level does not.
-  // These are initialised to null so that the first useEffect sync (which
-  // populates state from the fetched config) does NOT trigger the changed-flag
-  // and open the modal on every tab visit while a restart is pending.
-  const prevPortRef = useRef<string | null>(null)
-  const prevBindRef = useRef<string | null>(null)
-
-  const { status: saveStatus, error: saveError } = useAutoSave(
-    gatewayFormData,
-    async () => {
-      // FR-107: token auth is the only mode — there is no auth_mode field to send.
-      // FR-106: hot_reload is intentionally not sent — always-on backend-side.
-      // We cast to satisfy the Partial<Config> signature; frontendToRawConfig
-      // guards each field with `!== undefined` so absent fields are skipped.
-      // null means config hasn't loaded yet — treat as no change to avoid
-      // spurious modal pops on the initial config→state sync.
-      const portChanged = prevPortRef.current !== null && port !== prevPortRef.current
-      const bindChanged = prevBindRef.current !== null && bindAddress !== prevBindRef.current
-
-      await updateConfig({
-        gateway: {
-          bind_address: bindAddress,
-          port: parseInt(port, 10),
-          log_level: logLevel,
-        } as unknown as Config['gateway'],
-      })
-      isDirtyRef.current = false
-      prevPortRef.current = port
-      prevBindRef.current = bindAddress
-      queryClient.invalidateQueries({ queryKey: ['config'] })
-      // O4: if a restart-gated field changed, refresh pending list and show modal
-      // ONCE for this save event. The saveModalShownRef counter ensures the modal
-      // only pops on the save that created the pending change, not on subsequent
-      // tab visits while the change is still pending (the persistent badge below
-      // serves that role).
-      if (portChanged || bindChanged) {
-        await queryClient.invalidateQueries({ queryKey: [...PENDING_RESTART_QUERY_KEY] })
-        saveModalShownRef.current++
-        setRestartModalOpen(true)
-      }
+  const state = useSaveBar({
+    section: 'gateway',
+    fields,
+    onSave: (body) =>
+      toWriteResponse(() => updateConfig({ gateway: gatewayBody(body) as unknown as Config['gateway'] })),
+    readBack: async (key) => {
+      const fresh = await fetchConfig()
+      return (fresh.gateway as unknown as Record<string, unknown>)[key.replace(/^gateway\./, '')]
     },
-    { disabled: !gatewayHydrated },
-  )
-
-  // O4: always-available "Restart gateway" handler.
-  const handleManualRestart = useCallback(() => {
-    setRestartModalOpen(true)
-  }, [])
+    preSave: confirmBindAll,
+    onSaved: () => void queryClient.invalidateQueries({ queryKey: ['config'] }),
+  })
 
   const { mutate: doRotate, isPending: isRotating } = useMutation({
     mutationFn: rotateGatewayToken,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['config'] })
-      addToast({ message: 'Gateway token rotated', variant: 'success' })
+      addToast({ message: 'The gateway token was rotated. Apps and programs must sign in with the new one.', variant: 'success' })
     },
-    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Token rotation failed'), variant: 'error' }),
+    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'The gateway token was not rotated'), variant: 'error' }),
   })
 
   const copyToken = async () => {
@@ -265,18 +205,18 @@ export function GatewaySection({ focusGodMode }: { focusGodMode?: boolean }) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      addToast({ message: 'Could not copy token to clipboard', variant: 'error' })
+      addToast({ message: 'The token could not be copied. Select it and copy it by hand.', variant: 'error' })
     }
   }
 
-  if (isLoading) return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading...</div>
+  if (isLoading) return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading Gateway…</div>
 
-  if (isConfigError) {
+  if (isConfigError || !config) {
     return (
       <Card className="border-[var(--color-error)]/40 p-[var(--space-3)] space-y-[var(--space-2-5)]">
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Failed to load gateway configuration.</p>
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">The gateway settings could not be loaded.</p>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-          Save is disabled until the configuration is loaded successfully to prevent overwriting real settings with defaults.
+          Nothing can be saved here until they load, so no setting is overwritten with a default.
         </p>
         <Button size="sm" variant="outline" onClick={() => refetchConfig()}>
           Retry
@@ -285,244 +225,105 @@ export function GatewaySection({ focusGodMode }: { focusGodMode?: boolean }) {
     )
   }
 
-  // US-B2: badges derive from the PERSISTED config values (not local draft state).
-  const persistedBindAddress = config?.gateway.bind_address ?? '127.0.0.1'
-
-  // FR-107b: the only genuinely-unauthenticated state is dev_mode_bypass=true.
-  // (auth_mode is legacy/vestigial — token auth is enforced regardless of it.)
-  const devModeBypass = config?.gateway.dev_mode_bypass === true
+  const portEntry = pendingEntries.find((e) => e.key === 'gateway.port')
+  const bindEntry = pendingEntries.find((e) => e.key === 'gateway.bind_address' || e.key === 'gateway.host')
+  const runningPort = portEntry ? String(portEntry.applied_value) : String(config.gateway.port)
+  const runningBind = bindEntry ? String(bindEntry.applied_value) : config.gateway.bind_address
+  const devModeBypass = config.gateway.dev_mode_bypass === true
+  const [bindField, portField, previewField, logField] = fields
 
   return (
     <div className="space-y-[var(--space-4)]">
-      {/* ADR-092 FR-034: the god-mode-active banner is now rendered app-wide
-          from AppShell, not here — a change here would be a second copy. */}
-
       {/* FR-107b: persistent unauthenticated-access banner (dev_mode_bypass only) */}
       <UnauthenticatedBanner devModeBypass={devModeBypass} />
 
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Gateway</h2>
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-            Configure how the gateway listens. Restart required for port changes.
-          </p>
-        </div>
-        <AutoSaveIndicator status={saveStatus} error={saveError} />
+      <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+        {isOnline ? (
+          <Badge variant="success" className="gap-[var(--space-1)] text-[length:var(--type-caption-size)]">Online</Badge>
+        ) : (
+          <Badge variant="error" className="gap-[var(--space-1)] text-[length:var(--type-caption-size)]">Offline</Badge>
+        )}
+        <span>
+          Listening on <span className="font-mono">{runningBind}:{runningPort}</span>
+        </span>
       </div>
 
-      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
-        {/* Bind address — risky when 0.0.0.0 (US-B2) */}
-        <div className="space-y-[var(--space-2)]">
-          <div>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Bind address</p>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Which network interfaces the gateway listens on</p>
-          </div>
-          <RiskySettingControl
-            options={[
-              { value: '127.0.0.1', label: 'Localhost only (127.0.0.1)' },
-              { value: '0.0.0.0', label: 'All interfaces (0.0.0.0)' },
-            ]}
-            currentValue={persistedBindAddress}
-            selectedValue={bindAddress}
-            safeValue="127.0.0.1"
-            copy={BIND_ADDRESS_COPY}
-            onConfirm={(v) => { markDirty(); setBindAddress(v) }}
-            onSelectSafe={(v) => { markDirty(); setBindAddress(v) }}
-          />
-        </div>
-
-        {/* Port */}
-        <div className="flex items-center justify-between">
-          <div>
-            <Label htmlFor="gateway-port">Port</Label>
-          </div>
-          <Input
-            id="gateway-port"
-            type="number"
-            min="1024"
-            max="65535"
-            value={port}
-            onChange={(e) => { markDirty(); setPort(e.target.value) }}
-            className="w-24 h-8 text-[length:var(--type-utility-xs-size)] font-mono"
-          />
-        </div>
-
-        {/* Token management */}
-        <div className="pt-[var(--space-2)] border-t border-[var(--color-border)] space-y-[var(--space-2)]">
-          <div className="flex items-center justify-between">
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Gateway token</p>
-            <div className="flex gap-[var(--space-2)]">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
-                onClick={copyToken}
-                disabled={!config?.gateway.token}
+      <section aria-label="Network" className="space-y-[var(--space-2)]">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Network</h3>
+        <Card className="px-[var(--space-3)]">
+          <SettingRow state={state} field={bindField}>
+            {({ id, fieldId, value, setValue, describedBy }) => (
+              <select tabIndex={0}
+                id={id}
+                data-settings-field={fieldId}
+                value={String(value ?? LOCAL_ONLY)}
+                onChange={(e) => setValue(e.target.value)}
+                aria-describedby={describedBy}
+                className="flex h-9 w-full max-w-xs rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
               >
+                {[LOCAL_ONLY, ALL_INTERFACES].map((o) => (
+                  <option key={o} value={o}>
+                    {BIND_LABELS[o]} ({o})
+                  </option>
+                ))}
+              </select>
+            )}
+          </SettingRow>
+          <SettingRow state={state} field={portField} />
+        </Card>
+      </section>
+
+      <section aria-label="Access" className="space-y-[var(--space-2)]">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Access</h3>
+        <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
+          <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+            <div className="min-w-0">
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Gateway token</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Apps and programs use it to sign in. Rotating it signs them out.</p>
+            </div>
+            <div className="flex gap-[var(--space-2)]">
+              <Button variant="outline" size="sm" onClick={copyToken} disabled={!config.gateway.token} aria-label="Copy gateway token">
                 {copied ? <CheckCircle size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
                 {copied ? 'Copied' : 'Copy'}
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
-                onClick={() => doRotate()}
-                disabled={isRotating}
-              >
-                <ArrowsClockwise size={11} className={isRotating ? 'animate-spin' : ''} />
-                Rotate
+              <Button variant="outline" size="sm" onClick={() => setRotateConfirmOpen(true)} disabled={isRotating} aria-label="Rotate gateway token">
+                <ArrowsClockwise size={11} className={isRotating ? 'animate-spin motion-reduce:animate-none' : ''} />
+                Rotate…
               </Button>
             </div>
           </div>
-          {config?.gateway.token && (
+          {config.gateway.token && (
             <p className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)] truncate">
-              {config.gateway.token.slice(0, 20)}...
+              {'••••••••••••'}{config.gateway.token.slice(-4)}
             </p>
           )}
-        </div>
+        </Card>
+      </section>
 
-        {/* Preview toggle (US-4 / FR-008, ADR-044) */}
-        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-[var(--space-2)]">
-          <div>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Preview server</p>
+      <section aria-label="Other" className="space-y-[var(--space-2)]">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Other</h3>
+        <Card className="px-[var(--space-3)]">
+          <SettingRow state={state} field={previewField} />
+          <SettingRow state={state} field={logField} />
+        </Card>
+      </section>
+
+      <SaveBarPanel {...state.bar} />
+
+      <section aria-label="Restart" className="space-y-[var(--space-2)]">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Restart</h3>
+        <Card className="p-[var(--space-3)] flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+          <div className="min-w-0">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Restart gateway</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-              Serve agent-built dev previews at <span className="font-mono">/preview/</span>. Takes
-              effect immediately — no restart needed.
+              Applies saved changes that need a restart. Running agents pause for a few seconds.
             </p>
           </div>
-          <Switch
-            checked={previewEnabled}
-            onCheckedChange={handleTogglePreview}
-            disabled={previewSaving}
-            aria-label="Preview server"
-            data-testid="preview-server-toggle"
-          />
-        </div>
-
-        {/* Log level */}
-        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-[var(--space-2)]">
-          <div>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Log level</p>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Verbosity of gateway logs</p>
-          </div>
-          <SmartSelect
-            value={logLevel}
-            onValueChange={(v) => { markDirty(); setLogLevel(v) }}
-            triggerClassName="w-[120px] h-8 text-xs"
-            ariaLabel="Log level"
-            items={[
-              { value: 'debug', label: 'Debug' },
-              { value: 'info', label: 'Info' },
-              { value: 'warn', label: 'Warn' },
-              { value: 'error', label: 'Error' },
-            ]}
-          />
-        </div>
-      </Card>
-
-      {/* O4 honest status — show the *running* value (applied_value from pending
-          entries) vs the *saved* value separately when a restart is pending. */}
-      <div className="space-y-[var(--space-2)]">
-        <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-          {isOnline ? (
-            <Badge variant="success" className="gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" /> Online
-            </Badge>
-          ) : (
-            <Badge variant="error" className="gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)]" /> Offline
-            </Badge>
-          )}
-          {(() => {
-            // Find pending entries for gateway.port and gateway.bind_address.
-            const portEntry = pendingEntries.find((e) => e.key === 'gateway.port')
-            const bindEntry = pendingEntries.find((e) => e.key === 'gateway.bind_address')
-            const runningPort = portEntry ? String(portEntry.applied_value) : port
-            const runningBind = bindEntry ? String(bindEntry.applied_value) : bindAddress
-            const savedPort = portEntry ? String(portEntry.persisted_value) : port
-            const savedBind = bindEntry ? String(bindEntry.persisted_value) : bindAddress
-            const hasPending = Boolean(portEntry || bindEntry)
-            if (hasPending) {
-              return (
-                <span>
-                  Running on{' '}
-                  <span className="font-mono">{runningBind}:{runningPort}</span>
-                  {' '}—{' '}
-                  <span style={{ color: 'var(--color-warning)' }}>
-                    saved <span className="font-mono">{savedBind}:{savedPort}</span>, restart to apply
-                  </span>
-                </span>
-              )
-            }
-            return <span>Listening on <span className="font-mono">{bindAddress}:{port}</span></span>
-          })()}
-        </div>
-
-        {/* O4: persistent "Restart gateway" maintenance control — always available
-            so operators can trigger a graceful restart at any time. Also shows a
-            notice + changed keys when a restart is pending. */}
-        <div
-          className={`rounded-lg border px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)] ${
-            pendingEntries.length > 0 ? '' : 'border-[var(--color-border)] bg-[var(--color-surface-1)]'
-          }`}
-          style={
-            pendingEntries.length > 0
-              ? {
-                  borderColor: 'color-mix(in srgb, var(--color-warning) 40%, transparent)',
-                  backgroundColor: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
-                }
-              : undefined
-          }
-        >
-          <div className="flex items-center justify-between gap-[var(--space-2-5)]">
-            <div className="min-w-0">
-              {pendingEntries.length > 0 ? (
-                <>
-                  <p className="text-[length:var(--type-body-compact-size)] font-semibold" style={{ color: 'var(--color-warning)' }}>
-                    {pendingEntries.length} change{pendingEntries.length !== 1 ? 's' : ''} pending — restart to apply
-                  </p>
-                  <div className="mt-[var(--space-1)] space-y-[var(--space-0-5)]">
-                    {pendingEntries.map((e) => (
-                      <p
-                        key={e.key}
-                        className="text-[length:var(--type-caption-size)] font-mono"
-                        style={{ color: 'color-mix(in srgb, var(--color-warning) 70%, transparent)' }}
-                      >
-                        {e.key}: {String(e.applied_value)} → {String(e.persisted_value)}
-                      </p>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Restart gateway</p>
-              )}
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-                {pendingEntries.length > 0
-                  ? 'A graceful restart will drain in-flight requests before applying saved settings.'
-                  : 'Trigger a graceful restart for maintenance or to apply saved settings.'}
-              </p>
-            </div>
-            <Button
-              variant={pendingEntries.length > 0 ? 'default' : 'outline'}
-              size="sm"
-              onClick={handleManualRestart}
-              className="shrink-0"
-            >
-              <ArrowsClockwise size={13} className="mr-[var(--space-1)]" />
-              Restart
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <Separator />
-
-      {/* O14: God-mode switch (danger zone) — step-up-gated global override.
-          focusGodMode routes the ?focus=god-mode landing from the sidebar
-          pill / app-shell corner dot (2026-09-25). */}
-      <GodModeControl focusOnMount={focusGodMode} />
-
-      <Separator />
+          <Button variant="outline" size="sm" onClick={() => setRestartModalOpen(true)}>
+            Restart gateway…
+          </Button>
+        </Card>
+      </section>
 
       {/* Remote Access */}
       <section>
@@ -551,7 +352,7 @@ export function GatewaySection({ focusGodMode }: { focusGodMode?: boolean }) {
                 Install Tailscale on this machine and your client device. Once connected, access Omnipus via your Tailscale IP:
               </p>
               <code className="block text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-primary)] border border-[var(--color-border)] rounded px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-accent)]">
-                http://&lt;tailscale-ip&gt;:{port}
+                http://&lt;tailscale-ip&gt;:{runningPort}
               </code>
               <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 Ensure the gateway bind address is set to <span className="font-mono">0.0.0.0</span> or your Tailscale IP to accept remote connections.
@@ -565,22 +366,40 @@ export function GatewaySection({ focusGodMode }: { focusGodMode?: boolean }) {
                 Forward the gateway port to your local machine over SSH:
               </p>
               <code className="block text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-primary)] border border-[var(--color-border)] rounded px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-accent)] break-all">
-                ssh -L {port}:localhost:{port} user@your-server
+                ssh -L {runningPort}:localhost:{runningPort} user@your-server
               </code>
               <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-                Then open <span className="font-mono">http://localhost:{port}</span> in your browser.
+                Then open <span className="font-mono">http://localhost:{runningPort}</span> in your browser.
               </p>
             </Card>
           </div>
         )}
       </section>
 
-      {/* O4: restart modal — shows when a restart-gated setting is saved or
-          when the operator clicks the persistent "Restart" button. */}
-      <GatewayRestartModal
-        open={restartModalOpen}
-        onClose={() => setRestartModalOpen(false)}
+      <ConfirmDialog
+        open={rotateConfirmOpen}
+        onOpenChange={setRotateConfirmOpen}
+        title="Rotate the gateway token?"
+        description="Every app and program that uses the token must sign in again with the new one."
+        confirmLabel="Rotate token"
+        onConfirm={() => {
+          setRotateConfirmOpen(false)
+          doRotate()
+        }}
       />
+      <ConfirmDialog
+        open={bindConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open) settleBind(false)
+        }}
+        title="Listen on all interfaces?"
+        description="Anyone on your network can then reach the sign-in page of this server. Keep a strong password and the gateway token secret."
+        confirmLabel="Listen on all interfaces"
+        cancelLabel="Keep localhost only"
+        emphasis="cancel"
+        onConfirm={() => settleBind(true)}
+      />
+      <GatewayRestartModal open={restartModalOpen} onClose={() => setRestartModalOpen(false)} />
     </div>
   )
 }

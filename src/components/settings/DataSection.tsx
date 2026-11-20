@@ -1,11 +1,9 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Database, Trash } from '@phosphor-icons/react'
-import { useAutoSave } from '@/hooks/useAutoSave'
-import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -15,8 +13,6 @@ import {
 } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import {
-  fetchConfig,
-  updateConfig,
   fetchStorageStats,
   clearAllSessions,
   getErrorMessage,
@@ -34,12 +30,15 @@ export function DataSection() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
-  const { data: config, isLoading: configLoading } = useQuery({
-    queryKey: ['config'],
-    queryFn: fetchConfig,
-  })
 
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    isError: statsError,
+    error: statsReadError,
+    refetch: refetchStats,
+    isFetching: statsFetching,
+  } = useQuery({
     queryKey: ['storage-stats'],
     queryFn: fetchStorageStats,
   })
@@ -68,78 +67,51 @@ export function DataSection() {
     })
   }, [stats?.warnings, addToast])
 
-  const isDirtyRef = useRef(false)
-  const markDirty = () => { isDirtyRef.current = true }
-
-  const [retentionDays, setRetentionDays] = useState('90')
-  // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
-  // `!config` check useAutoSave's `disabled` option used to key off of.
-  // `config` turns truthy in the SAME commit the hydration effect below is
-  // SCHEDULED, but the effect's own `setRetentionDays` call doesn't land
-  // until the NEXT commit — so `disabled: !config` flipped false one render
-  // too early, letting useAutoSave capture the hardcoded '90' default as
-  // its baseline instead of the real persisted value. `retentionHydrated`
-  // is set at the END of the hydration effect, so it flips true in the same
-  // commit the real value lands.
-  const [retentionHydrated, setRetentionHydrated] = useState(false)
-
-  useEffect(() => {
-    if (!config) return
-    if (isDirtyRef.current) return
-    setRetentionDays(config.data.session_retention_days.toString())
-    setRetentionHydrated(true)
-  }, [config])
-
-  const dataFormData = useMemo(() => ({
-    session_retention_days: parseInt(retentionDays, 10) || 90,
-  }), [retentionDays])
-
-  const { status: saveStatus, error: saveError } = useAutoSave(
-    dataFormData,
-    async (data) => {
-      await updateConfig({ data })
-      isDirtyRef.current = false
-      queryClient.invalidateQueries({ queryKey: ['config'] })
-    },
-    { disabled: !retentionHydrated },
-  )
-
   const { mutate: doClearSessions, isPending: isClearing } = useMutation({
     mutationFn: clearAllSessions,
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['storage-stats'] })
       if (res.warnings && res.warnings.length > 0) {
         addToast({
-          message: `Sessions cleared, but ${res.warnings.length} could not be removed — see logs for details.`,
+          message: `Chat history was cleared, but ${res.warnings.length} could not be removed. The gateway log names them.`,
           variant: 'warning',
         })
       } else {
-        addToast({ message: 'All sessions cleared', variant: 'success' })
+        addToast({ message: 'All chat history was cleared.', variant: 'success' })
       }
       setClearConfirmOpen(false)
     },
     onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Clear failed'), variant: 'error' }),
   })
 
-  const isLoading = configLoading || statsLoading
+  const isLoading = statsLoading
 
-  if (isLoading) return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading...</div>
+  if (isLoading) return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading storage…</div>
 
   return (
     <div className="space-y-[var(--space-4)]">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Data</h2>
+          <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Storage</h3>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-            Manage session retention and storage.
+            What Omnipus stores on this computer.
           </p>
         </div>
-        <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
       {/* Storage stats */}
       <section className="space-y-[var(--space-2)]">
-        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Storage</h3>
+        {/* FR-066: the counts show their own error; retention still saves. */}
+        {statsError && (
+          <ReadErrorCallout
+            title="Failed to load the storage counts"
+            error={statsReadError}
+            onRetry={() => void refetchStats()}
+            retrying={statsFetching}
+            blocksSaving={false}
+            data-testid="storage-stats-load-error"
+          />
+        )}
         <div className="grid grid-cols-3 gap-[var(--space-2-5)]">
           <StatBox
             icon={<Database size={16} />}
@@ -157,30 +129,6 @@ export function DataSection() {
         </div>
       </section>
 
-      {/* Session retention */}
-      <section className="space-y-[var(--space-2)]">
-        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Session Retention</h3>
-        <Card className="p-[var(--space-3)]">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Retention period</p>
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Days to keep session transcripts before auto-deletion</p>
-            </div>
-            <div className="flex items-center gap-[var(--space-2)]">
-              <Input
-                type="number"
-                min="1"
-                max="365"
-                value={retentionDays}
-                onChange={(e) => { markDirty(); setRetentionDays(e.target.value) }}
-                className="w-20 h-8 text-[length:var(--type-utility-xs-size)] font-mono"
-              />
-              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">days</span>
-            </div>
-          </div>
-        </Card>
-      </section>
-
       <Separator />
 
       {/* Danger zone */}
@@ -188,8 +136,8 @@ export function DataSection() {
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-error)] uppercase tracking-wider">Danger Zone</h3>
         <Card className="border-[var(--color-error)]/30 p-[var(--space-3)] flex items-center justify-between">
           <div>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Clear all sessions</p>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Permanently delete all session transcripts. Cannot be undone.</p>
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Chat history</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Deletes every chat transcript. This cannot be undone.</p>
           </div>
           <Button
             variant="outline"
@@ -198,7 +146,7 @@ export function DataSection() {
             onClick={() => setClearConfirmOpen(true)}
           >
             <Trash size={12} />
-            Clear sessions
+            Clear all chat history
           </Button>
         </Card>
       </section>
@@ -207,10 +155,10 @@ export function DataSection() {
       <Dialog open={clearConfirmOpen} onOpenChange={setClearConfirmOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className="font-headline text-base">Clear all sessions?</DialogTitle>
+            <DialogTitle className="font-headline text-base">Clear all chat history?</DialogTitle>
           </DialogHeader>
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-[var(--space-2)]">
-            This will permanently delete all session transcripts. This action cannot be undone.
+            Every chat transcript is deleted. This cannot be undone.
           </p>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setClearConfirmOpen(false)}>Cancel</Button>

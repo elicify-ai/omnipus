@@ -1,4 +1,6 @@
-// ContextSection — Settings → Models (ADR-066 D9, FR-036 / FR-037).
+// ContextSection — Settings → Limits → Context and tool results, and Model
+// overrides (ADR-066 D9, FR-036 / FR-037; Settings redesign #1519: on the
+// Save bar, FR-010). Formerly the Models tab.
 //
 // Global context-budget controls: the three per-surface tool-result caps
 // (D4), the relative tool-result share limit (D6), the ingest bound (D10), the
@@ -14,20 +16,25 @@
 // field. Every successful write reloads the registry on the gateway — there
 // is no restart gate, so the UI shows plain Saved.
 //
+// The form lives in useContextForm so the Limits section can put it on the
+// same Save bar as Agents and goals (FR-019); ContextSection renders it alone.
+//
 // X-08 (ADR-068): `?provider=&model=` on the Settings route pre-fills a new
 // override row (or focuses the existing one) so the "No context length"
 // pointer lands on the right row.
-import { useState, useEffect, useMemo } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Sliders, Plus, X, Warning } from '@phosphor-icons/react'
+import { ReadErrorCallout } from './ReadErrorCallout'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, X } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { getContextSettings, putContextSettings, getErrorMessage, isApiError } from '@/lib/api'
+import { Spinner } from '@/components/ui/spinner'
+import { getContextSettings, putContextSettings } from '@/lib/api'
 import type { ContextSettings, ContextSettingsUpdate, ContextModelOverride, ContextWindowSource } from '@/lib/api'
-import { useUiStore } from '@/store/ui'
-import { SaveStatus, useSaveStatus } from './SaveStatus'
+import { FormRow, SaveBarPanel, SaveOutcomeLine } from './SaveBar'
+import { toWriteResponse, type WriteResponse } from './saveOutcome'
+import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 
 // ── Limits (ADR-066 §5 / FR-036; mirrored by the gateway's 400s) ──────────────
 
@@ -246,131 +253,76 @@ function buildPartial(parsed: Partial<ContextSettings>, base: ContextSettings): 
   return body
 }
 
-// A gateway 400 names the field and the limit (FR-036). Map it onto the field
-// when the body carries `details.field`, else by the field name appearing in
-// the message; otherwise it lands on the banner.
-function fieldFromError(err: unknown): { field?: string; message: string } {
-  const message = getErrorMessage(err, 'Save failed')
-  if (!isApiError(err) || err.status !== 400) return { message }
-  let field: string | undefined
-  if (err.body) {
-    try {
-      const parsed = JSON.parse(err.body) as { details?: { field?: unknown } }
-      if (typeof parsed.details?.field === 'string') field = parsed.details.field
-    } catch {
-      /* not JSON — fall through to the name scan */
-    }
-  }
-  if (!field) {
-    const known = [...NUMERIC_FIELDS.map((f) => f.key), 'default_context_window', 'model_overrides']
-    field = known.find((k) => err.userMessage.includes(k))
-  }
-  return { field, message: err.userMessage }
-}
 
-// ── Skeleton ──────────────────────────────────────────────────────────────────
-
-function Skeleton() {
-  return (
-    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
-      <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
-      <div className="h-3 w-full rounded bg-[var(--color-border)]" />
-      <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
-    </Card>
-  )
-}
-
-function FieldError({ id, message }: { id: string; message?: string }) {
-  if (!message) return null
-  return (
-    <p id={id} data-testid={`context-error-${id.replace(/^context-error-/, '')}`} role="alert" className="text-[length:var(--type-utility-xs-size)] mt-[var(--space-1)]" style={{ color: 'var(--color-error)' }}>
-      {message}
-    </p>
-  )
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
 
 export interface ContextSectionProps { // not-wire-format: React props, never serialized
   /** X-08: pre-fill (or focus) an override row for this (provider, model). */
   prefillOverride?: { provider: string; model: string }
 }
 
-export function ContextSection({ prefillOverride }: ContextSectionProps): React.ReactElement {
-  const { addToast } = useUiStore()
-  const queryClient = useQueryClient()
+export const CONTEXT_QUERY_KEY = ['context-settings'] as const
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['context-settings'],
+function sameForm(a: FormState, b: FormState, key: NumericKey | 'default_context_window'): boolean {
+  return a[key].trim() === b[key].trim()
+}
+
+function sameOverrides(a: OverrideRow[], b: OverrideRow[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((r, i) => r.provider.trim() === b[i].provider.trim() && r.model.trim() === b[i].model.trim() && r.context_window.trim() === b[i].context_window.trim())
+  )
+}
+
+/** Context and tool results plus Model overrides as one Save-bar part. */
+export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
+  const queryClient = useQueryClient()
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
+    queryKey: CONTEXT_QUERY_KEY,
     queryFn: getContextSettings,
   })
-
+  // The saved values known to the screen: the last successful answer, else the read.
+  const [savedSettings, setSavedSettings] = useState<ContextSettings | null>(null)
+  const base = savedSettings ?? data ?? null
+  const baseline = useMemo(() => (base ? toForm(base) : null), [base])
   const [form, setForm] = useState<FormState | null>(null)
-  const [errors, setErrors] = useState<FieldErrors>({})
-  const [bannerError, setBannerError] = useState<string | null>(null)
-  const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
+  const [serverErrors, setServerErrors] = useState<FieldErrors>({})
+  const sentRef = useRef<{ form: FormState; body: ContextSettingsUpdate } | null>(null)
 
-  // Hydrate from GET; apply the X-08 pre-fill once on top of the fetched rows.
+  // Hydrate from GET; apply the X-08 pre-fill once on top of the fetched rows:
+  // one new unsaved row (FR-004).
   useEffect(() => {
-    if (!data) return
+    if (!data || form) return
     const next = toForm(data)
     if (prefillOverride) {
-      const exists = next.model_overrides.some(
-        (r) => r.provider === prefillOverride.provider && r.model === prefillOverride.model,
-      )
-      if (!exists) {
-        next.model_overrides.push({ provider: prefillOverride.provider, model: prefillOverride.model, context_window: '' })
-      }
+      const exists = next.model_overrides.some((r) => r.provider === prefillOverride.provider && r.model === prefillOverride.model)
+      if (!exists) next.model_overrides.push({ provider: prefillOverride.provider, model: prefillOverride.model, context_window: '' })
     }
     setForm(next)
-    setErrors({})
-  }, [data, prefillOverride])
+  }, [data, form, prefillOverride])
 
-  const { mutate: save, isPending: isSaving } = useMutation({
-    mutationFn: (body: ContextSettingsUpdate) => putContextSettings(body),
-    onMutate: () => {
-      setSaveState('saving')
-      setBannerError(null)
-    },
-    onSuccess: (resp) => {
-      setSaveState('saved')
-      queryClient.setQueryData(['context-settings'], resp)
-    },
-    onError: (err: Error) => {
-      setSaveState('error')
-      const { field, message } = fieldFromError(err)
-      setErrorMessage(message)
-      if (field) setErrors((e) => ({ ...e, [field]: message }))
-      else setBannerError(message)
-      addToast({ message, variant: 'error' })
-    },
-  })
+  const { errors: localErrors } = useMemo(() => (form ? validate(form) : { errors: {} as FieldErrors }), [form])
+  const errors = { ...serverErrors, ...localErrors }
 
-  const effectiveSource = useMemo<ContextWindowSource | null>(() => {
-    if (!data) return null
-    return data.default_context_window === undefined || data.default_context_window === null ? null : 'operator'
-  }, [data])
+  const changedFields = useMemo(() => {
+    if (!form || !baseline) return [] as string[]
+    const out: string[] = []
+    for (const f of NUMERIC_FIELDS) if (!sameForm(form, baseline, f.key)) out.push(f.key)
+    if (!sameForm(form, baseline, 'default_context_window')) out.push('default_context_window')
+    if (!sameOverrides(form.model_overrides, baseline.model_overrides)) out.push('model_overrides')
+    return out
+  }, [form, baseline])
 
-  if (isLoading || !form) return <Skeleton />
-  if (isError) {
-    return (
-      <Card className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }} role="alert">
-        <Warning size={14} className="inline mr-[var(--space-1)]" weight="fill" />
-        Could not load context settings: {getErrorMessage(error, 'unknown error')}
-      </Card>
-    )
-  }
+  const clearServerError = (prefix: string) =>
+    setServerErrors((e) => {
+      const rest: FieldErrors = {}
+      for (const k of Object.keys(e)) if (!k.startsWith(prefix)) rest[k] = e[k]
+      return rest
+    })
 
   const setNumeric = (key: NumericKey | 'default_context_window', value: string) => {
     setForm((f) => (f ? { ...f, [key]: value } : f))
-    setErrors((e) => {
-      if (!(key in e)) return e
-      const rest = { ...e }
-      delete rest[key]
-      return rest
-    })
+    clearServerError(key)
   }
-
   const setRow = (i: number, patch: Partial<OverrideRow>) => {
     setForm((f) => {
       if (!f) return f
@@ -378,213 +330,240 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
       rows[i] = { ...rows[i], ...patch }
       return { ...f, model_overrides: rows }
     })
-    setErrors((e) => {
-      const rest: FieldErrors = {}
-      for (const k of Object.keys(e)) if (!k.startsWith(`model_overrides.${i}.`)) rest[k] = e[k]
-      return rest
-    })
+    clearServerError('model_overrides')
   }
-
-  const addRow = () =>
-    setForm((f) => (f ? { ...f, model_overrides: [...f.model_overrides, { provider: '', model: '', context_window: '' }] } : f))
-
+  const addRow = () => setForm((f) => (f ? { ...f, model_overrides: [...f.model_overrides, { provider: '', model: '', context_window: '' }] } : f))
   const removeRow = (i: number) => {
     setForm((f) => (f ? { ...f, model_overrides: f.model_overrides.filter((_, j) => j !== i) } : f))
-    setErrors((e) => {
-      const rest: FieldErrors = {}
-      for (const k of Object.keys(e)) if (!k.startsWith('model_overrides.')) rest[k] = e[k]
-      return rest
-    })
+    clearServerError('model_overrides')
   }
 
-  function handleSave() {
-    if (!data) return
-    const { errors: v, parsed } = validate(form as FormState)
-    setErrors(v)
-    if (Object.keys(v).length > 0) {
-      setSaveState('error')
-      setErrorMessage('Fix the highlighted fields.')
-      return
-    }
-    const body = buildPartial(parsed, data)
-    if (Object.keys(body).length === 0) {
-      setSaveState('saved')
-      return
-    }
-    save(body)
+  const write = async (): Promise<WriteResponse> => {
+    if (!form || !base) return { ok: false, status: 400, json: async () => ({ error: 'The context settings are not loaded.' }) }
+    const body = buildPartial(validate(form).parsed, base)
+    sentRef.current = { form, body }
+    return toWriteResponse(() => putContextSettings(body))
   }
 
-  const inputCls =
-    'w-40 rounded border bg-[var(--color-surface-2)] px-2 py-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] focus:outline-none'
-  const borderFor = (key: string) =>
-    errors[key] ? 'border-[var(--color-error)]' : 'border-[var(--color-border)]'
+  const part: FormSavePart = {
+    id: 'context',
+    count: changedFields.length,
+    invalidCount: form ? Object.keys(localErrors).length : 0,
+    write,
+    onOutcome: (outcome) => {
+      const sent = sentRef.current
+      if (outcome.kind === 'saved' || outcome.kind === 'saved-not-in-use') {
+        const resp = outcome.body as ContextSettings | undefined
+        const nextBase = resp && Array.isArray(resp.model_overrides) ? resp : null
+        if (nextBase) {
+          setSavedSettings(nextBase)
+          queryClient.setQueryData(CONTEXT_QUERY_KEY, nextBase)
+        } else {
+          void queryClient.invalidateQueries({ queryKey: CONTEXT_QUERY_KEY })
+        }
+        if (sent && nextBase) {
+          // Show what is stored now; an edit made while saving is kept.
+          setForm((f) => (f === sent.form ? toForm(nextBase) : f))
+        }
+        setServerErrors({})
+      } else if (outcome.kind === 'not-saved') {
+        const field = outcome.field ?? [...NUMERIC_FIELDS.map((f) => f.key), 'default_context_window', 'model_overrides'].find((k) => outcome.message.includes(k))
+        if (field) setServerErrors({ [field]: outcome.message })
+      }
+    },
+    check: async () => {
+      const sent = sentRef.current
+      const fresh = await getContextSettings()
+      if (!sent) return 'not-saved'
+      const stored = fresh as unknown as Record<string, unknown>
+      const ok = Object.entries(sent.body).every(([k, v]) => JSON.stringify(stored[k] ?? null) === JSON.stringify(v ?? null))
+      if (ok) {
+        setSavedSettings(fresh)
+        queryClient.setQueryData(CONTEXT_QUERY_KEY, fresh)
+      }
+      return ok ? 'saved' : 'not-saved'
+    },
+    focusInvalid: () => {
+      const first = Object.keys(localErrors)[0]
+      if (first) document.querySelector<HTMLElement>(`[data-settings-field="settings-limits-${first.replace(/\./g, '-')}"]`)?.focus()
+    },
+    discard: () => {
+      if (baseline) setForm({ ...baseline, model_overrides: baseline.model_overrides.map((r) => ({ ...r })) })
+      setServerErrors({})
+    },
+  }
 
-  return (
-    <div className="space-y-[var(--space-4)]" data-testid="context-section">
-      <div className="flex items-start justify-between gap-[var(--space-3)]">
-        <div>
-          <h2 className="font-headline text-lg font-semibold text-[var(--color-secondary)] flex items-center gap-[var(--space-2)]">
-            <Sliders size={18} /> Models
-          </h2>
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] leading-relaxed">
-            Context-window budget: how much of each tool result stays in the conversation, when the window is
-            re-checked mid-turn, and which context length each model is assumed to have. Changes apply on the next
-            turn — no restart.
-          </p>
-        </div>
+  const effectiveSource: ContextWindowSource | null =
+    base && base.default_context_window !== undefined && base.default_context_window !== null ? 'operator' : null
+
+  // ── Views ──────────────────────────────────────────────────────────────
+  let status: React.ReactNode = null
+  if (isLoading || (!form && !isError)) {
+    status = (
+      <div role="status" data-testid="context-loading" className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
+        <Spinner decorative />
+        Loading Context and tool results…
       </div>
+    )
+  } else if (isError || !form) {
+    status = (
+      <ReadErrorCallout
+        title="Context and tool results could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="context-load-error"
+      />
+    )
+  }
 
-      {bannerError && (
-        <div role="alert" data-testid="context-error-banner" className="rounded border border-[var(--color-error)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-error)' }}>
-          {bannerError}
-        </div>
-      )}
-
-      {/* Caps, share limit, ingest bound */}
-      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
-        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tool results and limits</h3>
-        {NUMERIC_FIELDS.map((f) => {
-          const id = `context-${f.key.replace(/_/g, '-')}`
-          const err = errors[f.key]
-          return (
-            <div key={f.key} className="space-y-[var(--space-2)]">
-              <Label htmlFor={id}>
-                {f.label}
-              </Label>
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">{f.description}</p>
+  const fieldsView = status ?? (
+    <Card className="px-[var(--space-3)]" data-testid="context-section">
+      {NUMERIC_FIELDS.map((f) => {
+        const domId = `settings-limits-${f.key}`
+        return (
+          <FormRow key={f.key} label={f.label} description={f.description} error={errors[f.key]} fieldId={domId}>
+            {({ id, describedBy, invalid, fieldId }) => (
               <div className="flex items-center gap-[var(--space-2)]">
                 <Input
                   id={id}
-                  data-testid={id}
-                  type="number"
+                  data-settings-field={fieldId}
+                  data-testid={`context-${f.key.replace(/_/g, '-')}`}
+                  type="text"
                   inputMode={f.key === 'tool_result_share_fraction' ? 'decimal' : 'numeric'}
-                  min={f.key === 'tool_result_share_fraction' ? 0 : 1}
-                  max={f.max ?? (f.maxExclusive !== undefined ? f.maxExclusive - 1 : undefined)}
-                  step={f.key === 'tool_result_share_fraction' ? 'any' : 1}
-                  value={form[f.key]}
-                  aria-invalid={err ? 'true' : undefined}
-                  aria-describedby={err ? `context-error-${f.key}` : undefined}
+                  value={form![f.key]}
                   onChange={(e) => setNumeric(f.key, e.target.value)}
-                  className={`${inputCls} ${borderFor(f.key)}`}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid || undefined}
+                  className="max-w-[10rem]"
                 />
-                <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{f.unit}</span>
+                <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">{f.unit}</span>
               </div>
-              <FieldError id={`context-error-${f.key}`} message={err} />
-            </div>
-          )
-        })}
-      </section>
-
-      {/* Global default window */}
-      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2)]">
-        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Default context window</h3>
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
-          Used when neither the agent nor a model override sets a context length. It is clamped to what the model
-          actually supports. Leave empty to let the provider catalog decide.
-        </p>
-        <div className="flex items-center gap-[var(--space-2)]">
-          <Input
-            id="context-default-window"
-            data-testid="context-default-window"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            step={1}
-            placeholder="Not set"
-            value={form.default_context_window}
-            aria-invalid={errors.default_context_window ? 'true' : undefined}
-            aria-describedby={errors.default_context_window ? 'context-error-default_context_window' : undefined}
-            onChange={(e) => setNumeric('default_context_window', e.target.value)}
-            className={`${inputCls} ${borderFor('default_context_window')}`}
-          />
-          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">tokens</span>
-          <span data-testid="context-default-window-source" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-            Source: {effectiveSource ? CONTEXT_WINDOW_SOURCE_LABEL[effectiveSource] : 'not set (catalog, live or floor per model)'}
-          </span>
-        </div>
-        <FieldError id="context-error-default_context_window" message={errors.default_context_window} />
-      </section>
-
-      {/* Model overrides */}
-      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]" id="model-overrides">
-        <div className="flex items-start justify-between gap-[var(--space-3)]">
-          <div>
-            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Model overrides</h3>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
-              Set the context length for a specific provider and model — for endpoints that do not report one, or to
-              keep a model below its advertised limit. An override can only lower the effective window, never raise it.
-            </p>
+            )}
+          </FormRow>
+        )
+      })}
+      <FormRow
+        label="Default context window"
+        description="Empty means not set: each model uses its catalog, live or minimum value."
+        error={errors.default_context_window}
+        fieldId="settings-limits-default_context_window"
+      >
+        {({ id, describedBy, invalid, fieldId }) => (
+          <div className="flex items-center gap-[var(--space-2)]">
+            <Input
+              id={id}
+              data-settings-field={fieldId}
+              data-testid="context-default-window"
+              type="text"
+              inputMode="numeric"
+              placeholder="Not set"
+              value={form!.default_context_window}
+              onChange={(e) => setNumeric('default_context_window', e.target.value)}
+              aria-describedby={describedBy}
+              aria-invalid={invalid || undefined}
+              className="max-w-[10rem]"
+            />
+            <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">tokens</span>
+            <span data-testid="context-default-window-source" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+              Source: {effectiveSource ? CONTEXT_WINDOW_SOURCE_LABEL[effectiveSource] : 'not set (catalog, live or floor per model)'}
+            </span>
           </div>
-          <Button type="button" variant="outline" size="sm" data-testid="context-override-add" onClick={addRow}>
-            <Plus size={14} className="mr-[var(--space-1)]" /> Add override
-          </Button>
-        </div>
-
-        {form.model_overrides.length === 0 ? (
-          <p data-testid="context-overrides-empty" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-            No overrides. Every model uses its catalog or live context length.
-          </p>
-        ) : (
-          <ul className="space-y-[var(--space-2)]">
-            {form.model_overrides.map((row, i) => {
-              const pk = `model_overrides.${i}.provider`
-              const mk = `model_overrides.${i}.model`
-              const wk = `model_overrides.${i}.context_window`
-              return (
-                <li key={i} data-testid="context-override-row" className="rounded border border-[var(--color-border)] p-[var(--space-2)] space-y-[var(--space-1)]">
-                  <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-                    <Input
-                      aria-label="Provider"
-                      data-testid="context-override-provider"
-                      placeholder="provider id"
-                      value={row.provider}
-                      aria-invalid={errors[pk] ? 'true' : undefined}
-                      onChange={(e) => setRow(i, { provider: e.target.value })}
-                      className={`${inputCls} ${borderFor(pk)}`}
-                    />
-                    <Input
-                      aria-label="Model"
-                      data-testid="context-override-model"
-                      placeholder="model id"
-                      value={row.model}
-                      aria-invalid={errors[mk] ? 'true' : undefined}
-                      onChange={(e) => setRow(i, { model: e.target.value })}
-                      className={`${inputCls} w-56 ${borderFor(mk)}`}
-                    />
-                    <Input
-                      aria-label="Context length"
-                      data-testid="context-override-window"
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      step={1}
-                      placeholder="tokens"
-                      value={row.context_window}
-                      aria-invalid={errors[wk] ? 'true' : undefined}
-                      onChange={(e) => setRow(i, { context_window: e.target.value })}
-                      className={`${inputCls} w-32 ${borderFor(wk)}`}
-                    />
-                    <Button type="button" variant="ghost" size="sm" aria-label="Remove override" data-testid="context-override-remove" onClick={() => removeRow(i)}>
-                      <X size={14} />
-                    </Button>
-                  </div>
-                  <FieldError id={`context-error-${pk}`} message={errors[pk]} />
-                  <FieldError id={`context-error-${mk}`} message={errors[mk]} />
-                  <FieldError id={`context-error-${wk}`} message={errors[wk]} />
-                </li>
-              )
-            })}
-          </ul>
         )}
-        <FieldError id="context-error-model_overrides" message={errors.model_overrides} />
-      </section>
+      </FormRow>
+    </Card>
+  )
 
-      <div className="flex items-center justify-end gap-[var(--space-2-5)]">
-        <SaveStatus state={saveState} errorMessage={errorMessage} />
-        <Button type="button" data-testid="context-save" onClick={handleSave} disabled={isSaving}>
-          Save
-        </Button>
-      </div>
+  const overridesView = status ?? (
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2)]" id="model-overrides">
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+        The context length for one provider and model, for endpoints that do not report one or to keep a model below its advertised limit. An override can only lower the window.
+      </p>
+      {form!.model_overrides.length === 0 ? (
+        <p data-testid="context-overrides-empty" className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+          No overrides. Every model uses its catalog or live context length.
+        </p>
+      ) : (
+        <ul className="space-y-[var(--space-2)]">
+          {form!.model_overrides.map((row, i) => {
+            const keys = (['provider', 'model', 'context_window'] as const).map((k) => `model_overrides.${i}.${k}`)
+            const rowErrors = keys.map((k) => errors[k]).filter(Boolean)
+            return (
+              <li key={i} data-testid="context-override-row" className="space-y-[var(--space-1)]">
+                <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+                  <Input
+                    aria-label={`Override ${i + 1} provider`}
+                    data-settings-field={`settings-limits-model_overrides-${i}-provider`}
+                    data-testid="context-override-provider"
+                    placeholder="Provider"
+                    value={row.provider}
+                    aria-invalid={errors[keys[0]] ? true : undefined}
+                    onChange={(e) => setRow(i, { provider: e.target.value })}
+                    className="max-w-[10rem]"
+                  />
+                  <Input
+                    aria-label={`Override ${i + 1} model`}
+                    data-settings-field={`settings-limits-model_overrides-${i}-model`}
+                    data-testid="context-override-model"
+                    placeholder="Model"
+                    value={row.model}
+                    aria-invalid={errors[keys[1]] ? true : undefined}
+                    onChange={(e) => setRow(i, { model: e.target.value })}
+                    className="max-w-[14rem]"
+                  />
+                  <Input
+                    aria-label={`Override ${i + 1} context length, tokens`}
+                    data-settings-field={`settings-limits-model_overrides-${i}-context_window`}
+                    data-testid="context-override-window"
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="Tokens"
+                    value={row.context_window}
+                    aria-invalid={errors[keys[2]] ? true : undefined}
+                    onChange={(e) => setRow(i, { context_window: e.target.value })}
+                    className="max-w-[8rem]"
+                  />
+                  <Button type="button" variant="ghost" size="sm" aria-label={`Remove override ${i + 1}`} data-testid="context-override-remove" onClick={() => removeRow(i)}>
+                    <X size={14} aria-hidden="true" />
+                  </Button>
+                </div>
+                {rowErrors.map((m) => (
+                  <p key={m} role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+                    {m}
+                  </p>
+                ))}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {errors.model_overrides && (
+        <p role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+          {errors.model_overrides}
+        </p>
+      )}
+      <Button type="button" variant="outline" size="sm" data-testid="context-override-add" onClick={addRow}>
+        <Plus size={14} aria-hidden="true" /> Add override
+      </Button>
+    </Card>
+  )
+
+  const firstInvalid = Object.keys(localErrors)[0]
+  const invalidGroup: 'context' | 'overrides' | null = !firstInvalid ? null : firstInvalid.startsWith('model_overrides') ? 'overrides' : 'context'
+
+  return { part, fieldsView, overridesView, invalidGroup, ready: !!form && !isError, loadFailed: isError, overrideCount: form?.model_overrides.length ?? 0 }
+}
+
+/** Context and tool results plus Model overrides on their own, with their own Save bar. */
+export function ContextSection({ prefillOverride }: ContextSectionProps): React.ReactElement {
+  const form = useContextForm({ prefillOverride })
+  const { bar, message } = useFormSaveBar([form.part])
+  return (
+    <div className="space-y-[var(--space-3)]">
+      {form.fieldsView}
+      {form.ready && form.overridesView}
+      <SaveOutcomeLine message={message('context')} />
+      <SaveBarPanel {...bar} />
     </div>
   )
 }

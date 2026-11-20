@@ -4,11 +4,42 @@ Settings connects model providers, sets agent limits, records your context, and 
 
 ## What it is
 
-The Settings screen is a row of tabs: Providers, Models, System agents, Third-party agents, Integrations, Security, Gateway, Data, Memory, Devices, Performance, Chat, and About. The Devices tab appears only when your install enables device pairing, so most people never see it.
+Settings has 11 sections in three groups, listed down the left side (on a phone, as a list you tap into):
 
-Most settings save when changed, with an indicator confirming the save. Secret changes ask you to re-type your password. Gateway listening changes require a restart.
+- **AI & agents**: Providers, Memory & recaps, System agents, Third-party agents, Limits
+- **Security**: Protection, Sandbox & network, Keys & secrets
+- **System**: Gateway, Data & retention, About
 
-Personal things are not tabs here. Profile is its own screen, holding your name, timezone, password, and the context your agents read about you. Usage is its own screen, showing token totals by agent, model, provider, and session.
+The open section is part of the address (`/settings?tab=gateway`), so a reload or a shared link opens the same section, and Back and Forward move between sections. The **Search settings** box above the list finds a setting by name and tells you when a setting has moved elsewhere, for example web search and tool permissions to Skills & Tools, or Verbose chat to Profile.
+
+Personal things are not sections here. Profile is its own screen, holding your name, timezone, password, the context your agents read about you, and **Chat display** (Verbose chat). Usage is its own screen, showing token totals by agent, model, provider, and session.
+
+### Saving changes
+
+A changed value is not stored until you press **Save changes**. As soon as a value differs from the saved one, a Save bar appears with the number of unsaved changes, **Discard** and **Save changes**. Buttons that act at once (Test, Check, Rotate, Restart, God Mode, Delete, Clear) are not part of a Save.
+
+- Leaving a section, or following a link elsewhere in the app, with unsaved changes asks **Leave without saving 2 changes?** (with your number) first. **Stay** keeps you where you were; **Leave** drops the changes. On a phone the **Settings** back button asks the same. Closing or reloading the tab gets the browser's own question.
+- Settings marked **Password** ask for your password once per Save, listing what the Save stores. If you cancel, nothing is stored and your changes stay on the page. When you sign in through omnipus.ai, a confirmation replaces the password field.
+- Settings marked **Needs restart** are stored at once but used only after a gateway restart. Right after such a Save, **Restart now?** offers to restart. **Later** keeps a banner at the top of every section, "N saved changes wait for a gateway restart", with **Restart now** and **Show changes** (each change with the value running now and the saved value it gets after the restart; "saved, not applied" means the gateway could not apply it).
+
+A Save ends in one of four ways, shown next to each setting:
+
+| What you see | What it means |
+|---|---|
+| **Saved at** and the time | Stored and in use |
+| **Saved, but not in use yet. Restart the gateway to apply it.** | Stored; the running gateway still uses the old value |
+| An error under the setting, and "N changes could not be saved" | Nothing was stored for that setting; your change stays on the page |
+| "N changes may not have been saved", with **Retry** | The answer was lost; Settings checks what was stored and tells you |
+
+If part of a section cannot be loaded, that part shows what could not be loaded, the server's reason and **Retry**, which loads only that part again. Only that part is blocked from saving; your changes elsewhere in the section stay and still save. A value stored outside its range (for example by editing the configuration file by hand) is shown as stored and marked; the Save bar then asks you to fix it before saving.
+
+**This setting was changed somewhere else while you were saving** means another tab or program stored a different value at the same time. The message names the value that is stored now.
+
+**Third-party agents** saves all three programs together, so two tabs saving that section at once keep whichever saved last.
+
+### When the port or address changes
+
+The page can only talk to the address it was opened from. When a restart moves the gateway to a new port, the **Restart now?** window says the new address and, if you reach Omnipus through a proxy, which port the proxy must point at. Once the old address stops answering, **Open the new address** takes you there, and Settings at the new address confirms the restart. If nothing changes within 60 seconds, the window says so: check that the gateway is running and read its log.
 
 ## When you would use it
 
@@ -34,7 +65,7 @@ API keys are stored encrypted on this server, never in the main configuration fi
 
 ## Web search
 
-In **Settings** → **Integrations**, **Web Search** says: "Your agents search with the default service. If it fails, the fallback takes over." When the search roles are available, two cards appear:
+In **Settings → Providers**, **Web Search** says: "Your agents search with the default service. If it fails, the fallback takes over." When the search roles are available, two cards appear:
 
 | Card | What you can do |
 |---|---|
@@ -102,27 +133,42 @@ SearXNG is no longer offered: on upgrade, Omnipus removes its old configuration,
 
 ## Where each setting lives
 
-Each tab and neighbor screen has one job.
+Each section and neighbor screen has one job.
 
-| Screen or tab | What it is for |
+| Screen or section | What it is for |
 |---|---|
-| Settings, Providers | Connect providers, manage keys and sign-ins, set the default model |
-| Settings, Models | Context budget: per-result caps, the combined share of the model's context window used by tool results, and model context-length overrides |
+| Settings, Providers | Connect providers, manage keys and sign-ins, set the default model; **Voice input**: the Active transcriber and a key for each voice service; web-search providers |
+| Settings, Memory & recaps | What the team remembers: recap settings. How long memory is kept is in Data & retention |
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Third-party agents | The program and standard parameters Omnipus uses for each external command-line tool (Claude Code, Codex, opencode) |
-| Settings, Integrations | Web-search and voice-input providers, with their keys |
-| Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
-| Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
-| Settings, Data | Session retention, storage numbers, clearing sessions |
-| Settings, Memory | What the team remembers: recap and retrospective settings |
-| Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
-| Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, the goal completion budget, and idle-reminder and stalled-work check-in timers |
-| Settings, Chat | Chat display, including the verbose view of tool calls; the **Verbose chat** toggle shows or hides the context-window retry notice, "Context window exceeded. Compressing history and retrying..." |
+| Settings, Limits | Three groups, each closed until you open it: **Context and tool results** (context budget), **Model overrides** (context length per model) and **Agents and goals** (tool calls per turn, agents at once, goal timers; every value there asks for your password) |
+| Settings, Protection | Security health, Auto-approve (saved with **Save changes**, Password badge), the **Turn on God Mode…** button (acts at once, never part of a Save), prompt-injection **Defense level** (Low, Medium or High, saved with **Save changes**; it applies without a restart), per-agent rate limits, the audit log |
+| Settings, Sandbox & network | Sandbox mode, filesystem model, shell workspace limit, allowed folders, internal network addresses (all asking for your password, on one Save), and the network proxy for shell commands |
+| Settings, Keys & secrets | The credential vault |
+| Settings, Gateway | Bind address, port, gateway token, preview server, log level; restarting the gateway |
+| Settings, Data & retention | How long chat history and memory are kept, storage numbers, clearing all chat history |
 | Settings, About | Version and build information |
-| Profile | Your name, timezone, font size, password, and workspace context |
+| Profile | Your name, timezone, font size, password, workspace context, and Chat display (Verbose chat) |
 | Usage | Token totals by period, agent, model, provider, and session; cache-hit percentage by agent and provider |
 
-**Tool-result share limit**, under **Settings → Models**, sets the maximum share of the active model's context window that all tool results together may occupy before trimming is needed. The context window is how much information the model can read at once. This is a percentage of the whole window, not the smaller budget left after reserving space for output and instructions, and it replaces the absolute character count. The default is **50%**. Enter a percentage **greater than 0% and no more than 100%**; fractional percentages are accepted.
+Old links keep working. An old `?tab=` name opens the section that holds those settings now:
+
+| Old link | Opens |
+|---|---|
+| `models`, `performance`, `context` | Limits |
+| `integrations` | Providers |
+| `security` | Protection |
+| `chat` | Profile, Chat display |
+| `backup`, `backups`, `restore` | Data & retention, with the notice "Backup and restore were removed." |
+| `devices`, `signin`, or a name Settings does not know | Providers |
+
+Device pairing and signed-in browsers are not in Settings at the moment. Tool permissions and whether unverified skills may load are set in [Skills & Tools](skills.md).
+
+**Voice input**, under **Settings → Providers**, holds the **Active transcriber**: the one service that turns your voice messages into text. Only services that have a key are offered. Changing it is part of the Providers Save and asks for your password. Each voice service has its own row; **Add key** or **Edit key** opens a side panel with the key field and a show/hide button, and **Save key** there asks for your password. The default model on the same page is saved by the same **Save changes**; it does not ask for the password.
+
+**Settings → Limits** opens with its three groups closed. The **No context length** link on a model opens Limits with **Model overrides** open and a new row filled in for that model; it is stored only when you press **Save changes**. If one group cannot be loaded, only that group shows the error and **Retry**; the other groups still save.
+
+**Tool-result share limit**, under **Settings → Limits**, sets the maximum share of the active model's context window that all tool results together may occupy before trimming is needed. The context window is how much information the model can read at once. This is a percentage of the whole window, not the smaller budget left after reserving space for output and instructions, and it replaces the absolute character count. The default is **50%**. Enter a percentage **greater than 0% and no more than 100%**; fractional percentages are accepted.
 
 For scripts, the same setting is `context.tool_result_share_fraction` in configuration and `tool_result_share_fraction` on `GET` / `PUT /api/v1/settings/context`. Send the fraction, not the percentage: `0.125` means 12.5%. An omitted field in a partial update keeps the saved value; it does not reset to 50%. Null, text, booleans, zero and values outside the interval are rejected. A successful update takes effect on the next turn without a restart.
 
@@ -130,11 +176,11 @@ The existing Usage screen counts recorded agent-turn-loop tokens, not money. Aux
 
 For **ChatGPT (subscription)**, Omnipus uses the same conversation identifier on successive calls to help the provider reuse cached input. This routing identifier is not built from credentials or message text. Reuse is not guaranteed: **Cache hit** measures the share of input tokens actually read from cache, not the percentage of calls with any cache reuse.
 
-There is no longer a computed default for `performance.max_parallel_agents`. Leave the field blank to let live available memory govern each new agent turn; the Performance tab reports this as "automatic — bounded by available memory". Set a positive whole number when you need an explicit cap.
+There is no longer a computed default for `performance.max_parallel_agents`. Leave the field blank to let live available memory govern each new agent turn; the Limits section reports this as "automatic — bounded by available memory". Set a positive whole number when you need an explicit cap.
 
 If the host cannot measure available memory, Omnipus holds agent concurrency at a floor of **two** turns. It refuses to grow, never to run: the first two turns can start, while a third concurrent turn is refused. Set `performance.max_parallel_agents` explicitly if the host can safely support more.
 
-The rate limits live in Settings, Security, under its advanced section. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank, or enter 0, for no limit. A change is saved on its own and applies to running agents without a restart; if the save fails, the section shows the error instead of **Saved**. Both number fields name that save status as their description, so a screen reader reads **Saved** or the error when you move to either field. For scripts, the same two numbers are `max_agent_llm_calls_per_hour` and `max_agent_tool_calls_per_minute` on `GET` / `PUT /api/v1/security/rate-limits`. A time limit for a single command and a time limit for background processes are not offered in Settings for now, because Omnipus does not apply them yet.
+The rate limits live in Settings, Protection. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank for no limit. A change is stored when you press **Save changes** and applies to running agents without a restart; if the save fails, the error appears under the field. For scripts, the same two numbers are `max_agent_llm_calls_per_hour` and `max_agent_tool_calls_per_minute` on `GET` / `PUT /api/v1/security/rate-limits`. A time limit for a single command and a time limit for background processes are not offered in Settings for now, because Omnipus does not apply them yet.
 
 Profile holds one setting your agents read every turn: **Workspace Context**. It is a free-text page about you — your role, your preferences, how you like answers — saved automatically and shared with all agents. Your display name, timezone, and font size are personal display choices stored in this browser, so they do not follow you to another machine.
 
@@ -178,7 +224,7 @@ Each worker's **Runtime** tab shows the saved program and parameters read-only, 
 
 ## Goal timers
 
-The goal timer controls live in **Settings → Performance**, beside the goal completion budget. They govern when the existing keeper can start another work turn, not how long that turn may run.
+The goal timer controls live in **Settings → Limits**, beside the goal completion budget. They govern when the existing keeper can start another work turn, not how long that turn may run.
 
 | Control | Default | Accepted values | What it controls |
 |---|---|---|---|
@@ -202,7 +248,7 @@ If a save reports **saved, but not applied yet**, do not treat it as a successfu
 
 ## Tool calls per turn
 
-**Max tool calls per turn**, on the Performance tab, sets an agent's normal work budget for each turn. For native agents, it counts working rounds, not individual tool calls: a round can run several calls. Pending follow-ups or winding down can extend the current turn beyond that normal budget, up to a hard safety bound of twice the configured number of rounds. A task run can contain several turns, so this is not a total budget for the whole task.
+**Max tool calls per turn**, in Settings, Limits, sets an agent's normal work budget for each turn. For native agents, it counts working rounds, not individual tool calls: a round can run several calls. Pending follow-ups or winding down can extend the current turn beyond that normal budget, up to a hard safety bound of twice the configured number of rounds. A task run can contain several turns, so this is not a total budget for the whole task.
 
 When a native chat turn exhausts its budget without a final answer, Omnipus ends that turn and records a system notice explaining the limit. This notice is generated by Omnipus, not written by the model, and carries no model attribution. External workers use their command-line tool's turn cap and error reporting instead; see [Workers and delegation](agents.md#workers-and-delegation).
 
@@ -218,9 +264,9 @@ A turn can also stop before the limit when the agent repeats itself without prog
 
 ### How to change it
 
-1. Open Settings, then the **Performance** tab.
-2. Find the **Tool calls per turn** card and type a new number into **Max tool calls per turn**. It saves by itself a moment after you stop typing.
-3. If the new value is lower than the current one and some agents have their own higher limit, a dialog lists each of those agents as *old value → new value*. Click **Lower limits** to go ahead, or cancel to change nothing.
+1. Open Settings, then the **Limits** section.
+2. Open the **Agents and goals** group and type a new number into **Max tool calls per turn**. Nothing is stored yet: the Save bar counts the change.
+3. Click **Save changes**. If the new value is lower than the current one and some agents have their own higher limit, a dialog lists each of those agents as *old value → new value*. Click **Lower limits** to go ahead, or cancel to change nothing.
 4. Re-type your password when asked. (Where there is no local password to re-type, you confirm the change instead.)
 
 Every change is recorded in the audit log as a `security_setting_change` event. The global limit is recorded as `agents.defaults.max_tool_iterations`, and each lowered agent as `agents.<agent id>.max_tool_iterations`, with the old and new values.
@@ -246,7 +292,7 @@ Rarely, a save is written but not yet in force. A warning then starts with **"Sa
 
 | The warning reads | What happened |
 |---|---|
-| "Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: …" | `config.json` holds the new value, but the running configuration could not be refreshed. The Performance tab keeps showing the value you saved, with this notice, until the gateway reloads or restarts. |
+| "Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload: …" | `config.json` holds the new value, but the running configuration could not be refreshed. The Limits section keeps showing the value you saved, with this notice, until the gateway reloads or restarts. |
 | "Saved, but not applied yet: … the agent reload failed …" | The running configuration has the new value, but the agents could not be reloaded with it. Their next turns keep the old limit. |
 
 Either way nothing is rolled back: the value is in `config.json`, agents it lowered are already lowered, and the change is in the audit log. The new limit applies after the next reload or a gateway restart.
@@ -260,14 +306,14 @@ If `config.json` holds a value the setting does not accept, for example after a 
 | Missing, or below 1 (such as 0) | 200, the shipped value |
 | Above 1000 (such as 5000) | 1000 |
 
-The gateway log carries a warning at start-up, and the Performance tab shows a warning naming the saved value and the one in use. Save a value from 1 to 1000 in the field to replace the saved one.
+The gateway log carries a warning at start-up, and the Limits section shows a warning naming the saved value and the one in use. Save a value from 1 to 1000 in the field to replace the saved one.
 
 ### Changing it outside Settings
 
-Only Settings, Performance changes this limit, because it asks for your password and shows you which agents a lowering affects. Other ways in are refused:
+Only Settings, Limits changes this limit, because it asks for your password and shows you which agents a lowering affects. Other ways in are refused:
 
 - The general configuration endpoint, `PUT /api/v1/config`, refuses a body that includes `agents.defaults.max_tool_iterations` with status 403 and "agents.defaults.max_tool_iterations is a blocked path — use the dedicated endpoint". Nothing in that body is saved. Other changes to `agents.defaults` through this endpoint keep the saved limit as it is.
-- The `set_config` tool that agents use to change configuration from a chat refuses the key and points to Settings, Performance. To limit one agent from a chat, ask for that agent's own value instead; see [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
+- The `set_config` tool that agents use to change configuration from a chat refuses the key and points to Settings, Limits. To limit one agent from a chat, ask for that agent's own value instead; see [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
 
 ### If you are upgrading
 
@@ -276,7 +322,7 @@ Only Settings, Performance changes this limit, because it asks for your password
 
 ## Delegation limits
 
-How much work one agent can hand to another is bounded in two ways: a Performance-tab setting for how many delegated sessions may run at once, and a chain-depth cap set by `performance.max_delegation_depth` in `config.json` (a workspace **Team** edge can set a tighter depth for a particular agent pair). Each behaves sensibly when left blank. There is no time limit: a delegated session runs until it finishes or someone stops it (see "How long a child may run" below).
+How much work one agent can hand to another is bounded in two ways: a Limits setting for how many delegated sessions may run at once, and a chain-depth cap set by `performance.max_delegation_depth` in `config.json` (a workspace **Team** edge can set a tighter depth for a particular agent pair). Each behaves sensibly when left blank. There is no time limit: a delegated session runs until it finishes or someone stops it (see "How long a child may run" below).
 
 ### How deep delegation may go
 
@@ -300,7 +346,7 @@ The protection that makes the upgrade run only once when two Omnipus instances s
 
 `performance.max_parallel_agents` caps how many delegated sessions execute a turn at the same time. When the cap is reached, a new delegation is not refused — it is **queued**, and the delegating agent's tool result tells it its place in line. Queued sessions start in order as slots free up. Use `delegate` with `action: "stop_all"` and that child's `session_id` to stop the queued child and its descendants. `cancel` is not a delegate action; `/cancel` is the separate chat command for Stop all.
 
-Leave the field blank and live available memory governs each new turn, reported on the Performance tab as "automatic — bounded by available memory".
+Leave the field blank and live available memory governs each new turn, reported in the Limits section as "automatic — bounded by available memory".
 
 ### How long a child may run
 
@@ -353,19 +399,40 @@ Three protections are fixed in the code on purpose. They guard against malformed
 - When it checks who may steer a session, it climbs at most **64** ancestors — again a guard against a corrupt or looping chain, far beyond any real delegation depth.
 - The side panel holds at most **50** pending status updates for children whose "started" signal has not arrived yet, so a gap in the stream cannot grow memory without bound.
 
+## Data & retention
+
+**How long data is kept** holds two settings. Both are cleaned up each night.
+
+| Setting | Range | Default |
+|---|---|---|
+| Keep chat history for | 1 to 365 days | 90 |
+| Keep memory for | 1 to 730 days | 180 |
+
+**Keep forever**, next to the memory day count, stops the nightly clean-up of memory (the agents' reflections on past chats); the day count is switched off and kept for later. When you turn it off again, older reflections are deleted at the next nightly clean-up. If `config.json` sets the older `storage.retention.disabled` switch, nothing is deleted at all: the section says chat history and memory are both kept forever because of a setting in the configuration file, and that the day counts apply once it is removed. You can still change the day counts.
+
+These values are written only through Settings (or `GET` / `PUT /api/v1/settings/retention`); a whole-configuration `PUT /api/v1/config` that would change them is refused.
+
+**Clear all chat history** deletes every chat transcript after one confirmation. It cannot be undone.
+
+## Keys & secrets
+
+Adding a key and re-encrypting the vault ask for your password. Deleting a key asks one confirmation, **Delete this key?**, but not the password.
+
+The gateway token, under Gateway → Access, is used by apps and programs to sign in. **Rotate…** asks first, because every app and program must then sign in again with the new token.
+
 ## Limits and things to watch
 
 - Usage is measured in tokens. If a provider bill surprises you, the Usage screen tells you which agent and which model drove it, not what it cost.
-- Session retention is 90 days by default, adjustable from 1 to 365 days on the Data tab. Older transcripts are deleted automatically, and that deletion is permanent.
-- **Clear all sessions** on the Data tab deletes every ordinary chat at once. There is no undo; if you need to keep the history, copy the data folder outside the app before clearing it. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
-- **Backup and Restore has been removed** from Settings → Data and the API. Existing backup files on disk are not deleted. Use agent packages (export/import) to move agents between installations; packages are not a full backup of the data folder.
+- Session retention is 90 days by default, adjustable from 1 to 365 days in Data & retention. Older transcripts are deleted automatically, and that deletion is permanent.
+- **Clear all chat history** in Data & retention deletes every ordinary chat at once. There is no undo; if you need to keep the history, copy the data folder outside the app before clearing it. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
+- **Backup and Restore has been removed** from Settings → Data & retention and the API. Existing backup files on disk are not deleted. Use agent packages (export/import) to move agents between installations; packages are not a full backup of the data folder.
 - A sign-in can expire. The provider row shows the state, and signing in again the same way restores it.
-- Model changes on the Models tab apply on the next turn, with no restart; gateway port changes do need a restart.
+- Changes in Limits apply on the next turn, with no restart; gateway port changes do need a restart.
 - Your Profile display settings stay in this browser. The workspace context, by contrast, lives on the server, so every browser and agent sees the same text.
 
 ## Related pages
 
-- [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, and the audit log.
+- [security](security.md) — Protection, Sandbox & network and Keys & secrets: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
 - [agents](agents.md) — giving one agent its own model instead of the default, the agent roster, and external workers.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.

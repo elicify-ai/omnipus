@@ -59,7 +59,7 @@ When a wait runs out, cleanup continues and the log shows a warning such as `Clo
 
 ## A connection shows a credential error (degraded)
 
-A connector, provider, mailbox, MCP server, or assistant-connector whose stored secret is missing, was deleted, or can no longer be read is shown as degraded — the row's or card's error names the exact credential reference to fix, for example `secret reference MY_BOT_TOKEN is missing from the credential store`. Missing credential references are handled as integration-specific errors. An individual authentication failure is handled the same way when another stored entry decrypts. Every integration using that reference can be affected. Other credential failures—including malformed entry encodings—can stop startup or reject reloads and settings refreshes even if another entry decrypts. More than one integration can depend on the same credential reference. A whole-vault failure is different, as described below. The reason shows where the integration lives: a chat-channel or mailbox row on the **Connectors** screen shows it under its status badge, a provider's row under **Settings → Providers** shows it as the row's error line, and an MCP server's card under **Skills & Tools → MCP Servers** shows it under the status badge. **Doctor** (Settings → Security, Security health) flags degraded chat channels only; for providers, mailboxes and MCP servers, read the reason on their own row or card.
+A connector, provider, mailbox, MCP server, or assistant-connector whose stored secret is missing, was deleted, or can no longer be read is shown as degraded — the row's or card's error names the exact credential reference to fix, for example `secret reference MY_BOT_TOKEN is missing from the credential store`. Missing credential references are handled as integration-specific errors. An individual authentication failure is handled the same way when another stored entry decrypts. Every integration using that reference can be affected. Other credential failures—including malformed entry encodings—can stop startup or reject reloads and settings refreshes even if another entry decrypts. More than one integration can depend on the same credential reference. A whole-vault failure is different, as described below. The reason shows where the integration lives: a chat-channel or mailbox row on the **Connectors** screen shows it under its status badge, a provider's row under **Settings → Providers** shows it as the row's error line, and an MCP server's card under **Skills & Tools → MCP Servers** shows it under the status badge. **Doctor** (Settings → Protection, Security health) flags degraded chat channels only; for providers, mailboxes and MCP servers, read the reason on their own row or card.
 
 To fix it, re-enter the credential where the row points you — **Connectors** for a chat channel or mailbox, **Settings → Providers** for a model key, the Credential Vault for a raw entry — and save. The connection recovers on the next settings save or restart.
 
@@ -137,7 +137,7 @@ Finish onboarding to fix it. Open `http://localhost:5000` — on a fresh install
 
 ## A chat turn stops before a finished answer
 
-If a turn fails after text starts streaming, chat shows a failure message in place of the unfinished reply, even with **Verbose chat** off. Enable **Settings → Chat → Verbose chat** before retrying to inspect tool activity and any available technical details. A turn you stop yourself still keeps its partial reply.
+If a turn fails after text starts streaming, chat shows a failure message in place of the unfinished reply, even with **Verbose chat** off. Enable **Profile → Chat display → Verbose chat** before retrying to inspect tool activity and any available technical details. A turn you stop yourself still keeps its partial reply.
 
 When you stop a turn, the stopped-turn notice appears after the partial reply, and a reopened or reloaded conversation shows the same order, with the reply and its tool cards together in one bubble. Conversations saved before this was fixed (#1775) keep their old saved order: the notice sits before the partial reply and the reply can show split in two. That is cosmetic. Nothing is lost, and new stops are saved in the corrected order. If the reload happens in the moment before the notice is saved (a slow disk or a stalled provider can delay it by about 2 seconds), the notice is shown once: the saved copy is matched to the one already on screen. If you press Stop before the assistant has written anything, you now see the stopped-turn notice straight away, the same as after a reload, instead of an empty "(interrupted)" bubble with no notice.
 
@@ -247,7 +247,7 @@ Before the reply starts, the waiting notice shows an end time for **this attempt
 
 ## The model ended its answer without sending anything
 
-On a connection that uses the OpenAI-compatible streaming format, the provider can close a streamed answer without sending any text, any tool call or any signal that the answer is finished. Omnipus does not treat that as a valid empty reply. It follows the same rule as a call that never answered: when the agent has a fallback model, the fallback is tried; otherwise the call is tried again, 3 attempts in total, with a retry line in between that names the model, for example "model-a sent an empty reply. Retrying automatically in 0:02 (attempt 2 of 3)." If every attempt ends empty, the turn ends with the error `provider_empty_reply`: "The model provider ended its answer without sending anything." Retry. If it keeps happening, turn on **Settings → Chat → Verbose chat** before retrying again, then inspect any **Technical details** shown with the new failure. Turning it on after a failure or reopening the chat does not recover details that were not kept.
+On a connection that uses the OpenAI-compatible streaming format, the provider can close a streamed answer without sending any text, any tool call or any signal that the answer is finished. Omnipus does not treat that as a valid empty reply. It follows the same rule as a call that never answered: when the agent has a fallback model, the fallback is tried; otherwise the call is tried again, 3 attempts in total, with a retry line in between that names the model, for example "model-a sent an empty reply. Retrying automatically in 0:02 (attempt 2 of 3)." If every attempt ends empty, the turn ends with the error `provider_empty_reply`: "The model provider ended its answer without sending anything." Retry. If it keeps happening, turn on **Profile → Chat display → Verbose chat** before retrying again, then inspect any **Technical details** shown with the new failure. Turning it on after a failure or reopening the chat does not recover details that were not kept.
 
 ## The provider rejects your model requests
 
@@ -289,11 +289,11 @@ If the final streamed reply cannot be saved, the live chat shows **"Sorry, I cou
 
 A failed write does not prove that the reply or its error notice was saved. The current connection's retained event history can carry the notice, and active-turn handling attempts to record it, but failing storage can prevent that record too. After a reload or restart, inspect the saved history and gateway log rather than assuming the notice must return. Fix disk space, permissions or the path problem before retrying. Work already done outside the conversation is not undone.
 
-The **context-window compression/retry notice** described above — not a failed-save notice — is shown or hidden by **Settings → Chat → Verbose chat**. Live chat, reopened history and conversation replay use that same display setting.
+The **context-window compression/retry notice** described above — not a failed-save notice — is shown or hidden by **Profile → Chat display → Verbose chat**. Live chat, reopened history and conversation replay use that same display setting.
 
 ### "This endpoint did not report a context length for this model"
 
-A local or self-hosted model's endpoint did not report how much it can read at once, and no operator override exists. Omnipus refuses to run on a guessed window rather than risk silent overflow. Set the context length explicitly at **Settings → Models → Model overrides → Context length**, then retry.
+A local or self-hosted model's endpoint did not report how much it can read at once, and no operator override exists. Omnipus refuses to run on a guessed window rather than risk silent overflow. Set the context length explicitly at **Settings → Limits → Model overrides**, then retry.
 
 ### 404 "No endpoints found that support tool use"
 
@@ -329,7 +329,7 @@ The `model` value reaches the provider exactly as written; on OpenRouter, IDs ca
 }
 ```
 
-`api_key_ref` names an entry in the encrypted credential store. Set it without touching files with `omnipus credentials set openrouter_api_key sk-or-v1-...`, or use **Settings → Security → Credential Vault** in the web app.
+`api_key_ref` names an entry in the encrypted credential store. Set it without touching files with `omnipus credentials set openrouter_api_key sk-or-v1-...`, or use **Settings → Keys & secrets** in the web app.
 
 ## Saving a search integration fails with "could not read the current configuration"
 
@@ -376,7 +376,7 @@ During that format conversion, the gateway refuses to start and leaves the crede
 | "N of M entries failed authentication" and names them | The named entries could not be authenticated | Back up `credentials.json`, remove the named entries, restart, then enter their values again |
 | "already migrated it once" | A version-1 file is present alongside the completed-conversion marker | Remove `credentials.json.migrated` only if you deliberately restored a trusted version-1 backup. Otherwise treat the file as potentially tampered with and investigate it |
 
-To remove an entry by hand: stop the gateway, back up `credentials.json`, open it in a text editor, and delete the named entry (its name and its `nonce` and `ciphertext` lines) from the `credentials` section. Restart the gateway, then enter the value again in **Settings**, **Security**, **Credential Vault**, or with `omnipus credentials set <name> <value>`.
+To remove an entry by hand: stop the gateway, back up `credentials.json`, open it in a text editor, and delete the named entry (its name and its `nonce` and `ciphertext` lines) from the `credentials` section. Restart the gateway, then enter the value again in **Settings**, **Keys & secrets**, or with `omnipus credentials set <name> <value>`.
 
 ### Restoring a credential backup
 

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckCircle,
@@ -17,6 +18,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   fetchIntegrationProviders,
   configureIntegrationProvider,
@@ -30,6 +32,10 @@ import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp, type StepUpDescribeChange } from './useStepUp'
 import { useSearchConnectionChecks } from './useSearchConnectionChecks'
 import { WebSearchGroup, orderSearchProviders, KEY_NOT_REACHING_SEARCH_LABEL } from './WebSearchGroup'
+import { FormRow, usePrimaryVariant } from './SaveBar'
+import { useSectionSavePart } from './SectionSaveScope'
+import { toWriteResponse } from './saveOutcome'
+import type { FormSavePart } from './useFormSaveBar'
 
 export function IntegrationsSection() {
   const { addToast } = useUiStore()
@@ -53,10 +59,47 @@ export function IntegrationsSection() {
     data,
     isLoading,
     isError,
+    error: integrationsError,
+    refetch: refetchIntegrations,
+    isFetching: integrationsFetching,
   } = useQuery({
     queryKey: ['integrations'],
     queryFn: fetchIntegrationProviders,
   })
+
+  // Settings redesign #1519 (FR-025, FR-053): Active transcriber is a draft
+  // on the Providers Save bar. Its write is password-protected
+  // (rest_integrations_roles.go requires re-auth), so it carries the Save's
+  // one password prompt.
+  const savedTranscriber = data?.voice.find((p) => p.active)?.id ?? ''
+  const [transcriberDraft, setTranscriberDraft] = useState<string | null>(null)
+  const transcriberChanged = transcriberDraft !== null && transcriberDraft !== savedTranscriber
+  const shownTranscriber = transcriberChanged ? (transcriberDraft as string) : savedTranscriber
+  const sentTranscriber = useRef<string | null>(null)
+  const transcriberPart: FormSavePart = {
+    id: 'active-transcriber',
+    count: transcriberChanged ? 1 : 0,
+    invalidCount: 0,
+    passwordLabels: transcriberChanged ? ['Active transcriber'] : [],
+    write: ({ reauthToken }) => {
+      const id = transcriberDraft as string
+      sentTranscriber.current = id
+      return toWriteResponse(() => configureIntegrationProvider(id, { kind: 'voice', active: true }, reauthToken))
+    },
+    check: async () => {
+      const fresh = await fetchIntegrationProviders()
+      const ok = fresh.voice.find((p) => p.active)?.id === sentTranscriber.current
+      if (ok) queryClient.setQueryData(['integrations'], fresh)
+      return ok ? 'saved' : 'not-saved'
+    },
+    onOutcome: (outcome) => {
+      if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
+      setTranscriberDraft(null)
+      void queryClient.invalidateQueries({ queryKey: ['integrations'] })
+    },
+    discard: () => setTranscriberDraft(null),
+  }
+  const { outcome: transcriberOutcome, ownBar } = useSectionSavePart(transcriberPart)
 
   const { mutateAsync: applyChange, isPending: isSaving } = useMutation({
     mutationFn: ({ id, body, token }: { id: string; body: IntegrationProviderUpdateRequest; token?: string }) =>
@@ -368,13 +411,14 @@ export function IntegrationsSection() {
     )
   }
 
-  // Voice rows: untouched by ADR-096 — the spec leaves voice integrations
-  // alone (one active transcriber). The "Active" badge, the "Set active"
-  // button and the coupled "Save & activate" keep their pre-ADR behaviour
-  // and their pre-ADR testids, which the existing voice tests assert.
+  // Voice rows (Settings redesign #1519, FR-053): which service transcribes
+  // is the Active transcriber choice above; each row only shows its state
+  // and opens its key in the side panel below.
+  const voiceKeyProvider = data?.voice.find((p) => p.id === expanded && p.requires_key)
+  const primaryVariant = usePrimaryVariant()
+
   const renderVoiceProvider = (p: IntegrationProvider) => {
     const isExpanded = expanded === p.id
-    const keyVal = apiKeys[p.id] ?? ''
 
     return (
       <Card
@@ -408,21 +452,10 @@ export function IntegrationsSection() {
           </div>
 
           <div className="flex items-center gap-[var(--space-2)] shrink-0">
-            {p.configured && !p.active && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
-                onClick={() => requestChange(p.id, { kind: p.kind, active: true })}
-                disabled={isSaving}
-                data-testid={`activate-${p.id}`}
-              >
-                Set active
-              </Button>
-            )}
             {p.requires_key && (
               <Button
                 size="sm"
+                variant="outline"
                 className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
                 onClick={() => setExpanded(isExpanded ? null : p.id)}
                 data-testid={`addkey-${p.id}`}
@@ -434,53 +467,6 @@ export function IntegrationsSection() {
             )}
           </div>
         </div>
-
-        {isExpanded && p.requires_key && (
-          <div className="border-t border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)] bg-[var(--color-surface-2)]">
-            <div>
-              <Label htmlFor={`key-input-${p.id}`} className="mb-[var(--space-2)] block">API Key</Label>
-              <div className="relative">
-                <Input
-                  id={`key-input-${p.id}`}
-                  type={showKey[p.id] ? 'text' : 'password'}
-                  value={keyVal}
-                  onChange={(e) => setApiKeys((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                  placeholder={`${p.display_name} API key`}
-                  className="pr-[var(--space-5)] font-mono text-[length:var(--type-utility-xs-size)]"
-                  autoComplete="off"
-                  data-testid={`key-input-${p.id}`}
-                />
-                <IconButton
-                  variant="ghost"
-                  type="button"
-                  onClick={() => setShowKey((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
-                  className="absolute right-2.5 top-1/2 h-auto w-auto -translate-y-1/2 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
-                  aria-label={showKey[p.id] ? 'Hide API key' : 'Show API key'}
-                >
-                  {showKey[p.id] ? <EyeSlash size={14} /> : <Eye size={14} />}
-                </IconButton>
-              </div>
-              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
-                Stored encrypted (AES-256-GCM) — saving requires re-typing your password.
-              </p>
-            </div>
-            <div className="flex justify-end gap-[var(--space-2)]">
-              <Button variant="outline" size="sm" onClick={() => setExpanded(null)}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={() =>
-                  requestChange(p.id, { kind: p.kind, api_key: keyVal.trim(), active: true })
-                }
-                disabled={!keyVal.trim() || isSaving}
-                data-testid={`save-${p.id}`}
-              >
-                Save &amp; activate
-              </Button>
-            </div>
-          </div>
-        )}
       </Card>
     )
   }
@@ -488,7 +474,7 @@ export function IntegrationsSection() {
   return (
     <div className="space-y-[var(--space-4)]">
       <div>
-        <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Integrations</h2>
+        <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Integrations</h3>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
           Configure the web-search and voice-input providers your agents use. API keys are stored
           encrypted; changes require re-typing your password.
@@ -496,7 +482,13 @@ export function IntegrationsSection() {
       </div>
 
       {isError && (
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load integrations. Please try again.</p>
+        <ReadErrorCallout
+          title="Failed to load integrations"
+          error={integrationsError}
+          onRetry={() => void refetchIntegrations()}
+          retrying={integrationsFetching}
+          data-testid="integrations-load-error"
+        />
       )}
 
       {isLoading ? (
@@ -543,12 +535,49 @@ export function IntegrationsSection() {
 
           <section className="space-y-[var(--space-2)]">
             <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-              <Microphone size={13} weight="bold" /> Voice Input
+              <Microphone size={13} weight="bold" /> Voice input
             </div>
             {data.voice.length === 0 ? (
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No voice providers available.</p>
             ) : (
-              data.voice.map(renderVoiceProvider)
+              <>
+                <FormRow
+                  label="Active transcriber"
+                  description="Turns your voice messages into text. One service at a time."
+                  password
+                  fieldId="settings-providers-active-transcriber"
+                >
+                  {({ id, describedBy, fieldId }) =>
+                    data.voice.some((p) => p.configured) ? (
+                      <select
+                        tabIndex={0}
+                        id={id}
+                        data-settings-field={fieldId}
+                        data-testid="active-transcriber"
+                        value={shownTranscriber}
+                        onChange={(e) => setTranscriberDraft(e.target.value)}
+                        aria-describedby={describedBy}
+                        className="flex h-9 w-full max-w-xs rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
+                      >
+                        {savedTranscriber === '' && <option value="">None</option>}
+                        {data.voice
+                          .filter((p) => p.configured)
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.display_name}
+                            </option>
+                          ))}
+                      </select>
+                    ) : (
+                      <p id={id} className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+                        Add a key to a voice service below first.
+                      </p>
+                    )
+                  }
+                </FormRow>
+                {transcriberOutcome}
+                {data.voice.map(renderVoiceProvider)}
+              </>
             )}
           </section>
         </>
@@ -563,7 +592,86 @@ export function IntegrationsSection() {
         onConfirm={acceptLocalRemoval}
         destructive
       />
+      {/* FR-053: a voice service's key opens in a side panel with the key
+          field and show/hide only (no Test, no Remove). The password prompt
+          opens over it; Cancel there closes only the prompt. */}
+      <Sheet
+        open={voiceKeyProvider !== undefined}
+        onOpenChange={(open) => {
+          if (!open && !stepUp.open) setExpanded(null)
+        }}
+      >
+        <SheetContent
+          side="right"
+          widthClass="w-[90vw] sm:max-w-lg"
+          className="p-0"
+          data-testid="voice-key-sheet"
+          aria-hidden={stepUp.open ? true : undefined}
+          inert={stepUp.open ? true : undefined}
+          onPointerDownOutside={(e) => {
+            if (stepUp.open) e.preventDefault()
+          }}
+        >
+          {voiceKeyProvider && (
+            <>
+              <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
+                <SheetTitle>{voiceKeyProvider.display_name} key</SheetTitle>
+              </SheetHeader>
+              <SheetDescription className="px-[var(--space-4)] pt-[var(--space-2)]">
+                Stored encrypted on this server. Saving the key asks for your password.
+              </SheetDescription>
+              <div className="px-[var(--space-4)] pt-[var(--space-3)] space-y-[var(--space-3)]">
+                <div>
+                  <Label htmlFor={`key-input-${voiceKeyProvider.id}`} className="mb-[var(--space-2)] block">API key</Label>
+                  <div className="relative">
+                    <Input
+                      id={`key-input-${voiceKeyProvider.id}`}
+                      type={showKey[voiceKeyProvider.id] ? 'text' : 'password'}
+                      value={apiKeys[voiceKeyProvider.id] ?? ''}
+                      onChange={(e) => setApiKeys((prev) => ({ ...prev, [voiceKeyProvider.id]: e.target.value }))}
+                      placeholder={`${voiceKeyProvider.display_name} API key`}
+                      className="pr-[var(--space-5)] font-mono text-[length:var(--type-utility-xs-size)]"
+                      autoComplete="off"
+                      data-testid={`key-input-${voiceKeyProvider.id}`}
+                    />
+                    <IconButton
+                      variant="ghost"
+                      type="button"
+                      onClick={() => setShowKey((prev) => ({ ...prev, [voiceKeyProvider.id]: !prev[voiceKeyProvider.id] }))}
+                      className="absolute right-2.5 top-1/2 h-auto w-auto -translate-y-1/2 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
+                      aria-label={showKey[voiceKeyProvider.id] ? 'Hide API key' : 'Show API key'}
+                    >
+                      {showKey[voiceKeyProvider.id] ? <EyeSlash size={14} /> : <Eye size={14} />}
+                    </IconButton>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-[var(--space-2)]">
+                  <Button variant="outline" size="sm" onClick={() => setExpanded(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={primaryVariant}
+                    onClick={() =>
+                      requestChange(voiceKeyProvider.id, {
+                        kind: voiceKeyProvider.kind,
+                        api_key: (apiKeys[voiceKeyProvider.id] ?? '').trim(),
+                      })
+                    }
+                    disabled={!(apiKeys[voiceKeyProvider.id] ?? '').trim() || isSaving}
+                    data-testid={`save-${voiceKeyProvider.id}`}
+                  >
+                    Save key
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+
       {stepUp.dialogs}
+      {ownBar}
     </div>
   )
 }

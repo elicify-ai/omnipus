@@ -96,7 +96,7 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 
 ### Automatic reminders
 
-An idle goal normally waits **60 seconds** without activity before another automatic reminder is eligible. In **Settings → Performance**, the reminder quiet window accepts a whole number from **30 to 3600 seconds**. It applies only when the goal is idle; it has no off switch and zero is not an off value. Busy-work check-ins use their own independent interval and switch, described below.
+An idle goal normally waits **60 seconds** without activity before another automatic reminder is eligible. In **Settings → Limits → Agents and goals**, the reminder quiet window accepts a whole number from **30 to 3600 seconds**. It applies only when the goal is idle; it has no off switch and zero is not an off value. Busy-work check-ins use their own independent interval and switch, described below.
 
 When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it.
 
@@ -150,7 +150,7 @@ Saving a bell item can fail independently of pausing the goal. Omnipus logs that
 
 ### One check-in for stalled background work
 
-While the goal's own background work is still busy, Omnipus observes the same progress signals listed above. By default, after **30 minutes without new progress**, measured from the first busy observation or the last fresh progress observation, it can start one system check-in on the same goal. **Settings → Performance** accepts a whole-number interval from **5 to 1440 minutes**. Stalled-work check-ins are **on by default**; their switch is the only way to turn them off. Turning them off retains the chosen minutes, and those minutes must stay within range even while off. It does not turn off ordinary idle reminders.
+While the goal's own background work is still busy, Omnipus observes the same progress signals listed above. By default, after **30 minutes without new progress**, measured from the first busy observation or the last fresh progress observation, it can start one system check-in on the same goal. **Settings → Limits → Agents and goals** accepts a whole-number interval from **5 to 1440 minutes**. Stalled-work check-ins are **on by default**; their switch is the only way to turn them off. Turning them off retains the chosen minutes, and those minutes must stay within range even while off. It does not turn off ordinary idle reminders.
 
 The two timers are independent. For example, a **5-minute** busy-work check-in can become due while a **3600-second** idle quiet window has not elapsed. Busy progress is observed on each sweep, not held behind idle quiet. Merely reserving or sending a check-in does not restart the separate idle quiet clock; real activity and the admitted turn keep their usual activity rules.
 
@@ -174,12 +174,12 @@ These numbers shape a goal's life:
 
 | Control | Value | Where it lives |
 |---|---|---|
-| Tries per goal | 20 by default | Settings, Performance, "Goal completion budget" |
+| Tries per goal | 20 by default | Settings, Limits, Agents and goals, "Goal completion budget" |
 | Task attempts | 3 by default | On the task |
 | Question rounds | 1 per goal | Fixed |
 | Automatic-reminder pause | 5 consecutive completed reminders without progress, or 3 consecutive failed reminder turns; no lifetime reminder limit | Fixed |
-| Idle reminder quiet window | 60 seconds by default; whole numbers from 30 to 3600 seconds; no off value | Settings, Performance; live without restart |
-| Stalled-background-work check-in | On by default; 30 minutes without new progress by default, adjustable from 5 to 1440 minutes; one per observed stall, re-armed by fresh progress | Settings, Performance; independent switch and live interval; off retains minutes |
+| Idle reminder quiet window | 60 seconds by default; whole numbers from 30 to 3600 seconds; no off value | Settings, Limits, Agents and goals; live without restart |
+| Stalled-background-work check-in | On by default; 30 minutes without new progress by default, adjustable from 5 to 1440 minutes; one per observed stall, re-armed by fresh progress | Settings, Limits, Agents and goals; independent switch and live interval; off retains minutes |
 | Idle expiry | 7 days, never while work is running | Server setting |
 | Active chat goals | 16 at a time | Server setting; tasks count separately |
 

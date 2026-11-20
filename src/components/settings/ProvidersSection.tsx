@@ -26,7 +26,7 @@
 //   FR-013 <BrandIcon> + lettermark fallback
 //   FR-014 <BrandDisclaimer> wherever marks appear
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Eye,
@@ -83,6 +83,9 @@ import { ProviderRow, isEntitlementEligible } from './ProviderRow'
 import { SignInDialog } from '@/components/providers/SignInDialog'
 import { ManageSignInDialog } from '@/components/providers/ManageSignInDialog'
 import { DefaultModelCard } from './DefaultModelCard'
+import { useSectionSavePart } from './SectionSaveScope'
+import { toWriteResponse } from './saveOutcome'
+import type { FormSavePart } from './useFormSaveBar'
 import { RemoveProviderDialog } from './RemoveProviderDialog'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
 import type { ProviderDetailSelection } from '@/components/providers/ProviderDetailPanel'
@@ -90,6 +93,7 @@ import { USABLE_PROVIDER_STATUSES } from '@/lib/providerStatus'
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
 import type {
   CatalogProvider,
+  DefaultModel,
   DefaultModelUpdateRequest,
   ProviderUpdateRequest,
   EntitlementResponse,
@@ -1036,22 +1040,45 @@ export function ProvidersSection() {
   })
 
   // ── ADR-068 US-4 — the default model ─────────────────────────────────────
-  const { mutate: saveDefaultModel, isPending: isSavingDefault } = useMutation({
-    mutationFn: (pair: DefaultModelUpdateRequest) => putDefaultModel(pair),
-    onSuccess: () => {
-      setChangingDefault(false)
-      setDefaultFilterId(undefined)
+  // Settings redesign #1519 (FR-010, FR-019): a picked default model is a
+  // draft on the Providers Save bar; Save sends it with PUT
+  // /providers/default-model (no password, spec "Sections and their endpoints").
+  const [defaultDraft, setDefaultDraft] = useState<DefaultModelUpdateRequest | null>(null)
+  const defaultChanged =
+    defaultDraft !== null &&
+    (defaultDraft.provider !== defaultModel?.provider ||
+      defaultDraft.model !== defaultModel?.model ||
+      (defaultDraft.reasoning_effort ?? defaultModel?.reasoning_effort ?? '') !== (defaultModel?.reasoning_effort ?? ''))
+  const shownDefault = defaultChanged && defaultDraft
+    ? { ...defaultModel, provider: defaultDraft.provider, model: defaultDraft.model, reasoning_effort: defaultDraft.reasoning_effort ?? defaultModel?.reasoning_effort, context_window: undefined, window_source: undefined, window_unknown: undefined } as DefaultModel
+    : defaultModel
+  const sentDefault = useRef<DefaultModelUpdateRequest | null>(null)
+  const defaultPart: FormSavePart = {
+    id: 'default-model',
+    count: defaultChanged ? 1 : 0,
+    invalidCount: 0,
+    write: () => {
+      const pair = defaultDraft as DefaultModelUpdateRequest
+      sentDefault.current = pair
+      return toWriteResponse(() => putDefaultModel(pair))
+    },
+    check: async () => {
+      const sent = sentDefault.current
+      const fresh = await getDefaultModel()
+      return sent && fresh.provider === sent.provider && fresh.model === sent.model ? 'saved' : 'not-saved'
+    },
+    onOutcome: (outcome) => {
+      if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
+      setDefaultDraft(null)
       queryClient.invalidateQueries({ queryKey: ['default-model'] })
       // Effort levels: chats and agents riding the default read its effort from the config.
       queryClient.invalidateQueries({ queryKey: ['config'] })
       // backs_default moves with it, so the rows are stale too.
       queryClient.invalidateQueries({ queryKey: ['providers'] })
-      addToast({ message: 'Default model updated', variant: 'success' })
     },
-    onError: (err: Error) => {
-      addToast({ message: getErrorMessage(err, 'Could not change the default model'), variant: 'error' })
-    },
-  })
+    discard: () => setDefaultDraft(null),
+  }
+  const { outcome: defaultOutcome, ownBar } = useSectionSavePart(defaultPart)
 
   // FR-019's row action: the same selector as the card, pre-filtered to one row.
   const openSetAsDefault = (provider: Provider) => {
@@ -1135,7 +1162,7 @@ export function ProvidersSection() {
     <div className="space-y-[var(--space-3)]">
       <div className="flex items-start justify-between gap-[var(--space-2-5)]">
         <div>
-          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h2>
+          <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h3>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             API keys are stored encrypted in credentials.json — never in config.json.
           </p>
@@ -1161,19 +1188,23 @@ export function ProvidersSection() {
       {/* ADR-068 FR-019 — the default-model control lives HERE and nowhere
           else, and it is the first card on the screen. */}
       <DefaultModelCard
-        defaultModel={defaultModel}
+        defaultModel={shownDefault}
         providers={providers}
         catalog={catalogDoc}
         status={defaultModelLoading ? 'loading' : defaultModelError ? 'error' : 'ready'}
-        isSaving={isSavingDefault}
         filterToProviderId={defaultFilterId}
         changing={changingDefault}
         onChangingChange={(next) => {
           setChangingDefault(next)
           if (!next) setDefaultFilterId(undefined)
         }}
-        onChange={(pair) => saveDefaultModel(pair)}
+        onChange={(pair) => {
+          setDefaultDraft(pair)
+          setChangingDefault(false)
+          setDefaultFilterId(undefined)
+        }}
       />
+      {defaultOutcome}
 
       {providersError ? (
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]" data-testid="providers-error">
@@ -1386,6 +1417,7 @@ export function ProvidersSection() {
       )}
 
       {stepUp.dialogs}
+      {ownBar}
 
       {signInTarget && (
         <SignInDialog

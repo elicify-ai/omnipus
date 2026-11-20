@@ -1,4 +1,5 @@
 import { ProfileSection } from '@/components/settings/ProfileSection'
+import { ChatSection } from '@/components/settings/ChatSection'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
 // ProfileScreen hosts the user's PERSONAL settings — identity, locale,
@@ -18,6 +19,10 @@ export function ProfileScreen() {
             </p>
           </div>
           <ProfileSection />
+          {/* Chat display moved here from the old Settings Chat tab (Settings redesign #1519, D-3 row 10). */}
+          <section id="chat-display" className="mt-[var(--space-6)] scroll-mt-[var(--space-4)]">
+            <ChatSection />
+          </section>
         </div>
       </div>
     </div>

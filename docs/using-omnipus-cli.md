@@ -394,13 +394,13 @@ Most jobs can be done from either place.
 | Run a one-off task | `omnipus <agent> "<prompt>"` | Chat |
 | Pick a model for one run | `--model <slug>` | The model picker in chat |
 | Manage API keys | `omnipus credentials …` | Settings → Providers |
-| Review the audit log | `omnipus audit` | Settings → Security |
+| Review the audit log | `omnipus audit` | Settings → Protection |
 | Create and edit agents | — | Ask Omnipus (**Add agent** in the sidebar or **Team → Add agent**); edit from the workspace's **Team** |
 | Move one custom agent to another install | `omnipus export`, `omnipus import`, `omnipus package inspect`, `omnipus package verify` | No separate screen. After a confirmed import the agent shows on the workspace **Team** |
 | Connect Telegram, Discord, Slack and more | — | The Connectors screen, Configure |
 | Add MCP servers | — | The Skills screen |
 | Follow task work | — | A workspace's Board and Calendar |
-| Set your preferences | — | Settings → Profile |
+| Set your preferences | — | Profile |
 
 ## Limits and things to watch
 

@@ -1,5 +1,5 @@
 /**
- * GodModeControl — Settings → Gateway god-mode switch (O14).
+ * GodModeControl — Settings → Protection, the "Turn on God Mode…" / "Turn off God Mode…" button (O14, FR-051).
  *
  * God-mode is the single global "bypass-permissions" switch. When ON it:
  *   - flips every agent's tool permissions from "ask" → "allow" (no prompts),
@@ -26,12 +26,12 @@
  * `supported` is true, even if `available` is currently false. `available`
  * means this BOOT was already authorized (via --allow-god-mode or a prior UI
  * enable + restart); it gates whether the override is live right now, not
- * whether the switch can be flipped. `persisted` is the raw config intent
+ * whether the button can act. `persisted` is the raw config intent
  * (sandbox.god_mode), read directly and NOT gated by `available` — it is what
- * this component's switch and toggle logic bind to (D1/D19), because
+ * this component's button and toggle logic bind to (D1/D19), because
  * `enabled` (== available && persisted) collapses "never armed" and "armed
  * via the UI, pending restart" to the same false value, which made an armed-
- * pending switch render as OFF with no way to disarm it.
+ * pending control read as OFF with no way to disarm it.
  *
  * The write goes through setGodMode() in api.ts (POST /api/v1/gateway/god-mode),
  * which returns { enabled, restart_required }. When enabling from a boot that
@@ -43,6 +43,7 @@
  * the restart modal never opens on disable.
  */
 
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useState, useEffect } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -55,6 +56,7 @@ import { isBypassUnavailable } from '@/hooks/useGodModeLiveStatus'
 import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
+import { PasswordBadge } from './SaveBar'
 
 export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolean } = {}) {
   const { addToast } = useUiStore()
@@ -70,7 +72,7 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
   // useGodModeLiveStatus, which shares it.)
   const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
 
-  const { data: godMode, isLoading: godModeIsLoading, isError, error } = useQuery({
+  const { data: godMode, isLoading: godModeIsLoading, isError, error, refetch: refetchGodMode, isFetching: godModeFetching } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
     enabled: appStateResolved && !devModeBypassKnown,
@@ -228,7 +230,7 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
   return (
     <div className="space-y-[var(--space-2-5)]">
       <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
-        Danger zone
+        God Mode
       </h3>
 
       <div
@@ -263,7 +265,10 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
                 // above: S1 (armed, pending restart) must not render as calm.
                 className={persisted ? 'text-[var(--color-error)]' : 'text-[var(--color-warning)]'}
               />
-              <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">God-mode</p>
+              <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
+                God-mode
+                <PasswordBadge />
+              </p>
             </div>
             <div id="god-mode-consequence-copy">
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
@@ -291,13 +296,14 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
                 </p>
               )}
               {isError && !bypassUnavailable && (
-                <p
+                <ReadErrorCallout
+                  title="Failed to load the God Mode status"
+                  error={error}
+                  onRetry={() => void refetchGodMode()}
+                  retrying={godModeFetching}
+                  blocksSaving={false}
                   data-testid="god-mode-fetch-error-note"
-                  className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
-                >
-                  Could not fetch god-mode status — gateway may be offline. The state shown here may
-                  be stale.
-                </p>
+                />
               )}
               {knownUnsupported && (
                 <p
@@ -340,45 +346,23 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
             </div>
           </div>
 
-          {/* Switch — accessible role=switch, danger styling when ON.
-              D1: bound to `persisted` (the config intent this control
-              actually governs), not `enabled` (whether it's live in THIS
-              process). Binding to `enabled` made an armed-but-pending-
-              restart switch render as OFF, and made requestToggle()'s
-              `!enabled` negation re-arm instead of disarm on every click. */}
-          {/* Kept on Button (not the catalogued Switch): the checked-state
-              track color here is danger red (--color-error), not the
-              Switch's accent gold, and the thumb hosts a busy spinner — both
-              are behaviour Switch doesn't express. Button with the same
-              role="switch"/aria-checked semantics preserves the D1/D19
-              contract exactly (see file header). */}
+          {/* FR-051: an action button, not a switch, so it never rides along
+              with a Save. D1: its label follows `persisted` (the config
+              intent this control governs), not `enabled` (whether it is live
+              in THIS process), so an armed-but-pending-restart God Mode
+              offers "Turn off", never a second "Turn on". */}
           <Button
             type="button"
             id="god-mode-toggle"
-            variant="ghost"
-            role="switch"
-            aria-checked={persisted}
-            aria-label="God-mode"
+            variant={persisted ? 'outline' : 'destructive'}
             aria-describedby="god-mode-consequence-copy god-mode-status-note"
             data-testid="god-mode-toggle"
             disabled={knownUnsupported || busy || isLoading}
             onClick={requestToggle}
-            className={[
-              'relative h-6 w-11 shrink-0 rounded-full p-0 transition-colors',
-              'disabled:opacity-40',
-              persisted
-                ? 'bg-[var(--color-error)] hover:bg-[var(--color-error)]'
-                : 'bg-[var(--color-surface-3)] hover:bg-[var(--color-surface-3)]',
-            ].join(' ')}
+            className="shrink-0 gap-[var(--space-1)]"
           >
-            <span
-              className={[
-                'inline-flex items-center justify-center h-5 w-5 rounded-full bg-[var(--color-secondary)] shadow transition-transform',
-                persisted ? 'translate-x-[22px]' : 'translate-x-0.5',
-              ].join(' ')}
-            >
-              {busy && <SpinnerGap size={11} className="animate-spin text-[var(--color-error)]" />}
-            </span>
+            {busy && <SpinnerGap size={13} aria-hidden="true" className="animate-spin" />}
+            {persisted ? 'Turn off God Mode…' : 'Turn on God Mode…'}
           </Button>
         </div>
       </div>

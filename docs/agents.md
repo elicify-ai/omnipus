@@ -78,7 +78,7 @@ When an agent creates an external worker through its tools, the soul rule depend
 - **The tool and the kind are locked.** An agent cannot change a worker's tool after it is created (create a new worker instead), and nobody sets the kind directly; it follows from the agent type. The agent's list of editable fields gives the reason for each locked one: "Locked after create; create a new agent to switch CLIs." for the tool, "Set in Settings -> Third-party agents." for the program, and "Derived from the agent type." for the kind. Environment variables and flags exist only on external workers; on any other agent those fields are not editable and carry "Only external-CLI workers have a runtime environment."
 - **Environment changes merge.** On `update_agent`, `env_overrides` adds or replaces only the names it lists, `env_overrides_remove` removes names, and the rest stay as they are. Names must look like environment variable names; names starting with `OMNIPUS_`, in any letter case, are refused. Values are never shown back: every read shows `••••••` in place of the value, and sending that mask as a value is refused.
 - **Flags are reported.** The result of a create or update lists the worker's flags as they will be passed and the ones a run will drop for safety (`dropped_at_run`). A person's standard parameters from Settings come after the agent's flags, so the person's value wins when both set the same flag.
-- **No per-agent rate limits.** Agents have no rate-limit setting; the global limits in Settings, Security apply.
+- **No per-agent rate limits.** Agents have no rate-limit setting; the global limits in Settings, Protection apply.
 
 ## Shared operating rules for native agents
 
@@ -245,7 +245,7 @@ Agent identity is the figure, role badge and palette colour. The legacy icon is 
 
 ## How to lower one agent's tool-call limit
 
-Every agent has a per-turn work budget. For native agents, this counts working rounds, each of which can run several tool calls, rather than a strict number of individual calls; pending follow-ups or winding down can extend the normal budget within its hard safety bound. The global limit lives in Settings, Performance; see [settings](settings.md#tool-calls-per-turn). One agent can have its own lower limit, for example a worker you want to keep on a short leash. An agent's own limit can equal or be lower than the global limit, never higher.
+Every agent has a per-turn work budget. For native agents, this counts working rounds, each of which can run several tool calls, rather than a strict number of individual calls; pending follow-ups or winding down can extend the normal budget within its hard safety bound. The global limit lives in Settings, Limits; see [settings](settings.md#tool-calls-per-turn). One agent can have its own lower limit, for example a worker you want to keep on a short leash. An agent's own limit can equal or be lower than the global limit, never higher.
 
 1. Open the agent's card and go to the **Advanced** tab.
 2. Under **Execution**, type a number into **Max tool calls per turn**. It saves by itself.
@@ -261,7 +261,7 @@ Every agent has a per-turn work budget. For native agents, this counts working r
 
 You can also give a limit when you ask Omnipus to create the agent. Leave it out to follow the global limit.
 
-A value above the global limit is not saved. On the profile, the field shows the refusal, which names the global limit and suggests raising it in Settings, Performance; your other changes on the profile still save. Values must be whole numbers from 1 to 1000.
+A value above the global limit is not saved. On the profile, the field shows the refusal, which names the global limit and suggests raising it in Settings, Limits; your other changes on the profile still save. Values must be whole numbers from 1 to 1000.
 
 The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Omnipus. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
 
@@ -336,7 +336,7 @@ If a helper is waiting for a slot, separate notifications that wake it are kept 
 
 An instruction that reaches a helper just as its turn is ending is still delivered to that same helper, in a short follow-up step of the same working session. Omnipus saves the exact instruction text in the helper's own transcript before it counts the instruction as delivered, so opening the helper's chat shows what it was told. A repeated delivery of the same instruction is saved once, and the helper is not run a second time for it.
 
-The limits on all of this — how many may run at once (Performance tab) and how deep a chain may go (`performance.max_delegation_depth` in `config.json`; a workspace **Team** edge can tighten it per agent pair) — are described in [settings](settings.md#delegation-limits). There is no time limit: a child runs until it finishes or someone stops it.
+The limits on all of this — how many may run at once (Settings, Limits) and how deep a chain may go (`performance.max_delegation_depth` in `config.json`; a workspace **Team** edge can tighten it per agent pair) — are described in [settings](settings.md#delegation-limits). There is no time limit: a child runs until it finishes or someone stops it.
 
 A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set in that [workspace](workspaces.md) **Team** panel, and that rule applies only there.
 
@@ -385,7 +385,7 @@ If nothing needs attention, the agent records an all-clear. The sidebar lists ch
 - Workers are not chat targets and have no voice or heartbeat. Every chat names a conversation agent; there is no default agent.
 - Other agents need an appropriate workspace delegation edge to delegate to a worker. A worker on the workspace team can also be assigned a task by the user.
 - An external worker depends on its tool being installed and on a program saved for that tool in **Settings → Third-party agents**. If the tool is missing, the create menu shows it greyed out.
-- An agent's own tool-call limit can only be lower than or equal to the global limit in Settings, Performance.
+- An agent's own tool-call limit can only be lower than or equal to the global limit in Settings, Limits.
 - Editing autosaves. A red save indicator means the last change failed; correct the field it names and the next change saves.
 
 ## Related pages

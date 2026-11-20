@@ -30,6 +30,8 @@ interface SsrfEditorProps {
   onNewSsrfEntryChange: (v: string) => void
   onAddSsrfEntry: () => void
   ssrfAddError: string | null
+  /** Password badge next to the heading (FR-025). */
+  badges?: React.ReactNode
 }
 
 export function SsrfEditor({
@@ -44,6 +46,7 @@ export function SsrfEditor({
   onNewSsrfEntryChange,
   onAddSsrfEntry,
   ssrfAddError,
+  badges,
 }: SsrfEditorProps) {
   const addErrorId = useId()
   const deleteButtonRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -73,8 +76,9 @@ export function SsrfEditor({
 
   return (
     <div className="space-y-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]">
-      <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
-        SSRF internal-network policy
+      <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
+        Internal network addresses
+        {badges}
       </p>
 
       <SegmentedControl
