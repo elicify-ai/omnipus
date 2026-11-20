@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -74,6 +75,35 @@ func (h *sessionHub) deliverLive(frame []byte) int {
 		}
 	}
 	return delivered
+}
+
+// hubDeliverTurnStarted names a foreground turn to the tabs bound to its chat
+// the moment it starts (#1428 step 2, live-only turn_started), so a command
+// typed before the turn's first token can carry its id. Same values a
+// session_state snapshot reports while the turn runs (ActiveForegroundTurnInfo):
+// the agent emits turn start after registering the turn. Unnumbered on
+// purpose: an older tab drops an unknown type, and a dropped numbered frame
+// would leave a sequence gap. A payload without a session or turn id (no
+// transcript session) names nothing.
+func (h *WSHandler) hubDeliverTurnStarted(meta agent.EventMeta, p agent.TurnStartPayload) {
+	if h.hubs == nil || p.SessionID == "" || meta.TurnID == "" {
+		return
+	}
+	frame := generated.TurnStartedFrame{
+		Type:      string(generated.WsFrameTypeTurnStarted),
+		SessionId: p.SessionID,
+		ActiveTurn: generated.SessionStateActiveTurn{
+			TurnId:    meta.TurnID,
+			AgentId:   meta.AgentID,
+			StartedAt: p.StartedAt.UTC().Format(time.RFC3339),
+		},
+	}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		logsafeError("ws: marshal turn_started failed", "session_id", p.SessionID, "error", err)
+		return
+	}
+	h.hubs.deliverLive(p.SessionID, data)
 }
 
 // hubDeliverOpenInLibrary turns show_to_user's open request into the

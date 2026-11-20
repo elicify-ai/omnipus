@@ -90,7 +90,9 @@ describe('T15/T20 actual history actions — B10/B28/B29/B34', () => {
     await user.click(earlierControl())
     await barrier.request.promise
     await act(async () => barrier.response.resolve(json({ error: 'storage unavailable' }, 500)))
-    const alert = await screen.findByRole('alert')
+    // Spec 4.10: the version banner is a second alert. The history sentence stays this one.
+    const alert = (await screen.findByText('Could not load earlier messages.')).closest('[role="alert"]')
+    if (!(alert instanceof HTMLElement)) throw new Error('the earlier-page failure is not an alert')
     expect(alert).toHaveTextContent('Could not load earlier messages.')
     const retry = within(alert).getByRole('button', { name: /^Retry$/ })
     retry.focus()
@@ -101,7 +103,10 @@ describe('T15/T20 actual history actions — B10/B28/B29/B34', () => {
     expect(within(alert).getByRole('button', { name: /^Retry$/ })).toBe(retry)
     await act(async () => barrier.response.resolve(json({ error: 'storage unavailable' }, 500)))
     await waitFor(() => expect(alert).toHaveTextContent('Could not load earlier messages. Retry 2 failed.'))
-    expect(screen.getAllByRole('alert')).toStrictEqual([alert])
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts, 'spec 4.10: history failure plus the version banner, and no third alert').toHaveLength(2)
+    expect(alerts).toContain(alert)
+    expect(alerts.find((node) => node !== alert)).toHaveTextContent('This page and the server are different versions. Your unsent text is kept below. Reload the page to send.')
     expect(retry).toHaveFocus()
     expect(screen.getByText('Saved row 81', { exact: true })).toBeInTheDocument()
     expect(screen.getByTestId('chat-input')).toBeEnabled()
@@ -125,7 +130,8 @@ describe('T15/T20 actual history actions — B10/B28/B29/B34', () => {
     expect(screen.getByText('Saved row 79', { exact: true })).toBeInTheDocument()
     expect(within(screen.getByLabelText('Conversation history', { exact: true })).getByRole('status')).toHaveTextContent('Loading latest messages…')
     await act(async () => barrier.response.resolve(json({ error: 'latest read failed' }, 500)))
-    const failure = await screen.findByRole('alert')
+    const failure = (await screen.findByText('Could not load latest messages.')).closest('[role="alert"]')
+    if (!(failure instanceof HTMLElement)) throw new Error('the latest-page failure is not an alert')
     expect(failure).toHaveTextContent('Could not load latest messages.')
     expect(input).toHaveValue('Keep this unsent draft')
     barrier = interceptEarlier(current)
@@ -194,7 +200,8 @@ describe('T15 unavailable history keeps current controls — B31/B43', () => {
         active_turn: { turn_id: 'running-current', agent_id: 'mia', started_at: STAMP } },
       { type: 'catch_up_complete', session_id: MAIN_ID, mode: 'live_only', seq: 200, boot_id: 'history-boot' },
     ])
-    const failure = await screen.findByRole('alert')
+    const failure = (await screen.findByText(UNAVAILABLE)).closest('[role="alert"]')
+    if (!(failure instanceof HTMLElement)) throw new Error('the unavailable-history failure is not an alert')
     expect(failure).toHaveTextContent(UNAVAILABLE)
     expect(within(failure).getByRole('button', { name: /^Retry$/ })).toBeEnabled()
     expect(screen.getByTestId('chat-input'), 'D7a history failure must not replace the whole thread/composer shell').toBeEnabled()

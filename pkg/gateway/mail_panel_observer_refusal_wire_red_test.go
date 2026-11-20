@@ -132,6 +132,8 @@ func tw2RefusalSocket(t *testing.T, server *httptest.Server) *websocket.Conn {
 	t.Cleanup(func() { _ = conn.Close() })
 	// Isolated existing dev-bypass helper; no live/configured account or secret.
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"auth","token":"test"}`)))
+	// #1428 §4.10 / S-11: the capability handshake precedes the unchanged state.
+	requireServerCapabilitiesFirst(t, tw2RefusalRead(t, conn), "mail observer admission")
 	initial := tw2RefusalRead(t, conn)
 	var initialFields map[string]any
 	require.NoError(t, json.Unmarshal(initial, &initialFields))

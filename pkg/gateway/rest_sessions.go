@@ -973,7 +973,24 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	meta, err := store.NewSession(sessionType, "webchat", agentID)
+	// #1428 step 2 (spec 4.3.3): the browser's new-chat key is saved in the
+	// creating write itself; a failed write returns the storage error, never
+	// 201. Checked here too so the bound holds with inbound validation off.
+	newChatKey := ""
+	if req.NewChatKey != nil {
+		newChatKey = *req.NewChatKey
+		if !validNewChatKey(newChatKey) {
+			jsonErr(w, http.StatusBadRequest, "invalid new_chat_key")
+			return
+		}
+	}
+	var meta *session.UnifiedMeta
+	var err error
+	if newChatKey != "" {
+		meta, err = store.NewSessionKeyed(sessionType, "webchat", agentID, newChatKey)
+	} else {
+		meta, err = store.NewSession(sessionType, "webchat", agentID)
+	}
 	if err != nil {
 		jsonSessionStorageError(w, "created", "", err)
 		return

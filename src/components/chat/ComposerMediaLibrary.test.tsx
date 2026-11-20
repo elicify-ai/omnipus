@@ -26,6 +26,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchWorkspaceMedia, attachWorkspaceMedia } from '@/lib/api'
+// Spec 4.4.3: library picks live on the chat store's draft state. Importing
+// the store binds that state; otherwise the picker throws before it can run.
+import '@/store/chat'
 
 const mockedFetch = vi.mocked(fetchWorkspaceMedia)
 const mockedAttach = vi.mocked(attachWorkspaceMedia)

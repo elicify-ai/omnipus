@@ -29,9 +29,18 @@ const SHOWN: NonNullable<CancelFrame['shown']> = {
   message_id: MID, turn_id: TURN,
   code_points: 4, // A + emoji + e + combining mark: 4 code points, not 5 UTF-16 units.
 }
-const TREE_FRAME: CancelFrame = {
-  type: 'cancel', session_id: SID, scope: 'tree', shown: SHOWN,
+// Spec 4.7: a cancel carries the chat origin and a client_frame_id. shown stays the checkpoint.
+const FRAME_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+function boundCancel(extra: Record<string, unknown> = {}) {
+  return {
+    type: 'cancel',
+    session_id: SID,
+    origin: { kind: 'chat', session_id: SID },
+    client_frame_id: expect.stringMatching(FRAME_ID),
+    ...extra,
+  }
 }
+const TREE_FRAME = boundCancel({ scope: 'tree', shown: SHOWN })
 const CANCEL: SlashCommand = {
   name: 'cancel', label: '/cancel', description: 'Stop this session and its helpers',
   delivery: 'client', available_while_streaming: true,
@@ -86,6 +95,8 @@ beforeEach(() => {
     useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'mia' })
     useChatStore.setState({ sessionsById: { [SID]: emptySessionState() } })
     useConnectionStore.getState().setConnection(sender as unknown as WsConnection)
+    // Spec 4.10: a stand-in sends only while marked connected.
+    useConnectionStore.getState().setConnected(true)
   })
 })
 
@@ -145,6 +156,8 @@ describe('#1534 first tree Stop versus confirming second Stop', () => {
         // Same real binding as OmnipusComposer; no cancel callback mock.
         cancelIfStreaming: cancelState.cancelAllTreeScoped,
         sendRedirectFrame: () => { throw new Error('/cancel must not redirect') },
+        // Spec 4.6.1: the session binding captures the open chat at submit.
+        origin: { capture: () => SID, refuseSwitched: () => {}, sendHeld: () => {} },
       })
       return { slash, cancelState }
     }, { wrapper })
@@ -177,16 +190,14 @@ describe('#1534 first tree Stop versus confirming second Stop', () => {
     act(() => { result.current.cancelUnconditional() })
     expect(result.current.stopAllArmed).toBe(true)
     expectFrozen()
-    expect(sender.send.mock.calls).toEqual([[{
-      type: 'cancel', session_id: SID, shown: SHOWN,
-    }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel({ shown: SHOWN })]])
     act(() => { result.current.cancelUnconditional() })
     expect(result.current.stopAllArmed).toBe(false)
     expectFrozen()
     expect(sender.send.mock.calls, 'only the first Stop carries shown; the confirming tree frame adds no checkpoint')
       .toEqual([
-        [{ type: 'cancel', session_id: SID, shown: SHOWN }],
-        [{ type: 'cancel', session_id: SID, scope: 'tree' }],
+        [boundCancel({ shown: SHOWN })],
+        [boundCancel({ scope: 'tree' })],
       ])
   })
 })

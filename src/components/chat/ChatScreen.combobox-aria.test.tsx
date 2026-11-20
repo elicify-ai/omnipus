@@ -366,6 +366,15 @@ describe('Composer combobox ARIA — menu container and rows (deferred item 2)',
   })
 
   it('mouse selection (onMouseDown) still works on role="option" rows — the ARIA changes did not remove mouse selection', () => {
+    // Spec 4.7: a typed command is handed over only on a supported connection.
+    // The file's null connection puts the typed "/" back, so the menu stays open.
+    // A stand-in whose send returns true is supported (not a WsConnection).
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: () => true } as never,
+        isConnected: true,
+      })
+    })
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })

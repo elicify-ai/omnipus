@@ -43,8 +43,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import type { ComposerRuntime } from '@assistant-ui/react'
-import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { generateId } from '@/lib/constants'
 import { fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
@@ -74,10 +72,10 @@ export interface UseSlashMenuParams {
   isReplaying: boolean
   /** Agent removed / gave-up-reconnect / replaying / disconnected — see OmnipusComposer's `inputEnabled`. */
   inputEnabled: boolean
-  composerRuntime: ComposerRuntime
+  composerRuntime: SlashComposer
   appendMessage: (message: ChatMessage) => void
   /** `/stop` is one existing Stop/Esc activation, including its 3 s confirmation window. */
-  activateStop: () => void
+  activateStop: (typed?: TypedCommand) => void
   /**
    * `/cancel` delegates here. ADR-20260928 D9: `/cancel` is ITSELF the
    * Stop-all confirmation — the caller wires the self-confirming tree
@@ -88,16 +86,14 @@ export interface UseSlashMenuParams {
    * scoping, the stable name keeps the hook's callers (and its test
    * constructors) unchanged.
    */
-  cancelIfStreaming: () => void
+  cancelIfStreaming: (typed?: TypedCommand) => void
   /**
-   * D9: sends the dedicated generated RedirectFrame
-   * `{type:'redirect', session_id, instruction}` to the server over the WS
-   * (the frame never touches message intake, which is what lets a redirect
-   * execute mid-stream). The caller owns the transport — connection lookup,
-   * the `connection.send` call and a VISIBLE error when the send fails —
-   * mirroring how `cancelIfStreaming` keeps its transport in the chat store.
-   * The hook only constructs the frame (exact generated shape, no extra
-   * properties) for the current chat after its usage and active-session gates pass.
+   * D9: asks the caller to send the dedicated RedirectFrame for the current
+   * chat (the frame never touches message intake, which is what lets a
+   * redirect execute mid-stream). #1428 step 2 (spec 4.6.1, AL-1): the hook
+   * passes the instruction and the typed command as captured at the submit
+   * event; the caller builds the frame through bound-send.ts and owns the
+   * transport and its visible outcome.
    *
    * Required, consistent with its sibling transport `cancelIfStreaming`
    * (architect adjudication F2, 2026-10-02): one required and one optional
@@ -106,7 +102,35 @@ export interface UseSlashMenuParams {
    * line still calls it DIRECTLY — not `?.` — and the runtime guard below
    * stays as a defensive invariant for malformed untyped runtime calls.
    */
-  sendRedirectFrame: (frame: RedirectFrame) => void
+  sendRedirectFrame: (instruction: string, typed: TypedCommand) => void
+  /**
+   * #1428 step 2 (spec 4.6.1): the session binding's capture of the chat a
+   * typed command belongs to. A command held while the command list loads is
+   * flushed only if that chat is still open; otherwise it is handed to
+   * `refuseSwitched` with its key and text. `sendHeld` sends a held submit
+   * that turned out to be a message with its text frozen at the submit, when
+   * the box was edited meanwhile (the edit stays as the newer draft).
+   * Absent: no capture (no binding).
+   */
+  origin?: {
+    capture: () => string
+    refuseSwitched: (key: string, text: string) => void
+    sendHeld: (key: string, text: string) => void
+  }
+}
+
+/** #1428 step 2 (spec 4.5 rule 6): the composer surface the slash menu writes to. */
+export interface SlashComposer {
+  getState: () => { text?: string }
+  setText: (text: string) => void
+  send: () => void
+  subscribe: (callback: () => void) => () => void
+}
+
+/** #1428 step 2 (spec 4.7): a typed command as captured at its submit event. */
+export interface TypedCommand {
+  text: string
+  originKey: string
 }
 
 export interface UseSlashMenuResult {
@@ -376,17 +400,35 @@ function withoutRetiredCommands(commands: SlashCommand[]): SlashCommand[] {
  * the composer before the store's own guard runs, so the refusal must come first
  * and leave the draft in place (#1428 item 3).
  */
-function sendComposerUnlessBlocked(composerRuntime: ComposerRuntime): void {
+function sendComposerUnlessBlocked(composerRuntime: SlashComposer): void {
   if (blockSendForWorkspaceEntry('send')) return
   composerRuntime.send()
 }
 
 /** The server-run command ("/clear"): same refusal, before the draft is replaced by the label. */
-function sendServerRunCommand(composerRuntime: ComposerRuntime, label: string, setInputValue: (value: string) => void): void {
+function sendServerRunCommand(composerRuntime: SlashComposer, label: string, setInputValue: (value: string) => void): void {
   if (blockSendForWorkspaceEntry('send')) return
   composerRuntime.setText(label)
   setInputValue(label)
   composerRuntime.send()
+}
+
+/**
+ * A held submit whose box was edited, with no draft binding to send the
+ * frozen text through: the latest text is acted on, after the SAME WC-1
+ * retirement check an immediate submit gets (a held submit edited to "/new"
+ * never reaches the wire; review round 1, F4).
+ */
+function flushUnboundEdited(composerRuntime: SlashComposer, setInputValue: (value: string) => void, appendMessage: (message: ChatMessage) => void): void {
+  const latest = (composerRuntime.getState().text ?? '').trim()
+  if (latest === '') return
+  if (isRetiredCommandSubmit(latest)) {
+    composerRuntime.setText('')
+    setInputValue('')
+    refuseRetiredCommand(appendMessage)
+    return
+  }
+  sendComposerUnlessBlocked(composerRuntime)
 }
 
 function refuseRetiredCommand(appendMessage: (message: ChatMessage) => void): void {
@@ -444,13 +486,14 @@ interface ClientCommandDeps {
   activateStop: UseSlashMenuParams['activateStop']
   cancelIfStreaming: UseSlashMenuParams['cancelIfStreaming']
   sendRedirectFrame: UseSlashMenuParams['sendRedirectFrame']
-  composerRuntime: ComposerRuntime
+  composerRuntime: SlashComposer
   setInputValue: (value: string) => void
   setSlashOpen: (open: boolean) => void
+  typed?: TypedCommand
 }
 
 function runClientSlashCommand(name: string, argument: string, deps: ClientCommandDeps): boolean {
-  const { allCommands, appendMessage, activateStop, cancelIfStreaming, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
+  const { allCommands, appendMessage, activateStop, cancelIfStreaming, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen, typed } = deps
   // /clear is not handled here (and /new — retired — is refused before this
   // function is ever reached). Selecting or typing /clear sends the server
   // command; this function never starts a chat for it.
@@ -518,14 +561,14 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
     // confirmation window, no second activation. The caller wires the
     // tree-scoped cancel into this (historically named) parameter — see
     // UseSlashMenuParams.cancelIfStreaming.
-    cancelIfStreaming()
+    cancelIfStreaming(typed)
     return true
   }
 
   if (name === 'stop') {
     // Founder 2026-10-06: exactly one Stop/Esc activation, not /cancel's
     // immediate tree stop. Reuse its label and 3 s confirmation window.
-    activateStop()
+    activateStop(typed)
     return true
   }
 
@@ -578,7 +621,7 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
         'useSlashMenu: /stop-redirect reached the send path with no sendRedirectFrame transport.',
       )
     }
-    sendRedirectFrame({ type: 'redirect', session_id: sessionId, instruction: argument })
+    sendRedirectFrame(argument, typed ?? { text: `/stop-redirect ${argument}`, originKey: sessionId })
     return true
   }
 
@@ -606,16 +649,8 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
 }
 
 export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
-  const {
-    isStreaming,
-    isReplaying,
-    inputEnabled,
-    composerRuntime,
-    appendMessage,
-    activateStop,
-    cancelIfStreaming,
-    sendRedirectFrame,
-  } = params
+  const { isStreaming, isReplaying, inputEnabled, composerRuntime, appendMessage } = params
+  const { activateStop, cancelIfStreaming, sendRedirectFrame, origin } = params
 
   const [inputValue, setInputValue] = useState('')
   const [slashOpen, setSlashOpen] = useState(false)
@@ -982,8 +1017,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // THIS render's values, the same closure semantics the pre-extraction
   // nested function had (see the "Deliberately NOT wrapped in useCallback"
   // note on interceptClientCommand below).
-  function runClientCommand(name: string, argument = ''): boolean {
+  function runClientCommand(name: string, argument = '', typed?: TypedCommand): boolean {
     return runClientSlashCommand(name, argument, {
+      typed,
       allCommands,
       appendMessage,
       activateStop,
@@ -1071,11 +1107,12 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       return
     }
 
-    // delivery === 'client': clear the composer then run the handler.
+    // delivery === 'client': clear the composer then run the handler. #1428 step 2
+    // (spec 4.7): a pick is a typed command; it keeps the box text and its key.
+    const picked = { text: (composerRuntime.getState().text ?? '').trim() || def.label, originKey: origin?.capture() ?? '' }
     composerRuntime.setText('')
     setInputValue('')
-
-    const handled = runClientCommand(def.name)
+    const handled = runClientCommand(def.name, '', picked)
     if (!handled) {
       // Issue 3: unknown client command — insert text so it isn't silently lost.
       composerRuntime.setText(`${def.label} `)
@@ -1192,7 +1229,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // the flush effect below). A ref, not state: setting it must not trigger a
   // render, and it has to survive the renders that happen while the query
   // resolves.
-  const deferredSlashSubmitRef = useRef(false)
+  const deferredSlashSubmitRef = useRef<{ key: string; text: string } | null>(null)
 
   function interceptClientCommand(): boolean {
     const currentText = composerRuntime.getState().text ?? inputValue
@@ -1235,7 +1272,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       // always was. Nothing is dropped and nothing is guessed at; the user
       // pays a wait bounded by the fetch that was already in flight.
       if (commandsFirstLoadPending) {
-        deferredSlashSubmitRef.current = true
+        deferredSlashSubmitRef.current = { key: origin?.capture() ?? '', text: currentText }
         // Length only — never the text itself (it is user content).
         logDiagnostic('slashSubmitHeldForCommandList', { textLength: trimmed.length })
         return true
@@ -1244,17 +1281,18 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
     composerRuntime.setText('')
     setInputValue('')
-    runClientCommand(resolved.command.name, resolved.argument)
+    runClientCommand(resolved.command.name, resolved.argument, { text: trimmed, originKey: origin?.capture() ?? '' })
     return true
   }
 
   // Flush of the held slash submit above, once the command list has landed.
   //
-  // Re-reads the composer's CURRENT text rather than replaying whatever was
-  // captured at submit time: the user may have edited or cleared it while
-  // the fetch was in flight, and their latest text is the only thing worth
-  // acting on. Runs only on a `commandsFirstLoadPending` transition, and the
-  // ref is cleared before dispatch so a re-render cannot double-fire it.
+  // #1428 step 2 (spec 4.6.1, 4.6.2): the held submission is frozen at the
+  // original submit. Its text is what runs or is sent; an edit of the same
+  // draft made while the list was in flight is a newer draft and stays in the
+  // box. Eligibility is checked here, at the flush. Runs only on a
+  // `commandsFirstLoadPending` transition, and the ref is cleared before
+  // dispatch so a re-render cannot double-fire it.
   //
   // #472 investigation note: this effect was named as the OTHER candidate
   // for the slash-menu self-close race. Confirmed it is NOT one for the
@@ -1272,37 +1310,30 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // useSlashMenu.test.ts.
   useEffect(() => {
     if (commandsFirstLoadPending) return
-    if (!deferredSlashSubmitRef.current) return
-    deferredSlashSubmitRef.current = false
-    const trimmed = (composerRuntime.getState().text ?? '').trim()
-    if (trimmed === '') return
-    // WC-1: the deferred dispatch reads the composer's LATEST text — which
-    // may have been edited while the list was in flight — so it runs the
-    // SAME retirement check an immediate submit gets. Without it, a held
-    // submit edited to "/new" would go straight to the wire when the list
-    // landed (review round 1, F4).
-    if (isRetiredCommandSubmit(trimmed)) {
-      composerRuntime.setText('')
-      setInputValue('')
-      refuseRetiredCommand(appendMessage)
-      return
-    }
-    const resolved = trimmed.startsWith('/') ? resolveClientCommand(trimmed) : null
+    const held = deferredSlashSubmitRef.current
+    if (!held) return
+    deferredSlashSubmitRef.current = null
+    if (origin && origin.capture() !== held.key) return origin.refuseSwitched(held.key, held.text)
+    const frozen = held.text.trim()
+    const current = (composerRuntime.getState().text ?? '').trim()
+    const unchanged = current === frozen
+    const resolved = resolveClientCommand(frozen)
     if (resolved) {
-      composerRuntime.setText('')
-      setInputValue('')
-      runClientCommand(resolved.command.name, resolved.argument)
+      if (unchanged) {
+        composerRuntime.setText('')
+        setInputValue('')
+      }
+      runClientCommand(resolved.command.name, resolved.argument, { text: frozen, originKey: held.key })
       return
     }
     // Not a client command after all (a skill, an agent-delivery command, or
-    // plain text that happens to start with "/") — complete the send the
-    // user asked for. `composerRuntime.send()` is the same runtime call
-    // every submit path converges on: ComposerPrimitive.Root's onSubmit and
-    // ComposerPrimitive.Send's onClick both end in `composer.send()`, and
-    // ChatScreen's own mid-stream path calls this method directly.
-    // The gate may have closed while the list was in flight: the draft stays.
-    sendComposerUnlessBlocked(composerRuntime)
-     
+    // plain text that happens to start with "/"): complete the send the user
+    // asked for. With the box unchanged that is the composer's own send
+    // (`composerRuntime.send()`, where every submit path converges); the gate
+    // may have closed while the list was in flight, and then the draft stays.
+    if (unchanged) return sendComposerUnlessBlocked(composerRuntime)
+    if (origin) return origin.sendHeld(held.key, frozen)
+    flushUnboundEdited(composerRuntime, setInputValue, appendMessage)
   }, [commandsFirstLoadPending])
 
   function onInputChange(val: string) {

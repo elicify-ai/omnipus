@@ -92,6 +92,10 @@ func dialFxTab(t *testing.T, url, name string) *fxTab {
 	t.Cleanup(tab.close)
 	// Dev-mode auth frame (connection setup, not recorded).
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"auth","token":"dev-token"}`)))
+	// #1428 §4.10 / S-11: capabilities is the first authenticated frame.
+	// Validate it as connection setup; retain every original catch-up event.
+	_, capability := readFirstApplicationFrame(t, conn)
+	requireServerCapabilitiesFirst(t, capability, "catch-up fixture admission")
 	return tab
 }
 

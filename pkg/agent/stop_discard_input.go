@@ -35,7 +35,10 @@ func (al *AgentLoop) discardUndeliveredHumanInput(sessionID string) ([]Discarded
 		return nil, nil
 	}
 	scopes := []string{sessionID}
-	if ts := al.getActiveTurnState(sessionID); ts != nil && ts.sessionKey != "" && ts.sessionKey != sessionID {
+	// An ordinary chat's turn is registered (and its queue scoped) under the
+	// agent-scoped key agent:<agent>:session:<id>, not the bare session id;
+	// liveTurnForSession resolves both that and a helper's bare-id turn.
+	if ts := al.liveTurnForSession(sessionID); ts != nil && ts.sessionKey != "" && ts.sessionKey != sessionID {
 		scopes = append(scopes, ts.sessionKey)
 	}
 	var out []DiscardedInput

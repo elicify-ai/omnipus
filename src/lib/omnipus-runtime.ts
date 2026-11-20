@@ -5,12 +5,11 @@ import { useExternalStoreRuntime } from "@assistant-ui/react";
 import type { ThreadMessageLike, AppendMessage } from "@assistant-ui/react";
 import { useChatStore } from "@/store/chat";
 import { useSessionStore } from "@/store/session";
-import type { ChatMessage, MediaAttachment } from "@/store/chat";
+import type { ChatMessage } from "@/store/chat";
 import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
-import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
-import { takeLibraryAttachments, mediaRefURL } from "@/lib/library-attachment";
-import { isImageAttachment } from "@/components/chat/AttachmentCard";
+import { omnipusAttachmentAdapter } from "@/lib/attachment-adapter";
+import { submitText } from "@/lib/bound-send";
 import { isCancelledTurn, type StatusSuffixInput } from "@/lib/truncation";
 
 type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
@@ -281,20 +280,10 @@ export function useOmnipusRuntime() {
     activeSessionId ? s.sessionsById[activeSessionId]?.toolCallOwnerMessageId : undefined
   );
   const isStreaming = useChatStore((s) => s.isStreaming);
-  const sendMessage = useChatStore((s) => s.sendMessage);
   const cancelStream = useChatStore((s) => s.cancelStream);
   const addToast = useUiStore((s) => s.addToast);
-  // Phase 1 / FR-008/009/010: the composer's model picker writes the
-  // picker's value here. We read it in onNew so the next message is
-  // routed via the chosen model. The store clears `nextModel` after
-  // sendMessage completes, so the picker auto-derives a fresh default
-  // on the next session reopen (per spec §18 Q3).
-  const nextModel = useChatStore((s) => s.nextModel);
-  // Effort levels FR-045/FR-055: the exact (provider, model) pair and the
-  // chat's effort ride the message with the model (metadata.provider,
-  // metadata.reasoning_effort). Not set sends no effort field.
-  const nextModelProvider = useChatStore((s) => s.nextModelProvider);
-  const nextEffort = useChatStore((s) => s.nextEffort);
+  // The per-turn model choice (nextModel, provider, effort) is read by
+  // bound-send.ts::captureForOpenKey at the submit event.
 
   return useExternalStoreRuntime<ChatMessage>({
     messages,
@@ -313,70 +302,19 @@ export function useOmnipusRuntime() {
       attachments: omnipusAttachmentAdapter,
     },
     onNew: async (message: AppendMessage) => {
-      // message.content carries ONLY the user's typed text (AssistantUI keeps
-      // attachments separate in message.attachments — verified in
-      // base-composer-runtime-core). Join all text parts to be safe.
+      // #1428 step 2 (spec 4.5 rule 5): a runtime append is a submit entry. The
+      // session composer never calls composer.send (its Send, Enter and form
+      // submit call submitDraft), so this is reached only by a thread append,
+      // which submits its own text for the open chat through the bound
+      // pipeline (origin, target and model frozen at this event). The draft
+      // store, not the runtime, owns staged files and library picks.
       const text = message.content
         .filter((p): p is { type: "text"; text: string } => p.type === "text")
         .map((p) => p.text)
         .join("\n");
-
-      // Pull the media:// refs (and display metadata) the attachment adapter
-      // stashed during send(), keyed by attachment id.
-      const mediaRefs: string[] = [];
-      const attachments: MediaAttachment[] = [];
-      for (const att of message.attachments ?? []) {
-        const resolved = takeResolvedUpload(att.id);
-        if (resolved) {
-          mediaRefs.push(resolved.ref);
-          attachments.push({
-            type: isImageAttachment(resolved.filename, resolved.contentType) ? "image" : "file",
-            url: resolved.url,
-            filename: resolved.filename,
-            contentType: resolved.contentType,
-          });
-        } else {
-          // send() returned a failedComplete for this attachment (upload or
-          // registration error) — the ref was never stashed. Warn so the user
-          // knows the file did not reach the agent.
-          console.warn(`[omnipus-runtime] Attachment "${att.name}" (id=${att.id}) had no resolved ref — it will not be sent to the agent.`);
-          addToast({ message: `Attachment "${att.name}" was not sent — it failed to upload or register.`, variant: "error" });
-        }
-      }
-
-      // ADR-051 Rev 4 (Slice H): drain pending workspace-LIBRARY attachments
-      // added via the composer picker. These are reused manifest entries
-      // (media://workspace/<ws>/<id>, FR-022) — no upload, no File. Drain
-      // (not read) so a single send cannot re-thread them into a later
-      // message. mediaRefURL() derives the local preview URL from the ref
-      // itself (not lib.mediaId) — a bare /api/v1/media/{id} route 404s for
-      // workspace-scoped entries (HandleMedia is a legacy-registry lookup
-      // that rejects any id containing "/"); see mediaRefURL's doc comment.
-      for (const lib of takeLibraryAttachments()) {
-        mediaRefs.push(lib.ref);
-        attachments.push({
-          type: isImageAttachment(lib.filename, lib.contentType) ? "image" : "file",
-          url: mediaRefURL(lib.ref),
-          filename: lib.filename,
-          contentType: lib.contentType,
-        });
-      }
-
-      // Attachment-only messages (no typed text) are valid — send as long as we
-      // have either text or at least one resolved attachment.
-      if (!text.trim() && mediaRefs.length === 0) {
-        console.warn("[omnipus-runtime] Message received with no text and no attachments — skipping.");
+      if (!submitText("Runtime append", text)) {
+        console.warn("[omnipus-runtime] Message received with no text — skipping.");
         addToast({ message: "Could not send — message had no text or attachments.", variant: "error" });
-        return;
-      }
-
-      const modelChoice = nextModel
-        ? { model_name: nextModel, ...(nextModelProvider ? { provider: nextModelProvider } : {}), ...(nextEffort ? { reasoning_effort: nextEffort } : {}) }
-        : {};
-      if (mediaRefs.length > 0) {
-        sendMessage(text, { mediaRefs, attachments, ...modelChoice });
-      } else {
-        sendMessage(text, nextModel ? modelChoice : undefined);
       }
     },
     onCancel: async () => { cancelStream() },

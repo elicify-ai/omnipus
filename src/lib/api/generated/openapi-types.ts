@@ -2089,7 +2089,9 @@ export interface paths {
          * Upload files for a session or into a workspace library
          * @description Streams multipart file uploads. Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory. Returns HTTP 201 on success.
          *
-         *     Two destinations. With workspace_id (query parameter, or a form field before the file parts) each file is stored in that workspace's media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/<id>/media/ (returned as a media://workspace/<id>/<uuid> ref) and the Library file under the workspace's .library folder; no session is used or created. When both workspace_id and session_id are given, workspace_id routes to the library and session_id is ignored. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id (query parameter or form field) is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path).
+         *     Routing fields (#1428 step 2, C1). The routing fields are session_id and workspace_id, taken from the query string and from multipart form fields that appear BEFORE the first file part (the routing prefix). At the first file part the prefix is frozen and checked; only then is the first file written. A routing form field that appears after a file part is refused with 400, code upload_routing_field_late; files already written by earlier parts of the same request stay where the checked prefix routed them (there is no whole-request no-write guarantee). A second, different value for an already-set routing field before the first file part is refused with 400, code upload_routing_conflict, and nothing is written; a repeated identical value is accepted.
+         *
+         *     Two destinations. With workspace_id each file is stored in that workspace's media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/<id>/media/ (returned as a media://workspace/<id>/<uuid> ref) and the Library file under the workspace's .library folder; no session is used or created. When both workspace_id and session_id are given, session_id must name a chat that belongs to that workspace, checked before any file is written: an unknown chat is 404; a chat in another workspace (or in no workspace) is 409, code upload_workspace_mismatch; a failure to read the chat's metadata is 500. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path). Workspace-only and session-only uploads keep their behaviour. Every error uses the standard ErrorResponse body.
          */
         post: operations["uploadFiles"];
         delete?: never;
@@ -5001,6 +5003,11 @@ export interface components {
              * @example 01M1H9JS5EHRYWDBM0BYA45NFM
              */
             workspace_id?: string;
+            /**
+             * @description #1428 step 2. The browser's new-chat key (SendOrigin.new_chat_key) of the "no chat yet" screen this creation belongs to. Optional. When present it is saved in the new session's metadata in the same creation write (a failed write returns the storage error, never 201), so later `message`/`redirect`/`cancel` frames with `origin {kind: new_chat}` and this key are accepted for this session. Never changed after creation and never returned: it is not part of Session or any other response.
+             * @example k_9f2c4e1a7b3d5f60
+             */
+            new_chat_key?: string;
         };
         /** @description Body for PUT /sessions/{id}. Renames a session. */
         SessionRenameRequest: {
@@ -24905,11 +24912,11 @@ export interface operations {
         parameters: {
             query?: {
                 /**
-                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
+                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field before the file parts. When workspace_id is also given, the session must belong to that workspace (404 unknown chat, 409 upload_workspace_mismatch, 500 read failure); the files still go to the workspace library.
                  * @example 550e8400-e29b-41d4-a716-446655440000
                  */
                 session_id?: string;
-                /** @description Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id. */
+                /** @description Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Routes the files; with session_id also given, the pair is checked (see the operation description). */
                 workspace_id?: string;
             };
             header?: never;
@@ -24919,9 +24926,9 @@ export interface operations {
         requestBody: {
             content: {
                 "multipart/form-data": {
-                    /** @description Session ID (alternative to query parameter). */
+                    /** @description Session ID (alternative to the query parameter); must precede the file parts (later is 400 upload_routing_field_late). */
                     session_id?: string;
-                    /** @description Workspace ID (alternative to the query parameter); must precede the file parts. */
+                    /** @description Workspace ID (alternative to the query parameter); must precede the file parts (later is 400 upload_routing_field_late). */
                     workspace_id?: string;
                     /** @description One or more files to upload. */
                     files?: string[];
@@ -24938,10 +24945,45 @@ export interface operations {
                     "application/json": components["schemas"]["UploadFilesResponse"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request: a missing or invalid field, a routing form field after a file part (code upload_routing_field_late), or two different values for the same routing field (code upload_routing_conflict). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
+            /** @description session_id and workspace_id were both given and session_id names no chat. Nothing was stored. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Method not allowed. */
             405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description session_id and workspace_id were both given and the chat belongs to another workspace or to none (code upload_workspace_mismatch). Nothing was stored. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The chat's metadata could not be read while checking the session_id/workspace_id pair. Nothing was stored. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

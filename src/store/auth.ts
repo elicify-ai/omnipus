@@ -39,6 +39,16 @@ export function hasStoredSession(): boolean {
   return getStoredUsername() !== null
 }
 
+// #1428 step 2 (spec 4.4.3): sign-out drops every draft, unsent item, command
+// record and pending creation. The chat side registers here so this store
+// imports nothing from it.
+const signOutListeners = new Set<() => void>()
+
+export function onSignOut(listener: () => void): () => void {
+  signOutListeners.add(listener)
+  return () => { signOutListeners.delete(listener) }
+}
+
 export const useAuthStore = create<AuthStore>((set) => ({
   username: getStoredUsername(),
   setUsername: (username) => {
@@ -48,5 +58,6 @@ export const useAuthStore = create<AuthStore>((set) => ({
   clearAuth: () => {
     localStorage.removeItem('omnipus_auth_username')
     set({ username: null })
+    for (const listener of signOutListeners) listener()
   },
 }))

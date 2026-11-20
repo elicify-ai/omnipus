@@ -16,6 +16,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beginPairExtra } from './pairExtra'
 import { useChatStore } from '@/store/chat'
+import { enterNewChat } from '@/store/session/newChatKey'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
@@ -53,11 +54,14 @@ function connect() {
 describe('beginPairExtra — the workspace switch belongs to a started outcome only (C4)', () => {
   it("a 'prompt' outcome leaves the active workspace on the workspace the route shows", () => {
     connect()
-    // Workspace A hosts an unconfirmed first send with no session id yet —
-    // the new-chat decision must prompt instead of starting.
-    useSessionStore.getState().setActiveSession(null, 'ava')
+    // Spec 4.4.1: the unconfirmed first send lives on a new-chat key, not on
+    // setActiveSession(null). FR-005: that send has no session id, so the
+    // decision prompts instead of starting.
+    enterNewChat(WS_A, 'ava')
     useChatStore.getState().sendMessage('first message in A')
-    expect(useChatStore.getState().pendingFirstSend?.sessionId ?? null).toBeNull()
+    const pending = useChatStore.getState().pendingFirstSend
+    expect(pending, 'FR-005: an unconfirmed first send is waiting').not.toBeNull()
+    expect(pending?.sessionId).toBeNull()
 
     const navigate = vi.fn()
     const close = vi.fn()
@@ -76,7 +80,8 @@ describe('beginPairExtra — the workspace switch belongs to a started outcome o
 
   it("a 'started' outcome switches the workspace and navigates to the extra's workspace", () => {
     connect()
-    useSessionStore.getState().setActiveSession(null, 'ava')
+    // Same first send as the prompt case. Abandoning it is what lets the extra start.
+    enterNewChat(WS_A, 'ava')
     useChatStore.getState().sendMessage('first message in A')
     // The pending send is abandoned (the dialog's confirm path), so the
     // extra starts outright.

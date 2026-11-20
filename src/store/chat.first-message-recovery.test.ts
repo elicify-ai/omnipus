@@ -15,11 +15,18 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
+
 import { makeSnapshotHistory } from '@/test/factories'
 import { queryClient } from '@/lib/queryClient'
 import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
 import { expectValidFrame } from '../../tests/chat-history-paging/fixtures'
 
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
+function withNewChatOrigin<T extends object>(frame: T): T & { origin: { kind: 'new_chat'; new_chat_key: string } } {
+  return { ...frame, origin: { kind: 'new_chat', new_chat_key: openedKey } }
+}
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7, FOUNDER DECISION "middle way", and Team-lead ruling (frontend scope).
 // Plan: T8 disconnect/reconnect; T9 exact-frame, same-ID, single-flight Retry;
@@ -42,7 +49,7 @@ const SERVER_ENTRY_ID = '1090-server-user-entry'
 const MEDIA_REFS = ['media://1090-original-image', 'media://1090-original-file']
 // Fixture values, not observed outputs. D7 requires preserving every original
 // outbound field, including whitespace, ordered refs, metadata and false Auto.
-const ORIGINAL_FRAME: MessageFrame = {
+const BASE_ORIGINAL_FRAME: MessageFrame = {
   type: 'message',
   content: CONTENT,
   client_message_id: CLIENT_ID,
@@ -103,6 +110,7 @@ function sendRecovery1090First(sender: ReturnType<typeof connectRecovery1090Send
   act(() => {
     useWorkspacesStore.setState({ activeWorkspaceId: '1090-origin-workspace' })
     useChatStore.setState({ pendingAutoApproveChoice: false })
+    openedKey = enterNewChat('1090-origin-workspace', 'mia')
     useChatStore.getState().sendMessage(CONTENT, {
       clientMessageId: CLIENT_ID,
       mediaRefs: [...MEDIA_REFS],
@@ -110,7 +118,7 @@ function sendRecovery1090First(sender: ReturnType<typeof connectRecovery1090Send
     })
   })
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: exact ordinary first send')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   expect(useSessionStore.getState().activeSessionId, 'fixture: no acknowledgement has arrived')
     .toBe('__pending')
   expect(recovery1090Users(), 'fixture: first user message is visible before the drop')
@@ -202,7 +210,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
     expect.soft(recovery1090Users(), 'T8: ordinary pending chat must not be abandoned on reconnect')
       .toStrictEqual([{ id: CLIENT_ID, content: CONTENT }])
     expect.soft(sender.send.mock.calls.map(([frame]) => frame), 'T8: reconnect must not retransmit automatically')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
     expect.soft(screen.queryByText('Delivery not confirmed', { exact: true }), 'T8: uncertainty survives reconnect')
       .toBeInTheDocument()
     expect.soft(screen.queryByRole('button', { name: /^Retry$/ }), 'T8: Retry remains reachable after reconnect')
@@ -233,7 +241,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
     })
 
     expect(recovery1090OutboundMessages(sender), 'T9: one verbatim session-less Retry, never a reconstructed request')
-      .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME)])
     expect(recovery1090Users(), 'T9: Retry must reuse the bubble, not append a new one')
       .toStrictEqual([{ id: CLIENT_ID, content: CONTENT }])
     expect(screen.queryByText('Checking delivery…', { exact: true }), 'T9: retry-in-flight copy must be exact')
@@ -258,7 +266,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
     act(() => useChatStore.getState().handleFrame(ack))
 
     expect.soft(sender.send.mock.calls.map(([frame]) => frame), 'T10: recovered acknowledgement must immediately attach with no cursor')
-      .toStrictEqual([ORIGINAL_FRAME, { type: 'attach_session', session_id: SESSION_ID }])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), { type: 'attach_session', session_id: SESSION_ID }])
     expect.soft(useChatStore.getState().isStreaming, 'T10: recovery must not invent a new running answer').toBe(false)
     expect.soft(screen.queryByText('Checking chat…', { exact: true }), 'T10: checking_existing copy is exact')
       .toBeInTheDocument()
@@ -316,7 +324,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
       'T10: attached server permission wins over the original mint-time false choice',
     ).toBe(true)
     expect.soft(recovery1090OutboundMessages(sender), 'T10: recovery and replay never start another answer turn')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   })
 
   it.each(DELIVERY_ERRORS)('T11: tagged $kind shows "$copy" + Retry without Generate again', ({ kind, copy }) => {
@@ -341,7 +349,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
     expect.soft(useSessionStore.getState().activeSessionId, `T11 ${kind}: no invented real session`)
       .toBe('__pending')
     expect.soft(recovery1090OutboundMessages(sender), `T11 ${kind}: errors must not auto-resend`)
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   })
 
   it('T12: answer_not_started shows Message saved, but no answer started; Generate again sends one fresh-ID turn with original media in the known session', () => {
@@ -457,9 +465,11 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
     act(() => useChatStore.getState().resendMessage(otherId))
 
     expect(sender.send).toHaveBeenCalledTimes(2)
+    // Spec 4.6.1: a saved chat's message carries origin {kind:'chat', session_id}.
     expect(sender.send).toHaveBeenNthCalledWith(2, {
       type: 'message', session_id: otherSid, client_message_id: otherId,
       content: otherContent, agent_id: 'mia', media: MEDIA_REFS,
+      origin: { kind: 'chat', session_id: otherSid },
     })
     expect(recovery1090Users(), 'control: ordinary resend keeps the existing bubble in place')
       .toStrictEqual([{ id: otherId, content: otherContent }])

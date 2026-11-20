@@ -1,0 +1,30 @@
+title: CancelIdleFrame
+description: >
+  Server → client. #1841 (ships with #1428 step 2). Answer to an accepted
+  `cancel` that found nothing to stop in its scope: no turn was running or
+  about to start, no session was stopped, no background shell was killed and
+  no queued input was discarded. The web client shows "Nothing to stop.",
+  the same sentence channel and CLI users already get for /cancel.
+
+  Sent only to the connection that sent the cancel, unsequenced; it is never
+  published to the session's other tabs, journaled or replayed, because it
+  answers one command rather than describing the chat's state. It does not
+  replace or change any cancel_stage frame. On a connection that received
+  `server_capabilities`, a cancel carrying `client_frame_id` gets its
+  `command_received` first and this frame after it. Never sent for a
+  refused cancel, and never while a pre-registration Stop latch is armed
+  (that case is acknowledged with cancel_stage `graceful`).
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: cancel_idle
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: The cancel's target, in which nothing was running.

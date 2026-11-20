@@ -250,9 +250,15 @@ describe('workspace-entry refusal keeps the composer text (#1428 item 3)', () =>
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
     act(() => { fireEvent.change(input, { target: { value: 'go' } }) })
-    let notPrevented = false
+    act(() => { useChatStore.setState({ outboundQueue: [] }) })
+    let notPrevented = true
     act(() => { notPrevented = fireEvent.submit(screen.getByTestId('composer-form')) })
-    expect(notPrevented).toBe(true)
+    // Spec 4.5: the binding submits and preventDefault. Not blocking means no warning and the text is delivered.
+    expect(notPrevented).toBe(false)
     expect(useUiStore.getState().toasts).toHaveLength(0)
+    const queued = useChatStore.getState().outboundQueue
+    expect(queued, 'a non-blocking entry still submits').toHaveLength(1)
+    const queuedItem = queued[0]
+    expect(typeof queuedItem === 'string' ? queuedItem : queuedItem.content).toBe('go')
   })
 })

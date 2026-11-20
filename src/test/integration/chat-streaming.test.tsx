@@ -166,7 +166,7 @@ describe('chat streaming integration (test #24) — token rendering', () => {
 describe('cancel integration (test #40)', () => {
   it('sends cancel frame and marks partial response as interrupted', async () => {
     // Traces to: wave5a-wire-ui-spec.md — test_cancel_integration (test #40)
-    const mockSend = vi.fn()
+    const mockSend = vi.fn().mockReturnValue(true)
     render(<ChatThread />, { wrapper })
 
     act(() => {
@@ -216,7 +216,13 @@ describe('cancel integration (test #40)', () => {
     })
 
     // Cancel frame sent
-    expect(mockSend).toHaveBeenCalledWith({ type: 'cancel', session_id: 'sess_cancel' })
+    // Spec 4.7: the cancel names this chat and carries a client_frame_id.
+    expect(mockSend.mock.calls).toEqual([[{
+      type: 'cancel',
+      session_id: 'sess_cancel',
+      origin: { kind: 'chat', session_id: 'sess_cancel' },
+      client_frame_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+    }]])
 
     // Partial response preserved with interrupted status
     await waitFor(() => {

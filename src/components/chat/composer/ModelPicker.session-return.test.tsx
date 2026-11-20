@@ -17,7 +17,8 @@ async function loadPageModules() {
   const { useWorkspacesStore } = await import('@/store/workspacesStore')
   const { ModelPicker } = await import('./ModelPicker')
   const { fetchAgents, fetchProviders } = await import('@/lib/api')
-  return { useChatStore, useSessionStore, useWorkspacesStore, ModelPicker, fetchAgents, fetchProviders }
+  const { enterNewChat } = await import('@/store/session/newChatKey')
+  return { useChatStore, useSessionStore, useWorkspacesStore, ModelPicker, fetchAgents, fetchProviders, enterNewChat }
 }
 
 let page: Awaited<ReturnType<typeof loadPageModules>>
@@ -195,7 +196,9 @@ describe('#1436 review gaps — draft choices and storage failure', () => {
     const frames: ClientFrame[] = []
     const transport = { send: (frame: ClientFrame) => { frames.push(frame); return true }, close: vi.fn(), isConnected: true }
     useConnectionStore.setState({ connection: transport as unknown as WsConnection, isConnected: true })
-    act(() => page.useSessionStore.getState().setActiveSession(null, agent.id))
+    // Spec 4.4.1 / 4.6.1: the first message is reached by enterNewChat and carries {new_chat, K}.
+    let openedKey = ''
+    act(() => { openedKey = page.enterNewChat(WORKSPACE_ID, agent.id) })
     const mounted = await renderPicker()
     const runtime = renderHook(() => useOmnipusRuntime())
     await choose(FIRST_CHOICE)
@@ -206,7 +209,10 @@ describe('#1436 review gaps — draft choices and storage failure', () => {
     })
     expect(page.useSessionStore.getState().activeSessionId).toBe('__pending')
     const sent = frames.find((frame) => frame.type === 'message')
-    expect(sent).toMatchObject({ type: 'message', metadata: { model_name: FIRST_CHOICE } })
+    expect(sent).toMatchObject({
+      type: 'message', metadata: { model_name: FIRST_CHOICE },
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
+    })
     if (!sent || sent.type !== 'message') throw new Error('The real composer did not send the first message')
     act(() => page.useChatStore.getState().handleFrame({
       type: 'session_started', session_id: SESSION_A, agent_id: agent.id, client_message_id: sent.client_message_id,

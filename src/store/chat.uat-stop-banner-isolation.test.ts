@@ -73,8 +73,15 @@ function sendAndStopParent() {
     {
       type: 'message', session_id: PARENT, content: INITIAL_TEXT,
       client_message_id: INITIAL_ID, agent_id: 'jim', metadata: { workspace_id: WORKSPACE },
+      // Spec 4.6.1: a saved chat's message carries origin {kind: chat, session_id}.
+      origin: { kind: 'chat', session_id: PARENT },
     },
-    { type: 'cancel', session_id: PARENT },
+    {
+      // Spec 4.7: a cancel carries the same origin and a client_frame_id.
+      type: 'cancel', session_id: PARENT,
+      origin: { kind: 'chat', session_id: PARENT },
+      client_frame_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+    },
   ])
 }
 

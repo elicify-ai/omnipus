@@ -78,6 +78,7 @@ export async function visibleNamedRows(page: Page, name: string, clause: string)
 }
 
 export async function expectPainted(locator: Locator, text: string | RegExp, timeout = 2_000) {
-  await expect.poll(() => paintedText(locator), { message: 'painted notice text, excluding every hidden/announcement descendant', timeout })
+  // Short-lived countdown rows: sample densely, as expectNamed does.
+  await expect.poll(() => paintedText(locator), { message: 'painted notice text, excluding every hidden/announcement descendant', timeout, intervals: [10, 20, 50] })
     .toEqual([typeof text === 'string' ? text : expect.stringMatching(text)]);
 }

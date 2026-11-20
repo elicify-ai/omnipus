@@ -9,15 +9,15 @@
 // a separate backend owner, not mocked into a frontend pass here.
 //
 // Oracle: founder ruling for /stop activation and any-chat redirect;
-// existing D9 client-delivery/available-while-streaming/argument rules;
-// generated RedirectFrame {type:'redirect', session_id, instruction} with
-// no scope or other extra properties. /cancel remains immediate tree and
-// /steer remains absent. Expected values never come from observing output.
+// existing D9 client-delivery/available-while-streaming/argument rules.
+// Spec 4.6.1 (r9): the hook passes the instruction and the typed command
+// captured at the submit event; the caller builds the RedirectFrame.
+// /cancel remains immediate tree and /steer remains absent.
+// Expected values never come from observing output.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type { ComposerRuntime } from '@assistant-ui/react'
-import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { useSlashMenu } from './useSlashMenu'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
@@ -135,6 +135,25 @@ function attachedRootSessionStore(sessionId: string) {
   })
 }
 
+// Spec 4.6.1 immediate row: one hand-off of the trimmed instruction plus the
+// typed command captured before the box is cleared. These tests supply no
+// origin binding, so the captured key is empty. The typed command has text
+// and originKey only — no scope, and no frame fields (the caller builds those).
+function expectRedirectHandOff(
+  sendRedirectFrame: ReturnType<typeof vi.fn>,
+  instruction: string,
+  typedText: string,
+): void {
+  expect(sendRedirectFrame).toHaveBeenCalledTimes(1)
+  const call = sendRedirectFrame.mock.calls[0] as [unknown, { text: string; originKey: string }]
+  expect(call[0], 'spec 4.6.1: the instruction, not a frame').toBe(instruction)
+  expect(call[1], 'spec 4.6.1: the typed command captured at submit').toEqual({
+    text: typedText,
+    originKey: '',
+  })
+  expect(Object.keys(call[1]).sort(), 'spec 4.6.1: no scope on the typed command').toEqual(['originKey', 'text'])
+}
+
 // ─── Palette visibility ─────────────────────────────────────────────────────
 
 describe('useSlashMenu — D9 /stop and /stop-redirect palette', () => {
@@ -211,11 +230,10 @@ describe('useSlashMenu — /stop-redirect execution', () => {
   // cannot execute mid-stream). RED today: no stop-redirect branch exists, so
   // the text is dispatched as an ordinary chat message and no frame is sent.
   //
-  // §3.1 web row: in a HELPER chat the SPA intercepts "/stop-redirect
-  // <instruction>" WITHOUT submitting it as chat text and sends the dedicated
-  // generated RedirectFrame — exactly one, with the active (helper) session id
-  // and the trimmed instruction, and NO scope property (D9 row 2 fixes scope:
-  // that helper only, subtree keeps working). It must work MID-STREAM.
+  // Spec 4.6.1 immediate row: in a HELPER chat the SPA intercepts
+  // "/stop-redirect <instruction>" WITHOUT submitting it as chat text and
+  // hands the trimmed instruction plus the typed command to the caller
+  // (exactly one call, no scope). It must work MID-STREAM. No stop.
   it('in a HELPER chat mid-stream intercepts and sends exactly one RedirectFrame — no chat submission, no scope, no stop', () => {
     helperSessionStore('helper-session-9')
     const composerRuntime = makeComposerRuntime('/stop-redirect focus on the failing tests')
@@ -231,16 +249,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     // Handled client-side via interception — the caller must not dispatch the
     // text as a chat message (mid-stream text would enter the steering queue).
     expect(intercepted).toBe(true)
-    expect(sendRedirectFrame).toHaveBeenCalledTimes(1)
-    const frame = sendRedirectFrame.mock.calls[0][0] as RedirectFrame
-    expect(frame).toEqual({
-      type: 'redirect',
-      session_id: 'helper-session-9',
-      instruction: 'focus on the failing tests',
-    })
-    // Exact key set — a scope property must never exist on the frame (D9 row
-    // 2; the schema's additionalProperties:false).
-    expect(Object.keys(frame).sort()).toEqual(['instruction', 'session_id', 'type'])
+    expectRedirectHandOff(sendRedirectFrame, 'focus on the failing tests', '/stop-redirect focus on the failing tests')
     // Nothing else happens: no chat-text submission, no local message, no
     // stop-only side effect (redirect is not a bare stop).
     expect(composerRuntime.send).not.toHaveBeenCalled()
@@ -248,9 +257,8 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     expect(cancelIfStreaming).not.toHaveBeenCalled()
   })
 
-  // The interception path is NOT gated on isStreaming — idle helpers get the
-  // same one-frame receipt (D9 row 2 is not conditioned on streaming; the
-  // palette is visible in both states).
+  // Spec 4.6.1: the interception path is NOT gated on isStreaming — idle
+  // helpers get the same instruction and typed command.
   it('in a HELPER chat when idle sends the same RedirectFrame (no isStreaming gate on the redirect path)', () => {
     helperSessionStore('helper-session-9')
     const composerRuntime = makeComposerRuntime('/stop-redirect focus on the failing tests')
@@ -262,18 +270,13 @@ describe('useSlashMenu — /stop-redirect execution', () => {
       intercepted = result.current.interceptClientCommand()
     })
     expect(intercepted).toBe(true)
-    expect(sendRedirectFrame).toHaveBeenCalledTimes(1)
-    expect(sendRedirectFrame.mock.calls[0][0]).toEqual({
-      type: 'redirect',
-      session_id: 'helper-session-9',
-      instruction: 'focus on the failing tests',
-    })
+    expectRedirectHandOff(sendRedirectFrame, 'focus on the failing tests', '/stop-redirect focus on the failing tests')
     expect(composerRuntime.send).not.toHaveBeenCalled()
   })
 
-  // The instruction is delivered verbatim (D2: the instruction becomes the
-  // newest instruction): trimmed at both ends, internal spacing preserved,
-  // multibyte content intact.
+  // Spec 4.6.1: the instruction is delivered verbatim (trimmed at both ends,
+  // internal spacing preserved, multibyte content intact). The typed command
+  // keeps that same trimmed submit text.
   it('sends the instruction verbatim: trimmed at both ends, internal spacing and multibyte content preserved', () => {
     helperSessionStore('helper-session-9')
     const composerRuntime = makeComposerRuntime('/stop-redirect \u00A0 先 export the CSV — 报告  ')
@@ -283,9 +286,13 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     act(() => {
       result.current.interceptClientCommand()
     })
-    expect(sendRedirectFrame).toHaveBeenCalledTimes(1)
-    const frame = sendRedirectFrame.mock.calls[0][0] as RedirectFrame
-    expect(frame.instruction).toBe('先 export the CSV — 报告')
+    // Ends trimmed. The space, NBSP and space between the command and the
+    // instruction stay in the captured submit text. The instruction is trimmed.
+    expectRedirectHandOff(
+      sendRedirectFrame,
+      '先 export the CSV — 报告',
+      '/stop-redirect   先 export the CSV — 报告',
+    )
   })
 
   it('without an attached current chat gives exact missing-session guidance and sends nothing', () => {
@@ -309,8 +316,8 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     expect(sendRedirectFrame).not.toHaveBeenCalled()
   })
 
-  // Founder: "/stop-redirect ... redirects the chat itself not their
-  // helper". Replace the former root refusal with an exact root-frame oracle.
+  // Spec 4.6.1: a root chat hands off the same way as a helper — one call,
+  // the instruction and the typed command, no scope and no stop.
   it('in a ROOT chat with an attached session sends exactly one current-chat RedirectFrame', () => {
     attachedRootSessionStore('root-session-1')
     const composerRuntime = makeComposerRuntime('/stop-redirect do the other thing')
@@ -324,13 +331,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
       intercepted = result.current.interceptClientCommand()
     })
     expect(intercepted).toBe(true)
-    expect(sendRedirectFrame).toHaveBeenCalledTimes(1)
-    expect(sendRedirectFrame.mock.calls[0][0]).toEqual({
-      type: 'redirect',
-      session_id: 'root-session-1',
-      instruction: 'do the other thing',
-    })
-    expect(Object.keys(sendRedirectFrame.mock.calls[0][0]).sort()).toEqual(['instruction', 'session_id', 'type'])
+    expectRedirectHandOff(sendRedirectFrame, 'do the other thing', '/stop-redirect do the other thing')
     expect(appendMessage).not.toHaveBeenCalled()
     expect(composerRuntime.send).not.toHaveBeenCalled()
     expect(cancelIfStreaming).not.toHaveBeenCalled()

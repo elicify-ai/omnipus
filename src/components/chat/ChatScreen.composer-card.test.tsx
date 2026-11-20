@@ -210,10 +210,12 @@ describe('OmnipusComposer — composer layout contract (bare context row · card
       expect(card.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
     }
 
-    // The attach control moved INSIDE the card (leading the textarea,
-    // ChatGPT/Claude-style) per operator direction — it was visually lost
-    // in the bare context row.
-    expect(withinCard.getByTestId('add-attachment')).toBeInTheDocument()
+    // Spec 4.5: the session binding's attach button leads the textarea.
+    // ComposerPrimitive.AddAttachment (testid add-attachment) is only the
+    // fallback when that binding is absent.
+    const attach = withinCard.getByRole('button', { name: 'Add files or context' })
+    expect(attach).toBeInTheDocument()
+    expect(withinCard.getByTestId('composer-file-picker')).toBeInTheDocument()
 
     // The input surface itself lives INSIDE the card.
     expect(withinCard.getByTestId('composer-input')).toBeInTheDocument()
@@ -243,7 +245,7 @@ describe('OmnipusComposer — composer layout contract (bare context row · card
   it('disables the attach control and passes disabled=true through to the model picker when agentRemoved', async () => {
     render(<OmnipusComposer agentRemoved />)
 
-    expect(screen.getByTestId('add-attachment')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add files or context' })).toBeDisabled()
     expect(screen.queryByTestId('agent-picker-trigger')).not.toBeInTheDocument()
     expect(screen.getByTestId('model-picker-stub').getAttribute('data-disabled')).toBe('true')
   })

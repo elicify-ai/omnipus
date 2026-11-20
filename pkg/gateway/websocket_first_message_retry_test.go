@@ -5,13 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -226,4 +230,145 @@ func TestFirstUserMessage_SessionlessRetryIsIsolatedByAuthenticatedPrincipal(t *
 	assert.Equal(t, [][3]string{{aliceSession, content, alice}, {bobSession, content, bob}}, issue1090AdmittedTurns(msgBus),
 		"T6: only the two distinct original sends may start turns, under their own principals")
 	t.Log("T6 instrument: both authenticated owners were checked; same-principal recovery controls forbid a false privacy green")
+}
+
+// --- #1428 step 2 (option C): retry identity includes origin (S-6, SV-11/11b) ---
+//
+// SPEC SOURCES (oracle independence):
+//   - SPEC-C-server-binds-send-to-chat-r8.md §4.3.5: digestFirstMessageRequest
+//     also hashes origin (kind, then session id or key, length-prefixed);
+//     "Same id + different origin → existing conflict reply; identical retry
+//     → existing recovered answer."
+//   - §6.1 SV-11/11b; F-p (as-is: the digest omits origin — the RED reason).
+//
+// These two tests drive the REAL wire: origin only exists on the raw frame,
+// and S-6's GREEN must read it from the decoded frame into the digest.
+// RED STATE: the digest ignores origin, so the different-origin retry
+// recovers today instead of conflicting — SV-11b fails on that recovered
+// acknowledgement (the right reason), while the identical-retry control
+// (SV-11) passes today and must keep passing.
+
+const originRetryA = "K-retry-origin-a1" // 16 chars, ^[A-Za-z0-9_-]+$ (SendOrigin.yaml)
+const originRetryB = "K-retry-origin-b2"
+
+// sendFirstMessageWithOrigin dials a fresh dev-mode connection and sends one
+// first message (no session_id) carrying the given origin and correlation id.
+func sendFirstMessageWithOrigin(t *testing.T, srv *httptest.Server, msgBus *bus.MessageBus, originKey, clientID, content string) string {
+	t.Helper()
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	sendWSAuthFrameDevMode(t, conn)
+	frame := generated.MessageFrame{
+		Type:            "message",
+		AgentId:         strPtr("mia"),
+		Origin:          &generated.SendOrigin{Kind: "new_chat", NewChatKey: &originKey},
+		ClientMessageId: strPtr(clientID),
+		Content:         content,
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
+	started := readFrameOfType(t, conn, "session_started", 10*time.Second)
+	require.NotEmpty(t, started.SessionID, "the first message must mint and acknowledge a session")
+	return started.SessionID
+}
+
+// TestFirstUserMessage_RetrySameIDDifferentOriginConflicts is SV-11b: the
+// retry identity includes origin, so the same client_message_id and body
+// retried with a DIFFERENT origin must take the existing conflict reply —
+// never a recovered acknowledgement, and never a second session.
+func TestFirstUserMessage_RetrySameIDDifferentOriginConflicts(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	handler, _ := newTestWSHandlerForModelName(t, msgBus)
+	store := handler.agentLoop.GetSessionStore()
+	require.NotNil(t, store)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	t.Cleanup(handler.Wait)
+
+	const clientID = "1428-sv11b-id"
+	const content = "SV-11b: identical body, different origin"
+
+	first := sendFirstMessageWithOrigin(t, srv, msgBus, originRetryA, clientID, content)
+
+	// Retry: same id, same body, origin K2.
+	retryConn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = retryConn.Close() })
+	sendWSAuthFrameDevMode(t, retryConn)
+	// Spec r9 S-11/§4.3.6/§4.10: capabilities is FIRST on every new
+	// connection, including retries. Assert it, then finish admission before
+	// observing the retry's own reply; do not mistake capability for conflict.
+	frameType, capabilityRaw := readFirstApplicationFrame(t, retryConn)
+	require.Equal(t, "server_capabilities", frameType)
+	requireServerCapabilitiesFirst(t, capabilityRaw, "SV-11b retry connection")
+	drainAdmissionOneShot(t, retryConn)
+	retry := generated.MessageFrame{
+		Type:            "message",
+		AgentId:         strPtr("mia"),
+		Origin:          &generated.SendOrigin{Kind: "new_chat", NewChatKey: strPtr(originRetryB)},
+		ClientMessageId: strPtr(clientID),
+		Content:         content,
+	}
+	retryRaw, err := json.Marshal(retry)
+	require.NoError(t, err)
+	require.NoError(t, retryConn.WriteMessage(websocket.TextMessage, retryRaw))
+
+	// Admission is settled: the very next frame must now be the existing
+	// conflict, not a recovered/minted session or another capability frame.
+	require.NoError(t, retryConn.SetReadDeadline(time.Now().Add(10*time.Second)))
+	_, rawFrame, readErr := retryConn.ReadMessage()
+	require.NoError(t, readErr, "the different-origin retry must be answered")
+	var reply generated.ErrorFrame
+	require.NoError(t, json.Unmarshal(rawFrame, &reply))
+	require.Equal(t, "error", reply.Type,
+		"S-6 violated: the same id + same body + different origin retry was answered with %q "+
+			"(message=%q), want the existing conflict error — the digest ignored the origin (F-p)",
+		reply.Type, reply.Message)
+	require.Contains(t, reply.Message, "client_message_id conflict",
+		"the conflict reply must be the existing dedupe conflict reply")
+	require.NotNil(t, reply.ClientMessageId, "C-4/ErrorFrame: the conflict reply must carry client_message_id")
+	require.Equal(t, clientID, *reply.ClientMessageId,
+		"the conflict reply must correlate the retried client_message_id")
+
+	// No second chat may exist for the retry, and the original admission
+	// stays the only one.
+	directories := issue1090SessionDirectories(t, store)
+	require.Equal(t, []string{first}, directories,
+		"the conflicting retry must not mint a second session")
+	admitted := issue1090AdmittedTurns(msgBus)
+	require.Equal(t, [][3]string{{first, content, ""}}, admitted,
+		"only the original first send may admit a turn")
+}
+
+// TestFirstUserMessage_RetryWithIdenticalOriginRecovers is SV-11's paired
+// control: the same id, same body and the SAME origin recovers the original
+// answer exactly as today — no conflict, no second session, no second turn.
+func TestFirstUserMessage_RetryWithIdenticalOriginRecovers(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	handler, _ := newTestWSHandlerForModelName(t, msgBus)
+	store := handler.agentLoop.GetSessionStore()
+	require.NotNil(t, store)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	t.Cleanup(handler.Wait)
+
+	const clientID = "1428-sv11-id"
+	const content = "SV-11: identical body and identical origin"
+
+	first := sendFirstMessageWithOrigin(t, srv, msgBus, originRetryA, clientID, content)
+
+	retry := sendFirstMessageWithOrigin(t, srv, msgBus, originRetryA, clientID, content)
+	require.Equal(t, first, retry,
+		"the identical retry must recover the original session, not mint another")
+
+	directories := issue1090SessionDirectories(t, store)
+	require.Equal(t, []string{first}, directories,
+		"the identical retry must not mint a second session")
+	admitted := issue1090AdmittedTurns(msgBus)
+	require.Equal(t, [][3]string{{first, content, ""}}, admitted,
+		"only the original first send may admit a turn")
 }

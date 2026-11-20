@@ -59,12 +59,9 @@ const initialize = vi.fn()
 const renderFn = vi.fn()
 vi.mock('mermaid', () => ({ default: { initialize, render: renderFn } }))
 
-// FIX 2: The error card's handleFix now does a LAZY `await import('@/store/chat')`
-// and then calls `useChatStore.getState()` — match that shape here.
-// isStreaming is mutable so tests can set it to true/false between assertions.
-const sendMessageMock = vi.fn()
-const storeState = { sendMessage: sendMessageMock, isStreaming: false }
-vi.mock('@/store/chat', () => ({ useChatStore: { getState: () => storeState } }))
+// Spec 4.6.1: Mermaid fix goes through the bound-send pipeline, captured at the
+// click. The chat store is the real one. A supported stand-in connection records
+// the frames (a transport that is not a WsConnection is treated as supported).
 
 // Mock Phase A media-actions helpers so tests can assert calls without DOM/canvas.
 const copyTextMock = vi.fn().mockResolvedValue(undefined)
@@ -104,8 +101,6 @@ beforeEach(() => {
   vi.resetModules() // fresh mermaid-renderer module -> initialized=false each test
   initialize.mockReset().mockReturnValue(undefined)
   renderFn.mockReset()
-  sendMessageMock.mockReset()
-  storeState.isStreaming = false
   copyTextMock.mockReset().mockResolvedValue(undefined)
   copyImageBlobMock.mockReset().mockResolvedValue(undefined)
   svgToPngBlobMock.mockReset().mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
@@ -122,6 +117,38 @@ async function importDiagram() {
 
 const DIAGRAM = 'graph TD; A-->B'
 const SVG_FIXTURE = '<svg data-testid="diagram"><g id="node"/></svg>'
+
+// Frames handed to the stand-in socket by the real send pipeline (spec 4.6.1).
+const sentFrames: Array<{ type?: string; content?: string; session_id?: string; origin?: { kind?: string; session_id?: string } }> = []
+
+/** Open chat-a on the stores loaded after resetModules, and record its sends. */
+async function armOwningChat(streaming = false): Promise<void> {
+  const { useSessionStore } = await import('@/store/session')
+  const { useChatStore } = await import('@/store/chat')
+  const { useConnectionStore } = await import('@/store/connection')
+  const { emptySessionState } = await import('@/store/chat/session')
+  // The diagram loads bound-send itself on the click (spec 4.6.1). Importing it
+  // here would stop the file loading on a tree where that module does not exist yet.
+  sentFrames.length = 0
+  useSessionStore.setState({ activeSessionId: 'chat-a', activeAgentId: 'mia', activeAgentType: 'core', newChatKey: null })
+  useConnectionStore.setState({
+    isConnected: true,
+    reconnectPhase: null,
+    connection: {
+      send: (frame: { type?: string; content?: string; session_id?: string; origin?: { kind?: string; session_id?: string } }) => {
+        sentFrames.push(frame)
+        return true
+      },
+    } as never,
+  })
+  // The guard is the owning chat's own turn (spec 4.6.1), not a global flag.
+  const bucket = { ...emptySessionState(), isStreaming: streaming }
+  useChatStore.setState({ sessionsById: { 'chat-a': bucket }, isStreaming: false })
+}
+
+function messageContents(): string[] {
+  return sentFrames.filter((frame) => frame.type === 'message').map((frame) => frame.content ?? '')
+}
 
 describe('MermaidDiagram', () => {
   it('renders a valid diagram as inline SVG (happy path)', async () => {
@@ -170,53 +197,70 @@ describe('MermaidDiagram', () => {
   it('error card "Ask assistant to fix" sends the syntax error + code back to the LLM', async () => {
     renderFn.mockRejectedValue(new Error("Parse error on line 3: Expecting 'PE', got '1'"))
     const MermaidDiagram = await importDiagram()
+    await armOwningChat()
 
     render(<MermaidDiagram code={'graph TD; A--B'} />)
 
     const btn = await screen.findByRole('button', { name: /fix the diagram/i })
     fireEvent.click(btn)
 
-    // handleFix is async (lazy store import) — wait for sendMessage to be called.
-    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
-    const sent = sendMessageMock.mock.calls[0][0] as string
-    expect(sent).toContain("Parse error on line 3: Expecting 'PE', got '1'") // the syntax detail
-    expect(sent).toContain('graph TD; A--B') // the original code
-    expect(sent).toMatch(/corrected Mermaid/i) // a clear fix request
-    // The prompt uses a backtick fence — guard that it includes the mermaid fence marker.
+    // Spec 4.6.1: the fix is one message to the chat that was open at the click.
+    await waitFor(() => expect(messageContents(), '4.6.1: the fix is one message').toHaveLength(1))
+    const sent = messageContents()[0]
+    expect(sent).toContain("Parse error on line 3: Expecting 'PE', got '1'")
+    expect(sent).toContain('graph TD; A--B')
+    expect(sent).toMatch(/corrected Mermaid/i)
     expect(sent).toContain('```mermaid')
-    // Button reflects the sent state (disabled to prevent double-send).
+    expect(sentFrames[0]?.session_id, '4.6.1: the owning chat is the one open at the click').toBe('chat-a')
+    expect(sentFrames[0]?.origin, '4.6.1: the fix carries the owning chat as its origin').toEqual({ kind: 'chat', session_id: 'chat-a' })
     expect(screen.getByRole('button', { name: /Fix requested/i })).toBeInTheDocument()
   })
 
-  it('fix button: a second click does NOT call sendMessage again (disabled after sent)', async () => {
+  it('fix button: a second click does not send a second fix', async () => {
     renderFn.mockRejectedValue(new Error('Parse error on line 1'))
     const MermaidDiagram = await importDiagram()
+    await armOwningChat()
 
     render(<MermaidDiagram code={'graph TD; A--C'} />)
 
     const btn = await screen.findByRole('button', { name: /fix the diagram/i })
     fireEvent.click(btn)
-    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(messageContents()).toHaveLength(1))
 
-    // Button is now disabled — a second click must be ignored.
     fireEvent.click(btn)
-    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(messageContents(), 'a second click does not send another fix').toHaveLength(1))
+    expect(sentFrames[0]?.origin, '4.6.1: the one fix is bound to the owning chat').toEqual({ kind: 'chat', session_id: 'chat-a' })
   })
 
-  it('fix button: clicking while a turn is streaming does NOT call sendMessage', async () => {
-    // Set isStreaming=true before the click — handleFix guards against this.
-    storeState.isStreaming = true
+  it('fix button: a click while the owning chat is streaming sends nothing, and the same click sends once the turn ends', async () => {
+    // Spec 4.6.1: a running turn in the owning chat takes no fix. The second
+    // click is the control: the same button does send once that turn has ended,
+    // so a green here is not "send was never wired".
     renderFn.mockRejectedValue(new Error('Parse error on line 1'))
     const MermaidDiagram = await importDiagram()
+    await armOwningChat(true)
 
     render(<MermaidDiagram code={'graph TD; A--D'} />)
 
     const btn = await screen.findByRole('button', { name: /fix the diagram/i })
     fireEvent.click(btn)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(messageContents(), '4.6.1: a running turn takes no fix').toEqual([])
+    expect(screen.getByRole('button', { name: /fix the diagram/i })).toBeEnabled()
 
-    // Give async handleFix time to run (it awaits the store import then returns early).
-    await new Promise((r) => setTimeout(r, 20))
-    expect(sendMessageMock).not.toHaveBeenCalled()
+    const { useChatStore } = await import('@/store/chat')
+    useChatStore.setState((state) => ({
+      isStreaming: false,
+      sessionsById: {
+        ...state.sessionsById,
+        'chat-a': { ...state.sessionsById['chat-a'], isStreaming: false },
+      },
+    }))
+    fireEvent.click(screen.getByRole('button', { name: /fix the diagram/i }))
+    await waitFor(() => expect(messageContents(), 'the same click sends once the turn has ended').toHaveLength(1))
+    expect(messageContents()[0]).toContain('Parse error on line 1')
+    expect(messageContents()[0]).toContain('graph TD; A--D')
+    expect(sentFrames[0]?.origin, '4.6.1: the fix after the turn ends is still bound to chat-a').toEqual({ kind: 'chat', session_id: 'chat-a' })
   })
 
   it('fix button: remount with the same code shows "Sent to assistant" (module-level cache)', async () => {
@@ -224,12 +268,14 @@ describe('MermaidDiagram', () => {
     // must not reset the button state to the un-sent "Fix".
     renderFn.mockRejectedValue(new Error('Parse error on line 1'))
     const MermaidDiagram = await importDiagram()
+    await armOwningChat()
 
     const { unmount } = render(<MermaidDiagram code={'graph TD; A--E'} />)
 
     const btn = await screen.findByRole('button', { name: /fix the diagram/i })
     fireEvent.click(btn)
-    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(messageContents()).toHaveLength(1))
+    expect(sentFrames[0]?.origin, '4.6.1: the cached send was bound to the owning chat').toEqual({ kind: 'chat', session_id: 'chat-a' })
 
     unmount()
 

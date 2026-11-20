@@ -4,6 +4,9 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { generateId } from '@/lib/constants'
+import { sendToChat } from '@/lib/bound-send'
+import { mediaRefURL } from '@/lib/library-attachment'
+import type { DraftFile } from '@/store/chat/draft-state'
 import type { MessageFrame } from '@/lib/api/generated/asyncapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { applyMessageArray } from './session'
@@ -283,7 +286,19 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
         draft.unansweredLastUserMessageId = null
       }) as Partial<SessionChatState>)
       // This is a new turn in a known session, never a same-ID delivery retry.
-      get().sendMessage(message.content, { mediaRefs: message.mediaRefs, attachments: message.media })
+      // #1428 step 2 (spec 4.6.1, Generate again row): captured at the click,
+      // through the send pipeline, origin {chat, that chat}, not navigation-sensitive.
+      const files: DraftFile[] = (message.mediaRefs ?? []).map((ref, index) => {
+        const media = message.media?.[index]
+        return { kind: 'uploaded', id: ref, ref, workspaceId: null, name: media?.filename ?? ref, mime: media?.contentType ?? '', previewUrl: media?.url ?? mediaRefURL(ref) }
+      })
+      void sendToChat('Generate again', {
+        text: message.content,
+        sessionId: sid,
+        agentId: useSessionStore.getState().activeAgentId ?? '',
+        workspaceId: null,
+        files,
+      })
     },
   }
 }

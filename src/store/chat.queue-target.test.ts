@@ -14,6 +14,13 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import type { QueuedOutboundMessage } from '@/store/chat'
+import { enterNewChat } from '@/store/session/newChatKey'
+
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
+function openNewChat() {
+  act(() => { openedKey = enterNewChat(null, 'mia') })
+}
 
 function resetStores() {
   act(() => {
@@ -95,7 +102,7 @@ describe('#1428 step 1: queued messages keep their chat', () => {
   })
 
   it('a first message of a new chat (no chat id yet) is not held back', async () => {
-    act(() => { useSessionStore.setState({ activeSessionId: null }) })
+    openNewChat()
     act(() => { useChatStore.getState().sendMessage('very first message') })
     const item = useChatStore.getState().outboundQueue[0] as QueuedOutboundMessage
     expect(item.targetSessionId, 'no chat id exists yet, so none is recorded').toBeUndefined()
@@ -124,7 +131,9 @@ describe('#1428 step 1 (CHECK round 1): follow-ups, full queue, order, shown row
 
   it('F1: a follow-up typed under a pending first message stays with that chat after the ack', async () => {
     const sender = connect()
+    openNewChat()
     act(() => { useChatStore.getState().sendMessage('first message') })
+    expect(sentFrames(sender)[0], 'spec 4.6.1: the first frame names the new chat').toMatchObject({ origin: { kind: 'new_chat', new_chat_key: openedKey } })
     const first = sentFrames(sender)[0] as { client_message_id?: string }
     act(() => { useChatStore.getState().sendMessage('follow-up while pending') })
     expect(sentFrames(sender), 'fixture: follow-up is held, only the first went out').toHaveLength(1)
@@ -177,7 +186,9 @@ describe('#1428 step 1 (CHECK round 1): follow-ups, full queue, order, shown row
 
   it('R1: a foreign acknowledgement does not take over A\'s follow-up', async () => {
     const sender = connect()
+    openNewChat()
     act(() => { useChatStore.getState().sendMessage('first message') })
+    expect(sentFrames(sender)[0], 'spec 4.6.1: the first frame names the new chat').toMatchObject({ origin: { kind: 'new_chat', new_chat_key: openedKey } })
     const first = sentFrames(sender)[0] as { client_message_id?: string }
     act(() => { useChatStore.getState().sendMessage('A follow-up') })
     act(() => {
@@ -205,7 +216,9 @@ describe('#1428 step 1 (CHECK round 1): follow-ups, full queue, order, shown row
 
   it('R3-F1: after a foreign acknowledgement, opening another chat does not send A\'s follow-up there; they stay held (stuck, #1833)', async () => {
     const sender = connect()
+    openNewChat()
     act(() => { useChatStore.getState().sendMessage('first message') })
+    expect(sentFrames(sender)[0], 'spec 4.6.1: the first frame names the new chat').toMatchObject({ origin: { kind: 'new_chat', new_chat_key: openedKey } })
     act(() => {
       useChatStore.getState().sendMessage('A follow 1')
       useChatStore.getState().sendMessage('A follow 2')

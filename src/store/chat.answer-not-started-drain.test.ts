@@ -8,6 +8,7 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
 import { useUiStore } from '@/store/ui'
 import { queryClient } from '@/lib/queryClient'
 import type { WsConnection } from '@/lib/ws'
@@ -41,8 +42,19 @@ function queuedTexts() {
 }
 function pendingFirstSend(followUps: string[] = ['A follow-up']) {
   const sender = connect()
-  act(() => useChatStore.getState().sendMessage('A first'))
-  const id = messages(sender)[0].client_message_id as string
+  // Spec 4.4.1 / 4.6.1: a first message needs a new-chat key. No key is a
+  // local refusal, so the follow-up queue never starts.
+  let key = ''
+  act(() => {
+    useWorkspacesStore.getState().setActiveWorkspaceId('w1')
+    key = enterNewChat('w1', 'mia')
+    useChatStore.getState().sendMessage('A first')
+  })
+  const first = messages(sender)[0]
+  expect(first, '4.6.1: the first message leaves').toBeTruthy()
+  expect(first.origin, '4.6.1: the first message carries {new_chat, K}').toEqual({ kind: 'new_chat', new_chat_key: key })
+  expect(first, '4.6.1: a new chat names no saved session').not.toHaveProperty('session_id')
+  const id = first.client_message_id as string
   for (const text of followUps) act(() => useChatStore.getState().sendMessage(text))
   expect(queuedTexts()).toStrictEqual(followUps)
   return { sender, id }
