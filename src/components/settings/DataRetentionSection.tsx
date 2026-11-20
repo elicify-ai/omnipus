@@ -84,6 +84,8 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
         description: 'Default 180. Agents’ reflections on past chats.',
         validate: dayRange(1, 730),
         disabled: locked,
+        // FR-040: while Keep memory forever is on, the day count is off and not sent.
+        disabledWhen: { key: 'memory_retros_forever', equals: true },
       },
     ]
     retention = (

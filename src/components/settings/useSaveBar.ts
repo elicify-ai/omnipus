@@ -12,6 +12,7 @@
 // being a draft; a refused or unknown one stays a draft.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useShellDrafts } from './useShellDrafts'
 import { classifyWrite, savedStateCheck, sameValue, type WriteOutcome, type WriteResponse } from './saveOutcome'
 import { useSettingsShell } from './SettingsShellContext'
 
@@ -37,6 +38,8 @@ export interface SaveBarField { // not-wire-format: screen-side description of o
   validate?: (value: SaveBarValue) => string | null
   /** Disabled values are neither validated nor sent (FR-040). */
   disabled?: boolean
+  /** Disabled while another value of the section (draft or saved) equals `equals` (FR-040). */
+  disabledWhen?: { key: string; equals: SaveBarValue }
 }
 
 export interface SaveContext { // not-wire-format: per-write context handed to a section's writer
@@ -75,7 +78,7 @@ export function fieldDomId(section: string, key: string): string {
   return `settings-${section}-${key}`.replace(/[^a-zA-Z0-9_-]/g, '-')
 }
 
-function formatTime(d: Date): string {
+export function formatTime(d: Date): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
@@ -106,20 +109,30 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
     [drafts, savedValue],
   )
 
+  const isDisabled = useCallback(
+    (key: string): boolean => {
+      const f = byKey.get(key)
+      if (!f) return false
+      if (f.disabled) return true
+      return !!f.disabledWhen && sameValue(currentValue(f.disabledWhen.key), f.disabledWhen.equals)
+    },
+    [byKey, currentValue],
+  )
+
   const changedKeys = useMemo(
-    () => Object.keys(drafts).filter((k) => byKey.has(k) && !byKey.get(k)!.disabled && !sameValue(drafts[k], savedValue(k))),
-    [drafts, byKey, savedValue],
+    () => Object.keys(drafts).filter((k) => byKey.has(k) && !isDisabled(k) && !sameValue(drafts[k], savedValue(k))),
+    [drafts, byKey, savedValue, isDisabled],
   )
 
   const invalid = useMemo(() => {
     const out: Record<string, string> = {}
     for (const f of fields) {
-      if (f.disabled || !f.validate) continue
+      if (isDisabled(f.key) || !f.validate) continue
       const msg = f.validate(currentValue(f.key))
       if (msg) out[f.key] = msg
     }
     return out
-  }, [fields, currentValue])
+  }, [fields, currentValue, isDisabled])
   const invalidKeys = Object.keys(invalid)
 
   const setDraft = useCallback(
@@ -144,25 +157,8 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
   const n = changedKeys.length
   const visible = n > 0 || savedAt !== null || unknownKeys.length > 0
 
-  // FR-014 leave guard (in-app half lives in the shell) and the browser's own
-  // prompt while drafts exist.
-  useEffect(() => {
-    shell.setDraftCount(n)
-  }, [n, shell])
-  useEffect(() => () => shell.setDraftCount(0), [shell])
-  useEffect(() => {
-    shell.setSaveBarVisible(n > 0)
-  }, [n, shell])
-  useEffect(() => {
-    if (n === 0) return
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-      // Legacy browsers need returnValue set to show the prompt.
-      e.returnValue = ''
-    }
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [n])
+  // FR-014 leave guard: the shell's in-app prompt and the browser's own.
+  useShellDrafts(n)
 
   // FR-018: the saved signal stays 8 seconds.
   useEffect(() => {
@@ -373,6 +369,7 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
     message: (key: string): FieldMessage | undefined =>
       invalid[key] && byKey.has(key) ? { tone: 'error', text: invalid[key] } : messages[key],
     isDraft: (key: string) => changedKeys.includes(key),
+    isDisabled,
     changedKeys,
     invalidKeys,
     save,

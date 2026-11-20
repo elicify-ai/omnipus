@@ -8,8 +8,7 @@ import { IntegrationsSection } from './IntegrationsSection'
 import { MemorySection } from './MemorySection'
 import { SystemAgentsSection } from './SystemAgentsSection'
 import { ThirdPartyAgentsSection } from './ThirdPartyAgentsSection'
-import { ContextSection } from './ContextSection'
-import { PerformanceSection } from './PerformanceSection'
+import { LimitsSection } from './LimitsSection'
 import { SecuritySection } from './SecuritySection'
 import { GodModeControl } from './GodModeControl'
 import { SandboxSection } from './SandboxSection'
@@ -53,12 +52,7 @@ export function SettingsSectionBody({ section, prefillOverride, focusGodMode, ba
     case 'third-party-agents':
       return <ThirdPartyAgentsSection />
     case 'limits':
-      return (
-        <div className="space-y-[var(--space-6)]">
-          <ContextSection prefillOverride={prefillOverride} />
-          <PerformanceSection />
-        </div>
-      )
+      return <LimitsSection prefillOverride={prefillOverride} />
     case 'protection':
       return <SecuritySection view="protection" godMode={<GodModeControl focusOnMount={focusGodMode} />} />
     case 'sandbox':

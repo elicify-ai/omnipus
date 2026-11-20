@@ -12,8 +12,8 @@ import { createContext, useContext } from 'react'
 export interface SettingsShellApi { // not-wire-format: React context contract inside the SPA
   /** Polite page-level announcement (one live region for the whole page). */
   announce: (text: string) => void
-  /** Reports how many unsaved drafts the open section holds. */
-  setDraftCount: (count: number) => void
+  /** Reports how many unsaved drafts one Save bar (owner) holds; the page sums them. */
+  setDraftCount: (owner: string, count: number) => void
   /** Opens the "Restart now?" window naming the settings just saved. */
   offerRestart: (labels: string[]) => void
   /** Re-reads GET /config/pending-restart for the banner. */
@@ -26,7 +26,7 @@ export interface SettingsShellApi { // not-wire-format: React context contract i
   requestPassword?: (labels: string[]) => Promise<string | null>
   /** True while the Save bar shows (FR-017: Save changes is the only gold button). */
   saveBarVisible: boolean
-  setSaveBarVisible: (visible: boolean) => void
+  setSaveBarVisible: (owner: string, visible: boolean) => void
 }
 
 const noop = () => {}

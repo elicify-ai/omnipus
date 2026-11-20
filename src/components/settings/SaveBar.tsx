@@ -25,6 +25,7 @@ import {
   fieldDomId,
   plural,
   useSaveBar,
+  type FieldMessage,
   type SaveBarField,
   type SaveBarPanelProps,
   type SaveBarState,
@@ -151,6 +152,7 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
     </span>
   )
   const setValue = (v: SaveBarField['value']) => state.setDraft(field.key, v)
+  const disabled = state.isDisabled(field.key)
   return (
     <div className="py-[var(--space-2)]" data-setting-key={field.key}>
       <Field
@@ -171,7 +173,7 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
                   data-settings-field={id}
                   checked={value === true}
                   onCheckedChange={(c) => setValue(c)}
-                  disabled={field.disabled}
+                  disabled={disabled}
                   aria-describedby={cp['aria-describedby']}
                 />
               )
@@ -182,7 +184,7 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
                   data-settings-field={id}
                   value={value == null ? '' : String(value)}
                   onChange={(e) => setValue(e.target.value)}
-                  disabled={field.disabled}
+                  disabled={disabled}
                   aria-describedby={cp['aria-describedby']}
                   aria-invalid={cp['aria-invalid']}
                   className="flex h-9 w-full max-w-xs rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
@@ -203,7 +205,7 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
                   inputMode={field.kind === 'number' ? 'numeric' : undefined}
                   value={value == null ? '' : String(value)}
                   onChange={(e) => setValue(e.target.value)}
-                  disabled={field.disabled}
+                  disabled={disabled}
                   aria-describedby={cp['aria-describedby']}
                   aria-invalid={cp['aria-invalid']}
                   className="max-w-xs"
@@ -248,3 +250,56 @@ export function usePrimaryVariant(): 'default' | 'outline' {
 }
 
 export default SaveBar
+
+export interface FormRowProps { // not-wire-format: React props
+  label: string
+  description?: React.ReactNode
+  error?: string | null
+  restart?: boolean
+  password?: boolean
+  /** data-settings-field id, used to move focus to the first invalid value. */
+  fieldId: string
+  children: (control: { id: string; describedBy?: string; invalid: boolean; fieldId: string }) => React.ReactNode
+}
+
+/** One labelled setting of a form section (Limits, Third-party agents), with its badges and error. */
+export function FormRow({ label, description, error, restart, password, fieldId, children }: FormRowProps) {
+  return (
+    <div className="py-[var(--space-2)]">
+      <Field
+        label={
+          <span className="inline-flex flex-wrap items-center gap-[var(--space-2)]">
+            {label}
+            {restart && <RestartBadge />}
+            {password && <PasswordBadge />}
+          </span>
+        }
+        description={description}
+        error={error || undefined}
+      >
+        {(cp) => children({ id: cp.id ?? fieldId, describedBy: cp['aria-describedby'], invalid: !!cp['aria-invalid'], fieldId })}
+      </Field>
+    </div>
+  )
+}
+
+/** The latest outcome line of one part of a form section. */
+export function SaveOutcomeLine({ message }: { message: FieldMessage | null }) {
+  if (!message) return null
+  if (message.tone === 'error') {
+    return (
+      <p role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+        {message.text}
+      </p>
+    )
+  }
+  return (
+    <div className="flex items-start gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
+      <Warning size={14} aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0" />
+      <div>
+        <div>{message.text}</div>
+        {message.keys && message.keys.length > 0 && <div className="text-[var(--color-muted)]">Not applied: {message.keys.join(', ')}</div>}
+      </div>
+    </div>
+  )
+}

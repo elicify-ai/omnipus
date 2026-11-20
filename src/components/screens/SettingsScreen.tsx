@@ -79,8 +79,30 @@ export function SettingsScreen({
   }, [])
 
   // ── Drafts of the open section (FR-014) and the Save bar's gold button ─
-  const [draftCount, setDraftCount] = useState(0)
-  const [saveBarVisible, setSaveBarVisible] = useState(false)
+  // A section can hold more than one Save bar (Limits: Context and Agents and
+  // goals); each reports under its own owner id and the page sums them.
+  const [draftsByOwner, setDraftsByOwner] = useState<Record<string, number>>({})
+  const [barsByOwner, setBarsByOwner] = useState<Record<string, boolean>>({})
+  const draftCount = Object.values(draftsByOwner).reduce((a, b) => a + b, 0)
+  const saveBarVisible = Object.values(barsByOwner).some(Boolean)
+  const setDraftCount = useCallback((owner: string, count: number) => {
+    setDraftsByOwner((prev) => {
+      if ((prev[owner] ?? 0) === count) return prev
+      const next = { ...prev }
+      if (count) next[owner] = count
+      else delete next[owner]
+      return next
+    })
+  }, [])
+  const setSaveBarVisible = useCallback((owner: string, visible: boolean) => {
+    setBarsByOwner((prev) => {
+      if (!!prev[owner] === visible) return prev
+      const next = { ...prev }
+      if (visible) next[owner] = true
+      else delete next[owner]
+      return next
+    })
+  }, [])
 
   const { requestPassword, dialog: passwordDialog } = useSavePasswordPrompt()
 
@@ -98,7 +120,7 @@ export function SettingsScreen({
       setSaveBarVisible,
     }),
     // pending.refetch is stable per query; listing it keeps the lint honest.
-    [announce, pending.refetch, requestPassword, saveBarVisible],
+    [announce, pending.refetch, requestPassword, saveBarVisible, setDraftCount, setSaveBarVisible],
   )
 
   // ── Leave guard inside the app (FR-014) ────────────────────────────────
@@ -335,10 +357,10 @@ export function SettingsScreen({
           onOpenChange={(open) => {
             if (!open && blocker.status === 'blocked') blocker.reset()
           }}
-          title="Leave without saving?"
+          title={`Leave without saving ${draftCount} ${draftCount === 1 ? 'change' : 'changes'}?`}
           description={`${draftCount} unsaved ${draftCount === 1 ? 'change' : 'changes'} on this page will be lost.`}
           cancelLabel="Stay"
-          confirmLabel="Discard changes"
+          confirmLabel="Leave"
           destructive
           onConfirm={() => {
             if (blocker.status === 'blocked') blocker.proceed()
