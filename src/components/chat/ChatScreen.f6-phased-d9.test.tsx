@@ -70,7 +70,7 @@ function recordedFrames(part: typeof events): ServerFrame[] {
     // Narrow the generated wider WS union by its actual frozen discriminators,
     // not a cast of unknown JSON into a hand-written/future wire format.
     switch (frame.type) {
-      case 'session_state': case 'session_started': case 'user_message': case 'message_status':
+      case 'session_state': case 'session_started': case 'user_message': case 'message_status': case 'turn_started':
       case 'token': case 'session_snapshot': case 'replay_message': case 'done': case 'catch_up_complete': return frame
       default: throw new Error(`Fixture instrument: unexpected F6 server type ${frame.type}`)
     }

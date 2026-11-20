@@ -75,6 +75,18 @@
         {
           "dir": "server→client",
           "frame": {
+            "active_turn": {
+              "agent_id": "mia",
+              "started_at": "2026-01-01T00:00:03Z",
+              "turn_id": "turn-1"
+            },
+            "session_id": "sess-1",
+            "type": "turn_started"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
             "client_message_id": "client-1",
             "seq": 4,
             "session_id": "sess-1",
@@ -135,8 +147,8 @@
           "dir": "server→client",
           "frame": {
             "boot_id": "boot-1",
-            "emitted_at": "2026-01-01T00:00:03Z",
-            "emitted_at_ms": 1767225603250,
+            "emitted_at": "2026-01-01T00:00:04Z",
+            "emitted_at_ms": 1767225604250,
             "pending_approvals": [],
             "type": "session_state",
             "user_id": ""
@@ -155,8 +167,8 @@
           "dir": "server→client",
           "frame": {
             "boot_id": "boot-1",
-            "emitted_at": "2026-01-01T00:00:04Z",
-            "emitted_at_ms": 1767225604250,
+            "emitted_at": "2026-01-01T00:00:05Z",
+            "emitted_at_ms": 1767225605250,
             "history_state": {
               "status": "available"
             },
@@ -195,7 +207,7 @@
             "id": "id-2",
             "seq": 8,
             "session_id": "sess-1",
-            "timestamp": "2026-01-01T00:00:05Z",
+            "timestamp": "2026-01-01T00:00:06Z",
             "type": "user_message"
           }
         },
@@ -207,6 +219,18 @@
             "session_id": "sess-1",
             "state": "received",
             "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "active_turn": {
+              "agent_id": "mia",
+              "started_at": "2026-01-01T00:00:07Z",
+              "turn_id": "turn-2"
+            },
+            "session_id": "sess-1",
+            "type": "turn_started"
           }
         },
         {

@@ -101,6 +101,13 @@ func wu22GatewayBlockTranscript(t *testing.T, h *wu22GatewayFinalizeHarness) fun
 // Finalize publishes synchronously into the real hub. Its retained journal
 // determines the finite frame count to read from the asynchronous socket queue,
 // so neither an empty poll nor a stopwatch is used to prove notice absence.
+//
+// #1428 step 2: a turn's live-only turn_started frame reaches the bound user
+// but is never numbered or journaled, so it is set aside from the
+// journal-equality oracle and pinned on its own: unnumbered, absent from the
+// journal, after the previous done and before any token of its turn, and
+// followed by that turn's done. Every other live frame must still equal the
+// journal exactly. The returned live slice keeps every frame in arrival order.
 func wu22GatewayFinalFrames(t *testing.T, h *wu22GatewayFinalizeHarness) ([][]byte, [][]byte) {
 	t.Helper()
 	hub := h.handler.hubs.lookup(h.sid)
@@ -113,18 +120,109 @@ func wu22GatewayFinalFrames(t *testing.T, h *wu22GatewayFinalizeHarness) ([][]by
 	hub.mu.Unlock()
 	require.Greater(t, len(journal), len(h.first), "instrument: completion must produce a retained frame")
 	live := append([][]byte(nil), h.first...)
+	journaled := 0
+	for _, raw := range live {
+		if !wu22IsTurnStarted(t, raw) {
+			journaled++
+		}
+	}
 	deadline := time.NewTimer(5 * time.Second) // hang guard, not a latency assertion
 	defer deadline.Stop()
-	for len(live) < len(journal) {
+	for journaled < len(journal) {
 		select {
 		case raw := <-h.conn.sendCh:
 			live = append(live, raw)
+			if !wu22IsTurnStarted(t, raw) {
+				journaled++
+			}
 		case <-deadline.C:
-			t.Fatalf("retained gateway frames did not reach the bound user: got %d of %d", len(live), len(journal))
+			t.Fatalf("retained gateway frames did not reach the bound user: got %d of %d", journaled, len(journal))
 		}
 	}
-	assert.Equal(t, journal, live, "the bound user receives the exact retained gateway frames")
+	retained := make([][]byte, 0, len(journal))
+	for _, raw := range live {
+		if !wu22IsTurnStarted(t, raw) {
+			retained = append(retained, raw)
+		}
+	}
+	assert.Equal(t, journal, retained, "the bound user receives the exact retained gateway frames")
+	wu22AssertTurnStartedPlacement(t, live, journal)
 	return live, journal
+}
+
+func wu22IsTurnStarted(t *testing.T, raw []byte) bool {
+	t.Helper()
+	var head struct {
+		Type string `json:"type"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &head))
+	return head.Type == string(generated.WsFrameTypeTurnStarted)
+}
+
+// wu22AssertTurnStartedPlacement pins every live turn_started to the design's
+// slot: never numbered, never retained in the journal, no token between the
+// previous done (or the start of the stream) and it, and a done after it.
+func wu22AssertTurnStartedPlacement(t *testing.T, live, journal [][]byte) {
+	t.Helper()
+	tokenSinceDone := false
+	for i, raw := range live {
+		var head struct {
+			Type string `json:"type"`
+			Seq  *int64 `json:"seq"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &head))
+		switch head.Type {
+		case "token":
+			tokenSinceDone = true
+		case "done":
+			tokenSinceDone = false
+		case string(generated.WsFrameTypeTurnStarted):
+			assert.Nil(t, head.Seq, "turn_started is live-only: never numbered")
+			for _, kept := range journal {
+				assert.NotEqual(t, string(kept), string(raw), "turn_started must never be journaled")
+			}
+			assert.False(t, tokenSinceDone, "turn_started must precede every token of its turn (live index %d)", i)
+			doneAfter := false
+			for _, later := range live[i+1:] {
+				if len(framesOfType(t, [][]byte{later}, "done")) == 1 {
+					doneAfter = true
+					break
+				}
+			}
+			assert.True(t, doneAfter, "the named turn's done must follow its turn_started (live index %d)", i)
+		}
+	}
+}
+
+// wu22GatewayTurnStarted decodes the live turn_started frames, in order.
+func wu22GatewayTurnStarted(t *testing.T, live [][]byte) []generated.TurnStartedFrame {
+	t.Helper()
+	raws := framesOfType(t, live, string(generated.WsFrameTypeTurnStarted))
+	out := make([]generated.TurnStartedFrame, 0, len(raws))
+	for _, raw := range raws {
+		var frame generated.TurnStartedFrame
+		require.NoError(t, json.Unmarshal(raw, &frame))
+		out = append(out, frame)
+	}
+	return out
+}
+
+// wu22AssertOneTurnNamed pins that the single engine turn was named exactly
+// once to the bound tab, for this chat, by the agent that ran it, and that the
+// name matches the turn its done frame closes.
+func wu22AssertOneTurnNamed(t *testing.T, live [][]byte, sid string) {
+	t.Helper()
+	started := wu22GatewayTurnStarted(t, live)
+	require.Len(t, started, 1, "one engine turn, named exactly once to the bound tab")
+	assert.Equal(t, sid, started[0].SessionId)
+	assert.Equal(t, "mia", started[0].ActiveTurn.AgentId)
+	assert.NotEmpty(t, started[0].ActiveTurn.TurnId)
+	_, err := time.Parse(time.RFC3339, started[0].ActiveTurn.StartedAt)
+	assert.NoError(t, err, "started_at is RFC3339")
+	done := wu22GatewayDoneFrames(t, live)
+	require.Len(t, done, 1)
+	require.NotNil(t, done[0].TurnId, "instrument: the live done names its turn")
+	assert.Equal(t, *done[0].TurnId, started[0].ActiveTurn.TurnId, "turn_started names the turn that done closes")
 }
 
 func wu22GatewayDoneFrames(t *testing.T, frames [][]byte) []generated.DoneFrame {
@@ -170,6 +268,7 @@ func TestWU22GatewayFinalizeTranscriptFailureReturnsErrorAndFailedDone(t *testin
 		assert.Equal(t, "open", cause.Op, "original append-open cause survives")
 	}
 	live, retained := wu22GatewayFinalFrames(t, h)
+	assert.Empty(t, wu22GatewayTurnStarted(t, live), "a bare streamer finalize runs no engine turn, so nothing names one")
 	for label, frames := range map[string][][]byte{"live user": live, "retained completion": retained} {
 		done := wu22GatewayDoneFrames(t, frames)
 		require.Len(t, done, 1, "%s: failure still closes the stream once", label)
@@ -203,6 +302,7 @@ func TestWU22GatewayFinalizeHealthyTranscriptPersistsAndCompletes(t *testing.T) 
 	h := wu22GatewayFinalizeFixture(t)
 	require.NoError(t, h.streamer.Finalize(context.Background(), wu22GatewayFinalAnswer))
 	live, retained := wu22GatewayFinalFrames(t, h)
+	assert.Empty(t, wu22GatewayTurnStarted(t, live), "a bare streamer finalize runs no engine turn, so nothing names one")
 	for _, frames := range [][][]byte{live, retained} {
 		done := wu22GatewayDoneFrames(t, frames)
 		require.Len(t, done, 1)
