@@ -115,16 +115,14 @@ describe('UAT-15: the redirect record captures the live turn id', () => {
 // Team B, a86b8f92e6 (UAT-15 main run, W1 Mia chat, x-p4r9k): the positive
 // control redirect was applied (mia-turn-2 stopped, mia-turn-3 started from
 // its instruction); the second redirect left while mia-turn-3 had not yet
-// sent a token, so nothing on the wire had named it to the page (the gateway
-// names a turn started after the attach only in its token/done frames). Its
-// command_received was withheld, the socket closed, the reattach snapshot
-// showed the applied redirect's new turn mia-turn-4. Spec UAT-15 main run:
-// uncertain item, NO notice (F-tt).
-describe('UAT-15 main run: the second redirect leaves before the new turn names itself', () => {
-  it('an applied redirect shows the uncertain item and no notice', async () => {
-    resetBindingWorld()
-    const socket = openLive()
-    mountComposer()
+// sent a token. Its command_received was withheld, the socket closed, the
+// reattach snapshot showed the applied redirect's new turn mia-turn-4.
+// Spec UAT-15 main run: uncertain item, NO notice (F-tt). Option A (chief,
+// 2026-11-19): the server names mia-turn-3 at its start with turn_started,
+// which is what lets the redirect capture it.
+describe('UAT-15 main run: the second redirect leaves before the new turn sends a token', () => {
+  /** The control redirect is applied: mia-turn-2 is stopped and done. */
+  async function controlRedirectApplied(socket: FakeSocket): Promise<void> {
     await liveTurn(socket, 'chat-a', 'mia-turn-2')
     await typeRedirect('/stop-redirect continue-1')
     const control = socket.sent.filter((frame) => frame.type === 'redirect').at(-1) as { client_frame_id: string } | undefined
@@ -135,10 +133,36 @@ describe('UAT-15 main run: the second redirect leaves before the new turn names 
     })
     act(() => { socket.receive({ type: 'done', session_id: 'chat-a', turn_id: 'mia-turn-2' }) })
     await flushInbound()
+  }
+
+  it('an applied redirect shows the uncertain item and no notice', async () => {
+    resetBindingWorld()
+    const socket = openLive()
+    mountComposer()
+    await controlRedirectApplied(socket)
+    act(() => {
+      socket.receive({ type: 'turn_started', session_id: 'chat-a', active_turn: { turn_id: 'mia-turn-3', agent_id: 'mia', started_at: EMITTED } })
+    })
+    await flushInbound()
     await typeRedirect('/stop-redirect x-p4r9k')
     expect(socket.sent.filter((frame) => frame.type === 'redirect'), 'both redirects were handed over').toHaveLength(2)
     await closeThenSnapshot(socket, 'chat-a', 'mia-turn-4')
     expect(screen.getByText('May not have been delivered'), 'the uncertain item stays').toBeTruthy()
     expect(screen.queryByText(NOT_STOPPED), 'F-tt: mia-turn-4 is the applied redirect\'s new turn').toBeNull()
+  })
+
+  // Known limit R3 (spec 4.7 null-id rule, unchanged): a command typed before
+  // the next turn has started (no turn_started received yet) captures no turn
+  // id, so any running turn in the reattach snapshot counts as still running.
+  it('known limit R3: a redirect typed before the next turn started shows the notice', async () => {
+    resetBindingWorld()
+    const socket = openLive()
+    mountComposer()
+    await controlRedirectApplied(socket)
+    await typeRedirect('/stop-redirect x-p4r9k')
+    expect(socket.sent.filter((frame) => frame.type === 'redirect'), 'both redirects were handed over').toHaveLength(2)
+    await closeThenSnapshot(socket, 'chat-a', 'mia-turn-4')
+    expect(screen.getByText('May not have been delivered'), 'the uncertain item stays').toBeTruthy()
+    expect(screen.getByText(NOT_STOPPED), 'spec 4.7: no captured turn id, a running turn shows the notice').toBeTruthy()
   })
 })
