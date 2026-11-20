@@ -200,7 +200,11 @@ describe('FR-066 — a failed read blocks only its groups', () => {
   })
 
   it('Data & retention keeps working when storage counts fail: counts error, retention saves', async () => {
-    const { updateRetentionSettings } = await import('@/lib/api')
+    // updateRetentionSettings exists only inside this file's vi.mock until
+    // the generated client lands (GREEN); the mock's handle is read loosely.
+    const mod = (await import('@/lib/api')) as unknown as {
+      updateRetentionSettings: ReturnType<typeof vi.fn>
+    }
     apiState.statsFails = true
     await openSettings('?tab=data')
     // The counts group shows its error with Retry.
@@ -210,6 +214,6 @@ describe('FR-066 — a failed read blocks only its groups', () => {
     await userEvent.clear(chat)
     await userEvent.type(chat, '30')
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
-    expect(vi.mocked(updateRetentionSettings)).toHaveBeenCalledTimes(1)
+    expect(mod.updateRetentionSettings).toHaveBeenCalledTimes(1)
   })
 })

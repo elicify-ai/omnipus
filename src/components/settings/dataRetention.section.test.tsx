@@ -85,13 +85,21 @@ import * as api from '@/lib/api'
 import { DataSection } from './DataSection'
 import { MemorySection } from './MemorySection'
 
+// The retention wrappers exist only inside this file's vi.mock (the real
+// module gains them when backend-lead regenerates the client at GREEN), so
+// the handles are taken loosely; the runtime module under the mock HAS them.
+const apiAny = api as unknown as {
+  fetchRetentionSettings: ReturnType<typeof vi.fn>
+  updateRetentionSettings: ReturnType<typeof vi.fn>
+}
+
 function renderSection(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>)
 }
 
 function retentionOf(): Record<string, unknown> {
-  return vi.mocked(api.updateRetentionSettings).mock.calls.at(-1)?.[0] as Record<string, unknown>
+  return apiAny.updateRetentionSettings.mock.calls.at(-1)?.[0] as Record<string, unknown>
 }
 
 beforeEach(() => {
@@ -115,7 +123,7 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
     await userEvent.clear(memory)
     await userEvent.type(memory, '365')
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
-    expect(api.updateRetentionSettings).toHaveBeenCalledTimes(1)
+    expect(apiAny.updateRetentionSettings).toHaveBeenCalledTimes(1)
     expect(retentionOf()).toEqual({ session_days: 30, memory_retros_days: 365 })
   })
 
@@ -127,11 +135,11 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
     expect(await screen.findByText('Enter a whole number from 1 to 365.')).toBeInTheDocument()
     const save = screen.getByRole('button', { name: /save changes/i })
     expect(save).toHaveAttribute('aria-disabled', 'true')
-    expect(api.updateRetentionSettings).not.toHaveBeenCalled()
+    expect(apiAny.updateRetentionSettings).not.toHaveBeenCalled()
   })
 
   it('a hand-edited stored 500 shows as stored with the range error and blocks Save until fixed (D-1 row 10, FR-046)', async () => {
-    vi.mocked(api.fetchRetentionSettings).mockResolvedValueOnce({
+    apiAny.fetchRetentionSettings.mockResolvedValueOnce({
       session_days: 500,
       memory_retros_days: 180,
       memory_retros_forever: false,
@@ -156,7 +164,7 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
     await userEvent.click(screen.getByRole('switch', { name: /keep forever/i }))
     expect(memory).toBeDisabled()
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
-    expect(api.updateRetentionSettings).toHaveBeenCalledTimes(1)
+    expect(apiAny.updateRetentionSettings).toHaveBeenCalledTimes(1)
     expect(retentionOf()).toEqual({ memory_retros_forever: true })
   })
 
@@ -167,7 +175,7 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
   })
 
   it('the legacy keep-everything switch shows the info notice and keeps the day fields editable (FR-048)', async () => {
-    vi.mocked(api.fetchRetentionSettings).mockResolvedValueOnce({
+    apiAny.fetchRetentionSettings.mockResolvedValueOnce({
       session_days: 90,
       memory_retros_days: 180,
       memory_retros_forever: false,
