@@ -159,6 +159,15 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 
 	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
+		// Saved, not in use: listed as apply_failed before the answer (C-6).
+		var keys []string
+		if newLLM != nil {
+			keys = append(keys, "sandbox.rate_limits.max_agent_llm_calls_per_hour")
+		}
+		if newTool != nil {
+			keys = append(keys, "sandbox.rate_limits.max_agent_tool_calls_per_minute")
+		}
+		a.applyFailed.record(applyFailedSourceRateLimits, canonicalConfigKeys(keys...))
 		slog.Warn("rest: rate limits saved but hot-reload failed; restart required",
 			"reload_error", reloadErr,
 			"max_agent_llm_calls_per_hour", newCfg.MaxAgentLLMCallsPerHour,
@@ -180,6 +189,7 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	a.applyFailed.clearSource(applyFailedSourceRateLimits)
 	slog.Info("rest: rate limits updated",
 		"max_agent_llm_calls_per_hour", newCfg.MaxAgentLLMCallsPerHour,
 		"max_agent_tool_calls_per_minute", newCfg.MaxAgentToolCallsPerMinute,

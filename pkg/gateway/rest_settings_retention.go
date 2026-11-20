@@ -144,7 +144,7 @@ func parseRetentionUpdate(raw []byte) (gen.RetentionSettingsUpdate, string) {
 // within [lo, hi]; strings, null, booleans and fractions are refused.
 func parseWholeNumberInRange(raw json.RawMessage, lo, hi int) (int, bool) {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || !(trimmed[0] == '-' || (trimmed[0] >= '0' && trimmed[0] <= '9')) {
+	if len(trimmed) == 0 || (trimmed[0] != '-' && (trimmed[0] < '0' || trimmed[0] > '9')) {
 		return 0, false
 	}
 	var n json.Number
@@ -192,9 +192,9 @@ func (a *restAPI) putRetentionSettings(w http.ResponseWriter, r *http.Request) {
 
 	var before, after config.OmnipusRetentionConfig
 	writeErr := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		retention, err := retentionMapForWrite(m)
-		if err != nil {
-			return err
+		retention, mapErr := retentionMapForWrite(m)
+		if mapErr != nil {
+			return mapErr
 		}
 		before = retentionFromMap(retention)
 		if upd.SessionDays != nil {

@@ -938,9 +938,13 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// GET /api/v1/credentials — even though plaintext is not returned, the
 	// credential ref names reveal what integrations exist, so this is gated
 	// behind authentication.
-	// Chain: withAuth (verifies token) → handler.
-	rae.cm.RegisterHTTPHandler("/api/v1/credentials", rae.a.withAuth(rae.a.HandleCredentials))
-	rae.cm.RegisterHTTPHandler("/api/v1/credentials/", rae.a.withAuth(rae.a.HandleCredentials))
+	// Chain: withAuth (verifies token) → credentialDeleteBypassGate → handler.
+	// DELETE of a stored key needs no password (FR-056 / C-5) but keeps the
+	// dev-mode-bypass exclusion (RequireNotBypass → 503).
+	rae.cm.RegisterHTTPHandler("/api/v1/credentials",
+		rae.a.withAuth(credentialDeleteBypassGate(rae.a.HandleCredentials)))
+	rae.cm.RegisterHTTPHandler("/api/v1/credentials/",
+		rae.a.withAuth(credentialDeleteBypassGate(rae.a.HandleCredentials)))
 	// Agent packages (epic #1094 S1a, FR-045): local mode only.
 	if config.EditionAuthMode() == config.AuthModeLocal {
 		rae.a.registerPackageRoutes(rae.cm)

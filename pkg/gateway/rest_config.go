@@ -58,19 +58,25 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 		return
 	}
 
-	// Redact any top-level field names that look like credentials.
+	redactConfigForWire(m)
+	jsonOK(w, m)
+}
+
+// redactConfigForWire applies the GET /api/v1/config read policy to a
+// decoded config map in place. Every endpoint that returns config values
+// (getConfig, the pending-restart apply_failed readback) uses it, so the
+// policy lives in one place.
+func redactConfigForWire(m map[string]any) {
+	// Redact any field names that look like credentials.
 	redactSensitiveFields(m)
 	// Issue #638: header values under tools.mcp.servers.<name>.headers are
 	// request credentials (Authorization/Cookie/Proxy-Authorization) whose
 	// NAMES match no keyword in redactSensitiveFields — redact them here so
-	// GET /api/v1/config never carries an MCP header value, whatever wrote
-	// the literal into config.json.
+	// no config readback carries an MCP header value, whatever wrote the
+	// literal into config.json.
 	redactMCPServerHeaderValues(m)
-
 	// Strip internal-only bookkeeping keys from the wire.
 	sanitizeConfigForWire(m)
-
-	jsonOK(w, m)
 }
 
 // wireExcludedConfigFields is the single place listing top-level config.json
@@ -1002,7 +1008,7 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 	// Use safeUpdateConfigJSON to hold configMu during the read-modify-write cycle.
 	// Deep merge nested objects so partial updates don't wipe sibling keys
 	// (e.g., updating gateway.port must not delete gateway.users).
-	var changed []string
+	var changed []configKeyPath
 	if err := a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
 		// #1519 C-3 / C-7: the effective retention and Performance values
 		// before the merge — the baseline checkConfigEffectUnchanged compares.
@@ -1066,7 +1072,7 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		changed = changedConfigKeys(stored, m)
 		return nil
-	}, func() []string { return changed }); err != nil {
+	}, func() []configKeyPath { return changed }); err != nil {
 		var refusal *requestRefusalError
 		if errors.As(err, &refusal) {
 			jsonErr(w, http.StatusBadRequest, refusal.Error())

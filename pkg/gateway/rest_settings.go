@@ -20,28 +20,36 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // startTime records when the gateway process started, used by GET /api/v1/about.
 var startTime = time.Now()
 
-// auditDir is the directory the audit logger writes: the "system" sibling of
-// the agents home, derived from the live config exactly as the writer derives
-// it (agent/loop_construct.go: Dir(cfg.AgentHomeBasePath()) + "/system"), so
-// a customized agents.defaults.home no longer hides the log (#1742). With no
-// agents home configured it falls back to the gateway home.
-func (a *restAPI) auditDir() string {
+// auditFilePath is the audit file the viewer reads (S3, #1742). With an
+// active audit logger it is the logger's own file — the one it writes and
+// Verify checks — so the records shown and chain_status always refer to the
+// same file, whatever the live config says now. With audit logging off there
+// is no writer and no chain check; the viewer then reads the file a writer
+// would use: the "system" sibling of the agents home from the live config
+// (agent/loop_construct.go: Dir(cfg.AgentHomeBasePath()) + "/system"), else
+// the gateway home.
+func (a *restAPI) auditFilePath(logger *audit.Logger) string {
+	if logger != nil {
+		return logger.Path()
+	}
 	if a.agentLoop != nil {
 		if cfg := a.agentLoop.GetConfig(); cfg != nil {
 			if base := cfg.AgentHomeBasePath(); base != "" {
-				return filepath.Join(filepath.Dir(base), "system")
+				return filepath.Join(filepath.Dir(base), "system", "audit.jsonl")
 			}
 		}
 	}
-	return filepath.Join(a.homePath, "system")
+	return filepath.Join(a.homePath, "system", "audit.jsonl")
 }
 
 // HandleAuditLog handles GET /api/v1/audit-log.
@@ -51,7 +59,12 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	auditPath := filepath.Join(a.auditDir(), "audit.jsonl")
+	// One logger value for both the read and the chain check (S3).
+	var logger *audit.Logger
+	if a.agentLoop != nil {
+		logger = a.agentLoop.AuditLogger()
+	}
+	auditPath := a.auditFilePath(logger)
 	f, err := os.Open(auditPath)
 	if errors.Is(err, os.ErrNotExist) {
 		// AuditLogResponse envelope: no entries, chain not checkable.
@@ -99,7 +112,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	// verify with (e.g. audit logging disabled).
 	chainStatus := "unknown"
 	var chainBrokenIndex *int
-	if logger := a.agentLoop.AuditLogger(); logger != nil {
+	if logger != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		if res, verr := logger.Verify(ctx); verr != nil {
@@ -147,6 +160,24 @@ func (a *restAPI) HandleCredentials(w http.ResponseWriter, r *http.Request) {
 		a.deleteCredential(w, r, sub)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// credentialDeleteBypassGate applies the dev-mode-bypass guard
+// (middleware.RequireNotBypass, 503) to DELETE of a stored credential and
+// passes every other method straight through. Deleting a key needs only the
+// screen's confirm, no password (FR-056 / C-5), but it keeps the bypass
+// exclusion, so the synthetic _dev_bypass identity cannot delete vault
+// entries. It runs after withAuth, which writes the config snapshot the guard
+// reads.
+func credentialDeleteBypassGate(next http.HandlerFunc) http.HandlerFunc {
+	guarded := middleware.RequireNotBypass(next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			guarded(w, r)
+			return
+		}
+		next(w, r)
 	}
 }
 
@@ -283,6 +314,9 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 		jsonServerFailure(w, http.StatusInternalServerError, "could not delete credential", err)
 		return
 	}
+	// FR-056: the committed deletion is audited before the reload, so the
+	// record exists whatever the reload outcome.
+	a.auditCredentialDeleted(r, key)
 	// Trigger reload AND WAIT for it — same reasoning as setCredential above.
 	// Symmetric behavior: if this ref is still wired into an ENABLED channel's
 	// config, executeReload's escalation check rejects the reload (rollback,
@@ -304,6 +338,33 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 			"credential %q was deleted but the live reload did not confirm in time; it may not be live yet", key)
 	}
 	jsonOK(w, resp)
+}
+
+// EventCredentialDeleted is the audit event for a committed
+// DELETE /api/v1/credentials/{key} (FR-056; registered in
+// pkg/audit.IsValidEventName).
+const EventCredentialDeleted = "credential.deleted"
+
+// auditCredentialDeleted records a committed credential deletion: the
+// signed-in actor, the credential reference NAME and the outcome. The stored
+// value is never read or written here. With audit logging off it records
+// nothing. A write failure goes through audit.EmitEntry, which logs it and
+// raises the audit-skipped counter that GET /health reports as degraded; the
+// deletion itself has already committed, so it is not undone.
+func (a *restAPI) auditCredentialDeleted(r *http.Request, key string) {
+	logger := a.auditor
+	if logger == nil && a.agentLoop != nil {
+		logger = a.agentLoop.AuditLogger()
+	}
+	audit.EmitEntry(logger, &audit.Entry{
+		Event:    EventCredentialDeleted,
+		Decision: audit.DecisionAllow,
+		User:     auditActor(r),
+		Details: map[string]any{
+			"credential_ref": key,
+			"outcome":        "deleted",
+		},
+	})
 }
 
 // rotateCredentials handles POST /api/v1/credentials/rotate (G5). It re-encrypts
