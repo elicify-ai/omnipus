@@ -9,6 +9,7 @@ import { MemorySection } from './MemorySection'
 import { SystemAgentsSection } from './SystemAgentsSection'
 import { ThirdPartyAgentsSection } from './ThirdPartyAgentsSection'
 import { LimitsSection } from './LimitsSection'
+import { SectionSaveScope } from './SectionSaveScope'
 import { SecuritySection } from './SecuritySection'
 import { GodModeControl } from './GodModeControl'
 import { SandboxSection } from './SandboxSection'
@@ -38,12 +39,14 @@ export function SettingsSectionBody({ section, prefillOverride, focusGodMode, ba
   switch (section) {
     case 'providers':
       return (
-        <div className="space-y-[var(--space-6)]">
-          <ProvidersSection />
-          <Group title="Voice input and web search">
-            <IntegrationsSection />
-          </Group>
-        </div>
+        <SectionSaveScope>
+          <div className="space-y-[var(--space-6)]">
+            <ProvidersSection />
+            <Group title="Voice input and web search">
+              <IntegrationsSection />
+            </Group>
+          </div>
+        </SectionSaveScope>
       )
     case 'memory':
       return <MemorySection />

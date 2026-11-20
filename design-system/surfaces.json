@@ -7651,6 +7651,22 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/LimitsSection.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/SectionSaveScope.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/useFormSaveBar.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/useShellDrafts.ts",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/PerformanceSection.tsx",
       "lane": 6
     },
