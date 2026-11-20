@@ -216,15 +216,15 @@ Columns (all checked at `7faff5291`):
 | `AGENT.md` | packaged byte-identical | stored **byte-identical**, written right after the create | no | no | no | yes (`agent_md`) | Import-only at create time |
 | `model.primary`, `model.provider` | kept | kept (provider name only); not configured on target → listed `provider_not_configured` | yes | yes | yes | yes | |
 | `model.fallbacks` (legacy strings) | kept | **left out**, listed `field_not_carried` | no | no | no (refused as retired) | no | Legacy; `fallback_models` is current |
-| `fallback_models[].model`, `.provider` | kept | create rule (≤ 2 entries, paired); a violation is refused at upload | yes | yes | yes | yes | Rider #1440 |
-| `fallback_models[].reasoning_effort` | kept | kept (create rule) | yes | yes | yes | yes | |
-| `reasoning_effort` | kept | kept | yes (native) | yes | yes | yes | |
+| `fallback_models[].model`, `.provider` | kept | **Native agents:** create rule (≤ 2 entries, paired); a violation is refused at upload. **External workers [S1b]:** a non-empty list is refused before mapping (`element_not_creatable`, `field: fallback_models`) | yes | yes | yes | yes | Rider #1440 |
+| `fallback_models[].reasoning_effort` | kept | **Native agents:** kept (create rule). **External workers [S1b]:** a non-empty fallback list is refused as above | yes | yes | yes | yes | |
+| `reasoning_effort` | kept | **Native agents:** kept. **External workers [S1b]:** a non-empty value is refused before mapping (`element_not_creatable`, `field: reasoning_effort`), with the same external-CLI effort refusal as `create_agent` | yes (native) | yes | yes | yes | |
 | `max_tool_iterations` | kept | create rule (1–1000 and ≤ the target's global limit); refused at upload or apply with `element_not_creatable`, `field: max_tool_iterations` | yes | yes | yes | yes | |
-| `model_params.temperature`, `.max_tokens` | kept | kept (create rule; other keys refused) | yes (native) | yes | yes | yes | |
-| `skills` | kept | names installed on the target kept and bound (listed `skill_bound_local`); others dropped (listed `skill_dropped`) **before** the create rule runs, because that rule refuses unknown skills | yes | yes | yes | yes | **Import transformation** |
+| `model_params.temperature`, `.max_tokens` | kept | **Native agents:** kept (create rule; other keys refused). **External workers [S1b]:** non-null `model_params`, including `{}`, is refused before mapping (`element_not_creatable`, `field: model_params`) | yes (native) | yes | yes | yes | |
+| `skills` | kept | **Native agents:** names installed on the target kept and bound (listed `skill_bound_local`); others dropped (listed `skill_dropped`) **before** the create rule runs, because that rule refuses unknown skills. **External workers [S1b]:** a non-empty list is refused on the raw record before this mapping (`element_not_creatable`, `field: skills`), even when no listed skill is installed on the target | yes | yes | yes | yes | **Import transformation** |
 | `skill_grants` | **removed** | rebuilt by the store | no | no | no | no | |
-| `tools.builtin.policies` | kept | sparse changes over the type's seed: unknown tool names dropped (`tool_policy_dropped`); `allow` on an always-ask tool becomes `ask` (`tool_policy_tightened`); missing tools get the seed value | yes | yes | yes (`tool_policy_changes`) | perm | **Import transformation** |
-| `tools.mcp.servers` | kept (so the preview can list them) | **always dropped** (`mcp_binding_dropped`) | yes | yes | yes (`mcp_servers`) | perm | **Import transformation**; ADR D5 deviation until S3 |
+| `tools.builtin.policies` | kept | **Native agent:** sparse changes over the type's seed: unknown tool names dropped (`tool_policy_dropped`); `allow` on an always-ask tool becomes `ask` (`tool_policy_tightened`); missing tools get the seed value. **External worker [S1b]:** the package's policies are dropped before policy mapping; the target's standard worker policies apply, not the package's values, with no `tool_policy_dropped` or `tool_policy_tightened` warning | yes | yes | yes (`tool_policy_changes`) | perm | **Import transformation**; external-worker target-seed exception |
+| `tools.mcp.servers` | kept (so the preview can list them) | **Native agents:** always dropped (`mcp_binding_dropped`). **External workers [S1b]:** non-empty assignments are refused on the raw record before mapping (`element_not_creatable`, `field: mcp_servers`) | yes | yes | yes (`mcp_servers`) | perm | **Import transformation**; native ADR D5 deviation until S3 |
 | `figure`, `role`, `color` | kept | create rule: canonical values kept; any other non-empty value is **refused at upload** (`element_not_creatable`, `field`), as REST create refuses it. Export only writes values the source install accepted, so this only affects hand-made or damaged packages | yes | yes | yes | yes | No import-only normalisation |
 | `voice` | kept | **Main only**: applied with the `create_agent` tool's rule (`applySharedConfigArgs`) in the same create write. A worker with a non-empty voice is refused at upload (`element_not_creatable`, `field: voice`) | **accepted, not stored** (existing behaviour, unchanged; Known Limit L17) | yes | yes | yes | Import matches `create_agent`, not REST create |
 | `memory_enabled` | kept | **native agents**: applied with the `create_agent` tool's rule in the same create write. **External workers [S1b]**: refused at upload (`element_not_creatable`, `field: memory_enabled`), because `create_agent` runs `agentmutation.ValidateFields` first and its `externalUnsupported` list forbids this field for external runtimes | no | yes | yes (native) | yes (native) | Import matches `create_agent`, including its runtime check |
@@ -1043,13 +1043,34 @@ Examples: `replace`, `merge`.
 - **When** imported
 - **Then** the stored record has none of them, and `runtime_settings_removed` is listed
 
+#### Scenario: [S1b] External-worker policies use the target's standard worker permissions
+**Traces to**: User Story 3, Acceptance Scenario 6 — **Category**: Edge Case
+- **Given** an external-worker package with `tools.builtin.policies`, including values that differ from the target's standard worker policies
+- **When** it is imported
+- **Then** the package's policies are dropped before policy mapping, and the new worker gets the target's standard worker policies
+- **And** neither `tool_policy_dropped` nor `tool_policy_tightened` is listed for those policies in the preview or result
+
 #### Scenario Outline: [S1b] External-worker fields the runtime does not support
 **Traces to**: User Story 3, Acceptance Scenario 7 — **Category**: Error Path
-- **Given** a hand-made external-worker record with `<field>` set to `<value>`
+- **Given** a hand-made external-worker record with `<field>` set to `<value>` (`mcp_servers` is stored as `tools.mcp.servers`)
 - **When** it is uploaded to S1b
-- **Then** 422 `element_not_creatable`, `field: <field>`, exactly as `create_agent` refuses it (the runtime check `agentmutation.ValidateFields` runs before the shared field applier)
+- **Then** 422 `element_not_creatable`, `field: <field>`, exactly as `create_agent` refuses it (the runtime check `agentmutation.ValidateFields` reads the raw record before import mapping and before the shared field applier)
+- **And** a skill that is not installed on the target is still refused, not silently dropped before the runtime check
 
-Examples: `memory_enabled` false; `context_window_override` 64000 (Dataset D1 rows 33–34).
+Examples:
+
+| Dataset / rule | `<field>` | `<value>` / target condition |
+|---|---|---|
+| D1 row 33 | `memory_enabled` | `false` |
+| D1 row 34 | `context_window_override` | `64000` |
+| D1 row 35 | `skills` | `["writing"]`, installed on the target |
+| D1 row 35 | `skills` | `["missing-on-target"]`, not installed on the target |
+| D1 row 36 | `fallback_models` | `[{"model":"m-fb","provider":"openrouter"}]` |
+| D1 row 37 | `model_params` | `{"temperature":0.25,"max_tokens":2048}` |
+| D1 row 37 | `model_params` | `{}` (non-null, even though empty) |
+| D1 row 38 | `reasoning_effort` | `"high"`; the same external-CLI effort refusal as `create_agent` |
+| FR-047 | `mcp_servers` | `[{"id":"github"}]` |
+| FR-047 | `voice` | `"alloy"` |
 
 #### Scenario: [S1a only] External worker export and unknown element refused until S1b
 **Traces to**: User Story 1, Acceptance Scenario 5 — **Category**: Error Path
