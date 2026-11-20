@@ -8,7 +8,37 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 )
+
+// dirSyncFault is the test-only fault seam on the strict directory sync
+// (SyncDir, and so WriteFileAtomicSyncDir's durability step). nil in
+// production; set only through SetDirSyncFaultForTest.
+var dirSyncFault atomic.Pointer[func(dir string) error]
+
+// SetDirSyncFaultForTest makes every strict directory sync call f(dir) first
+// and fail with its non-nil error, so a caller's handling of a failed
+// durability step can be tested even as root, where a permission fixture
+// cannot force the failure. The non-strict WriteFileAtomic never consults it.
+// Call it from _test.go files only; the returned func restores the previous
+// fault. Process-wide: tests that use it must not run in parallel with other
+// strict writers they do not expect to fail.
+func SetDirSyncFaultForTest(f func(dir string) error) (restore func()) {
+	prev := dirSyncFault.Swap(&f)
+	return func() { dirSyncFault.Store(prev) }
+}
+
+// SyncDir makes the entries of dir durable: on Unix it opens dir and syncs
+// it, returning an open or sync error. On Windows there is no directory
+// handle to flush (see syncParentDir), so it does nothing there.
+func SyncDir(dir string) error {
+	if f := dirSyncFault.Load(); f != nil && *f != nil {
+		if err := (*f)(dir); err != nil {
+			return fmt.Errorf("fileutil: sync dir %q: %w", dir, err)
+		}
+	}
+	return syncParentDir(dir)
+}
 
 // WriteFileAtomicSyncDir writes data to path and returns an error when the
 // durability step fails. WriteFileAtomic is a different function and is not
@@ -89,5 +119,5 @@ func WriteFileAtomicSyncDir(path string, data []byte, perm os.FileMode) error {
 	}
 	// The temp name is gone. A durability failure must not remove the target.
 	cleanup = false
-	return syncParentDir(dir)
+	return SyncDir(dir)
 }

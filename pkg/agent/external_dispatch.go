@@ -34,6 +34,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -183,7 +184,7 @@ type runExternalCLISubTurnState struct {
 // cascade root's (#1895, ADR-091 D1).
 func (ed *runExternalCLISubTurnState) reportWorkspaceRefusal(wsErr error) error {
 	llm := TranslateTurnError(wsErr)
-	ed.al.emitExternalErrorFrame(ed.childTS, "workspace", llm)
+	ed.al.emitExternalErrorFrame(ed.childTS, "workspace", llm, "")
 	ed.childTS.appendClassifiedError(EventKindError.String(), "workspace", llm)
 	return fmt.Errorf("external-cli dispatch: %w", wsErr)
 }
@@ -198,11 +199,15 @@ func runExternalCLISubTurn(
 
 	ed.agent = ed.childTS.agent
 	if ed.agent == nil || ed.agent.Subagents == nil || ed.agent.Subagents.Executor == nil {
-		return nil, fmt.Errorf("external-cli dispatch: missing executor config")
+		// #1857 B16-config: typed; the text is unchanged. No program is
+		// known yet, so the no_program sentence (W19) is shown.
+		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, cliVariantNoProgram, "",
+			fmt.Errorf("external-cli dispatch: missing executor config"))
 	}
 	cli := ed.agent.Subagents.Executor.CLI
 	if cli == "" {
-		return nil, fmt.Errorf("external-cli dispatch: executor.cli is empty (set claude-code, codex, or opencode)")
+		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, cliVariantNoProgram, "",
+			fmt.Errorf("external-cli dispatch: executor.cli is empty (set claude-code, codex, or opencode)"))
 	}
 
 	ed.runID = ed.childTS.turnID
@@ -417,7 +422,14 @@ func runExternalCLISubTurn(
 	}
 	driver, driverErr := sess.driverForRun(cli, consent, resume)
 	if driverErr != nil {
-		return nil, fmt.Errorf("external-cli dispatch: %w", driverErr)
+		wrapped := fmt.Errorf("external-cli dispatch: %w", driverErr)
+		if errors.Is(driverErr, errExternalResumeUnavailable) {
+			// B16a (resume unavailable) is a separate class, not this round.
+			return nil, wrapped
+		}
+		// #1857 B16-config: the driver could not be built (selected by error
+		// identity, not call site — §13.8.5).
+		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, "", cli, wrapped)
 	}
 
 	return ed.startAndDrain(runCtx, driver, consent, cli, resolvedWorkDir, task, resume)
@@ -471,7 +483,9 @@ func (ed *runExternalCLISubTurnState) startAndDrain(
 	} else {
 		evCh, err = driver.Run(runCtx, runOpts)
 		if err != nil {
-			return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
+			// #1857 C7 / B17b: typed start failure; the text is unchanged.
+			return nil, classifyDriverStartError(cli,
+				fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err))
 		}
 	}
 
@@ -716,42 +730,8 @@ func drainExternalRun(
 				ended = true
 			case runner.EventKindError:
 				if ev.Err != nil {
-					// Wave 1 (ADR-051 §RD5 MAJ-005 / fail-closed sanitizer):
-					// route runner-channel errors through SanitizeRunnerError
-					// so raw stderr / CLI failure text does NOT reach the
-					// assistant transcript. The transcript gets a generic
-					// marker; the raw is logged + retained on the EventKindError
-					// payload for the WS forwarder (where Verbose Chat
-					// decides whether to show it).
-					rawMsg := ev.Err.Message
-					sanitized := SanitizeRunnerError(rawMsg)
-					childTS.appendIntermediateAssistantTranscript(
-						"[external-cli error] "+sanitized.AssistantText,
-						transcriptModelFor(childTS.agent),
-					)
-					// Surface the generic EventKindError for the WS forwarder
-					// — the assistant transcript gets sanitized text, but the
-					// structured error frame still carries the code/retryable
-					// bits the SPA needs.
-					emitExternalCLIErrorEvent(al, childTS, ev.Err, sanitized)
-					if ev.Err.Fatal {
-						// ADR-051 B2 fix: runErr MUST carry the sanitized
-						// generic message — it flows into ToolResult.ForLLM
-						// (L535) and reaches the parent agent's tool-result
-						// context. sanitized.LogText is raw stderr / provider
-						// text and must NEVER cross that boundary. The raw
-						// text is retained ONLY in the structured slog.Warn
-						// below for operator triage via gateway.log.
-						// curatedTurnError: the CLI's own output has already been
-						// replaced by the plain message for its code, so a task
-						// run may show this text as written (turnErrorUserText).
-						runErr = &curatedTurnError{text: "external-cli run failed: " + sanitized.AssistantText}
-						slog.Warn("external-cli dispatch: fatal runner error",
-							"run_id", runID, "cli", cli,
-							"assistant_text", sanitized.AssistantText,
-							"raw_log_text", sanitized.LogText,
-							"code", string(sanitized.Code),
-							"retryable", sanitized.Retryable)
+					if fatalErr := handleExternalRunError(al, childTS, runID, cli, ev.Err); fatalErr != nil {
+						runErr = fatalErr
 					}
 				}
 			}
@@ -778,6 +758,16 @@ done:
 		"err", runErr, "output_len", len(output))
 
 	if runErr != nil {
+		// #1857 (§13.8.4 rule 3): a classified CLI failure reaches the parent
+		// as its typed code and sentence — never the internal
+		// "external-cli run failed: " form, which stays in gateway.log.
+		var cliErr *externalCLIRunError
+		if errors.As(runErr, &cliErr) {
+			return &tools.ToolResult{
+				Err:    runErr,
+				ForLLM: fmt.Sprintf("External CLI run (%s) failed %s", cli, cliErr.agentText()),
+			}
+		}
 		return &tools.ToolResult{
 			Err:    runErr,
 			ForLLM: fmt.Sprintf("External CLI run (%s) failed: %v", cli, runErr),
@@ -1152,6 +1142,12 @@ type SanitizedRunnerError struct {
 	// ONLY this. NEVER the raw stderr.
 	AssistantText string
 
+	// NeutralText is the same catalogue sentence in the neutral voice
+	// (#1857 design note D-B B1) for surfaces outside a chat: the parent's
+	// tool result, the completion message, the task centre and the Settings
+	// test. Rendered together with AssistantText from the same facts.
+	NeutralText string
+
 	// LogText is the operator-facing copy (raw + classifier code). Lands
 	// in gateway.log only, never on the wire and never in the transcript.
 	LogText string
@@ -1165,46 +1161,68 @@ type SanitizedRunnerError struct {
 	// Retryable mirrors the LLMError's retryable bit — the WS forwarder
 	// surfaces retry hints when true.
 	Retryable bool
+
+	// failure is the CLI-only classifier's full verdict (variant and safe
+	// facts) for the dispatch site's rendering and technical details.
+	failure cliFailure
+
+	// technicalDetail is the Verbose/Debug technical-details text (display
+	// name, exit status, kind — never the raw text), set by renderForRun.
+	technicalDetail string
 }
 
 // SanitizeRunnerError is the fail-closed sanitizer between a runner's
 // raw error text and anything that reaches the assistant or the wire.
-// Maps the runner error through the shared translateLLMError classifier
-// (using a synthetic ProviderError built from the message) and returns
-// a SanitizedRunnerError with AssistantText generic over CLI identity.
+// #1857 (§13.8.2 R-2): it classifies through the CLI-only classifier
+// (classifyCLIFailure), never through the provider-side classifyByMessage,
+// so the CLI path never yields a provider or network code.
 //
 // The function NEVER returns the raw stderr verbatim — AssistantText is
-// always one of the userMessages entries, regardless of classification
-// outcome. This is the load-bearing invariant: a failed CLI run cannot
-// leak its raw stderr to the assistant transcript even when the
-// classifier returns CodeUnknown.
+// always a catalogue sentence (the code's message or its named variant),
+// still carrying its {cli}/{model}/{n} slots: the dispatch site renders
+// them with the facts only it knows (renderMessageSlots / RenderCLIMessage).
+// This is the load-bearing invariant: a failed CLI run cannot leak its raw
+// stderr to the assistant transcript whatever the classification.
 func SanitizeRunnerError(rawMessage string) SanitizedRunnerError {
+	return sanitizeRunnerErrorTyped(rawMessage, "")
+}
+
+// SanitizeRunnerErrorWithType is SanitizeRunnerError with the structured
+// error type the driver read (runner.ErrorEvent.Type; "" when none) — the
+// entry point for the Settings test path (§13.8.5 B18: the same CLI-only
+// classifier as the run path).
+//
+// #1857: the {n} fact (the CLI's own turn cap) is known only here, from the
+// classified message, so it is filled in both voices now; the caller fills
+// {cli}/{model} from its own facts (RenderCLIMessage).
+func SanitizeRunnerErrorWithType(rawMessage, structuredType string) SanitizedRunnerError {
+	s := sanitizeRunnerErrorTyped(rawMessage, structuredType)
+	count := messageSlotFacts{n: s.failure.maxTurns}
+	s.AssistantText = fillMessageSlots(s.AssistantText, count)
+	s.NeutralText = fillMessageSlots(s.NeutralText, count)
+	return s
+}
+
+// sanitizeRunnerErrorTyped is SanitizeRunnerError with the structured error
+// type the driver read (runner.ErrorEvent.Type; "" when none).
+func sanitizeRunnerErrorTyped(rawMessage, structuredType string) SanitizedRunnerError {
 	if rawMessage == "" {
 		rawMessage = "external CLI failed"
 	}
-	// Build a synthetic ProviderError carrying only the message; the
-	// classifier falls through to substring matching (no status) — fine
-	// for the common external-CLI errors (auth, content policy, generic
-	// process failure). Status-less classification is intentional: the
-	// runner's ev.Err has no HTTP context.
-	pe := &ProviderError{
-		Status: 0,
-		Body:   rawMessage,
-		Err:    nil,
-	}
-	llm := TranslateLLMError(pe, rawMessage)
-	// The shared translator emits one of the userMessages entries; that
-	// is always safe for the assistant to see. Force the empty/CodeUnknown
-	// case onto the generic copy too — the load-bearing invariant.
-	assistant := llm.Message
+	failure := classifyCLIFailure(rawMessage, structuredType)
+	assistant := catalogueSentence(failure.code, failure.variant)
+	neutral := neutralCatalogueSentence(failure.code, failure.variant)
 	if assistant == "" {
 		assistant = "The external CLI failed. See gateway.log for details."
+		neutral = assistant
 	}
 	return SanitizedRunnerError{
 		AssistantText: assistant,
+		NeutralText:   neutral,
 		LogText:       rawMessage,
-		Code:          llm.Code,
-		Retryable:     llm.Retryable,
+		Code:          failure.code,
+		Retryable:     isRetryable(failure.code),
+		failure:       failure,
 	}
 }
 
@@ -1240,7 +1258,10 @@ func emitExternalCLIErrorEvent(
 	// are subscribed. It used to stamp the cascade root's routing id, so a
 	// helper's CLI failure never reached the helper's own chat live (#1895,
 	// ADR-091 D1). FIX 4 stands: ChatID is set (emitExternalErrorFrame).
-	al.emitExternalErrorFrame(ts, "external_cli", llm)
+	// #1857: only the live frame carries the safe technical details (CLI
+	// display name, exit status, kind); the transcript keeps the code and
+	// the rendered sentence, as before.
+	al.emitExternalErrorFrame(ts, "external_cli", llm, sanitized.technicalDetail)
 	// Mirror to the JSONL transcript via the write choke point. The raw
 	// runnerErr.Message stays in sanitized.LogText / gateway.log; the
 	// transcript gets the generic copy.

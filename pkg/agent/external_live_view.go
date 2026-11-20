@@ -94,7 +94,7 @@ func (ts *turnState) liveViewContext() context.Context {
 func (al *AgentLoop) finishExternalLiveView(ctx context.Context, ts *turnState, runErr error) error {
 	failed := runErr != nil && !errors.Is(runErr, context.Canceled)
 	if failed && !ts.externalErrorAnnounced.Load() {
-		al.emitExternalErrorFrame(ts, "external_cli", TranslateTurnError(runErr))
+		al.emitExternalErrorFrame(ts, "external_cli", TranslateTurnError(runErr), "")
 	}
 	if failed {
 		ts.markTurnFailed()
@@ -119,8 +119,11 @@ func (al *AgentLoop) finishExternalLiveView(ctx context.Context, ts *turnState, 
 // honours the typed-error audience; for a steered helper that is the helper's
 // chat, where its viewers are subscribed, not the cascade root's (#1895,
 // ADR-091 D1). ChatID falls back to the turn's chat id when the options carry
-// none, as the external exits always did.
-func (al *AgentLoop) emitExternalErrorFrame(ts *turnState, stage string, llm LLMError) {
+// none, as the external exits always did. detail is the frame's technical
+// details: only the runner-error path passes its safe #1857 text
+// (SanitizedRunnerError.technicalDetail); every other caller passes "", so a
+// translated error's own Detail never reaches the wire from here.
+func (al *AgentLoop) emitExternalErrorFrame(ts *turnState, stage string, llm LLMError, detail string) {
 	ts.externalErrorAnnounced.Store(true)
 	sessionID := u9ToolExecSessionIDs(ts)
 	if al.audienceFor(context.Background(), steer.BoundaryTypedErrorFrame, sessionID) == steer.AudienceNone {
@@ -136,6 +139,7 @@ func (al *AgentLoop) emitExternalErrorFrame(ts *turnState, stage string, llm LLM
 		SessionID: sessionID,
 		Code:      string(llm.Code),
 		Message:   llm.Message,
+		Detail:    detail,
 	})
 }
 

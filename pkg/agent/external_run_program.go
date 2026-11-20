@@ -23,7 +23,7 @@ import (
 func (ed *runExternalCLISubTurnState) resolveRunProgram(cli string) error {
 	row, refusal := ed.al.runProgramFor(cli)
 	if refusal != "" {
-		return ed.reportProgramRefusal(refusal)
+		return ed.reportProgramRefusal(cli, refusal)
 	}
 	resolved := row.resolved
 	ed.programEntered = row.settings.Path
@@ -63,14 +63,21 @@ func (al *AgentLoop) runProgramFor(cli string) (runProgram, string) {
 // refused earlier, at launch, with the same text as the parent's tool error
 // (SteerLauncher.Launch); reaching this for a delegated child means the
 // Settings program changed between launch and spawn.
-func (ed *runExternalCLISubTurnState) reportProgramRefusal(text string) error {
-	refusal := &curatedTurnError{text: text}
+//
+// #1857 C8 (§13.8.5): the curated refusal travels on its own typed code,
+// external_cli_not_found; its text stays the error's text.
+// The live frame carries the rendered catalogue sentence (llm.Message), the
+// same text the transcript saves: the curated text is not a catalogue
+// sentence, so WireLLMError would demote it to the generic sentence
+// (gate finding sfh F1). The returned error keeps the curated text for task
+// surfaces (known limit F9).
+func (ed *runExternalCLISubTurnState) reportProgramRefusal(cli, text string) error {
+	refusal := newExternalCLIRefusal(CodeExternalCLINotFound, "", cli, &curatedTurnError{text: text})
 	llm := TranslateTurnError(refusal)
-	// The frame carries the refusal text as written and addresses the run's
-	// OWN session, as reportWorkspaceRefusal does (#1895).
-	framed := llm
-	framed.Message = text
-	ed.al.emitExternalErrorFrame(ed.childTS, "external_cli", framed)
+	// The frame carries the same rendered C8 sentence the transcript saves
+	// (gate finding sfh F1, above) and addresses the run's OWN session, as
+	// reportWorkspaceRefusal does (#1895, ADR-091 D1).
+	ed.al.emitExternalErrorFrame(ed.childTS, "external_cli", llm, "")
 	ed.childTS.appendClassifiedError(EventKindError.String(), "external_cli", llm)
 	return refusal
 }

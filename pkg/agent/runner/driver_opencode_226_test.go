@@ -94,6 +94,8 @@ func TestOpencode226_ProviderErrorIsVisibleAndNotSuccessful(t *testing.T) {
 	want := runner.ErrorEvent{
 		Message: "Model unavailable: openrouter/no-such-vendor/no-such-model",
 		Fatal:   true,
+		// #1857 (spec 13.8.2 row C2): the structured error.type is kept.
+		Type: "provider.no-route",
 	}
 	if events[0].Err == nil {
 		t.Fatalf("provider failure has no visible error payload; want %+v", want)

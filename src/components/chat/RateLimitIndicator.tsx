@@ -12,8 +12,11 @@ export interface RateLimitIndicatorProps {
   onDismiss: () => void
 }
 
-function formatSeconds(s: number): string {
-  if (s <= 0) return '0s'
+function formatSeconds(raw: number): string {
+  if (raw <= 0) return '0s'
+  // #1857: the server sends a fractional wait (e.g. 3591.75); show whole
+  // seconds, rounded up so the banner never reads 0s while a wait remains.
+  const s = Math.ceil(raw)
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
   const rem = s % 60

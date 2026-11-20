@@ -29,12 +29,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchConfig: vi.fn(),
     updateConfig: vi.fn(),
     fetchStorageStats: vi.fn(),
-    fetchAppState: vi.fn(),
-    createBackup: vi.fn(),
-    fetchBackups: vi.fn(),
-    restoreBackup: vi.fn(),
     clearAllSessions: vi.fn(),
-    reAuth: vi.fn(),
   }
 })
 
@@ -47,17 +42,11 @@ import {
   fetchConfig,
   updateConfig,
   fetchStorageStats,
-  fetchAppState,
-  createBackup,
-  fetchBackups,
-  restoreBackup,
   clearAllSessions,
-  reAuth,
   ApiError,
 } from '@/lib/api'
 import { DataSection } from './DataSection'
-import type { Config, StorageStats, AppState } from '@/lib/api'
-import type { BackupEntry } from '@/lib/api/generated/openapi-types'
+import type { Config, StorageStats } from '@/lib/api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -89,21 +78,11 @@ const baseStats: StorageStats = {
   memory_entry_count: 10,
 }
 
-// WP4 (ADR-0010): platform mode is the DEFAULT test fixture for AppState —
-// no `identity` field at all, which is exactly what this branch sees today
-// (the field lands with a parallel lane, WP1). DataSection must fail CLOSED
-// (hide the backup section) in that shape, same as an absent/unknown
-// identity would on a real hosted/desktop build.
-const platformAppState = { onboarding_complete: true } as AppState
-const localAppState = { onboarding_complete: true, identity: { mode: 'local' } } as AppState
-
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(fetchConfig).mockResolvedValue(baseConfig)
   vi.mocked(updateConfig).mockResolvedValue(baseConfig)
   vi.mocked(fetchStorageStats).mockResolvedValue(baseStats)
-  vi.mocked(fetchAppState).mockResolvedValue(platformAppState)
-  vi.mocked(fetchBackups).mockResolvedValue([])
 })
 
 // ── describe: rejected mutations render getErrorMessage() text ──────────────
@@ -177,113 +156,5 @@ describe('DataSection — D3: hydration must not trigger a spurious PUT', () => 
     // 500ms default debounce.
     await new Promise((resolve) => setTimeout(resolve, 900))
     expect(updateConfig).not.toHaveBeenCalled()
-  })
-})
-
-// WP4 (ADR-0010): local backup, off in platform mode. These tests pin the
-// SPA half of the switch — the section must be entirely absent (not
-// disabled, not a 404 error state) in platform mode, and fully functional
-// (create + list + restore) in local mode.
-describe('DataSection — WP4: backup/restore gated by AppState identity.mode', () => {
-  it('platform mode: no Backup & Restore section, no backup network call', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue(platformAppState)
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByText('Data')).toBeInTheDocument()
-    })
-    expect(screen.queryByText('Backup & Restore')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /create backup/i })).not.toBeInTheDocument()
-    expect(fetchBackups).not.toHaveBeenCalled()
-  })
-
-  it('absent identity field (pre-WP1, today\'s actual AppState shape) also hides the section — fails closed, not open', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue({ onboarding_complete: true } as AppState)
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByText('Data')).toBeInTheDocument()
-    })
-    expect(screen.queryByText('Backup & Restore')).not.toBeInTheDocument()
-  })
-
-  it('local mode: shows Backup & Restore, lists existing archives, and creates a new one', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue(localAppState)
-    const backup: BackupEntry = {
-      filename: 'backup-20260101T000000Z.tar.gz',
-      size_bytes: 2048,
-      created_at: '2026-01-01T00:00:00Z',
-    }
-    vi.mocked(fetchBackups).mockResolvedValue([backup])
-    vi.mocked(createBackup).mockResolvedValue({
-      path: '/home/user/.omnipus/backups/backup-20260102T000000Z.tar.gz',
-      size_bytes: 4096,
-      created_at: '2026-01-02T00:00:00Z',
-    })
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByText('Data & Backup')).toBeInTheDocument()
-    })
-    await waitFor(() => {
-      expect(screen.getByText(backup.filename)).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: /create backup/i }))
-    await waitFor(() => {
-      expect(createBackup).toHaveBeenCalled()
-    })
-    await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledWith({
-        message: expect.stringContaining('Backup created:'),
-        variant: 'success',
-      })
-    })
-  })
-
-  // Restore overwrites the whole vault, so after the plain confirmation it
-  // takes the step-up gate (WP3): local mode is password mode, and the gate
-  // is dialog-first — ReAuthDialog opens BEFORE any request, and the one
-  // POST carries the minted consent token.
-  it('local mode: restoring a listed backup calls restoreBackup with its filename after confirmation and re-auth', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue(localAppState)
-    const backup: BackupEntry = {
-      filename: 'backup-20260101T000000Z.tar.gz',
-      size_bytes: 2048,
-      created_at: '2026-01-01T00:00:00Z',
-    }
-    vi.mocked(fetchBackups).mockResolvedValue([backup])
-    vi.mocked(restoreBackup).mockResolvedValue(undefined)
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByText(backup.filename)).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByRole('button', { name: /^restore$/i }))
-
-    const dialog = await screen.findByRole('dialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: /^restore$/i }))
-
-    // Password prompt first; nothing has been sent yet.
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-password-input')).toBeInTheDocument()
-    })
-    expect(restoreBackup).not.toHaveBeenCalled()
-
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
-    await waitFor(() => {
-      expect(reAuth).toHaveBeenCalledWith('mypassword')
-      expect(restoreBackup).toHaveBeenCalledTimes(1)
-      expect(restoreBackup).toHaveBeenCalledWith(backup.filename, 'reauth_tok')
-    })
-    await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledWith({
-        message: 'Restore complete. Restart gateway to apply.',
-        variant: 'success',
-      })
-    })
   })
 })

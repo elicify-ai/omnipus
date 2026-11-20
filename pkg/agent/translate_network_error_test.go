@@ -72,7 +72,9 @@ func TestTranslateTurnError_MidStreamErrorFollowsItsCode(t *testing.T) {
 		{"429", "RAWPROVIDERTEXT", CodeRateLimited, true},
 		{"invalid_request_error", "RAWPROVIDERTEXT", CodeProviderRejected, false},
 		{"content_policy_violation", "RAWPROVIDERTEXT", CodeContentPolicy, false},
-		{"some_new_code", "RAWPROVIDERTEXT", CodeUnknown, false},
+		// #1857 §13.8.2 A4/A5, R-4, T-52: an unrecognized error inside
+		// a 200 stream is promoted only at this terminal presentation.
+		{"some_new_code", "RAWPROVIDERTEXT", CodeProviderError, false},
 	} {
 		got := TranslateTurnError(fmt.Errorf("x: %w", &common.StreamProviderError{Code: tc.code, Message: tc.msg}))
 		assert.Equal(t, tc.want, got.Code, "code %q", tc.code)

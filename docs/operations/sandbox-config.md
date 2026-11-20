@@ -61,7 +61,7 @@ Note: there is no `experimental.workspace_shell_enabled` feature flag. `bash` (A
 
 | Mode | Boot behavior | Runtime behavior |
 |---|---|---|
-| `enforce` | Build Landlock ruleset, add rules, `PR_SET_NO_NEW_PRIVS`, `landlock_restrict_self`, install seccomp BPF with `SECCOMP_RET_ERRNO(EPERM)`. | Filesystem violations return `EACCES`; blocked syscalls return `EPERM`. Production default on capable kernels. |
+| `enforce` | On Linux 6.7+ (Landlock ABI 4+) first reserve the gateway's loopback egress-proxy port (`127.0.0.1`, port chosen by the OS) so the proxy still has its listener after the bind-port rules apply; then build Landlock ruleset, add rules, `PR_SET_NO_NEW_PRIVS`, `landlock_restrict_self`, install seccomp BPF with `SECCOMP_RET_ERRNO(EPERM)`. | Filesystem violations return `EACCES`; blocked syscalls return `EPERM`. Production default on capable kernels. |
 | `permissive` | Build ruleset and add rules. Set `NNP`. **Skip** `landlock_restrict_self` on kernels < 6.12 (no native permissive Landlock). Install seccomp with `SECCOMP_RET_LOG`. | Policy is computed and audit-logged; nothing is blocked. `permissiveNagBanner` repeats every 60s. |
 | `off` | No Apply, no Install. Logs `sandbox.disabled` at WARN. | No kernel enforcement. If `OMNIPUS_ENV=production`, `productionNagBanner` repeats every 60s. |
 
@@ -147,7 +147,7 @@ The exit-code contract is in `cmd/omnipus/internal/gateway/command.go:34-36` and
 
 ### Exit 78 (`EX_CONFIG`)
 
-Apply or Install failed on a kernel that claims Landlock support (`linuxApplier` type assertion succeeded) for a reason other than a right the kernel does not know — a malformed rule, a net-port rule the kernel rejects, or a `restrict_self` failure. The error path in `pkg/gateway/sandbox_apply.go:389-406` returns a `SandboxBootError` and the gateway main loop exits before any HTTP listener binds. External TCP probes see `ECONNREFUSED`, not HTTP 503.
+Apply or Install failed on a kernel that claims Landlock support (`linuxApplier` type assertion succeeded) for a reason other than a right the kernel does not know — a malformed rule, a net-port rule the kernel rejects, or a `restrict_self` failure. The error path in `pkg/gateway/sandbox_apply.go:389-406` returns a `SandboxBootError` and the gateway main loop exits before any HTTP listener binds (the one thing opened earlier is the loopback egress-proxy reservation, which is released on failure). External TCP probes see `ECONNREFUSED`, not HTTP 503.
 
 A ruleset rejection caused by a right the kernel does not know is **not** exit 78 — it degrades to application-level enforcement instead (see the note below).
 

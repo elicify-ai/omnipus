@@ -854,7 +854,7 @@ type LLMError struct {
 		RequestId *string `json:"request_id,omitempty"`
 	} `json:"facts,omitempty"`
 	Message string `json:"message"`
-	// Server-authored subtype/trust flag (MAJ-104, C-14) — when true, `message` carries the server-assembled provider-message sentence and the SPA renders it; when absent or false, the SPA keeps today's catalogue-copy rendering keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2). Set at write time by the agent's assembly path; the replay shape carries the same flag so a reloaded session renders identically.
+	// Server-authored subtype/trust flag (MAJ-104, C-14) — when true, `message` carries the server-assembled catalogue sentence, every slot filled (any code), and the SPA renders it; when absent or false, the SPA keeps today's catalogue-copy rendering keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2). Set at write time by the agent's assembly path; the replay shape carries the same flag so a reloaded session renders identically.
 	ProviderMessage *bool `json:"provider_message,omitempty"`
 	Retryable       bool  `json:"retryable"`
 }
@@ -864,7 +864,7 @@ type LLMErrorReplay struct {
 	// Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
 	Code    string `json:"code"`
 	Message string `json:"message"`
-	// Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the live LLMError flag — when true, `message` carries the persisted provider-message sentence and the SPA renders it after reload; when absent or false, catalogue copy keyed on `code`, byte-identical to today (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted message itself carries the provider naming, C-13).
+	// Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the live LLMError flag — when true, `message` carries the persisted server-assembled catalogue sentence, every slot filled (any code), and the SPA renders it after reload; when absent or false, catalogue copy keyed on `code`, byte-identical to today (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted message itself carries the provider naming, C-13).
 	ProviderMessage *bool `json:"provider_message,omitempty"`
 	Retryable       bool  `json:"retryable"`
 }

@@ -454,9 +454,18 @@ def isolation_universe(name):
     return False
 
 
+# omnipus-voice (user-facing wording rules): founder decision 2026-10-31
+# (Q2 B) preloads it for the four roles that write product or operator
+# text: backend-lead, frontend-lead, prometheus-prompt-engineer and
+# docs-verifier. No other role may cite it.
+VOICE_ROLES = {"backend-lead", "frontend-lead", "prometheus-prompt-engineer", "docs-verifier"}
+
+
 def role_allowed(role, skill):
     if skill == "omnipus-shared-rules":
         return True
+    if skill == "omnipus-voice":
+        return role in VOICE_ROLES
     if role == "backend-lead":
         if skill in {"omnipus-backend-rules", "omnipus-failure-triage", "grill-code"}:
             return True

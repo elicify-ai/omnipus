@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +26,7 @@ func TestGoalReminderR3ReviewRegressions(t *testing.T) {
 
 func r3FailedSettlementErrorRetainsOutcome(t *testing.T) {
 	h, provider, msg := r2TwoFailuresAtNextWake(t)
+	logFile := b26EnableServerLog(t)
 	events := r3CaptureReviewEvents(t, h)
 	work := goalReminderWorkFor(h.goalID)
 	work.mu.Lock()
@@ -107,7 +107,7 @@ func r3FailedSettlementErrorRetainsOutcome(t *testing.T) {
 	for tick := 0; tick < 3; tick++ {
 		r3RequireHealthyGoalAndSession(t, h, fmt.Sprintf("assessment-%d", tick))
 		h.al.goalQuietWindowSettle(time.Now())
-		r3AssertSettlementHeld(t, h, pending, assessedBefore, events, completedCalls)
+		r3AssertSettlementHeld(t, h, pending, assessedBefore, events, completedCalls, logFile)
 	}
 	fault.repair(t) // owner and worker are already fully joined; do not retry them
 	assert.Equal(t, fault.before, h.journal(t))
@@ -137,7 +137,7 @@ func r3FailedSettlementErrorRetainsOutcome(t *testing.T) {
 	assert.ErrorIs(t, retainedErr, os.ErrPermission, "recovery must not erase/re-finish the old owner")
 }
 
-func r3AssertSettlementHeld(t *testing.T, h *grHarness, pending *goalReminderOutcome, assessed string, events *r3ReviewEvents, calls int) {
+func r3AssertSettlementHeld(t *testing.T, h *grHarness, pending *goalReminderOutcome, assessed string, events *r3ReviewEvents, calls int, logFile string) {
 	t.Helper()
 	work := goalReminderWorkFor(h.goalID)
 	work.mu.Lock()
@@ -156,21 +156,23 @@ func r3AssertSettlementHeld(t *testing.T, h *grHarness, pending *goalReminderOut
 	assert.Empty(t, events.pauseNotices())
 	grNoPublishedReminder(t, h.al)
 	assert.Equal(t, calls, h.root.count())
+	// #1857 B26 (sec2 A): the assessment's settlement refusal is shown as the
+	// goal_state_unavailable sentence only. The operation and the raw error
+	// ("settle root") are on the goal_read_error server log line.
+	const assessOperation = "assess completed goal reminder (no new reminder dispatched)"
+	const rawSettleError = "settle root"
+	sentence := b26Sentence(t)
 	var assessments []ErrorPayload
 	for _, e := range events.errorsAt("goal_record_read") {
-		if strings.Contains(e.Message, "assess completed goal reminder (no new reminder dispatched)") {
+		if e.Code == "goal_state_unavailable" && e.Message == sentence {
 			assessments = append(assessments, e)
 		}
+		b26RequireNoRaw(t, "the live frame", e.Message, rawSettleError)
 	}
-	assert.NotEmpty(t, assessments, "R3-SF01: assessment must visibly report its own settlement refusal, not rely on an earlier outer error")
-	for _, e := range assessments {
-		assert.Contains(t, e.Message, "settle root")
-	}
-	found := false
-	for _, row := range h.visibleHistory(t) {
-		found = found || (row.Role == "system" && strings.Contains(row.Content, "assess completed goal reminder (no new reminder dispatched)") && strings.Contains(row.Content, "settle root"))
-	}
-	assert.True(t, found, "R3-SF01: assessment error must survive a fresh transcript-view read")
+	assert.NotEmpty(t, assessments, "R3-SF01: assessment must visibly report its own settlement refusal as the goal_state_unavailable frame, not rely on an earlier outer error")
+	saved := b26RequireSavedLines(t, h.visibleHistory(t), rawSettleError)
+	assert.Positive(t, saved, "R3-SF01: the assessment refusal (the goal_state_unavailable sentence) must survive a fresh transcript-view read")
+	b26RequireLogLine(t, logFile, assessOperation, rawSettleError)
 }
 
 type r3LifecycleWriteFault struct {

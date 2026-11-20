@@ -1,4 +1,4 @@
-// security.ts: Credentials, audit log, god-mode, sandbox, and backups
+// security.ts: Credentials, audit log, god-mode, and sandbox
 
 import { maybeDevToast } from '../dev-toast'
 import type { ZodType } from 'zod'
@@ -6,7 +6,6 @@ import { z } from 'zod'
 import {
   AuditLogResponse as AuditLogResponseSchema,
   AuditEntry as AuditEntrySchema,
-  BackupEntry as BackupEntrySchema,
   ExecProxyStatus as ExecProxyStatusSchema,
   PendingRestartEntry as PendingRestartEntrySchema,
   PromptGuardResponse as PromptGuardResponseSchema,
@@ -21,15 +20,15 @@ import {
   // O14 god-mode switch (contract-first #8):
   GodModeStatus as GodModeStatusSchema,
   GodModeUpdateResponse as GodModeUpdateResponseSchema,
-  // WP4: local backup — off in platform mode (contract-first #8):
-  BackupCreateResponse as BackupCreateResponseSchema,
+  // #1882: per-agent rate limits through their own route (contract-first #8):
+  RateLimitsResponse as RateLimitsResponseSchema,
+  RateLimitsUpdateResponse as RateLimitsUpdateResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   SandboxConfig,
   SandboxConfigUpdate,
   SandboxStatus,
   AuditLogResponse,
-  BackupEntry,
   ExecProxyStatus,
   SkillTrustResponse,
   PromptGuardResponse,
@@ -45,8 +44,10 @@ import type {
   GodModeStatus,
   GodModeUpdateRequest,
   GodModeUpdateResponse,
-  // WP4: local backup — off in platform mode (contract-first #8):
-  BackupCreateResponse,
+  // #1882: per-agent rate limits through their own route (contract-first #8):
+  RateLimitsResponse,
+  RateLimitsUpdateRequest,
+  RateLimitsUpdateResponse,
 } from '@/lib/api/generated/openapi-types'
 import { REAUTH_HEADER } from './auth'
 import { ApiSchemaError, _recordApiSchemaError, request } from './http'
@@ -96,37 +97,6 @@ export function rotateCredentials(newPassphrase: string, reAuthToken?: string): 
     method: 'POST',
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify({ new_passphrase: newPassphrase }),
-  })
-}
-
-// ── Backup / Restore (WP4: local backup — off in platform mode) ────────────────
-//
-// createBackup/fetchBackups/restoreBackup only ever succeed against a local-mode
-// engine (config.EditionAuthMode() == config.AuthModeLocal); the server answers
-// 404 in platform mode and the routes are not even registered there. The
-// caller in DataSection.tsx is responsible for not rendering this section
-// outside local mode — these functions do not themselves check the mode.
-
-// BackupEntry — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/BackupEntry.yaml.
-
-export function createBackup(): Promise<BackupCreateResponse> {
-  return request<BackupCreateResponse>('/backup', { method: 'POST' }, BackupCreateResponseSchema as ZodType<BackupCreateResponse>)
-}
-
-export function fetchBackups(): Promise<BackupEntry[]> {
-  return request<BackupEntry[]>('/backups', undefined, z.array(BackupEntrySchema))
-}
-
-// restoreBackup overwrites the whole vault, so it takes the step-up gate like
-// the credential writes above: the consent token in local mode, none in
-// platform mode (where the route does not exist anyway).
-export function restoreBackup(filename: string, reAuthToken?: string): Promise<void> {
-  // no-schema: void response; 204 No Content on success.
-  return request<void>('/restore', {
-    method: 'POST',
-    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
-    body: JSON.stringify({ filename }),
   })
 }
 
@@ -359,6 +329,22 @@ export function updateSandboxConfig(
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, SandboxConfigSchema)
+}
+
+// ── Per-agent rate limits ─────────────────────────────────────────────────────
+// #1882: the two per-agent limits are read from and saved through their own
+// route. PUT /config refuses `security.*` by design, so the Settings screen
+// never sends them there. Wire types are the generated RateLimits* types.
+
+export function fetchRateLimits(): Promise<RateLimitsResponse> {
+  return request<RateLimitsResponse>('/security/rate-limits', undefined, RateLimitsResponseSchema)
+}
+
+export function updateRateLimits(body: RateLimitsUpdateRequest): Promise<RateLimitsUpdateResponse> {
+  return request<RateLimitsUpdateResponse>('/security/rate-limits', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  }, RateLimitsUpdateResponseSchema)
 }
 
 // ── Exec Proxy ────────────────────────────────────────────────────────────────

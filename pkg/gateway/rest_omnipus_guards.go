@@ -24,21 +24,30 @@ const (
 	codeAgentNameTooLong   = "agent_name_too_long"
 )
 
-// refuseReservedAgentName answers 400 when name is longer than the contract's
-// 100 characters (#1075), else 409 "the name Omnipus is reserved" when name
-// (trimmed, case-insensitive) is the system agent's name (FR-002, §6.2), and
-// reports whether it did. A similar name such as "Omnipus Helper" passes.
-func refuseReservedAgentName(w http.ResponseWriter, name string) bool {
+// reservedAgentNameRefusal is the name rule shared by create and update: 400
+// with agent_name_too_long when name is longer than the contract's 100
+// characters (#1075; the read schema caps it, so a longer one is never
+// stored), else 409 "the name Omnipus is reserved" when name (trimmed,
+// case-insensitive) is the system agent's name (FR-002, §6.2), else nil. A
+// similar name such as "Omnipus Helper" passes.
+func reservedAgentNameRefusal(name string) *agentCreateRefusalError {
 	if coreagent.AgentNameTooLong(name) {
-		// #1075: the read schema caps the name at 100 characters; a longer one
-		// is refused here (validation on or off) so it is never stored.
-		jsonErrCode(w, http.StatusBadRequest, coreagent.AgentNameTooLongRefusal, codeAgentNameTooLong)
-		return true
+		return &agentCreateRefusalError{Status: http.StatusBadRequest, Msg: coreagent.AgentNameTooLongRefusal, Code: codeAgentNameTooLong}
 	}
 	if !coreagent.IsReservedAgentName(name) {
+		return nil
+	}
+	return &agentCreateRefusalError{Status: http.StatusConflict, Msg: coreagent.ReservedNameRefusal, Code: codeReservedAgentName}
+}
+
+// refuseReservedAgentName writes reservedAgentNameRefusal's answer, if any,
+// and reports whether it did.
+func refuseReservedAgentName(w http.ResponseWriter, name string) bool {
+	refusal := reservedAgentNameRefusal(name)
+	if refusal == nil {
 		return false
 	}
-	jsonErrCode(w, http.StatusConflict, coreagent.ReservedNameRefusal, codeReservedAgentName)
+	refusal.write(w)
 	return true
 }
 
@@ -53,17 +62,27 @@ func refuseOmnipusPerAgentAsk(w http.ResponseWriter, agentID string, policies ma
 	return true
 }
 
-// refuseAlwaysAskAllow answers 400 with the always-ask text when policies —
-// the policy values this request would store, global or per agent — set an
-// always-ask tool to allow (channels-spec-r8 FR-037, T-10 rows 15–16), and
-// reports whether it did. ask and deny pass; for Omnipus the per-agent ask
-// refusal (refuseOmnipusPerAgentAsk) still applies after this check.
-func refuseAlwaysAskAllow[V ~string](w http.ResponseWriter, policies map[string]V) bool {
+// alwaysAskAllowRefusal is 400 with the always-ask text when policies (the
+// policy values a request would store, global or per agent) set an always-ask
+// tool to allow (channels-spec-r8 FR-037, T-10 rows 15-16), else nil. ask and
+// deny pass; for Omnipus the per-agent ask refusal (refuseOmnipusPerAgentAsk)
+// still applies after this check.
+func alwaysAskAllowRefusal[V ~string](policies map[string]V) *agentCreateRefusalError {
 	name, bad := tools.AlwaysAskAllowViolation(policies)
 	if !bad {
+		return nil
+	}
+	return &agentCreateRefusalError{Status: http.StatusBadRequest, Msg: tools.AlwaysAskAllowRefusal(name)}
+}
+
+// refuseAlwaysAskAllow writes alwaysAskAllowRefusal's answer, if any, and
+// reports whether it did.
+func refuseAlwaysAskAllow[V ~string](w http.ResponseWriter, policies map[string]V) bool {
+	refusal := alwaysAskAllowRefusal(policies)
+	if refusal == nil {
 		return false
 	}
-	jsonErr(w, http.StatusBadRequest, tools.AlwaysAskAllowRefusal(name))
+	refusal.write(w)
 	return true
 }
 

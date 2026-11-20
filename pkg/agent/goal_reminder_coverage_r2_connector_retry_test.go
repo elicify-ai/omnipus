@@ -31,11 +31,23 @@ func TestGoalReminderConnectorPauseRetriesOnceAfterQueueRepair(t *testing.T) {
 	require.NoError(t, err)
 	engine := NewPlanEngine(h.al, store, h.al.taskStore, GetTaskExecutor(h.al))
 	h.al.SetPlanEngine(engine)
-	var rejected atomic.Int32
+	// #1857 B26 (sec2 A): the rejected pause handoff shows the user only the
+	// goal_state_unavailable sentence. The operation and the raw error are
+	// observed on the goal_read_error server log line.
+	const rawQueueError = "outbound queue is full or closed; notice remains pending"
+	const pauseOperation = "publish goal reminder pause (will retry)"
+	logFile := b26EnableServerLog(t)
+	sentence := b26Sentence(t)
+	var rejected, leaked atomic.Int32
 	h.al.SetEventSyncTap(func(event Event) {
 		payload, ok := event.Payload.(ErrorPayload)
-		if event.Kind == EventKindError && ok && payload.SessionID == h.id && payload.Stage == "goal_record_read" &&
-			strings.Contains(payload.Message, "outbound queue is full or closed; notice remains pending") {
+		if event.Kind != EventKindError || !ok || payload.SessionID != h.id || payload.Stage != "goal_record_read" {
+			return
+		}
+		if strings.Contains(payload.Message, rawQueueError) {
+			leaked.Add(1)
+		}
+		if payload.Code == "goal_state_unavailable" && payload.Message == sentence {
 			rejected.Add(1)
 		}
 	})
@@ -49,7 +61,10 @@ func TestGoalReminderConnectorPauseRetriesOnceAfterQueueRepair(t *testing.T) {
 		assert.Equal(t, 5, goalRecordForSession(t, h.id).ZeroOutputPushes)
 		assert.Equal(t, beforeCalls, h.root.count(), "failed connector handoff cannot dispatch a sixth paid reminder")
 	}
-	require.Greater(t, rejected.Load(), int32(0), "SETUP: positively observe the real same-session rejected pause handoff")
+	require.Greater(t, rejected.Load(), int32(0), "SETUP: positively observe the real same-session rejected pause handoff as the goal_state_unavailable frame")
+	assert.Zero(t, leaked.Load(), "#1857 B26: no frame may carry the raw queue error")
+	b26RequireLogLine(t, logFile, pauseOperation, rawQueueError)
+	b26RequireSavedLines(t, h.visibleHistory(t), rawQueueError)
 	first := r2PublicPauseRow(t, h)
 	fullQueue := r2DrainOutbound(t, h.al.bus)
 	for _, message := range fullQueue {
