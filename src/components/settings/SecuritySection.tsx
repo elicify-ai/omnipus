@@ -259,7 +259,8 @@ export function AutoApproveControl({ draft }: { draft: AutoApproveDraft }) {
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Tools set to &ldquo;Ask&rdquo; run without a prompt when it&rsquo;s safe: reading, listing and
             searching run anywhere except Omnipus&rsquo;s protected files, and writing runs without a prompt
-            only inside your workspace and the folders mounted into it.
+            only inside your workspace and the folders mounted into it. Each chat can still turn it off
+            with its Auto button.
           </p>
         </div>
         <Switch
