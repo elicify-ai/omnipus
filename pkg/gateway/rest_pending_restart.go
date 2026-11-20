@@ -55,6 +55,12 @@ var RestartGatedKeys = []config.ConfigKey{
 	// has not.
 	config.SandboxWorkspacePathGuard,
 	config.SessionDMScope,
+	// #1519 FR-036: the filesystem model is read when the sandbox policy is
+	// built at boot (sandbox_apply.go), and the shell network proxy when the
+	// agent loop is built (loop_construct.go) — a saved change to either
+	// reaches the running gateway only through a restart.
+	config.SandboxFilesystemModel,
+	config.ToolsExecEnableProxy,
 	// Changing the bind host re-binds the listener (like the port), which can
 	// only happen safely on restart — so it is restart-gated like gateway.port.
 	config.GatewayHost,
@@ -203,8 +209,14 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 				Key:            string(key),
 				PersistedValue: pv,
 				AppliedValue:   av,
+				Reason:         gen.PendingRestartEntryReasonRestartRequired,
 			})
 		}
+	}
+	diffs, err = a.appendApplyFailedEntries(diffs, persisted)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to read running config")
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -213,6 +225,46 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 		// Header already written; can only log.
 		slog.Error("pending-restart: encode failed", "error", err)
 	}
+}
+
+// appendApplyFailedEntries adds one "apply_failed" entry per hot-reloaded key
+// whose last save did not apply since boot (FR-062). persisted_value comes
+// from config.json as read for this request; applied_value is the value the
+// running config still holds (nil when the path is absent there). A key
+// already listed as restart_required is not listed twice.
+func (a *restAPI) appendApplyFailedEntries(diffs []pendingRestartEntry, persisted map[string]any) ([]pendingRestartEntry, error) {
+	keys := a.applyFailed.keys()
+	if len(keys) == 0 {
+		return diffs, nil
+	}
+	var running map[string]any
+	if a.agentLoop != nil {
+		if cfg := a.agentLoop.GetConfig(); cfg != nil {
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				return diffs, err
+			}
+			if err := json.Unmarshal(raw, &running); err != nil {
+				return diffs, err
+			}
+		}
+	}
+	listed := make(map[string]struct{}, len(diffs))
+	for _, d := range diffs {
+		listed[d.Key] = struct{}{}
+	}
+	for _, key := range keys {
+		if _, dup := listed[key]; dup {
+			continue
+		}
+		diffs = append(diffs, pendingRestartEntry{
+			Key:            key,
+			PersistedValue: getAtPath(persisted, key),
+			AppliedValue:   getAtPath(running, key),
+			Reason:         gen.PendingRestartEntryReasonApplyFailed,
+		})
+	}
+	return diffs, nil
 }
 
 // deepCopyConfig returns a deep copy of cfg via JSON round-trip. It is called

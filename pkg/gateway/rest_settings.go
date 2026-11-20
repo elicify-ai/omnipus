@@ -28,6 +28,22 @@ import (
 // startTime records when the gateway process started, used by GET /api/v1/about.
 var startTime = time.Now()
 
+// auditDir is the directory the audit logger writes: the "system" sibling of
+// the agents home, derived from the live config exactly as the writer derives
+// it (agent/loop_construct.go: Dir(cfg.AgentHomeBasePath()) + "/system"), so
+// a customized agents.defaults.home no longer hides the log (#1742). With no
+// agents home configured it falls back to the gateway home.
+func (a *restAPI) auditDir() string {
+	if a.agentLoop != nil {
+		if cfg := a.agentLoop.GetConfig(); cfg != nil {
+			if base := cfg.AgentHomeBasePath(); base != "" {
+				return filepath.Join(filepath.Dir(base), "system")
+			}
+		}
+	}
+	return filepath.Join(a.homePath, "system")
+}
+
 // HandleAuditLog handles GET /api/v1/audit-log.
 // Returns the last 100 audit log entries in reverse-chronological order.
 func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
@@ -35,9 +51,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	// Read from system/ directory to match the audit logger's documented path
-	// (~/.omnipus/system/audit.jsonl per audit package).
-	auditPath := filepath.Join(a.homePath, "system", "audit.jsonl")
+	auditPath := filepath.Join(a.auditDir(), "audit.jsonl")
 	f, err := os.Open(auditPath)
 	if errors.Is(err, os.ErrNotExist) {
 		// AuditLogResponse envelope: no entries, chain not checkable.

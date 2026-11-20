@@ -50,10 +50,16 @@ const (
 	// setting appear to take effect while the guard still enforces the old one.
 	SandboxWorkspacePathGuard ConfigKey = "sandbox.workspace_path_guard"
 	SessionDMScope            ConfigKey = "session.dm_scope"
-	GatewayHost               ConfigKey = "gateway.host"
-	GatewayPort               ConfigKey = "gateway.port"
-	GatewayUsers              ConfigKey = "gateway.users"
-	GatewayDevModeBypass      ConfigKey = "gateway.dev_mode_bypass"
+	// SandboxFilesystemModel and ToolsExecEnableProxy are restart-gated
+	// (Settings redesign #1519, FR-036): the filesystem model is read when
+	// the sandbox policy is built at boot, the shell network proxy when the
+	// agent loop is built.
+	SandboxFilesystemModel ConfigKey = "sandbox.filesystem_model"
+	ToolsExecEnableProxy   ConfigKey = "tools.exec.enable_proxy"
+	GatewayHost            ConfigKey = "gateway.host"
+	GatewayPort            ConfigKey = "gateway.port"
+	GatewayUsers           ConfigKey = "gateway.users"
+	GatewayDevModeBypass   ConfigKey = "gateway.dev_mode_bypass"
 
 	// GatewayPublicURL drives boot-frozen CORS/CSP/WS-origin fences
 	// (CanonicalGatewayOrigin) — it MUST stay restart-gated (ADR-044).

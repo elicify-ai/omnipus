@@ -980,30 +980,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/security/retention": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get session retention configuration
-         * @description Returns session_days and disabled flag from storage.retention.
-         */
-        get: operations["getRetention"];
-        /**
-         * Update session retention configuration
-         * @description Partial update — any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string "true"/"false" rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false).
-         */
-        put: operations["updateRetention"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/security/retention/sweep": {
         parameters: {
             query?: never;
@@ -1082,10 +1058,34 @@ export interface paths {
          */
         get: operations["getMemorySettings"];
         /**
-         * Update global memory and recap/retention settings
-         * @description Writes the global memory/recap and retention settings. Reads/writes ONLY the MemorySettings fields — no merge of sibling config sections or secrets (A2/G-02). Writable by any authenticated user (operator decision, no admin gate). Uses safeUpdateConfigJSON server-side to preserve all other config fields including API keys.
+         * Update global memory and recap settings
+         * @description Writes the global memory/recap settings. Reads/writes ONLY the MemorySettings fields — no merge of sibling config sections or secrets (A2/G-02). Writable by any authenticated user (operator decision, no admin gate). Uses safeUpdateConfigJSON server-side to preserve all other config fields including API keys. Retention is NOT writable here: a body carrying session_days or memory_retros_days is refused with 400 naming the field, nothing in the body is applied — including its other fields — and this holds whatever gateway.validate_inbound is (Settings redesign #1519, FR-045). Retention is changed only through PUT /settings/retention.
          */
         put: operations["updateMemorySettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the retention settings (Settings → Data & retention)
+         * @description Returns RetentionSettings: how long chat history and memory are kept, as stored. The read shape has no range so a hand-edited out-of-range value can be shown and repaired; 0 or a negative stored day count is returned as its effective default (90 / 180). keep_everything_forever mirrors the legacy config-file-only storage.retention.disabled. Writable by any authenticated user (withAuth + RequireNotBypass, the /settings/memory posture; no password).
+         */
+        get: operations["getRetentionSettings"];
+        /**
+         * Update the retention settings
+         * @description The only write path for retention (Settings redesign #1519, C-3). Takes RetentionSettingsUpdate, applies the sent fields to the stored values read inside the config write lock, writes once, and answers 200 with RetentionSettings. Ranges are enforced in the handler whatever gateway.validate_inbound is (review MAJ-004): session_days 1–365, memory_retros_days 1–730 (validated whenever sent, also while memory_retros_forever is true), memory_retros_forever a boolean; a body carrying keep_everything_forever or any unknown field, an empty body, and a wrong type each answer 400 naming the field and its range. Every other writer that would change the effective retention values — the generic PUT /config included — is refused by effect (FR-044).
+         */
+        put: operations["updateRetentionSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1107,7 +1107,7 @@ export interface paths {
         get: operations["getContextSettings"];
         /**
          * Update the global context-budget settings (ADR-066 D9)
-         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth). The sent fields are applied to the stored values read INSIDE the config write lock (Settings redesign #1519, FR-021): two writes changing different fields both survive in either order; on the same field the later write wins; a list value is one field. When config.json was written but the live refresh or reload failed afterwards, the answer is 500 ErrorResponse with code "saved_not_refreshed" and details.keys naming the changed context.<field> paths — saved, not in use — and the keys are recorded as apply_failed entries in GET /config/pending-restart inside the write lock, before the response is sent (#995, FR-102). A failure before config.json was written answers 500 without that code.
          */
         put: operations["updateContextSettings"];
         post?: never;
@@ -1131,7 +1131,7 @@ export interface paths {
         get: operations["getThirdPartyAgentSettings"];
         /**
          * Replace the Settings -> Third-party agents section
-         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check; never the path, which goes to the server log only) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it.
+         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check; never the path, which goes to the server log only) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it. That answer carries details.keys naming the changed clis.<cli> dotted keys, and the keys are recorded as apply_failed entries in GET /config/pending-restart inside the write lock, before the response is sent (Settings redesign #1519, FR-102).
          */
         put: operations["updateThirdPartyAgentSettings"];
         post?: never;
@@ -1385,6 +1385,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the generic configuration map
+         * @description Returns the full configuration (config.Config serialized; secrets redacted as "[redacted]" placeholders). Read by Settings → Gateway and the SPA's config round-trip.
+         */
+        get: operations["getConfig"];
+        /**
+         * Update the generic configuration (deep merge, one level)
+         * @description Deep-merges the body into config.json (maps merge one level deep; scalars and arrays replace). Refusals, in order, before anything is written: 403 for a credential-like field (providers, or a key whose folded name contains api_key, secret or password — a raw GET /config echo is refused here); 403 for a blocked path (sandbox, security, credentials, gateway.users, agents.list, gateway.dev_mode_bypass, …); 400 for a merged result that changes any effective retention value — "retention settings can only be changed through PUT /api/v1/settings/retention" (Settings redesign #1519, FR-044) — or any effective Performance value — "performance settings can only be changed through PUT /api/v1/performance" (FR-100) — or that does not decode into the configuration ("this write does not decode: …"), or that would change the protected agent defaults (#904). A write that stored config.json and then failed to refresh the live settings answers 500 ErrorResponse with code "saved_not_refreshed" and details.keys naming the dotted keys the body changed — saved, not in use — with the keys recorded as apply_failed entries in GET /config/pending-restart inside the write lock, before the response is sent (FR-102). A failure before the write answers 500 without that code. A successful write answers 200 with the configuration map (the GET shape).
+         */
+        put: operations["updateConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/gateway/rotate-token": {
         parameters: {
             query?: never;
@@ -1413,8 +1437,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get pending restart-gated config changes
-         * @description Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed.
+         * Get pending restart-gated and apply-failed config changes
+         * @description Returns an array of entries: (a) config keys whose persisted (disk) value differs from the boot-time applied value, with reason "restart_required", and (b) hot-reloaded keys whose last save did not apply since boot, with reason "apply_failed". The restart_required key list (RestartGatedKeys): sandbox.mode, sandbox.audit_log, sandbox.allowed_paths, sandbox.workspace_path_guard, session.dm_scope, gateway.host, gateway.port, gateway.public_url, tools.run_in_workspace.warmup_timeout_seconds, sandbox.filesystem_model, tools.exec.enable_proxy, security.platform_auth.issuer, security.platform_auth.client_id, security.platform_auth.instance_id, security.platform_auth.keys. Hot-reload keys (prompt-injection defense level, rate limits, sandbox.auto_approve) and God Mode never appear as restart_required. An empty array means no restart is needed. For an apply_failed entry, persisted_value is read from config.json at request time; a later successful apply of that key, or a restart, removes the entry.
          */
         get: operations["getPendingRestart"];
         put?: never;
@@ -1545,7 +1569,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a credential
-         * @description Removes a credential by key. Returns 404 if not found.
+         * @description Removes a credential by key. Returns 404 if not found. No X-Reauth-Token and no password (Settings redesign #1519, B7 / FR-056; ADR-022 corrected at landing): the existing sign-in, admin and bypass guards and the audit entry stay. Setting (POST /credentials) and rotating (POST /credentials/rotate) still require the reauth token.
          */
         delete: operations["deleteCredential"];
         options?: never;
@@ -4196,7 +4220,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break). "saved_not_refreshed" is a 500 whose write reached disk but whose running settings could not be refreshed; the settings endpoint that answers it is named here: PUT /settings/third-party-agents (existing), PUT /config and PUT /settings/context (Settings redesign #1519, C-6 outcome table). A 500 with this code means saved, not in use — never "not saved".
              * @example csrf_missing
              */
             code?: string;
@@ -4205,7 +4229,7 @@ export interface components {
              * @example provider
              */
             field?: string;
-            /** @description Optional structured details about the error. For `cli_path_invalid` and `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and `check` (the failed check's name). No path is returned; path-check diagnostics are recorded in the server log. */
+            /** @description Optional structured details about the error. For `cli_path_invalid` and `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and `check` (the failed check's name). No path is returned; path-check diagnostics are recorded in the server log. For `saved_not_refreshed`: `keys`, an array of the dotted config keys the body changed (for example ["gateway.log_level", "context.mcp_result_cap"]), which are also recorded as apply_failed entries in GET /config/pending-restart. */
             details?: {
                 [key: string]: unknown;
             };
@@ -10004,20 +10028,28 @@ export interface components {
             rejected_senders?: components["schemas"]["ChannelRejectedSenders"];
         };
         /**
-         * RetentionConfig
-         * @description Session log retention configuration returned by GET /api/v1/security/retention.
+         * RetentionSettings
+         * @description How long chat history and memory are kept (Settings → Data & retention), as stored. Day counts are returned as stored, even outside the ranges that RetentionSettingsUpdate enforces, so the screen can show and repair them. 0 or a negative stored value means "use the default" (the existing config_retention.go accessors) and is returned as the effective default.
          */
-        RetentionConfig: {
-            /**
-             * @description Number of days to retain session logs. 0 means use the system default (90 days). Only present when a custom retention period is set.
-             * @example 30
-             */
+        RetentionSettings: {
+            /** @description Days chat transcripts are kept. Default 90. storage.retention.session_days. */
+            session_days: number;
+            /** @description Days the agents' retrospectives (reflections on past chats) are kept. Default 180. storage.retention.memory_retros_days. */
+            memory_retros_days: number;
+            /** @description Keep memory forever; the nightly sweep deletes no retrospective. Default false. storage.retention.memory_retros_forever (new key). */
+            memory_retros_forever: boolean;
+            /** @description True when config.json sets storage.retention.disabled, an older, config-file-only switch that stops BOTH sweeps. */
+            keep_everything_forever: boolean;
+        };
+        /**
+         * RetentionSettingsUpdate
+         * @description Partial update of the retention settings. At least one field.
+         */
+        RetentionSettingsUpdate: {
             session_days?: number;
-            /**
-             * @description When true, retention sweeps are disabled and session logs are kept forever.
-             * @example false
-             */
-            disabled?: boolean;
+            /** @description Validated whenever sent, also while memory_retros_forever is true. */
+            memory_retros_days?: number;
+            memory_retros_forever?: boolean;
         };
         /**
          * RetentionSweepResult
@@ -10390,24 +10422,29 @@ export interface components {
         };
         /**
          * PendingRestartEntry
-         * @description A single config key that has been written to disk but not yet applied — the running value diverges from the persisted value. Returned in the array from GET /api/v1/config/pending-restart.
+         * @description A single config key that has been written to disk but not yet in force — either a restart-gated key whose saved value differs from the running value (reason "restart_required"), or a hot-reloaded key whose last save did not apply since boot (reason "apply_failed"). Returned in the array from GET /api/v1/config/pending-restart.
          */
         PendingRestartEntry: {
             /**
-             * @description Dotted config key path (e.g. "sandbox.mode", "gateway.port"). Only RestartGatedKeys appear here — hot-reload keys never appear.
+             * @description Dotted config key path (e.g. "sandbox.mode", "gateway.port"). Restart-gated keys: sandbox.mode, sandbox.audit_log, sandbox.allowed_paths, sandbox.workspace_path_guard, session.dm_scope, gateway.host, gateway.port, gateway.public_url, tools.run_in_workspace.warmup_timeout_seconds, sandbox.filesystem_model, tools.exec.enable_proxy, security.platform_auth.issuer, security.platform_auth.client_id, security.platform_auth.instance_id, security.platform_auth.keys. For reason "apply_failed", the key is a hot-reloaded key whose last save did not apply since boot (for example sandbox.prompt_injection_level, a rate limit, or a key named in a saved_not_refreshed answer). God Mode keys never appear.
              * @example sandbox.mode
              */
             key: string;
             /**
-             * @description Value currently on disk (what will be applied after restart).
+             * @description Value currently on disk (what will be applied after restart). Read from config.json at request time.
              * @example enforce
              */
             persisted_value: unknown;
             /**
-             * @description Value currently applied to the running process (boot-time snapshot).
+             * @description Value currently in force. For "restart_required", the boot-time snapshot value; for "apply_failed", the value still in force, or null when unknown.
              * @example permissive
              */
             applied_value: unknown;
+            /**
+             * @description restart_required — a RestartGatedKeys key whose saved value differs from the boot value (today's entries). apply_failed — a hot-reloaded key whose last save did not apply; a later successful apply of that key, or a restart, removes the entry.
+             * @enum {string}
+             */
+            reason: "restart_required" | "apply_failed";
         };
         /**
          * GatewayRestartResponse
@@ -12901,32 +12938,6 @@ export interface components {
              * @example config saved to disk but hot-reload failed; restart the gateway to apply
              */
             warning?: string;
-        };
-        /**
-         * RetentionUpdateResponse
-         * @description Response from PUT /api/v1/security/retention. Returns save status and the currently active retention settings.
-         */
-        RetentionUpdateResponse: {
-            /**
-             * @description True when the configuration was successfully persisted to disk.
-             * @example true
-             */
-            saved: boolean;
-            /**
-             * @description Always false — retention config is hot-reloaded.
-             * @example false
-             */
-            requires_restart: boolean;
-            /**
-             * @description Number of days to retain session logs. 0 = system default (90 days).
-             * @example 30
-             */
-            session_days: number;
-            /**
-             * @description When true, retention sweeps are disabled and session logs are kept forever.
-             * @example false
-             */
-            disabled: boolean;
         };
         /**
          * AgentToolsResponse
@@ -15467,22 +15478,6 @@ export interface components {
             detail?: string;
         };
         /**
-         * RetentionUpdateRequest
-         * @description Request body for PUT /api/v1/security/retention. Partial update — any subset of the two retention fields. Strict type validation rejects JSON strings for session_days, floats with fractional parts for session_days, and non-boolean values for disabled. An empty body {} is accepted as a no-op.
-         */
-        RetentionUpdateRequest: {
-            /**
-             * @description Number of days to retain session logs. 0 means use the system default (90 days). Floats and strings are rejected with 400.
-             * @example 30
-             */
-            session_days?: number;
-            /**
-             * @description When true, retention sweeps are disabled and session logs are kept forever. Strings ("true"/"false") and numbers are rejected with 400.
-             * @example false
-             */
-            disabled?: boolean;
-        };
-        /**
          * McpToolsListResponse
          * @description Response from GET /api/v1/tools/mcp. Returns all configured MCP servers with their status for the agent tool picker UI.
          */
@@ -15880,7 +15875,7 @@ export interface components {
              */
             body?: string;
         };
-        /** @description Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. */
+        /** @description Global memory and recap settings. Backed by agents.defaults.* fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. Retention moved out: chat-history and memory day counts and the Keep-forever switch live only in RetentionSettings (GET/PUT /settings/retention); a body carrying session_days or memory_retros_days is refused with 400. */
         MemorySettings: {
             /**
              * @description Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
@@ -15966,16 +15961,6 @@ export interface components {
              * @example 1
              */
             bootstrap_recap_min_spacing_seconds?: number;
-            /**
-             * @description Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
-             * @example 90
-             */
-            session_days?: number;
-            /**
-             * @description Number of days to retain memory retrospective files. Defaults longer than session retention (180 vs 90) so reflections outlive their transcripts. Maps to storage.retention.memory_retros_days.
-             * @example 180
-             */
-            memory_retros_days?: number;
         };
         /** @description Request body for POST /workspaces */
         WorkspaceCreateRequest: {
@@ -21752,70 +21737,6 @@ export interface operations {
             503: components["responses"]["503BypassActive"];
         };
     };
-    getRetention: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current retention configuration. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RetentionConfig"];
-                };
-            };
-            /** @description Missing or invalid bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    updateRetention: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RetentionConfig"];
-            };
-        };
-        responses: {
-            /** @description Updated retention configuration. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RetentionUpdateResponse"];
-                };
-            };
-            /** @description Type mismatch (float for session_days, string for disabled). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            503: components["responses"]["503BypassActive"];
-        };
-    };
     triggerRetentionSweep: {
         parameters: {
             query?: never;
@@ -22033,7 +21954,7 @@ export interface operations {
                     "application/json": components["schemas"]["MemorySettings"];
                 };
             };
-            /** @description Invalid field value (e.g. negative session_days). */
+            /** @description Invalid field value, or a retired retention field (session_days / memory_retros_days) in the body. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -22043,6 +21964,63 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getRetentionSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current retention settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionSettings"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    updateRetentionSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetentionSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The updated retention settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionSettings"];
+                };
+            };
+            /** @description A field outside its range or type, an unknown or read-only field, or an empty body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503BypassActive"];
         };
     };
     getContextSettings: {
@@ -22090,6 +22068,15 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description Failed before the write (no code), or written and then the live refresh/reload failed (code "saved_not_refreshed", details.keys). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     getThirdPartyAgentSettings: {
@@ -22963,6 +22950,85 @@ export interface operations {
                 };
             };
             500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The configuration map. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    updateConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description The stored configuration after the write. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Retention or Performance guard, protected agent defaults, or a merged result that does not decode. Nothing was written. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Credential-like field or blocked path. Nothing was written. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Failed before the write (no code), or written and then the live refresh failed (code "saved_not_refreshed", details.keys). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     rotateGatewayToken: {
@@ -29188,7 +29254,8 @@ export type GlobalToolPolicies = components["schemas"]["GlobalToolPolicies"];
 export type ChannelId = components["schemas"]["ChannelId"];
 export type ChannelIdentity = components["schemas"]["ChannelIdentity"];
 export type ChannelEntry = components["schemas"]["ChannelEntry"];
-export type RetentionConfig = components["schemas"]["RetentionConfig"];
+export type RetentionSettings = components["schemas"]["RetentionSettings"];
+export type RetentionSettingsUpdate = components["schemas"]["RetentionSettingsUpdate"];
 export type RetentionSweepResult = components["schemas"]["RetentionSweepResult"];
 export type SandboxConfig = components["schemas"]["SandboxConfig"];
 export type SandboxStatus = components["schemas"]["SandboxStatus"];
@@ -29277,7 +29344,6 @@ export type RateLimitsResponse = components["schemas"]["RateLimitsResponse"];
 export type RateLimitsUpdateRequest = components["schemas"]["RateLimitsUpdateRequest"];
 export type RateLimitsUpdateResponse = components["schemas"]["RateLimitsUpdateResponse"];
 export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpdateResponse"];
-export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
 export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
@@ -29370,7 +29436,6 @@ export type ThirdPartyAgentSettings = components["schemas"]["ThirdPartyAgentSett
 export type ThirdPartyAgentSettingsView = components["schemas"]["ThirdPartyAgentSettingsView"];
 export type CliValidateRequest = components["schemas"]["CliValidateRequest"];
 export type CliValidateResponse = components["schemas"]["CliValidateResponse"];
-export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateRequest"];
 export type McpToolsListResponse = components["schemas"]["McpToolsListResponse"];
 export type McpToolCallRequest = components["schemas"]["McpToolCallRequest"];
 export type McpToolCallResponse = components["schemas"]["McpToolCallResponse"];

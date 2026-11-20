@@ -1,25 +1,51 @@
 title: PendingRestartEntry
 description: >
-  A single config key that has been written to disk but not yet applied —
-  the running value diverges from the persisted value. Returned in the
+  A single config key that has been written to disk but not yet in force —
+  either a restart-gated key whose saved value differs from the running
+  value (reason "restart_required"), or a hot-reloaded key whose last save
+  did not apply since boot (reason "apply_failed"). Returned in the
   array from GET /api/v1/config/pending-restart.
 type: object
 required:
   - key
   - persisted_value
   - applied_value
+  - reason
 properties:
   key:
     type: string
     description: >
       Dotted config key path (e.g. "sandbox.mode", "gateway.port").
-      Only RestartGatedKeys appear here — hot-reload keys never appear.
+      Restart-gated keys: sandbox.mode, sandbox.audit_log,
+      sandbox.allowed_paths, sandbox.workspace_path_guard, session.dm_scope,
+      gateway.host, gateway.port, gateway.public_url,
+      tools.run_in_workspace.warmup_timeout_seconds,
+      sandbox.filesystem_model, tools.exec.enable_proxy,
+      security.platform_auth.issuer, security.platform_auth.client_id,
+      security.platform_auth.instance_id, security.platform_auth.keys.
+      For reason "apply_failed", the key is a hot-reloaded key whose last
+      save did not apply since boot (for example
+      sandbox.prompt_injection_level, a rate limit, or a key named in a
+      saved_not_refreshed answer). God Mode keys never appear.
     example: sandbox.mode
   persisted_value:
     description: >
-      Value currently on disk (what will be applied after restart).
+      Value currently on disk (what will be applied after restart). Read
+      from config.json at request time.
     example: enforce
   applied_value:
     description: >
-      Value currently applied to the running process (boot-time snapshot).
+      Value currently in force. For "restart_required", the boot-time
+      snapshot value; for "apply_failed", the value still in force, or
+      null when unknown.
     example: permissive
+  reason:
+    type: string
+    enum:
+      - restart_required
+      - apply_failed
+    description: >
+      restart_required — a RestartGatedKeys key whose saved value differs
+      from the boot value (today's entries). apply_failed — a
+      hot-reloaded key whose last save did not apply; a later successful
+      apply of that key, or a restart, removes the entry.
