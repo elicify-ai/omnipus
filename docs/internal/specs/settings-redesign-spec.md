@@ -1,4 +1,4 @@
-Status: In review (round-2 fix applied 2026-11-20; final fix round)
+Status: Approved
 
 ADR: none — no open design decision. The founder settled the design in the wireframe answers (S-Q1 to S-Q14, #1096 Q1 to Q4). The contract shapes this spec needs, including the B4 choice, are architect decisions recorded in "Contract Changes" below. One existing ADR needs a dated correction because of S-Q11 B: [ADR-022 — Re-auth Consent Gate: Credential-Vault Scope Expansion to v0.1.0](../architecture/ADR-022-credential-vault-reauth.md) (see FQ-2 and DOC-012).
 
