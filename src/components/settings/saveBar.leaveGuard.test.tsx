@@ -157,10 +157,13 @@ describe('FR-016/FR-019 — every way out with an unsaved draft asks first', () 
     // unchanged (FR-014) — the navigation must not have landed.
     await userEvent.click(screen.getByRole('button', { name: 'Stay' }))
     expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
-    expect(router.state.location.pathname).toBe(
-      '/settings',
+    // The message rides expect()'s own second argument — the matchers take
+    // one argument, and the two-argument form fails `npm run typecheck`
+    // against the frontend branch (TS2554, item 11 of the dispatch).
+    expect(
+      router.state.location.pathname,
       'Stay must keep the address (FR-014) — no silent drop',
-    )
+    ).toBe('/settings')
     expect(screen.getByLabelText('Log level')).toHaveValue('debug')
   })
 
