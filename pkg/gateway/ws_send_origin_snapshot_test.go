@@ -286,7 +286,7 @@ func soSV19Control(t *testing.T) {
 	drainAdmissionOneShot(t, conn)
 	b := s.mintChat(t, conn, soKeyB, "SV-19 control idle chat")
 	soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b, Origin: soChatOrigin(b), ClientFrameId: strPtr("so-19ctl")})
-	frames := soSettle(t, conn)
+	frames := soSettleThen(t, conn, soRequesterWindow)
 	require.Contains(t, soTypes(frames), "command_received", "SV-19 control: accepted command must actually run")
 	for _, f := range frames {
 		require.NotEqual(t, "session_state", f.Type, "SV-19 control: an ACCEPTED cancel gets no refusal snapshot (got %s)", f.Raw)
@@ -340,7 +340,7 @@ func soDecisiveSnapshotOrder(t *testing.T, beforeHold bool) {
 		soSnapshotHooks(t, nil, hook, nil)
 	}
 	soSend(t, r.conn, generated.CancelFrame{Type: "cancel", SessionId: r.sid})
-	frames := soSettle(t, r.conn)
+	frames := soSettleThen(t, r.conn, soRequesterWindow)
 	require.Equal(t, 1, hookCalls.load(), "instrument: decisive hook must actually execute")
 	want := []string{"error", "session_state", "done"}
 	if beforeHold {

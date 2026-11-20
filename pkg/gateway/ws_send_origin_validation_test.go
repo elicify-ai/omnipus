@@ -210,10 +210,31 @@ func soRunRow(t *testing.T, s *sendOriginSrv, row soRowFrames, n int) (frames []
 	}
 	for _, raw := range row.build(sid) {
 		soSend(t, conn, raw)
-		frames = append(frames, soSettle(t, conn)...)
+		// A message is accepted asynchronously (soSettle doc), so it keeps its
+		// original horizon; a cancel or redirect is refused or accepted
+		// synchronously in the read loop.
+		if soRowFrameType(t, raw) == "message" {
+			frames = append(frames, soSettleThen(t, conn, soRefusalWindow)...)
+		} else {
+			frames = append(frames, soSettle(t, conn)...)
+		}
 	}
 	row.check(t, s, frames, sid, before)
 	return frames, sid, before
+}
+
+// soRowFrameType reads a row frame's wire type. A row frame that is not a
+// JSON object (a malformed-frame row) is treated as a message: the slower,
+// stronger observation.
+func soRowFrameType(t *testing.T, raw []byte) string {
+	t.Helper()
+	var head struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil || head.Type == "" {
+		return "message"
+	}
+	return head.Type
 }
 
 // soRefusalOracle is the oracle shared by the refusal rows that echo the

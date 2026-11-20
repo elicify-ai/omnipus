@@ -270,29 +270,22 @@ const soBarrierGap = 110 * time.Millisecond
 // handling queued. So the frames before that pong are the complete synchronous
 // reply — refusals, old-tab notices, refusal snapshots, receipts, the first
 // cancel stage, cancel_idle, and anything a hub publish already returned —
-// and the pong itself is not returned. Use soWindow instead when a check needs
-// frames produced later by a running turn (tokens, done, a forced stop).
-// A missing pong fails the test instead of passing an empty window.
+// and the pong itself is not returned. A missing pong fails the test instead
+// of passing an empty window.
 //
-// The pong fences only the read loop, not independent producers (a timer, a
-// goroutine, a turn's hub publish). Every caller counts frames for an
-// exactly-once or absence oracle, so after the pong soSettle keeps observing
-// for soQuietTail and returns those frames too: a stray duplicate receipt,
-// notice or snapshot emitted up to soQuietTail after the pong (so at least
-// that long after the triggering frame) is still counted. Measured coverage:
-// a duplicate redirect receipt scheduled 250 ms or 750 ms after the real one
-// is caught; one scheduled later than the tail is not (the replaced 4 s
-// windows covered up to about 4 s).
+// The pong fences ONLY the read loop, never an independent producer (a timer,
+// a goroutine such as an accepted redirect's redirectOrdinarySession, a turn's
+// hub publish, a message's post-persist echo/status). Use soSettle alone only
+// where every frame the check counts or excludes is produced synchronously by
+// the read loop or by the test itself and nothing else can still emit: a
+// REFUSED cancel/redirect (an accepted command would show synchronously as
+// command_received, the first cancel stage or cancel_idle; the refusal path
+// starts no goroutine) and a test's own synchronous hub publish. Everywhere an
+// asynchronous producer is realistic — an accepted command, a running or
+// completing turn, any message send (acceptance surfaces asynchronously after
+// PublishInbound) — use soSettleThen with the site's original observation
+// horizon.
 func soSettle(t *testing.T, conn *websocket.Conn) []soFrame {
-	t.Helper()
-	out := soSettleBarrier(t, conn)
-	return append(out, soWindow(t, conn, soQuietTail)...)
-}
-
-// soQuietTail is soSettle's bounded negative observation after the barrier.
-const soQuietTail = 1 * time.Second
-
-func soSettleBarrier(t *testing.T, conn *websocket.Conn) []soFrame {
 	t.Helper()
 	if stored, ok := soBarrierPings.Load(conn); ok {
 		last, isTime := stored.(time.Time)
@@ -327,6 +320,18 @@ func soSettleBarrier(t *testing.T, conn *websocket.Conn) []soFrame {
 			return nil
 		}
 	}
+}
+
+// soSettleThen is soSettle followed by a full negative observation of horizon
+// AFTER the pong, returning every frame from both. horizon is the site's
+// original window (soRequesterWindow, soRefusalWindow, ...), now measured from
+// the pong instead of from the send, so it covers at least what the original
+// window covered: a stray asynchronous duplicate or leak emitted up to horizon
+// after the triggering frame is still counted.
+func soSettleThen(t *testing.T, conn *websocket.Conn, horizon time.Duration) []soFrame {
+	t.Helper()
+	out := soSettle(t, conn)
+	return append(out, soWindow(t, conn, horizon)...)
 }
 
 func soTypes(frames []soFrame) []string {
@@ -373,7 +378,7 @@ func TestCheckSendOrigin(t *testing.T) {
 		a := s.mintChat(t, conn, soKeyA, "check-mismatch other")
 		before := s.transcriptLen(t, b)
 		soSend(t, conn, soMessage(&b, soChatOrigin(a), "so-mismatch-1", "borrowed origin"))
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, 4*time.Second)
 		refused := soRefusedFrame(t, frames, "4.3.1 kind chat, target != origin.session_id")
 		require.Equal(t, "wrong_chat", refused.Reason)
 		require.Equal(t, "message", refused.RefusedFrame, "refused_frame must name the message")
@@ -403,7 +408,7 @@ func TestCheckSendOrigin(t *testing.T) {
 				bindIdleCancelFixture(t, conn, b)
 				before := s.transcriptLen(t, b)
 				soSend(t, conn, row.raw)
-				frames := soSettle(t, conn)
+				frames := soSettleThen(t, conn, 4*time.Second)
 				refused := soRefusedFrame(t, frames, "P1a row: "+row.name)
 				require.Equal(t, "origin_malformed", refused.Reason, "P1a row %s: wrong reason (frames: %v)", row.name, soTypes(frames))
 				require.Equal(t, "message", refused.RefusedFrame, "P1a row %s: wrong refused_frame", row.name)
@@ -446,7 +451,7 @@ func TestCheckSendOrigin(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		sv9 := s.mintChat(t, conn, soKeyA, "SV-9 mint")
 		soSend(t, conn, soMessage(&sv9, soNewChatOrigin(soKeyB), "so-sv9-1", "borrowed creation"))
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, 4*time.Second)
 		refused := soRefusedFrame(t, frames, "SV-9 (origin {new_chat, K2} against S keyed K1)")
 		require.Equal(t, "wrong_chat", refused.Reason)
 	})
@@ -459,7 +464,7 @@ func TestCheckSendOrigin(t *testing.T) {
 		meta, err := s.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
 		require.NoError(t, err, "SETUP: keyless chat")
 		soSend(t, conn, soMessage(&meta.ID, soNewChatOrigin(soKeyB), "so-keyless-1", "key against keyless"))
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, 4*time.Second)
 		refused := soRefusedFrame(t, frames, "SV-9 second row (S with no key)")
 		require.Equal(t, "wrong_chat", refused.Reason)
 	})

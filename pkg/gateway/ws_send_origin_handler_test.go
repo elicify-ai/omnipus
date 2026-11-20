@@ -223,7 +223,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		b := s.mintChat(t, conn, soKeyB, "SV-4 mint")
 		soSend(t, conn, soMessage(&b, nil, "so-sv4-m1", "old tab send"))
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, soRequesterWindow)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab message must get the OUTDATED error (window: %v)", soTypes(frames))
 		require.NotNil(t, errs[0].SessionId, "old-tab refusal must name its exact target")
@@ -240,7 +240,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		conn := s.dialBrowserConn(t)
 		drainAdmissionOneShot(t, conn)
 		soSend(t, conn, soMessage(nil, nil, "so-sv4-first", "old tab first send"))
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, soRequesterWindow)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab first message must get the not_saved reply (window: %v)", soTypes(frames))
 		require.Nil(t, errs[0].SessionId, "SV-4: the first-message reply carries no session_id")
@@ -290,7 +290,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		b := s.mintChat(t, conn, soKeyB, "SV-4 no-id mint")
 		raw := []byte(`{"type":"message","agent_id":"mia","session_id":"` + b + `","content":"no id"}`)
 		soSend(t, conn, raw)
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, soRequesterWindow)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the no-id old-tab message must still get its notice (window: %v)", soTypes(frames))
 		require.NotNil(t, errs[0].ClientMessageId, "SV-4: the synthetic id is present")
@@ -308,7 +308,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		soSend(t, conn, []byte(`{"type":"message","agent_id":"mia","session_id":7,"client_message_id":"so-m8b","content":"x"}`))
 		// M-9: absent target and no valid id.
 		soSend(t, conn, []byte(`{"type":"message","agent_id":"mia","content":"no target no id"}`))
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, 2*time.Second)
 		require.Empty(t, frames, "M-8b/M-9: an unroutable old-tab frame gets ZERO replies (got %v)", soTypes(frames))
 	})
 }
@@ -401,7 +401,7 @@ func TestSendOriginHandler_SV18_ReceiptObligationTable(t *testing.T) {
 			drainAdmissionOneShot(t, conn)
 			b := s.mintChat(t, conn, soKeyB, "SV-18 mint "+tc.name)
 			soSend(t, conn, tc.send(b))
-			frames := soSettle(t, conn)
+			frames := soSettleThen(t, conn, soRequesterWindow)
 			receipts := 0
 			receiptIdx := -1
 			effectIdx := -1
