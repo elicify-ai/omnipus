@@ -466,30 +466,16 @@ func TestSetCredential_WithReAuth_Succeeds(t *testing.T) {
 	assert.Equal(t, "hunter2", val)
 }
 
-// TestDeleteCredential_RequiresReAuth proves a credential-vault delete (DELETE
-// /api/v1/credentials/{key}) carrying the admin user but no re-auth consent
-// token is rejected (403). Deleting a stored secret mid-session can revoke a
-// channel or provider, so it is gated just like the write.
-func TestDeleteCredential_RequiresReAuth(t *testing.T) {
-	withEdition(t, config.EditionCore) // local mode: requireReAuth performs the real token check
-	api := newCredVaultReAuthTestAPI(t)
-	// Seed a credential so the delete would otherwise succeed — proving the 403
-	// is from the gate, not a missing-key 404.
-	require.NoError(t, api.credStore.Set("DOOMED_KEY", "secret"))
-
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/credentials/DOOMED_KEY", nil)
-	r = withReAuthAdminNoToken(r)
-	w := httptest.NewRecorder()
-	api.HandleCredentials(w, r)
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"credential DELETE without a re-auth token must be 403; body=%s", w.Body.String())
-	assert.Contains(t, strings.ToLower(w.Body.String()), "re-typing your password")
-
-	// The gate must have fired BEFORE the delete — the seeded key still exists.
-	keys, err := api.credStore.List()
-	require.NoError(t, err)
-	assert.Contains(t, keys, "DOOMED_KEY", "the gate must not have deleted the credential")
-}
+// TestDeleteCredential_RequiresReAuth was REPLACED per the Settings redesign
+// spec's regression table (C-5 / B7, founder S-Q11 B): `DELETE
+// /credentials/{key}` no longer calls requireReAuth (FR-056 — it keeps
+// withAuth, the admin/bypass guards and the audit entry; set and rotate keep
+// the token). The replacing regression test is
+// rest_credentials_delete_gate_test.go::TestDeleteCredential_NoReauthNeeded
+// (with TestSetCredential_StillNeedsReauth pinning the kept gate), so the old
+// 403-without-token assertion is retired WITH the behaviour it pinned — not
+// weakened: deleting a stored key now asks the screen for a confirm, and the
+// server change that allows that is the spec's accepted decision (FQ-2).
 
 // TestDeleteCredential_WithReAuth_Succeeds proves the same DELETE succeeds once
 // a valid consent token is supplied — the credential is removed and 200 returned.
