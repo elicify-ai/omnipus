@@ -1276,6 +1276,10 @@ Test names are placeholders; qa-lead names the real tests in RED. **Revision 7 m
 | 32 | 64 MiB + 1 byte sent chunked, no declared length | Limit + 1, unknown length | 413 `package_too_large` | BDD: Upload size through the real route |
 | 33 | **[S1b]** External worker with `memory_enabled` false | Runtime rule (`agentmutation.ValidateFields`) | 422 `element_not_creatable`, `field: memory_enabled` | BDD: [S1b] External-worker fields the runtime does not support |
 | 34 | **[S1b]** External worker with `context_window_override` 64000 | Runtime rule | 422 `element_not_creatable`, `field: context_window_override` | same |
+| 35 | **[S1b]** External worker with non-empty `skills`, installed or absent on the target | Raw-record runtime rule before mapping | 422 `element_not_creatable`, `field: skills`; a missing skill is refused, not silently dropped | same |
+| 36 | **[S1b]** External worker with non-empty `fallback_models` | Raw-record runtime rule before mapping | 422 `element_not_creatable`, `field: fallback_models` | same |
+| 37 | **[S1b]** External worker with `model_params`, including an empty object | Raw-record runtime rule before mapping | 422 `element_not_creatable`, `field: model_params` | same |
+| 38 | **[S1b]** External worker with non-empty `reasoning_effort` | Raw-record runtime rule before mapping | 422 `element_not_creatable`, `field: reasoning_effort`; same external-CLI effort refusal as `create_agent` | same |
 
 #### Dataset D2: Entry paths and types (universal checks)
 
@@ -1564,7 +1568,7 @@ Revision-6 rows 5–12 (Delete-agent recovery, session paging, second-workspace 
 - **FR-042**: Apply MUST re-run the preview checks on the current state before its first write ("Preview freshness").
 - **FR-043** **[S1b]**: An imported external worker's result MUST carry the existing "cannot run" text when its tool has no program set, and `runtime_settings_removed` pointing to Edit → Runtime for environment overrides and additional arguments.
 - **FR-044**: An upload that finds an orphan staging with an unfinished journal MUST warn `unfinished_import_found`, naming the agent ID, the staging folder and the recovery section (moved from S1b to S1a in revision 3). Since revision 7 this only happens when start-up recovery could not finish that journal.
-- **FR-047**: Import MUST store `voice`, `memory_enabled` and `context_window_override` with the `create_agent` tool's rules: first its runtime check (`agentmutation.ValidateFields`, which refuses `memory_enabled` and `context_window_override` for external workers **[S1b]**), then the shared applier (`applySharedConfigArgs`). REST create's behaviour MUST stay unchanged.
+- **FR-047**: Import MUST use the `create_agent` tool's runtime rules on the **raw record, before import mapping**, then apply supported `voice`, `memory_enabled` and `context_window_override` with the shared applier (`applySharedConfigArgs`). For external workers **[S1b]**, the runtime check (`agentmutation.ValidateFields`) MUST refuse non-empty `skills`, `fallback_models`, `reasoning_effort`, `mcp_servers` (stored as `tools.mcp.servers`) and `voice`, non-null `model_params` (including an empty object), and supplied `memory_enabled` or `context_window_override`, with 422 `element_not_creatable` naming the field. The same runtime refusal as `create_agent` applies; missing skills MUST NOT be silently dropped before this check. Native-agent support and REST create's behaviour MUST stay unchanged.
 - **FR-048**: Every field name of the agent tools' create and update lists, the REST create schemas and `AgentUpdateRequest` MUST resolve, through the alias table, to Field mapping rows (nested leaves included), or be a listed control name with its decision (`TestImportFieldCoverage`). No unlisted ignore set.
 
 **Access**
