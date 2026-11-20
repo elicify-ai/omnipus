@@ -118,7 +118,7 @@ Cancellation is not proof that an action never happened: a tool may have acted b
 |---|---|
 | Search matches words, not meaning | A note saved as "invoice" will not surface for "billing" unless the words overlap. There is no meaning-based search. |
 | No memory browser | No screen in the app lists saved notes, and no tool deletes one. To remove a note, delete its file under `~/.omnipus/`. |
-| Retrospectives expire | A nightly clean-up deletes retrospectives older than **Keep memory for** in Settings → Data & retention: 180 days by default, from 1 to 730 days. With **Keep memory forever** on, nothing is deleted. Recall reads reflections as far back as they are kept. |
+| Retrospectives expire | A nightly clean-up deletes retrospectives older than **Keep memory for** in Settings → Data & retention: 180 days by default, from 1 to 730 days. With **Keep forever** on, nothing is deleted. Recall reads reflections as far back as they are kept. |
 | Transcripts expire | Chat history is kept 90 days by default (Settings → Data & retention, 1 to 365 days). The sweep removes eligible transcript files by file-modification age, not a strict per-message read cutoff. A main chat's current transcript file is protected, while eligible older rolled files can expire. `recall_conversation` can read content that remains in the archive, including content older than 90 days; it cannot recover files the sweep removed. |
 | Saved notes never expire | Nothing prunes them; a workspace in use for years keeps every note. |
 | Writes are rate-limited | An agent can save at most 60 notes per minute, and one caller at most 600. Beyond that the save is rejected and the agent is told to wait. |

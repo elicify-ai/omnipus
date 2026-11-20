@@ -20,7 +20,7 @@ A changed value is not stored until you press **Save changes**. As soon as a val
 
 - Leaving a section, or following a link elsewhere in the app, with unsaved changes asks **Leave without saving 2 changes?** (with your number) first. **Stay** keeps you where you were; **Leave** drops the changes. On a phone the **Settings** back button asks the same. Closing or reloading the tab gets the browser's own question.
 - Settings marked **Password** ask for your password once per Save, listing what the Save stores. If you cancel, nothing is stored and your changes stay on the page. When you sign in through omnipus.ai, a confirmation replaces the password field.
-- Settings marked **Needs restart** are stored at once but used only after a gateway restart. Right after such a Save, **Restart now?** offers to restart. **Later** keeps a banner at the top of every section, "N saved changes wait for a gateway restart", with **Restart now** and **Show changes** (each change with its running and saved value; "saved, not applied" means the gateway could not apply it).
+- Settings marked **Needs restart** are stored at once but used only after a gateway restart. Right after such a Save, **Restart now?** offers to restart. **Later** keeps a banner at the top of every section, "N saved changes wait for a gateway restart", with **Restart now** and **Show changes** (each change with the value running now and the saved value it gets after the restart; "saved, not applied" means the gateway could not apply it).
 
 A Save ends in one of four ways, shown next to each setting:
 
@@ -30,6 +30,8 @@ A Save ends in one of four ways, shown next to each setting:
 | **Saved, but not in use yet. Restart the gateway to apply it.** | Stored; the running gateway still uses the old value |
 | An error under the setting, and "N changes could not be saved" | Nothing was stored for that setting; your change stays on the page |
 | "N changes may not have been saved", with **Retry** | The answer was lost; Settings checks what was stored and tells you |
+
+If part of a section cannot be loaded, that part shows what could not be loaded, the server's reason and **Retry**, which loads only that part again. Only that part is blocked from saving; your changes elsewhere in the section stay and still save. A value stored outside its range (for example by editing the configuration file by hand) is shown as stored and marked; the Save bar then asks you to fix it before saving.
 
 **This setting was changed somewhere else while you were saving** means another tab or program stored a different value at the same time. The message names the value that is stored now.
 
@@ -399,14 +401,14 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 ## Data & retention
 
-Two settings decide how long things are kept. Both are cleaned up each night.
+**How long data is kept** holds two settings. Both are cleaned up each night.
 
 | Setting | Range | Default |
 |---|---|---|
-| Keep chat history for (days) | 1 to 365 | 90 |
-| Keep memory for (days) | 1 to 730 | 180 |
+| Keep chat history for | 1 to 365 days | 90 |
+| Keep memory for | 1 to 730 days | 180 |
 
-**Keep memory forever** stops the nightly clean-up of memory (the agents' reflections on past chats); the day count is kept for when you switch it off. If `config.json` sets the older `storage.retention.disabled` switch, nothing is deleted at all; the section says so and the values cannot be changed until that line is removed.
+**Keep forever**, next to the memory day count, stops the nightly clean-up of memory (the agents' reflections on past chats); the day count is switched off and kept for later. When you turn it off again, older reflections are deleted at the next nightly clean-up. If `config.json` sets the older `storage.retention.disabled` switch, nothing is deleted at all: the section says chat history and memory are both kept forever because of a setting in the configuration file, and that the day counts apply once it is removed. You can still change the day counts.
 
 These values are written only through Settings (or `GET` / `PUT /api/v1/settings/retention`); a whole-configuration `PUT /api/v1/config` that would change them is refused.
 
