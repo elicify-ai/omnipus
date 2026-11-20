@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -42,24 +44,69 @@ const (
 	applyFailedSourceRateLimits applyFailedSource = "rate_limits"
 )
 
+// configKeyPath is one config key as its path segments. The segments are
+// kept separate so a literal member name that contains dots (stored verbatim
+// by the generic config write) is never re-read as a nested path (S2); the
+// dotted form is only the display key on the wire.
+type configKeyPath []string
+
+// String is the dotted display key (details.keys, pending-restart key).
+func (p configKeyPath) String() string { return strings.Join(p, ".") }
+
+// identity is an unambiguous map key for p: each segment Go-quoted, so no
+// member name can make two different paths collide.
+func (p configKeyPath) identity() string {
+	quoted := make([]string, len(p))
+	for i, seg := range p {
+		quoted[i] = strconv.Quote(seg)
+	}
+	return strings.Join(quoted, ",")
+}
+
+// canonicalConfigKeys turns code-defined canonical dotted keys (fixed
+// literals such as "sandbox.prompt_injection_level") into paths. Never use it
+// on member names read from a request or from config.json.
+func canonicalConfigKeys(dotted ...string) []configKeyPath {
+	out := make([]configKeyPath, 0, len(dotted))
+	for _, d := range dotted {
+		out = append(out, configKeyPath(strings.Split(d, ".")))
+	}
+	return out
+}
+
+// dottedConfigKeys returns the display keys of paths, never nil.
+func dottedConfigKeys(paths []configKeyPath) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, p.String())
+	}
+	return out
+}
+
+// applyFailedEntry is one listed key and the apply path that failed for it.
+type applyFailedEntry struct {
+	path   configKeyPath
+	source applyFailedSource
+}
+
 // applyFailedRegistry is the zero-value-usable set of failed-apply keys.
 type applyFailedRegistry struct {
 	mu      sync.Mutex
-	entries map[string]applyFailedSource
+	entries map[string]applyFailedEntry
 }
 
 // record adds keys whose last save did not apply through source.
-func (r *applyFailedRegistry) record(source applyFailedSource, keys []string) {
+func (r *applyFailedRegistry) record(source applyFailedSource, keys []configKeyPath) {
 	if len(keys) == 0 {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.entries == nil {
-		r.entries = make(map[string]applyFailedSource)
+		r.entries = make(map[string]applyFailedEntry)
 	}
 	for _, k := range keys {
-		r.entries[k] = source
+		r.entries[k.identity()] = applyFailedEntry{path: append(configKeyPath(nil), k...), source: source}
 	}
 }
 
@@ -67,23 +114,34 @@ func (r *applyFailedRegistry) record(source applyFailedSource, keys []string) {
 func (r *applyFailedRegistry) clearSource(source applyFailedSource) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for k, s := range r.entries {
-		if s == source {
-			delete(r.entries, k)
+	for id, e := range r.entries {
+		if e.source == source {
+			delete(r.entries, id)
 		}
 	}
 }
 
-// keys returns the listed keys, sorted.
-func (r *applyFailedRegistry) keys() []string {
+// keys returns the listed keys, sorted by display key then identity.
+func (r *applyFailedRegistry) keys() []configKeyPath {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]string, 0, len(r.entries))
-	for k := range r.entries {
-		out = append(out, k)
+	out := make([]configKeyPath, 0, len(r.entries))
+	for _, e := range r.entries {
+		out = append(out, append(configKeyPath(nil), e.path...))
 	}
-	sort.Strings(out)
+	sortConfigKeyPaths(out)
 	return out
+}
+
+// sortConfigKeyPaths orders paths by display key, ties by identity.
+func sortConfigKeyPaths(paths []configKeyPath) {
+	sort.Slice(paths, func(i, j int) bool {
+		si, sj := paths[i].String(), paths[j].String()
+		if si != sj {
+			return si < sj
+		}
+		return paths[i].identity() < paths[j].identity()
+	})
 }
 
 // savedNotRefreshedText is the 500 text for a write that reached config.json
@@ -95,12 +153,9 @@ const (
 
 // writeSavedNotRefreshed answers 500 ErrorResponse with code
 // saved_not_refreshed and details.keys (FR-102).
-func writeSavedNotRefreshed(w http.ResponseWriter, text string, keys []string) {
-	if keys == nil {
-		keys = []string{}
-	}
+func writeSavedNotRefreshed(w http.ResponseWriter, text string, keys []configKeyPath) {
 	code := savedNotRefreshedCode
-	details := map[string]any{"keys": keys}
+	details := map[string]any{"keys": dottedConfigKeys(keys)}
 	writeJSON(w, http.StatusInternalServerError, gen.ErrorResponse{Error: text, Code: &code, Details: &details})
 }
 
@@ -109,7 +164,9 @@ func writeSavedNotRefreshed(w http.ResponseWriter, text string, keys []string) {
 // (configRefreshError), the keys changedKeys reports are recorded as
 // apply_failed while configMu is still held — before the caller answers.
 // changedKeys is called only after mutate ran.
-func (a *restAPI) safeUpdateConfigJSONRecorded(mutate func(m map[string]any) error, changedKeys func() []string) error {
+func (a *restAPI) safeUpdateConfigJSONRecorded(
+	mutate func(m map[string]any) error, changedKeys func() []configKeyPath,
+) error {
 	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
@@ -121,13 +178,14 @@ func (a *restAPI) safeUpdateConfigJSONRecorded(mutate func(m map[string]any) err
 	return err
 }
 
-// changedConfigKeys returns the dotted leaf paths whose value differs between
+// changedConfigKeys returns the leaf paths whose value differs between
 // before and after (objects are walked, also when only one side has one; any
-// other value is a leaf).
-func changedConfigKeys(before, after map[string]any) []string {
-	var out []string
-	var walk func(prefix string, b, a map[string]any)
-	walk = func(prefix string, b, a map[string]any) {
+// other value is a leaf). Each member name is one segment, whatever it
+// contains, so a literal dotted name stays a single segment (S2).
+func changedConfigKeys(before, after map[string]any) []configKeyPath {
+	var out []configKeyPath
+	var walk func(prefix configKeyPath, b, a map[string]any)
+	walk = func(prefix configKeyPath, b, a map[string]any) {
 		seen := make(map[string]struct{}, len(a)+len(b))
 		for k := range a {
 			seen[k] = struct{}{}
@@ -136,10 +194,7 @@ func changedConfigKeys(before, after map[string]any) []string {
 			seen[k] = struct{}{}
 		}
 		for k := range seen {
-			path := k
-			if prefix != "" {
-				path = prefix + "." + k
-			}
+			path := append(append(configKeyPath(nil), prefix...), k)
 			bv, bok := b[k]
 			av, aok := a[k]
 			bm, bIsMap := bv.(map[string]any)
@@ -165,8 +220,8 @@ func changedConfigKeys(before, after map[string]any) []string {
 			}
 		}
 	}
-	walk("", before, after)
-	sort.Strings(out)
+	walk(nil, before, after)
+	sortConfigKeyPaths(out)
 	return out
 }
 

@@ -121,7 +121,7 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	var previous map[string]config.ThirdPartyCLIConfig
-	var written []string
+	var written []configKeyPath
 	err = a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
 		previous = readThirdPartyRows(m)
 		before, copyErr := deepCopyJSONMap(m)
@@ -131,7 +131,7 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 		writeThirdPartyRows(m, rows)
 		written = changedConfigKeys(thirdPartySubtree(before), thirdPartySubtree(m))
 		return nil
-	}, func() []string { return written })
+	}, func() []configKeyPath { return written })
 	var refreshErr *configRefreshError
 	if err != nil && !errors.As(err, &refreshErr) {
 		logsafeError("rest: PUT /settings/third-party-agents: failed", "error", err)

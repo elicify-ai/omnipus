@@ -253,12 +253,12 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		writeContextSection(ctxSection, next)
 		return nil
-	}, func() []string { return written })
+	}, func() []configKeyPath { return canonicalConfigKeys(written...) })
 	var refreshErr *configRefreshError
 	switch {
 	case errors.As(err, &refreshErr):
 		logsafeError("rest: PUT /settings/context: saved but not refreshed", "error", err)
-		writeSavedNotRefreshed(w, savedNotRefreshedText, written)
+		writeSavedNotRefreshed(w, savedNotRefreshedText, canonicalConfigKeys(written...))
 		return
 	case err != nil:
 		slog.Error("rest: PUT /settings/context: failed", "error", err)
@@ -273,8 +273,8 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 	// write lock, so this record is made after it, not inside it.
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("rest: PUT /settings/context: reload failed", "error", err)
-		a.applyFailed.record(applyFailedSourceRefresh, written)
-		writeSavedNotRefreshed(w, savedNotRefreshedText, written)
+		a.applyFailed.record(applyFailedSourceRefresh, canonicalConfigKeys(written...))
+		writeSavedNotRefreshed(w, savedNotRefreshedText, canonicalConfigKeys(written...))
 		return
 	}
 
