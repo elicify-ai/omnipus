@@ -37,13 +37,29 @@ var continueSteeredTurnBeforeRunTestHook func(sessionID string, generation int)
 // dispatch, but reconstructs a fresh turnState for every continuation. The
 // caller performs the completion tail once, after this returns, using the
 // final attempted turn's state/result/error.
+//
+// #1895: an external-CLI turn a steer interrupt ended holds back its done
+// (deferExternalLiveDoneForResume). On every return, the final attempted
+// turn's held done is sent here, so a drain that resumes nothing still closes
+// that turn's live view; a resumed run's own live view closes the chat
+// otherwise. A done that cannot be finalized fails the turn, exactly as in
+// runExternalCLISteeredTurn.
 func (al *AgentLoop) drainSteeredTurn(
 	ctx context.Context,
 	snapshot *session.LifecycleRecord,
 	initialTS *turnState,
 	initialResult turnResult,
 	initialErr error,
-) (*turnState, turnResult, error) {
+) (finalTS *turnState, finalResult turnResult, finalErr error) {
+	defer func() {
+		if liveErr := al.settleDeferredExternalLiveDone(ctx, finalTS); liveErr != nil {
+			finalErr = errors.Join(finalErr, liveErr)
+			finalResult.status, finalResult.turnFailed = TurnEndStatusError, true
+			if finalResult.finalContent == "" {
+				finalResult.finalContent = liveErr.Error()
+			}
+		}
+	}()
 	lastTS, lastResult, lastErr := initialTS, initialResult, initialErr
 	// Founder Q2=A: this bounded drain is the original admitted job. Keep
 	// its selected immutable claim, even if the session now has a replacement.

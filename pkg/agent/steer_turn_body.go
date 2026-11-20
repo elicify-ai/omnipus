@@ -186,6 +186,9 @@ func runtimeLabel(is3P bool) string {
 func (al *AgentLoop) runExternalCLISteeredTurn(ctx context.Context, rec *session.LifecycleRecord, ts *turnState) (result turnResult, runErr error) {
 	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer func() {
+		if al.deferExternalLiveDoneForResume(ts, rec.SessionID, runErr) {
+			return
+		}
 		if liveErr := al.finishExternalLiveView(ctx, ts, runErr); liveErr != nil {
 			// A done that could not be finalized is a failed turn, as on the
 			// native path (#1178); never only a log line.
