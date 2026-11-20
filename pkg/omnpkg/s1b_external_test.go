@@ -95,7 +95,7 @@ func TestS1bExternalExport_StripsRuntimeAndListsSecretNames(t *testing.T) {
 				assert.Equal(t, omnpkg.FileInfo{SHA256: sha256hex(body), Size: int64(len(body))}, manifest.Files[path], path)
 			}
 			for _, forbidden := range []string{"sk-TEST-123", "sk-TEST-456", "/source-host/private/codex"} {
-				assert.NotContains(t, string(out.Bytes()), forbidden, "secret/path in compressed archive")
+				assert.NotContains(t, out.String(), forbidden, "secret/path in compressed archive")
 				for path, body := range decoded.Payload {
 					assert.NotContains(t, string(body), forbidden, "secret/path in decompressed entry %s", path)
 				}
