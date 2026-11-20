@@ -1,0 +1,128 @@
+title: PackageImportPreview
+description: >
+  Response of POST /api/v1/packages/import (201). The upload was checked in
+  full and kept in a staging folder until expires_at (30 minutes after it
+  became ready). Everything in the preview is provisional: apply re-runs the
+  checks on the current state and lists each difference as the warning
+  changed_since_preview (FR-021, FR-042).
+type: object
+required:
+  - staging_id
+  - expires_at
+  - manifest
+  - will_add
+  - skipped_elements
+  - warnings
+  - needs_secrets
+additionalProperties: false
+properties:
+  staging_id:
+    type: string
+    description: ID of the staged upload; pass it to the apply operation.
+    example: 0b6f3c1e-2d4a-4e5f-9a8b-7c6d5e4f3a2b
+  expires_at:
+    type: string
+    format: date-time
+    description: When the staged upload expires (ready time + 30 minutes).
+    example: '2026-11-19T12:30:00Z'
+  manifest:
+    $ref: ./PackageManifest.yaml
+  will_add:
+    type: array
+    description: The elements New mode would add, with their proposed (provisional) names.
+    items:
+      type: object
+      required:
+        - type
+        - source_id
+        - source_name
+        - proposed_name
+        - renamed
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          description: Element type (agent in S1).
+          example: agent
+        source_id:
+          type: string
+          description: The element's ID in the package.
+        source_name:
+          type: string
+          description: The element's name in the package.
+          example: Writer
+        proposed_name:
+          type: string
+          description: The name the element would get now (a suffix is added on a name clash).
+          example: Writer (imported)
+        renamed:
+          type: boolean
+          description: Whether proposed_name differs from source_name.
+  skipped_elements:
+    type: array
+    description: Elements that would not be imported (unknown element types, from S1b).
+    items:
+      type: object
+      required:
+        - type
+        - source_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          description: Element type.
+          example: skill
+        source_id:
+          type: string
+          description: The element's ID in the package.
+        name:
+          type: string
+          description: The element's name in the package.
+  warnings:
+    type: array
+    description: >
+      Items the import changes or leaves out (for example skill_dropped,
+      mcp_binding_dropped, tool_policy_tightened, provider_not_configured,
+      field_not_carried, unfinished_import_found).
+    items:
+      type: object
+      required:
+        - code
+        - message
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          description: Machine-readable warning code.
+          example: skill_dropped
+        element_source_id:
+          type: string
+          description: Source ID of the element the warning is about, when it is about one.
+        message:
+          type: string
+          description: Plain-language explanation.
+        items:
+          type: array
+          description: The items concerned (skill names, tool names, connector IDs).
+          items:
+            type: string
+  needs_secrets:
+    type: array
+    description: Secrets to enter again after the import (S1a lists none).
+    items:
+      type: object
+      required:
+        - name
+        - used_by
+        - kind
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Secret name.
+        used_by:
+          type: string
+          description: Source ID of the element that uses it.
+        kind:
+          type: string
+          description: Kind of secret.

@@ -156,6 +156,13 @@ export function createAgent(data: AgentCreateRequest): Promise<Agent> {
 // no-op-invalidate pitfall documented in WorkspaceTeamTab.tsx and
 // WorkspaceSettingsTab.tsx).
 //
+// FR-056 (T-7, epic #1094): the frame carries no workspace ID, so EVERY
+// cached workspace detail and delegation graph is invalidated too — an open
+// Team tab then shows the new member. A predicate matches exactly those two
+// key shapes; a blanket ['workspaces'] invalidate would also hit both list
+// queries above and refetch each twice (duplicate refetch storm), and would
+// needlessly refetch instructions and media.
+//
 // Callers own the client (useQueryClient() in components, the singleton in
 // the WS frame path); fire-and-forget, returns void.
 export function invalidateAfterAgentCreate(client: QueryClient): void {
@@ -163,6 +170,15 @@ export function invalidateAfterAgentCreate(client: QueryClient): void {
   for (const status of ['active', 'archived'] as const) {
     void client.invalidateQueries({ queryKey: workspacesQueryKeys.list({ status }) })
   }
+  void client.invalidateQueries({ predicate: (query) => isWorkspaceDetailOrDelegationKey(query.queryKey) })
+}
+
+// isWorkspaceDetailOrDelegationKey — true for workspacesQueryKeys.detail(id)
+// (['workspaces', id]) and .delegation(id) (['workspaces', id, 'delegation']).
+// List keys carry an object (or undefined) at index 1, so they never match.
+function isWorkspaceDetailOrDelegationKey(key: readonly unknown[]): boolean {
+  if (key[0] !== 'workspaces' || typeof key[1] !== 'string') return false
+  return key.length === 2 || (key.length === 3 && key[2] === 'delegation')
 }
 
 export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {

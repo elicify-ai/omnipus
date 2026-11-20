@@ -14,8 +14,6 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
-	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
-	"github.com/google/uuid"
 )
 
 // decodeAgentCreateVariant strictly decodes raw into out (a pointer to one of
@@ -177,13 +175,10 @@ type restAPICreateAgent struct {
 	a                 *restAPI
 	w                 http.ResponseWriter
 	r                 *http.Request
-	soul              string
-	toolsCfgIn        *agentCreateToolsCfgInput
 	ac                config.AgentConfig
 	createSoulContent string
 	defaultModelName  string
 	mutationResult    agentstore.MutationResult
-	policyChanges     *agentmutation.ToolPolicyChanges
 }
 
 // createAgent handles POST /api/v1/agents.
@@ -199,22 +194,27 @@ type restAPICreateAgent struct {
 // errors, off by default), then strictly decode into the NAMED variant
 // struct via decodeAgentCreateVariant (a field the chosen variant does not
 // carry is rejected 400 unconditionally, independent of ValidateInbound) —
-// never the generated union wrapper's As*() accessors — and normalize into a
-// small set of variant-agnostic locals so the remainder of the handler
-// (validation, persistence, response building) is written once.
+// never the generated union wrapper's As*() accessors — and normalize into
+// the shared create core's agentCreateInput (agent_create_core.go), which
+// applies the create rules (buildAgentCreate) and the persist step
+// (persistAgentCreateLocked) shared with the package import.
 //
 // type is REQUIRED on every variant: a missing or unrecognized type value is
 // a 400.
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	cra := &restAPICreateAgent{a: a, w: w, r: r}
 
-	if cra.prepareAgent() {
+	in, stop := cra.decodeAgentCreateInput()
+	if stop {
 		return
 	}
-	if cra.buildToolConfig() {
+	plan, refusal := a.buildAgentCreate(in)
+	if refusal != nil {
+		// Rider #1914: a refusal ends the request; nothing is stored.
+		refusal.write(w)
 		return
 	}
-	if cra.persistAgent() {
+	if cra.persistAgent(&plan) {
 		return
 	}
 	// agent-picker-freshness fix (#1009): the new agent is now durably
@@ -229,60 +229,29 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	cra.publishResponse()
 }
 
-// restAPICreateAgentPrepareAgent carries the shared state of prepareAgent across its stages.
+// restAPICreateAgentPrepareAgent carries the shared state of
+// decodeAgentCreateInput across its stages.
 type restAPICreateAgentPrepareAgent struct {
-	cra            *restAPICreateAgent
-	wireType       string
-	createType     config.AgentType
-	name           string
-	description    *string
-	model          *string
-	provider       *string
-	color          *gen.AgentColor
-	figure         *gen.AgentFigure
-	role           *gen.AgentRole
-	resolvedFigure string
-	resolvedRole   string
-	skills         *[]string
-	fallbackModels *[]gen.FallbackModel
-	// reasoningEffort is the new agent primary's stored effort (FR-029),
-	// stored as written; subagent_3p has no such property (S-77).
-	reasoningEffort *string
-	modelParamsIn   *agentModelParamsInput
-	mcpServers      *[]agentCreateMCPServerInput
-	policyChanges   *agentmutation.ToolPolicyChanges
-	// maxToolIterations is the new agent's own tool-iteration limit (#904,
-	// every variant incl. subagent_3p per D14); nil = rides the global.
-	maxToolIterations *int
+	cra *restAPICreateAgent
+	in  agentCreateInput
 }
 
-// prepareAgent decodes and validates the request and builds the persistent agent config.
-func (cra *restAPICreateAgent) prepareAgent() bool {
+// decodeAgentCreateInput is the HTTP half of create: it reads, checks and
+// strictly decodes the request into the shared create core's input. It
+// reports stop once it has written an error response.
+func (cra *restAPICreateAgent) decodeAgentCreateInput() (agentCreateInput, bool) {
 	pap := &restAPICreateAgentPrepareAgent{cra: cra}
 	raw, wireType, variantName, stop := pap.decodeAndValidateRequest()
 	if stop {
-		return true
+		return agentCreateInput{}, true
 	}
-	pap.wireType = wireType
+	pap.in.WireType = wireType
 	executorIn, stop := pap.normalizeVariant(raw, wireType, variantName)
 	if stop {
-		return true
+		return agentCreateInput{}, true
 	}
-
-	// Trim before the empty check so a whitespace-only name ("   ") is rejected
-	// rather than silently accepted (UAT fix). Persist the trimmed value.
-	pap.name = strings.TrimSpace(pap.name)
-	if pap.name == "" {
-		jsonErr(pap.cra.w, http.StatusUnprocessableEntity, "name is required")
-		return true
-	}
-	if refuseReservedAgentName(pap.cra.w, pap.name) {
-		return true
-	}
-	if r0, stop := pap.validateAndBuildConfig(); stop {
-		return r0
-	}
-	return pap.buildExecutor(wireType, executorIn)
+	pap.in.Executor = executorIn
+	return pap.in, false
 }
 
 func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, string, string, bool) {
@@ -315,9 +284,8 @@ func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, s
 		jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
 		return nil, "", "", true
 	}
-	const typeErrMsg = "type is required and must be one of Main, Subagent, subagent_3p"
 	if typePeek.Type == nil {
-		jsonErr(pap.cra.w, http.StatusBadRequest, typeErrMsg)
+		jsonErr(pap.cra.w, http.StatusBadRequest, agentCreateTypeRefusal)
 		return nil, "", "", true
 	}
 	if *typePeek.Type == "system" {
@@ -326,10 +294,9 @@ func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, s
 	}
 	variantName := agentCreateVariantName(*typePeek.Type)
 	if variantName == "" {
-		jsonErr(pap.cra.w, http.StatusBadRequest, typeErrMsg)
+		jsonErr(pap.cra.w, http.StatusBadRequest, agentCreateTypeRefusal)
 		return nil, "", "", true
 	}
-	pap.createType = coreagent.ResolveType(gen.AgentType(*typePeek.Type))
 	// r17 §3.11/§7.11: executor.kind is derived and executor.cli_path is
 	// Settings-owned; each is refused with its own text and field before the
 	// schema validator or the strict decoder could answer generically.
@@ -424,58 +391,58 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		if !decodeAgentCreateVariant(pap.cra.w, raw, wireType, variantName, &vreq) {
 			return nil, true
 		}
-		pap.name = vreq.Name
-		pap.description = vreq.Description
-		pap.model = vreq.Model
-		pap.provider = vreq.Provider
-		pap.figure = vreq.Figure
-		pap.role = vreq.Role
-		pap.color = vreq.Color
-		pap.cra.soul = vreq.Soul
-		pap.skills = vreq.Skills
-		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
-		pap.policyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
-		pap.fallbackModels = vreq.FallbackModels
-		pap.reasoningEffort = vreq.ReasoningEffort
-		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
-		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
-		pap.maxToolIterations = vreq.MaxToolIterations
+		pap.in.Name = vreq.Name
+		pap.in.Description = vreq.Description
+		pap.in.Model = vreq.Model
+		pap.in.Provider = vreq.Provider
+		pap.in.Figure = vreq.Figure
+		pap.in.Role = vreq.Role
+		pap.in.Color = vreq.Color
+		pap.in.Soul = vreq.Soul
+		pap.in.Skills = vreq.Skills
+		pap.in.MCPServers = agentCreateMCPServersFromWire(vreq.McpServers)
+		pap.in.PolicyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
+		pap.in.FallbackModels = vreq.FallbackModels
+		pap.in.ReasoningEffort = vreq.ReasoningEffort
+		pap.in.ToolsCfg = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
+		pap.in.ModelParams = agentModelParamsFromWire(vreq.ModelParams)
+		pap.in.MaxToolIterations = vreq.MaxToolIterations
 		return nil, false
 	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
 		if !decodeAgentCreateVariant(pap.cra.w, raw, wireType, variantName, &vreq) {
 			return nil, true
 		}
-		pap.name = vreq.Name
-		pap.description = vreq.Description
-		pap.model = vreq.Model
-		pap.provider = vreq.Provider
-		pap.figure = vreq.Figure
-		pap.role = vreq.Role
-		pap.color = vreq.Color
-		pap.cra.soul = vreq.Soul
-		pap.skills = vreq.Skills
-		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
-		pap.policyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
-		pap.fallbackModels = vreq.FallbackModels
-		pap.reasoningEffort = vreq.ReasoningEffort
-		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
-		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
-		pap.maxToolIterations = vreq.MaxToolIterations
+		pap.in.Name = vreq.Name
+		pap.in.Description = vreq.Description
+		pap.in.Model = vreq.Model
+		pap.in.Provider = vreq.Provider
+		pap.in.Figure = vreq.Figure
+		pap.in.Role = vreq.Role
+		pap.in.Color = vreq.Color
+		pap.in.Soul = vreq.Soul
+		pap.in.Skills = vreq.Skills
+		pap.in.MCPServers = agentCreateMCPServersFromWire(vreq.McpServers)
+		pap.in.PolicyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
+		pap.in.FallbackModels = vreq.FallbackModels
+		pap.in.ReasoningEffort = vreq.ReasoningEffort
+		pap.in.ToolsCfg = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
+		pap.in.ModelParams = agentModelParamsFromWire(vreq.ModelParams)
+		pap.in.MaxToolIterations = vreq.MaxToolIterations
 		return nil, false
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p
 		if !decodeAgentCreateVariant(pap.cra.w, raw, wireType, variantName, &vreq) {
 			return nil, true
 		}
-		pap.name = vreq.Name
-		pap.description = vreq.Description
-		pap.model = vreq.Model
-		pap.provider = vreq.Provider
-		pap.figure = vreq.Figure
-		pap.role = vreq.Role
-		pap.color = vreq.Color
-		pap.maxToolIterations = vreq.MaxToolIterations
+		pap.in.Name = vreq.Name
+		pap.in.Description = vreq.Description
+		pap.in.Model = vreq.Model
+		pap.in.Provider = vreq.Provider
+		pap.in.Figure = vreq.Figure
+		pap.in.Role = vreq.Role
+		pap.in.Color = vreq.Color
+		pap.in.MaxToolIterations = vreq.MaxToolIterations
 		return &executorRequestInput{
 			Cli:          string(vreq.Executor.Cli),
 			EnvOverrides: vreq.Executor.EnvOverrides,
@@ -485,338 +452,9 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 	return nil, true
 }
 
-func (pap *restAPICreateAgentPrepareAgent) buildExecutor(wireType string, executorIn *executorRequestInput) bool {
-	// Sub-agent executor. Mapped into AgentConfig.Subagents.Executor so it is
-	// actually persisted. A native Subagent (no Executor property on the wire
-	// at all) always gets a native runtime here. A subagent_3p always gets
-	// kind=external-cli — the wire schema requires `executor` to be present
-	// for that variant and, per the field matrix, kind is server-derived
-	// (never client-writable) rather than read from the request.
-	if pap.createType == config.AgentTypeWorker {
-		if wireType == string(gen.AgentTypeSubagent3p) {
-			execCfg, errMsg := executorConfigFromRequest(string(config.ExecutorKindExternalCLI), executorIn.Cli)
-			if errMsg != "" {
-				jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)
-				return true
-			}
-			// r17 §7.6 EX-01/EX-04: the same env_overrides and cli_args rules
-			// as create_agent and the update merge (pkg/thirdpartycli).
-			if executorIn.EnvOverrides != nil {
-				if err := thirdpartycli.ValidateEnvOverrides(*executorIn.EnvOverrides); err != nil {
-					jsonErrField(pap.cra.w, http.StatusBadRequest, err.Error(), "executor.env_overrides")
-					return true
-				}
-				execCfg.EnvOverrides = *executorIn.EnvOverrides
-			}
-			if executorIn.CliArgs != nil {
-				if err := thirdpartycli.ValidateCLIArgs(*executorIn.CliArgs); err != nil {
-					jsonErrField(pap.cra.w, http.StatusBadRequest, err.Error(), "executor.cli_args")
-					return true
-				}
-				execCfg.CLIArgs = *executorIn.CliArgs
-			}
-			pap.cra.ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
-		} else {
-			pap.cra.ac.Subagents = &config.SubagentsConfig{
-				Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
-			}
-		}
-	}
-	return false
-}
-
-// validateCreateFields validates the incoming shared agent fields before constructing a config.
-func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, string, bool) {
-	// Referential validation: reject unknown skill IDs before doing any work.
-	if pap.skills != nil && len(*pap.skills) > 0 {
-		if errMsg := pap.cra.a.validateSkillIDs(*pap.skills); errMsg != "" {
-			jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)
-			return "", "", true
-		}
-	}
-	descTrimmed := ""
-	if pap.description != nil {
-		descTrimmed = strings.TrimSpace(*pap.description)
-	}
-	// W2 spec §4.3 / §9.2 F-02 (mirror of PUT path): Subagent and subagent_3p
-	// require a non-empty description after trim. A worker without a
-	// description cannot be routed to by the orchestrator.
-	if pap.createType == config.AgentTypeWorker && descTrimmed == "" {
-		jsonErr(pap.cra.w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
-		return "", "", true
-	}
-	// O12.1 — voice is Main-only (form matrix row 13): no runtime check is
-	// needed here any more. AgentCreateRequestSubagent / …Subagent3p
-	// structurally have no `voice` property (additionalProperties: false) —
-	// a worker create can no longer carry one at all. Heartbeat is
-	// workspace-scoped (ADR-027) and is no longer set at create time.
-	//
-	// W2 spec §3.1 row 16 / §9.2 F-13 (mirror of PUT path): fallback_models
-	// is capped at 2 entries. Server-enforced so direct REST callers (not the
-	// SPA) cannot smuggle more entries past the schema validator. subagent_3p
-	// has no fallback_models property (fallbackModels stays nil for that variant).
-	if pap.fallbackModels != nil && len(*pap.fallbackModels) > 2 {
-		jsonErr(pap.cra.w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
-		return "", "", true
-	}
-	// Issue #1340 (founder rule 2026-10-18): same pair rule as the update path.
-	if pap.fallbackModels != nil {
-		if msg := unpairedFallbackError(*pap.fallbackModels); msg != "" {
-			jsonErr(pap.cra.w, http.StatusBadRequest, msg)
-			return "", "", true
-		}
-	}
-	// model_params.top_p (T2): removed from the wire entirely — see
-	// agentModelParamsInput's doc comment. No explicit rejection is needed
-	// here: gen.AgentCreateRequestMain/Subagent no longer have a top_p
-	// property at all, and decodeAgentCreateVariant's unconditional
-	// DisallowUnknownFields decode above already rejects a client still
-	// sending {"model_params":{"top_p":...}} with a 400 "unknown field"
-	// error before this point is ever reached.
-	// W2 spec §4.7 / §9.2 row 8: whitespace-only soul is rejected (the wire
-	// schema enforces minLength:1; whitespace-only is the natural
-	// soft-bypass). Backend trims before validation. r17 §7.5 AG-04 (F-05):
-	// an external worker (subagent_3p) has no soul at all — its variant
-	// carries no soul property (a supplied one is refused at decode), so the
-	// requirement applies to the native types only.
-	if pap.wireType != string(gen.AgentTypeSubagent3p) {
-		if strings.TrimSpace(pap.cra.soul) == "" {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
-			return "", "", true
-		}
-	}
-	pap.resolvedFigure = coreagent.DefaultFigure
-	if pap.figure != nil && string(*pap.figure) != "" {
-		canon, ok := coreagent.CanonicalFigure(string(*pap.figure))
-		if !ok {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "figure must be Robot, Man, Woman, Omnipus, or Monogram")
-			return "", "", true
-		}
-		pap.resolvedFigure = canon
-	}
-	pap.resolvedRole = coreagent.DefaultRole
-	if pap.role != nil && string(*pap.role) != "" {
-		canon, ok := coreagent.CanonicalRole(string(*pap.role))
-		if !ok {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "role must be one of the curated role slugs")
-			return "", "", true
-		}
-		pap.resolvedRole = canon
-	}
-	colorVal := coreagent.DefaultColor
-	if pap.color != nil && string(*pap.color) != "" {
-		canon, ok := coreagent.CanonicalColor(string(*pap.color))
-		if !ok {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "color must be one of the ten identity colours")
-			return "", "", true
-		}
-		colorVal = canon
-	}
-	return descTrimmed, colorVal, false
-}
-
-// validateAndBuildConfig validates shared fields and builds the base persistent agent config.
-func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool) {
-	descTrimmed, colorVal, stop := pap.validateCreateFields()
-	if stop {
-		return true, true
-	}
-	// #904 FR-006/FR-007/FR-014: an own tool-iteration limit must be within
-	// 1..1000 and not above the global in force (D10). Re-checked under
-	// configMu in persistAgent, which closes the window against REST global
-	// writes (PUT /api/v1/performance holds configMu too). Not covered: a
-	// hand edit of config.json applied by a reload outside configMu, and the
-	// stale in-memory global after a refresh-stage performance_reload_failed
-	// — the agent is then capped and flagged (D1), never unbounded (both
-	// cases: rest_agents_update.go::persistAgent).
-	if pap.maxToolIterations != nil {
-		if err := config.ValidateAgentMaxToolIterations(*pap.maxToolIterations,
-			&pap.cra.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
-			jsonErrField(pap.cra.w, http.StatusBadRequest, err.Error(), maxToolIterationsFieldName)
-			return true, true
-		}
-	}
-	// ac is the in-memory config record. Locked is left at its zero value
-	// (false) for BOTH custom and worker creates — the API is the operator's
-	// surface for editing; only SeedConfig-seeded agents are locked. A newly
-	// created worker is therefore editable (unlike the seeded default
-	// general-purpose worker, which is locked by coreagent.SeedConfig).
-	pap.cra.ac = config.AgentConfig{
-		ID:          uuid.New().String(),
-		Name:        pap.name,
-		Description: descTrimmed,
-		Figure:      pap.resolvedFigure,
-		Role:        pap.resolvedRole,
-		Color:       colorVal,
-		Type:        pap.createType,
-	}
-	if pap.maxToolIterations != nil {
-		pap.cra.ac.MaxToolIterations = *pap.maxToolIterations
-	}
-	if pap.reasoningEffort != nil {
-		pap.cra.ac.ReasoningEffort = *pap.reasoningEffort
-	}
-	if pap.model != nil && *pap.model != "" {
-		pap.cra.ac.Model = &config.AgentModelConfig{Primary: *pap.model}
-		// O3 two-field model: persist the explicit primary provider when supplied.
-		if pap.provider != nil && strings.TrimSpace(*pap.provider) != "" {
-			pap.cra.ac.Model.Provider = strings.TrimSpace(*pap.provider)
-		}
-	}
-	// model_params (T1 fix): createAgent previously decoded model_params fine
-	// (both AgentCreateRequestMain.yaml and AgentCreateRequestSubagent.yaml
-	// carry it) but had nowhere to persist it — same ADR-037 anti-pattern
-	// commit 2b057e15 (Q1) fixed for PUT. mergeAgentModelParams is the exact
-	// helper that fix introduced for updateAgent; existing is nil here since
-	// this is a brand-new agent record.
-	pap.cra.ac.ModelParams = mergeAgentModelParams(nil, pap.modelParamsIn)
-	// AG-03 (#1440, r17 §7.5): the validated fallback chain is stored, not
-	// only checked; an empty list stores none.
-	if pap.fallbackModels != nil && len(*pap.fallbackModels) > 0 {
-		pap.cra.ac.FallbackModels = fallbackModelsFromWire(*pap.fallbackModels, nil)
-	}
-	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
-	if pap.skills != nil && len(*pap.skills) > 0 {
-		pap.cra.ac.Skills = make([]string, len(*pap.skills))
-		copy(pap.cra.ac.Skills, *pap.skills)
-	}
-	if pap.mcpServers != nil || pap.policyChanges != nil {
-		if pap.cra.toolsCfgIn == nil {
-			pap.cra.toolsCfgIn = &agentCreateToolsCfgInput{}
-		}
-		if pap.mcpServers != nil {
-			if pap.cra.toolsCfgIn.MCPSpecified {
-				jsonErr(pap.cra.w, http.StatusBadRequest, "mcp_servers and tools_cfg.mcp cannot both be supplied")
-				return false, true
-			}
-			pap.cra.toolsCfgIn.MCPServers = *pap.mcpServers
-			pap.cra.toolsCfgIn.MCPSpecified = true
-		}
-	}
-	pap.cra.createSoulContent = strings.TrimSpace(pap.cra.soul)
-	if pap.policyChanges != nil {
-		if pap.cra.toolsCfgIn != nil && pap.cra.toolsCfgIn.BuiltinPolicies != nil {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "tool_policy_changes and tools_cfg.builtin cannot both be supplied")
-			return false, true
-		}
-		pap.cra.ac.Tools = nil // applied after the server seed is constructed
-		pap.cra.policyChanges = pap.policyChanges
-	}
-	return false, false
-}
-
-// buildToolConfig validates and builds the agent's builtin and MCP tool configuration.
-func (cra *restAPICreateAgent) buildToolConfig() bool {
-	if cra.toolsCfgIn != nil {
-		configured := cra.a.agentLoop.GetConfig().Tools.MCP.Servers
-		for _, server := range cra.toolsCfgIn.MCPServers {
-			if _, ok := configured[server.ID]; !ok || server.ID == "" {
-				jsonErr(cra.w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", server.ID))
-				return true
-			}
-			if err := config.ValidateAgentMCPServerBinding(config.AgentMCPServerBinding{ID: server.ID, Tools: server.Tools, ToolsSpecified: server.ToolsSpecified}); err != nil {
-				jsonErr(cra.w, http.StatusUnprocessableEntity, err.Error())
-				return true
-			}
-		}
-	}
-	// ADR-037: delegation_policy is retired from the wire entirely — the
-	// per-workspace delegation graph (Team tab) is the sole delegation
-	// mechanism. There is nothing left to map/validate/persist here.
-	// Seed the Main or Worker defaults (founder ruling, 2026-10-22), with
-	// every static builtin explicitly classified via denyAllThenOverride.
-	// Apply worker restrictions BEFORE caller overrides: these are creation
-	// defaults, not fixed role restrictions. There are no static wildcards or
-	// runtime fallbacks. subagent_3p has no tools_cfg property, so it keeps the
-	// Worker seed; the external runner still controls its own internal tools.
-	//
-	// CLAUDE.md hard constraint 6 — validate the CALLER'S OWN map FIRST, before
-	// the deny-seeded baseline below is allowed to paper over it.
-	//
-	// This check has to happen here, and not (only) via the
-	// config.ValidateToolPolicyCoverage guard further down, because of the
-	// merge that follows: the handler starts from the fully-enumerated
-	// coreagent.NewCustomAgentToolsCfg() seed and copies the caller's entries
-	// ON TOP of it. A tool the caller omitted is therefore silently backfilled
-	// from the seed before the coverage check ever runs, so that check can
-	// structurally never observe a caller-side gap on this path — it was dead
-	// code for POST /agents. Reproduced live (UAT 2026-09-02, batch 3 S48 /
-	// batch 4 S83): a create omitting `bash` entirely returned 201, and a
-	// create carrying a literal "*" key returned 201 with the wildcard stored
-	// inertly alongside the real entries, because the merge loop copied every
-	// caller key verbatim with no check that it names a real tool.
-	//
-	// Only runs when the caller actually submitted a builtin policy map. A
-	// request with no tools_cfg at all (or a tools_cfg carrying only `mcp`)
-	// legitimately falls through to the server-generated, complete, deny-seeded
-	// baseline — that is not a caller gap, and subagent_3p has no tools_cfg on
-	// the wire at all.
-	if cra.toolsCfgIn != nil && cra.toolsCfgIn.BuiltinPolicies != nil {
-		if defects := validateSubmittedBuiltinToolPolicyMap(cra.toolsCfgIn.BuiltinPolicies); !defects.Empty() {
-			jsonErr(cra.w, http.StatusBadRequest,
-				"tools_cfg.builtin.policies "+defects.String())
-			return true
-		}
-	}
-	// Channels FR-037 (security S4): create stores tool policy just like the
-	// update writers, so an always-ask tool is refused as allow in both the
-	// complete (tools_cfg) and sparse (tool_policy_changes) forms before
-	// anything is built or persisted. ask and deny stay accepted.
-	if cra.toolsCfgIn != nil && refuseAlwaysAskAllow(cra.w, cra.toolsCfgIn.BuiltinPolicies) {
-		return true
-	}
-	if cra.policyChanges != nil && refuseAlwaysAskAllow(cra.w, cra.policyChanges.Set) {
-		return true
-	}
-	baseCfg := coreagent.NewCustomAgentToolsCfg()
-	if cra.ac.Type == config.AgentTypeWorker {
-		coreagent.RestrictForWorkerTier(baseCfg)
-	}
-	if cra.toolsCfgIn != nil {
-		builtin := config.AgentBuiltinToolsCfg{
-			// Copy the complete Main/Worker seed (every static tool has an
-			// explicit allow, ask or deny, no wildcard), then apply the
-			// caller's policies without mutating the shared defaults.
-			Policies: make(map[string]config.ToolPolicy, len(baseCfg.Builtin.Policies)),
-		}
-		for k, v := range baseCfg.Builtin.Policies {
-			builtin.Policies[k] = v
-		}
-		// Merge caller-supplied policies; the caller's per-tool entry (exact
-		// name, never a wildcard) overrides the corresponding seed entry.
-		for k, v := range cra.toolsCfgIn.BuiltinPolicies {
-			builtin.Policies[k] = config.ToolPolicy(v)
-		}
-		cra.ac.Tools = &config.AgentToolsCfg{Builtin: builtin}
-		if cra.toolsCfgIn.MCPSpecified {
-			servers := make([]config.AgentMCPServerBinding, 0, len(cra.toolsCfgIn.MCPServers))
-			for _, s := range cra.toolsCfgIn.MCPServers {
-				servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools, ToolsSpecified: s.ToolsSpecified})
-			}
-			cra.ac.Tools.MCP = config.AgentMCPToolsCfg{Servers: servers}
-		}
-	} else {
-		// No caller-supplied tools config: use the full base config.
-		cra.ac.Tools = baseCfg
-	}
-	if cra.policyChanges != nil {
-		updated, err := agentmutation.ApplyToolPolicyChanges(cra.ac.Tools.Builtin.Policies, *cra.policyChanges, buildKnownBuiltinToolNames())
-		if err != nil {
-			jsonErr(cra.w, http.StatusBadRequest, err.Error())
-			return true
-		}
-		cra.ac.Tools.Builtin.Policies = updated
-	}
-	for name := range buildKnownBuiltinToolNames() {
-		if _, exists := cra.ac.Tools.Builtin.Policies[name]; !exists {
-			cra.ac.Tools.Builtin.Policies[name] = config.ToolPolicyDeny
-		}
-	}
-	return false
-}
-
-// persistAgent persists the new agent under the tool-policy coverage guard.
-func (cra *restAPICreateAgent) persistAgent() bool {
+// persistAgent persists the planned agent under the tool-policy coverage
+// guard and reports stop once it has written an error response.
+func (cra *restAPICreateAgent) persistAgent(plan *agentCreatePlan) bool {
 	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: reject
 	// the create if the new agent's tool-policy map — together with the
 	// global sandbox.tool_policies — would leave any static builtin tool
@@ -831,47 +469,32 @@ func (cra *restAPICreateAgent) persistAgent() bool {
 	// doc comment), via withToolPolicyCoverageGuard: it returns false once it
 	// has already written the HTTP response (error case), so the caller just
 	// returns.
-	if ok := cra.a.withToolPolicyCoverageGuard(
+	ok := cra.a.withToolPolicyCoverageGuard(
 		cra.w,
 		func(c *config.Config) {
-			c.Agents.List = append(c.Agents.List, cra.ac)
+			c.Agents.List = append(c.Agents.List, plan.Agent)
 		},
-		func(gaps []config.CoverageGap) string {
-			return fmt.Sprintf(
-				"tool policy coverage incomplete for new agent (%d gap(s)): %s",
-				len(gaps), joinCoverageGapMessages(gaps),
-			)
-		},
+		agentCreateCoverageGapMessage,
 		// ADR-054 D2/§11 checklist item 1: agents are per-entity records under
 		// entities/agents/<id>.json, not config.json's agents.list — persist
-		// via the agent store instead of splicing the raw config map. `m` is
-		// deliberately left untouched (config.json no longer carries the
-		// roster); this closure still runs inside updateConfigJSONLocked's
-		// a.configMu-guarded critical section, so it composes with the
-		// tool-policy-coverage validation above exactly as before.
-		// agentstore.Store.Create (via entity.Store.Create) already performs
-		// write-then-verify (D6 corollary: it reads the just-written file back
-		// and confirms it parses with the expected ID) and stamps CreatedAt —
-		// a nil error here means ac is durably confirmed on disk before this
-		// handler ever reports success to the caller.
+		// via the agent store (persistAgentCreateLocked) instead of splicing
+		// the raw config map. `m` is deliberately left untouched; this closure
+		// still runs inside updateConfigJSONLocked's a.configMu-guarded
+		// critical section, so it composes with the coverage validation above.
+		// CreateState performs write-then-verify, so a nil error here means
+		// the agent is durably confirmed on disk before this handler ever
+		// reports success to the caller.
 		func(m map[string]any) error {
-			// #904 D10, the deciding check under configMu (see
-			// validateAndBuildConfig for the fast path).
-			if cra.ac.MaxToolIterations > 0 {
-				if err := config.ValidateAgentMaxToolIterations(cra.ac.MaxToolIterations,
-					&cra.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
-					return &requestRefusalError{msg: err.Error(), field: maxToolIterationsFieldName}
-				}
-			}
-			result, err := agentstore.New(cra.a.homePath).CreateState(cra.ac.ID, &cra.ac, cra.createSoulContent)
+			result, err := cra.a.persistAgentCreateLocked(plan)
 			cra.mutationResult = result
-			if err != nil {
-				return &configurationMutationError{Result: result, Err: fmt.Errorf("create agent state: %w", err)}
-			}
-			return nil
+			return err
 		},
 		"rest: save agent entity record for new agent",
-	); !ok {
+	)
+	// The store stamps CreatedAt and binds skill grants on plan.Agent.
+	cra.ac = plan.Agent
+	cra.createSoulContent = plan.Soul
+	if !ok {
 		return true
 	}
 	cra.defaultModelName = cra.a.agentLoop.GetConfig().Agents.Defaults.DefaultModel.Model

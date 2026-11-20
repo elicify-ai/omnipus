@@ -2623,6 +2623,62 @@ type MailAttachmentSaveResponse = {
   audit_status: "recorded" | "disabled" | "failed";
   warning_code: "audit_write_failed" | null;
 };
+type PackageImportPreview = {
+  staging_id: string;
+  expires_at: string;
+  manifest: PackageManifest;
+  will_add: Array<{
+    type: string;
+    source_id: string;
+    source_name: string;
+    proposed_name: string;
+    renamed: boolean;
+  }>;
+  skipped_elements: Array<{
+    type: string;
+    source_id: string;
+    name?: string | undefined;
+  }>;
+  warnings: Array<{
+    code: string;
+    element_source_id?: string | undefined;
+    message: string;
+    items?: Array<string> | undefined;
+  }>;
+  needs_secrets: Array<{
+    name: string;
+    used_by: string;
+    kind: string;
+  }>;
+};
+type PackageManifest = {
+  format: "omnpkg";
+  format_version: number;
+  scope: "workspace" | "system" | "custom";
+  elements: Array<
+    {
+      type: string;
+      schema: number;
+      source_id: string;
+      name: string;
+      files: Array<string>;
+    } & {
+      [key: string]: any;
+    }
+  >;
+  counts: {};
+  files: {};
+  source_build: string;
+  created_at: string;
+  includes_sessions: boolean;
+  needs_secrets: Array<{
+    name: string;
+    used_by: string;
+    kind: string;
+  }>;
+} & {
+  [key: string]: any;
+};
 type OperationResult = {
   success: boolean;
   error?: string | undefined;
@@ -5720,12 +5776,101 @@ export const CredentialSetRequest = z.object({
 export const CredentialRotateRequest = z.object({
   new_passphrase: z.string().min(1),
 });
-export const BackupCreateResponse = z.object({
-  path: z.string(),
-  size_bytes: z.number().int().gte(0),
-  created_at: z.string().datetime({ offset: true }),
+export const PackageExportRequest = z.object({
+  agent_ids: z.array(z.string()),
 });
-export const RestoreBackupRequest = z.object({ filename: z.string() });
+export const PackageManifest: z.ZodType<PackageManifest> = z
+  .object({
+    format: z.literal("omnpkg"),
+    format_version: z.number().int().gte(1),
+    scope: z.enum(["workspace", "system", "custom"]),
+    elements: z.array(
+      z
+        .object({
+          type: z.string(),
+          schema: z.number().int().gte(1),
+          source_id: z.string(),
+          name: z.string(),
+          files: z.array(z.string()),
+        })
+        .passthrough()
+    ),
+    counts: z.record(z.number().int().gte(0)),
+    files: z.record(
+      z.object({
+        sha256: z.string().regex(/^[0-9a-f]{64}$/),
+        size: z.number().int().gte(0),
+      })
+    ),
+    source_build: z.string(),
+    created_at: z.string().datetime({ offset: true }),
+    includes_sessions: z.boolean(),
+    needs_secrets: z.array(
+      z.object({ name: z.string(), used_by: z.string(), kind: z.string() })
+    ),
+  })
+  .passthrough();
+export const PackageImportPreview: z.ZodType<PackageImportPreview> = z.object({
+  staging_id: z.string(),
+  expires_at: z.string().datetime({ offset: true }),
+  manifest: PackageManifest,
+  will_add: z.array(
+    z.object({
+      type: z.string(),
+      source_id: z.string(),
+      source_name: z.string(),
+      proposed_name: z.string(),
+      renamed: z.boolean(),
+    })
+  ),
+  skipped_elements: z.array(
+    z.object({
+      type: z.string(),
+      source_id: z.string(),
+      name: z.string().optional(),
+    })
+  ),
+  warnings: z.array(
+    z.object({
+      code: z.string(),
+      element_source_id: z.string().optional(),
+      message: z.string(),
+      items: z.array(z.string()).optional(),
+    })
+  ),
+  needs_secrets: z.array(
+    z.object({ name: z.string(), used_by: z.string(), kind: z.string() })
+  ),
+});
+export const PackageImportApplyRequest = z.object({
+  mode: z.enum(["replace", "merge", "new"]),
+  workspace_id: z.string().optional(),
+});
+export const PackageImportResult = z.object({
+  mode: z.enum(["replace", "merge", "new"]),
+  created: z.array(
+    z.object({
+      type: z.string(),
+      source_id: z.string(),
+      new_id: z.string(),
+      name: z.string(),
+      workspace_id: z.string(),
+    })
+  ),
+  warnings: z.array(
+    z.object({
+      code: z.string(),
+      element_source_id: z.string().optional(),
+      message: z.string(),
+      items: z.array(z.string()).optional(),
+    })
+  ),
+  needs_secrets: z.array(
+    z.object({ name: z.string(), used_by: z.string(), kind: z.string() })
+  ),
+  activation: z.enum(["active", "pending"]),
+  activation_message: z.string().optional(),
+});
 export const StorageStats = z
   .object({
     workspace_size_bytes: z.number().int().gte(0),
@@ -8360,11 +8505,6 @@ export const PerformanceReloadFailedError: z.ZodType<PerformanceReloadFailedErro
     code: z.string(),
     details: PerformanceReloadFailedDetails,
   });
-export const BackupEntry = z.object({
-  filename: z.string(),
-  size_bytes: z.number().int().gte(0),
-  created_at: z.string().datetime({ offset: true }),
-});
 export const CreateEmailDraftResult = z.object({
   created: z.boolean(),
   message_id: z.string(),
@@ -10056,56 +10196,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 429,
         description: `Rate limit exceeded.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/backup",
-    alias: "createBackup",
-    description: `Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories. The archive is written atomically to ~/.omnipus/backups/.
-`,
-    requestFormat: "json",
-    response: BackupCreateResponse,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/backups",
-    alias: "listBackups",
-    description: `Lists all .tar.gz files in ~/.omnipus/backups/ with filename, size, and creation time. Returns an empty array when no backups exist.
-`,
-    requestFormat: "json",
-    response: z.array(
-      z
-        .object({
-          filename: z.string(),
-          size_bytes: z.number().int().gte(0),
-          created_at: z.string().datetime({ offset: true }),
-        })
-        .passthrough()
-    ),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
         schema: ErrorResponse,
       },
     ],
@@ -13271,6 +13361,165 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
     ],
   },
   {
+    method: "post",
+    path: "/packages/export",
+    alias: "exportPackage",
+    description: `Packs exactly one user-created agent (its cleaned record, SOUL.md and, when present, AGENT.md) into a zstd-compressed tar whose first entry is manifest.json. Built-in agents are refused, and so are external workers until S1b. Stored credentials, keys, tokens and config.json are never read; SOUL.md and AGENT.md are copied as they are. Local mode only; refused while developer bypass mode is on. One audit entry per export; if it cannot be written the export is refused and no bytes are sent.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PackageExportRequest,
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `agent_ids does not hold exactly one ID (export_selection_invalid).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Agent not found (agent_not_found).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 413,
+        description: `JSON body over 1 MiB.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `The agent cannot be exported (core_agent_not_exportable, agent_prompt_missing, element_not_creatable, agent_file_unreadable, external_worker_not_supported_yet).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The audit entry could not be written (audit_failed); no bytes were sent.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/packages/import",
+    alias: "uploadPackage",
+    description: `Copies the whole body (at most 64 MiB) into a staging folder, then runs every format check (bounded zstd decoding, manifest, checksums, entry paths and types, agent layout) and a dry run of the create rules. Nothing outside the staging folder, staging maintenance and the audit log is changed. The preview is provisional; the staging expires 30 minutes after it became ready. At most 5 stagings are kept at once.
+`,
+    requestFormat: "binary",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.instanceof(File),
+      },
+    ],
+    response: PackageImportPreview,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `All 5 upload slots are taken (too_many_staged_imports).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 413,
+        description: `Body over 64 MiB, or a decoded size limit was passed (package_too_large, details.limit).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `The package was refused (not_a_package, package_too_new, element_schema_too_new, package_too_large with details.limit window, checksum_mismatch, manifest_mismatch, unsafe_path, unsafe_entry_type, no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable, external_worker_not_supported_yet).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/packages/import/:staging_id/apply",
+    alias: "applyPackageImport",
+    description: `Re-runs the preview checks on the current state, then imports in the requested mode (S1: new only). The new agent stays invisible until the commit point; a failure before it is rolled back (import_rolled_back), and a rollback that could not finish is reported with its leftovers (import_rollback_incomplete) and finished at the next gateway start. Only one apply runs at a time.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PackageImportApplyRequest,
+      },
+      {
+        name: "staging_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: PackageImportResult,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Staging unknown, expired or used (staging_not_found), or the workspace is unknown (workspace_not_found).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Another apply is running (import_in_progress), no workspace named and no default workspace (default_workspace_missing), or every name suffix is taken (name_suffix_exhausted).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 413,
+        description: `JSON body over 1 MiB.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Mode replace or merge (import_mode_not_available), or the record now breaks a create rule (element_not_creatable).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The import failed before the commit point and was rolled back (import_rolled_back), or the rollback could not finish (import_rollback_incomplete).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/performance",
     alias: "getPerformanceSettings",
@@ -14071,46 +14320,6 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/restore",
-    alias: "restoreBackup",
-    description: `Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: z.object({ filename: z.string() }),
-      },
-    ],
-    response: z
-      .object({ status: z.literal("restored"), filename: z.string() })
-      .passthrough(),
-    errors: [
-      {
-        status: 400,
-        description: `Invalid filename (path traversal, missing .tar.gz).`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Backup file not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 422,
-        description: `Filename field is required.`,
         schema: ErrorResponse,
       },
     ],
