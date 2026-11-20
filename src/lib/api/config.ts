@@ -13,13 +13,16 @@ import {
   MaxToolIterationsLoweringPreview as MaxToolIterationsLoweringPreviewSchema,
   MaxToolIterationsLoweringConflict as MaxToolIterationsLoweringConflictSchema,
   ErrorResponse as ErrorResponseSchema,
+  RetentionSettings as RetentionSettingsSchema,
   MaxToolIterationAgentChange as MaxToolIterationAgentChangeSchema,
   PerformanceReloadFailedError as PerformanceReloadFailedErrorSchema,
   // T8 / T11 slice B — Settings → Third-party agents:
   ThirdPartyAgentSettingsView as ThirdPartyAgentSettingsViewSchema,
 } from '@/lib/api/generated/schemas'
 import type {
-  RetentionConfig,
+  // Settings redesign #1519 C-3 — the one retention write path:
+  RetentionSettings,
+  RetentionSettingsUpdate,
   // ADR-066 D9 — global context-budget settings (Settings → Models):
   ContextSettings,
   ContextSettingsUpdate,
@@ -318,13 +321,9 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
     }
     raw.security = sec
   }
-  if (data.data) {
-    raw.storage = {
-      retention: {
-        session_days: data.data.session_retention_days,
-      },
-    }
-  }
+  // `data` (storage.retention) is intentionally never serialised: retention
+  // has one write path, PUT /settings/retention, and PUT /config refuses a
+  // body that changes it (Settings redesign #1519, FR-044).
   if (data.agents?.defaults) {
     raw.agents = { defaults: { ...data.agents.defaults } }
   }
@@ -342,19 +341,28 @@ export async function updateConfig(data: Partial<Config>): Promise<Config> {
   return rawToFrontendConfig(raw)
 }
 
-// Retention — session log retention policy.
-// RetentionConfig — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/RetentionConfig.yaml.
-//
-// No current caller reads, writes, or sweeps retention (fetchRetention/
-// updateRetention/triggerRetentionSweep/retentionMode were all removed as
-// zero-consumer exports). The two type aliases below remain available for a
-// future Settings surface — RetentionMode is the SPA-internal classification
-// of a RetentionConfig response; RetentionUpdateBody is the PUT request body
-// shape.
-export type RetentionMode = 'default' | 'custom' | 'forever'
+// Retention — Settings → Data & retention (Settings redesign #1519, C-3).
+// GET/PUT /settings/retention is the ONLY write path for the three editable
+// retention values; PUT /config refuses any write that changes them (FR-044),
+// so frontendToRawConfig never serialises `storage`. RetentionSettings is the
+// read shape (no ranges, so a hand-edited value can be shown and repaired);
+// RetentionSettingsUpdate is the partial write body (ranges enforced).
 
-export type RetentionUpdateBody = RetentionConfig
+export function fetchRetentionSettings(): Promise<RetentionSettings> {
+  return request<RetentionSettings>(
+    '/settings/retention',
+    undefined,
+    RetentionSettingsSchema as ZodType<RetentionSettings>,
+  )
+}
+
+export function updateRetentionSettings(body: RetentionSettingsUpdate): Promise<RetentionSettings> {
+  return request<RetentionSettings>(
+    '/settings/retention',
+    { method: 'PUT', body: JSON.stringify(body) },
+    RetentionSettingsSchema as ZodType<RetentionSettings>,
+  )
+}
 
 export function fetchPerformanceSettings(): Promise<PerformanceSettings> {
   return request<PerformanceSettings>('/performance', undefined, PerformanceSettingsSchema)
