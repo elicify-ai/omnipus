@@ -219,6 +219,10 @@ type previewModelForms struct {
 	// has no room for it, it gets its text and a note, not the not-re-sent
 	// marker (architect rule G5 §5). Set per call by the assembler.
 	newest bool
+	// pdfCountUsedUp: the provider's per-request native-PDF count (maxPDFs)
+	// is used up by other PDFs in the request, so pdf was turned off for this
+	// call (AD-6). Set per call by the assembler; the note names it (G12).
+	pdfCountUsedUp bool
 }
 
 // noBudgetNote is the note on the newest preview when the request's 32 MiB
@@ -272,7 +276,7 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 		if forms.maxPDFs > 0 && pdfsLeft == 0 {
 			// The provider's per-request document count is used up by newer
 			// calls: this one goes as page images (or text).
-			callForms.pdf = false
+			callForms.pdf, callForms.pdfCountUsedUp = false, forms.pdf
 		}
 		before := len(live[i].Media)
 		used, err := attachDocumentPreview(ctx, &live[i], d, callForms, budget)
@@ -368,6 +372,10 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 		sizeNote = fmt.Sprintf("; the PDF (%.1f MiB) is larger than this model's native PDF limit (%.1f MiB)",
 			float64(len(d.PDF))/(1<<20), float64(forms.maxPDF)/(1<<20))
 	}
+	countNote := ""
+	if forms.pdfCountUsedUp && len(d.PDF) > 0 && len(d.PDF) <= forms.maxPDF {
+		countNote = fmt.Sprintf("; the provider's per-request PDF count limit (%d) is used up by other PDFs in this request", forms.maxPDFs)
+	}
 	if forms.images && len(d.Pages) == 0 && d.RenderPages != nil {
 		// Rendered on first need, once (read_file on a PDF, §4.1).
 		pages, unavailable, note := d.RenderPages(ctx)
@@ -383,11 +391,14 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 		}
 		noBudget = forms.noBudgetNote()
 	}
-	reason := sizeNote + noBudget
+	reason := sizeNote + countNote + noBudget
 	switch {
 	case noBudget != "":
 	case d.ImagesUnavailable != "":
 		reason = "; page images unavailable: " + d.ImagesUnavailable + reason
+	case countNote != "":
+		// The model reads PDFs; the count limit, not the model, is why
+		// this one went as text (G12).
 	case !forms.images:
 		reason = "; this model reads text only" + reason
 	}

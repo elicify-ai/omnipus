@@ -14,12 +14,15 @@
 // manifest into Omnipus's protected data directory ($OMNIPUS_HOME/system/
 // components/<kind>/), marked operator-registered with the operator, time
 // and path. It refuses a folder any agent can write (writer exclusion). The
-// running gateway picks the change up on its next preview call.
+// running gateway picks the change up on its next preview call — except on
+// Linux under the confined file model, where it needs Omnipus stopped and
+// started, and the command says so (office-preview spec §3.8 BR-2.7).
 package components
 
 import (
 	"fmt"
 	"os/user"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
@@ -27,7 +30,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/preview"
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
+
+// confinedRestartHint is printed after a successful registration on Linux
+// under the confined file model (office-preview spec §3.8 BR-2.7): the
+// running gateway's startup rules cover only components present when it
+// started.
+const confinedRestartHint = "Stop and start Omnipus (for example with your service manager) to use this component; the in-app restart is not enough in the confined sandbox, which lets the running gateway use only components installed before it started."
 
 // NewPDFRendererCommand returns `omnipus pdf-renderer`.
 func NewPDFRendererCommand() *cobra.Command {
@@ -64,17 +74,21 @@ func registerCommand(kind component.Kind, use, short string, register func(compo
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home := internal.GetOmnipusHome()
+			cfg, cfgErr := config.LoadConfig(internal.GetConfigPath())
 			opts := component.RegisterOptions{
 				Home:       home,
 				Folder:     args[0],
 				Operator:   operatorName(),
-				WriteRoots: configuredWriteRoots(home),
+				WriteRoots: configuredWriteRoots(home, cfg, cfgErr),
 			}
 			m, err := register(opts)
 			if err != nil {
 				return fmt.Errorf("%s not registered: %w", kind, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Registered %s %s from %s\n", kind, m.Version, m.Root)
+			if needsRestartHint(cfg, cfgErr) {
+				fmt.Fprintln(cmd.OutOrStdout(), confinedRestartHint)
+			}
 			return nil
 		},
 	}
@@ -114,10 +128,26 @@ func operatorName() string {
 // component against them (and against configuration reloads) before every
 // use, so a component registered here is still disabled there if a grant
 // covers it.
-func configuredWriteRoots(home string) []component.WriteRoot {
-	cfg, err := config.LoadConfig(internal.GetConfigPath())
-	if err != nil {
-		return []component.WriteRoot{{All: true, Grant: "agent write settings (the configuration could not be read: " + err.Error() + ")"}}
+func configuredWriteRoots(home string, cfg *config.Config, cfgErr error) []component.WriteRoot {
+	if cfgErr != nil {
+		return []component.WriteRoot{{All: true, Grant: "agent write settings (the configuration could not be read: " + cfgErr.Error() + ")"}}
 	}
 	return preview.ConfiguredWriteRoots(home, cfg, nil)
+}
+
+// needsRestartHint reports whether a successful registration prints
+// confinedRestartHint: on Linux when the configured file model is confined,
+// resolved as the gateway resolves it (an empty value is confined), and when
+// the configuration cannot be read or names an unknown model — a hint that
+// is not needed is harmless, a missing one leaves a component that silently
+// fails (BR-2.7). macOS and Windows never print it.
+func needsRestartHint(cfg *config.Config, cfgErr error) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	if cfgErr != nil || cfg == nil {
+		return true
+	}
+	model, err := sandbox.ParseFilesystemModel(cfg.Sandbox.FilesystemModel, sandbox.FilesystemModelConfined)
+	return err != nil || model == sandbox.FilesystemModelConfined
 }

@@ -78,13 +78,16 @@ type protocolProgram struct {
 	call      *call
 	maxInput  int64
 	extraExes []string
+	// observe, when set, is called once per confined start (the renderer's
+	// testHookRendererStart; nil for extract-text).
+	observe func(converterStart)
 }
 
 // run sends req with input and returns the validated response. Pages go to
 // sink as they arrive (at most one frame held per program, AD-6).
 func (p protocolProgram) run(ctx context.Context, req protocol.Request, input []byte, sink protocol.PageSink) (*protocol.Response, string, error) {
 	req.MaxInput = p.maxInput
-	hooks := hooksFor(p.confine)
+	hooks := hooksFor(p.confine).observedBy(p.observe)
 	p.call.noteUnconfined(hooks.unconfined)
 	proc, err := launcher.Start(launcher.Spec{
 		Self:    p.self,

@@ -227,6 +227,10 @@ const (
 	StatusMissing
 	StatusDamaged
 	StatusUnsafe
+	// StatusAfterStart: the component folder was installed, registered,
+	// moved or replaced after the confined Linux startup rules were made, so
+	// those rules do not cover it (office-preview spec §3.8 BR-2.5).
+	StatusAfterStart
 )
 
 // Component is a resolved, verified component.
@@ -413,7 +417,10 @@ func RegisteredDir(home string, kind Kind) string {
 // Resolve returns the usable component of kind, or a Problem. An
 // operator-registered component wins over a packaged one (it is the
 // operator's explicit choice); a registration that fails verification is
-// reported as damaged and never falls back to another program (AD-4).
+// reported as damaged and never falls back to another program (AD-4). When
+// the gateway's confined Linux startup rules are recorded (SetStartupGrants),
+// a folder they do not cover is refused before anything in it is read
+// (CheckStartupGrant, office-preview spec §3.8 BR-2.5).
 func (r *Resolver) Resolve(kind Kind) (*Component, *ComponentError) {
 	regDir := RegisteredDir(r.Home, kind)
 	regManifest := filepath.Join(regDir, ManifestFile)
@@ -425,12 +432,24 @@ func (r *Resolver) Resolve(kind Kind) (*Component, *ComponentError) {
 		if m.Trust != TrustOperatorRegistered {
 			return nil, damaged("registered manifest is not marked operator-registered")
 		}
+		if p := CheckStartupGrant(m.Root); p != nil {
+			return nil, p
+		}
 		return load(kind, m, m.Root, regDir, "registered: "+m.Root)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, damaged("registered manifest unreadable: %v", err)
 	}
 	for _, cand := range r.PackagedCandidates(kind) {
-		data, err := os.ReadFile(filepath.Join(cand, ManifestFile))
+		manifest := filepath.Join(cand, ManifestFile)
+		// Metadata only: under the confined startup rules nothing in a
+		// slot is read before CheckStartupGrant clears it (BR-2.5).
+		if _, err := os.Lstat(manifest); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if p := CheckStartupGrant(cand); p != nil {
+			return nil, p
+		}
+		data, err := os.ReadFile(manifest)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
