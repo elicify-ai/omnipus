@@ -1,32 +1,41 @@
 /**
- * DataSection.backup-removal-1919.test.tsx — RED tests for issue #1919
- * (founder decision P-Q3b B, 2026-11-19): Backup and Restore is removed
- * from Settings, Data.
+ * DataSection.backup-removal-1919.test.tsx — issue #1919 (founder decision
+ * P-Q3b B, 2026-11-19): Backup and Restore is removed; Settings redesign
+ * #1519 carries it forward as FR-061 ("No backup or restore control MUST
+ * appear; old links show the FR-003 notice") and D-3 row 11 (`backup`,
+ * `backups`, `restore` land in Data & retention with the notice "Backup and
+ * restore were removed.").
  *
- * The NEW truth pinned here:
- *   1. The Data section shows NO backup UI in any edition — no "Backup &
- *      Restore" section, no Create backup / Restore buttons, and the
- *      heading is exactly "Data" even in local mode (the mode that used to
- *      show "Data & Backup").
+ * The truth pinned here:
+ *   1. The Data & retention section shows NO backup UI in any edition — no
+ *      "Backup & Restore" section, no Create backup / Restore buttons, no
+ *      backup-flavoured text. The local-mode "Data & Backup" heading variant
+ *      is part of the removed feature; the section is Data & retention now
+ *      (the shell renders its heading; the section body has no backup text).
  *   2. The section makes NO request to any backup endpoint
  *      (/api/v1/backups, /api/v1/backup, /api/v1/restore).
- *   3. CONTROLS (pass today, must keep passing): the neighbouring Data
- *      controls — storage stat boxes, session retention, danger zone —
- *      still render, and platform mode is unchanged.
+ *   3. FR-003/D-3 row 11: with the backup link flag set (the route resolves
+ *      `?tab=backup` to this section with `backupRemoved`), the notice
+ *      "Backup and restore were removed." shows. Without the flag, no notice.
+ *   4. CONTROLS (pass today, must keep passing): the neighbouring Data &
+ *      retention controls — storage stat boxes, the retention fields, the
+ *      Danger zone's "Clear all chat history" (FR-108) — still render.
  *
  * Oracle note (test-writing skill: oracle independence): every expected
- * value here comes from issue #1919's brief, not from the current
- * implementation. The real '@/lib/api' module is loaded — createBackup /
- * fetchBackups / restoreBackup are deliberately NOT mocked — so the fetch
- * edge sees every request the section actually makes. Only the surviving
- * read APIs are fixture-mocked (their zod-validated wire shapes are not
- * what this test exercises), and global fetch is stubbed at the process
- * edge: it records every URL and rejects relative inputs with the exact
- * TypeError src/test/setup.ts's guard produces, so the application's catch
- * behaviour is unchanged. After the developer removes the feature this
- * file compiles unchanged: it imports only APIs that survive the removal.
+ * value comes from the #1919 brief and the spec (FR-003, FR-061, FR-108,
+ * D-3 row 11), not from the implementation. The real '@/lib/api' module is
+ * loaded — createBackup / fetchBackups / restoreBackup are deliberately NOT
+ * mocked — and global fetch is stubbed at the process edge: it records every
+ * URL and rejects relative inputs with the exact TypeError src/test/setup.ts
+ * 's guard produces, so the application's catch behaviour is unchanged.
+ *
+ * Harness: the redesign's real section body — DataRetentionSection, which
+ * embeds the old DataSection (storage counts + Danger zone). Loaded through
+ * import.meta.glob so the file compiles on the pre-redesign tree and fails
+ * loudly as BLOCKED RED there, never as an import error.
  */
 
+import type { ComponentType } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -35,12 +44,18 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchConfig: vi.fn(),
-    updateConfig: vi.fn(),
     fetchStorageStats: vi.fn(),
     fetchAppState: vi.fn(),
     clearAllSessions: vi.fn(),
-    reAuth: vi.fn(),
+    // The retention read of the Data & retention section (FR-041 shape).
+    fetchRetentionSettings: vi.fn(async () => ({
+      session_days: 90,
+      memory_retros_days: 180,
+      memory_retros_forever: false,
+      keep_everything_forever: false,
+    })),
+    updateRetentionSettings: vi.fn(),
+    fetchConfig: vi.fn(),
   }
 })
 
@@ -49,9 +64,23 @@ vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(() => ({ addToast: mockAddToast })),
 }))
 
-import { fetchConfig, updateConfig, fetchStorageStats, fetchAppState } from '@/lib/api'
-import { DataSection } from './DataSection'
-import type { Config, StorageStats, AppState } from '@/lib/api'
+import { fetchStorageStats, fetchAppState } from '@/lib/api'
+
+// The Data & retention section body exists only on the redesign tree; a
+// missing module is a loud per-case failure, not a skipped test or an
+// import/collection error.
+const sectionModules = import.meta.glob<{ DataRetentionSection: ComponentType }>('./DataRetentionSection.tsx')
+async function loadDataRetentionSection() {
+  const load = sectionModules['./DataRetentionSection.tsx']
+  if (!load) {
+    expect.fail(
+      'BLOCKED RED (FR-061/FR-003/D-3 row 11/D-9 row 9): DataRetentionSection.tsx not implemented — the Data & retention section body that must show no backup UI and the removal notice',
+    )
+  }
+  const module = await load()
+  expect(module, 'the Data & retention section body must export DataRetentionSection').toHaveProperty('DataRetentionSection')
+  return module.DataRetentionSection
+}
 
 // ── Fetch edge: the network instrument ───────────────────────────────────────
 
@@ -71,16 +100,14 @@ function backupFetchCalls(): string[] {
   return fetchCalls.filter((u) => backupEndpointPattern.test(u))
 }
 
-// Settles every query the section starts — symmetric wait, no sleeps: today
-// it also waits out the (removed-feature) backups query, after removal it
-// settles as soon as the three legitimate reads finish.
-async function renderSettled() {
+async function renderSettled({ backupRemoved = false }: { backupRemoved?: boolean } = {}) {
+  const Section = await loadDataRetentionSection()
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   const utils = render(
     <QueryClientProvider client={client}>
-      <DataSection />
+      <Section backupRemoved={backupRemoved} />
     </QueryClientProvider>,
   )
   await waitFor(() => {
@@ -91,45 +118,34 @@ async function renderSettled() {
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-const baseConfig: Config = {
-  gateway: { bind_address: '0.0.0.0', port: 5000 },
-  security: { rate_limits: {} },
-  data: { session_retention_days: 90 },
-}
-
-const baseStats: StorageStats = {
+const baseStats = {
   workspace_size_bytes: 1024,
   session_count: 3,
   memory_entry_count: 10,
 }
 
-const localAppState = { onboarding_complete: true, identity: { mode: 'local' } } as AppState
-const platformAppState = { onboarding_complete: true } as AppState
+const localAppState = { onboarding_complete: true, identity: { mode: 'local' } }
+const platformAppState = { onboarding_complete: true }
 
 beforeEach(() => {
   vi.clearAllMocks()
   fetchCalls.length = 0
   vi.stubGlobal('fetch', fetchSpy)
-  vi.mocked(fetchConfig).mockResolvedValue(baseConfig)
-  vi.mocked(updateConfig).mockResolvedValue(baseConfig)
   vi.mocked(fetchStorageStats).mockResolvedValue(baseStats)
-  vi.mocked(fetchAppState).mockResolvedValue(platformAppState)
+  vi.mocked(fetchAppState).mockResolvedValue(platformAppState as never)
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// ── RED: the backup UI is gone (issue #1919) ─────────────────────────────────
+// ── The backup UI is gone (#1919 → FR-061) ───────────────────────────────────
 
-describe('DataSection — issue #1919: Backup and Restore is removed', () => {
-  it('local mode: no backup UI remains — no Backup & Restore section, no Create backup or Restore buttons, heading exactly "Data"', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue(localAppState)
+describe('Data & retention — issue #1919 / FR-061: Backup and Restore is removed', () => {
+  it('local mode: no backup UI remains — no Backup & Restore section, no Create backup or Restore buttons, no backup text', async () => {
+    vi.mocked(fetchAppState).mockResolvedValue(localAppState as never)
     await renderSettled()
 
-    // Heading must be exactly "Data" — the local-mode "Data & Backup"
-    // variant is part of the removed feature.
-    expect(screen.queryByText('Data')).toBeInTheDocument()
     expect(screen.queryByText('Data & Backup')).not.toBeInTheDocument()
     // No backup-flavoured text anywhere: section title, list states, error
     // states, dialog titles all used the word.
@@ -141,16 +157,28 @@ describe('DataSection — issue #1919: Backup and Restore is removed', () => {
   })
 
   it('local mode: the section makes no request to any backup endpoint', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue(localAppState)
+    vi.mocked(fetchAppState).mockResolvedValue(localAppState as never)
     await renderSettled()
 
     expect(backupFetchCalls()).toEqual([])
   })
 
+  it('D-3 row 11: with the backup link flag, the notice "Backup and restore were removed." shows (FR-003/FR-061)', async () => {
+    await renderSettled({ backupRemoved: true })
+    expect(
+      await screen.findByText('Backup and restore were removed.'),
+      'BLOCKED RED (FR-003/D-3 row 11): an old backup link must show the removal notice in Data & retention',
+    ).toBeInTheDocument()
+  })
+
+  it('without the flag no removal notice shows (the notice is the old-link answer, not the section default)', async () => {
+    await renderSettled()
+    expect(screen.queryByText('Backup and restore were removed.')).not.toBeInTheDocument()
+  })
+
   // ── CONTROLS: pass today, must keep passing ────────────────────────────────
 
-  it('CONTROL local mode: the neighbouring Data controls still render — storage stats, session retention, danger zone', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue(localAppState)
+  it('CONTROL: the neighbouring Data & retention controls still render — storage stats, retention fields, the FR-108 danger zone', async () => {
     await renderSettled()
 
     // Storage stat boxes with the fixture values (formatBytes(1024) = "1.0 KB").
@@ -160,21 +188,25 @@ describe('DataSection — issue #1919: Backup and Restore is removed', () => {
     expect(screen.getByText('3')).toBeInTheDocument()
     expect(screen.getByText('Memory entries')).toBeInTheDocument()
     expect(screen.getByText('10')).toBeInTheDocument()
-    // Session retention: header + hydrated persisted value.
-    expect(screen.getByText('Session Retention')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('90')).toBeInTheDocument()
-    // Danger zone.
-    expect(screen.getByText('Danger Zone')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /clear sessions/i })).toBeInTheDocument()
+    // The retention fields live in this section now (D-9 row 9: kept/moved here).
+    // The days field and the memory-forever switch are asserted by their
+    // distinguishing queries — the exact label oracles live in
+    // dataRetention.section.test.tsx.
+    expect(screen.getByLabelText(/^keep chat history for/i)).toBeInTheDocument()
+    // The memory-forever switch (the spec's exact label oracle, "Keep
+    // forever", lives in dataRetention.section.test.tsx; this CONTROL only
+    // requires the switch to render).
+    expect(screen.getByRole('switch', { name: /keep.*forever/i })).toBeInTheDocument()
+    // Danger zone with the FR-108 wording.
+    expect(screen.getByRole('button', { name: /clear all chat history/i })).toBeInTheDocument()
   })
 
-  it('CONTROL platform mode: Data section unchanged — no backup UI and no backup request (hidden there today, stays hidden after removal)', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue(platformAppState)
-    await renderSettled()
+  it('CONTROL: with the backup flag set the controls still render alongside the notice', async () => {
+    await renderSettled({ backupRemoved: true })
 
-    expect(screen.queryByText('Data')).toBeInTheDocument()
-    expect(screen.queryByText(/backup/i)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /create backup/i })).not.toBeInTheDocument()
-    expect(backupFetchCalls()).toEqual([])
+    expect(await screen.findByText('Backup and restore were removed.')).toBeInTheDocument()
+    expect(screen.getByText('Workspace')).toBeInTheDocument()
+    expect(screen.getByLabelText(/keep chat history for/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /clear all chat history/i })).toBeInTheDocument()
   })
 })
