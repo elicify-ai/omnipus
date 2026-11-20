@@ -45,7 +45,7 @@ import {
   getErrorMessage,
   type PerformanceSettingsUpdate,
 } from '@/lib/api'
-import type { MaxToolIterationAgentChange, PerformanceSettings } from '@/lib/api/generated/openapi-types'
+import type { MaxToolIterationAgentChange, PerformancePendingApply, PerformanceSettings } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { savedStateWarning, MAX_TOOL_ITERATIONS_MIN, MAX_TOOL_ITERATIONS_MAX } from './MaxToolIterationsCard'
 import { MaxToolIterationsLoweringDialog } from './MaxToolIterationsLoweringDialog'
@@ -148,6 +148,21 @@ function bodyOf(changed: Key[], v: Values): PerformanceSettingsUpdate {
 function loweredSummaryText(agents: MaxToolIterationAgentChange[]): string {
   const list = agents.map((a) => `${a.agent_name} ${a.old_value} → ${a.new_value}`).join(', ')
   return `Lowered ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}: ${list}`
+}
+
+/**
+ * What the fields show while a save is not applied yet (contract
+ * PerformancePendingApply.stage). At stage reload the running configuration
+ * already holds the new values. At stage refresh the read still returns the
+ * OLD values, so the fields show the saved ones only where this page knows
+ * them from its own save.
+ */
+function pendingFieldsLine(p: PerformancePendingApply, known: Partial<Values>): string {
+  if (p.stage === 'reload') return 'The fields show the saved values.'
+  const allKnown = p.changed_fields.length > 0 && p.changed_fields.every((f) => f in known)
+  return allKnown
+    ? 'The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the previous ones.'
+    : 'The fields below still show the values Omnipus is running on; the saved ones take effect after the restart or reload.'
 }
 
 interface LoweringState { // not-wire-format: screen-only dialog state
@@ -382,7 +397,7 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
         {data.pending_apply && (
           <Callout variant="info" data-testid="performance-unapplied-notice">
             <CalloutTitle>Some saved values are not in use yet</CalloutTitle>
-            <CalloutDescription>{performancePendingApplyMessage(data.pending_apply)} The fields show the saved values.</CalloutDescription>
+            <CalloutDescription>{performancePendingApplyMessage(data.pending_apply)} {pendingFieldsLine(data.pending_apply, known)}</CalloutDescription>
           </Callout>
         )}
         <Card className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">

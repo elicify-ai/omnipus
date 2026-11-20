@@ -265,8 +265,8 @@ A turn can also stop before the limit when the agent repeats itself without prog
 ### How to change it
 
 1. Open Settings, then the **Limits** section.
-2. Find the **Tool calls per turn** card and type a new number into **Max tool calls per turn**. It saves by itself a moment after you stop typing.
-3. If the new value is lower than the current one and some agents have their own higher limit, a dialog lists each of those agents as *old value → new value*. Click **Lower limits** to go ahead, or cancel to change nothing.
+2. Open the **Agents and goals** group and type a new number into **Max tool calls per turn**. Nothing is stored yet: the Save bar counts the change.
+3. Click **Save changes**. If the new value is lower than the current one and some agents have their own higher limit, a dialog lists each of those agents as *old value → new value*. Click **Lower limits** to go ahead, or cancel to change nothing.
 4. Re-type your password when asked. (Where there is no local password to re-type, you confirm the change instead.)
 
 Every change is recorded in the audit log as a `security_setting_change` event. The global limit is recorded as `agents.defaults.max_tool_iterations`, and each lowered agent as `agents.<agent id>.max_tool_iterations`, with the old and new values.

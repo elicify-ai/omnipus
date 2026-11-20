@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Eye, EyeSlash, ShieldCheck, SpinnerGap, XCircle } from '@phosphor-icons/react'
 import {
   Dialog,
@@ -46,6 +46,13 @@ export function ReAuthDialog({
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  // FR-029: after a refusal the person types again, so focus returns to the
+  // password field.
+  const refuse = (message: string) => {
+    setError(message)
+    inputRef.current?.focus()
+  }
 
   const reset = () => {
     setPassword('')
@@ -61,7 +68,7 @@ export function ReAuthDialog({
 
   const handleSubmit = async () => {
     if (!password.trim()) {
-      setError('Enter your password to continue.')
+      refuse('Enter your password to continue.')
       return
     }
     setSubmitting(true)
@@ -83,7 +90,7 @@ export function ReAuthDialog({
           429: 'Too many tries. Wait a minute, then try again.',
         },
       })
-      setError(message)
+      refuse(message)
     }
   }
 
@@ -131,6 +138,7 @@ export function ReAuthDialog({
               placeholder="Your password"
               autoComplete="current-password"
               autoFocus
+              ref={inputRef}
               className="pr-[var(--space-6)]"
               data-testid="reauth-password-input"
             />
@@ -168,7 +176,10 @@ export function ReAuthDialog({
           <Button
             size="sm"
             onClick={handleSubmit}
-            disabled={submitting || !password.trim()}
+            // The Settings Save prompt (items given) refuses an empty password
+            // inline with a message (D-11 row 3); elsewhere Confirm stays
+            // disabled until something is typed.
+            disabled={submitting || (!items?.length && !password.trim())}
             data-testid="reauth-confirm"
           >
             {submitting ? (
