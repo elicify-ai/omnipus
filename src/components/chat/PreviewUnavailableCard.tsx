@@ -20,7 +20,7 @@ import { retrySessionPreview } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import type { MediaAttachment } from '@/store/chat'
 import type { MediaPreview } from '@/lib/api/generated/asyncapi-types'
-import { unavailableReasonText } from './previewGroups'
+import { unavailableHeadline } from './previewGroups'
 
 type RetryState =
   | { kind: 'idle' }
@@ -66,8 +66,7 @@ export function PreviewUnavailableCard({ sessionId, toolCallId, sourceName, reas
   if (retry.marker !== marker) setRetry({ marker, state: { kind: 'idle' } })
   const state = retry.marker === marker ? retry.state : { kind: 'idle' as const }
 
-  const reasonText = unavailableReasonText(reason)
-  const headline = reasonText ? `Page previews unavailable — ${reasonText}` : 'Page previews unavailable'
+  const headline = unavailableHeadline(reason)
   const retryable =
     reason !== 'renderer_missing' &&
     !!toolCallId &&

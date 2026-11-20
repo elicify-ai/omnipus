@@ -77,6 +77,9 @@ type Service struct {
 
 	officeMu sync.Mutex
 	office   *component.Component
+	// officeSelection identifies the operator registration office was
+	// resolved under (registrationIdentity); a different value drops it.
+	officeSelection string
 
 	// memoryUnenforced is the §3.1 D1.4 reason, "" when the memory limit is
 	// enforced (computed once at New).
@@ -201,8 +204,12 @@ type Result struct {
 	Pages                         []Page
 	// Text is the extracted text of First..Last (≤ 4 MiB).
 	Text []protocol.TextPage
-	// TextTruncated reports that the 4 MiB text budget cut the text.
+	// TextTruncated reports that a text limit cut the text: one page's frame
+	// limit (about 1 MiB) or the 4 MiB budget of the call (protocol.TextCut).
 	TextTruncated bool
+	// TextProblem is why no text could be extracted at all (Text is then
+	// nil); "" otherwise. A single page that failed is named in Text instead.
+	TextProblem string
 	// RenderReason is "" when pages were rendered, else a Reason* value;
 	// RenderDetail is the human reason.
 	RenderReason string
@@ -237,6 +244,11 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 	defer c.finish()
 
 	pdf := req.Data
+	// pdfSum keys the rendered-page cache: the SHA-256 of the PDF actually
+	// rendered (AD-9). For Office input that is the converted PDF, which can
+	// differ between conversions of the same source (formulas are
+	// recalculated on load); the source digest stays the SourceVersion.
+	pdfSum := sum
 	maxInput := int64(protocol.MaxInputPDF)
 	if IsOffice(req.Ext) {
 		office, problem := s.officeComponent(req.CallerWriteRoots)
@@ -257,6 +269,7 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 			return nil, convErr
 		}
 		pdf = converted
+		pdfSum = sha256.Sum256(converted)
 		maxInput = protocol.MaxInputConverted
 	}
 	res.PDF = pdf
@@ -291,7 +304,7 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 		return nil, err
 	}
 	if render != nil {
-		if renderErr := s.renderPages(ctx, render, pdf, sum, res); renderErr != nil {
+		if renderErr := s.renderPages(ctx, render, pdf, pdfSum, res); renderErr != nil {
 			var f *failure
 			if errors.As(renderErr, &f) && f.Kind == failStopped {
 				return nil, renderErr
@@ -321,20 +334,26 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 	if textErr != nil && render != nil {
 		text, textErr = s.text(ctx, extract, pdf, res.First, res.Last)
 	}
+	if f := (*failure)(nil); errors.As(textErr, &f) && f.Kind == failText {
+		// One page's text could not be extracted: extract page by page so
+		// the other pages keep their text and the failed page is named, not
+		// delivered as a blank page (AD-15, SF-02).
+		text, textErr = s.textByPage(ctx, extract, pdf, res.First, res.Last)
+	}
 	if textErr != nil {
 		var f *failure
 		if errors.As(textErr, &f) && f.Kind == failStopped {
 			return nil, textErr
 		}
-		// Text is a fallback form; its failure does not undo a render.
+		// Text is a fallback form; its failure does not undo a render, but
+		// the cause is kept for the model and the log (SF-02).
+		logger.WarnCF("preview", "document text extraction failed",
+			map[string]any{"name": req.Name, "first_page": res.First, "last_page": res.Last, "error": textErr.Error()})
 		res.Text = nil
+		res.TextProblem = textErr.Error()
 	} else {
 		res.Text = text
-		total := 0
-		for _, t := range text {
-			total += len(t.Text)
-		}
-		res.TextTruncated = total >= protocol.MaxTextTotalBytes
+		res.TextTruncated = protocol.TextCut(text)
 	}
 	res.Unconfined = c.unconfinedReason()
 	res.MemoryUnenforced = s.memoryUnenforced
@@ -423,6 +442,34 @@ func (s *Service) text(ctx context.Context, prog protocolProgram, pdf []byte, fi
 	return resp.Text, nil
 }
 
+// textByPage extracts first..last one page per run after a page's text
+// failed: a page that fails again is kept as a "[text extraction failed on
+// page n: …]" entry; any other failure (Stop, a crash, a limit) ends it. The
+// 4 MiB whole-call budget still applies across the runs.
+func (s *Service) textByPage(ctx context.Context, prog protocolProgram, pdf []byte, first, last int) ([]protocol.TextPage, error) {
+	var out []protocol.TextPage
+	total := 0
+	for p := first; p <= last && total < protocol.MaxTextTotalBytes; p++ {
+		pages, err := s.text(ctx, prog, pdf, p, p)
+		var f *failure
+		switch {
+		case err == nil:
+		case errors.As(err, &f) && f.Kind == failText:
+			pages = []protocol.TextPage{{Number: uint32(p), Text: "[" + f.Message + "]"}}
+		default:
+			return nil, err
+		}
+		for _, page := range pages {
+			if room := protocol.MaxTextTotalBytes - total; len(page.Text) > room {
+				page.Text = protocol.TruncateUTF8(page.Text, room)
+			}
+			total += len(page.Text)
+			out = append(out, page)
+		}
+	}
+	return out, nil
+}
+
 func (s *Service) writeRoots(caller []component.WriteRoot) []component.WriteRoot {
 	var roots []component.WriteRoot
 	if s.cfg.WriteRoots != nil {
@@ -448,10 +495,17 @@ func (s *Service) rendererComponent(caller []component.WriteRoot) (*component.Co
 }
 
 // officeComponent resolves LibreOffice once and re-verifies it when a
-// fingerprinted file's size or modification time changed (AD-4).
+// fingerprinted file's size or modification time changed (AD-4). A changed
+// operator registration (registered, unregistered or re-registered elsewhere)
+// drops the cached selection, so the next preview uses the current one
+// without a gateway restart (SF-11).
 func (s *Service) officeComponent(caller []component.WriteRoot) (*component.Component, *failure) {
 	s.officeMu.Lock()
 	defer s.officeMu.Unlock()
+	selection := registrationIdentity(s.cfg.Home, component.KindOffice)
+	if s.office != nil && selection != s.officeSelection {
+		s.office = nil
+	}
 	if s.office != nil {
 		if problem := s.office.VerifyIfChanged(); problem != nil {
 			s.office = nil
@@ -462,12 +516,27 @@ func (s *Service) officeComponent(caller []component.WriteRoot) (*component.Comp
 		if problem != nil {
 			return nil, officeProblem(problem)
 		}
-		s.office = comp
+		s.office, s.officeSelection = comp, selection
 	}
 	if overlap := component.FirstOverlap(s.office.Root, s.writeRoots(caller)); overlap != nil {
 		return nil, docFailure(fmt.Sprintf("Office preview is in a folder an agent can write (%s); disabled until that access is removed.", overlap.Grant))
 	}
 	return s.office, nil
+}
+
+// registrationIdentity is the identity of kind's operator registration: the
+// SHA-256 of its manifest, "none" when there is none, or the read error. The
+// manifest is small and read once per preview.
+func registrationIdentity(home string, kind component.Kind) string {
+	data, err := os.ReadFile(filepath.Join(component.RegisteredDir(home, kind), component.ManifestFile))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "none"
+	case err != nil:
+		return "unreadable: " + err.Error()
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func officeProblem(p *component.ComponentError) *failure {

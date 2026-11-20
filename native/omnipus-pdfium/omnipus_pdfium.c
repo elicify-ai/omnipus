@@ -269,7 +269,14 @@ static size_t utf8_cut(const char *s, size_t n) {
 
 static void emit_text(FPDF_PAGE page, uint32_t pg, size_t *text_total) {
   FPDF_TEXTPAGE tp = FPDFText_LoadPage(page);
-  int nch = tp ? FPDFText_CountChars(tp) : 0;
+  if (!tp) {
+    /* A page whose text cannot be loaded is a typed failure naming the page,
+       never an empty successful page (AD-15, SF-02). */
+    char msg[64];
+    snprintf(msg, sizeof msg, "text extraction failed on page %u", (unsigned)pg);
+    fail("text_failed", msg, 4);
+  }
+  int nch = FPDFText_CountChars(tp);
   size_t n8 = 0;
   char *u8 = NULL;
   if (nch > 0) {
@@ -290,7 +297,7 @@ static void emit_text(FPDF_PAGE page, uint32_t pg, size_t *text_total) {
   put_u32(p4, pg);
   frame(F_TEXT, p4, 4, u8, (uint32_t)n8);
   free(u8);
-  if (tp) FPDFText_ClosePage(tp);
+  FPDFText_ClosePage(tp);
 }
 
 /* ---- render ---- */

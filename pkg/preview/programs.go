@@ -53,6 +53,7 @@ const (
 	failDocument failureKind = iota // the document is the problem
 	failProgram                     // the program failed (protocol, crash, limit)
 	failStopped                     // Stop or deadline
+	failText                        // one page's text could not be extracted
 )
 
 func (f *failure) Error() string { return f.Message }
@@ -163,6 +164,8 @@ func classifyProgramError(err error, proc *launcher.Process) *failure {
 			return programFailure("rendering stopped: page image size exceeded")
 		case "oom":
 			return programFailure("rendering stopped: memory exceeded")
+		case protocol.CodeTextFailed:
+			return &failure{Message: ef.Message, Kind: failText}
 		default:
 			return programFailure("PDF renderer failed (" + ef.Code + ")")
 		}

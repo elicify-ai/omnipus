@@ -57,6 +57,8 @@ func (fw *FrameWriter) Meta(m Meta) error {
 
 // Text writes one TEXT frame. Text that would exceed the per-frame or
 // per-call ceiling is cut at a UTF-8 boundary; the returned bool reports a cut.
+// A per-frame cut leaves room for later pages; TextBudgetSpent reports when
+// the per-call ceiling is used up.
 func (fw *FrameWriter) Text(page uint32, text string) (bool, error) {
 	cut := false
 	room := MaxTextTotalBytes - fw.text
@@ -78,6 +80,12 @@ func (fw *FrameWriter) Text(page uint32, text string) (bool, error) {
 	return cut, fw.frame(FrameText, payload)
 }
 
+// TextBudgetSpent reports that the per-call text ceiling has no room left
+// for even one more character, so later pages cannot be sent.
+func (fw *FrameWriter) TextBudgetSpent() bool {
+	return MaxTextTotalBytes-fw.text < utf8.UTFMax
+}
+
 // Error writes the terminal ERROR frame.
 func (fw *FrameWriter) Error(code, message string) error {
 	if len(message) > MaxErrorBytes/2 {
@@ -96,6 +104,9 @@ func (fw *FrameWriter) Done() error {
 	binary.LittleEndian.PutUint32(b[:], fw.frames+1)
 	return fw.frame(FrameDone, b[:])
 }
+
+// TruncateUTF8 cuts s to at most n bytes at a UTF-8 boundary.
+func TruncateUTF8(s string, n int) string { return truncateUTF8(s, n) }
 
 func truncateUTF8(s string, n int) string {
 	if n <= 0 {

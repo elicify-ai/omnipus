@@ -91,6 +91,17 @@ export function unavailableReasonText(reason: MediaPreview['unavailable_reason']
   return reason ? REASON_TEXT[reason] : null
 }
 
+/**
+ * The unavailable card's headline, also what a screen reader announces.
+ * storage_failed: the pages were rendered but not saved (a Retry may show
+ * them now), so it does not say "unavailable".
+ */
+export function unavailableHeadline(reason: MediaPreview['unavailable_reason'] | null): string {
+  if (reason === 'storage_failed') return 'Page previews could not be saved'
+  const reasonText = unavailableReasonText(reason)
+  return reasonText ? `Page previews unavailable — ${reasonText}` : 'Page previews unavailable'
+}
+
 function findByAttr(attr: string, value: string): HTMLElement | null {
   for (const el of document.querySelectorAll<HTMLElement>(`[${attr}]`)) {
     if (el.getAttribute(attr) === value && el.isConnected) return el

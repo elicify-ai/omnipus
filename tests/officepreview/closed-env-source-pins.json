@@ -1,6 +1,6 @@
 {
   "algorithm": "office-preview-env-pins/go-tokens-v1",
-  "reviewed_source": "11ffc42044434d8b5e9cd2c60f0deeb37d314e55",
+  "reviewed_source": "376c40e2d94043fb129319553233c6e26bad77dd",
   "files": {
     "cmd/omnipus/main.go": {
       "declarations": {
@@ -15,7 +15,7 @@
     },
     "pkg/preview/confine.go": {
       "declarations": {
-        "confinement": "47ccd9134876ec17e9ea582f496e8c23fcc6a88415f7fd2cb9eda0a1cbdff12c",
+        "confinement": "56d3a5beb76a5480fc56e5c764b3e4ea193daca78dc59355a04f9a91a711121f",
         "converterStart": "02bbe97de42cd53b18c1388aa1691d34fa8ab7ea4bfe549a631571c28afabd7c",
         "foldersAbove": "1ccc2937140b6ed12aa69f1bc82f61b32610f1ce8ea5fb512faa24fb9649e510",
         "realRulePath": "5f22b617b72c8b5cadb9457d0ba14fad186df702aa4db0996c85516ca5babcb4",
@@ -39,7 +39,7 @@
     },
     "pkg/preview/confine_unix.go": {
       "declarations": {
-        "confinement.policy": "9e37de583cf9eabc9df93d1f785674154a476fb6c8c6ac717b48c2444bb40f0b"
+        "confinement.policy": "72e043990ffa2958b69dc0f25868c2c18e48246763f01a83d288db61e387bb93"
       }
     },
     "pkg/preview/confine_windows.go": {
@@ -162,7 +162,7 @@
         "existingFolders": "1b0d170a646d96f98ad84dec1cb1a953cc595378bb85875d3c2957b51654d2ab",
         "fileURL": "0805dedd244e34552ea2e190904e43a93ecfd152ea40c170409e490f38b3f416",
         "officeConversion": "2a440324a3c417a113277e1743a5c37d77803975cb78021c2e7b6024eb7d53bf",
-        "officeConversion.run": "6f476af9554a9efdeee62bc696197a1084fd9eb64eeedeb43a9605cf6a91d6ad",
+        "officeConversion.run": "aeca6c577c90d27e57666a8ae0346081b6b63d3ed78f2711b268abe772c423e4",
         "officeConversion.startOnce": "6c2ed50cebc8971f240fb1b95582eb31602bed03e4e9544a94119a566d324074",
         "officeStartHooks": "31ccca225a029c38719de1377ce7ffdf9ccb89388efd6bed16467355b5093844",
         "protocolProgram": "1c576a59a35ea9cf9092e02bdab699d25d9f162309e91f91aa29e6a7a7cd3b4d",

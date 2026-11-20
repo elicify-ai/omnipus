@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media/resize"
@@ -50,12 +51,90 @@ func (p uploadPages) note(dest string, offErr error) string {
 	return line + "]"
 }
 
-// uploadPDFPageImages renders pages 1–10 of an uploaded PDF through the
-// shared preview service (same admission, limits, cache and sandbox as
-// preview_document) and resizes them to the model's image limits. The
-// resolver has no turn context, so the call is bounded by the preview call
-// timeout only.
+// uploadRenderTimeout is the page-rendering budget of one uploaded PDF,
+// admission wait included (AD-6 "Upload rendering: 20 s per PDF, then text
+// fallback"); the PDF's text form is sent either way.
+const uploadRenderTimeout = 20 * time.Second
+
+// errUploadRenderTimeout marks the upload budget, not the turn, as the
+// reason the render stopped.
+var errUploadRenderTimeout = errors.New("upload page rendering budget spent")
+
+// uploadPagesPerRequest is how many automatic upload page images one
+// request carries in total (AD-6 "≤ 20 auto upload pages per request,
+// newest uploads first").
+const uploadPagesPerRequest = 20
+
+// uploadPageAllowance is what is left of one request's automatic upload
+// page images: a page count and decoded bytes (the 32 MiB request budget).
+type uploadPageAllowance struct {
+	pages, bytes int
+}
+
+func newUploadPageAllowance() *uploadPageAllowance {
+	return &uploadPageAllowance{pages: uploadPagesPerRequest, bytes: previewRequestBudget}
+}
+
+// uploadPageJob is one uploaded PDF whose page images go into message msg:
+// the images at Media index mediaAt, the note inside injection injAt at
+// byte noteAt (between the offload line and the text).
+type uploadPageJob struct {
+	msg, mediaAt, injAt, noteAt int
+	localPath, name, dest       string
+	offErr                      error
+	limits                      catalog.ResizeLimits
+	turn                        bool // one of this turn's own uploads
+}
+
+// renderUploadPageJobs renders the jobs newest first within one request
+// allowance and places each one's images and note. Jobs are in request
+// order, so placing them in reverse keeps every earlier job's indices valid.
+// It returns the decoded bytes of the page images of this turn's uploads.
+func renderUploadPageJobs(ctx context.Context, jobs []uploadPageJob, media, injections [][]string) int {
+	allowance := newUploadPageAllowance()
+	turnBytes := 0
+	for j := len(jobs) - 1; j >= 0; j-- {
+		job := jobs[j]
+		pages := uploadPDFPageImagesWithin(ctx, allowance, job.localPath, job.name, job.limits)
+		m := media[job.msg]
+		media[job.msg] = append(m[:job.mediaAt:job.mediaAt], append(pages.images, m[job.mediaAt:]...)...)
+		inj := injections[job.msg][job.injAt]
+		injections[job.msg][job.injAt] = inj[:job.noteAt] + pages.note(job.dest, job.offErr) + inj[job.noteAt:]
+		if job.turn {
+			for _, img := range pages.images {
+				turnBytes += dataURLDecodedSize(img)
+			}
+		}
+	}
+	return turnBytes
+}
+
+// uploadPDFPageImages renders an uploaded PDF's first pages without a turn
+// (no Stop to follow) and with a request allowance of its own.
 func uploadPDFPageImages(localPath, name string, limits catalog.ResizeLimits) uploadPages {
+	return uploadPDFPageImagesWithin(context.Background(), newUploadPageAllowance(), localPath, name, limits)
+}
+
+// uploadPDFPageImagesWithin renders pages 1–10 of an uploaded PDF through
+// the shared preview service (same admission, limits, cache and sandbox as
+// preview_document) and resizes them to the model's image limits, taking
+// the images from the request's allowance. It runs under the turn's
+// context, so Stop ends it, and within uploadRenderTimeout (AD-6), not the
+// 120 s whole-call budget of preview_document.
+func uploadPDFPageImagesWithin(turnCtx context.Context, allowance *uploadPageAllowance, localPath, name string, limits catalog.ResizeLimits) uploadPages {
+	if allowance.pages <= 0 || allowance.bytes <= 0 {
+		return uploadPages{problem: fmt.Sprintf("newer uploads used this request's %d page images or %d MiB", uploadPagesPerRequest, previewRequestBudget>>20)}
+	}
+	ctx, cancel := context.WithTimeoutCause(turnCtx, uploadRenderTimeout, errUploadRenderTimeout)
+	defer cancel()
+	pages := renderUploadPages(ctx, allowance, localPath, name, limits)
+	if len(pages.images) == 0 && errors.Is(context.Cause(ctx), errUploadRenderTimeout) {
+		pages.problem = fmt.Sprintf("page rendering did not finish within %d s", int(uploadRenderTimeout/time.Second))
+	}
+	return pages
+}
+
+func renderUploadPages(ctx context.Context, allowance *uploadPageAllowance, localPath, name string, limits catalog.ResizeLimits) uploadPages {
 	svc := preview.Shared()
 	if svc == nil {
 		return uploadPages{problem: "document preview is not running"}
@@ -64,8 +143,6 @@ func uploadPDFPageImages(localPath, name string, limits catalog.ResizeLimits) up
 	if err != nil {
 		return uploadPages{problem: "the PDF could not be read (" + err.Error() + ")"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), preview.CallTimeout)
-	defer cancel()
 	adm, err := svc.Admit(ctx, false)
 	if err != nil {
 		return uploadPages{problem: err.Error()}
@@ -86,15 +163,17 @@ func uploadPDFPageImages(localPath, name string, limits catalog.ResizeLimits) up
 		return uploadPages{problem: problem}
 	}
 	out := uploadPages{pageCount: res.PageCount}
-	used := 0
 	for _, page := range res.Pages {
+		if allowance.pages == 0 {
+			break
+		}
 		decoded, _, decErr := image.Decode(bytes.NewReader(page.PNG))
 		if decErr != nil {
 			logger.WarnCF("agent", "uploaded PDF page image invalid", map[string]any{"page": page.Number, "error": decErr.Error()})
 			break
 		}
 		normalized, rsErr := resize.ResizeToFit(decoded, limits)
-		if rsErr != nil || used+len(normalized.Data) > previewRequestBudget {
+		if rsErr != nil || len(normalized.Data) > allowance.bytes {
 			break
 		}
 		if len(out.images) == 0 {
@@ -102,10 +181,11 @@ func uploadPDFPageImages(localPath, name string, limits catalog.ResizeLimits) up
 		}
 		out.last = page.Number
 		out.images = append(out.images, "data:"+normalized.Mime+";base64,"+base64.StdEncoding.EncodeToString(normalized.Data))
-		used += len(normalized.Data)
+		allowance.pages--
+		allowance.bytes -= len(normalized.Data)
 	}
 	if len(out.images) == 0 {
-		out.problem = "the page images do not fit this model's image limits"
+		out.problem = "the page images do not fit this model's image limits or this request's upload page allowance"
 	}
 	return out
 }
