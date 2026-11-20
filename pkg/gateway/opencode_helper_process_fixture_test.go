@@ -44,8 +44,8 @@ func opencodeFix1895Process() int {
 			resumeAddr = strings.TrimPrefix(arg, "--fixture-resume-address=")
 		}
 	}
-	if mode == "live_followup" {
-		return opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID)
+	if mode == "live_followup" || mode == "live_followup_pending" {
+		return opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID, mode == "live_followup_pending")
 	}
 	if mode == "startup_followup" && nativeID != "" {
 		prompt := os.Args[len(os.Args)-1]

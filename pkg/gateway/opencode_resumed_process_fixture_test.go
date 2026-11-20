@@ -17,9 +17,10 @@ const (
 
 // Both invocations are real processes. The first announces its conversation
 // before an observable tool event, then can end only through interruption.
-// Resume validates the retained native id/new prompt and prints its answer
-// before waiting at a separate exit barrier. No model or web service is used.
-func opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID string) int {
+// Resume validates the retained native id/new prompt. The pending mode waits
+// before ANY stdout; other modes print immediately. Both then wait at an exit
+// barrier. No model or web service is used.
+func opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID string, holdOutput bool) int {
 	resumed := nativeID != ""
 	if resumed {
 		prompt := os.Args[len(os.Args)-1]
@@ -36,11 +37,17 @@ func opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID string) int {
 		return 2
 	}
 	defer func() { _ = conn.Close() }()
-	fmt.Printf("{\"type\":\"step_start\",\"sessionID\":%q,\"part\":{\"type\":\"step-start\"}}\n", opencode1895LiveNativeID)
-	if resumed {
-		fmt.Printf("{\"type\":\"text\",\"sessionID\":%q,\"part\":{\"type\":\"text\",\"text\":%q}}\n", opencode1895LiveNativeID, opencode1895LiveAnswer)
-	} else {
-		fmt.Println(`{"type":"tool_use","part":{"type":"tool","id":"fixture-ready-1895","tool":"read_file","state":{"status":"completed","input":{"path":"fixture.txt"},"output":"ready"}}}`)
+	emit := func() {
+		fmt.Printf("{\"type\":\"step_start\",\"sessionID\":%q,\"part\":{\"type\":\"step-start\"}}\n", opencode1895LiveNativeID)
+		if resumed {
+			fmt.Printf("{\"type\":\"text\",\"sessionID\":%q,\"part\":{\"type\":\"text\",\"text\":%q}}\n", opencode1895LiveNativeID, opencode1895LiveAnswer)
+		} else {
+			fmt.Println(`{"type":"tool_use","part":{"type":"tool","id":"fixture-ready-1895","tool":"read_file","state":{"status":"completed","input":{"path":"fixture.txt"},"output":"ready"}}}`)
+		}
+	}
+	emitted := !resumed || !holdOutput
+	if emitted {
+		emit()
 	}
 	reader := bufio.NewReader(conn)
 	for {
@@ -51,11 +58,22 @@ func opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID string) int {
 		}
 		switch command {
 		case "probe\n":
-			if _, err = fmt.Fprintln(conn, "live-process-still-paused"); err != nil {
+			reply := "live-process-still-paused"
+			if !emitted {
+				reply = "live-process-paused-before-output"
+			}
+			if _, err = fmt.Fprintln(conn, reply); err != nil {
 				return 2
 			}
+		case "answer\n":
+			if !resumed || emitted {
+				fmt.Fprintln(os.Stderr, "fixture: answer release requires a silent resumed run")
+				return 2
+			}
+			emit()
+			emitted = true
 		case "finish\n":
-			if resumed {
+			if resumed && emitted {
 				return 0
 			}
 			fmt.Println(`{"type":"error","message":"fixture: original run must be interrupted, not released naturally"}`)
