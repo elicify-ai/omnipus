@@ -275,16 +275,13 @@ const soBarrierGap = 110 * time.Millisecond
 //
 // The pong fences ONLY the read loop, never an independent producer (a timer,
 // a goroutine such as an accepted redirect's redirectOrdinarySession, a turn's
-// hub publish, a message's post-persist echo/status). Use soSettle alone only
-// where every frame the check counts or excludes is produced synchronously by
-// the read loop or by the test itself and nothing else can still emit: a
-// REFUSED cancel/redirect (an accepted command would show synchronously as
-// command_received, the first cancel stage or cancel_idle; the refusal path
-// starts no goroutine) and a test's own synchronous hub publish. Everywhere an
-// asynchronous producer is realistic — an accepted command, a running or
-// completing turn, any message send (acceptance surfaces asynchronously after
-// PublishInbound) — use soSettleThen with the site's original observation
-// horizon.
+// hub publish, a message's post-persist echo/status), and a wrong extra frame
+// can come from such a producer on ANY path, refused or accepted. So no check
+// uses soSettle alone: every exact-list, exactly-once, absence or zero-frame
+// oracle goes through soSettleThen / soSettleThenMany with the site's ORIGINAL
+// observation window, measured from the pong. Speed comes from overlapping
+// those windows across independent connections (soSettleThenMany), never from
+// shortening one.
 func soSettle(t *testing.T, conn *websocket.Conn) []soFrame {
 	t.Helper()
 	if stored, ok := soBarrierPings.Load(conn); ok {
@@ -332,6 +329,43 @@ func soSettleThen(t *testing.T, conn *websocket.Conn, horizon time.Duration) []s
 	t.Helper()
 	out := soSettle(t, conn)
 	return append(out, soWindow(t, conn, horizon)...)
+}
+
+// soSettleThenMany is soSettleThen for several independent connections whose
+// windows overlap: it runs each connection's barrier in order, then ONE wait of
+// horizon after the LAST pong, then collects what every connection received.
+// Every connection is therefore observed for at least horizon after its own
+// pong (earlier connections for longer), exactly the guarantee soSettleThen
+// gives one connection. frames[i] belongs to conns[i], in arrival order.
+func soSettleThenMany(t *testing.T, conns []*websocket.Conn, horizon time.Duration) [][]soFrame {
+	t.Helper()
+	out := make([][]soFrame, len(conns))
+	for i, conn := range conns {
+		out[i] = soSettle(t, conn)
+	}
+	time.Sleep(horizon)
+	for i, conn := range conns {
+		out[i] = append(out[i], soDrain(t, conn)...)
+	}
+	return out
+}
+
+// soDrain returns every frame conn's reader already received, without waiting.
+func soDrain(t *testing.T, conn *websocket.Conn) []soFrame {
+	t.Helper()
+	reader := soReaderFor(t, conn)
+	var out []soFrame
+	for {
+		select {
+		case result := <-reader.frames:
+			require.NoError(t, result.err, "observation reader must remain live")
+			var peek wsTypeOnly
+			require.NoError(t, json.Unmarshal(result.raw, &peek), "every frame must decode")
+			out = append(out, soFrame{Type: peek.Type, Raw: result.raw})
+		default:
+			return out
+		}
+	}
 }
 
 func soTypes(frames []soFrame) []string {
@@ -399,16 +433,27 @@ func TestCheckSendOrigin(t *testing.T) {
 		// Spec r9 §4.3.2 P1a/M-1/M-2: present-but-malformed origin gets
 		// send_refused{origin_malformed}, never the §4.3.4 old-tab error.
 		// The live wire control uses this same dataset and sender.
-		for _, row := range soMalformedOriginFrames(b) {
+		// Each shape has its own connection, so the shapes' 4 s windows overlap
+		// in one wait (soSettleThenMany: each still observed >= 4 s after its
+		// own pong), and each shape's assertions run in its own subtest, so a
+		// failed assertion never prevents the other shapes executing. The
+		// transcript baseline is taken once before ANY send: every shape also
+		// proves no shape leaked into B.
+		rows := soMalformedOriginFrames(b)
+		conns := make([]*websocket.Conn, len(rows))
+		for i := range rows {
+			conns[i] = s.dialBrowserConn(t)
+			drainAdmissionOneShot(t, conns[i])
+			bindIdleCancelFixture(t, conns[i], b)
+		}
+		before := s.transcriptLen(t, b)
+		for i, row := range rows {
+			soSend(t, conns[i], row.raw)
+		}
+		observed := soSettleThenMany(t, conns, 4*time.Second)
+		for i, row := range rows {
+			frames := observed[i]
 			t.Run(row.name, func(t *testing.T) {
-				// Each shape has its own connection: a read-window timeout or
-				// failed assertion must not prevent the other shapes executing.
-				conn := s.dialBrowserConn(t)
-				drainAdmissionOneShot(t, conn)
-				bindIdleCancelFixture(t, conn, b)
-				before := s.transcriptLen(t, b)
-				soSend(t, conn, row.raw)
-				frames := soSettleThen(t, conn, 4*time.Second)
 				refused := soRefusedFrame(t, frames, "P1a row: "+row.name)
 				require.Equal(t, "origin_malformed", refused.Reason, "P1a row %s: wrong reason (frames: %v)", row.name, soTypes(frames))
 				require.Equal(t, "message", refused.RefusedFrame, "P1a row %s: wrong refused_frame", row.name)

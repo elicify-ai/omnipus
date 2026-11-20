@@ -87,7 +87,7 @@ func soLiveFrameDelivered(t *testing.T, s *sendOriginSrv, conn *websocket.Conn, 
 	raw, err := json.Marshal(generated.UserMessageFrame{Type: "user_message", SessionId: chatID, Content: marker, Id: "so-live-" + phase})
 	require.NoError(t, err)
 	s.handler.hubs.getOrCreate(chatID).publish(raw)
-	frames := soSettle(t, conn)
+	frames := soSettleThen(t, conn, soRequesterWindow)
 	var observed []generated.UserMessageFrame
 	for _, frame := range frames {
 		if frame.Type == "user_message" {
@@ -257,7 +257,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		b := s.mintChat(t, conn, soKeyB, "SV-4 redirect mint")
 		soSend(t, conn, generated.RedirectFrame{Type: "redirect", SessionId: b, Instruction: "old tab redirect"})
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, soRequesterWindow)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab redirect must get its error (window: %v)", soTypes(frames))
 		require.NotNil(t, errs[0].SessionId, "old-tab refusal must name its exact target")
@@ -276,7 +276,7 @@ func TestSendOriginHandler_SV4_MissingOriginBrowserReplies(t *testing.T) {
 		drainAdmissionOneShot(t, conn)
 		b := s.mintChat(t, conn, soKeyB, "SV-4 cancel mint")
 		soSend(t, conn, generated.CancelFrame{Type: "cancel", SessionId: b})
-		frames := soSettle(t, conn)
+		frames := soSettleThen(t, conn, soRequesterWindow)
 		errs := soErrors(t, frames)
 		require.NotEmpty(t, errs, "SV-4: the old-tab cancel must get its error (window: %v)", soTypes(frames))
 		require.Equal(t, soOutdatedStop, errs[0].Message, "SV-4: OUTDATED_STOP text is exact")

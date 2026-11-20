@@ -182,59 +182,64 @@ type soRowFrames struct {
 	bytes   bool
 }
 
-// soRunRow drives one row on one server: fresh conn, keyed mint (bound) or
-// unbound/CLI per the row, every frame sent with its own reply window.
-func soRunRow(t *testing.T, s *sendOriginSrv, row soRowFrames, n int) (frames []soFrame, sid string, before int) {
-	t.Helper()
-	var conn *websocket.Conn
-	switch {
-	case row.cli:
-		conn = s.dialCLIConn(t)
-		drainAdmissionOneShot(t, conn)
-		// M-11 setup: mint the target chat through today's legacy path
-		// (no origin, non-browser), then send the row to it.
-		soSend(t, conn, soRawMsg("", "", "", "sv12 legacy mint"))
-		started := readFrameOfType(t, conn, "session_started", lifecycleEW)
-		sid = started.SessionID
-		require.NotEmpty(t, sid, "SETUP: the legacy mint must acknowledge")
-	case row.unbound:
-		conn = s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-	default:
-		conn = s.dialBrowserConn(t)
-		drainAdmissionOneShot(t, conn)
-		sid = s.mintChat(t, conn, soRowKey(row.name, n), "sv12 row setup mint "+row.name)
-	}
-	if sid != "" {
-		before = s.transcriptLen(t, sid)
-	}
-	for _, raw := range row.build(sid) {
-		soSend(t, conn, raw)
-		// A message is accepted asynchronously (soSettle doc), so it keeps its
-		// original horizon; a cancel or redirect is refused or accepted
-		// synchronously in the read loop.
-		if soRowFrameType(t, raw) == "message" {
-			frames = append(frames, soSettleThen(t, conn, soRefusalWindow)...)
-		} else {
-			frames = append(frames, soSettle(t, conn)...)
-		}
-	}
-	row.check(t, s, frames, sid, before)
-	return frames, sid, before
+// soRowRun is one row started on one server: its connection, the frames
+// received up to the last frame's barrier, and the row's target.
+type soRowRun struct {
+	conn   *websocket.Conn
+	frames []soFrame
+	sid    string
+	before int
 }
 
-// soRowFrameType reads a row frame's wire type. A row frame that is not a
-// JSON object (a malformed-frame row) is treated as a message: the slower,
-// stronger observation.
-func soRowFrameType(t *testing.T, raw []byte) string {
+// soStartRow drives one row on one server: fresh conn, keyed mint (bound) or
+// unbound/CLI per the row, every frame sent and fenced by its own barrier so
+// replies stay in send order. The row's observation window is NOT taken here:
+// soRunRowBothModes takes the original soRefusalWindow after the LAST frame's
+// pong, so every frame is observed for at least that long after its own pong.
+func soStartRow(t *testing.T, s *sendOriginSrv, row soRowFrames, n int) *soRowRun {
 	t.Helper()
-	var head struct {
-		Type string `json:"type"`
+	run := &soRowRun{}
+	switch {
+	case row.cli:
+		run.conn = s.dialCLIConn(t)
+		drainAdmissionOneShot(t, run.conn)
+		// M-11 setup: mint the target chat through today's legacy path
+		// (no origin, non-browser), then send the row to it.
+		soSend(t, run.conn, soRawMsg("", "", "", "sv12 legacy mint"))
+		started := readFrameOfType(t, run.conn, "session_started", lifecycleEW)
+		run.sid = started.SessionID
+		require.NotEmpty(t, run.sid, "SETUP: the legacy mint must acknowledge")
+	case row.unbound:
+		run.conn = s.dialBrowserConn(t)
+		drainAdmissionOneShot(t, run.conn)
+	default:
+		run.conn = s.dialBrowserConn(t)
+		drainAdmissionOneShot(t, run.conn)
+		run.sid = s.mintChat(t, run.conn, soRowKey(row.name, n), "sv12 row setup mint "+row.name)
 	}
-	if err := json.Unmarshal(raw, &head); err != nil || head.Type == "" {
-		return "message"
+	if run.sid != "" {
+		run.before = s.transcriptLen(t, run.sid)
 	}
-	return head.Type
+	for _, raw := range row.build(run.sid) {
+		soSend(t, run.conn, raw)
+		run.frames = append(run.frames, soSettle(t, run.conn)...)
+	}
+	return run
+}
+
+// soRunRowBothModes runs one row on both servers, overlapping their two
+// soRefusalWindow observations in one wait, then applies the row's oracle to
+// each mode's complete frames.
+func soRunRowBothModes(t *testing.T, sTrue, sFalse *sendOriginSrv, row soRowFrames, n int) (framesTrue, framesFalse []soFrame) {
+	t.Helper()
+	runTrue := soStartRow(t, sTrue, row, n)
+	runFalse := soStartRow(t, sFalse, row, n)
+	late := soSettleThenMany(t, []*websocket.Conn{runTrue.conn, runFalse.conn}, soRefusalWindow)
+	framesTrue = append(runTrue.frames, late[0]...)
+	framesFalse = append(runFalse.frames, late[1]...)
+	row.check(t, sTrue, framesTrue, runTrue.sid, runTrue.before)
+	row.check(t, sFalse, framesFalse, runFalse.sid, runFalse.before)
+	return framesTrue, framesFalse
 }
 
 // soRefusalOracle is the oracle shared by the refusal rows that echo the
@@ -264,8 +269,7 @@ func TestCheckSendOriginValidationModes(t *testing.T) {
 
 	for i, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			framesTrue, _, _ := soRunRow(t, sTrue, row, i)
-			framesFalse, _, _ := soRunRow(t, sFalse, row, i)
+			framesTrue, framesFalse := soRunRowBothModes(t, sTrue, sFalse, row, i)
 			if !row.bytes {
 				return
 			}
