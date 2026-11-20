@@ -37,7 +37,7 @@ import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { PasswordBadge, SaveBarPanel, SettingRow } from './SaveBar'
 import { toWriteResponse } from './saveOutcome'
-import { useSaveBar, type SaveBarField, type SaveBarValue } from './useSaveBar'
+import { fieldDomId, useSaveBar, type FieldMessage, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -186,7 +186,23 @@ function GlobalToolPoliciesSection() {
 // Exported (not just used locally) so AutoApproveControl.stories.tsx can
 // mount this one card in isolation for a visual check, without seeding
 // every query the rest of SecuritySection needs.
-export function AutoApproveControl() {
+export interface AutoApproveDraft { // not-wire-format: React props from Protection's Save bar
+  /** The value shown: the draft, or the saved value. */
+  value: boolean
+  onChange: (next: boolean) => void
+  /** The Save bar's line for this value (an error or "Saved, but not in use yet"). */
+  message?: FieldMessage
+  /** data-settings-field id, used to move focus to it. */
+  fieldId: string
+}
+
+/**
+ * With `draft` (Settings → Protection, Settings redesign #1519 FR-010,
+ * FR-025), the switch is a draft on Protection's Save bar and nothing is sent
+ * until Save changes. Without it (the legacy view and the story), it saves at
+ * once through its own password gate as before.
+ */
+export function AutoApproveControl({ draft }: { draft?: AutoApproveDraft } = {}) {
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
@@ -291,13 +307,25 @@ export function AutoApproveControl() {
           </p>
         </div>
         <Switch
-          checked={enabled}
-          disabled={isSaving}
-          onCheckedChange={requestChange}
+          checked={draft ? draft.value : enabled}
+          disabled={draft ? false : isSaving}
+          onCheckedChange={draft ? draft.onChange : requestChange}
           aria-label="Auto-approve"
           data-testid="auto-approve-global-switch"
+          data-settings-field={draft?.fieldId}
         />
       </div>
+      {draft?.message && (
+        <p
+          role={draft.message.tone === 'error' ? 'alert' : undefined}
+          className={cn(
+            'text-[length:var(--type-body-compact-size)]',
+            draft.message.tone === 'error' ? 'text-[var(--color-error)]' : 'text-[var(--color-warning)]',
+          )}
+        >
+          {draft.message.text}
+        </p>
+      )}
 
       <AutoApproveAskList />
 
@@ -366,6 +394,14 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
     retry: false,
   })
 
+  // Auto-approve is a draft on the same Save bar (FR-010, FR-025): Save sends
+  // it with PUT /security/sandbox-config after the Save's one password prompt.
+  const { data: sandboxConfig } = useQuery({
+    queryKey: ['sandbox-config'],
+    queryFn: fetchSandboxConfig,
+    enabled: view === 'protection',
+  })
+
   // Rate limits wait for Save changes (FR-010, #346: no auto-save in Settings).
   // An empty field means "Unlimited", which the route spells as 0.
   const rateLimitFields = useMemo<SaveBarField[]>(() => {
@@ -375,6 +411,15 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       return Number.isInteger(n) && n >= 0 ? null : 'Enter a whole number, or leave it empty for no limit.'
     }
     return [
+      {
+        key: 'auto_approve',
+        label: 'Auto-approve',
+        value: sandboxConfig?.auto_approve === true,
+        kind: 'switch',
+        password: true,
+        target: 'sandbox-config',
+        disabled: !sandboxConfig,
+      },
       {
         key: 'max_agent_llm_calls_per_hour',
         label: 'Model calls per hour',
@@ -394,23 +439,42 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
         disabled: !rateLimits,
       },
     ]
-  }, [rateLimits])
+  }, [rateLimits, sandboxConfig])
   const rateLimitState = useSaveBar({
     section: 'protection',
     fields: rateLimitFields,
-    onSave: (body) =>
-      toWriteResponse(() =>
+    onSave: (body, ctx) =>
+      ctx.target === 'sandbox-config'
+        ? toWriteResponse(() => updateSandboxConfig({ auto_approve: body.auto_approve === true }, ctx.reauthToken))
+        : toWriteResponse(() =>
         updateRateLimits({
           max_agent_llm_calls_per_hour: Number(body.max_agent_llm_calls_per_hour ?? rateLimits?.max_agent_llm_calls_per_hour ?? 0) || 0,
           max_agent_tool_calls_per_minute: Number(body.max_agent_tool_calls_per_minute ?? rateLimits?.max_agent_tool_calls_per_minute ?? 0) || 0,
         }),
       ),
     readBack: async (key) => {
+      if (key === 'auto_approve') return (await fetchSandboxConfig()).auto_approve === true
       const fresh = await fetchRateLimits()
       return (fresh as unknown as Record<string, unknown>)[key]
     },
-    onSaved: () => void queryClient.invalidateQueries({ queryKey: ['security', 'rate-limits'] }),
+    onSaved: (keys) => {
+      if (keys.includes('auto_approve')) {
+        void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
+        void queryClient.invalidateQueries({ queryKey: ['sandbox-status'] })
+      }
+      void queryClient.invalidateQueries({ queryKey: ['security', 'rate-limits'] })
+    },
   })
+  const autoApproveField = rateLimitFields[0]
+  const autoApproveDraft: AutoApproveDraft | undefined =
+    view === 'protection'
+      ? {
+          value: rateLimitState.value('auto_approve') === true,
+          onChange: (next) => rateLimitState.setDraft('auto_approve', next),
+          message: rateLimitState.message('auto_approve'),
+          fieldId: fieldDomId('protection', 'auto_approve'),
+        }
+      : undefined
 
   // Audit log dialog state
   const [auditLogOpen, setAuditLogOpen] = useState(false)
@@ -522,10 +586,10 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
         The current limits could not be loaded, so they cannot be changed here. Reload the page to try again.
       </p>
     )}
-    {rateLimitFields.map((f) => (
+    {rateLimitFields.filter((f) => f !== autoApproveField).map((f) => (
       <SettingRow key={f.key} state={rateLimitState} field={f} />
     ))}
-    <SaveBarPanel {...rateLimitState.bar} />
+    {view !== 'protection' && <SaveBarPanel {...rateLimitState.bar} />}
   </Card>
   )
 
@@ -582,7 +646,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
         {/* 1. Auto-approve (ADR-092) — primary-layer tool-access control:
             whether a tool resolved to "ask" still prompts. */}
-        <AutoApproveControl />
+        <AutoApproveControl draft={autoApproveDraft} />
 
         {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level. In the
             redesign it moved to Skills & Tools (FR-060). */}
@@ -697,6 +761,8 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
               </Button>
             </CalloutActions>
           </Callout>
+          {/* One Save bar for the section: Auto-approve and the rate limits. */}
+          <SaveBarPanel {...rateLimitState.bar} />
         </>
       )}
 
