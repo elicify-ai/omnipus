@@ -55,6 +55,12 @@ var RestartGatedKeys = []config.ConfigKey{
 	// has not.
 	config.SandboxWorkspacePathGuard,
 	config.SessionDMScope,
+	// #1519 FR-036: the filesystem model is read when the sandbox policy is
+	// built at boot (sandbox_apply.go), and the shell network proxy when the
+	// agent loop is built (loop_construct.go) — a saved change to either
+	// reaches the running gateway only through a restart.
+	config.SandboxFilesystemModel,
+	config.ToolsExecEnableProxy,
 	// Changing the bind host re-binds the listener (like the port), which can
 	// only happen safely on restart — so it is restart-gated like gateway.port.
 	config.GatewayHost,
@@ -203,8 +209,14 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 				Key:            string(key),
 				PersistedValue: pv,
 				AppliedValue:   av,
+				Reason:         gen.PendingRestartEntryReasonRestartRequired,
 			})
 		}
+	}
+	diffs, appendErr := a.appendApplyFailedEntries(diffs, persisted)
+	if appendErr != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to read running config")
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -213,6 +225,78 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 		// Header already written; can only log.
 		slog.Error("pending-restart: encode failed", "error", err)
 	}
+}
+
+// appendApplyFailedEntries adds one "apply_failed" entry per hot-reloaded key
+// whose last save did not apply since boot (FR-062). persisted_value comes
+// from config.json as read for this request; applied_value is the value the
+// running config still holds (nil when the path is absent there). A key
+// already listed as restart_required is not listed twice.
+//
+// S2: both values are read from copies redacted by the GET /api/v1/config
+// policy (redactConfigForWire), and each key is looked up by its separate
+// segments, so a literal dotted member name never addresses a nested value.
+func (a *restAPI) appendApplyFailedEntries(diffs []pendingRestartEntry, persisted map[string]any) ([]pendingRestartEntry, error) {
+	keys := append(a.applyFailed.keys(), canonicalConfigKeys(a.performancePendingApplyKeys()...)...)
+	if len(keys) == 0 {
+		return diffs, nil
+	}
+	persistedView, err := deepCopyJSONMap(persisted)
+	if err != nil {
+		return diffs, err
+	}
+	redactConfigForWire(persistedView)
+	var running map[string]any
+	if a.agentLoop != nil {
+		if cfg := a.agentLoop.GetConfig(); cfg != nil {
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				return diffs, err
+			}
+			if err := json.Unmarshal(raw, &running); err != nil {
+				return diffs, err
+			}
+			redactConfigForWire(running)
+		}
+	}
+	listed := make(map[string]struct{}, len(diffs))
+	for _, d := range diffs {
+		listed[d.Key] = struct{}{}
+	}
+	for _, key := range keys {
+		display := key.String()
+		if _, dup := listed[display]; dup {
+			continue
+		}
+		diffs = append(diffs, pendingRestartEntry{
+			Key:            display,
+			PersistedValue: getAtSegments(persistedView, key),
+			AppliedValue:   getAtSegments(running, key),
+			Reason:         gen.PendingRestartEntryReasonApplyFailed,
+		})
+		listed[display] = struct{}{}
+	}
+	return diffs, nil
+}
+
+// getAtSegments extracts the value at path from a nested map[string]any, one
+// map member per segment (a segment is never split). Returns nil when a
+// segment is missing or a non-map intermediate value is encountered.
+func getAtSegments(m map[string]any, path configKeyPath) any {
+	if len(path) == 0 {
+		return nil
+	}
+	var cur any = m
+	for _, seg := range path {
+		node, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		if cur, ok = node[seg]; !ok {
+			return nil
+		}
+	}
+	return cur
 }
 
 // deepCopyConfig returns a deep copy of cfg via JSON round-trip. It is called

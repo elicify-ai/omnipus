@@ -58,19 +58,25 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 		return
 	}
 
-	// Redact any top-level field names that look like credentials.
+	redactConfigForWire(m)
+	jsonOK(w, m)
+}
+
+// redactConfigForWire applies the GET /api/v1/config read policy to a
+// decoded config map in place. Every endpoint that returns config values
+// (getConfig, the pending-restart apply_failed readback) uses it, so the
+// policy lives in one place.
+func redactConfigForWire(m map[string]any) {
+	// Redact any field names that look like credentials.
 	redactSensitiveFields(m)
 	// Issue #638: header values under tools.mcp.servers.<name>.headers are
 	// request credentials (Authorization/Cookie/Proxy-Authorization) whose
 	// NAMES match no keyword in redactSensitiveFields — redact them here so
-	// GET /api/v1/config never carries an MCP header value, whatever wrote
-	// the literal into config.json.
+	// no config readback carries an MCP header value, whatever wrote the
+	// literal into config.json.
 	redactMCPServerHeaderValues(m)
-
 	// Strip internal-only bookkeeping keys from the wire.
 	sanitizeConfigForWire(m)
-
-	jsonOK(w, m)
 }
 
 // wireExcludedConfigFields is the single place listing top-level config.json
@@ -674,6 +680,9 @@ func (a *restAPI) applyWrittenConfigLocked(out []byte, snapshots ...*config.Conf
 	if refreshErr := a.refreshConfigAndRewireServices(a.configPath(), snapshots...); refreshErr != nil {
 		return &configRefreshError{err: refreshErr}
 	}
+	// The whole config.json is now the running config, so every key an
+	// earlier failed refresh left unapplied is applied now (FR-062).
+	a.applyFailed.clearSource(applyFailedSourceRefresh)
 	// refreshConfigAndRewireServices loads the config, and config.LoadConfig may
 	// normalize + re-save the file (config.go SaveConfig-on-load), producing
 	// different bytes than `out`. Register the FINAL on-disk content hash too, so
@@ -999,7 +1008,18 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 	// Use safeUpdateConfigJSON to hold configMu during the read-modify-write cycle.
 	// Deep merge nested objects so partial updates don't wipe sibling keys
 	// (e.g., updating gateway.port must not delete gateway.users).
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	var changed []configKeyPath
+	if err := a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
+		// #1519 C-3 / C-7: the effective retention and Performance values
+		// before the merge — the baseline checkConfigEffectUnchanged compares.
+		effectBefore, effectErr := storedConfigEffect(m)
+		if effectErr != nil {
+			return effectErr
+		}
+		stored, copyErr := deepCopyJSONMap(m)
+		if copyErr != nil {
+			return fmt.Errorf("copy stored config: %w", copyErr)
+		}
 		// #904: the merge below is ONE level deep, so a body carrying
 		// {"agents":{"defaults":{…}}} replaces the whole agents.defaults
 		// map. The global tool-iteration limit and its env-import marker
@@ -1042,11 +1062,29 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// decode the merged result the way config.json is loaded and refuse
 		// if either protected value would change, whatever key spelling
 		// carried it.
-		return checkProtectedAgentDefaultsUnchanged(fingerprint, m)
-	}); err != nil {
+		if err := checkProtectedAgentDefaultsUnchanged(fingerprint, m); err != nil {
+			return err
+		}
+		// #1519 FR-044 / FR-100: refuse, by effect, any merged result that
+		// does not decode or that changes a retention or Performance value.
+		if err := checkConfigEffectUnchanged(effectBefore, m); err != nil {
+			return err
+		}
+		changed = changedConfigKeys(stored, m)
+		return nil
+	}, func() []configKeyPath { return changed }); err != nil {
 		var refusal *requestRefusalError
 		if errors.As(err, &refusal) {
 			jsonErr(w, http.StatusBadRequest, refusal.Error())
+			return
+		}
+		// #995 / FR-102: config.json was written, the live refresh failed —
+		// saved, not in use. The keys were recorded as apply_failed under
+		// the write lock (safeUpdateConfigJSONRecorded).
+		var refreshErr *configRefreshError
+		if errors.As(err, &refreshErr) {
+			logsafeError("rest: save config: written but not applied", "error", err)
+			writeSavedNotRefreshed(w, savedNotRefreshedText, changed)
 			return
 		}
 		if writeOutboundProtected(w, err) {

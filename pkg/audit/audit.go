@@ -335,6 +335,11 @@ var validEventNames = map[EventName]struct{}{
 	// orphaned `<id>_API_KEY` credentials whose provider row is gone
 	// (ADR-068 FR-010 last clause, T068-10).
 	"provider.deleted": {},
+	// "credential.deleted" is emitted once per committed
+	// DELETE /credentials/{key} (Settings redesign #1519, FR-056) by
+	// pkg/gateway/rest_settings.go; details carry the credential REF NAME
+	// (never the value) and the outcome.
+	"credential.deleted": {},
 	// pkg/gateway/rest_sign_in.go. Bare literals, no constants.
 	"provider.signed_in":        {},
 	"provider.signed_out":       {},
@@ -921,6 +926,16 @@ func (l *Logger) RunRetentionCleanup() error {
 
 func (l *Logger) auditPath() string {
 	return filepath.Join(l.dir, "audit.jsonl")
+}
+
+// Path returns the active audit file this logger writes and Verify checks.
+// The directory is fixed at construction, so the path never follows a later
+// config change. Returns "" for a nil logger.
+func (l *Logger) Path() string {
+	if l == nil {
+		return ""
+	}
+	return l.auditPath()
 }
 
 func (l *Logger) openCurrentFile() error {

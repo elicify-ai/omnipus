@@ -264,7 +264,14 @@ func executeRetroSweepTick(agentLoop *agent.AgentLoop, getCfg func() *config.Con
 	}
 
 	ret := cfg.Storage.Retention
-	if ret.IsDisabled() {
+	// The legacy keep-everything switch (disabled) and Keep forever for
+	// memory (memory_retros_forever, #1519 B6 / FR-049) both stop this sweep;
+	// only disabled also stops the chat-history sweep (executeSweepTick).
+	if ret.KeepsMemoryForever() {
+		slog.Info("retention_retro_sweep: skipping tick",
+			"event", "retention_retro_sweep_skipped",
+			"reason", "memory_kept_forever",
+		)
 		return
 	}
 

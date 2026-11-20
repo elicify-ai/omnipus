@@ -2,6 +2,40 @@
 
 package config
 
+// OmnipusStorageConfig holds storage-related settings per Appendix E §E.5.4.
+type OmnipusStorageConfig struct {
+	Retention OmnipusRetentionConfig `json:"retention,omitempty"`
+}
+
+// OmnipusRetentionConfig controls session transcript retention per Appendix E §E.5.4.
+type OmnipusRetentionConfig struct {
+	// SessionDays is how many days transcript partitions are kept. 0 = use default (90 days).
+	SessionDays int `json:"session_days,omitempty"`
+	// Disabled means transcripts are kept forever (no retention enforcement).
+	// This is orthogonal to SessionDays: setting Disabled=true suppresses deletion
+	// regardless of what SessionDays says.
+	Disabled bool `json:"disabled,omitempty"`
+	// ArchiveBeforeDelete compresses old partitions to .jsonl.gz before deletion.
+	ArchiveBeforeDelete bool `json:"archive_before_delete,omitempty"`
+	// MemoryRetrosDays is how many days of retrospective files to keep per
+	// agent. 0 = use default (30 days). Used by MemoryStore.SweepRetros.
+	// Spec v7 FR-034.
+	MemoryRetrosDays int `json:"memory_retros_days,omitempty"`
+	// MemoryRetrosForever keeps every retrospective: the nightly memory sweep
+	// deletes none, while the chat-history sweep still applies SessionDays
+	// (Settings redesign #1519, B6 / FR-049). Written only through
+	// PUT /api/v1/settings/retention.
+	MemoryRetrosForever bool `json:"memory_retros_forever,omitempty"`
+}
+
+// OmnipusCompactionConfig holds context compression settings per Appendix E §E.5.3.
+type OmnipusCompactionConfig struct {
+	Enabled        bool `json:"enabled,omitempty"`
+	ReserveTokens  int  `json:"reserve_tokens,omitempty"`
+	PreserveRecent int  `json:"preserve_recent,omitempty"`
+	MemoryFlush    bool `json:"memory_flush,omitempty"`
+}
+
 // RetentionSessionDays returns the configured session retention days, defaulting to 90.
 func (r OmnipusRetentionConfig) RetentionSessionDays() int {
 	if r.SessionDays <= 0 {
@@ -23,6 +57,14 @@ func (r OmnipusRetentionConfig) RetentionMemoryRetrosDays() int {
 		return 180
 	}
 	return r.MemoryRetrosDays
+}
+
+// KeepsMemoryForever reports whether no retrospective is ever deleted by
+// age: either Keep forever (MemoryRetrosForever) or the legacy keep-everything
+// switch (Disabled) is on. The memory sweep and the recall window both key on
+// it (FR-049, FR-050).
+func (r OmnipusRetentionConfig) KeepsMemoryForever() bool {
+	return r.Disabled || r.MemoryRetrosForever
 }
 
 // RetentionMode summarizes the (session_days, disabled) pair into one of

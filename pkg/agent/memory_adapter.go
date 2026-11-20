@@ -104,12 +104,13 @@ func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope,
 // private room whose content (recap + went-well + needs-improvement) matches the
 // query, ranked by BM25 relevance (same k1/b parameters bleve uses for long-term
 // recall), capped at limit. This lets recall_memory span past reflections with
-// consistent lexical ranking, not just long-term memories.
+// consistent lexical ranking, not just long-term memories. It reads as far
+// back as memory retention keeps reflections (FR-050, ReadRetrosForRecall).
 func (a *MemoryStoreAdapter) SearchRetros(query string, limit int) ([]tools.MemoryEntry, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	retros, err := a.ms.ReadRetros(365)
+	retros, err := a.ms.ReadRetrosForRecall()
 	if err != nil {
 		return nil, err
 	}

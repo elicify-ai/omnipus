@@ -7862,6 +7862,24 @@ func (e PackageManifestScope) Valid() bool {
 	}
 }
 
+// Defines values for PendingRestartEntryReason.
+const (
+	PendingRestartEntryReasonApplyFailed     PendingRestartEntryReason = "apply_failed"
+	PendingRestartEntryReasonRestartRequired PendingRestartEntryReason = "restart_required"
+)
+
+// Valid indicates whether the value is a known member of the PendingRestartEntryReason enum.
+func (e PendingRestartEntryReason) Valid() bool {
+	switch e {
+	case PendingRestartEntryReasonApplyFailed:
+		return true
+	case PendingRestartEntryReasonRestartRequired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PerformancePendingApplyChangedFields.
 const (
 	PerformancePendingApplyChangedFieldsGoalMaxRounds             PerformancePendingApplyChangedFields = "goal_max_rounds"
@@ -18398,10 +18416,10 @@ type EnumValueDefGroup string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
-	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed. The package routes (/packages/export, /packages/import, /packages/import/{staging_id}/apply) use: export_selection_invalid, agent_not_found, core_agent_not_exportable, agent_prompt_missing, agent_file_unreadable (details.file, details.check one of link, not_regular, unreadable, too_large), audit_failed, not_a_package, package_too_new, element_schema_too_new, package_too_large (details.limit one of window, decoded, entries, manifest, agent_file, body), checksum_mismatch (details.file), manifest_mismatch (details.file or details.element), unsafe_path (details.file), unsafe_entry_type (details.file), no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable (field, details.reason), external_worker_not_supported_yet, too_many_staged_imports, import_mode_not_available, staging_not_found, import_in_progress, workspace_not_found, default_workspace_missing, name_suffix_exhausted, import_rolled_back and import_rollback_incomplete (details.failed_step C1 or C2, details.leftovers, details.agent_id, details.staging_id).
+	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break). "saved_not_refreshed" is a 500 whose write reached disk but whose running settings could not be refreshed; the settings endpoint that answers it is named here: PUT /settings/third-party-agents (existing), PUT /config and PUT /settings/context (Settings redesign #1519, C-6 outcome table). A 500 with this code means saved, not in use — never "not saved". The package routes (/packages/export, /packages/import, /packages/import/{staging_id}/apply) use: export_selection_invalid, agent_not_found, core_agent_not_exportable, agent_prompt_missing, agent_file_unreadable (details.file, details.check one of link, not_regular, unreadable, too_large), audit_failed, not_a_package, package_too_new, element_schema_too_new, package_too_large (details.limit one of window, decoded, entries, manifest, agent_file, body), checksum_mismatch (details.file), manifest_mismatch (details.file or details.element), unsafe_path (details.file), unsafe_entry_type (details.file), no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable (field, details.reason), external_worker_not_supported_yet, too_many_staged_imports, import_mode_not_available, staging_not_found, import_in_progress, workspace_not_found, default_workspace_missing, name_suffix_exhausted, import_rolled_back and import_rollback_incomplete (details.failed_step C1 or C2, details.leftovers, details.agent_id, details.staging_id).
 	Code *string `json:"code,omitempty"`
 
-	// Details Optional structured details about the error. For `cli_path_invalid` and `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and `check` (the failed check's name). No path is returned; path-check diagnostics are recorded in the server log.
+	// Details Optional structured details about the error. For `cli_path_invalid` and `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and `check` (the failed check's name). No path is returned; path-check diagnostics are recorded in the server log. For `saved_not_refreshed`: `keys`, an array of the dotted config keys the body changed (for example ["gateway.log_level", "context.mcp_result_cap"]), which are also recorded as apply_failed entries in GET /config/pending-restart.
 	Details *map[string]interface{} `json:"details,omitempty"`
 
 	// Error Human-readable error message.
@@ -21843,7 +21861,7 @@ type MediaLibraryEntrySource string
 // MediaLibraryEntryStatus Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
 type MediaLibraryEntryStatus string
 
-// MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
+// MemorySettings Global memory and recap settings. Backed by agents.defaults.* fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. Retention moved out: chat-history and memory day counts and the Keep-forever switch live only in RetentionSettings (GET/PUT /settings/retention); a body carrying session_days or memory_retros_days is refused with 400.
 type MemorySettings struct {
 	// AutoRecapEnabled Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
 	AutoRecapEnabled *bool `json:"auto_recap_enabled,omitempty"`
@@ -21859,9 +21877,6 @@ type MemorySettings struct {
 
 	// IdleTimeoutMinutes Minutes of inactivity after which a session is considered idle and a recap is triggered. Maps to agents.defaults.idle_timeout_minutes.
 	IdleTimeoutMinutes *int `json:"idle_timeout_minutes,omitempty"`
-
-	// MemoryRetrosDays Number of days to retain memory retrospective files. Defaults longer than session retention (180 vs 90) so reflections outlive their transcripts. Maps to storage.retention.memory_retros_days.
-	MemoryRetrosDays *int `json:"memory_retros_days,omitempty"`
 
 	// RecapCharsPerToken Characters counted as one token when sizing recap input. Default 4. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_chars_per_token.
 	RecapCharsPerToken *int `json:"recap_chars_per_token,omitempty"`
@@ -21901,9 +21916,6 @@ type MemorySettings struct {
 
 	// RecapTimeoutSeconds Overall time limit for one recap, across every model tried and every retry. Default 60. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_timeout_seconds.
 	RecapTimeoutSeconds *int `json:"recap_timeout_seconds,omitempty"`
-
-	// SessionDays Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
-	SessionDays *int `json:"session_days,omitempty"`
 }
 
 // Message The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). The one display-only exception (F15) is participant / reply_to_participant (ChatParticipant): a name, a kind and a source label, never an id or a route. Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely.
@@ -23190,17 +23202,23 @@ type PackageManifestFormat string
 // PackageManifestScope What the package was made from; S1 writes custom.
 type PackageManifestScope string
 
-// PendingRestartEntry A single config key that has been written to disk but not yet applied — the running value diverges from the persisted value. Returned in the array from GET /api/v1/config/pending-restart.
+// PendingRestartEntry A single config key that has been written to disk but not yet in force — either a restart-gated key whose saved value differs from the running value (reason "restart_required"), or a hot-reloaded key whose last save did not apply since boot (reason "apply_failed"). Returned in the array from GET /api/v1/config/pending-restart.
 type PendingRestartEntry struct {
-	// AppliedValue Value currently applied to the running process (boot-time snapshot).
+	// AppliedValue Value currently in force. For "restart_required", the boot-time snapshot value; for "apply_failed", the value still in force, or null when unknown.
 	AppliedValue interface{} `json:"applied_value"`
 
-	// Key Dotted config key path (e.g. "sandbox.mode", "gateway.port"). Only RestartGatedKeys appear here — hot-reload keys never appear.
+	// Key Dotted config key path (e.g. "sandbox.mode", "gateway.port"). Restart-gated keys: sandbox.mode, sandbox.audit_log, sandbox.allowed_paths, sandbox.workspace_path_guard, session.dm_scope, gateway.host, gateway.port, gateway.public_url, tools.run_in_workspace.warmup_timeout_seconds, sandbox.filesystem_model, tools.exec.enable_proxy, security.platform_auth.issuer, security.platform_auth.client_id, security.platform_auth.instance_id, security.platform_auth.keys. For reason "apply_failed", the key is a hot-reloaded key whose last save did not apply since boot (for example sandbox.prompt_injection_level, a rate limit, or a key named in a saved_not_refreshed answer). God Mode keys never appear.
 	Key string `json:"key"`
 
-	// PersistedValue Value currently on disk (what will be applied after restart).
+	// PersistedValue Value currently on disk (what will be applied after restart). Read from config.json at request time.
 	PersistedValue interface{} `json:"persisted_value"`
+
+	// Reason restart_required — a RestartGatedKeys key whose saved value differs from the boot value (today's entries). apply_failed — a hot-reloaded key whose last save did not apply; a later successful apply of that key, or a restart, removes the entry.
+	Reason PendingRestartEntryReason `json:"reason"`
 }
+
+// PendingRestartEntryReason restart_required — a RestartGatedKeys key whose saved value differs from the boot value (today's entries). apply_failed — a hot-reloaded key whose last save did not apply; a later successful apply of that key, or a restart, removes the entry.
+type PendingRestartEntryReason string
 
 // PerformancePendingApply Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
 type PerformancePendingApply struct {
@@ -25174,13 +25192,27 @@ type RelationWriteResponse struct {
 	Warnings []string `json:"warnings"`
 }
 
-// RetentionConfig Session log retention configuration returned by GET /api/v1/security/retention.
-type RetentionConfig struct {
-	// Disabled When true, retention sweeps are disabled and session logs are kept forever.
-	Disabled *bool `json:"disabled,omitempty"`
+// RetentionSettings How long chat history and memory are kept (Settings → Data & retention), as stored. Day counts are returned as stored, even outside the ranges that RetentionSettingsUpdate enforces, so the screen can show and repair them. 0 or a negative stored value means "use the default" (the existing config_retention.go accessors) and is returned as the effective default.
+type RetentionSettings struct {
+	// KeepEverythingForever True when config.json sets storage.retention.disabled, an older, config-file-only switch that stops BOTH sweeps.
+	KeepEverythingForever bool `json:"keep_everything_forever"`
 
-	// SessionDays Number of days to retain session logs. 0 means use the system default (90 days). Only present when a custom retention period is set.
-	SessionDays *int `json:"session_days,omitempty"`
+	// MemoryRetrosDays Days the agents' retrospectives (reflections on past chats) are kept. Default 180. storage.retention.memory_retros_days.
+	MemoryRetrosDays int `json:"memory_retros_days"`
+
+	// MemoryRetrosForever Keep memory forever; the nightly sweep deletes no retrospective. Default false. storage.retention.memory_retros_forever (new key).
+	MemoryRetrosForever bool `json:"memory_retros_forever"`
+
+	// SessionDays Days chat transcripts are kept. Default 90. storage.retention.session_days.
+	SessionDays int `json:"session_days"`
+}
+
+// RetentionSettingsUpdate Partial update of the retention settings. At least one field.
+type RetentionSettingsUpdate struct {
+	// MemoryRetrosDays Validated whenever sent, also while memory_retros_forever is true.
+	MemoryRetrosDays    *int  `json:"memory_retros_days,omitempty"`
+	MemoryRetrosForever *bool `json:"memory_retros_forever,omitempty"`
+	SessionDays         *int  `json:"session_days,omitempty"`
 }
 
 // RetentionSweepResult Result of a POST /api/v1/security/retention/sweep on-demand sweep operation.
@@ -25190,30 +25222,6 @@ type RetentionSweepResult struct {
 
 	// SkippedReason Present when the sweep was skipped without removing anything. Currently only "disabled" (retention is configured as disabled).
 	SkippedReason *string `json:"skipped_reason,omitempty"`
-}
-
-// RetentionUpdateRequest Request body for PUT /api/v1/security/retention. Partial update — any subset of the two retention fields. Strict type validation rejects JSON strings for session_days, floats with fractional parts for session_days, and non-boolean values for disabled. An empty body {} is accepted as a no-op.
-type RetentionUpdateRequest struct {
-	// Disabled When true, retention sweeps are disabled and session logs are kept forever. Strings ("true"/"false") and numbers are rejected with 400.
-	Disabled *bool `json:"disabled,omitempty"`
-
-	// SessionDays Number of days to retain session logs. 0 means use the system default (90 days). Floats and strings are rejected with 400.
-	SessionDays *int `json:"session_days,omitempty"`
-}
-
-// RetentionUpdateResponse Response from PUT /api/v1/security/retention. Returns save status and the currently active retention settings.
-type RetentionUpdateResponse struct {
-	// Disabled When true, retention sweeps are disabled and session logs are kept forever.
-	Disabled bool `json:"disabled"`
-
-	// RequiresRestart Always false — retention config is hot-reloaded.
-	RequiresRestart bool `json:"requires_restart"`
-
-	// Saved True when the configuration was successfully persisted to disk.
-	Saved bool `json:"saved"`
-
-	// SessionDays Number of days to retain session logs. 0 = system default (90 days).
-	SessionDays int `json:"session_days"`
 }
 
 // RevisionEntry A single owner-loop plan correction record (ADR-053 §Contract Surface — "Revision entry"). Committed transactionally with the tail members + edges it introduces via the write-ahead intent-log (INV-6/N-8) — the intent record, the tail members, their edges, and the plan-record patch land all-or-nothing. This is the single canonical shape for a revision record; `SessionMessageRevisionEntry` (the SessionMessage transport variant, `kind: revision_entry`) nests this same schema under a `revision` key rather than duplicating its fields — see that file's description for why the two `generation` concepts cannot be flattened into one object.
@@ -30479,6 +30487,9 @@ type ListCommandsParams struct {
 // ListCommandsParamsSurface defines parameters for ListCommands.
 type ListCommandsParamsSurface string
 
+// UpdateConfigJSONBody defines parameters for UpdateConfig.
+type UpdateConfigJSONBody map[string]interface{}
+
 // RotateCredentials200JSONResponseBodyStatus defines parameters for RotateCredentials.
 type RotateCredentials200JSONResponseBodyStatus string
 
@@ -30927,6 +30938,9 @@ type SetChannelOutboundJSONRequestBody = ChannelOutboundUpdateRequest
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
 
+// UpdateConfigJSONRequestBody defines body for UpdateConfig for application/json ContentType.
+type UpdateConfigJSONRequestBody UpdateConfigJSONBody
+
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest
 
@@ -31056,9 +31070,6 @@ type UpdatePromptGuardJSONRequestBody = PromptGuardUpdateRequest
 // UpdateRateLimitsJSONRequestBody defines body for UpdateRateLimits for application/json ContentType.
 type UpdateRateLimitsJSONRequestBody = RateLimitsUpdateRequest
 
-// UpdateRetentionJSONRequestBody defines body for UpdateRetention for application/json ContentType.
-type UpdateRetentionJSONRequestBody = RetentionConfig
-
 // UpdateSandboxConfigJSONRequestBody defines body for UpdateSandboxConfig for application/json ContentType.
 type UpdateSandboxConfigJSONRequestBody = SandboxConfigUpdate
 
@@ -31082,6 +31093,9 @@ type UpdateContextSettingsJSONRequestBody = ContextSettingsUpdate
 
 // UpdateMemorySettingsJSONRequestBody defines body for UpdateMemorySettings for application/json ContentType.
 type UpdateMemorySettingsJSONRequestBody = MemorySettings
+
+// UpdateRetentionSettingsJSONRequestBody defines body for UpdateRetentionSettings for application/json ContentType.
+type UpdateRetentionSettingsJSONRequestBody = RetentionSettingsUpdate
 
 // UpdateThirdPartyAgentSettingsJSONRequestBody defines body for UpdateThirdPartyAgentSettings for application/json ContentType.
 type UpdateThirdPartyAgentSettingsJSONRequestBody = ThirdPartyAgentSettings

@@ -1,0 +1,17 @@
+title: RetentionSettingsUpdate
+description: Partial update of the retention settings. At least one field.
+type: object
+additionalProperties: false
+minProperties: 1
+properties:
+  session_days:
+    type: integer
+    minimum: 1
+    maximum: 365
+  memory_retros_days:
+    type: integer
+    minimum: 1
+    maximum: 730
+    description: Validated whenever sent, also while memory_retros_forever is true.
+  memory_retros_forever:
+    type: boolean

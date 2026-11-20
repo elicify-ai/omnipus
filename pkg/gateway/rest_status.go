@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -142,10 +143,13 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 		})
 	}
 
-	// Check sandbox configuration. ResolvedMode is the source of truth.
-	// Both "enforce" and "permissive" represent an active sandbox; only
-	// "off" (or an empty config that resolves to off) should warn.
-	if cfg.Sandbox.ResolvedMode() == string(config.SandboxModeOff) {
+	// Check sandbox configuration. Both "enforce" and "permissive" represent
+	// an active sandbox. An explicit "off" warns. An unset mode (a fresh
+	// install) resolves to off too, but the running kernel sandbox may still
+	// be enforcing; the finding would then contradict
+	// GET /security/sandbox-status, so it warns only when no turn policy base
+	// is installed (#853).
+	if sandboxReportedDisabled(cfg) {
 		issues = append(issues, map[string]any{
 			"id":             "sandbox-disabled",
 			"severity":       "medium",
@@ -737,4 +741,17 @@ func (a *restAPI) HandleStorageStats(w http.ResponseWriter, r *http.Request) {
 		resp["warnings"] = warnings
 	}
 	jsonOK(w, resp)
+}
+
+// sandboxReportedDisabled reports whether the health check should say the
+// sandbox is disabled (#853): an explicit off always does; an unset mode
+// does only when the kernel sandbox is not running either.
+func sandboxReportedDisabled(cfg *config.Config) bool {
+	if cfg.Sandbox.ResolvedMode() != string(config.SandboxModeOff) {
+		return false
+	}
+	if cfg.Sandbox.Mode == "" {
+		return !sandbox.TurnPolicyBaseInstalled()
+	}
+	return true
 }

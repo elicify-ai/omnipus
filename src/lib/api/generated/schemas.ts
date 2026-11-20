@@ -3025,8 +3025,6 @@ type MemorySettings = Partial<{
   recap_retry_pause_ms: number;
   recap_chars_per_token: number;
   bootstrap_recap_min_spacing_seconds: number;
-  session_days: number;
-  memory_retros_days: number;
 }>;
 type WorkspaceUpdateRequest = {
   revision: ConfigurationRevision;
@@ -5370,18 +5368,6 @@ export const AuditLogUpdateResponse = z.object({
   requires_restart: z.boolean(),
   applied_enabled: z.boolean(),
 });
-export const RetentionConfig = z
-  .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
-  .partial()
-  .passthrough();
-export const RetentionUpdateResponse = z
-  .object({
-    saved: z.boolean(),
-    requires_restart: z.boolean(),
-    session_days: z.number().int().gte(0),
-    disabled: z.boolean(),
-  })
-  .passthrough();
 export const RetentionSweepResult = z
   .object({
     removed: z.number().int().gte(0),
@@ -5478,8 +5464,19 @@ export const MemorySettings: z.ZodType<MemorySettings> = z
     recap_retry_pause_ms: z.number().int().gte(100).lte(5000),
     recap_chars_per_token: z.number().int().gte(2).lte(8),
     bootstrap_recap_min_spacing_seconds: z.number().int().gte(1).lte(60),
-    session_days: z.number().int(),
-    memory_retros_days: z.number().int(),
+  })
+  .partial();
+export const RetentionSettings = z.object({
+  session_days: z.number().int(),
+  memory_retros_days: z.number().int(),
+  memory_retros_forever: z.boolean(),
+  keep_everything_forever: z.boolean(),
+});
+export const RetentionSettingsUpdate = z
+  .object({
+    session_days: z.number().int().gte(1).lte(365),
+    memory_retros_days: z.number().int().gte(1).lte(730),
+    memory_retros_forever: z.boolean(),
   })
   .partial();
 export const ContextModelOverride: z.ZodType<ContextModelOverride> = z.object({
@@ -5748,6 +5745,7 @@ export const PendingRestartEntry = z
     key: z.string(),
     persisted_value: z.unknown(),
     applied_value: z.unknown(),
+    reason: z.enum(["restart_required", "apply_failed"]),
   })
   .passthrough();
 export const GatewayRestartResponse = z
@@ -8602,9 +8600,6 @@ export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
   })
   .partial()
   .passthrough();
-export const RetentionUpdateRequest = z
-  .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
-  .partial();
 export const SessionMessageProgress =
   z.object({
     message_id: z.string().min(1),
@@ -10738,6 +10733,62 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
+    method: "get",
+    path: "/config",
+    alias: "getConfig",
+    description: `Returns the full configuration (config.Config serialized; secrets redacted as &quot;[redacted]&quot; placeholders). Read by Settings → Gateway and the SPA&#x27;s config round-trip.
+`,
+    requestFormat: "json",
+    response: z.object({}).partial().passthrough(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/config",
+    alias: "updateConfig",
+    description: `Deep-merges the body into config.json (maps merge one level deep; scalars and arrays replace). Refusals, in order, before anything is written: 403 for a credential-like field (providers, or a key whose folded name contains api_key, secret or password — a raw GET /config echo is refused here); 403 for a blocked path (sandbox, security, credentials, gateway.users, agents.list, gateway.dev_mode_bypass, …); 400 for a merged result that changes any effective retention value — &quot;retention settings can only be changed through PUT /api/v1/settings/retention&quot; (Settings redesign #1519, FR-044) — or any effective Performance value — &quot;performance settings can only be changed through PUT /api/v1/performance&quot; (FR-100) — or that does not decode into the configuration (&quot;this write does not decode: …&quot;), or that would change the protected agent defaults (#904). A write that stored config.json and then failed to refresh the live settings answers 500 ErrorResponse with code &quot;saved_not_refreshed&quot; and details.keys naming the dotted keys the body changed — saved, not in use — with the keys recorded as apply_failed entries in GET /config/pending-restart inside the write lock, before the response is sent (FR-102). A failure before the write answers 500 without that code. A successful write answers 200 with the configuration map (the GET shape).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({}).partial().passthrough(),
+      },
+    ],
+    response: z.object({}).partial().passthrough(),
+    errors: [
+      {
+        status: 400,
+        description: `Retention or Performance guard, protected agent defaults, or a merged result that does not decode. Nothing was written.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Credential-like field or blocked path. Nothing was written.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Failed before the write (no code), or written and then the live refresh failed (code &quot;saved_not_refreshed&quot;, details.keys).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "post",
     path: "/config/gateway/rotate-token",
     alias: "rotateGatewayToken",
@@ -10767,7 +10818,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/config/pending-restart",
     alias: "getPendingRestart",
-    description: `Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed.
+    description: `Returns an array of entries: (a) config keys whose persisted (disk) value differs from the boot-time applied value, with reason &quot;restart_required&quot;, and (b) hot-reloaded keys whose last save did not apply since boot, with reason &quot;apply_failed&quot;. The restart_required key list (RestartGatedKeys): sandbox.mode, sandbox.audit_log, sandbox.allowed_paths, sandbox.workspace_path_guard, session.dm_scope, gateway.host, gateway.port, gateway.public_url, tools.run_in_workspace.warmup_timeout_seconds, sandbox.filesystem_model, tools.exec.enable_proxy, security.platform_auth.issuer, security.platform_auth.client_id, security.platform_auth.instance_id, security.platform_auth.keys. Hot-reload keys (prompt-injection defense level, rate limits, sandbox.auto_approve) and God Mode never appear as restart_required. An empty array means no restart is needed. For an apply_failed entry, persisted_value is read from config.json at request time; a later successful apply of that key, or a restart, removes the entry.
 `,
     requestFormat: "json",
     response: z.array(PendingRestartEntry),
@@ -10847,7 +10898,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/credentials/:key",
     alias: "deleteCredential",
-    description: `Removes a credential by key. Returns 404 if not found.`,
+    description: `Removes a credential by key. Returns 404 if not found. No X-Reauth-Token and no password (Settings redesign #1519, B7 / FR-056; ADR-022 corrected at landing): the existing sign-in, admin and bypass guards and the audit entry stay. Setting (POST /credentials) and rotating (POST /credentials/rotate) still require the reauth token.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -15095,55 +15147,6 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     ],
   },
   {
-    method: "get",
-    path: "/security/retention",
-    alias: "getRetention",
-    description: `Returns session_days and disabled flag from storage.retention.
-`,
-    requestFormat: "json",
-    response: RetentionConfig,
-    errors: [
-      {
-        status: 401,
-        description: `Missing or invalid bearer token.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/security/retention",
-    alias: "updateRetention",
-    description: `Partial update — any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string &quot;true&quot;/&quot;false&quot; rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false).
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: RetentionConfig,
-      },
-    ],
-    response: RetentionUpdateResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Type mismatch (float for session_days, string for disabled).`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
     method: "post",
     path: "/security/retention/sweep",
     alias: "triggerRetentionSweep",
@@ -15881,7 +15884,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/settings/context",
     alias: "updateContextSettings",
-    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap &gt; 150,000 or &lt; 1; tool_result_share_fraction must be a finite JSON number with 0 &lt; f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values &gt; 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap &gt; 150,000 or &lt; 1; tool_result_share_fraction must be a finite JSON number with 0 &lt; f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values &gt; 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth). The sent fields are applied to the stored values read INSIDE the config write lock (Settings redesign #1519, FR-021): two writes changing different fields both survive in either order; on the same field the later write wins; a list value is one field. When config.json was written but the live refresh or reload failed afterwards, the answer is 500 ErrorResponse with code &quot;saved_not_refreshed&quot; and details.keys naming the changed context.&lt;field&gt; paths — saved, not in use — and the keys are recorded as apply_failed entries in GET /config/pending-restart inside the write lock, before the response is sent (#995, FR-102). A failure before config.json was written answers 500 without that code.
 `,
     requestFormat: "json",
     parameters: [
@@ -15901,6 +15904,12 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Failed before the write (no code), or written and then the live refresh/reload failed (code &quot;saved_not_refreshed&quot;, details.keys).
+`,
         schema: ErrorResponse,
       },
     ],
@@ -15925,7 +15934,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/settings/memory",
     alias: "updateMemorySettings",
-    description: `Writes the global memory/recap and retention settings. Reads/writes ONLY the MemorySettings fields — no merge of sibling config sections or secrets (A2/G-02). Writable by any authenticated user (operator decision, no admin gate). Uses safeUpdateConfigJSON server-side to preserve all other config fields including API keys.
+    description: `Writes the global memory/recap settings. Reads/writes ONLY the MemorySettings fields — no merge of sibling config sections or secrets (A2/G-02). Writable by any authenticated user (operator decision, no admin gate). Uses safeUpdateConfigJSON server-side to preserve all other config fields including API keys. Retention is NOT writable here: a body carrying session_days or memory_retros_days is refused with 400 naming the field, nothing in the body is applied — including its other fields — and this holds whatever gateway.validate_inbound is (Settings redesign #1519, FR-045). Retention is changed only through PUT /settings/retention.
 `,
     requestFormat: "json",
     parameters: [
@@ -15939,12 +15948,66 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     errors: [
       {
         status: 400,
-        description: `Invalid field value (e.g. negative session_days).`,
+        description: `Invalid field value, or a retired retention field (session_days / memory_retros_days) in the body.`,
         schema: ErrorResponse,
       },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/settings/retention",
+    alias: "getRetentionSettings",
+    description: `Returns RetentionSettings: how long chat history and memory are kept, as stored. The read shape has no range so a hand-edited out-of-range value can be shown and repaired; 0 or a negative stored day count is returned as its effective default (90 / 180). keep_everything_forever mirrors the legacy config-file-only storage.retention.disabled. Writable by any authenticated user (withAuth + RequireNotBypass, the /settings/memory posture; no password).
+`,
+    requestFormat: "json",
+    response: RetentionSettings,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/settings/retention",
+    alias: "updateRetentionSettings",
+    description: `The only write path for retention (Settings redesign #1519, C-3). Takes RetentionSettingsUpdate, applies the sent fields to the stored values read inside the config write lock, writes once, and answers 200 with RetentionSettings. Ranges are enforced in the handler whatever gateway.validate_inbound is (review MAJ-004): session_days 1–365, memory_retros_days 1–730 (validated whenever sent, also while memory_retros_forever is true), memory_retros_forever a boolean; a body carrying keep_everything_forever or any unknown field, an empty body, and a wrong type each answer 400 naming the field and its range. Every other writer that would change the effective retention values — the generic PUT /config included — is refused by effect (FR-044).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: RetentionSettingsUpdate,
+      },
+    ],
+    response: RetentionSettings,
+    errors: [
+      {
+        status: 400,
+        description: `A field outside its range or type, an unknown or read-only field, or an empty body.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -15974,7 +16037,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/settings/third-party-agents",
     alias: "updateThirdPartyAgentSettings",
-    description: `Replaces the whole section in one call (a CLI key absent from &#x60;clis&#x60; is saved as {path: &quot;&quot;, preset_args: &quot;&quot;}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.&lt;cli&gt;.path or clis.&lt;cli&gt;.preset_args, details.cli, details.check; never the path, which goes to the server log only) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it.
+    description: `Replaces the whole section in one call (a CLI key absent from &#x60;clis&#x60; is saved as {path: &quot;&quot;, preset_args: &quot;&quot;}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.&lt;cli&gt;.path or clis.&lt;cli&gt;.preset_args, details.cli, details.check; never the path, which goes to the server log only) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it. That answer carries details.keys naming the changed clis.&lt;cli&gt; dotted keys, and the keys are recorded as apply_failed entries in GET /config/pending-restart inside the write lock, before the response is sent (Settings redesign #1519, FR-102).
 `,
     requestFormat: "json",
     parameters: [

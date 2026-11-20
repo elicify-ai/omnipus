@@ -98,7 +98,7 @@ func NewConfigSetTool(d *Deps) *ConfigSetTool   { return &ConfigSetTool{deps: d}
 func (t *ConfigSetTool) Name() string           { return "set_config" }
 func (t *ConfigSetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ConfigSetTool) Description() string {
-	return "Update a setting (port, timeout, host, feature flag, or similar) in config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.tool_policies'. Only updates settings that already exist — it never creates a new one, and a key naming nothing that exists is refused rather than silently dropped. Writable sections are limited to: gateway., agents., sandbox., channels., tools., providers, workspace_path — everything else is refused. Within those, several security-critical subtrees are refused too, even though their prefix is writable: the whole sandbox.* namespace, gateway.dev_mode_bypass/users/token/cli_token/public_url/trust_xff, tools.exec/mcp/browser/allow_read_paths/allow_write_paths, and the channel ownership fields channels.*.identity/workspace_id — each refusal names where the setting actually belongs. Credential/API-key-shaped values (api_key, secret, token, password in the name) are always refused here — use configure_provider or configure_channel instead, which route secrets into the encrypted credential store. The result includes a requires_restart field: when true, the change was saved but has no effect until the operator restarts the gateway — check it and relay that to the user rather than assuming the change is already live.\nParameters: key (required), value (required)."
+	return "Update a setting (port, timeout, host, feature flag, or similar) in config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.tool_policies'. Only updates settings that already exist — it never creates a new one, and a key naming nothing that exists is refused rather than silently dropped. Writable sections are limited to: gateway., agents., sandbox., channels., tools., providers, workspace_path — everything else is refused. Within those, several security-critical subtrees are refused too, even though their prefix is writable: the whole sandbox.* namespace, gateway.dev_mode_bypass/users/token/cli_token/public_url/trust_xff, tools.exec/mcp/browser/allow_read_paths/allow_write_paths, and the channel ownership fields channels.*.identity/workspace_id — each refusal names where the setting actually belongs. The Performance values agents.defaults.max_tool_iterations and tools.manifest.compressed (and its parent tools.manifest) are refused too: they are changed only in Settings → Limits. Credential/API-key-shaped values (api_key, secret, token, password in the name) are always refused here — use configure_provider or configure_channel instead, which route secrets into the encrypted credential store. The result includes a requires_restart field: when true, the change was saved but has no effect until the operator restarts the gateway — check it and relay that to the user rather than assuming the change is already live.\nParameters: key (required), value (required)."
 }
 
 func (t *ConfigSetTool) Parameters() map[string]any {
@@ -901,40 +901,72 @@ const performanceOnlyConfigReason = "the global tool-iteration limit (max tool c
 // default_agent_id, …) unwritable. A section write is instead checked by
 // value, after the merge (checkPerformanceOnlyConfigUnchanged). Reads stay
 // open — the limit is not secret.
-var performanceOnlyConfigKeys = []string{
-	string(config.AgentsDefaultsMaxToolIterations),
-	string(config.AgentsDefaultsMaxToolIterationsEnvImported),
+var performanceOnlyConfigKeys = []struct {
+	key    string
+	reason string
+}{
+	{string(config.AgentsDefaultsMaxToolIterations), performanceOnlyConfigReason},
+	{string(config.AgentsDefaultsMaxToolIterationsEnvImported), performanceOnlyConfigReason},
+	{manifestCompressedConfigKey, manifestCompressedConfigReason},
 }
 
+// manifestCompressedConfigKey is the compressed tool list switch, a
+// Performance value with one write path (Settings redesign #1519, C-7 / #936,
+// FR-100): Settings → Limits, PUT /api/v1/performance.
+const (
+	manifestCompressedConfigKey = "tools.manifest.compressed"
+	manifestConfigKey           = "tools.manifest"
+)
+
+// manifestCompressedConfigReason is the refusal text for
+// tools.manifest.compressed and its parent tools.manifest.
+const manifestCompressedConfigReason = "the compressed tool list (tools.manifest.compressed) is changed only in " +
+	"Settings → Limits (PUT /api/v1/performance), which asks for the admin's password"
+
 // validatePerformanceOnlyConfigKey refuses a key at or under a
-// performance-only key, in any case spelling.
+// performance-only key, in any case spelling. A write AT tools.manifest, the
+// parent of tools.manifest.compressed, is refused too, whatever the value
+// carries (D-16 row 8); its sibling tools.manifest.preview_all_lazy stays
+// writable, and a write at the tools section is checked by value after the
+// merge (checkPerformanceOnlyConfigUnchanged).
 func validatePerformanceOnlyConfigKey(cfg *config.Config, key string) error {
 	for _, k := range performanceOnlyConfigKeys {
-		if configKeyCovers(cfg, key, k) {
-			return fmt.Errorf("config key %q is not writable via this tool: %s", key, performanceOnlyConfigReason)
+		if configKeyCovers(cfg, key, k.key) {
+			return fmt.Errorf("config key %q is not writable via this tool: %s", key, k.reason)
 		}
+	}
+	if configKeyCovers(cfg, key, manifestConfigKey) && configKeyCovers(cfg, manifestConfigKey, key) {
+		return fmt.Errorf("config key %q is not writable via this tool: %s", key, manifestCompressedConfigReason)
 	}
 	return nil
 }
 
 // performanceOnlyConfig is the value of the performance-only fields.
 type performanceOnlyConfig struct {
-	maxToolIterations int
-	envImported       bool
+	maxToolIterations  int
+	envImported        bool
+	manifestCompressed bool
 }
 
 func snapshotPerformanceOnlyConfig(cfg *config.Config) performanceOnlyConfig {
 	return performanceOnlyConfig{
-		maxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
-		envImported:       cfg.Agents.Defaults.MaxToolIterationsEnvImported,
+		maxToolIterations:  cfg.Agents.Defaults.MaxToolIterations,
+		envImported:        cfg.Agents.Defaults.MaxToolIterationsEnvImported,
+		manifestCompressed: cfg.Tools.Manifest.Compressed,
 	}
 }
 
 // checkPerformanceOnlyConfigUnchanged refuses a write that changed a
 // performance-only field through an ancestor key.
 func checkPerformanceOnlyConfigUnchanged(key string, before performanceOnlyConfig, cfg *config.Config) error {
-	if snapshotPerformanceOnlyConfig(cfg) == before {
+	after := snapshotPerformanceOnlyConfig(cfg)
+	if after == before {
 		return nil
+	}
+	if after.manifestCompressed != before.manifestCompressed {
+		return fmt.Errorf("config key %q is not writable via this tool with this value: it would change %s — %s; "+
+			"leave manifest.compressed out of the object",
+			key, manifestCompressedConfigKey, manifestCompressedConfigReason)
 	}
 	return fmt.Errorf("config key %q is not writable via this tool with this value: it would change %s — %s; "+
 		"leave max_tool_iterations out of the object",
@@ -1184,6 +1216,13 @@ func isRestartRequired(key string) bool {
 		if strings.HasPrefix(key, prefix) || key == strings.TrimSuffix(prefix, ".") {
 			return true
 		}
+	}
+	// #1519 FR-036: the shell network proxy is read when the agent loop is
+	// built, so it is restart-gated too — including a write at its parent
+	// object (tools.exec), which carries it.
+	const execProxyKey = "tools.exec.enable_proxy"
+	if strings.HasPrefix(key, execProxyKey) || strings.HasPrefix(execProxyKey, key+".") {
+		return true
 	}
 	return false
 }
