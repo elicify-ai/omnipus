@@ -177,6 +177,14 @@ a copy yourself.
 - Registering LibreOffice never runs it: Omnipus reads the version from the
   installation's own files. A copy whose version files are missing is refused
   with `LibreOffice version unreadable`.
+- On Linux with `sandbox.filesystem_model` set to `confined`, stop and start
+  Omnipus (for example with your service manager) after installing,
+  registering, moving or reinstalling a preview program; the in-app restart is
+  not enough (see
+  [Sandbox limitations](operations/sandbox-limitations.md#document-preview-programs)).
+  Until then an Office preview says
+  `Office preview was installed or registered after Omnipus started. Stop and start Omnipus (for example with your service manager) to use it; the in-app restart is not enough in the confined sandbox.`
+  and the registration commands print a reminder.
 - On macOS and Linux, previews use the fonts installed for all users and the
   fonts that come with LibreOffice. A font installed only for your user
   account is not used, and text in that font is shown in a similar font. To
