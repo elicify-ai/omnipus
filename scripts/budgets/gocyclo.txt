@@ -125,7 +125,6 @@ pkg/sandbox/gitguard.go	GitGuard.inspectGitArgs	34
 pkg/tools/browser/webrtc/dedicated_input_queue.go	matchingPressRelease	34
 pkg/vaultprops/sync.go	syncReconcileBody	34
 pkg/filegrep/matcher_test.go	TestFileGrep_CaseModesAndSmartCase	33
-pkg/gateway/rest_agents_create.go	restAPICreateAgent.prepareAgent	33
 pkg/gateway/rest_providers_delete.go	restAPI.runProviderDelete	33
 pkg/gateway/rest_workspaces.go	restAPIHandleWorkspacePut.applyUpdate	33
 pkg/knowledge/links_test.go	TestKnowledge_NoLanguageModelInTheGraphPath	33

@@ -131,6 +131,15 @@ const (
 	// human-access policy requires audit payloads that carry no assertions,
 	// tickets or keys.
 	EventPlatformSignIn = "auth.platform_sign_in"
+	// EventPackageExport, EventPackageUpload, EventPackageImport and
+	// EventPackageRecovery record the agent package operations (epic #1094,
+	// export-import spec FR-016, FR-040, FR-062; pkg/gateway/rest_packages*.go):
+	// one entry per export, per upload refusal, per apply (import) outcome and per
+	// import recovered at start-up. Details carry "operation" plus the outcome.
+	EventPackageExport   = "package.export"
+	EventPackageUpload   = "package.upload"
+	EventPackageImport   = "package.import"
+	EventPackageRecovery = "package.recovery"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -212,6 +221,7 @@ var validEventNames = map[EventName]struct{}{
 	// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).
 	EventOnboardingAdminCreated: {},
 	EventOnboardingRefused:      {}, EventPlatformSignIn: {}, // omnipus.ai sign-in (pkg/gateway/rest_platform_auth.go).
+	EventPackageExport: {}, EventPackageUpload: {}, EventPackageImport: {}, EventPackageRecovery: {}, // agent packages (pkg/gateway/rest_packages*.go).
 	// Tool Registry redesign event names from events.go. These are
 	// emitted from the agent loop and the policy package.
 	EventToolPolicyDenyAttempted:        {},

@@ -77,6 +77,44 @@ func adminCtx() context.Context {
 	return ctx
 }
 
+// newAuditReadSurfaceAPI is newTestRestAPIWithHome with the agents home at
+// tmpDir/workspace (the placement newTestRestAPIWithAuditLog uses). The audit
+// writer's directory is Dir(agents home)/system, and #1742 makes the audit-log
+// viewer read exactly that writer folder (rest_settings.go::auditDir on the
+// implemented branch). With the home at tmpDir/workspace the writer folder is
+// tmpDir/system — which is also homePath/system, the folder the pre-#1742
+// read path consulted. The fixtures below therefore plant audit.jsonl in the
+// one folder that is the writer's on the implemented branch AND the reader's
+// on the pre-merge branch, so the read-surface regression pins hold on both.
+func newAuditReadSurfaceAPI(t *testing.T) *restAPI {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o700))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
+			},
+		},
+	}
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), minimalCfg, 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	return &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir,
+	}
+}
+
 // TestHandleSandboxAuditLog_PUTPersists verifies that PUT {enabled:true}
 // writes sandbox.audit_log=true to config.json on disk.
 func TestHandleSandboxAuditLog_PUTPersists(t *testing.T) {
@@ -273,7 +311,9 @@ func TestHandleSandboxAuditLog_EmitsAuditEntry(t *testing.T) {
 // nobody later reads this test's green as evidence that the Audit Log SCREEN
 // shows a snapshot. It does not, and will not until #667 lands.
 func TestAuditLog_RecordRetrievableAlongsideDottedLegacyEvent(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+	// #1742: the fixture goes to the folder the audit WRITER writes (see
+	// newAuditReadSurfaceAPI) — the viewer reads the writer's folder now.
+	api := newAuditReadSurfaceAPI(t)
 
 	systemDir := filepath.Join(api.homePath, "system")
 	require.NoError(t, os.MkdirAll(systemDir, 0o700))
@@ -456,7 +496,9 @@ func auditEntryEventPatternFromContract(t *testing.T) *regexp.Regexp {
 // the handler started filtering, that is a genuine behaviour change and the
 // comment above needs rewriting — which is the point of pinning it.
 func TestAuditLog_ReadSurfaceRedactsNothing(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+	// #1742: the fixture goes to the folder the audit WRITER writes (see
+	// newAuditReadSurfaceAPI) — the viewer reads the writer's folder now.
+	api := newAuditReadSurfaceAPI(t)
 
 	systemDir := filepath.Join(api.homePath, "system")
 	require.NoError(t, os.MkdirAll(systemDir, 0o700))

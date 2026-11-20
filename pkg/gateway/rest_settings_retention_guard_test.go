@@ -99,6 +99,15 @@ func readRetentionEffective(t *testing.T, path string) retentionEffective {
 // d12Fixture is one valid config.json that differs only in storage.retention
 // (Dataset D-12 preamble). F1 exists at the baseline; F2's switch is part of
 // this feature's GREEN but the raw file is already valid JSON today.
+//
+// The fixture stores gateway.port 8080 because D-12 rows 5, 7, 10 and 11
+// state their port oracle as an absolute value ("Port stays 8080" /
+// "Port 8081"): the assertion is only meaningful against a STORED 8080.
+// Without a stored port, config.LoadConfig applies its shipped default
+// (5000, pkg/config/defaults.go), and "Port stays 8080" would compare
+// against a number the fixture never held (observed in the backend
+// branch's failing run: expected 8080, actual 5000). Both fixtures carry
+// the same gateway object, so they still differ only in storage.retention.
 func d12Fixture(t *testing.T, api *restAPI, fixture string) retentionEffective {
 	t.Helper()
 	var ret string
@@ -113,7 +122,7 @@ func d12Fixture(t *testing.T, api *restAPI, fixture string) retentionEffective {
 	default:
 		t.Fatalf("unknown D-12 fixture %q", fixture)
 	}
-	doc := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"storage":{` + ret + `}}`
+	doc := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],"gateway":{"port":8080},"storage":{` + ret + `}}`
 	require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "config.json"), []byte(doc), 0o600))
 	want := retentionEffective{sessionDays: 30, memoryRetroDays: 400}
 	switch fixture {

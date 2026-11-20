@@ -1,0 +1,280 @@
+package omnpkg
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/klauspost/compress/zstd"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
+)
+
+// Selection names what to export (S1 accepts exactly one agent, FR-010).
+type Selection struct {
+	AgentIDs []string
+}
+
+// ExportSource is the store edge the gateway fills (ADR D1): the engine never
+// reads the data folder around the stores. An error the source returns as a
+// *PackageError (for example agent_not_found) is passed through unchanged.
+type ExportSource interface {
+	// AgentRecord returns the stored record JSON for id.
+	AgentRecord(id string) ([]byte, error)
+	// AgentHomeDir returns the agent's home folder (holds SOUL.md / AGENT.md).
+	AgentHomeDir(id string) (string, error)
+	// IsCoreAgent reports built-in / system / shipped-subagent agents (D4).
+	IsCoreAgent(id string) bool
+}
+
+// exportRemovedFields are the top-level record fields Field mapping removes at
+// export (home path, timestamps, lock flag, skill grants).
+var exportRemovedFields = []string{"workspace", "created_at", "updated_at", "locked", "skill_grants"}
+
+// exportRemovedSubagentFields are the retired/unused subagents fields (ADR A3).
+var exportRemovedSubagentFields = []string{"allow_agents", "model"}
+
+// Export packs the selected agent into w (manifest first, FR-001/FR-002,
+// Field mapping Export column, FR-018 bounded source reads). Nothing is
+// written to w unless the whole package was built.
+func Export(ctx context.Context, src ExportSource, sel Selection, w io.Writer) error {
+	if len(sel.AgentIDs) != 1 {
+		return newErr(CodeExportSelectionInvalid, "reason", "exactly one agent must be selected")
+	}
+	id := sel.AgentIDs[0]
+	if src.IsCoreAgent(id) {
+		return newErr(CodeCoreAgentNotExportable, "agent_id", id)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	files, name, err := collectAgentFiles(src, id)
+	if err != nil {
+		return err
+	}
+	pkg, err := buildPackage(id, name, files, time.Now().UTC().Truncate(time.Second))
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := w.Write(pkg); err != nil {
+		return fmt.Errorf("omnpkg: write package: %w", err)
+	}
+	return nil
+}
+
+// packagedFile is one payload entry in package order.
+type packagedFile struct {
+	path string
+	body []byte
+}
+
+// collectAgentFiles reads and cleans the record and captures SOUL.md and
+// AGENT.md, applying the export refusals (FR-010, FR-011, FR-018, FR-019).
+func collectAgentFiles(src ExportSource, id string) ([]packagedFile, string, error) {
+	raw, err := src.AgentRecord(id)
+	if err != nil {
+		return nil, "", sourceErr("read agent record", err)
+	}
+	v, err := parseRecordView(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("omnpkg: agent %s: stored record is not valid JSON: %w", id, err)
+	}
+	ac := v.asAgentConfig()
+	switch {
+	case v.isCoreType():
+		return nil, "", newErr(CodeCoreAgentNotExportable, "agent_id", id)
+	case ac.IsExternalCLIWorker():
+		return nil, "", newErr(CodeExternalWorkerNotSupported, "agent_id", id)
+	case ac.IsWorker() && blank(v.Description):
+		return nil, "", fieldErr(CodeElementNotCreatable, "description", "a worker needs a description")
+	}
+	home, err := src.AgentHomeDir(id)
+	if err != nil {
+		return nil, "", sourceErr("resolve agent home", err)
+	}
+	soul, soulPresent, err := readSourceFile(home, AgentSoulName)
+	if err != nil {
+		return nil, "", err
+	}
+	if !soulPresent || blank(string(soul)) {
+		return nil, "", newErr(CodeAgentPromptMissing, "agent_id", id)
+	}
+	agentMD, mdPresent, err := readSourceFile(home, AgentInstructionsNm)
+	if err != nil {
+		return nil, "", err
+	}
+	record, err := cleanRecordForExport(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("omnpkg: agent %s: %w", id, err)
+	}
+	files := []packagedFile{
+		{path: agentRecordPath(id), body: record},
+		{path: agentSoulPath(id), body: soul},
+	}
+	if mdPresent {
+		files = append(files, packagedFile{path: agentInstructionsPath(id), body: agentMD})
+	}
+	return files, v.Name, nil
+}
+
+// sourceErr passes a coded source error through and wraps any other.
+func sourceErr(what string, err error) error {
+	var pe *PackageError
+	if errors.As(err, &pe) {
+		return err
+	}
+	return fmt.Errorf("omnpkg: %s: %w", what, err)
+}
+
+// readSourceFile reads home/name without following links, as a regular file
+// only, bounded to MaxAgentFileBytes (FR-018). An absent file reports
+// present=false; every other problem refuses with agent_file_unreadable.
+func readSourceFile(home, name string) ([]byte, bool, error) {
+	path := filepath.Join(home, name)
+	unreadable := func(check string) error {
+		return newErr(CodeAgentFileUnreadable, "file", name, "check", check)
+	}
+	before, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, unreadable(CheckUnreadable)
+	}
+	if before.Mode()&fs.ModeSymlink != 0 {
+		return nil, false, unreadable(CheckLink)
+	}
+	if !before.Mode().IsRegular() {
+		return nil, false, unreadable(CheckNotRegular)
+	}
+	// A file nobody may read (mode 000) is refused the same way whether or
+	// not the gateway runs with privileges that would bypass the mode.
+	if before.Mode().Perm()&0o444 == 0 {
+		return nil, false, unreadable(CheckUnreadable)
+	}
+	if before.Size() > MaxAgentFileBytes {
+		return nil, false, unreadable(CheckTooLarge)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, unreadable(CheckUnreadable)
+	}
+	defer f.Close()
+	after, err := f.Stat()
+	if err != nil {
+		return nil, false, unreadable(CheckUnreadable)
+	}
+	// The path was swapped between the check and the open (for example for a
+	// link): refuse rather than read what it points at now.
+	if !os.SameFile(before, after) {
+		return nil, false, unreadable(CheckLink)
+	}
+	body, err := io.ReadAll(io.LimitReader(f, MaxAgentFileBytes+1))
+	if err != nil {
+		return nil, false, unreadable(CheckUnreadable)
+	}
+	if len(body) > MaxAgentFileBytes {
+		return nil, false, unreadable(CheckTooLarge)
+	}
+	return body, true, nil
+}
+
+// cleanRecordForExport removes the fields Field mapping's Export column
+// removes and keeps every other stored value as it is.
+func cleanRecordForExport(raw []byte) ([]byte, error) {
+	var rec map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return nil, fmt.Errorf("stored record is not a JSON object: %w", err)
+	}
+	for _, k := range exportRemovedFields {
+		delete(rec, k)
+	}
+	if subRaw, ok := rec["subagents"]; ok && string(subRaw) != "null" {
+		var sub map[string]json.RawMessage
+		if err := json.Unmarshal(subRaw, &sub); err != nil {
+			return nil, fmt.Errorf("stored subagents is not a JSON object: %w", err)
+		}
+		for _, k := range exportRemovedSubagentFields {
+			delete(sub, k)
+		}
+		cleaned, err := json.Marshal(sub)
+		if err != nil {
+			return nil, fmt.Errorf("encode subagents: %w", err)
+		}
+		rec["subagents"] = cleaned
+	}
+	return json.Marshal(rec)
+}
+
+// buildPackage writes manifest.json first, then the payload files in order,
+// as a tar compressed with a zstd window of at most MaxDecoderWindow (FR-008).
+// Hashes and sizes come from the same captured bytes that are packaged.
+func buildPackage(id, name string, files []packagedFile, createdAt time.Time) ([]byte, error) {
+	m := Manifest{
+		Format:        FormatName,
+		FormatVersion: FormatVersion,
+		Scope:         ScopeCustom,
+		Elements: []ManifestElement{{
+			Type:     ElementTypeAgent,
+			Schema:   AgentSchemaVersion,
+			SourceID: id,
+			Name:     name,
+		}},
+		Counts:       map[string]int{ElementTypeAgent: 1},
+		Files:        make(map[string]FileInfo, len(files)),
+		SourceBuild:  config.GetVersion(),
+		CreatedAt:    createdAt,
+		NeedsSecrets: []NeedsSecret{},
+	}
+	for _, f := range files {
+		sum := sha256.Sum256(f.body)
+		m.Files[f.path] = FileInfo{SHA256: hex.EncodeToString(sum[:]), Size: int64(len(f.body))}
+		m.Elements[0].Files = append(m.Elements[0].Files, f.path)
+	}
+	manifest, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("omnpkg: encode manifest: %w", err)
+	}
+	var out bytes.Buffer
+	zw, err := zstd.NewWriter(&out, zstd.WithWindowSize(MaxDecoderWindow), zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		return nil, fmt.Errorf("omnpkg: open zstd encoder: %w", err)
+	}
+	tw := tar.NewWriter(zw)
+	entries := append([]packagedFile{{path: ManifestEntry, body: manifest}}, files...)
+	for _, e := range entries {
+		hdr := &tar.Header{
+			Name:     e.path,
+			Typeflag: tar.TypeReg,
+			Mode:     0o644,
+			Size:     int64(len(e.body)),
+			ModTime:  createdAt,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return nil, fmt.Errorf("omnpkg: write tar header %s: %w", e.path, err)
+		}
+		if _, err := tw.Write(e.body); err != nil {
+			return nil, fmt.Errorf("omnpkg: write tar entry %s: %w", e.path, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("omnpkg: close tar: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("omnpkg: close zstd: %w", err)
+	}
+	return out.Bytes(), nil
+}
