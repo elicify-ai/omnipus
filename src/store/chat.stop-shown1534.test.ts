@@ -23,11 +23,21 @@ function token(content: string, extra: Partial<TokenFrame> = {}) {
 function bucket(sid = SID) { return useChatStore.getState().sessionsById[sid] }
 function rows(sid = SID) { const b = bucket(sid); return b.messageOrder.map(id => b.messagesById[id]) }
 function stop(sid = SID) { expect(useChatStore.getState().cancelStream(sid)).toBe(true) }
+// Spec 4.7: a cancel carries the chat origin and a client_frame_id. shown stays the checkpoint.
+const FRAME_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+function boundCancel(extra: Record<string, unknown> = {}) {
+  return {
+    type: 'cancel',
+    session_id: SID,
+    origin: { kind: 'chat', session_id: SID },
+    client_frame_id: expect.stringMatching(FRAME_ID),
+    ...extra,
+  }
+}
 function expectShown(messageId: string, codePoints: number) {
-  expect(sender.send.mock.calls).toEqual([[{
-    type: 'cancel', session_id: SID,
+  expect(sender.send.mock.calls).toEqual([[boundCancel({
     shown: { message_id: messageId, turn_id: TURN, code_points: codePoints },
-  }]])
+  })]])
 }
 function reset() {
   pendingCancelAckSids.clear()
@@ -42,6 +52,8 @@ beforeEach(() => {
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'mia' })
   useChatStore.setState({ sessionsById: { [SID]: emptySessionState() } })
   useConnectionStore.getState().setConnection(sender as unknown as WsConnection)
+  // Spec 4.10: a stand-in sends only while marked connected.
+  useConnectionStore.getState().setConnected(true)
 })
 afterEach(() => { reset(); vi.restoreAllMocks() })
 
@@ -93,7 +105,7 @@ describe('#1534 applied code-point checkpoint', () => {
     expectShown(MID, 0)
   })
 
-  it('reads shown from exactly the bubble already frozen before connection.send', () => {
+  it('reads the shown checkpoint before send and freezes the bubble only after the handover', () => {
     token('SCREEN')
     // Keep an unrelated completed answer in the thread: its counters and
     // identity must not leak into the currently frozen answer's checkpoint.
@@ -105,18 +117,22 @@ describe('#1534 applied code-point checkpoint', () => {
       } },
     } } })
     sender.send.mockImplementation((payload) => {
+      // Spec 4.7: the checkpoint is already on the frame; the bubble freezes after send returns.
       expect(rows().map(m => [m.id, m.content, m.status])).toEqual([
-        ['other-done', 'OTHER', 'done'], [MID, 'SCREEN', 'interrupted'],
+        ['other-done', 'OTHER', 'done'], [MID, 'SCREEN', 'streaming'],
       ])
-      expect(payload).toEqual({ type: 'cancel', session_id: SID, shown: { message_id: MID, turn_id: TURN, code_points: 6 } })
-      // A token delivered reentrantly at the transport boundary cannot alter
-      // the already-captured checkpoint or the frozen body.
+      expect(payload).toEqual(boundCancel({ shown: { message_id: MID, turn_id: TURN, code_points: 6 } }))
+      // Spec 4.7: the bubble is not frozen until send returns, so a token inside
+      // the handover is applied. The checkpoint already on the frame stays SCREEN.
       token('UNSEEN')
       return true
     })
     stop()
     expectShown(MID, 6)
-    expect(rows().map(m => m.content)).toEqual(['OTHER', 'SCREEN'])
+    expect(rows().map(m => [m.content, m.status])).toEqual([
+      ['OTHER', 'done'],
+      ['SCREENUNSEEN', 'interrupted'],
+    ])
   })
 
   it('background Stop takes the named session checkpoint, never the foreground answer', () => {
@@ -133,7 +149,7 @@ describe('#1534 applied code-point checkpoint', () => {
   it('freezing an empty placeholder sends code_points zero without a fabricated message ID', () => {
     useChatStore.setState({ sessionsById: { [SID]: { ...emptySessionState(), isStreaming: true } } })
     stop()
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID, shown: { code_points: 0 } }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel({ shown: { code_points: 0 } })]])
     expect(rows().map(m => [m.content, m.status])).toEqual([['', 'interrupted']])
   })
 
@@ -145,16 +161,16 @@ describe('#1534 applied code-point checkpoint', () => {
       } },
     } } })
     stop()
-    expect(sender.send.mock.calls).toEqual([[{
-      type: 'cancel', session_id: SID, shown: { turn_id: TURN, code_points: 0 },
-    }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel({
+      shown: { turn_id: TURN, code_points: 0 },
+    })]])
     expect(rows().map(m => [m.id, m.content, m.status])).toEqual([['local-placeholder', '', 'interrupted']])
   })
 
   it('message-ID-less fallback sends no shown record', () => {
     token('fallback', { message_id: undefined })
     stop()
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel()]])
   })
 
   it('idle goal-gap Stop sends no shown record and leaves completed text alone', () => {
@@ -167,7 +183,7 @@ describe('#1534 applied code-point checkpoint', () => {
       round: 1, max_rounds: 5, latest_reason: '', active_loops: 1, cap: 3,
     } } } })
     stop()
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel()]])
     expect(rows().map(m => [m.content, m.status])).toEqual([['COMPLETE', 'done']])
   })
 
@@ -177,13 +193,13 @@ describe('#1534 applied code-point checkpoint', () => {
     expect(useChatStore.getState().cancelStream(SID, 'tree')).toBe(true)
     expect(rows().map(m => [m.id, m.content, m.status])).toEqual([[MID, 'SCREEN', 'interrupted']])
     // Keep a missing first checkpoint RED while still checking the second press.
-    expect.soft(sender.send.mock.calls, 'first tree Stop carries the frozen SCREEN checkpoint').toEqual([[{
-      type: 'cancel', session_id: SID, scope: 'tree',
+    expect.soft(sender.send.mock.calls, 'first tree Stop carries the frozen SCREEN checkpoint').toEqual([[boundCancel({
+      scope: 'tree',
       shown: { message_id: MID, turn_id: TURN, code_points: 6 }, // SCREEN = six code points
-    }]])
+    })]])
     sender.send.mockClear() // Only the recorder resets; the frozen store state stays real.
     expect(useChatStore.getState().cancelStream(SID, 'tree')).toBe(true)
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID, scope: 'tree' }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel({ scope: 'tree' })]])
   })
 })
 

@@ -40,8 +40,11 @@ import (
 func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	switch evt.Kind {
 	case agent.EventKindTurnStart:
-		if p, ok := evt.Payload.(agent.TurnStartPayload); ok && p.ChatNotice != nil {
-			h.hubPublishFrame(p.ChatNotice.SessionId, string(generated.WsFrameTypeReplayMessage), *p.ChatNotice, nil)
+		if p, ok := evt.Payload.(agent.TurnStartPayload); ok {
+			if p.ChatNotice != nil {
+				h.hubPublishFrame(p.ChatNotice.SessionId, string(generated.WsFrameTypeReplayMessage), *p.ChatNotice, nil)
+			}
+			h.hubDeliverTurnStarted(evt.Meta, p)
 		}
 	case agent.EventKindTurnEnd:
 		h.hubTurnEnd(evt)

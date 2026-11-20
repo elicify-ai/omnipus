@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // --- File upload ---
@@ -47,6 +50,9 @@ type restAPIHandleUpload struct {
 	workspaceID  string
 	resp         gen.UploadFilesResponse
 	workspaceLib *library.Library
+	// prefixFrozen is set at the first file part: the routing prefix
+	// (session_id/workspace_id) can no longer change (#1428 step 2, 4.3.7).
+	prefixFrozen bool
 }
 
 // restAPIHandleUploadFlow reports how a block stage of restAPIHandleUpload wants the conductor to proceed.
@@ -113,24 +119,10 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 		// Non-file field — check for session_id / workspace_id overrides.
 		if fileName == "" {
-			if formName == "session_id" && ru.sessionID == "" {
-				buf, readErr := io.ReadAll(io.LimitReader(part, 256))
-				part.Close()
-				if readErr != nil {
-					slog.Warn("rest: upload: read session_id field", "error", readErr)
-					jsonErr(ru.w, http.StatusBadRequest, "could not read session_id field")
+			if formName == "session_id" || formName == "workspace_id" {
+				if !ru.acceptRoutingField(part, formName) {
 					return
 				}
-				ru.sessionID = strings.TrimSpace(string(buf))
-			} else if formName == "workspace_id" && ru.workspaceID == "" {
-				buf, readErr := io.ReadAll(io.LimitReader(part, 256))
-				part.Close()
-				if readErr != nil {
-					slog.Warn("rest: upload: read workspace_id field", "error", readErr)
-					jsonErr(ru.w, http.StatusBadRequest, "could not read workspace_id field")
-					return
-				}
-				ru.workspaceID = strings.TrimSpace(string(buf))
 			} else {
 				// Discard unrecognized non-file fields.
 				if _, discardErr := io.Copy(io.Discard, part); discardErr != nil {
@@ -139,6 +131,17 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 				part.Close()
 			}
 			continue
+		}
+
+		// #1428 step 2 (spec 4.3.7): the routing prefix freezes at the first
+		// file part and, when it names both a chat and a workspace, the chat
+		// must belong to that workspace before anything is written.
+		if !ru.prefixFrozen {
+			ru.prefixFrozen = true
+			if !ru.checkRoutingPair() {
+				part.Close()
+				return
+			}
 		}
 
 		// --- Workspace media library path (ADR-051 Rev 4, FR-001) ---
@@ -771,4 +774,78 @@ func (a *restAPI) serveMedia(
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+}
+
+// acceptRoutingField reads one session_id/workspace_id form field (#1428 step
+// 2, spec 4.3.7). Before the first file part a first value sets the field, a
+// repeated identical value is accepted and a different one is refused with
+// 400 upload_routing_conflict; after a file part any routing field is refused
+// with 400 upload_routing_field_late. It closes part and returns false when
+// the request was answered.
+func (ru *restAPIHandleUpload) acceptRoutingField(part *multipart.Part, formName string) bool {
+	defer part.Close()
+	if ru.prefixFrozen {
+		jsonErrCode(ru.w, http.StatusBadRequest,
+			formName+" must come before the first file", "upload_routing_field_late")
+		return false
+	}
+	buf, readErr := io.ReadAll(io.LimitReader(part, 256))
+	if readErr != nil {
+		slog.Warn("rest: upload: read routing field", "field", formName, "error", readErr)
+		jsonErr(ru.w, http.StatusBadRequest, "could not read "+formName+" field")
+		return false
+	}
+	value := strings.TrimSpace(string(buf))
+	current := &ru.sessionID
+	if formName == "workspace_id" {
+		current = &ru.workspaceID
+	}
+	switch {
+	case *current == "":
+		*current = value
+	case *current != value:
+		jsonErrCode(ru.w, http.StatusBadRequest,
+			formName+" was given twice with different values", "upload_routing_conflict")
+		return false
+	}
+	return true
+}
+
+// checkRoutingPair runs once, at the first file part (#1428 step 2, spec
+// 4.3.7): when the frozen prefix names both a chat and a workspace, the chat's
+// metadata must name that workspace. Not found → 404; read error → 500;
+// another or no workspace → 409 upload_workspace_mismatch. Returns false when
+// the request was answered.
+func (ru *restAPIHandleUpload) checkRoutingPair() bool {
+	if ru.sessionID == "" || ru.workspaceID == "" {
+		return true
+	}
+	if err := validateEntityID(ru.sessionID); err != nil {
+		jsonErr(ru.w, http.StatusBadRequest, "invalid session_id")
+		return false
+	}
+	// The one shared store, not resolveSessionStore: that returns nil for an
+	// unknown chat, which must be a 404 here, not a missing store.
+	var store *session.UnifiedStore
+	if ru.a.agentLoop != nil {
+		store = ru.a.agentLoop.GetSessionStore()
+	}
+	if store == nil {
+		jsonErr(ru.w, http.StatusInternalServerError, "session store unavailable")
+		return false
+	}
+	meta, err := store.GetMeta(ru.sessionID)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || (err == nil && meta == nil):
+		jsonErr(ru.w, http.StatusNotFound, "session not found")
+		return false
+	case err != nil:
+		jsonServerFailure(ru.w, http.StatusInternalServerError, "could not read the chat for this upload", err)
+		return false
+	case meta.WorkspaceID != ru.workspaceID:
+		jsonErrCode(ru.w, http.StatusConflict,
+			"this chat does not belong to the upload's workspace", "upload_workspace_mismatch")
+		return false
+	}
+	return true
 }

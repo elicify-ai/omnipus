@@ -2,6 +2,8 @@
 
 import type { Message, ToolCall } from '@/lib/api'
 import type { StoreApi } from 'zustand'
+import type { DraftState } from './draft-state'
+import type { Submission } from '@/lib/bound-send'
 import type { SessionHistoryQuery, SessionHistoryMetadata, SessionHistoryEntry, HistoryPosition } from '@/lib/api/history-types'
 import type { WsConnection } from '@/lib/ws'
 import type {
@@ -411,6 +413,8 @@ export interface QueuedOutboundMessage {
   firstSendOwner?: string
   /** #1833: the unconfirmed chat this follow-up was typed under was abandoned. It is held, never sent, until the user discards it. */
   abandoned?: boolean
+  /** #1428 step 2 (spec 4.6.1): the frozen submission; it drains through sendBound and its eligibility check. */
+  submission?: Submission
 }
 
 /** Strings remain readable for persisted/test state created before #823. */
@@ -1060,6 +1064,8 @@ export type HistorySliceContext = {
 }
 
 export interface ChatStore extends HistorySlice {
+  /** #1428 step 2 (spec 4.4.3): per-chat drafts and recovery state; read and written only through store/chat/drafts.ts. */
+  draftState: DraftState
   acceptHistoryFallback(sessionId: string, page: import('@/lib/api/sessions').SessionHistoryPage, generation: number, baseline?: Record<string, ChatMessage>): void
   history: SessionHistoryState
   historyNotice?: string
@@ -1321,7 +1327,9 @@ export interface ChatStore extends HistorySlice {
    * button attaches to its message into Omnipus's main (W1 create an agent,
    * W18 set up a team, for a named workspace). Never an instruction.
    */
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; queueSeq?: number; workflowStart?: WorkflowStart }) => void
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; queueSeq?: number; workflowStart?: WorkflowStart; submission?: Submission }) => void
+  /** #1428 step 2 (spec 4.8): a refused message's optimistic bubble and placeholder are removed; other turns are untouched. */
+  withdrawRefusedMessage: (sessionId: string | null, clientMessageId: string) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED
@@ -1365,7 +1373,7 @@ export interface ChatStore extends HistorySlice {
    * already been shown); `true` otherwise, including a completed turn with
    * nothing to send. The Stop window is armed only on a non-`false` result.
    */
-  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => boolean
+  cancelStream: (sessionId?: string, scope?: CancelFrame['scope'], typed?: { kind: 'cancel' | 'stop'; text: string; originKey: string }) => boolean
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
   /**
    * askuserquestion-tool-spec v3 §3: submit (or cancel) the pending

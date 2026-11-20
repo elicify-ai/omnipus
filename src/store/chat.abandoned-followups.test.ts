@@ -13,6 +13,7 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { runStartNewSession } from '@/store/session/newChatFlow'
+import { enterNewChat } from '@/store/session/newChatKey'
 import { useUiStore } from '@/store/ui'
 import { selectQueuedRows } from '@/store/chat/queue-target'
 import type { QueuedOutboundMessage } from '@/store/chat'
@@ -35,9 +36,12 @@ function connect() {
   act(() => {
     useConnectionStore.getState().setConnection(sender as unknown as WsConnection)
     useConnectionStore.getState().setConnected(true)
+    // Spec 4.4.1: the unsaved chat is entered through enterNewChat before its first message.
+    openedKey = enterNewChat(null, 'mia')
   })
   return sender
 }
+let openedKey = ''
 type Sent = { type: string; content?: string; session_id?: string; client_message_id?: string }
 const allFrames = (sender: { send: ReturnType<typeof vi.fn> }) =>
   sender.send.mock.calls.map(([frame]) => frame as Sent).filter((frame) => frame.type === 'message')
@@ -48,6 +52,8 @@ const frame = (value: Record<string, unknown>) => act(() => { useChatStore.getSt
 function abandonAWithFollowUps() {
   const sender = connect()
   act(() => { useChatStore.getState().sendMessage('A first') })
+  // Spec 4.4.1 / 4.3.1: the first message of the entered chat carries {new_chat, K}.
+  expect(allFrames(sender)[0]).toMatchObject({ origin: { kind: 'new_chat', new_chat_key: openedKey } })
   const aId = allFrames(sender)[0].client_message_id as string
   act(() => {
     useChatStore.getState().sendMessage('A follow 1')
@@ -102,6 +108,7 @@ describe('#1833 follow-ups of an abandoned unconfirmed chat', () => {
   it('also holds them when a foreign acknowledgement had already moved the unsaved first message (CHECK r1 F1)', async () => {
     const sender = connect()
     act(() => { useChatStore.getState().sendMessage('A first') })
+    expect(allFrames(sender)[0], 'spec 4.4.1: A is a new chat').toMatchObject({ origin: { kind: 'new_chat', new_chat_key: openedKey } })
     const aId = allFrames(sender)[0].client_message_id as string
     act(() => {
       useChatStore.getState().sendMessage('A follow 1')
@@ -123,6 +130,7 @@ describe('#1833 follow-ups of an abandoned unconfirmed chat', () => {
   it('marks only the abandoned chat\'s own unbound follow-ups, never another owner, ownerless, bound or legacy items (CHECK r1 F2)', async () => {
     const sender = connect()
     act(() => { useChatStore.getState().sendMessage('A first') })
+    expect(allFrames(sender)[0], 'spec 4.4.1: A is a new chat').toMatchObject({ origin: { kind: 'new_chat', new_chat_key: openedKey } })
     const aId = allFrames(sender)[0].client_message_id as string
     act(() => { useChatStore.getState().sendMessage('A follow') })
     const stamp = '2026-11-14T10:00:00.000Z'
@@ -149,6 +157,7 @@ describe('#1833 follow-ups of an abandoned unconfirmed chat', () => {
   it('holds them when a later first send replaced their orphaned owner before New chat (CHECK r2)', async () => {
     const sender = connect()
     act(() => { useChatStore.getState().sendMessage('A first') })
+    expect(allFrames(sender)[0], 'spec 4.4.1: A is a new chat').toMatchObject({ origin: { kind: 'new_chat', new_chat_key: openedKey } })
     const aId = allFrames(sender)[0].client_message_id as string
     act(() => {
       useChatStore.getState().sendMessage('A follow 1')

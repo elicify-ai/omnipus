@@ -38,6 +38,8 @@ beforeEach(() => {
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'mia' })
   useChatStore.setState({ sessionsById: { [SID]: emptySessionState() } })
   useConnectionStore.getState().setConnection(sender as unknown as WsConnection)
+  // Spec 4.10: a stand-in sends only while marked connected.
+  useConnectionStore.getState().setConnected(true)
 })
 afterEach(() => { reset(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 

@@ -102,6 +102,9 @@ it.each(['success', 'failure'] as const)('T66: leaving aborts full read; late %s
   app.network.respond('GET', fullPath(), () => json(FULL_SOURCE))
   await userEvent.setup().click(previewToggle())
   await waitFor(() => expect(document.body.textContent).toContain('-FULL_END'))
-  expect(screen.queryByRole('alert'), 'a late old-session failure never becomes a stale error on the next visit').not.toBeInTheDocument()
+  // Spec 4.10: the version banner is an alert for the whole visit. A stale history error would be a second one.
+  const alerts = screen.getAllByRole('alert')
+  expect(alerts, 'a late old-session failure never becomes a stale error on the next visit').toHaveLength(1)
+  expect(alerts[0]).toHaveTextContent('This page and the server are different versions. Your unsent text is kept below. Reload the page to send.')
   expect(fullReads(app), 'next visit uses a fresh request instead of late released content').toHaveLength(1)
 })

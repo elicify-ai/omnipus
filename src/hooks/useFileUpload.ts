@@ -22,6 +22,18 @@ const HARMFUL_EXTENSIONS = ['.exe', '.bat', '.cmd', '.sh', '.ps1', '.dll', '.sys
 export interface HarmfulConfirmState {
   files: File[]
   harmfulNames: string[]
+  /** #1428 step 2 (spec 4.5 rule 2): the draft key captured at the drop or paste. */
+  key?: string
+}
+
+/**
+ * #1428 step 2 (spec 4.5 rule 2): the session binding's file route. `capture`
+ * reads the owning draft key at the initiating event; `commit` validates and
+ * writes the files into that key's draft (never `addAttachment`).
+ */
+export interface FileSink {
+  capture: () => string
+  commit: (key: string, files: File[]) => void
 }
 
 export interface UseFileUploadResult {
@@ -45,7 +57,7 @@ export interface UseFileUploadResult {
   confirmHarmfulUpload: () => void
 }
 
-export function useFileUpload(composerRuntime: ComposerRuntime): UseFileUploadResult {
+export function useFileUpload(composerRuntime: ComposerRuntime, sink?: FileSink): UseFileUploadResult {
   const [isDragging, setIsDragging] = useState(false)
   // Harmful-file upload confirmation (replaces the two native
   // window.confirm calls). `harmfulConfirm` holds the files awaiting
@@ -62,7 +74,11 @@ export function useFileUpload(composerRuntime: ComposerRuntime): UseFileUploadRe
   // through onNew. Used by drag-drop and image paste (directly, or via the
   // harmful-file confirm flow).
   const commitFiles = useCallback(
-    (files: File[]) => {
+    (files: File[], key?: string) => {
+      if (sink && key !== undefined) {
+        sink.commit(key, files)
+        return
+      }
       for (const file of files) {
         composerRuntime.addAttachment(file).catch((err: unknown) => {
           useUiStore.getState().addToast({
@@ -77,11 +93,12 @@ export function useFileUpload(composerRuntime: ComposerRuntime): UseFileUploadRe
         })
       }
     },
-    [composerRuntime],
+    [composerRuntime, sink],
   )
 
   const handleFilesSelected = useCallback(
     (files: File[]) => {
+      const key = sink?.capture()
       const harmful = files.filter((f) =>
         HARMFUL_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext))
       )
@@ -90,12 +107,12 @@ export function useFileUpload(composerRuntime: ComposerRuntime): UseFileUploadRe
         // when the user clicks through both stages (preserves the original
         // semantics).
         setHarmfulStage(1)
-        setHarmfulConfirm({ files, harmfulNames: harmful.map((f) => f.name) })
+        setHarmfulConfirm({ files, harmfulNames: harmful.map((f) => f.name), key })
         return
       }
-      commitFiles(files)
+      commitFiles(files, key)
     },
-    [commitFiles],
+    [commitFiles, sink],
   )
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -118,6 +135,14 @@ export function useFileUpload(composerRuntime: ComposerRuntime): UseFileUploadRe
   const onPaste = useCallback(
     (e: React.ClipboardEvent) => {
       const items = Array.from(e.clipboardData?.items ?? [])
+      // #1428 step 2 (spec 4.5 rule 2, A3): the session binding stages every
+      // pasted file, not only images. A missing `kind` does not hide a file.
+      const pastedFiles = sink ? items.filter((item) => item.kind !== 'string').map((item) => item.getAsFile()).filter(Boolean) as File[] : []
+      if (pastedFiles.length > 0) {
+        e.preventDefault()
+        handleFilesSelected(pastedFiles)
+        return
+      }
       const imageItems = items.filter((item) => item.type.startsWith('image/'))
       const imageFiles = imageItems.map((item) => item.getAsFile()).filter(Boolean) as File[]
       if (imageFiles.length > 0) {
@@ -129,13 +154,13 @@ export function useFileUpload(composerRuntime: ComposerRuntime): UseFileUploadRe
         useUiStore.getState().addToast({ message: 'Could not paste image — try saving it to a file first', variant: 'error' })
       }
     },
-    [handleFilesSelected],
+    [handleFilesSelected, sink],
   )
 
   const dismissHarmfulConfirm = useCallback(() => setHarmfulConfirm(null), [])
   const advanceHarmfulStage = useCallback(() => setHarmfulStage(2), [])
   const confirmHarmfulUpload = useCallback(() => {
-    if (harmfulConfirm) commitFiles(harmfulConfirm.files)
+    if (harmfulConfirm) commitFiles(harmfulConfirm.files, harmfulConfirm.key)
     setHarmfulConfirm(null)
   }, [harmfulConfirm, commitFiles])
 

@@ -52,10 +52,10 @@
  *    slow pass.
  *
  *    Fix: `sendCancelFrame` below sends the byte-identical wire frame a real
- *    Stop click sends — `{type:"cancel",session_id}`, exactly
- *    `contracts/components/schemas/CancelFrame.yaml` /
- *    `outbound-lifecycle.ts`'s own `connection.send({ type: 'cancel',
- *    session_id: targetSid })` — over a SECOND, same-origin WebSocket opened
+ *    Stop click sends — `{type:"cancel",session_id,origin,client_frame_id}`
+ *    (`contracts/components/schemas/CancelFrame.yaml`; since #1428 step 2 a
+ *    browser connection must carry `origin`) — over a SECOND, same-origin
+ *    WebSocket opened
  *    from inside the page. No separate auth is needed: `pkg/gateway/
  *    websocket.go`'s upgrade handler authenticates purely off the session
  *    cookie the browser already carries (verified: "the SPA always attaches
@@ -231,11 +231,11 @@ async function seedSubagentFramesInParentTranscript(rootId: string, childId: str
 }
 
 /**
- * Sends `{type:"cancel", session_id: sessionId}` — the exact `CancelFrame`
+ * Sends `{type:"cancel", session_id, origin: {kind:"chat", session_id},
+ * client_frame_id}` — the `CancelFrame` shape
  * (contracts/components/schemas/CancelFrame.yaml) a real Stop click sends
- * (outbound-lifecycle.ts:757's `connection.send({ type: 'cancel',
- * session_id: targetSid })`) — over a FRESH, same-origin WebSocket opened
- * from inside the page.
+ * since #1428 step 2 — over a FRESH, same-origin WebSocket opened from
+ * inside the page.
  *
  * Why not press the real `stop-btn`: it (and `cancelStream()`'s own network
  * send) is gated on `isStreaming`, which only ever becomes true for a
@@ -257,7 +257,17 @@ async function sendCancelFrame(page: Page, sessionId: string): Promise<void> {
         reject(new Error('sendCancelFrame: socket did not open within 10s'))
       }, 10_000)
       socket.onopen = () => {
-        socket.send(JSON.stringify({ type: 'cancel', session_id: sid }))
+        // #1428 step 2 (spec 4.3.4): this socket is a browser connection (the
+        // page sends an Origin header), so a cancel without `origin` gets the
+        // old-tab reply and nothing is stopped. A real Stop click carries the
+        // chat it was pressed in (the worker's own session, which is also the
+        // target) and a client_frame_id.
+        socket.send(JSON.stringify({
+          type: 'cancel',
+          session_id: sid,
+          origin: { kind: 'chat', session_id: sid },
+          client_frame_id: `steered-stop-${Date.now()}`,
+        }))
         // WebSocket.send() returns synchronously but the frame is flushed
         // asynchronously — give it a beat before tearing the socket down.
         setTimeout(() => {

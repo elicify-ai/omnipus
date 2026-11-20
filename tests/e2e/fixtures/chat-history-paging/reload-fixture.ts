@@ -120,8 +120,11 @@ export class ReloadHarness {
   async baseline() {
     await this.send(BASELINE_INPUT);
     await this.completed(EARLIER_TOKENS);
-    const result = this.traffic.frames.filter(frame => frame.type === 'tool_call_result' && frame.call_id === COMPLETED_ID);
-    expect(result, 'PREREQUISITE: real native completed tool positive control').toHaveLength(1);
+    // The saved lifecycle can read "done" before the page's socket has the
+    // turn's frames (stubs-2, run 44596704157): wait for the frame, then check it.
+    const completedResults = () => this.traffic.frames.filter(frame => frame.type === 'tool_call_result' && frame.call_id === COMPLETED_ID);
+    await expect.poll(() => completedResults().length, { message: 'PREREQUISITE: real native completed tool positive control' }).toBe(1);
+    const result = completedResults();
     expect(result[0]).toMatchObject({ type: 'tool_call_result', tool: 'bash', status: 'success' });
     expect(this.executionCount(COMPLETED_MARKER), 'PREREQUISITE: native completed command actually executed once').toBe(1);
     await this.counter(EARLIER_TOKENS, 'PREREQUISITE: known live baseline');

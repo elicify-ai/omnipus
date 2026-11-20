@@ -76,6 +76,18 @@
         {
           "dir": "server→client",
           "frame": {
+            "active_turn": {
+              "agent_id": "mia",
+              "started_at": "2026-01-01T00:00:03Z",
+              "turn_id": "turn-1"
+            },
+            "session_id": "sess-1",
+            "type": "turn_started"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
             "client_message_id": "client-1",
             "seq": 4,
             "session_id": "sess-1",

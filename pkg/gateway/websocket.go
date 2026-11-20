@@ -420,6 +420,12 @@ type wsConn struct {
 	// CLI caller apart from a human account.
 	isCLIToken bool
 
+	// browser is true for a browser connection (spec #1428 step 2, glossary):
+	// the upgrade carried an Origin header (wsHandshakeIsBrowser) and the
+	// connection did not authenticate with the CLI token. Set once in
+	// ServeHTTP after authentication, before the read loop starts.
+	browser bool
+
 	// retryPrincipal identifies successful legacy-token and dev-bypass auth,
 	// whose userID is empty. Unauthenticated bare connections have no principal.
 	// Named accounts and CLI callers use their resolved userID and isCLIToken.
@@ -658,6 +664,16 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.authenticateWS(conn, wc, r) {
 		return
 	}
+	wc.browser = wsHandshakeIsBrowser(r) && !wc.isCLIToken
+
+	// server_capabilities is the first frame on every authenticated
+	// connection (#1428 step 2, spec 4.3.6, F-aa): enqueued before the
+	// connection is published in h.sessions, so no forwarder, broadcast,
+	// attach replay, session_state or pong can precede it.
+	sendConnGenFrame(wc, string(generated.WsFrameTypeServerCapabilities), generated.ServerCapabilitiesFrame{
+		Type:       string(generated.WsFrameTypeServerCapabilities),
+		SendOrigin: true,
+	})
 
 	chatID := "webchat:" + uuid.New().String()
 
@@ -1239,6 +1255,13 @@ wsHandlerReadLoopLoop1:
 			continue
 		}
 
+		// #1428 step 2 raw pre-check (spec 4.3.2): message, redirect and
+		// cancel are checked against their origin before schema validation,
+		// decode and every side effect, in both validation modes.
+		if isSendOriginFrameType(peek.Type) && wh.runSendOriginPreCheck(data, peek.Type) {
+			continue
+		}
+
 		// Per-frame JSON Schema validation (mirrors REST decodeAndValidate).
 		// Gated by gateway.validate_inbound; when false the check is a no-op.
 		validateEnabled := wh.h.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -1371,9 +1394,9 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 	if f.Recipient != nil {
 		recipient = &addressing.Pair{WorkspaceID: f.Recipient.WorkspaceId, AgentID: f.Recipient.AgentId}
 	}
-	wh.h.handleChatMessageWithChoice(
+	wh.h.handleChatMessageWithOrigin(
 		wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-		modelName, choice, workspaceID, clientMessageID, f.AutoApprove, recipient, wh.wc,
+		modelName, choice, workspaceID, clientMessageID, f.AutoApprove, recipient, f.Origin, wh.wc,
 	)
 	return wsHandlerReadLoopNext
 }

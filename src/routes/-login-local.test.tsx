@@ -74,6 +74,8 @@ vi.mock('./authValidation', () => ({
 vi.mock('@/store/auth', () => ({
   useAuthStore: (selector: (s: { setUsername: ReturnType<typeof vi.fn> }) => unknown) =>
     selector({ setUsername: vi.fn() }),
+  // Spec 4.4.3: bound-send registers onSignOut at load. Assertions unchanged.
+  onSignOut: () => () => {},
 }))
 
 // Load the login component once for all tests (avoids repeated transform cost).

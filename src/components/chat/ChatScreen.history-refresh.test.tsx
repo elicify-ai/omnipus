@@ -75,7 +75,9 @@ describe('T34 retained range refresh and expiry — B26/B47/B48', () => {
     expect(region).toHaveAttribute('aria-busy', 'true')
     expect(within(region).getByRole('status')).toHaveTextContent('Refreshing loaded messages…')
     await act(async () => barrier.response.resolve(json({ error: 'refresh unavailable' }, 500)))
-    const alert = await screen.findByRole('alert')
+    // Spec 4.10: the version banner is a second alert. The refresh sentence stays this one.
+    const alert = (await screen.findByText('Could not refresh loaded messages.')).closest('[role="alert"]')
+    if (!(alert instanceof HTMLElement)) throw new Error('the refresh failure is not an alert')
     expect(alert).toHaveTextContent('Could not refresh loaded messages.')
     expect(screen.getByText(/out.of.date/i), 'D7 cached rows are explicitly labelled stale').toBeInTheDocument()
     expect(region).not.toHaveAttribute('aria-busy', 'true')

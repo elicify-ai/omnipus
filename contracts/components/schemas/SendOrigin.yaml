@@ -1,0 +1,47 @@
+title: SendOrigin
+description: >
+  #1428 step 2 (option C). The chat the input was written in, carried next to
+  the frame's target (`session_id`) on `message`, `redirect` and `cancel`.
+  The target says which chat the frame acts on; the origin says where the
+  person typed it. The gateway compares the two before any side effect and
+  refuses a mismatch with a correlated `send_refused` frame.
+
+  This is a consistency control, not proof of authorship and not an access
+  check: existing authentication and session-access checks stay
+  authoritative. A client that wants to lie can send matching wrong values.
+
+  Exactly the field of its kind must be present: `session_id` for
+  `kind: chat`, `new_chat_key` for `kind: new_chat`. The schema does not use
+  `oneOf` for that rule; the server enforces it and answers any other shape
+  with `send_refused{reason: origin_malformed}`. `origin: null` is malformed,
+  which is different from an absent `origin` key.
+type: object
+required:
+  - kind
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - chat
+      - new_chat
+    description: >
+      chat — the input was written in an existing chat (`session_id`).
+      new_chat — the input was written on a "no chat yet" screen identified
+      by a browser-minted key (`new_chat_key`).
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: The existing chat the input was written in. Present only when kind is chat.
+  new_chat_key:
+    type: string
+    minLength: 16
+    maxLength: 128
+    pattern: '^[A-Za-z0-9_-]+$'
+    description: >
+      Random key the browser minted when the person entered an editable
+      "no chat yet" state. Present only when kind is new_chat. The server saves
+      it in the created chat's metadata in the creation write and never
+      returns it on any read; a later frame from the same new-chat screen is
+      accepted for that chat only. Duplicate keys across chats are allowed.

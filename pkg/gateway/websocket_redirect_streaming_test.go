@@ -45,6 +45,14 @@ const redirectStreamItem = "plant-list-item "
 // and returns the server, the loop and a valid bearer token.
 func newRedirectStreamServer(t *testing.T, provider providers.LLMProvider) (*httptest.Server, *agent.AgentLoop, string) {
 	t.Helper()
+	srv, al, token, _ := newRedirectStreamServerWithHandler(t, provider)
+	return srv, al, token
+}
+
+// newRedirectStreamServerWithHandler is newRedirectStreamServer that also
+// returns the gateway handler, for tests that wrap its event sync tap.
+func newRedirectStreamServerWithHandler(t *testing.T, provider providers.LLMProvider) (*httptest.Server, *agent.AgentLoop, string, *WSHandler) {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -102,7 +110,7 @@ func newRedirectStreamServer(t *testing.T, provider providers.LLMProvider) (*htt
 	t.Cleanup(srv.Close)
 	t.Cleanup(handler.Wait)
 
-	return srv, al, token
+	return srv, al, token, handler
 }
 
 // sseModel is a local OpenAI-compatible endpoint: request 1 streams a long

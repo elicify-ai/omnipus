@@ -162,7 +162,8 @@ describe('Train 1 Row 4 — honest failed member main', () => {
     expect(screen.queryByTestId('unavailable-chat-notice')).not.toBeInTheDocument()
     expect(screen.getByText(READY, { exact: true })).toBeVisible()
     expect(screen.getByTestId('composer-input')).toBeEnabled()
-    expect(screen.getByTestId('chat-send')).toBeEnabled()
+    // Spec 4.5 rule 4: Send stays disabled until the draft has text or files.
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
   })
 
   it('keeps the normal welcome unchanged for a healthy first main and ignores another member error', async () => {
@@ -178,7 +179,8 @@ describe('Train 1 Row 4 — honest failed member main', () => {
     expect(screen.queryByText(FOLDER_ERROR, { exact: true })).not.toBeInTheDocument()
     expect(screen.queryByTestId('unavailable-chat-notice')).not.toBeInTheDocument()
     expect(screen.getByTestId('composer-input')).toBeEnabled()
-    expect(screen.getByTestId('chat-send')).toBeEnabled()
+    // Spec 4.5 rule 4: Send stays disabled until the draft has text or files.
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
     expect(sender.send.mock.calls).toEqual([[{ type: 'attach_session', session_id: MAIN }]])
   })
 
@@ -285,7 +287,8 @@ describe('C2 r19 resolved-main history proof boundary', () => {
     expect(useChatStore.getState().sessionsById[MAIN].replayCompletedForSession).toBe(MAIN)
     expect(screen.getByText(READY, { exact: true })).toBeVisible()
     expect(screen.getByTestId('composer-input')).toBeEnabled()
-    expect(screen.getByTestId('chat-send')).toBeEnabled()
+    // Spec 4.5 rule 4: Send stays disabled until the draft has text or files.
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
     expect(vi.mocked(fetchWorkspace).mock.calls).toStrictEqual([[WS]])
     expect(sender.send.mock.calls, 'history completion did not resend or reattach the main').toStrictEqual([[{ type: 'attach_session', session_id: MAIN }]])
   })

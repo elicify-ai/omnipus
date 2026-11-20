@@ -168,6 +168,7 @@ func readSessionStateFrame(t *testing.T, ch chan []byte) struct {
 // CR1/S1 fix: a connection (re)attaching to a session with an in-flight
 // streaming turn receives frames in EXACTLY this order:
 //
+//	server_capabilities → connection-open state → session_snapshot →
 //	session_state(session_id, active_turn) → replay_message* →
 //	done(frames_emitted) → token(catch-up) → token*(live) →
 //	done(stats.tokens)
@@ -212,6 +213,12 @@ func TestFix_CR1_S1_SessionStateFirstInWireOrder(t *testing.T) {
 	connB := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = connB.Close() })
 	sendWSAuthFrameDevMode(t, connB)
+
+	// Spec r9 S-11/§4.3.6 supersedes the old connection-first assumption:
+	// capabilities precedes BOTH the connection-open state and attach replay.
+	firstType, firstRaw := readFirstApplicationFrame(t, connB)
+	require.Equal(t, "server_capabilities", firstType, "capabilities must precede every attach/admission frame")
+	requireServerCapabilitiesFirst(t, firstRaw, "CR1/S1 reattaching connection")
 
 	attachFrame := wsClientFrameTestHelper{Type: "attach_session", SessionID: sessionID}
 	attachData, err := json.Marshal(attachFrame)

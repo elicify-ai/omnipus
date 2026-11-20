@@ -44,6 +44,7 @@ import { act } from 'react'
 import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { enterNewChat } from '@/store/session/newChatKey'
 import { useWorkspacesStore } from './workspacesStore'
 import type { WsConnection } from '@/lib/ws'
 import type { ToolCall } from '@/lib/api'
@@ -660,14 +661,17 @@ describe('sendMessage — steer during the "__pending" session window (bugfixes3
   it('nothing is sent on the socket, the message is buffered, and the first turn is untouched', () => {
     const send = connectWithSendSpy()
 
-    // No active session yet — sendMessage's no-session branch renders
-    // optimistically into the '__pending' bucket and sets it active.
+    // Spec 4.4.1: the unacknowledged first message is reached by enterNewChat.
+    let openedKey = ''
     act(() => {
-      useSessionStore.setState({ activeSessionId: null })
+      openedKey = enterNewChat(null, 'general-assistant')
     })
     act(() => {
       useChatStore.getState().sendMessage('first message')
     })
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
+    }))
     expect(useSessionStore.getState().activeSessionId).toBe('__pending')
     expect(useChatStore.getState().isStreaming).toBe(true)
     send.mockClear()
@@ -696,12 +700,17 @@ describe('sendMessage — steer during the "__pending" session window (bugfixes3
   it('drains the buffered steer as a follow-up message once session_started resolves and the first turn completes', () => {
     const send = connectWithSendSpy()
 
+    // Spec 4.4.1 / 4.6.1: the unacknowledged first message carries {new_chat, K}.
+    let openedKey = ''
     act(() => {
-      useSessionStore.setState({ activeSessionId: null })
+      openedKey = enterNewChat(null, 'general-assistant')
     })
     act(() => {
       useChatStore.getState().sendMessage('first message')
     })
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
+    }))
     // Capture the minted client_message_id before the spy is cleared: the
     // gateway echoes it on the ack (pkg/gateway/websocket_first_message.go::
     // acknowledgeNewSession), and DEL-F21/F22 made that echo the only

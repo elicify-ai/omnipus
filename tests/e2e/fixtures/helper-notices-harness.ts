@@ -215,6 +215,9 @@ export async function expectNamed(scene: NoticeScene, name = 'Researcher', claus
   await expect.poll(() => visibleNamed(scene.page, name, clause), {
     message: `FR-005: ${name} named row in the real main chat`,
     timeout: Math.max(1, receivedAt + 2_000 - performance.now()),
+    // A Retry-After 1 row shows its clause for about 1 s before "Retrying now…";
+    // the default 100/250/500/1000 ms sampling can step over it (stubs-3, run 44596704157).
+    intervals: [10, 20, 50],
   }).toHaveLength(1);
   expect(performance.now() - receivedAt, 'Timing: named row painted within 2 s of the relevant main-chat copy').toBeLessThanOrEqual(2_000);
 }

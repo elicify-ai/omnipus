@@ -16,7 +16,9 @@
  * Approach — fully deterministic, no live model:
  *   - page.routeWebSocket() fully mocks the chat WS transport (established
  *     pattern: whatsapp-qr.spec.ts, reconnect-mid-turn.spec.ts).
- *   - The mock answers the client's first `message` frame with
+ *   - Spec 4.10: the first server frame is server_capabilities with send_origin,
+ *     or the trigger never leaves and Stop never appears. The mock then answers
+ *     the client's first `message` frame with
  *     `session_started` + a `token` stream and never sends `done`, so the
  *     turn is mid-stream for the whole test (stop button visible).
  *   - Every client→server frame is captured in Node; the assertions read the
@@ -75,7 +77,7 @@ async function mockChatWebSocket(
   const savedHistory: WireMessage[] = []
   await page.route(`**/api/v1/sessions/${E2E_SESSION_ID}/messages`, (route) => route.fulfill({ status: 200, json: wireHistoryPage(E2E_SESSION_ID, savedHistory, savedHistory.length) }))
   await page.routeWebSocket(/api\/v1\/chat\/ws/, (ws: WebSocketRoute) => {
-    let turnStarted = false
+    ws.send(JSON.stringify({ type: 'server_capabilities', send_origin: true } satisfies ServerFrame)); let turnStarted = false
     let activeTurn: SessionStateFrame['active_turn']
     let activeText = ''
     let turnNumber = 0
