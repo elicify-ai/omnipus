@@ -9,6 +9,7 @@ import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
 import { useUiStore } from "@/store/ui";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
+import { enterBlockedNoChat } from "@/store/session/newChatKey";
 import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { queryClient } from "@/lib/queryClient";
@@ -143,7 +144,7 @@ export function reattachActiveSession(
     if (getPendingFirstSend(chat)) {
       return false; // Keep the user's bubble; reconnect is not permission to resend.
     }
-    useSessionStore.getState().setActiveSession(null);
+    enterBlockedNoChat("stuck-pending");
     return false;
   }
   const chat = useChatStore.getState();

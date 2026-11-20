@@ -95,7 +95,12 @@ export type WsFrameType =
   | "room_member_state"
   | "room_meta"
   | "open_in_library"
-  | "chat_presence";
+  | "chat_presence"
+  | "cancel_idle"
+  | "send_refused"
+  | "server_capabilities"
+  | "command_received"
+  | "turn_started";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -289,6 +294,12 @@ export interface ChatParticipant {
   };
 }
 
+export interface SendOrigin {
+  kind: "chat" | "new_chat";
+  session_id?: string;
+  new_chat_key?: string;
+}
+
 export interface AuthFrame {
   type: "auth";
   token: string;
@@ -300,6 +311,7 @@ export interface MessageFrame {
   client_message_id?: string;
   content: string;
   session_id?: string;
+  origin?: SendOrigin;
   recipient?: {
     workspace_id: string;
     agent_id: string;
@@ -320,6 +332,8 @@ export interface MessageFrame {
 export interface CancelFrame {
   type: "cancel";
   session_id: string;
+  origin?: SendOrigin;
+  client_frame_id?: string;
   scope?: "session" | "tree";
   shown?: {
     turn_id?: string;
@@ -331,6 +345,8 @@ export interface CancelFrame {
 export interface RedirectFrame {
   type: "redirect";
   session_id: string;
+  origin?: SendOrigin;
+  client_frame_id?: string;
   instruction: string;
 }
 
@@ -923,6 +939,12 @@ export interface SessionStateActiveTurn {
   started_at: string;
 }
 
+export interface TurnStartedFrame {
+  type: "turn_started";
+  session_id: string;
+  active_turn: SessionStateActiveTurn;
+}
+
 export interface SessionStateFrame {
   history_state?: SessionHistoryState;
   secret_requests?: Array<SessionStateSecretRequest>;
@@ -971,6 +993,33 @@ export interface CancelStageFrame {
   skipped_terminal?: Array<string>;
   partial?: boolean;
   seq?: number;
+}
+
+export interface CancelIdleFrame {
+  type: "cancel_idle";
+  session_id: string;
+}
+
+export interface SendRefusedFrame {
+  type: "send_refused";
+  reason: "wrong_chat" | "origin_malformed" | "origin_unverified" | "frame_malformed";
+  refused_frame: "message" | "redirect" | "cancel";
+  session_id?: string;
+  origin?: SendOrigin;
+  client_message_id?: string;
+  client_frame_id?: string;
+}
+
+export interface ServerCapabilitiesFrame {
+  type: "server_capabilities";
+  send_origin: true;
+}
+
+export interface CommandReceivedFrame {
+  type: "command_received";
+  command: "redirect" | "cancel";
+  client_frame_id: string;
+  session_id: string;
 }
 
 export interface SessionModeUpdateFrame {
@@ -1582,10 +1631,15 @@ export type WsFrame =
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | AskUserAnswerFrame
+  | TurnStartedFrame
   | SessionStateFrame
   | SystemOverloadFrame
   | ReplayWarningFrame
   | CancelStageFrame
+  | CancelIdleFrame
+  | SendRefusedFrame
+  | ServerCapabilitiesFrame
+  | CommandReceivedFrame
   | SessionModeUpdateFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
@@ -1696,10 +1750,15 @@ export type ServerFrame =
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
+  | TurnStartedFrame
   | SessionStateFrame
   | SystemOverloadFrame
   | ReplayWarningFrame
   | CancelStageFrame
+  | CancelIdleFrame
+  | SendRefusedFrame
+  | ServerCapabilitiesFrame
+  | CommandReceivedFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame

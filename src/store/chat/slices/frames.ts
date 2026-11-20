@@ -31,6 +31,8 @@ import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 import { handleCatchUpFrame } from './catchup-frames'
 import { handleProviderFrame } from './provider-frames'
 import { handleMailPanelObserverFrame } from './mail-panel-observer-frames'
+import { handleBoundSendFrame } from './bound-send-frames'
+import { handleTurnStartedFrame } from './turn-started-frames'
 import { handleOpenInLibraryFrame } from './open-in-library-frames'
 import { handleSecretRequestFrame } from './secret-request-frames'
 import { handleRoomFrame } from './room-frames'
@@ -1131,8 +1133,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         return
       }
 
-      // Mail panel presence, the secret card (K1/K3/K4) and open_in_library (chat links): own handlers, main switch is grandfathered.
-      if (handleMailPanelObserverFrame(frame) || handleSecretRequestFrame(frame) || handleOpenInLibraryFrame(frame, get)) {
+      // Mail panel presence, #1428 frames consumed before the reducer, the secret card (K1/K3/K4) and open_in_library (chat links): own handlers, main switch is grandfathered.
+      if (handleMailPanelObserverFrame(frame) || handleBoundSendFrame(frame) || handleTurnStartedFrame(frame, withBucket) || handleSecretRequestFrame(frame) || handleOpenInLibraryFrame(frame, get)) {
         syncForeground()
         return
       }

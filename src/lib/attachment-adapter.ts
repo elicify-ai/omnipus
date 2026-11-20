@@ -10,8 +10,9 @@
 // Flow:
 //   add()    — register a pending attachment; DO NOT upload yet (the user may
 //              remove it before sending).
-//   send()   — called for each attachment when the composer sends. Ensures a
-//              session exists, uploads the file to /api/v1/uploads, and stashes
+//   send()   — called for each attachment when the composer sends. Finds the
+//              chat (a new chat through its keyed creation, spec 4.4.2),
+//              uploads the file to /api/v1/uploads, and stashes
 //              the resulting media:// ref keyed by attachment id so onNew (in
 //              omnipus-runtime.ts) can thread it into our WS transport.
 //   remove() — drop any stashed ref.
@@ -22,7 +23,8 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 
-import { createSession, uploadFiles } from "@/lib/api";
+import { uploadFiles } from "@/lib/api";
+import { createForNewChat } from "@/lib/new-chat-creation";
 import { mediaRefURL } from "@/lib/library-attachment";
 import { useSessionStore } from "@/store/session";
 import { useUiStore } from "@/store/ui";
@@ -64,38 +66,19 @@ function stashResolvedUpload(id: string, upload: ResolvedUpload): void {
   resolvedUploads.set(id, upload);
 }
 
-// Ensure a session exists before uploading. send() runs once per attachment and
-// AssistantUI dispatches them concurrently, so memoize the in-flight creation to
-// avoid racing multiple createSession calls.
-let sessionEnsure: Promise<string> | null = null;
-async function ensureSession(): Promise<string> {
-  const { activeSessionId, activeAgentId, setActiveSession } = useSessionStore.getState();
+// #1428 step 2 (spec 4.4.2, finding F-g): the chat an upload belongs to. A
+// saved open chat is used as is. A new chat K is created through K's own keyed
+// creation (`creationByKey` replaces the old global `sessionEnsure`), so the
+// activation rule (4.4.1) applies: S becomes the open chat only if K still is.
+// With no K (the blocked no-chat state) nothing is created: whether that state
+// holds a key is parked gap C5 (#1896), and no key is invented here.
+function chatForUpload(): Promise<string | null> | string {
+  const { activeSessionId, activeAgentId, newChatKey } = useSessionStore.getState();
   if (activeSessionId && activeSessionId !== "__pending") return activeSessionId;
-  if (!sessionEnsure) {
-    sessionEnsure = (async () => {
-      if (!activeAgentId) throw new Error("Select an agent before sending files");
-      // U2: carry the chat's workspace into the session at birth.
-      //
-      // The session this mints becomes the ACTIVE one, and it is the session
-      // the live browser panel would attach against if the user opened it
-      // before sending anything. The gateway reads which workspace's browser
-      // to show off that session's own meta, server-side (ADR-075 FR-017), so
-      // a session created with no workspace gets a multi-workspace agent
-      // refused as ambiguous — advised to open the panel from a workspace
-      // chat, which is where they already are. Waiting for the first message
-      // to stamp it is exactly the gap. `undefined` outside a workspace is
-      // correct: no workspace is not a default one.
-      const created = await createSession(
-        activeAgentId,
-        useWorkspacesStore.getState().activeWorkspaceId ?? undefined,
-      );
-      setActiveSession(created.id, created.agent_id, null);
-      return created.id;
-    })().finally(() => {
-      sessionEnsure = null;
-    });
-  }
-  return sessionEnsure;
+  if (!activeAgentId) throw new Error("Select an agent before sending files");
+  if (!newChatKey) throw new Error("Open a chat before sending files");
+  // U2 / ADR-075 FR-017: the chat's workspace travels with its creation.
+  return createForNewChat(newChatKey, activeAgentId, useWorkspacesStore.getState().activeWorkspaceId ?? null);
 }
 
 /** G16: Maximum file size accepted by the upload endpoint. */
@@ -157,29 +140,41 @@ let counter = 0;
 // `satisfies` (not `: AttachmentAdapter`) so callers keep the concrete return
 // types (add → Promise<PendingAttachment>) instead of the adapter interface's
 // Promise|AsyncGenerator union, while still being checked for conformance.
+/**
+ * The size/type check every attach route runs (spec #1428 4.5 rule 2): the
+ * adapter's own `add`, and the session binding's drop, paste and picker, which
+ * write into the draft store without the runtime. Returns the user-facing
+ * reason, or null when the file is accepted. Size and audio rejections show
+ * their toast here, as the adapter always did.
+ */
+export function rejectAttachment(file: File): string | null {
+  // G16: Reject files that exceed the server-side size limit before any upload
+  // attempt, giving the user immediate feedback.
+  if (file.size > MAX_UPLOAD_BYTES) {
+    const tooLargeMsg = `"${file.name}" is too large (max 100 MB).`;
+    useUiStore.getState().addToast({ message: tooLargeMsg, variant: "error" });
+    return tooLargeMsg;
+  }
+  // Reject unsupported types immediately so the drag-drop / paste / commitFiles
+  // paths surface a user-facing error instead of silently throwing later.
+  if (!isAcceptedFile(file.name, file.type)) {
+    // G15: Audio files get a tailored message instead of the generic rejection.
+    if (isAudioFile(file.name, file.type)) {
+      const audioMsg = "Audio files aren't supported yet.";
+      useUiStore.getState().addToast({ message: audioMsg, variant: "error" });
+      return audioMsg;
+    }
+    return `Can't attach "${file.name}": file type not supported`;
+  }
+  return null;
+}
+
 export const omnipusAttachmentAdapter = {
   accept: ACCEPT,
 
   async add({ file }): Promise<PendingAttachment> {
-    // G16: Reject files that exceed the server-side size limit before any upload
-    // attempt, giving the user immediate feedback.
-    if (file.size > MAX_UPLOAD_BYTES) {
-      const tooLargeMsg = `"${file.name}" is too large (max 100 MB).`;
-      useUiStore.getState().addToast({ message: tooLargeMsg, variant: "error" });
-      throw new Error(tooLargeMsg);
-    }
-
-    // Reject unsupported types immediately so the drag-drop / paste / commitFiles
-    // paths surface a user-facing error instead of silently throwing later.
-    if (!isAcceptedFile(file.name, file.type)) {
-      // G15: Audio files get a tailored message instead of the generic rejection.
-      if (isAudioFile(file.name, file.type)) {
-        const audioMsg = "Audio files aren't supported yet.";
-        useUiStore.getState().addToast({ message: audioMsg, variant: "error" });
-        throw new Error(audioMsg);
-      }
-      throw new Error(`Can't attach "${file.name}": file type not supported`);
-    }
+    const rejected = rejectAttachment(file);
+    if (rejected !== null) throw new Error(rejected);
 
     // Defer the upload to send() — registering here only tracks the pending file.
     return {
@@ -201,9 +196,14 @@ export const omnipusAttachmentAdapter = {
       content: [],
     };
 
+    // Spec 4.6.1 (F-g): the workspace is read at the send event, before any
+    // await, so a switch during the creation cannot move the upload.
+    const workspaceId = useWorkspacesStore.getState().activeWorkspaceId ?? undefined;
     let sessionId: string;
     try {
-      sessionId = await ensureSession();
+      const created = await chatForUpload();
+      if (!created) throw new Error("the chat could not be created — try again");
+      sessionId = created;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       useUiStore.getState().addToast({ message: `Could not send "${attachment.name}": ${msg}`, variant: "error" });
@@ -218,7 +218,6 @@ export const omnipusAttachmentAdapter = {
 
     let uploadResult: Awaited<ReturnType<typeof uploadFiles>>;
     try {
-      const workspaceId = useWorkspacesStore.getState().activeWorkspaceId ?? undefined;
       uploadResult = await uploadFiles(sessionId, [attachment.file], workspaceId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

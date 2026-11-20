@@ -7,6 +7,7 @@ import type { PanelId } from '@/components/panel-shell/types'
 import { useSessionStore } from '@/store/session'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { logDiagnostic } from '@/lib/telemetry'
+import { registerAppNavigate } from '@/lib/appNavigate'
 
 // Chat tab — the workspace's default front view (chat-first). Agent picker is
 // scoped to the workspace team; sessions are filtered by this workspace_id.
@@ -47,6 +48,11 @@ function WorkspaceChatRoute() {
   const { panel, open } = Route.useSearch()
   usePanelDeepLink(workspaceId, panel)
   useSyncOpenSearchKey(workspaceId, open)
+  // #1428 step 2: Unsent Open (openUnsentChat.ts) navigates through this route's navigate.
+  const navigate = useNavigate()
+  useEffect(() => registerAppNavigate(({ workspaceId: target, open: sessionId }) => {
+    void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: target }, search: { open: sessionId } })
+  }), [navigate])
   return <WorkspaceChatTab workspaceId={workspaceId} />
 }
 

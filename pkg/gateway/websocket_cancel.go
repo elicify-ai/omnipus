@@ -378,6 +378,7 @@ func (wh *wsHandlerReadLoop) handleCancelFrame(data []byte) wsHandlerReadLoopFlo
 		return wsHandlerReadLoopContinue
 	}
 	stopAll := f.Scope != nil && *f.Scope == "tree"
+	sendCommandReceived(wh.wc, string(generated.WsFrameTypeCancel), f.ClientFrameId, f.SessionId)
 	wh.h.handleCancelShown(wh.wc, f.SessionId, stopAll, stopShownFromFrame(f))
 	return wsHandlerReadLoopNext
 }
@@ -426,7 +427,12 @@ func (h *WSHandler) handleCancelShown(wc *wsConn, sessionID string, stopAll bool
 		return
 	}
 
-	report, cascaded, outcome, staged, err := h.requestScopedStopShown(wc, sessionID, stopAll, shown)
+	report, cascaded, outcome, staged, discarded, err := h.requestScopedStopCounted(wc, sessionID, stopAll, shown)
+	if err == nil && stopWasIdle(report, outcome, discarded, staged) {
+		// #1841: this Stop touched nothing. Answer the requester only, in
+		// addition to today's frames (1841-DESIGN.md section 2).
+		defer sendCancelIdle(wc, sessionID)
+	}
 	if cascaded {
 		h.sendCancelPartialNotice(wc, sessionID, report)
 		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
@@ -507,4 +513,24 @@ func (h *WSHandler) handleCancelShown(wc *wsConn, sessionID string, stopAll bool
 		// the requester a stage: acknowledge it with the cascade's report.
 		h.sendCancelReportFrame(wc, sessionID, "detached", report)
 	}
+}
+
+// stopWasIdle is the #1841 idle predicate (1841-DESIGN.md section 1): the
+// Stop was accepted without error and touched nothing at all. cascaded is
+// deliberately not part of it; SkippedTerminal may be non-empty.
+func stopWasIdle(report steer.CancelReport, outcome agent.CancelOutcome, discarded int, staged bool) bool {
+	return !outcome.Fired && !outcome.Armed &&
+		outcome.BackgroundSessionsKilled == 0 && outcome.BackgroundSessionsFailed == 0 &&
+		len(report.Reached) == 0 && len(report.Unreachable) == 0 &&
+		len(report.SkippedNewerGeneration) == 0 &&
+		discarded == 0 && !staged
+}
+
+// sendCancelIdle answers an idle Stop with cancel_idle, unsequenced, to the
+// requesting connection only (#1841). Never published through the hub.
+func sendCancelIdle(wc *wsConn, sessionID string) {
+	sendConnGenFrame(wc, string(generated.WsFrameTypeCancelIdle), generated.CancelIdleFrame{
+		Type:      string(generated.WsFrameTypeCancelIdle),
+		SessionId: sessionID,
+	})
 }

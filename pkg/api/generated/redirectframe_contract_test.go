@@ -99,29 +99,61 @@ func TestRedirectFrameGoShape_MarshalsExactWireShape(t *testing.T) {
 }
 
 // TestRedirectFrameGoShape_FieldSetMatchesSchema: the generated struct has
-// exactly the three schema fields with the snake_case json tags, and the
+// exactly the five schema fields with the snake_case json tags, and the
 // WsFrame type constant carries the literal.
+//
+// #1428 step 2 (option C) spec C-3: RedirectFrame gains the optional `origin`
+// (SendOrigin object — contracts/components/schemas/SendOrigin.yaml) and the
+// optional `client_frame_id` (string 1..128) next to type/session_id/
+// instruction; additionalProperties stays false, so the field set is exactly
+// those five. Expected values derive from RedirectFrame.yaml + SendOrigin.yaml
+// (spec 4.2 C-3), never from the generated struct.
 func TestRedirectFrameGoShape_FieldSetMatchesSchema(t *testing.T) {
 	typ := reflect.TypeOf(RedirectFrame{})
-	if typ.NumField() != 3 {
-		t.Fatalf("RedirectFrame has %d fields, want exactly 3 (type, session_id, instruction) — additionalProperties:false", typ.NumField())
+	if typ.NumField() != 5 {
+		t.Fatalf("RedirectFrame has %d fields, want exactly 5 (type, session_id, origin, client_frame_id, instruction) — additionalProperties:false, spec C-3", typ.NumField())
 	}
-	want := map[string]string{
-		"Instruction": "instruction",
-		"SessionId":   "session_id",
-		"Type":        "type",
+	// Field name → JSON tag → Go kind, all read from the contract:
+	// origin is the SendOrigin object by reference ($ref ./SendOrigin.yaml),
+	// so the generated field must be *SendOrigin; client_frame_id is an
+	// optional string, so *string; the three original fields stay strings.
+	// C-3 marks origin and client_frame_id OPTIONAL, so their generated tags
+	// carry ",omitempty" (oapi-codegen's convention for optional pointers);
+	// the required three keep bare tags.
+	want := map[string]struct {
+		tag  string
+		kind reflect.Kind
+	}{
+		"Instruction":   {"instruction", reflect.String},
+		"SessionId":     {"session_id", reflect.String},
+		"Type":          {"type", reflect.String},
+		"Origin":        {"origin,omitempty", reflect.Pointer},          // *SendOrigin — schema $ref, optional (C-3)
+		"ClientFrameId": {"client_frame_id,omitempty", reflect.Pointer}, // *string — optional, string 1..128 (C-3)
 	}
-	for fieldName, tag := range want {
+	for fieldName, expect := range want {
 		f, ok := typ.FieldByName(fieldName)
 		if !ok {
-			t.Errorf("RedirectFrame missing field %s (want json %q)", fieldName, tag)
+			t.Errorf("RedirectFrame missing field %s (want json %q)", fieldName, expect.tag)
 			continue
 		}
-		if f.Type.Kind() != reflect.String {
-			t.Errorf("RedirectFrame.%s is %v, want string", fieldName, f.Type)
+		if f.Type.Kind() != expect.kind {
+			t.Errorf("RedirectFrame.%s is %v, want kind %v", fieldName, f.Type, expect.kind)
 		}
-		if got := f.Tag.Get("json"); got != tag {
-			t.Errorf("RedirectFrame.%s json tag = %q, want %q", fieldName, got, tag)
+		// The element types the contract pins, beyond the pointer kind:
+		// origin must be *SendOrigin (not any struct), client_frame_id a
+		// *string (not any pointer).
+		switch fieldName {
+		case "Origin":
+			if f.Type.Elem().Name() != "SendOrigin" {
+				t.Errorf("RedirectFrame.Origin element type = %v, want SendOrigin (schema $ref ./SendOrigin.yaml)", f.Type.Elem())
+			}
+		case "ClientFrameId":
+			if f.Type.Elem().Kind() != reflect.String {
+				t.Errorf("RedirectFrame.ClientFrameId element kind = %v, want string (schema: string 1..128)", f.Type.Elem().Kind())
+			}
+		}
+		if got := f.Tag.Get("json"); got != expect.tag {
+			t.Errorf("RedirectFrame.%s json tag = %q, want %q", fieldName, got, expect.tag)
 		}
 	}
 	if string(WsFrameTypeRedirect) != "redirect" {

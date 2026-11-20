@@ -43,6 +43,20 @@ export interface RoomScreenProps {
   roomId: string
 }
 
+/** Ask again (FR-036), tagged with the room it was requested in. */
+type RoomAskAgainPrefill = { agentId: string; nonce: number; roomId: string }
+
+/**
+ * #1849: the route keeps one RoomScreen across a room change, so this child is
+ * keyed by room id and remounts only then. Its composer runtime, attachment
+ * adapter and send state are created before the loading and error returns, so
+ * a failed refresh and Retry in the same room keep the unsent draft. A real
+ * room change discards that draft; returning to the room does not restore it.
+ */
+export function RoomScreen(props: RoomScreenProps) {
+  return <RoomSession key={props.roomId} {...props} />
+}
+
 /** FR-048: this group's question cards, one at a time with "+N more" (as the normal chat). */
 function RoomQuestionTail({ roomId }: { roomId: string }) {
   const cards = useRoomQuestionCards(roomId)
@@ -58,13 +72,12 @@ function RoomQuestionTail({ roomId }: { roomId: string }) {
   )
 }
 
-export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
+function RoomSession({ workspaceId, roomId }: RoomScreenProps) {
   const view = useRoomView(roomId, workspaceId)
   const connected = useConnectionStore((state) => state.isConnected)
   const connection = useConnectionStore((state) => state.connection)
   const liteMode = useConnectionStore((state) => state.liteMode)
-  const send = useRoomSend(roomId)
-  const [askAgain, setAskAgain] = useState<{ agentId: string; nonce: number }>()
+  const [askAgain, setAskAgain] = useState<RoomAskAgainPrefill>()
   const [attachedRoomId, setAttachedRoomId] = useState<string>()
   const groupCards = useRoomCardRequestIds(roomId)
   // ADR §11 C-I4: the box is locked only by a pending question of THIS
@@ -96,7 +109,7 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   useEffect(() => {
     const onAskAgain = (event: Event) => {
       const detail = (event as CustomEvent<RoomAskAgainDetail>).detail
-      if (detail?.roomId === roomId) setAskAgain({ agentId: detail.agentId, nonce: Date.now() })
+      if (detail?.roomId === roomId) setAskAgain({ agentId: detail.agentId, nonce: Date.now(), roomId })
     }
     window.addEventListener(ROOM_ASK_AGAIN_EVENT, onAskAgain)
     return () => window.removeEventListener(ROOM_ASK_AGAIN_EVENT, onAskAgain)
@@ -104,6 +117,9 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
 
   const attachedHere = connected && attachedRoomId === roomId
   const conversation = useRoomConversationSource(roomId, attachedHere, view.roomQuery.isError)
+  // Above the loading and error returns: unmounting the box must not create a
+  // new runtime while the room id is unchanged (#1849 CHECK F1).
+  const send = useRoomSend(roomId)
   const workspaceRef = useRef<string | undefined>(undefined)
   workspaceRef.current = view.room?.workspace_id
   const bridge = useRef<RoomSendBridge | null>(null)
@@ -136,6 +152,8 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
 
   const room = view.room
   const liveViewReceived = attachedHere && view.live?.snapshotReceived === true
+  // A previous room's Ask again must not prefill this room's box (#1849).
+  const prefill = askAgain?.roomId === roomId ? askAgain : undefined
   return (
     <ConversationSourceContext.Provider value={conversation.source}>
       <ConversationKindContext.Provider value="room">
@@ -166,7 +184,7 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
                     send={send}
                     blockedReason={roomBlockedReason(room, connected, liveViewReceived)
                       ?? (questionPending ? 'Answer the question card above, or cancel it, to write again.' : undefined)}
-                    prefill={askAgain}
+                    prefill={prefill}
                     bridge={bridge}
                   />
                 </div>

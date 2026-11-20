@@ -4,6 +4,7 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { createSession } from '@/lib/api'
+import { createForNewChat } from '@/lib/new-chat-creation'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
@@ -27,6 +28,16 @@ interface ChatControlsProps {
  * No-clip safety: cluster uses min-w-0; overflow-x-auto with hidden
  * scrollbar as a last-resort guard against extreme viewport sizes.
  */
+/** Opens the browser panel for S unless another panel took over meanwhile. */
+function openPanelIfUnchanged(panelAtCreationStart: ReturnType<typeof useUiStore.getState>['activePanel'], sessionId: string, agentId: string): void {
+  const current = useUiStore.getState().activePanel
+  if (current !== panelAtCreationStart) return
+  leaveGateThen(current?.id ?? null, () => {
+    if (useUiStore.getState().activePanel !== current) return
+    useUiStore.getState().openPanel('browser', { sessionId, agentId })
+  })
+}
+
 export function ChatControls({ className }: ChatControlsProps) {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
   const addToast = useUiStore((s) => s.addToast)
@@ -49,10 +60,9 @@ export function ChatControls({ className }: ChatControlsProps) {
   // schema still requires a non-empty session_id, so a brand-new chat with
   // zero messages (activeSessionId === null) could never open the panel at
   // all — the "Open browser" launcher errored on the very case ADR-039
-  // designed it for. Fixed by ensuring a real session exists first, mirroring
-  // attachment-adapter.ts's ensureSession(): create one via the same
-  // POST /sessions the composer's first-send path uses, and adopt it as the
-  // active session, before opening the panel. BrowserTool.tsx's
+  // designed it for. Fixed by ensuring a real session exists first: create one
+  // via POST /sessions (for a new chat K, K's own keyed creation in
+  // new-chat-creation.ts, spec 4.4.2), before opening the panel. BrowserTool.tsx's
   // handleWatchLive (the "Watch live" affordance on an in-transcript tool
   // call) still requires activeSessionId to already exist there instead — a
   // running tool call implies a session already exists, so it never hits
@@ -72,12 +82,17 @@ export function ChatControls({ className }: ChatControlsProps) {
     // just-sent first message whose real session_started ack hasn't landed
     // yet (see sendMessage's no-active-session branch) — not a real backend
     // session the browser WS can usefully attach against. Same check as
-    // attachment-adapter.ts's ensureSession(). Captured now so the values the
+    // attachment-adapter.ts's chatForUpload(). Captured now so the values the
     // gate approved are the values that open, even after a dialog round-trip.
     const sessionId = activeSessionId && activeSessionId !== '__pending' ? activeSessionId : null
     const agentId = activeAgentId
     const workspaceId = activeWorkspaceId
     const approvedPanel = useUiStore.getState().activePanel
+    // #1428 step 2 (spec 4.4.1, 4.4.2): with a new chat open, its key K is
+    // captured at the click and the creation is K's own. With no key (the
+    // blocked no-chat state) the unkeyed creation below is kept: whether that
+    // state holds a key is parked gap C5 (#1896), and no key is invented here.
+    const newChatKey = sessionId ? null : useSessionStore.getState().newChatKey
     leaveGateThen(approvedPanel?.id ?? null, () => {
       if (sessionId) {
         useUiStore.getState().openPanel('browser', { sessionId, agentId })
@@ -107,6 +122,17 @@ export function ChatControls({ className }: ChatControlsProps) {
           // `undefined` on the global/inbox chat is correct and stays correct: no
           // workspace is not the same as a default one, and the refusal is right
           // when there is genuinely nothing to disambiguate on.
+          if (newChatKey) {
+            const created = await createForNewChat(newChatKey, agentId, workspaceId ?? null)
+            // Activation rule (4.4.1): the panel opens only if S became the open chat.
+            if (!created) {
+              addToast({ message: 'Could not start a browser session — try again.', variant: 'error' })
+              return
+            }
+            if (useSessionStore.getState().activeSessionId !== created) return
+            openPanelIfUnchanged(panelAtCreationStart, created, agentId)
+            return
+          }
           const created = await createSession(agentId, workspaceId ?? undefined)
           setActiveSession(created.id, created.agent_id, null)
           const current = useUiStore.getState().activePanel

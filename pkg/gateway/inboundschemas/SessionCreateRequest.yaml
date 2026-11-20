@@ -49,3 +49,17 @@ properties:
       access on it re-checks membership itself — browser.ResolveBrowsingKeyForAgent
       honours it only when the agent really is on that workspace's team.
     example: "01M1H9JS5EHRYWDBM0BYA45NFM"
+  new_chat_key:
+    type: string
+    minLength: 16
+    maxLength: 128
+    pattern: '^[A-Za-z0-9_-]+$'
+    description: >
+      #1428 step 2. The browser's new-chat key (SendOrigin.new_chat_key) of
+      the "no chat yet" screen this creation belongs to. Optional. When
+      present it is saved in the new session's metadata in the same creation
+      write (a failed write returns the storage error, never 201), so later
+      `message`/`redirect`/`cancel` frames with `origin {kind: new_chat}` and
+      this key are accepted for this session. Never changed after creation
+      and never returned: it is not part of Session or any other response.
+    example: "k_9f2c4e1a7b3d5f60"

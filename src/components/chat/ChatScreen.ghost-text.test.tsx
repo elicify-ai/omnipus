@@ -257,17 +257,12 @@ describe('Ghost text overlay', () => {
 // presses Enter/Send while the composer shows just `/<skill-id> ` (the ghost
 // state), the message dispatched is `/<skill-id>` (trimmed, no ghost text).
 //
-// Dispatch capture: in this test harness the AssistantUI runtime's onNew is
-// mocked away, so we capture the dispatched text by:
-//   1. Making composerRuntime.getState a vi.fn() spy so we can read the text
-//      value that interceptClientCommand sees at submit time.
-//   2. Asserting that setText('') was NOT called (no interception).
-//   3. Asserting that the text from getState().text.trim() is exactly the
-//      expected dispatched payload — proving the correct content reaches the
-//      runtime without the ghost `<message>` text appended.
-// This test MUST fail if interceptClientCommand is changed to intercept skill
-// slugs (setText('') would be called), or if the ghost text is somehow
-// included in the submitted payload (trimmed text would not equal '/web-research').
+// Dispatch capture: the session binding submits the open draft (spec 4.5 rule
+// 5), and a null connection queues that text (spec 4.10 offline). The ghost
+// overlay is not part of the draft. Spec 4.5 rule 6 then mirrors the emptied
+// draft with one setText(''). Intercepting the skill slug returns before the
+// queue write, so the queued-text assertion fails. A payload that includes the
+// ghost `<message>` fails the same assertion.
 describe('Ghost text never submitted (SC-004/B8)', () => {
   it('submitting with ghost active dispatches exactly `/<skill-id>` and no ghost text', async () => {
     const mockSetText = vi.fn()
@@ -302,8 +297,12 @@ describe('Ghost text never submitted (SC-004/B8)', () => {
     const ghostEl = screen.getByTestId('ghost-text')
     expect(ghostEl).toHaveAttribute('aria-hidden', 'true')
 
-    // Reset the getState spy so call counts below only reflect the submit path.
+    // Spec 4.5 rule 6: mount-sync writes the empty open draft into a runtime
+    // whose getState text is the ghost slug, so setText('') already ran. The
+    // intercept oracle below is the submit path only.
     mockGetState.mockClear()
+    mockSetText.mockClear()
+    act(() => { useChatStore.setState({ outboundQueue: [] }) })
 
     // Submit the form. The component's onSubmit calls:
     //   const currentText = composerRuntime.getState().text ?? inputValue
@@ -324,12 +323,20 @@ describe('Ghost text never submitted (SC-004/B8)', () => {
     // 3. The ghost text `<message>` MUST NOT appear in the dispatched payload.
     expect(submittedText).not.toContain('<message>')
 
-    // 4. setText was NOT called with '' — skill slugs are never intercepted.
-    //    (setText('') is the intercept cleanup; it MUST NOT fire for skill slugs.)
+    // 4. Spec 4.5 rule 6: a skill slug is not a client command, so intercept
+    //    does not clear it. The one setText('') is the submit-clear mirror of
+    //    the emptied draft. The dispatched text is the queued draft, trimmed
+    //    to the skill id, never the ghost `<message>`.
     const clearCalls = mockSetText.mock.calls.filter(
       (args: unknown[]) => args[0] === '',
     )
-    expect(clearCalls).toHaveLength(0)
+    expect(clearCalls).toHaveLength(1)
+    const queued = useChatStore.getState().outboundQueue
+    expect(queued).toHaveLength(1)
+    const queuedItem = queued[0]
+    const queuedText = typeof queuedItem === 'string' ? queuedItem : queuedItem.content
+    expect(queuedText.trim()).toBe('/web-research')
+    expect(queuedText).not.toContain('<message>')
 
     // 5. setText was NOT called with '<message>' — the ghost text must never
     //    be written to the composer value.

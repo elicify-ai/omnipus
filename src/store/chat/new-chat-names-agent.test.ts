@@ -14,6 +14,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { queryClient } from '@/lib/queryClient'
 import { emptySessionState } from './session'
+import { enterNewChat } from '@/store/session/newChatKey'
 
 function sentFrames(): unknown[] {
   const sent: unknown[] = []
@@ -51,6 +52,8 @@ beforeEach(() => {
 describe('a NEW chat names its agent on the minting frame (K16)', () => {
   it('no agent selected → the frame never goes out; refusal is visible; no optimistic chat is minted', () => {
     const sent = sentFrames()
+    // Spec 4.4.1: a new chat with no agent still has a key, so K16's agent-less refusal is the one that runs.
+    enterNewChat(null, null)
 
     useChatStore.getState().sendMessage('hello there')
 
@@ -65,15 +68,17 @@ describe('a NEW chat names its agent on the minting frame (K16)', () => {
 
   it('agent selected → the minting frame carries agent_id', () => {
     const sent = sentFrames()
-    useSessionStore.setState({ activeSessionId: null, activeAgentId: 'mia' } as never)
+    // Spec 4.4.1 / 4.6.1: the minting frame is reached by enterNewChat and carries {new_chat, K}.
+    const openedKey = enterNewChat(null, 'mia')
 
     useChatStore.getState().sendMessage('hello there')
 
     expect(sent).toHaveLength(1)
-    const frame = sent[0] as { type: string; agent_id?: string; content?: string }
+    const frame = sent[0] as { type: string; agent_id?: string; content?: string; origin?: { kind: string; new_chat_key: string } }
     expect(frame.type).toBe('message')
     expect(frame.agent_id).toBe('mia')
     expect(frame.content).toBe('hello there')
+    expect(frame.origin).toEqual({ kind: 'new_chat', new_chat_key: openedKey })
   })
 })
 

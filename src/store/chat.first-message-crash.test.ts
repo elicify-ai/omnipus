@@ -10,6 +10,10 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
+
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
 
 // Issue #1090, founder-approved T3/T4. The investigation report's "Proposed
 // fix and risks — not implemented" requires preserving an ordinary unconfirmed
@@ -56,6 +60,7 @@ function connect1090Sender() {
   act(() => {
     useConnectionStore.getState().setConnection(sender as unknown as WsConnection)
     useConnectionStore.getState().setConnected(true)
+    openedKey = enterNewChat(null, 'mia')
   })
   return sender
 }
@@ -91,6 +96,7 @@ describe('#1090 — an ordinary unconfirmed first message after a crash', () => 
     expect(sender.send).toHaveBeenCalledTimes(1)
     expect(sender.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
       type: 'message', content, client_message_id: id, agent_id: 'mia',
+      origin: { kind: 'new_chat', new_chat_key: openedKey },
     }))
     expect(useSessionStore.getState().activeSessionId).toBe('__pending')
     expect(foreground1090Users(), 'T3 fixture must first show the submitted message')
@@ -131,8 +137,10 @@ describe('#1090 — an ordinary unconfirmed first message after a crash', () => 
     expect(foreground1090Users(), 'T4 confirmed + New chat must start with an empty foreground').toEqual([])
     act(() => useChatStore.getState().sendMessage(newContent, { clientMessageId: newId }))
     expect(sender.send).toHaveBeenCalledTimes(2)
+    const freshKey = useSessionStore.getState().newChatKey
     expect(sender.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
       type: 'message', content: newContent, client_message_id: newId, agent_id: 'mia',
+      origin: { kind: 'new_chat', new_chat_key: freshKey },
     }))
 
     expect.soft(foreground1090Users(),

@@ -64,6 +64,8 @@ vi.mock('@/lib/ws', () => ({
       return false
     }
   },
+  // bound-send.ts subscribes at load. The real export returns an unsubscribe.
+  subscribeConnectionEvents: () => () => {},
 }))
 
 vi.mock('@/lib/memory-observer', () => ({

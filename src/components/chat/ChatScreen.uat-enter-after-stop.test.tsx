@@ -131,6 +131,8 @@ function seedParentAndHelper() {
     {
       type: 'message', session_id: PARENT, content: INITIAL_TEXT, client_message_id: INITIAL_ID,
       agent_id: 'jim', metadata: { workspace_id: WORKSPACE },
+      // Spec 4.6.1: a saved chat's message origin is {chat, that chat}.
+      origin: { kind: 'chat', session_id: PARENT },
     },
   ])
   sender.send.mockClear()
@@ -203,8 +205,17 @@ describe('release UAT D3 — Enter after Stop sends in the selected parent chat'
     } else {
       await user.click(screen.getByRole('button', { name: stopName }))
     }
+    // Spec 4.6.1 Stop row: origin is {chat, this chat}. Spec 4.7: the cancel
+    // carries a client_frame_id. A tree stop still has scope tree; a single
+    // Stop does not.
     expect(sender.send.mock.calls.map(([frame]) => frame), 'instrument: the actual Stop control emitted the intended parent cancel').toStrictEqual([
-      tree ? { type: 'cancel', session_id: PARENT, scope: 'tree' } : { type: 'cancel', session_id: PARENT },
+      {
+        type: 'cancel',
+        session_id: PARENT,
+        origin: { kind: 'chat', session_id: PARENT },
+        client_frame_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+        ...(tree ? { scope: 'tree' as const } : {}),
+      },
     ])
     acknowledgeStop(tree)
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, STOP_LABEL_DISPLAY_MS)) })
@@ -221,6 +232,7 @@ describe('release UAT D3 — Enter after Stop sends in the selected parent chat'
       {
         type: 'message', session_id: PARENT, content: CONTINUATION,
         client_message_id: expect.any(String), agent_id: 'jim', metadata: { workspace_id: WORKSPACE },
+        origin: { kind: 'chat', session_id: PARENT },
       },
     ])
     expect(useSessionStore.getState().activeSessionId, 'D3: Enter is Send, never select-helper').toBe(PARENT)
@@ -258,6 +270,7 @@ describe('release UAT D3 — Enter after Stop sends in the selected parent chat'
       {
         type: 'message', session_id: PARENT, content: CONTINUATION,
         client_message_id: expect.any(String), agent_id: 'jim', metadata: { workspace_id: WORKSPACE },
+        origin: { kind: 'chat', session_id: PARENT },
       },
     ])
   })

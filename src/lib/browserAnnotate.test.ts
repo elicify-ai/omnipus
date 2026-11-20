@@ -10,6 +10,7 @@ import { submitAnnotation, AnnotationBusyError } from './browserAnnotate'
 import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useConnectionStore } from '@/store/connection'
 
 // D18: mock only the network calls (uploadFiles, inspectBrowserElement);
 // keep the real modelLacksImageCapability (pure decision helper) via
@@ -45,6 +46,7 @@ describe('submitAnnotation', () => {
     vi.clearAllMocks()
     useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: 'agent-1' })
     useChatStore.setState({ sendMessage: sendMessageSpy, isStreaming: false })
+    useConnectionStore.setState({ isConnected: true, connection: { send: () => true } as never })
     useWorkspacesStore.setState({ activeWorkspaceId: null })
     mockUploadFiles.mockResolvedValue({
       files: [
@@ -206,29 +208,36 @@ describe('submitAnnotation', () => {
     expect(sendMessageSpy).not.toHaveBeenCalled()
   })
 
-  // Reviewer finding #7 (MEDIUM): the annotation must target the panel's
-  // PINNED pair, and must refuse — not silently misdirect — when the
-  // active chat has since diverged from it (sendMessage has no session
-  // override; it always posts to whatever is CURRENTLY active).
-  it('throws and never sends when the active session has diverged from the pinned session by send time', async () => {
+  // Spec 4.6.1: a browser annotation is not navigation-sensitive. It stays
+  // bound to the panel's pinned chat; a switch before send time does not refuse it.
+  it('sends to the pinned session when the active session has diverged by send time', async () => {
     useSessionStore.setState({ activeSessionId: 'sess-OTHER', activeAgentId: 'agent-1' })
 
-    await expect(
-      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' }),
-    ).rejects.toThrow(/active chat has changed/i)
-    // The upload still happens (it's addressed to the pinned session, which
-    // is valid on its own) — only the final send is refused.
+    await submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
     expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)], undefined)
-    expect(sendMessageSpy).not.toHaveBeenCalled()
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    const opts = sendMessageSpy.mock.calls[0][1] as {
+      submission: { target: string; agentId: string; origin: { kind: string; session_id: string } }
+      mediaRefs: string[]
+    }
+    expect(opts.submission.target, '4.6.1: the panel session, not the chat open now').toBe('sess-1')
+    expect(opts.submission.origin).toEqual({ kind: 'chat', session_id: 'sess-1' })
+    expect(opts.submission.agentId).toBe('agent-1')
+    expect(opts.mediaRefs).toEqual(['media://ref-1'])
+    expect(useSessionStore.getState().activeSessionId, '4.6.1: the send does not pull the screen over').toBe('sess-OTHER')
   })
 
-  it('throws and never sends when the active agent has diverged from the pinned agent by send time', async () => {
+  it('sends to the pinned agent when the active agent has diverged by send time', async () => {
     useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: 'agent-OTHER' })
 
-    await expect(
-      submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' }),
-    ).rejects.toThrow(/active chat has changed/i)
-    expect(sendMessageSpy).not.toHaveBeenCalled()
+    await submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    const opts = sendMessageSpy.mock.calls[0][1] as { submission: { agentId: string; target: string } }
+    expect(opts.submission.agentId, '4.6.1: the panel agent, not the agent open now').toBe('agent-1')
+    expect(opts.submission.target).toBe('sess-1')
+    expect(useSessionStore.getState().activeAgentId).toBe('agent-OTHER')
   })
 
   // F6 coverage gap: the inspect-text truncation (280 chars + "…") had no

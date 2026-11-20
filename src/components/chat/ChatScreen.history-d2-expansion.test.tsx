@@ -58,7 +58,9 @@ for (const failure of ['network', 'timeout', '500', 'malformed JSON', 'schema in
     const user = userEvent.setup()
     await user.click(previewToggle())
     await waitFor(() => expect(fullReads(app!)).toHaveLength(1))
-    const alert = await screen.findByRole('alert')
+    // Spec 4.10: the version banner is also an alert. The history failure is the one with Retry.
+    const alert = (await screen.findAllByRole('alert')).find((node) => within(node).queryByRole('button', { name: /^Retry$/ }))
+    if (!alert) throw new Error('T66: the history read failure is not an alert')
     expect(document.body.textContent).toContain(MARKER.preview)
     const retry = within(alert).getByRole('button', { name: /^Retry$/ })
     retry.focus()
@@ -66,7 +68,9 @@ for (const failure of ['network', 'timeout', '500', 'malformed JSON', 'schema in
     await user.keyboard('{Enter}')
     await waitFor(() => expect(document.body.textContent).toContain('-FULL_END'))
     expect(fullReads(app).map(read => read.path)).toEqual([fullPath(), fullPath()])
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    const left = screen.getAllByRole('alert')
+    expect(left.filter((node) => within(node).queryByRole('button', { name: /^Retry$/ })), 'T66: Retry clears the history failure').toHaveLength(0)
+    expect(left.some((node) => (node.textContent ?? '').includes('This page and the server are different versions. Your unsent text is kept below. Reload the page to send.')), 'spec 4.10 leaves the version banner').toBe(true)
     expect(JSON.stringify(useChatStore.getState().sessionsById[MAIN_ID]?.messagesById)).not.toContain(FULL_TEXT)
   })
 }

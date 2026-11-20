@@ -93,7 +93,8 @@ vi.mock('@/store/auth', () => {
   const state = { clearAuth: vi.fn(), username: 'testuser', token: null, role: null }
   const useAuthStore = (selector?: (value: typeof state) => unknown) => (selector ? selector(state) : state)
   useAuthStore.getState = () => state
-  return { useAuthStore }
+  // Spec 4.4.3: bound-send registers onSignOut at load. Assertions unchanged.
+  return { useAuthStore, onSignOut: () => () => {} }
 })
 
 vi.mock('@/store/notifications', () => ({

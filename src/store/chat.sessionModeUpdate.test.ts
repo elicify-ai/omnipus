@@ -12,6 +12,7 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { emptySessionState } from './chat/session'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
 import type { WsConnection } from '@/lib/ws'
 
 const TEST_SESSION_ID = 'test-session-1'
@@ -217,14 +218,17 @@ describe('chat store — session_state reconnect/reload snapshot carries the per
 // same value locally into the new session's bucket and clears the pending
 // field — no WS send at all.
 describe('chat store — pendingAutoApproveChoice rides the first message frame (ADR-092)', () => {
+  // Spec 4.6.1: the minting frame carries {new_chat, K}.
+  let openedAutoKey = ''
   function resetPendingChoiceScenario() {
     act(() => {
       useChatStore.getState().clearStreamingState()
       useChatStore.setState({ sessionsById: {}, pendingAutoApproveChoice: null })
       useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
-      // B1/B2: a first send requires an owner; the Auto-approve oracle is unchanged.
+      // Spec 4.4.1: the first message is reached by enterNewChat, not a session-less send.
       useSessionStore.setState({ activeSessionId: null, activeAgentId: 'mia', activeAgentType: 'core' })
       useWorkspacesStore.setState({ activeWorkspaceId: null })
+      openedAutoKey = enterNewChat(null, 'mia')
     })
   }
 
@@ -243,7 +247,10 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
       useChatStore.getState().sendMessage('hello')
     })
     expect(mockSend).toHaveBeenCalledTimes(1)
-    expect(mockSend.mock.calls[0][0]).toMatchObject({ type: 'message', content: 'hello', auto_approve: true })
+    expect(mockSend.mock.calls[0][0]).toMatchObject({
+      type: 'message', content: 'hello', auto_approve: true,
+      origin: { kind: 'new_chat', new_chat_key: openedAutoKey },
+    })
     // The choice is still pending — not cleared merely by sending — so the
     // switch keeps showing it while the ack is in flight.
     expect(useChatStore.getState().pendingAutoApproveChoice).toBe(true)
@@ -296,7 +303,10 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
       })
       expect(mockSend).toHaveBeenCalledTimes(1)
       expect(mockSend.mock.calls[0][0]).toEqual(
-        expect.objectContaining({ type: 'message', content: 'hello', auto_approve: true }),
+        expect.objectContaining({
+          type: 'message', content: 'hello', auto_approve: true,
+          origin: { kind: 'new_chat', new_chat_key: openedAutoKey },
+        }),
       )
 
       // 3) The server's session_started ack arrives (echoing the first
@@ -343,7 +353,10 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
       useChatStore.getState().sendMessage('hello')
     })
     expect(mockSend).toHaveBeenCalledTimes(1)
-    expect(mockSend.mock.calls[0][0]).toMatchObject({ type: 'message', auto_approve: false })
+    expect(mockSend.mock.calls[0][0]).toMatchObject({
+      type: 'message', auto_approve: false,
+      origin: { kind: 'new_chat', new_chat_key: openedAutoKey },
+    })
 
     const falseChoiceCid = (mockSend.mock.calls[0][0] as { client_message_id?: string }).client_message_id
     act(() => {
@@ -370,6 +383,7 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
     })
     expect(mockSend).toHaveBeenCalledTimes(1)
     expect(mockSend.mock.calls[0][0]).not.toHaveProperty('auto_approve')
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ origin: { kind: 'new_chat', new_chat_key: openedAutoKey } })
 
     const noChoiceCid = (mockSend.mock.calls[0][0] as { client_message_id?: string }).client_message_id
     act(() => {

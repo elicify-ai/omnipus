@@ -116,6 +116,7 @@ func TestWU22DonePublicationLateFailureTurnIsInactive(t *testing.T) {
 	assert.Equal(t, 1, f.cut.finalizations)
 	wu22AssertDoneInactive(t, f, *observations, true)
 	live, _ := wu22GatewayFinalFrames(t, f.cut.frames)
+	wu22AssertOneTurnNamed(t, live, f.cut.frames.sid)
 	assert.Equal(t, 1, wu22GatewayNoticeCount(t, live), "completion ordering must not duplicate the save notice")
 	f.cut.restore()
 }

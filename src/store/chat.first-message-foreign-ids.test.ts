@@ -11,6 +11,14 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
+
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
+function withNewChatOrigin<T extends object>(frame: T): T & { origin: { kind: 'new_chat'; new_chat_key: string } } {
+  return { ...frame, origin: { kind: 'new_chat', new_chat_key: openedKey } }
+}
+
 
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7, "PR B silent-failure review rulings" (SF-2/F5), and the final normal
@@ -35,7 +43,7 @@ const WORKSPACE = '1090-foreign-ids-workspace'
 const MODEL = '1090-foreign-ids-model'
 const MEDIA = ['media://1090-foreign-ids-image', 'media://1090-foreign-ids-file']
 const NOW = '2026-10-01T12:00:00.000Z'
-const ORIGINAL_FRAME: MessageFrame = {
+const BASE_ORIGINAL_FRAME: MessageFrame = {
   type: 'message', client_message_id: CLIENT_A, content: CONTENT,
   agent_id: 'mia', media: [...MEDIA],
   metadata: { model_name: MODEL, workspace_id: WORKSPACE }, auto_approve: false,
@@ -95,6 +103,7 @@ function connectSender() {
     useConnectionStore.getState().setConnected(true)
     useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE })
     useChatStore.setState({ pendingAutoApproveChoice: false })
+    openedKey = enterNewChat(WORKSPACE, 'mia')
   })
   return sender
 }
@@ -104,10 +113,10 @@ function sendFirstA(sender: ReturnType<typeof connectSender>) {
     clientMessageId: CLIENT_A, mediaRefs: [...MEDIA], model_name: MODEL,
   }))
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: A sends exactly the original session-less request')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   expect(useSessionStore.getState().activeSessionId, 'fixture: A has no acknowledged real session').toBe('__pending')
   expect(useChatStore.getState().pendingFirstSend?.payload, 'fixture: A owns the exact original recovery request')
-    .toStrictEqual(ORIGINAL_FRAME)
+    .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
   expect(useChatStore.getState().messagesById[CLIENT_A].firstSendStatus, 'fixture: A has no save confirmation yet')
     .toBe('sending')
   expect(useChatStore.getState().messagesById[CLIENT_A].deliveryStatus, 'fixture: sending A is not a received receipt')
@@ -145,7 +154,7 @@ function beginSessionACheck() {
   expect(useChatStore.getState().pendingFirstSend?.status, 'fixture: losing A\'s acknowledgement is delivery uncertainty')
     .toBe('unconfirmed')
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: reconnect does not retransmit A')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   act(() => {
     useChatStore.getState().retryFirstSend()
     useChatStore.getState().handleFrame({
@@ -156,11 +165,11 @@ function beginSessionACheck() {
     })
   })
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: matching recovery of A attaches without a cursor')
-    .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_A])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_A])
 
   reconnect(sender)
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: checking known session A reconnects by attach only')
-    .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_A, ATTACH_A])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_A, ATTACH_A])
   expect(useSessionStore.getState().activeSessionId, 'fixture: session A owns the foreground check').toBe(SESSION_A)
   expect(useChatStore.getState().pendingFirstSend?.sessionId, 'fixture: the check owns A, not just any nonempty session')
     .toBe(SESSION_A)
@@ -194,7 +203,7 @@ describe('#1090 SF-2/D7 — different nonempty IDs cannot settle the owned first
     expect(after.pendingFirstSend, 'D7/F1: B cannot discard or rewrite A\'s original recovery request')
       .toStrictEqual(pending)
     expect(after.pendingFirstSend?.payload, 'D7/F1: retain A\'s exact text, ordered media, routing, model and false Auto')
-      .toStrictEqual(ORIGINAL_FRAME)
+      .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
     expect(screen.getByTestId('user-message-delivery-status').textContent,
       'D7/F1: A still shows its exact unconfirmed-send copy').toBe('Sending…')
     expect(screen.queryByText('Saved', { exact: true }), 'SF-2/F1: a foreign client ID cannot show Saved for A')
@@ -204,7 +213,7 @@ describe('#1090 SF-2/D7 — different nonempty IDs cannot settle the owned first
     'D7/F1: keep exactly A\'s original user bubble and identity')
       .toStrictEqual([{ id: CLIENT_A, clientMessageId: CLIENT_A, content: CONTENT }])
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7/F1: a foreign acknowledgement causes no resend or attach')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
 
     // F5/normal-session ruling: unknown-to-this-tab client IDs FALL THROUGH;
     // rejecting their first-send confirmation must not reject normal binding.
@@ -243,7 +252,7 @@ describe('#1090 SF-2/D7 — different nonempty IDs cannot settle the owned first
     expect(after.pendingFirstSend, 'D7/F2: B\'s error cannot change any field of A\'s retained request')
       .toStrictEqual(pending)
     expect(after.pendingFirstSend?.payload, 'D7/F2: A retains the exact original request, not B\'s error data')
-      .toStrictEqual(ORIGINAL_FRAME)
+      .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
     expect(after.firstSendGeneration, 'D7/F2: B\'s error is not another attempt for A').toBe(generation)
     expect(after.messagesById[CLIENT_A], 'D7/F2: A\'s saved bubble and receipt stay byte-for-byte unchanged')
       .toStrictEqual(originalBubble)
@@ -265,6 +274,6 @@ describe('#1090 SF-2/D7 — different nonempty IDs cannot settle the owned first
     expect(screen.queryByRole('button', { name: /Generate again/ }), 'D7/F2: B\'s error cannot authorize a second answer')
       .not.toBeInTheDocument()
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7/F2: B\'s error causes no resend, attach or queued-message send')
-      .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_A, ATTACH_A])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_A, ATTACH_A])
   })
 })

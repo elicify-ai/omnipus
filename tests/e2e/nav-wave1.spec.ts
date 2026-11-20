@@ -121,6 +121,10 @@ test('a built-in agent shows locked figure, role and colour and no upload', asyn
     await expect(dot).toHaveAttribute('aria-pressed', String(name === 'Steel blue'))
   }
   // No upload affordance in the avatar editor and no file input on the page.
+  // The chat composer behind the Team panel keeps one hidden file input of its
+  // own (#1428 step 2: OmnipusComposer's bound file picker, test id
+  // composer-file-picker); it is the chat's attach control, not an avatar
+  // upload, so it is the one input excluded here. Any other file input fails.
   await expect(look.getByRole('button', { name: /upload/i })).toHaveCount(0)
-  await expect(page.locator('input[type="file"]')).toHaveCount(0)
+  await expect(page.locator('input[type="file"]:not([data-testid="composer-file-picker"])')).toHaveCount(0)
 })

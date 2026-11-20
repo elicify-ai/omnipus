@@ -1,0 +1,37 @@
+title: CommandReceivedFrame
+description: >
+  Server → client. #1428 step 2 (option C). Receipt for a `redirect` or
+  `cancel` frame that carried a valid `client_frame_id`: it passed the
+  origin check and was handed to its handler. It does not mean the command
+  was applied; the handler's own frames (cancel_stage, cancel_idle, the
+  redirected turn) follow. Enqueued before the handler acts, so it always
+  arrives before them. Sent only to the connection that sent the command,
+  unsequenced. Never sent for a refused frame, for a frame without
+  `client_frame_id`, or for one whose `client_frame_id` is malformed.
+type: object
+required:
+  - type
+  - command
+  - client_frame_id
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: command_received
+  command:
+    type: string
+    enum:
+      - redirect
+      - cancel
+    description: Type of the received command frame.
+  client_frame_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The command frame's own correlation id.
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: The command frame's target.

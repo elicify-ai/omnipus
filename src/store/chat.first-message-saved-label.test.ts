@@ -10,6 +10,13 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
+
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
+function withNewChatOrigin<T extends object>(frame: T): T & { origin: { kind: 'new_chat'; new_chat_key: string } } {
+  return { ...frame, origin: { kind: 'new_chat', new_chat_key: openedKey } }
+}
 
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // "PR B silent-failure review rulings", SF-2, and D7. State names/exact copy:
@@ -33,7 +40,7 @@ const SESSION_ID = '1090-red7-chat'
 const WORKSPACE_ID = '1090-red7-workspace'
 const MEDIA_REFS = ['media://1090-red7-file']
 const MODEL_NAME = '1090-red7-model'
-const ORIGINAL_FRAME: MessageFrame = {
+const BASE_FRAME: MessageFrame = {
   type: 'message',
   client_message_id: CLIENT_ID,
   content: CONTENT,
@@ -93,6 +100,7 @@ function connectSavedLabelSender() {
     useConnectionStore.getState().setConnected(true)
     useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE_ID })
     useChatStore.setState({ pendingAutoApproveChoice: false })
+    openedKey = enterNewChat(WORKSPACE_ID, 'mia')
   })
   return sender
 }
@@ -102,10 +110,10 @@ function sendFirstForSavedLabel(sender: ReturnType<typeof connectSavedLabelSende
     clientMessageId: CLIENT_ID, mediaRefs: [...MEDIA_REFS], model_name: MODEL_NAME,
   }))
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: real sendMessage sends the original session-less request')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_FRAME)])
   expect(useSessionStore.getState().activeSessionId, 'fixture: first send awaits a real session').toBe('__pending')
   expect(useChatStore.getState().pendingFirstSend?.payload, 'fixture: real first-send lifecycle retains this request')
-    .toStrictEqual(ORIGINAL_FRAME)
+    .toStrictEqual(withNewChatOrigin(BASE_FRAME))
   expect(useChatStore.getState().messagesById[CLIENT_ID].firstSendStatus, 'fixture: no server confirmation yet')
     .toBe('sending')
 }
@@ -136,7 +144,7 @@ describe('#1090 SF-2 — Saved requires a correlated first-message confirmation'
       .map(({ id, content }) => ({ id, content })), 'SF-2: the original bubble remains visible')
       .toStrictEqual([{ id: CLIENT_ID, content: CONTENT }])
     expect(sender.send.mock.calls.map(([frame]) => frame), 'SF-2: an untagged acknowledgement cannot cause an automatic resend')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_FRAME)])
   })
 
   it('(b) an untagged session_started followed by tagged not_saved must show Could not save message · Retry', () => {
@@ -158,7 +166,7 @@ describe('#1090 SF-2 — Saved requires a correlated first-message confirmation'
       .map(({ id, content }) => ({ id, content })), 'D7: failure keeps exactly the original message')
       .toStrictEqual([{ id: CLIENT_ID, content: CONTENT }])
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: recovery requires an explicit Retry, not an automatic resend')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_FRAME)])
   })
 
   it('(c) control: a client-ID-tagged session_started acknowledgement marks the matching first message saved', () => {
@@ -176,6 +184,6 @@ describe('#1090 SF-2 — Saved requires a correlated first-message confirmation'
     expect(screen.getByTestId('user-message-delivery-status').textContent, 'FIRST_SEND_COPY: exact confirmed-save label')
       .toBe('Saved')
     expect(sender.send.mock.calls.map(([frame]) => frame), 'control: normal acknowledgement causes no delivery resend')
-      .toStrictEqual([ORIGINAL_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_FRAME)])
   })
 })

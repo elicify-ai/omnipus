@@ -432,6 +432,8 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.start"),
 		TurnStartPayload{
 			ChatNotice:  rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.goalReminderFrame,
+			SessionID:   rp.rc.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
+			StartedAt:   rp.rc.rx.rr.rq.ri.rf.rt.ts.startedAt,
 			Channel:     rp.rc.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:      rp.rc.rx.rr.rq.ri.rf.rt.ts.chatID,
 			UserMessage: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,

@@ -104,6 +104,10 @@ type wsHandlerHandleChatMessage struct {
 	// firstRequestDigest captures original requested fields before intake mutates
 	// them, so a retry compares the request, not newly resolved server defaults.
 	firstRequestDigest firstClientMessageDigest
+	// origin is MessageFrame.origin after the raw pre-check accepted it (#1428
+	// step 2); nil on a legacy origin-less non-browser send. A new_chat origin
+	// gives a minted chat its key (spec 4.3.3).
+	origin *generated.SendOrigin
 }
 
 // pendingMessageStatus is one persisted user message still waiting for its
@@ -198,6 +202,28 @@ func (h *WSHandler) handleChatMessageWithChoice(
 	recipient *addressing.Pair,
 	wc *wsConn,
 ) {
+	h.handleChatMessageWithOrigin(ctx, chatID, frameSessionID, content, agentID, mediaRefs, modelName,
+		choice, workspaceID, clientMessageID, autoApprove, recipient, nil, wc)
+}
+
+// handleChatMessageWithOrigin is handleChatMessageWithChoice carrying the
+// frame's origin, already accepted by the raw pre-check (#1428 step 2).
+func (h *WSHandler) handleChatMessageWithOrigin(
+	ctx context.Context,
+	chatID string,
+	frameSessionID string,
+	content string,
+	agentID string,
+	mediaRefs []string,
+	modelName string,
+	choice frameEffortChoice,
+	workspaceID string,
+	clientMessageID string,
+	autoApprove *bool,
+	recipient *addressing.Pair,
+	origin *generated.SendOrigin,
+	wc *wsConn,
+) {
 	// Schema validation is optional, but the client-id bound is not. Reject
 	// before resolution, persistence, or the deferred status/cache cleanup.
 	if utf8.RuneCountInString(clientMessageID) > maxClientMessageIDChars {
@@ -225,7 +251,7 @@ func (h *WSHandler) handleChatMessageWithChoice(
 			return
 		}
 	}
-	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, choice: choice, workspaceID: workspaceID, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc}
+	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, choice: choice, workspaceID: workspaceID, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc, origin: origin}
 	hcm.firstMessage = frameSessionID == "" &&
 		(clientMessageID != "" || agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound())
 	defer func() {
@@ -855,7 +881,15 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		return true
 	}
 	// No session_id in frame: mint a new session so all subsequent frames have one.
-	meta, err := hcm.store.NewSession(session.SessionTypeChat, "webchat", hcm.targetAgentID)
+	// #1428 step 2 (spec 4.3.3): a first message from a new chat saves that
+	// chat's key in the creating write, so the chat is born bound to it.
+	var meta *session.UnifiedMeta
+	var err error
+	if key := hcm.newChatKey(); key != "" {
+		meta, err = hcm.store.NewSessionKeyed(session.SessionTypeChat, "webchat", hcm.targetAgentID, key)
+	} else {
+		meta, err = hcm.store.NewSession(session.SessionTypeChat, "webchat", hcm.targetAgentID)
+	}
 	if err != nil {
 		logsafeError("ws: could not create session", "error", err)
 		if hcm.firstMessage {
@@ -1252,4 +1286,13 @@ func (hcm *wsHandlerHandleChatMessage) refuseOmnipusChat(home, agentID, workspac
 	}
 	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), frame)
 	return true
+}
+
+// newChatKey is the accepted new_chat origin's key, or "" when the frame
+// carried no new_chat origin.
+func (hcm *wsHandlerHandleChatMessage) newChatKey() string {
+	if hcm.origin == nil || hcm.origin.Kind != "new_chat" || hcm.origin.NewChatKey == nil {
+		return ""
+	}
+	return *hcm.origin.NewChatKey
 }

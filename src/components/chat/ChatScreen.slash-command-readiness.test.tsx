@@ -150,6 +150,7 @@ beforeEach(() => {
       toolCalls: {},
       sessionTokens: 0,
       sessionCost: 0,
+      outboundQueue: [],
     })
     useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
     useSessionStore.setState({
@@ -210,7 +211,7 @@ describe('slash command typed before the command list resolves', () => {
   })
 
   it('a non-command "/zzz hi" is held and then delivered verbatim — the gate never eats input', async () => {
-    const { setText, send } = await mockRuntimeWithText('/zzz hi')
+    const { send } = await mockRuntimeWithText('/zzz hi')
 
     const { rerender } = render(<OmnipusComposer />)
     const form = screen.getByTestId('composer-form')
@@ -223,10 +224,13 @@ describe('slash command typed before the command list resolves', () => {
     commandsStillLoading = false
     act(() => { rerender(<OmnipusComposer />) })
 
-    // Delivered exactly once, unmodified (never cleared before the send), and
-    // no client command ran.
-    expect(send).toHaveBeenCalledTimes(1)
-    expect(setText).not.toHaveBeenCalledWith('')
+    // Spec 4.5 / 4.6.1: the binding delivers the frozen text. The primitive send never runs.
+    expect(send).not.toHaveBeenCalled()
+    const queued = useChatStore.getState().outboundQueue
+    expect(queued, 'the held non-command is delivered once, not eaten').toHaveLength(1)
+    const queuedItem = queued[0]
+    const queuedText = typeof queuedItem === 'string' ? queuedItem : queuedItem.content
+    expect(queuedText).toBe('/zzz hi')
     expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
   })
 
@@ -241,9 +245,14 @@ describe('slash command typed before the command list resolves', () => {
     let dispatched = false
     act(() => { dispatched = fireEvent.submit(form) })
 
-    // Not intercepted — the form submit proceeds to assistant-ui as normal.
-    expect(dispatched).toBe(true)
+    // Spec 4.5: the binding submits and preventDefault, so the primitive does not also send.
+    // The text is still delivered at once (only a leading "/" is held).
+    expect(dispatched).toBe(false)
     expect(send).not.toHaveBeenCalled()
+    const queued = useChatStore.getState().outboundQueue
+    expect(queued, 'plain text is delivered immediately').toHaveLength(1)
+    const queuedItem = queued[0]
+    expect(typeof queuedItem === 'string' ? queuedItem : queuedItem.content).toBe('hello there')
   })
 
   it('once the list has loaded, "/new" is still refused and never sent (WC-1)', async () => {
