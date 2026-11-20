@@ -273,10 +273,31 @@ const soBarrierGap = 110 * time.Millisecond
 // and the pong itself is not returned. Use soWindow instead when a check needs
 // frames produced later by a running turn (tokens, done, a forced stop).
 // A missing pong fails the test instead of passing an empty window.
+//
+// The pong fences only the read loop, not independent producers (a timer, a
+// goroutine, a turn's hub publish). Every caller counts frames for an
+// exactly-once or absence oracle, so after the pong soSettle keeps observing
+// for soQuietTail and returns those frames too: a stray duplicate receipt,
+// notice or snapshot emitted up to soQuietTail after the pong (so at least
+// that long after the triggering frame) is still counted. Measured coverage:
+// a duplicate redirect receipt scheduled 250 ms or 750 ms after the real one
+// is caught; one scheduled later than the tail is not (the replaced 4 s
+// windows covered up to about 4 s).
 func soSettle(t *testing.T, conn *websocket.Conn) []soFrame {
 	t.Helper()
-	if last, ok := soBarrierPings.Load(conn); ok {
-		if wait := soBarrierGap - time.Since(last.(time.Time)); wait > 0 {
+	out := soSettleBarrier(t, conn)
+	return append(out, soWindow(t, conn, soQuietTail)...)
+}
+
+// soQuietTail is soSettle's bounded negative observation after the barrier.
+const soQuietTail = 1 * time.Second
+
+func soSettleBarrier(t *testing.T, conn *websocket.Conn) []soFrame {
+	t.Helper()
+	if stored, ok := soBarrierPings.Load(conn); ok {
+		last, isTime := stored.(time.Time)
+		require.True(t, isTime, "instrument: soBarrierPings holds pong receipt times")
+		if wait := soBarrierGap - time.Since(last); wait > 0 {
 			time.Sleep(wait)
 		}
 	} else {
