@@ -574,8 +574,11 @@ func TestMemorySettingsPUT_NoSiblingClobber(t *testing.T) {
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	// PUT memory settings (session_days only).
-	body := `{"session_days":30}`
+	// PUT memory settings (auto_recap_enabled only). The old body carried
+	// session_days, which FR-045 removes from MemorySettings — the endpoint
+	// refuses it with 400 (pinned by TestMemorySettings_RefusesRetentionFields),
+	// so the sibling-clobber subject now rides a field the endpoint still owns.
+	body := `{"auto_recap_enabled":true}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/settings/memory", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -595,13 +598,11 @@ func TestMemorySettingsPUT_NoSiblingClobber(t *testing.T) {
 	assert.Equal(t, "custom-model", defaults["model_name"],
 		"model_name must not be clobbered by PUT /settings/memory")
 
-	// Also verify storage.retention.session_days was written correctly.
-	storage, _ := rawCfg["storage"].(map[string]any)
-	require.NotNil(t, storage, "storage section must exist after PUT memory settings")
-	retention, _ := storage["retention"].(map[string]any)
-	require.NotNil(t, retention, "retention section must exist")
-	assert.Equal(t, float64(30), retention["session_days"],
-		"session_days must be written to storage.retention")
+	// FR-045: the endpoint no longer writes retention at all — the seed had
+	// no storage section, and this PUT must not have created one.
+	_, hasStorage := rawCfg["storage"]
+	assert.False(t, hasStorage,
+		"PUT /settings/memory must not write storage.retention (FR-045 removes the retention fields from MemorySettings)")
 }
 
 // ---------------------------------------------------------------------------

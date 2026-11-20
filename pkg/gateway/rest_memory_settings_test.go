@@ -1,4 +1,8 @@
-// Tests for GET/PUT /api/v1/settings/memory (FR-019 / US-6, ADR-027).
+// Tests for GET/PUT /api/v1/settings/memory (FR-019 / US-6, ADR-027),
+// reconciled to the approved Settings redesign spec: FR-045 removes
+// session_days and memory_retros_days from MemorySettings, so the retention
+// fields and assertions that used to live here moved to
+// /settings/retention (C-3, FR-041/FR-042/FR-043).
 
 package gateway
 
@@ -21,6 +25,9 @@ import (
 
 // TestMemorySettings_GetReturnsDefaults verifies that GET /api/v1/settings/memory
 // returns the current effective settings from config (using the test API's defaults).
+// The retention fields this test used to assert are removed from MemorySettings
+// (FR-045); their checks live at /settings/retention (see
+// TestMemorySettings_RetentionFieldsMovedToRetentionEndpoint below).
 func TestMemorySettings_GetReturnsDefaults(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
@@ -34,10 +41,6 @@ func TestMemorySettings_GetReturnsDefaults(t *testing.T) {
 	// The response must include all required fields (non-nil).
 	assert.NotNil(t, resp.AutoRecapEnabled, "auto_recap_enabled must be present")
 	assert.NotNil(t, resp.BootstrapRecapEnabled, "bootstrap_recap_enabled must be present")
-	assert.NotNil(t, resp.SessionDays, "session_days must be present")
-	assert.NotNil(t, resp.MemoryRetrosDays, "memory_retros_days must be present")
-	// Default retention for retros is 180 (not 30).
-	assert.Equal(t, 180, *resp.MemoryRetrosDays, "memory_retros_days default must be 180")
 	// recap_model is present (may be empty string on a default config).
 	assert.NotNil(t, resp.RecapModel, "recap_model must be present")
 	// recap_fallback_models is present as an array (not null).
@@ -82,7 +85,9 @@ func TestMemorySettings_PutUpdatesAndReturnsNewValues(t *testing.T) {
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
-	body := `{"auto_recap_enabled":true,"idle_timeout_minutes":45,"session_days":60}`
+	// The session_days member is removed from the write shape (FR-045); the
+	// body carries only fields the endpoint still owns.
+	body := `{"auto_recap_enabled":true,"idle_timeout_minutes":45}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/settings/memory", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -91,13 +96,11 @@ func TestMemorySettings_PutUpdatesAndReturnsNewValues(t *testing.T) {
 
 	var resp gen.MemorySettings
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	// auto_recap_enabled, idle_timeout_minutes, and session_days must have been updated.
+	// auto_recap_enabled and idle_timeout_minutes must have been updated.
 	require.NotNil(t, resp.AutoRecapEnabled)
 	assert.True(t, *resp.AutoRecapEnabled, "auto_recap_enabled must be updated to true")
 	require.NotNil(t, resp.IdleTimeoutMinutes)
 	assert.Equal(t, 45, *resp.IdleTimeoutMinutes, "idle_timeout_minutes must be updated to 45")
-	require.NotNil(t, resp.SessionDays)
-	assert.Equal(t, 60, *resp.SessionDays, "session_days must be updated to 60")
 }
 
 // TestMemorySettings_PutMethodNotAllowed verifies that unsupported methods return 405.
@@ -162,24 +165,47 @@ func TestMemorySettings_RecapModelRoundTrip(t *testing.T) {
 	assert.Equal(t, "openai", *fb.Provider)
 }
 
-// TestMemorySettings_RetentionRetrosDefault verifies that the default
-// memory_retros_days is 180 (not the old 30).
-func TestMemorySettings_RetentionRetrosDefault(t *testing.T) {
+// TestMemorySettings_RetentionFieldsMovedToRetentionEndpoint — replaces
+// TestMemorySettings_RetentionRetrosDefault (which asserted the
+// memory_retros_days default of 180 on /settings/memory). FR-045 removes the
+// retention fields from MemorySettings, so the moved check now pins BOTH
+// halves of the move: the memory read carries no retention field any more,
+// and the 180 default it used to pin is answered by the replacing endpoint
+// GET /settings/retention (FR-041).
+func TestMemorySettings_RetentionFieldsMovedToRetentionEndpoint(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/settings/memory", nil)
 	api.HandleMemorySettings(w, r)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	var resp gen.MemorySettings
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.NotNil(t, resp.MemoryRetrosDays)
-	assert.Equal(t, 180, *resp.MemoryRetrosDays, "default memory_retros_days must be 180")
+	var mem map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &mem))
+	assert.NotContains(t, mem, "session_days",
+		"FR-045 removes session_days from MemorySettings — the memory read must not carry it")
+	assert.NotContains(t, mem, "memory_retros_days",
+		"FR-045 removes memory_retros_days from MemorySettings — the memory read must not carry it")
+
+	// The replacing endpoint answers the default this test pinned (FR-041:
+	// memory_retros_days defaults to 180).
+	h := newRetentionSectionAPI(t, true)
+	wRet := h.do(http.MethodGet, "/api/v1/settings/retention", "")
+	require.Equal(t, http.StatusOK, wRet.Code,
+		"BLOCKED RED: GET /api/v1/settings/retention is not implemented — required by FR-041; body=%s", wRet.Body.String())
+	var ret map[string]any
+	require.NoError(t, json.Unmarshal(wRet.Body.Bytes(), &ret))
+	assert.Equal(t, float64(180), ret["memory_retros_days"],
+		"the default memory_retros_days of 180 must be answered by /settings/retention (FR-041)")
 }
 
 // TestMemorySettings_PutValidatesNegativeValues verifies that negative values
-// for bounded fields are rejected with 400.
+// for bounded fields are rejected with 400. The two retention rows are
+// REPLACED by the FR-045 refusal: PUT /settings/memory carrying session_days
+// or memory_retros_days answers 400 naming the retired field (their range
+// enforcement moved to PUT /settings/retention, FR-042). On pre-merge code
+// those rows still answer 200 — the loud RED of the FR-045 rows is expected
+// until the refusal is implemented.
 func TestMemorySettings_PutValidatesNegativeValues(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
@@ -187,8 +213,6 @@ func TestMemorySettings_PutValidatesNegativeValues(t *testing.T) {
 		name string
 		body string
 	}{
-		{"negative session_days", `{"session_days":-1}`},
-		{"negative memory_retros_days", `{"memory_retros_days":-5}`},
 		{"negative idle_timeout_minutes", `{"idle_timeout_minutes":-1}`},
 		{"negative bootstrap_recap_max_per_minute", `{"bootstrap_recap_max_per_minute":-1}`},
 	}
@@ -200,6 +224,34 @@ func TestMemorySettings_PutValidatesNegativeValues(t *testing.T) {
 			api.HandleMemorySettings(w, r)
 			assert.Equal(t, http.StatusBadRequest, w.Code,
 				"negative value in %s must return 400; body: %s", tc.name, w.Body.String())
+		})
+	}
+
+	// FR-045 rows: the retired retention fields are refused, naming the
+	// field, whatever the value would have been.
+	refused := []struct {
+		name     string
+		body     string
+		wantName string
+	}{
+		{"retired session_days", `{"session_days":-1}`, "session_days"},
+		{"retired memory_retros_days", `{"memory_retros_days":-5}`, "memory_retros_days"},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/settings/memory", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			api.HandleMemorySettings(w, r)
+			require.Equal(t, http.StatusBadRequest, w.Code,
+				"RED: PUT /settings/memory still accepts %s — FR-045 removes it from MemorySettings and requires a 400 naming it (got %d); body: %s",
+				tc.wantName, w.Code, w.Body.String())
+			var errBody map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errBody),
+				"the refusal must be a JSON error body; got: %s", w.Body.String())
+			errMsg, _ := errBody["error"].(string)
+			require.Contains(t, errMsg, tc.wantName,
+				"the FR-045 refusal must name the retired field; got: %s", errMsg)
 		})
 	}
 }
