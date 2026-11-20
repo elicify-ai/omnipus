@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"time"
 )
 
-// The starting run is alive but announces no native id until its natural-exit
-// command. It emits no answer, so its ordinary done has no message id. The
-// resumed process reuses the existing fully-silent output barrier/validation.
+// The starting run announces no native id until its natural-exit command.
+// Plain mode emits no answer; text mode emits an original answer without an id.
+// The resumed process reuses the fully-silent output barrier/validation.
 func opencode1895QueuedFollowupProcess(addr, resumeAddr, nativeID string) int {
 	if nativeID != "" {
 		return opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID, true)
@@ -21,6 +22,9 @@ func opencode1895QueuedFollowupProcess(addr, resumeAddr, nativeID string) int {
 		return 2
 	}
 	defer func() { _ = conn.Close() }()
+	if slices.Contains(os.Args, "--fixture-mode=queued_followup_text_pending") {
+		fmt.Printf("{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":%q}}\n", opencode1895FirstAnswer)
+	}
 	fmt.Println(`{"type":"tool_use","part":{"type":"tool","id":"fixture-ready-1895","tool":"read_file","state":{"status":"completed","input":{"path":"fixture.txt"},"output":"ready"}}}`)
 	reader := bufio.NewReader(conn)
 	for {
