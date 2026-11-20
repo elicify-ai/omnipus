@@ -20,6 +20,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
@@ -302,6 +303,9 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 		jsonServerFailure(w, http.StatusInternalServerError, "could not delete credential", err)
 		return
 	}
+	// FR-056: the committed deletion is audited before the reload, so the
+	// record exists whatever the reload outcome.
+	a.auditCredentialDeleted(r, key)
 	// Trigger reload AND WAIT for it — same reasoning as setCredential above.
 	// Symmetric behavior: if this ref is still wired into an ENABLED channel's
 	// config, executeReload's escalation check rejects the reload (rollback,
@@ -323,6 +327,33 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 			"credential %q was deleted but the live reload did not confirm in time; it may not be live yet", key)
 	}
 	jsonOK(w, resp)
+}
+
+// EventCredentialDeleted is the audit event for a committed
+// DELETE /api/v1/credentials/{key} (FR-056; registered in
+// pkg/audit.IsValidEventName).
+const EventCredentialDeleted = "credential.deleted"
+
+// auditCredentialDeleted records a committed credential deletion: the
+// signed-in actor, the credential reference NAME and the outcome. The stored
+// value is never read or written here. With audit logging off it records
+// nothing. A write failure goes through audit.EmitEntry, which logs it and
+// raises the audit-skipped counter that GET /health reports as degraded; the
+// deletion itself has already committed, so it is not undone.
+func (a *restAPI) auditCredentialDeleted(r *http.Request, key string) {
+	logger := a.auditor
+	if logger == nil && a.agentLoop != nil {
+		logger = a.agentLoop.AuditLogger()
+	}
+	audit.EmitEntry(logger, &audit.Entry{
+		Event:    EventCredentialDeleted,
+		Decision: audit.DecisionAllow,
+		User:     auditActor(r),
+		Details: map[string]any{
+			"credential_ref": key,
+			"outcome":        "deleted",
+		},
+	})
 }
 
 // rotateCredentials handles POST /api/v1/credentials/rotate (G5). It re-encrypts

@@ -335,6 +335,11 @@ var validEventNames = map[EventName]struct{}{
 	// orphaned `<id>_API_KEY` credentials whose provider row is gone
 	// (ADR-068 FR-010 last clause, T068-10).
 	"provider.deleted": {},
+	// "credential.deleted" is emitted once per committed
+	// DELETE /credentials/{key} (Settings redesign #1519, FR-056) by
+	// pkg/gateway/rest_settings.go; details carry the credential REF NAME
+	// (never the value) and the outcome.
+	"credential.deleted": {},
 	// pkg/gateway/rest_sign_in.go. Bare literals, no constants.
 	"provider.signed_in":        {},
 	"provider.signed_out":       {},
