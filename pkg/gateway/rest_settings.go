@@ -30,20 +30,26 @@ import (
 // startTime records when the gateway process started, used by GET /api/v1/about.
 var startTime = time.Now()
 
-// auditDir is the directory the audit logger writes: the "system" sibling of
-// the agents home, derived from the live config exactly as the writer derives
-// it (agent/loop_construct.go: Dir(cfg.AgentHomeBasePath()) + "/system"), so
-// a customized agents.defaults.home no longer hides the log (#1742). With no
-// agents home configured it falls back to the gateway home.
-func (a *restAPI) auditDir() string {
+// auditFilePath is the audit file the viewer reads (S3, #1742). With an
+// active audit logger it is the logger's own file — the one it writes and
+// Verify checks — so the records shown and chain_status always refer to the
+// same file, whatever the live config says now. With audit logging off there
+// is no writer and no chain check; the viewer then reads the file a writer
+// would use: the "system" sibling of the agents home from the live config
+// (agent/loop_construct.go: Dir(cfg.AgentHomeBasePath()) + "/system"), else
+// the gateway home.
+func (a *restAPI) auditFilePath(logger *audit.Logger) string {
+	if logger != nil {
+		return logger.Path()
+	}
 	if a.agentLoop != nil {
 		if cfg := a.agentLoop.GetConfig(); cfg != nil {
 			if base := cfg.AgentHomeBasePath(); base != "" {
-				return filepath.Join(filepath.Dir(base), "system")
+				return filepath.Join(filepath.Dir(base), "system", "audit.jsonl")
 			}
 		}
 	}
-	return filepath.Join(a.homePath, "system")
+	return filepath.Join(a.homePath, "system", "audit.jsonl")
 }
 
 // HandleAuditLog handles GET /api/v1/audit-log.
@@ -53,7 +59,12 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	auditPath := filepath.Join(a.auditDir(), "audit.jsonl")
+	// One logger value for both the read and the chain check (S3).
+	var logger *audit.Logger
+	if a.agentLoop != nil {
+		logger = a.agentLoop.AuditLogger()
+	}
+	auditPath := a.auditFilePath(logger)
 	f, err := os.Open(auditPath)
 	if errors.Is(err, os.ErrNotExist) {
 		// AuditLogResponse envelope: no entries, chain not checkable.
@@ -101,7 +112,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	// verify with (e.g. audit logging disabled).
 	chainStatus := "unknown"
 	var chainBrokenIndex *int
-	if logger := a.agentLoop.AuditLogger(); logger != nil {
+	if logger != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		if res, verr := logger.Verify(ctx); verr != nil {

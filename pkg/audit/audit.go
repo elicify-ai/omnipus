@@ -928,6 +928,16 @@ func (l *Logger) auditPath() string {
 	return filepath.Join(l.dir, "audit.jsonl")
 }
 
+// Path returns the active audit file this logger writes and Verify checks.
+// The directory is fixed at construction, so the path never follows a later
+// config change. Returns "" for a nil logger.
+func (l *Logger) Path() string {
+	if l == nil {
+		return ""
+	}
+	return l.auditPath()
+}
+
 func (l *Logger) openCurrentFile() error {
 	path := l.auditPath()
 	// #nosec G304 -- path is filepath.Join(l.dir, "audit.jsonl"): l.dir is the
