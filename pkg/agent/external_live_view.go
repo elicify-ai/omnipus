@@ -140,19 +140,21 @@ func (al *AgentLoop) emitExternalErrorFrame(ts *turnState, stage string, llm LLM
 }
 
 // deferExternalLiveDoneForResume holds back the done of a steered external-CLI
-// turn that a steer interrupt ended with the instruction still queued: the
-// post-turn drain resumes the conversation with it at once. A done here would
-// tell every viewer the helper is idle while the resumed run works, until its
-// first output (#1895). It reports whether the done was held back. Every
-// steered body call is followed by drainSteeredTurn, whose
+// turn that ends, by a steer interrupt or naturally, with a person's or
+// parent's instruction still queued: the post-turn drain resumes the
+// conversation with it at once. A done here would tell every viewer the helper
+// is idle while the resumed run works, until its first output (#1895). The
+// natural end covers an instruction queued without interrupt while the tool
+// was still starting (#1899 B). It reports whether the done was held back.
+// Every steered body call is followed by drainSteeredTurn, whose
 // settleDeferredExternalLiveDone sends the held done if no resumed run starts.
 //
 // Only the live-stream ownership is released now (as the abandoned-turn path
 // of finalizeStreamer does), so the resumed run's streamer can own the live
-// slot; the turn's text rows are already saved. A Stop, a failure or a natural
-// end keeps the immediate done.
+// slot; the turn's text rows are already saved. A Stop, a failure, or an end
+// with nothing queued keeps the immediate done.
 func (al *AgentLoop) deferExternalLiveDoneForResume(ts *turnState, sessionID string, runErr error) bool {
-	if !errors.Is(runErr, context.Canceled) || ts.stopRequested.Load() ||
+	if (runErr != nil && !errors.Is(runErr, context.Canceled)) || ts.stopRequested.Load() ||
 		executionStopPending(ts.opts.executionDisposition) ||
 		al.steering == nil || al.steering.scopeEmpty(sessionID) {
 		return false
@@ -167,16 +169,18 @@ func (al *AgentLoop) deferExternalLiveDoneForResume(ts *turnState, sessionID str
 	return true
 }
 
-// settleDeferredExternalLiveDone sends the done a steer interrupt held back
-// (deferExternalLiveDoneForResume) when the drain ends with that interrupted
-// turn as its last run, i.e. no resumed run followed it (the session was
-// stopped, the queue was taken elsewhere, or the resume was refused). A
-// resumed run that did start ends its own live view, so a superseded turn's
-// held done is never sent. A failure to finalize is returned for the caller to
-// fold into the turn's outcome, as finishExternalLiveView's own caller does.
+// settleDeferredExternalLiveDone sends the done held back by
+// deferExternalLiveDoneForResume when the drain ends with that turn as its
+// last run, i.e. no resumed run followed it (the session was stopped, the
+// queue was taken elsewhere, or the resume was refused). A resumed run that did
+// start ends its own live view, so a superseded turn's held done is never sent.
+// Only an interrupted or successful turn is held back, so the done is sent as
+// not failed and with no error frame. A failure to finalize is returned for
+// the caller to fold into the turn's outcome, as finishExternalLiveView's own
+// caller does.
 func (al *AgentLoop) settleDeferredExternalLiveDone(ctx context.Context, last *turnState) error {
 	if last == nil || !last.externalLiveDoneDeferred.Swap(false) {
 		return nil
 	}
-	return al.finishExternalLiveView(ctx, last, context.Canceled)
+	return al.finishExternalLiveView(ctx, last, nil)
 }

@@ -625,10 +625,10 @@ type turnState struct {
 	// emitted for this turn, so the steered body adds its one terminal error
 	// event only for a failure nothing announced yet (#1895).
 	externalErrorAnnounced atomic.Bool
-	// externalLiveDoneDeferred records that a steer interrupt ended this
-	// external-CLI turn with the person's instruction queued, so its done was
-	// held back: the resumed run's live view continues the working state
-	// (#1895). drainSteeredTurn sends the held done if no resumed run follows
+	// externalLiveDoneDeferred records that this external-CLI turn ended (by
+	// a steer interrupt or naturally) with an instruction queued, so its done
+	// was held back: the resumed run's live view continues the working state
+	// (#1895, #1899 B). drainSteeredTurn sends the held done if no resumed run follows
 	// (settleDeferredExternalLiveDone).
 	externalLiveDoneDeferred atomic.Bool
 

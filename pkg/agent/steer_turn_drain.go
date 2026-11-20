@@ -38,8 +38,8 @@ var continueSteeredTurnBeforeRunTestHook func(sessionID string, generation int)
 // caller performs the completion tail once, after this returns, using the
 // final attempted turn's state/result/error.
 //
-// #1895: an external-CLI turn a steer interrupt ended holds back its done
-// (deferExternalLiveDoneForResume). On every return, the final attempted
+// #1895: an external-CLI turn that ends with an instruction queued holds back
+// its done (deferExternalLiveDoneForResume). On every return, the final attempted
 // turn's held done is sent here, so a drain that resumes nothing still closes
 // that turn's live view; a resumed run's own live view closes the chat
 // otherwise. A done that cannot be finalized fails the turn, exactly as in
