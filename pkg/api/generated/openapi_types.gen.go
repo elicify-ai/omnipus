@@ -14177,21 +14177,6 @@ func (e GetKnowledgeGraphParamsKind) Valid() bool {
 	}
 }
 
-// Defines values for RestoreBackup200JSONResponseBodyStatus.
-const (
-	RestoreBackup200JSONResponseBodyStatusRestored RestoreBackup200JSONResponseBodyStatus = "restored"
-)
-
-// Valid indicates whether the value is a known member of the RestoreBackup200JSONResponseBodyStatus enum.
-func (e RestoreBackup200JSONResponseBodyStatus) Valid() bool {
-	switch e {
-	case RestoreBackup200JSONResponseBodyStatusRestored:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ListSessionsParamsType.
 const (
 	ListSessionsParamsTypeChannel   ListSessionsParamsType = "channel"
@@ -16200,30 +16185,6 @@ type AuditLogUpdateResponse struct {
 type AuthSessionResponse struct {
 	// Username The signed-in account's email address. Since ADR-0008 the account IS the login, so this is an email and not a locally chosen name.
 	Username string `json:"username"`
-}
-
-// BackupCreateResponse Response from POST /api/v1/backup. Returns the path, size, and creation time of the new backup archive.
-type BackupCreateResponse struct {
-	// CreatedAt RFC3339 timestamp when the backup was created.
-	CreatedAt time.Time `json:"created_at"`
-
-	// Path Absolute path to the backup file.
-	Path string `json:"path"`
-
-	// SizeBytes Size of the backup file in bytes.
-	SizeBytes int64 `json:"size_bytes"`
-}
-
-// BackupEntry A single backup archive entry returned by GET /api/v1/backups.
-type BackupEntry struct {
-	// CreatedAt RFC3339 timestamp when the backup was created.
-	CreatedAt time.Time `json:"created_at"`
-
-	// Filename Backup archive filename (e.g. "omnipus-backup-2026-05-16.tar.gz").
-	Filename string `json:"filename"`
-
-	// SizeBytes Archive size in bytes.
-	SizeBytes int64 `json:"size_bytes"`
 }
 
 // BearerToken Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
@@ -25213,12 +25174,6 @@ type RelationWriteResponse struct {
 	Warnings []string `json:"warnings"`
 }
 
-// RestoreBackupRequest Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
-type RestoreBackupRequest struct {
-	// Filename Name of the backup file (without path). Must not contain path separators or traversal sequences. Must end with .tar.gz.
-	Filename string `json:"filename"`
-}
-
 // RetentionConfig Session log retention configuration returned by GET /api/v1/security/retention.
 type RetentionConfig struct {
 	// Disabled When true, retention sweeps are disabled and session logs are kept forever.
@@ -30659,9 +30614,6 @@ type GetProvidersCatalogParams struct {
 	IfNoneMatch *string `json:"If-None-Match,omitempty"`
 }
 
-// RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
-type RestoreBackup200JSONResponseBodyStatus string
-
 // GetRoomHistoryParams defines parameters for GetRoomHistory.
 type GetRoomHistoryParams struct {
 	// BeforeSeq Exclusive entry-sequence boundary, with no default. Omit for the newest page. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, signed int64 overflow and repeated occurrences (even identical ones) are rejected with the exact before_seq syntax 400 documented above. Must not exceed the newest actual entry seq, not the live stream high-water sequence; a cursor beyond that bound returns the distinct cursor-ahead 400 above. Positive values within the bound need not identify an existing entry, including values before the first entry.
@@ -31076,9 +31028,6 @@ type UpdateProviderJSONRequestBody = ProviderUpdateRequest
 
 // PollProviderSignInJSONRequestBody defines body for PollProviderSignIn for application/json ContentType.
 type PollProviderSignInJSONRequestBody = SignInPollRequest
-
-// RestoreBackupJSONRequestBody defines body for RestoreBackup for application/json ContentType.
-type RestoreBackupJSONRequestBody = RestoreBackupRequest
 
 // UpdateRoomMembersJSONRequestBody defines body for UpdateRoomMembers for application/json ContentType.
 type UpdateRoomMembersJSONRequestBody = RoomMembersUpdateRequest

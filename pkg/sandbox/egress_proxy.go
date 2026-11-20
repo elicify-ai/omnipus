@@ -136,11 +136,19 @@ func NewEgressProxy(allowList []string, audit EgressAuditFunc) (*EgressProxy, er
 	if err != nil {
 		return nil, err
 	}
-	// Bind to 127.0.0.1:0 — the kernel assigns a free port. Loopback-only
-	// so the proxy is unreachable from outside the host.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("egress_proxy: listen: %w", err)
+	// #1909: under an enforcing Landlock bind-port list, a listen on
+	// 127.0.0.1:0 is denied (port 0 is never on the list), so the Linux
+	// backend takes this listener BEFORE restrict_self and parks it here.
+	// Without a parked listener (every other platform, permissive mode,
+	// kernels without net rules, or a proxy built before Apply) bind
+	// 127.0.0.1:0 now — the kernel assigns a free port. Loopback-only so
+	// the proxy is unreachable from outside the host.
+	listener := takeReservedEgressListener()
+	if listener == nil {
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, fmt.Errorf("egress_proxy: listen: %w", err)
+		}
 	}
 	p := &EgressProxy{
 		allowList: append([]string(nil), allowList...),
@@ -162,6 +170,25 @@ func NewEgressProxy(allowList []string, audit EgressAuditFunc) (*EgressProxy, er
 	}()
 
 	return p, nil
+}
+
+// reservedEgressListener holds at most one loopback listener taken before
+// the gateway's Landlock bind-port restriction took effect (#1909). The
+// first NewEgressProxy after Apply — the boot-time Tier 2/3 proxy — consumes
+// it. Guarded by reservedEgressListenerMu.
+var (
+	reservedEgressListenerMu sync.Mutex
+	reservedEgressListener   net.Listener
+)
+
+// takeReservedEgressListener hands over the parked listener, or nil when
+// none is parked. Ownership moves to the caller.
+func takeReservedEgressListener() net.Listener {
+	reservedEgressListenerMu.Lock()
+	defer reservedEgressListenerMu.Unlock()
+	l := reservedEgressListener
+	reservedEgressListener = nil
+	return l
 }
 
 // Addr returns the loopback address the proxy is bound to (e.g.

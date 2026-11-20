@@ -80,7 +80,7 @@ tags:
 - name: Agents
   description: Agent management endpoints
 - name: Settings
-  description: Credentials, backup/restore, and storage management
+  description: Credentials and storage management
 - name: Workspaces
   description: Workspace management — create, list, update, delete, and session linking.
 - name: Tasks
@@ -1772,8 +1772,6 @@ components:
       $ref: ./components/schemas/DevicePaired.yaml
     DevicesResponse:
       $ref: ./components/schemas/DevicesResponse.yaml
-    BackupEntry:
-      $ref: ./components/schemas/BackupEntry.yaml
     StorageStats:
       $ref: ./components/schemas/StorageStats.yaml
     AuditLogToggleRequest:
@@ -1900,8 +1898,6 @@ components:
       $ref: ./components/schemas/MailboxRemovalResult.yaml
     MailboxCleanupRequest:
       $ref: ./components/schemas/MailboxCleanupRequest.yaml
-    BackupCreateResponse:
-      $ref: ./components/schemas/BackupCreateResponse.yaml
     PackageManifest:
       $ref: ./components/schemas/PackageManifest.yaml
     PackageExportRequest:
@@ -1986,8 +1982,6 @@ components:
       $ref: ./components/schemas/CredentialSetRequest.yaml
     CredentialRotateRequest:
       $ref: ./components/schemas/CredentialRotateRequest.yaml
-    RestoreBackupRequest:
-      $ref: ./components/schemas/RestoreBackupRequest.yaml
     BearerToken:
       $ref: ./components/schemas/BearerToken.yaml
     ChannelConfigureRequest:
@@ -6780,127 +6774,6 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '503':
           description: Credential store locked.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /backup:
-    post:
-      operationId: createBackup
-      summary: Create a backup archive
-      description: 'Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories. The archive is written atomically to ~/.omnipus/backups/.
-
-        '
-      tags:
-      - Settings
-      responses:
-        '200':
-          description: Backup created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BackupCreateResponse'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '405':
-          description: Method not allowed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /backups:
-    get:
-      operationId: listBackups
-      summary: List backup archives
-      description: 'Lists all .tar.gz files in ~/.omnipus/backups/ with filename, size, and creation time. Returns an empty array when no backups exist.
-
-        '
-      tags:
-      - Settings
-      responses:
-        '200':
-          description: List of backup archive entries.
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  required:
-                  - filename
-                  - size_bytes
-                  - created_at
-                  properties:
-                    filename:
-                      type: string
-                      example: backup-20260516T103000Z.tar.gz
-                    size_bytes:
-                      type: integer
-                      format: int64
-                      minimum: 0
-                      example: 1048576
-                    created_at:
-                      type: string
-                      format: date-time
-                      example: '2026-05-16T10:30:00Z'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '405':
-          description: Method not allowed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /restore:
-    post:
-      operationId: restoreBackup
-      summary: Restore from a backup archive
-      description: 'Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
-
-        '
-      tags:
-      - Settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RestoreBackupRequest'
-      responses:
-        '200':
-          description: Backup restored.
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                - status
-                - filename
-                properties:
-                  status:
-                    type: string
-                    enum:
-                    - restored
-                    example: restored
-                  filename:
-                    type: string
-                    example: backup-20260516T103000Z.tar.gz
-        '400':
-          description: Invalid filename (path traversal, missing .tar.gz).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '404':
-          description: Backup file not found.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          description: Filename field is required.
           content:
             application/json:
               schema:
