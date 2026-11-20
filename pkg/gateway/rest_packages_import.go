@@ -178,6 +178,9 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 	if msg, field := effortBodyRefusal(raw); msg != "" {
 		return nil, notCreatable(field, msg)
 	}
+	if err := refuseExternalUnsupportedFields(raw, el.SourceID); err != nil {
+		return nil, err
+	}
 	mapped, err := omnpkg.MapAgentForImport(raw, el.SourceID, packageImportTarget{a: a})
 	if err != nil {
 		return nil, err
@@ -219,6 +222,68 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 		AgentMD:  string(payload[packageAgentPath(el.SourceID, omnpkg.AgentInstructionsNm)]),
 		Warnings: warningsFromEngine(mapped.Warnings),
 	}, nil
+}
+
+// refuseExternalUnsupportedFields is FR-047 (amended): an external worker's
+// record is checked with create_agent's runtime rule
+// (agentmutation.ValidateFields) on the raw record, before mapping, so the
+// verdict does not depend on which skills or connectors this install has.
+// The fields are listed in a fixed order; the first refused one is named.
+// tools.builtin.policies is not checked: the mapping replaces it with the
+// target's worker seed. A native record passes unchecked.
+func refuseExternalUnsupportedFields(raw []byte, sourceID string) error {
+	wrongType := func() error {
+		return packageErr(omnpkg.CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
+	}
+	// Decide the kind from the type-deciding fields only, so a native record
+	// reaches the mapping exactly as before (ValidateElements has already
+	// refused those fields when they have the wrong JSON type).
+	var top map[string]any
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return wrongType()
+	}
+	agentType, _ := top["type"].(string)
+	probe := config.AgentConfig{Type: config.AgentType(agentType)}
+	if sub, ok := top["subagents"].(map[string]any); ok {
+		if exec, ok := sub["executor"].(map[string]any); ok {
+			execKind, _ := exec["kind"].(string)
+			probe.Subagents = &config.SubagentsConfig{Executor: &config.ExecutorConfig{Kind: config.ExecutorKind(execKind)}}
+		}
+	}
+	if !probe.IsExternalCLIWorker() {
+		return nil
+	}
+	var rec config.AgentConfig
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return wrongType()
+	}
+	var supplied []string
+	add := func(present bool, field string) {
+		if present {
+			supplied = append(supplied, field)
+		}
+	}
+	add(len(rec.Skills) > 0, "skills")
+	add(len(rec.FallbackModels) > 0, "fallback_models")
+	add(rec.ModelParams != nil, "model_params")
+	add(rec.ReasoningEffort != "", "reasoning_effort")
+	add(rec.Tools != nil && len(rec.Tools.MCP.Servers) > 0, "mcp_servers")
+	add(rec.Voice != "", "voice")
+	add(rec.MemoryEnabled != nil, "memory_enabled")
+	add(rec.ContextWindowOverride != nil, "context_window_override")
+	if len(supplied) == 0 {
+		return nil
+	}
+	err := agentmutation.ValidateFields(probe, supplied)
+	if err == nil {
+		return nil
+	}
+	field := ""
+	var fe *agentmutation.FieldError
+	if errors.As(err, &fe) && len(fe.Fields) > 0 {
+		field = fe.Fields[0]
+	}
+	return notCreatable(field, err.Error())
 }
 
 func notCreatable(field, reason string) *omnpkg.PackageError {

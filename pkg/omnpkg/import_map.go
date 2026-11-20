@@ -109,6 +109,15 @@ func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*Ag
 		// Listed for every external worker: export always removes these
 		// values, so they must be entered again (FR-033, FR-043).
 		im.warn(WarnRuntimeSettingsRemoved, runtimeSettingsRemovedMessage, nil)
+		// The create path gives an external worker the target's worker seed,
+		// as REST create and create_agent do; the package's policies are not
+		// an input (architect ruling 4B). Not a drop: a genuine export only
+		// ever holds the source's seed.
+		if tools, isMap := rec["tools"].(map[string]any); isMap {
+			if builtin, isMap := tools["builtin"].(map[string]any); isMap {
+				delete(builtin, "policies")
+			}
+		}
 	}
 	im.mapSkills(rec)
 	im.mapModel(rec)
