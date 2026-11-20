@@ -56,6 +56,9 @@ import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 export const PERFORMANCE_QUERY_KEY = ['performance-settings'] as const
 
 const PHYSICAL_THREAD_CEILING = 2000
+// #904: the server may have lowered agents but its list could not be read.
+const UNKNOWN_LOWERED_TEXT =
+  "Some agents' own tool-call limits may have been lowered, but the server's list could not be read — reload the page to see which."
 const LOWERED_TOAST_DURATION_MS = 10_000
 
 type Key =
@@ -104,7 +107,7 @@ function validate(key: Key, v: string | boolean): string | null {
       if (v.trim() === '') return null
       return n !== null && n >= 1 ? null : 'Enter a whole number of 1 or more, or leave it empty for no fixed limit.'
     case 'goal_max_rounds':
-      return n !== null && n >= 1 ? null : 'Enter a whole number of 1 or more.'
+      return n !== null && n >= 1 ? null : 'Enter a whole number of at least 1.'
     case 'goal_reminder_quiet_seconds':
       return n !== null && n >= 30 && n <= 3600 ? null : 'Enter a whole number from 30 to 3,600.'
     case 'goal_stalled_checkin_minutes':
@@ -186,6 +189,9 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
   const [known, setKnown] = useState<Partial<Values>>({})
   const [lowering, setLowering] = useState<LoweringState | null>(null)
   const [loweredSummary, setLoweredSummary] = useState<string | null>(null)
+  // A Save's own refusal of the tool-call limit, shown under that field: a
+  // preview that could not be read, or a refused write (FR-020 outcome 3).
+  const [toolIterError, setToolIterError] = useState<string | null>(null)
   const confirmedRef = useRef<{ value: number; agents: MaxToolIterationAgentChange[] } | null>(null)
   const sentRef = useRef<{ keys: Key[]; values: Values } | null>(null)
 
@@ -206,6 +212,7 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
   }, [drafts, server, value])
 
   const setDraft = (k: Key, v: string | boolean) => {
+    if (k === 'max_tool_iterations') setToolIterError(null)
     setDrafts((prev) => {
       const next = { ...prev }
       if (same(v, saved(k))) delete next[k]
@@ -218,6 +225,7 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
     new Promise<boolean>((resolve) => setLowering({ value, agents, listChanged, resolve }))
 
   const preSave = async (): Promise<boolean> => {
+    setToolIterError(null)
     if (!changed.includes('max_tool_iterations')) return true
     const next = Number(String(value('max_tool_iterations')).trim())
     const inForce = data?.max_tool_iterations
@@ -230,7 +238,9 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
     try {
       agents = (await fetchMaxToolIterationsLoweringPreview(next)).agents
     } catch (err) {
-      addToast({ variant: 'error', message: getErrorMessage(err, 'The agents this lowers could not be checked. Try again.') })
+      // Nothing is saved when the affected agents cannot be listed; the
+      // reason shows under the field (tool-iteration-limit spec, UI states).
+      setToolIterError(`Could not check which agents this would affect, so nothing was saved: ${getErrorMessage(err, 'no answer')}`)
       return false
     }
     if (agents.length === 0) {
@@ -271,8 +281,12 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
       if (isPerformanceReloadFailed(err)) {
         // Stored in config.json but not in force yet: saved, not in use.
         if (err.loweredAgents.length) reportLowered(err.loweredAgents)
+        else if (err.loweredUnknown) setLoweredSummary(UNKNOWN_LOWERED_TEXT)
         return { ok: true, status: 200, json: async () => ({ pending_apply: { stage: err.stage ?? 'refresh' } }) }
       }
+      // FR-020 outcome 3: the server's own reason shows under the field it
+      // refused, besides the Save bar's not-saved line.
+      if ('max_tool_iterations' in body) setToolIterError(getErrorMessage(err, 'The tool-call limit was not saved.'))
       return toWriteResponse(() => Promise.reject(err))
     }
   }
@@ -331,7 +345,14 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
 
   // ── View ───────────────────────────────────────────────────────────────
   const numberRow = (k: Key, description: React.ReactNode, opts: { unit?: string; placeholder?: string; testId: string; disabled?: boolean; allowsEmpty?: boolean }) => (
-    <FormRow key={k} label={LABELS[k]} description={description} error={errors[k]} password fieldId={`settings-limits-${k}`}>
+    <FormRow
+      key={k}
+      label={LABELS[k]}
+      description={description}
+      error={errors[k] ?? (k === 'max_tool_iterations' ? toolIterError : undefined)}
+      password
+      fieldId={`settings-limits-${k}`}
+    >
       {({ id, describedBy, invalid, fieldId }) => (
         <div className="flex items-center gap-[var(--space-2)]">
           <Input

@@ -204,17 +204,12 @@ export interface AutoApproveDraft { // not-wire-format: React props from Protect
 }
 
 /**
- * With `draft` (Settings → Protection, Settings redesign #1519 FR-010,
- * FR-025), the switch is a draft on Protection's Save bar and nothing is sent
- * until Save changes. Without it (the legacy view and the story), it saves at
- * once through its own password gate as before.
+ * Auto-approve is a draft on Protection's Save bar (Settings redesign #1519
+ * FR-010, FR-025): nothing is sent until Save changes, which asks for the
+ * password once for the whole Save.
  */
-export function AutoApproveControl({ draft }: { draft?: AutoApproveDraft } = {}) {
-  const { addToast } = useUiStore()
-  const stepUp = useStepUp()
-  const queryClient = useQueryClient()
-
-  const { data: sandboxConfig, isLoading, isError } = useQuery({
+export function AutoApproveControl({ draft }: { draft: AutoApproveDraft }) {
+  const { isLoading, isError } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
   })
@@ -224,50 +219,6 @@ export function AutoApproveControl({ draft }: { draft?: AutoApproveDraft } = {})
   })
   const kernelSandboxEnforcing = sandboxStatus?.kernel_sandbox_active === true
   const noSandboxCaution = sandboxStatus !== undefined && !kernelSandboxEnforcing
-
-  const { mutateAsync: saveAsync, isPending: isSaving } = useMutation({
-    mutationFn: (vars: { next: boolean; token?: string }) =>
-      updateSandboxConfig({ auto_approve: vars.next }, vars.token),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
-      queryClient.invalidateQueries({ queryKey: ['sandbox-status'] })
-    },
-    onError: (err: unknown) => {
-      addToast({ message: getErrorMessage(err, 'Could not change Auto-approve'), variant: 'error' })
-    },
-  })
-
-  // Founder feedback (2026-09-24): the old copy put the full grouped
-  // ask-list, the workspace path rule, an example and the Windows caveat
-  // into one long paragraph here too — "a huge blob of text". The
-  // confirmation stays short (at most 2-3 plain sentences) and points at
-  // the SAME collapsed "Always asks when set to Ask" list the card itself
-  // shows, rather than restating all 28 tools inline. `ConfirmDialog`'s
-  // `description` renders inside an `AlertDialogDescription`, which Radix
-  // renders as a `<p>` — a list/disclosure element cannot legally nest
-  // inside a `<p>`, which is why this is a pointer to the list, not the
-  // list itself.
-  //
-  // Founder decision (2026-09-24, UAT defect D-02): the pointer sentence
-  // used to say these tools "always still ask" — false for a tool on
-  // Allow, which several of these are by default. Reworded to name the
-  // actual condition: they never skip the prompt once set to Ask.
-  function requestChange(next: boolean) {
-    if (isSaving) return
-    void stepUp
-      .gate((token) => saveAsync({ next, token }), {
-        title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
-        body: next
-          ? 'Tools set to “ask” will run without a prompt when it’s safe — reading, listing and searching run anywhere except Omnipus’s protected files, and writing runs without a prompt only inside your workspace and the folders mounted into it. See “Always asks when set to Ask” on this card for the short list of things that never skip the prompt once set to Ask. Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows.'
-          : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
-        confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
-      })
-      .catch((err: unknown) => {
-        // A cancelled gate sent nothing — stay silent. A real failure already
-        // toasted once via saveAsync's own onError; do not toast twice.
-        if (isReAuthCancelled(err)) return
-      })
-  }
 
   if (isLoading) {
     return (
@@ -287,8 +238,6 @@ export function AutoApproveControl({ draft }: { draft?: AutoApproveDraft } = {})
       </Card>
     )
   }
-
-  const enabled = sandboxConfig?.auto_approve === true
 
   // #920 founder decision D3 (2026-09-27): the summary no longer says tools
   // "stay inside your workspace" — under Auto, read_file, list_directory and
@@ -314,15 +263,14 @@ export function AutoApproveControl({ draft }: { draft?: AutoApproveDraft } = {})
           </p>
         </div>
         <Switch
-          checked={draft ? draft.value : enabled}
-          disabled={draft ? false : isSaving}
-          onCheckedChange={draft ? draft.onChange : requestChange}
+          checked={draft.value}
+          onCheckedChange={draft.onChange}
           aria-label="Auto-approve"
           data-testid="auto-approve-global-switch"
-          data-settings-field={draft?.fieldId}
+          data-settings-field={draft.fieldId}
         />
       </div>
-      {draft?.message && (
+      {draft.message && (
         <p
           role={draft.message.tone === 'error' ? 'alert' : undefined}
           className={cn(
@@ -345,12 +293,6 @@ export function AutoApproveControl({ draft }: { draft?: AutoApproveDraft } = {})
         Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and
         commands an operator rule allows.
       </p>
-
-      {/* This control's OWN useStepUp() instance — its dialogs must be
-          mounted here, not assumed to come from SecuritySection's separate
-          credential-vault stepUp instance (each useStepUp() call owns
-          independent open/close state). */}
-      {stepUp.dialogs}
     </Card>
   )
 }
@@ -412,6 +354,8 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   const { data: sandboxConfig } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
+    // Read here only on Protection; elsewhere the control's own read fills
+    // the same cache entry, so no extra request is sent.
     enabled: view === 'protection',
   })
   // Defense level is a draft on the same Save bar too (FR-010): Save sends it
@@ -419,6 +363,8 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   const { data: promptGuard } = useQuery({
     queryKey: ['prompt-guard-k'],
     queryFn: fetchPromptGuardLevel,
+    // Read here only on Protection; elsewhere the control's own read fills
+    // the same cache entry, so no extra request is sent.
     enabled: view === 'protection',
   })
 
@@ -500,26 +446,21 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   })
   const autoApproveField = rateLimitFields[0]
   const promptGuardField = rateLimitFields[1]
-  const autoApproveDraft: AutoApproveDraft | undefined =
-    view === 'protection'
-      ? {
-          value: rateLimitState.value('auto_approve') === true,
-          onChange: (next) => rateLimitState.setDraft('auto_approve', next),
-          message: rateLimitState.message('auto_approve'),
-          fieldId: fieldDomId('protection', 'auto_approve'),
-        }
-      : undefined
-  const promptGuardDraft: PromptGuardDraft | undefined =
-    view === 'protection'
-      ? {
-          // Null only before the level is read; the control then shows its
-          // own loading or error state instead of the choices.
-          value: rateLimitState.value(PROMPT_GUARD_KEY) as PromptInjectionLevel,
-          onChange: (next) => rateLimitState.setDraft(PROMPT_GUARD_KEY, next),
-          message: rateLimitState.message(PROMPT_GUARD_KEY),
-          fieldId: fieldDomId('protection', PROMPT_GUARD_KEY),
-        }
-      : undefined
+  // FR-010: wherever these controls show, they are drafts on this Save bar.
+  const autoApproveDraft: AutoApproveDraft = {
+    value: rateLimitState.value('auto_approve') === true,
+    onChange: (next) => rateLimitState.setDraft('auto_approve', next),
+    message: rateLimitState.message('auto_approve'),
+    fieldId: fieldDomId('protection', 'auto_approve'),
+  }
+  const promptGuardDraft: PromptGuardDraft = {
+    // Null only before the level is read; the control then shows its own
+    // loading or error state instead of the choices.
+    value: rateLimitState.value(PROMPT_GUARD_KEY) as PromptInjectionLevel,
+    onChange: (next) => rateLimitState.setDraft(PROMPT_GUARD_KEY, next),
+    message: rateLimitState.message(PROMPT_GUARD_KEY),
+    fieldId: fieldDomId('protection', PROMPT_GUARD_KEY),
+  }
 
   // Audit log dialog state
   const [auditLogOpen, setAuditLogOpen] = useState(false)
@@ -746,7 +687,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
               Prompt Injection Defense
             </p>
-            <PromptGuardSection />
+            <PromptGuardSection draft={promptGuardDraft} />
           </section>
 
           <Separator />

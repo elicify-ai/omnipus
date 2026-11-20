@@ -1,13 +1,10 @@
-import { useState, useEffect } from 'react'
 import { ReadErrorCallout } from './ReadErrorCallout'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Shield } from '@phosphor-icons/react'
-import { fetchPromptGuardLevel, updatePromptGuardLevel, getErrorMessage } from '@/lib/api'
+import { fetchPromptGuardLevel } from '@/lib/api'
 import type { PromptInjectionLevel } from '@/lib/api'
-import { useUiStore } from '@/store/ui'
 import { Card } from '@/components/ui/card'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { SaveStatus, useSaveStatus } from './SaveStatus'
 import type { FieldMessage } from './useSaveBar'
 import { cn } from '@/lib/utils'
 
@@ -59,55 +56,16 @@ export interface PromptGuardDraft { // not-wire-format: React props from Protect
 }
 
 /**
- * With `draft` (Settings → Protection, Settings redesign #1519 FR-010), the
- * level is a draft on Protection's Save bar and nothing is sent until Save
- * changes; the Save bar reports the outcome and any restart. Without it (the
- * legacy view), it saves at once as before.
+ * The Defense level is a draft on Protection's Save bar (Settings redesign
+ * #1519 FR-010): choosing a level sends nothing; Save changes sends it, and
+ * the Save bar reports the outcome and any restart.
  */
-export function PromptGuardSection({ draft }: { draft?: PromptGuardDraft } = {}): React.ReactElement {
-  const { addToast } = useUiStore()
-  const queryClient = useQueryClient()
-
-  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
+export function PromptGuardSection({ draft }: { draft: PromptGuardDraft }): React.ReactElement {
+  const { isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['prompt-guard-k'],
     queryFn: fetchPromptGuardLevel,
   })
-
-  const [selected, setSelected] = useState<PromptInjectionLevel>('medium')
-  const [restartRequired, setRestartRequired] = useState(false)
-
-  const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
-
-  useEffect(() => {
-    if (!data) return
-    setSelected(data.level)
-  }, [data])
-
-  const { mutate: save } = useMutation({
-    mutationFn: (level: PromptInjectionLevel) => updatePromptGuardLevel(level),
-    onMutate: () => setSaveState('saving'),
-    onSuccess: (resp) => {
-      setSaveState('saved')
-      if (resp.requires_restart) setRestartRequired(true)
-      queryClient.setQueryData(['prompt-guard-k'], { level: resp.applied_level })
-    },
-    onError: (err: Error) => {
-      setSaveState('error')
-      const msg = getErrorMessage(err, 'Save failed')
-      setErrorMessage(msg)
-      addToast({ message: msg, variant: 'error' })
-    },
-  })
-
-  function handleChange(level: PromptInjectionLevel) {
-    if (draft) {
-      draft.onChange(level)
-      return
-    }
-    setSelected(level)
-    save(level)
-  }
-  const shown = draft ? draft.value : selected
+  const shown = draft.value
 
   if (isLoading) return <Skeleton />
 
@@ -129,13 +87,7 @@ export function PromptGuardSection({ draft }: { draft?: PromptGuardDraft } = {})
         <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-[var(--space-1)]">
           <Shield size={14} className="text-[var(--color-muted)]" />
           Prompt Injection Defense
-          {!draft && restartRequired && (
-            <span className="ml-[var(--space-2)] text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-[var(--space-1)] py-[var(--space-0-5)]">
-              Restart required
-            </span>
-          )}
         </h3>
-        {!draft && <SaveStatus state={saveState} errorMessage={errorMessage} />}
       </div>
 
       <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
@@ -148,8 +100,8 @@ export function PromptGuardSection({ draft }: { draft?: PromptGuardDraft } = {})
           orientation="vertical"
           aria-label="Prompt injection defense level"
           value={shown}
-          onValueChange={(value) => handleChange(value as PromptInjectionLevel)}
-          data-settings-field={draft?.fieldId}
+          onValueChange={(value) => draft.onChange(value as PromptInjectionLevel)}
+          data-settings-field={draft.fieldId}
         >
           {LEVELS.map((lvl) => {
             const isActive = shown === lvl.value
@@ -190,7 +142,7 @@ export function PromptGuardSection({ draft }: { draft?: PromptGuardDraft } = {})
             )
           })}
         </RadioGroup>
-        {draft?.message && (
+        {draft.message && (
           <p
             role={draft.message.tone === 'error' ? 'alert' : undefined}
             className={cn(
