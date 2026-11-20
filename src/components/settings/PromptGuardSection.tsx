@@ -10,25 +10,11 @@ import { cn } from '@/lib/utils'
 
 // ── Level metadata ────────────────────────────────────────────────────────────
 
+// Wording from the approved wireframe (app.js, "Prompt injection defense").
 const LEVELS: { value: PromptInjectionLevel; label: string; subtitle: string }[] = [
-  {
-    value: 'low',
-    label: 'Low',
-    subtitle:
-      'Minimal sanitization. Tool output reaches the model with only basic cleanup.',
-  },
-  {
-    value: 'medium',
-    label: 'Medium',
-    subtitle:
-      'Balanced sanitization. Strips common prompt-injection patterns from tool output. (Default.)',
-  },
-  {
-    value: 'high',
-    label: 'High',
-    subtitle:
-      'Aggressive sanitization. Strips more patterns — may clip legitimate content.',
-  },
+  { value: 'low', label: 'Low', subtitle: 'Fewest false alarms.' },
+  { value: 'medium', label: 'Medium (default)', subtitle: 'Balanced.' },
+  { value: 'high', label: 'High', subtitle: 'Strictest; some harmless text may be blocked.' },
 ]
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────

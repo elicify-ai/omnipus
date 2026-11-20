@@ -176,10 +176,9 @@ export function ReAuthDialog({
           <Button
             size="sm"
             onClick={handleSubmit}
-            // The Settings Save prompt (items given) refuses an empty password
-            // inline with a message (D-11 row 3); elsewhere Confirm stays
-            // disabled until something is typed.
-            disabled={submitting || (!items?.length && !password.trim())}
+            // Confirm stays pressable: an empty password is refused inline
+            // with a message and focus in the field (D-11 row 3, FR-029).
+            disabled={submitting}
             data-testid="reauth-confirm"
           >
             {submitting ? (
