@@ -35,7 +35,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
-import { SaveBarPanel, SettingRow } from './SaveBar'
+import { PasswordBadge, SaveBarPanel, SettingRow } from './SaveBar'
 import { toWriteResponse } from './saveOutcome'
 import { useSaveBar, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -280,7 +280,10 @@ export function AutoApproveControl() {
     <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between gap-[var(--space-3)]">
         <div>
-          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
+          <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+            Auto-approve
+            <PasswordBadge />
+          </p>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Tools set to &ldquo;Ask&rdquo; run without a prompt when it&rsquo;s safe: reading, listing and
             searching run anywhere except Omnipus&rsquo;s protected files, and writing runs without a prompt

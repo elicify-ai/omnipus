@@ -55,6 +55,7 @@ import { isBypassUnavailable } from '@/hooks/useGodModeLiveStatus'
 import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
+import { PasswordBadge } from './SaveBar'
 
 export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolean } = {}) {
   const { addToast } = useUiStore()
@@ -263,7 +264,10 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
                 // above: S1 (armed, pending restart) must not render as calm.
                 className={persisted ? 'text-[var(--color-error)]' : 'text-[var(--color-warning)]'}
               />
-              <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">God-mode</p>
+              <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
+                God-mode
+                <PasswordBadge />
+              </p>
             </div>
             <div id="god-mode-consequence-copy">
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">

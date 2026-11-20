@@ -62,6 +62,17 @@ export function LimitsSection({ prefillOverride }: LimitsSectionProps) {
     saveRef.current = save
   }, [save])
 
+  // FR-066: a group whose read failed opens, so its error and Retry show
+  // without a click; the other groups keep working.
+  const contextFailed = context.loadFailed
+  const performanceFailed = performance.loadFailed
+  useEffect(() => {
+    if (contextFailed) setOpen((o) => ({ ...o, context: true, overrides: true }))
+  }, [contextFailed])
+  useEffect(() => {
+    if (performanceFailed) setOpen((o) => ({ ...o, agents: true }))
+  }, [performanceFailed])
+
   const toggle = (g: GroupId) => (expanded: boolean) => setOpen((o) => ({ ...o, [g]: expanded }))
 
   return (
