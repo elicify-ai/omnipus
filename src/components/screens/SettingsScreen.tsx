@@ -33,7 +33,7 @@ import {
   type SettingsSectionId,
 } from '@/components/settings/settingsSections'
 import { SettingsSectionBody } from '@/components/settings/SettingsSectionBody'
-import { RestartBanner } from '@/components/settings/RestartBanner'
+import { RestartBanner, toBannerEntries } from '@/components/settings/RestartBanner'
 
 export interface SettingsScreenProps { // not-wire-format: React props from the route's validated search params
   /** The open section, already resolved from `?tab=` (FR-003). */
@@ -235,6 +235,11 @@ export function SettingsScreen({
                     onClick={() => {
                       navIntent.current = 'search'
                       stayFocus.current = searchInput()
+                      // FR-014: Stay from a search result returns to the
+                      // search field. The leave prompt gives focus back to
+                      // whatever had it when it opened, so hand focus to the
+                      // field first when the prompt is about to ask.
+                      if (draftCount > 0) stayFocus.current?.focus()
                       if (r.section === section) {
                         setQuery('')
                         setPhoneShowsSection(true)
@@ -366,10 +371,10 @@ export function SettingsScreen({
                 </div>
 
                 <RestartBanner
-                  entries={pending.entries}
-                  isError={pending.isError}
+                  entries={toBannerEntries(pending.entries)}
+                  error={pending.isError}
                   onRetry={() => void pending.refetch()}
-                  onRestart={() => {
+                  onRestartNow={() => {
                     setRestartLabels(null)
                     setRestartOpen(true)
                   }}

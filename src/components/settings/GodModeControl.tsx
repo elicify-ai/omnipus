@@ -43,6 +43,7 @@
  * the restart modal never opens on disable.
  */
 
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useState, useEffect } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -71,7 +72,7 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
   // useGodModeLiveStatus, which shares it.)
   const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
 
-  const { data: godMode, isLoading: godModeIsLoading, isError, error } = useQuery({
+  const { data: godMode, isLoading: godModeIsLoading, isError, error, refetch: refetchGodMode, isFetching: godModeFetching } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
     enabled: appStateResolved && !devModeBypassKnown,
@@ -295,13 +296,14 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
                 </p>
               )}
               {isError && !bypassUnavailable && (
-                <p
+                <ReadErrorCallout
+                  title="Failed to load the God Mode status"
+                  error={error}
+                  onRetry={() => void refetchGodMode()}
+                  retrying={godModeFetching}
+                  blocksSaving={false}
                   data-testid="god-mode-fetch-error-note"
-                  className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
-                >
-                  Could not fetch god-mode status — gateway may be offline. The state shown here may
-                  be stale.
-                </p>
+                />
               )}
               {knownUnsupported && (
                 <p

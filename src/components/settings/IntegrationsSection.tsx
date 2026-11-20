@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckCircle,
@@ -58,6 +59,9 @@ export function IntegrationsSection() {
     data,
     isLoading,
     isError,
+    error: integrationsError,
+    refetch: refetchIntegrations,
+    isFetching: integrationsFetching,
   } = useQuery({
     queryKey: ['integrations'],
     queryFn: fetchIntegrationProviders,
@@ -478,7 +482,13 @@ export function IntegrationsSection() {
       </div>
 
       {isError && (
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load integrations. Please try again.</p>
+        <ReadErrorCallout
+          title="Failed to load integrations"
+          error={integrationsError}
+          onRetry={() => void refetchIntegrations()}
+          retrying={integrationsFetching}
+          data-testid="integrations-load-error"
+        />
       )}
 
       {isLoading ? (

@@ -22,15 +22,15 @@
 // X-08 (ADR-068): `?provider=&model=` on the Settings route pre-fills a new
 // override row (or focuses the existing one) so the "No context length"
 // pointer lands on the right row.
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, X } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
-import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
-import { getContextSettings, putContextSettings, getErrorMessage } from '@/lib/api'
+import { getContextSettings, putContextSettings } from '@/lib/api'
 import type { ContextSettings, ContextSettingsUpdate, ContextModelOverride, ContextWindowSource } from '@/lib/api'
 import { FormRow, SaveBarPanel, SaveOutcomeLine } from './SaveBar'
 import { toWriteResponse, type WriteResponse } from './saveOutcome'
@@ -407,13 +407,13 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
     )
   } else if (isError || !form) {
     status = (
-      <Callout variant="error" data-testid="context-load-error">
-        <CalloutTitle>Context and tool results could not be loaded</CalloutTitle>
-        <CalloutDescription>{getErrorMessage(error, 'The gateway did not answer.')} Nothing here can be saved until it loads.</CalloutDescription>
-        <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
-          Retry
-        </Button>
-      </Callout>
+      <ReadErrorCallout
+        title="Context and tool results could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="context-load-error"
+      />
     )
   }
 

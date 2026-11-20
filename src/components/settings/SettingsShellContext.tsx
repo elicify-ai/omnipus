@@ -27,6 +27,8 @@ export interface SettingsShellApi { // not-wire-format: React context contract i
   /** True while the Save bar shows (FR-017: Save changes is the only gold button). */
   saveBarVisible: boolean
   setSaveBarVisible: (owner: string, visible: boolean) => void
+  /** True only for the default value: no Settings shell around this Save bar. */
+  standalone?: boolean
 }
 
 const noop = () => {}
@@ -39,6 +41,7 @@ export const SettingsShellContext = createContext<SettingsShellApi>({
   requestPassword: undefined,
   saveBarVisible: false,
   setSaveBarVisible: noop,
+  standalone: true,
 })
 
 export function useSettingsShell(): SettingsShellApi {

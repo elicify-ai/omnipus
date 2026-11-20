@@ -37,6 +37,7 @@ import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { PasswordBadge, SaveBarPanel, SettingRow } from './SaveBar'
 import { toWriteResponse } from './saveOutcome'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { fieldDomId, useSaveBar, type FieldMessage, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Switch } from '@/components/ui/switch'
@@ -388,7 +389,13 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
   // #1882: the per-agent limits live behind their own route. PUT /config
   // refuses `security.*` by design, so they are read and saved there only.
-  const { data: rateLimits, isError: rateLimitsError } = useQuery({
+  const {
+    data: rateLimits,
+    isError: rateLimitsError,
+    error: rateLimitsReadError,
+    refetch: refetchRateLimits,
+    isFetching: rateLimitsFetching,
+  } = useQuery({
     queryKey: ['security', 'rate-limits'],
     queryFn: fetchRateLimits,
     retry: false,
@@ -582,9 +589,16 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   const rateLimitsCard = (
   <Card className="px-[var(--space-3)]">
     {rateLimitsError && (
-      <p className="pt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-text-error)]">
-        The current limits could not be loaded, so they cannot be changed here. Reload the page to try again.
-      </p>
+      <div className="pt-[var(--space-2)]">
+      <ReadErrorCallout
+        title="The current limits could not be loaded"
+        action="Press Retry, or reload the page if it keeps failing."
+        error={rateLimitsReadError}
+        onRetry={() => void refetchRateLimits()}
+        retrying={rateLimitsFetching}
+        data-testid="rate-limits-load-error"
+      />
+      </div>
     )}
     {rateLimitFields.filter((f) => f !== autoApproveField).map((f) => (
       <SettingRow key={f.key} state={rateLimitState} field={f} />
@@ -752,7 +766,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
           <Callout variant="info" data-testid="protection-moved-permissions">
             <CalloutTitle>Tool and skill permissions moved</CalloutTitle>
             <CalloutDescription>
-              Allow, Ask or Deny for each tool, and whether unverified skills may load, are set in Skills &amp; Tools.
+              Allow, Ask or Deny for each tool, and whether unverified skills may load, are set on that page now.
               An agent can still be stricter on its own profile.
             </CalloutDescription>
             <CalloutActions>

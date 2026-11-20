@@ -13,10 +13,13 @@
 //     useSaveBar. Sections with richer controls use useSaveBar, SettingRow and
 //     SaveBarPanel directly.
 
+import { useId } from 'react'
+import { useBlocker, useRouter } from '@tanstack/react-router'
 import { ArrowClockwise, Lock, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Field } from '@/components/ui/field'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
@@ -50,6 +53,51 @@ export function PasswordBadge() {
   )
 }
 
+interface SettingFieldControl {
+  id: string
+  'aria-describedby'?: string
+  'aria-invalid'?: boolean
+}
+
+/**
+ * One labelled setting. Same layout and ids as the catalogued Field, but the
+ * Needs restart and Password badges (FR-025, FR-037) sit next to the label,
+ * not inside it, so the control's name is the setting's name alone.
+ */
+function SettingField({
+  label,
+  restart,
+  password,
+  description,
+  error,
+  children,
+}: {
+  label: string
+  restart?: boolean
+  password?: boolean
+  description?: React.ReactNode
+  error?: React.ReactNode
+  children: (control: SettingFieldControl) => React.ReactNode
+}) {
+  const generatedId = useId()
+  const controlId = `${generatedId}-control`
+  const descriptionId = `${generatedId}-description`
+  const errorId = `${generatedId}-error`
+  const describedBy = [description ? descriptionId : null, error ? errorId : null].filter(Boolean).join(' ') || undefined
+  return (
+    <div className="space-y-[var(--space-2)]">
+      <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+        <Label htmlFor={controlId}>{label}</Label>
+        {restart && <RestartBadge />}
+        {password && <PasswordBadge />}
+      </div>
+      {children({ id: controlId, 'aria-describedby': describedBy, 'aria-invalid': error ? true : undefined })}
+      {description && <div id={descriptionId} className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">{description}</div>}
+      {error && <div id={errorId} role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">{error}</div>}
+    </div>
+  )
+}
+
 export function SaveBarPanel({
   visible,
   count,
@@ -65,7 +113,7 @@ export function SaveBarPanel({
   onRetry,
 }: SaveBarPanelProps) {
   if (!visible) return null
-  if (count === 0 && unknownCount === 0) {
+  if (count === 0 && unknownCount === 0 && invalidCount === 0) {
     return (
       <div
         data-testid="settings-save-bar"
@@ -75,7 +123,7 @@ export function SaveBarPanel({
       </div>
     )
   }
-  let headline = plural(count, 'unsaved change', 'unsaved changes')
+  let headline = count > 0 ? plural(count, 'unsaved change', 'unsaved changes') : 'A saved value is out of range'
   let detail: string
   if (unknownCount > 0) {
     headline = `${plural(unknownCount, 'change', 'changes')} may not have been saved`
@@ -144,24 +192,19 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
   const id = fieldDomId(state.section, field.key)
   const value = state.value(field.key)
   const msg = state.message(field.key)
-  const label = (
-    <span className="inline-flex flex-wrap items-center gap-[var(--space-2)]">
-      {field.label}
-      {field.restart && <RestartBadge />}
-      {field.password && <PasswordBadge />}
-    </span>
-  )
   const setValue = (v: SaveBarField['value']) => state.setDraft(field.key, v)
   const disabled = state.isDisabled(field.key)
   return (
     <div className="py-[var(--space-2)]" data-setting-key={field.key}>
-      <Field
-        label={label}
+      <SettingField
+        label={field.label}
+        restart={field.restart}
+        password={field.password}
         description={field.description}
         error={msg?.tone === 'error' ? msg.text : undefined}
       >
         {(cp) => {
-          const controlId = cp.id ?? id
+          const controlId = cp.id
           if (children) {
             return children({ id: controlId, fieldId: id, value, setValue, describedBy: cp['aria-describedby'], invalid: !!cp['aria-invalid'] })
           }
@@ -213,7 +256,7 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
               )
           }
         }}
-      </Field>
+      </SettingField>
       {msg?.tone === 'warning' && (
         <div className="mt-[var(--space-1)] flex items-start gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
           <Warning size={14} aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0" />
@@ -231,15 +274,47 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
 
 export type SaveBarProps = UseSaveBarOptions // not-wire-format: React props
 
+/**
+ * FR-014 for a Save bar outside the Settings shell (the shell asks for the
+ * whole page): leaving through the app with unsaved changes asks first.
+ */
+function StandaloneLeaveGuard({ count }: { count: number }) {
+  const blocker = useBlocker({
+    shouldBlockFn: () => count > 0,
+    withResolver: true,
+    // useSaveBar registers the browser's own prompt while drafts exist.
+    enableBeforeUnload: false,
+  })
+  return (
+    <ConfirmDialog
+      open={blocker.status === 'blocked'}
+      onOpenChange={(open) => {
+        if (!open && blocker.status === 'blocked') blocker.reset()
+      }}
+      title={`Leave without saving ${plural(count, 'change', 'changes')}?`}
+      description={`${plural(count, 'unsaved change', 'unsaved changes')} on this page will be lost.`}
+      cancelLabel="Stay"
+      confirmLabel="Leave"
+      destructive
+      onConfirm={() => {
+        if (blocker.status === 'blocked') blocker.proceed()
+      }}
+    />
+  )
+}
+
 /** A simple section: its setting rows plus the Save bar. */
 export function SaveBar(options: SaveBarProps) {
   const state = useSaveBar(options)
+  const shell = useSettingsShell()
+  const router = useRouter({ warn: false })
   return (
     <div>
       {options.fields.map((f) => (
         <SettingRow key={f.key} state={state} field={f} />
       ))}
       <SaveBarPanel {...state.bar} />
+      {shell.standalone && router && <StandaloneLeaveGuard count={state.bar.count} />}
     </div>
   )
 }
@@ -266,19 +341,9 @@ export interface FormRowProps { // not-wire-format: React props
 export function FormRow({ label, description, error, restart, password, fieldId, children }: FormRowProps) {
   return (
     <div className="py-[var(--space-2)]">
-      <Field
-        label={
-          <span className="inline-flex flex-wrap items-center gap-[var(--space-2)]">
-            {label}
-            {restart && <RestartBadge />}
-            {password && <PasswordBadge />}
-          </span>
-        }
-        description={description}
-        error={error || undefined}
-      >
-        {(cp) => children({ id: cp.id ?? fieldId, describedBy: cp['aria-describedby'], invalid: !!cp['aria-invalid'], fieldId })}
-      </Field>
+      <SettingField label={label} restart={restart} password={password} description={description} error={error || undefined}>
+        {(cp) => children({ id: cp.id, describedBy: cp['aria-describedby'], invalid: !!cp['aria-invalid'], fieldId })}
+      </SettingField>
     </div>
   )
 }

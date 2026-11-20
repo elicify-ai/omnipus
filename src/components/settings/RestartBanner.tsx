@@ -5,7 +5,7 @@
 // running value and saved value. A Callout (warning) with two Buttons — no
 // new kit component.
 
-import { useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ArrowClockwise } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Callout, CalloutActions, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
@@ -44,19 +44,61 @@ function show(v: unknown): string {
   return JSON.stringify(v)
 }
 
+/** One waiting change as the banner shows it (FR-035). */
+export interface RestartBannerEntry { // not-wire-format: screen-side view of a pending-restart entry
+  key: string
+  label: string
+  /** The value still in force; null when it is not known. */
+  appliedValue: unknown
+  /** The saved value, used after the restart. */
+  persistedValue: unknown
+  reason?: string
+}
+
+/** Maps the gateway's pending-restart list to the banner's entries. */
+export function toBannerEntries(entries: readonly PendingRestartEntry[]): RestartBannerEntry[] {
+  return entries.map((e) => ({
+    key: e.key,
+    label: pendingKeyLabel(e.key),
+    appliedValue: e.applied_value,
+    persistedValue: e.persisted_value,
+    reason: e.reason,
+  }))
+}
+
 export interface RestartBannerProps { // not-wire-format: React props
-  entries: PendingRestartEntry[]
-  isError: boolean
+  entries: RestartBannerEntry[]
+  /** The list could not be loaded (FR-039). */
+  error?: boolean
   onRetry: () => void
-  onRestart: () => void
+  onRestartNow: () => void
+  /** After Later in the "Restart now?" window, Restart now here takes focus (FR-035). */
+  autofocusRestartNow?: boolean
   restartButtonRef?: RefObject<HTMLButtonElement | null>
   /** Landed on the new address after a port change (FR-063). */
   restartedNotice?: boolean
 }
 
-export function RestartBanner({ entries, isError, onRetry, onRestart, restartButtonRef, restartedNotice }: RestartBannerProps) {
+export function RestartBanner({
+  entries,
+  error = false,
+  onRetry,
+  onRestartNow,
+  autofocusRestartNow = false,
+  restartButtonRef,
+  restartedNotice,
+}: RestartBannerProps) {
   const [open, setOpen] = useState(false)
-  if (isError) {
+  const ownRef = useRef<HTMLButtonElement | null>(null)
+  const hasEntries = entries.length > 0
+  useEffect(() => {
+    if (autofocusRestartNow && hasEntries && !error) ownRef.current?.focus()
+  }, [autofocusRestartNow, hasEntries, error])
+  const setRestartRef = (el: HTMLButtonElement | null) => {
+    ownRef.current = el
+    if (restartButtonRef) restartButtonRef.current = el
+  }
+  if (error) {
     return (
       <Callout variant="warning" className="mb-[var(--space-3)]" data-testid="settings-restart-banner-error">
         <CalloutTitle>The list of waiting changes could not be loaded</CalloutTitle>
@@ -86,19 +128,20 @@ export function RestartBanner({ entries, isError, onRetry, onRestart, restartBut
       <CalloutTitle>
         {n} saved {n === 1 ? 'change waits' : 'changes wait'} for a gateway restart
       </CalloutTitle>
-      <CalloutDescription>Running agents pause for a few seconds while the gateway restarts.</CalloutDescription>
+      <CalloutDescription>Agents pause for a few seconds while the gateway restarts.</CalloutDescription>
       {open && (
         <ul id="settings-pending-list" className="mt-[var(--space-1)] space-y-[var(--space-0-5)] text-[length:var(--type-body-compact-size)]">
           {entries.map((e) => (
             <li key={e.key}>
-              {pendingKeyLabel(e.key)}: running {show(e.applied_value)} · saved {show(e.persisted_value)} ·{' '}
-              {e.reason === 'apply_failed' ? 'saved, not applied' : 'needs a restart'}
+              <span className="font-medium">{e.label}</span>: running <span>{show(e.appliedValue)}</span>, after the restart{' '}
+              <span>{show(e.persistedValue)}</span> ·{' '}
+              <span>{e.reason === 'apply_failed' ? 'saved, not applied' : 'needs a restart'}</span>
             </li>
           ))}
         </ul>
       )}
       <CalloutActions>
-        <Button ref={restartButtonRef} variant="outline" size="sm" onClick={onRestart}>
+        <Button ref={setRestartRef} variant="outline" size="sm" onClick={onRestartNow}>
           Restart now
         </Button>
         <Button

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield } from '@phosphor-icons/react'
 import { fetchPromptGuardLevel, updatePromptGuardLevel, getErrorMessage } from '@/lib/api'
@@ -49,7 +50,7 @@ export function PromptGuardSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['prompt-guard-k'],
     queryFn: fetchPromptGuardLevel,
   })
@@ -89,10 +90,13 @@ export function PromptGuardSection(): React.ReactElement {
 
   if (isError) {
     return (
-      <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }}>
-        Failed to load prompt guard settings:{' '}
-        {error instanceof Error ? error.message : 'Unknown error'}
-      </p>
+      <ReadErrorCallout
+        title="Failed to load prompt injection defense"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="prompt-guard-load-error"
+      />
     )
   }
 

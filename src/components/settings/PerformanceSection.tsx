@@ -26,10 +26,10 @@
  * renders it alone with its own Save bar.
  */
 
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Warning } from '@phosphor-icons/react'
-import { Button } from '@/components/ui/button'
 import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -364,13 +364,14 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
     )
   } else if (error || !data) {
     view = (
-      <Callout variant="error" data-testid="performance-load-error">
-        <CalloutTitle>Agents and goals could not be loaded</CalloutTitle>
-        <CalloutDescription>{getErrorMessage(error, 'The gateway did not answer.')} Nothing here can be saved until it loads.</CalloutDescription>
-        <Button variant="outline" size="sm" data-testid="performance-retry-btn" onClick={() => void refetch()} disabled={isFetching}>
-          Retry
-        </Button>
-      </Callout>
+      <ReadErrorCallout
+        title="Agents and goals could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="performance-load-error"
+        retryTestId="performance-retry-btn"
+      />
     )
   } else {
     const parallel = wholeNumber(String(value('max_parallel_agents')))

@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShellDrafts } from './useShellDrafts'
 import { classifyWrite, savedStateCheck, sameValue, type WriteOutcome, type WriteResponse } from './saveOutcome'
 import { useSettingsShell } from './SettingsShellContext'
+import { assertOneProtectedEndpointPerSection, planSectionSave } from './savePlanner'
 
 export type SaveBarValue = string | number | boolean | null
 
@@ -36,6 +37,11 @@ export interface SaveBarField { // not-wire-format: screen-side description of o
   password?: boolean
   /** Returns the message to show, or null when the value is valid (FR-013). */
   validate?: (value: SaveBarValue) => string | null
+  /** Whole-number range (FR-013, Dataset D-10): outside it, `rangeText` shows. */
+  min?: number
+  max?: number
+  /** The range message, for example "Enter a whole number from 1,024 to 65,535." */
+  rangeText?: string
   /** Disabled values are neither validated nor sent (FR-040). */
   disabled?: boolean
   /** Disabled while another value of the section (draft or saved) equals `equals` (FR-040). */
@@ -67,6 +73,16 @@ export interface UseSaveBarOptions { // not-wire-format: React hook options
 }
 
 export const SAVED_SIGNAL_MS = 8000
+
+/** A declared whole-number range: the field's range message when the value is outside it. */
+function rangeMessage(f: SaveBarField, value: SaveBarValue): string | null {
+  if (f.min === undefined && f.max === undefined) return null
+  const text = String(value ?? '').trim()
+  const n = /^-?\d+$/.test(text) ? Number(text) : NaN
+  const ok = Number.isInteger(n) && (f.min === undefined || n >= f.min) && (f.max === undefined || n <= f.max)
+  if (ok) return null
+  return f.rangeText ?? `Enter a whole number${f.min !== undefined ? ` from ${f.min.toLocaleString('en-US')}` : ''}${f.max !== undefined ? ` to ${f.max.toLocaleString('en-US')}` : ''}.`
+}
 
 export const NOT_IN_USE_MESSAGE = 'Saved, but not in use yet. Restart the gateway to apply it.'
 
@@ -127,8 +143,8 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
   const invalid = useMemo(() => {
     const out: Record<string, string> = {}
     for (const f of fields) {
-      if (isDisabled(f.key) || !f.validate) continue
-      const msg = f.validate(currentValue(f.key))
+      if (isDisabled(f.key)) continue
+      const msg = f.validate?.(currentValue(f.key)) ?? rangeMessage(f, currentValue(f.key))
       if (msg) out[f.key] = msg
     }
     return out
@@ -155,7 +171,9 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
   )
 
   const n = changedKeys.length
-  const visible = n > 0 || savedAt !== null || unknownKeys.length > 0
+  // A stored value outside its range (hand-edited config) also shows the bar,
+  // with Save unavailable until it is fixed (FR-046, Dataset D-1 row 10).
+  const visible = n > 0 || savedAt !== null || unknownKeys.length > 0 || invalidKeys.length > 0
 
   // FR-014 leave guard: the shell's in-app prompt and the browser's own.
   useShellDrafts(n)
@@ -296,6 +314,21 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
       beforeRef.current[f.key] = savedValue(f.key)
     }
     if (preSave && !(await preSave(changed, sentDrafts))) return
+    // FR-030 / C-4: one Save has one consent token, so every password-marked
+    // value of the section must reach the section's one protected endpoint.
+    try {
+      const plan = planSectionSave(section, changed.map((f) => ({ key: f.key, value: sentDrafts[f.key], password: f.password, target: f.target })))
+      assertOneProtectedEndpointPerSection({ [section]: plan.filter((w) => w.password).map((w) => w.endpoint) })
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err)
+      setMessages((prev) => {
+        const next = { ...prev }
+        for (const f of changed) if (f.password) next[f.key] = { tone: 'error', text }
+        return next
+      })
+      shell.announce('Nothing was saved.')
+      return
+    }
     let token: string | undefined
     const protectedFields = changed.filter((f) => f.password)
     if (protectedFields.length && shell.requestPassword) {
@@ -334,7 +367,7 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
     } finally {
       setSaving(false)
     }
-  }, [saving, invalidKeys, changedKeys, byKey, drafts, savedValue, preSave, shell, onSave, applyOutcomes, runCheck, finish])
+  }, [saving, invalidKeys, changedKeys, byKey, drafts, savedValue, preSave, section, shell, onSave, applyOutcomes, runCheck, finish])
 
   const retry = useCallback(async () => {
     const keys = unknownKeys

@@ -58,33 +58,33 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
       </Callout>
     )
   } else {
+    // FR-048: the config-file switch keeps everything; the fields stay editable.
     const locked = data.keep_everything_forever
     const fields: SaveBarField[] = [
       {
         key: 'session_days',
-        label: 'Keep chat history for (days)',
+        label: 'Keep chat history for',
         value: data.session_days,
         kind: 'number',
-        description: 'Default 90. Older chats are deleted each night.',
+        description: 'Days, 1 to 365. Default 90. Older chats are deleted each night.',
         validate: dayRange(1, 365),
-        disabled: locked,
       },
       {
         key: 'memory_retros_forever',
-        label: 'Keep memory forever',
+        label: 'Keep forever',
         value: data.memory_retros_forever,
         kind: 'switch',
-        disabled: locked,
+        // FR-049: say before saving what turning it off again does.
+        description: 'Memory is never deleted while this is on. When you turn it off, older reflections are deleted at the next nightly clean-up.',
       },
       {
         key: 'memory_retros_days',
-        label: 'Keep memory for (days)',
+        label: 'Keep memory for',
         value: data.memory_retros_days,
         kind: 'number',
-        description: 'Default 180. Agents’ reflections on past chats.',
+        description: 'Days, 1 to 730. Default 180. Agents’ reflections on past chats.',
         validate: dayRange(1, 730),
-        disabled: locked,
-        // FR-040: while Keep memory forever is on, the day count is off and not sent.
+        // FR-040: while Keep forever is on, the day count is off and not sent.
         disabledWhen: { key: 'memory_retros_forever', equals: true },
       },
     ]
@@ -94,7 +94,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
           <Callout variant="info" className="mb-[var(--space-3)]">
             <CalloutTitle>Nothing is deleted at the moment</CalloutTitle>
             <CalloutDescription>
-              The configuration file turns off both clean-ups (storage.retention.disabled). Remove that line to use the values here.
+              Chat history and memory are both kept forever because of a setting in the configuration file. The day counts below apply once it is removed.
             </CalloutDescription>
           </Callout>
         )}
@@ -119,7 +119,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
       {notice}
       <section aria-labelledby="settings-retention-heading">
         <h3 id="settings-retention-heading" className="font-headline font-bold text-base text-[var(--color-secondary)] mb-[var(--space-2)]">
-          How long things are kept
+          How long data is kept
         </h3>
         {retention}
       </section>

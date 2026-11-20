@@ -28,6 +28,12 @@ export const Route = createFileRoute('/_app/settings')({
     if (search.tab === 'chat') {
       throw redirect({ to: '/profile', hash: 'chat-display', replace: true })
     }
+    // FR-005: the God Mode button lives in Protection, so the focus link
+    // names that section before the button consumes `focus`; otherwise the
+    // address would fall back to the old tab and unmount the button.
+    if (search.focus === 'god-mode' && search.tab !== 'protection') {
+      throw redirect({ to: '/settings', search: { ...search, tab: 'protection' }, replace: true })
+    }
   },
   component: SettingsRoute,
 })

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Database, Trash } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -30,7 +31,14 @@ export function DataSection() {
   const queryClient = useQueryClient()
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
 
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    isError: statsError,
+    error: statsReadError,
+    refetch: refetchStats,
+    isFetching: statsFetching,
+  } = useQuery({
     queryKey: ['storage-stats'],
     queryFn: fetchStorageStats,
   })
@@ -93,6 +101,17 @@ export function DataSection() {
 
       {/* Storage stats */}
       <section className="space-y-[var(--space-2)]">
+        {/* FR-066: the counts show their own error; retention still saves. */}
+        {statsError && (
+          <ReadErrorCallout
+            title="Failed to load the storage counts"
+            error={statsReadError}
+            onRetry={() => void refetchStats()}
+            retrying={statsFetching}
+            blocksSaving={false}
+            data-testid="storage-stats-load-error"
+          />
+        )}
         <div className="grid grid-cols-3 gap-[var(--space-2-5)]">
           <StatBox
             icon={<Database size={16} />}
@@ -117,7 +136,7 @@ export function DataSection() {
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-error)] uppercase tracking-wider">Danger Zone</h3>
         <Card className="border-[var(--color-error)]/30 p-[var(--space-3)] flex items-center justify-between">
           <div>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Clear all chat history</p>
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Chat history</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Deletes every chat transcript. This cannot be undone.</p>
           </div>
           <Button

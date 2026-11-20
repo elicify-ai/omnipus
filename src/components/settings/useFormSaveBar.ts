@@ -29,6 +29,7 @@ import {
   type FieldMessage,
   type SaveBarPanelProps,
 } from './useSaveBar'
+import { assertOneProtectedEndpointPerSection } from './savePlanner'
 
 export interface FormSavePart { // not-wire-format: one endpoint's share of a section Save
   /** Stable name of the part (its endpoint). */
@@ -157,6 +158,14 @@ export function useFormSaveBar(parts: FormSavePart[]) {
     if (!changed.length) return
     // FR-016: every pre-save confirm runs before the password prompt.
     for (const p of changed) if (p.preSave && !(await p.preSave())) return
+    // FR-030 / C-4: one Save has one consent token, so the password-marked
+    // values may come from one part (one protected endpoint) only.
+    try {
+      assertOneProtectedEndpointPerSection({ form: changed.filter((p) => p.passwordLabels?.length).map((p) => p.id) })
+    } catch (err) {
+      shell.announce(`Nothing was saved. ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
     let reauthToken: string | undefined
     if (passwordLabels.length && shell.requestPassword) {
       const got = await shell.requestPassword(passwordLabels)

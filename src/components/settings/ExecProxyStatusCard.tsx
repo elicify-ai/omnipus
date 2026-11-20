@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Globe, ArrowsClockwise, Warning, CheckCircle, XCircle, ArrowCounterClockwise } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -52,6 +53,7 @@ export function ExecProxyStatusCard(): React.ReactElement {
     data,
     isLoading,
     isError,
+    error,
     refetch,
     isFetching,
   } = useQuery({
@@ -148,12 +150,14 @@ export function ExecProxyStatusCard(): React.ReactElement {
         {isLoading ? (
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Checking...</p>
         ) : isError ? (
-          <div className="flex items-center gap-[var(--space-2)]">
-            <XCircle size={14} style={{ color: 'var(--color-error)' }} />
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-              Failed to reach backend
-            </p>
-          </div>
+          <ReadErrorCallout
+            title="Failed to load the proxy status"
+            error={error}
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+            blocksSaving={false}
+            data-testid="exec-proxy-load-error"
+          />
         ) : data && cfg ? (
           <>
             {/* Status row */}
