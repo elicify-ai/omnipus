@@ -92,6 +92,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
       warnings: [],
     })),
     fetchConfig: vi.fn(async () => ({ gateway: {}, data: { session_retention_days: 90 } })),
+    fetchAboutInfo: vi.fn(async () => ({ version: 't' })),
+    fetchPendingRestart: vi.fn(async () => []),
   }
 })
 
@@ -137,10 +139,13 @@ describe('FR-066 — Retry re-reads a failed group and renders it on success', (
 
     // Only the group that needs the failed read errors (Read dependencies),
     // quoting the server's cause and offering Retry.
-    const causes = screen.getAllByText(/performance settings unreadable/i)
+    // The group error appears after the read fails (FR-065: loading first),
+    // so it is awaited; the page-level reads above are mocked healthy, so
+    // the only Retry buttons here are the group's.
+    const causes = await screen.findAllByText(/performance settings unreadable/i)
     expect(causes.length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText(/context settings unreadable/i)).not.toBeInTheDocument()
-    const retries = screen.getAllByRole('button', { name: /retry/i })
+    const retries = await screen.findAllByRole('button', { name: /retry/i })
     expect(retries.length).toBeGreaterThanOrEqual(1)
 
     // Retry sends the read again — the read is re-issued, not merely shown.
@@ -153,7 +158,7 @@ describe('FR-066 — Retry re-reads a failed group and renders it on success', (
 
     // The read then succeeds: Retry's re-read renders the group's values.
     apiState.perfFails = false
-    const retries2 = screen.getAllByRole('button', { name: /retry/i })
+    const retries2 = await screen.findAllByRole('button', { name: /retry/i })
     await userEvent.click(retries2[0])
     expect(screen.queryByText(/performance settings unreadable/i)).not.toBeInTheDocument()
     const tries = await screen.findByLabelText('Tries per goal')
