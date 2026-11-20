@@ -29,7 +29,7 @@ func opencodeFix1895Process() int {
 		fmt.Println("2.2.6")
 		return 0
 	}
-	var addr, mode, nativeID string
+	var addr, resumeAddr, mode, nativeID string
 	for i, arg := range os.Args[1:] {
 		if arg == "--session" && i+2 < len(os.Args) {
 			nativeID = os.Args[i+2]
@@ -40,6 +40,12 @@ func opencodeFix1895Process() int {
 		if strings.HasPrefix(arg, "--fixture-mode=") {
 			mode = strings.TrimPrefix(arg, "--fixture-mode=")
 		}
+		if strings.HasPrefix(arg, "--fixture-resume-address=") {
+			resumeAddr = strings.TrimPrefix(arg, "--fixture-resume-address=")
+		}
+	}
+	if mode == "live_followup" {
+		return opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID)
 	}
 	if mode == "startup_followup" && nativeID != "" {
 		prompt := os.Args[len(os.Args)-1]
