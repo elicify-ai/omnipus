@@ -44,18 +44,6 @@ async function loadSavePlanner(): Promise<any> {
   }
 }
 
-async function loadSaveBar(): Promise<any> {
-  try {
-    const mod: any = await vi.importActual('@/components/settings/SaveBar')
-    return mod.SaveBar ?? mod.default
-  } catch {
-    throw new Error(
-      'BLOCKED RED (FR-030, D-8, order 23): the Settings SaveBar component does not exist yet — ' +
-        'required by FR-030 (network-mock counting while the real planner runs)',
-    )
-  }
-}
-
 // D-8 sections and their password-marked rows (FR-025 badge list; C-4 table).
 const D8_PASSWORD_SECTIONS: Array<{ section: string; endpoint: string; fields: any[] }> = [
   {

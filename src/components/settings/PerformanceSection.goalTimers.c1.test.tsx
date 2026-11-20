@@ -32,7 +32,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PerformanceSection } from './PerformanceSection'
 
@@ -147,7 +147,7 @@ async function mount() {
       </SettingsShellContext.Provider>
     </QueryClientProvider>,
   )
-  await waitFor(() => expect(screen.getByRole('spinbutton', { name: 'Tries per goal' })).toHaveValue(server.goal_max_rounds))
+  await waitFor(() => expect(screen.getByRole('spinbutton', { name: 'Tries per goal' })).toHaveValue(server.goal_max_rounds as string | number))
   expect(reads).toBeGreaterThan(0)
   return { ...view, client }
 }

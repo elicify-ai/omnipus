@@ -142,7 +142,7 @@ async function mount() {
       </SettingsShellContext.Provider>
     </QueryClientProvider>,
   )
-  await waitFor(() => expect(screen.getByRole('spinbutton', { name: 'Tries per goal' })).toHaveValue(server.goal_max_rounds))
+  await waitFor(() => expect(screen.getByRole('spinbutton', { name: 'Tries per goal' })).toHaveValue(server.goal_max_rounds as string | number))
   expect(reads).toBeGreaterThan(0)
   return { ...view, client }
 }
