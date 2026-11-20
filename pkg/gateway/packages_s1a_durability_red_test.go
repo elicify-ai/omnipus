@@ -24,7 +24,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 func TestPackages_PrePublishDurability(t *testing.T) {
@@ -84,6 +86,69 @@ func TestPackages_PrePublishDurability(t *testing.T) {
 		_, err := os.Stat(filepath.Join(agentsDir, id))
 		require.ErrorIs(t, err, os.ErrNotExist, "the rollback removes the agent folder")
 	})
+}
+
+// TestPackages_JournalDurabilityStopsApply covers review finding R2 (#1094
+// S1a): the import journal goes through the strict writer, so a failed
+// directory sync of the first journal write (E1) stops the apply before any
+// pending-agent or membership write. The fault sits in that writer's
+// durability step; the old warn-only writer never reaches it, so with the old
+// writer the import goes through and this test fails.
+func TestPackages_JournalDurabilityStopsApply(t *testing.T) {
+	api := packageAPI(t)
+	usePackageSeams(t)
+	ws := createWorkspaceViaAPI(t, api, "Research", "notes")
+	prev := stageUpload(t, api, validMainPackage(t))
+	stagingDir := filepath.Join(api.packageStagingBase(), prev.StagingId)
+	faulted := 0
+	t.Cleanup(fileutil.SetDirSyncFaultForTest(func(dir string) error {
+		if dir == stagingDir {
+			faulted++
+			return errors.New("sync failed: disk did not flush")
+		}
+		return nil
+	}))
+	var writes []string
+	packageT5.WriteWorkspace = func(_, wsID string, _ workspace.Workspace) error {
+		writes = append(writes, "workspace "+wsID)
+		return nil
+	}
+	packageT5.SaveDelegation = func(_, wsID string, _ []workspace.DelegationEdge) error {
+		writes = append(writes, "delegation "+wsID)
+		return nil
+	}
+	recordsBefore := agentEntityNames(t, api.homePath)
+	foldersBefore := dirEntryNames(t, filepath.Join(api.homePath, "agents"))
+
+	got := callPackageApply(t, api, prev.StagingId, applyBody("new", ws))
+
+	require.Equal(t, http.StatusInternalServerError, got.Code, "body=%s", got.Body)
+	require.Positive(t, faulted, "the journal write's directory sync must be the faulted step")
+	require.Empty(t, writes, "no membership write after a journal durability failure")
+	require.Equal(t, recordsBefore, agentEntityNames(t, api.homePath), "no pending or final agent record")
+	require.Equal(t, foldersBefore, dirEntryNames(t, filepath.Join(api.homePath, "agents")), "no agent folder")
+	// Stopped at E1, before the pending write: no journal is left (a later
+	// failure leaves a rolled_back journal) and the staging is ready again.
+	_, err := os.Stat(filepath.Join(stagingDir, omnpkg.JournalName))
+	require.ErrorIs(t, err, os.ErrNotExist, "an E1 refusal removes the journal")
+	state, err := api.packageRegistry().State(prev.StagingId)
+	require.NoError(t, err)
+	require.Equal(t, omnpkg.StagingReady, state, "an E1 refusal leaves the staging ready")
+}
+
+// dirEntryNames lists dir's entry names; a missing dir is empty.
+func dirEntryNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
 }
 
 func indexOf(events []string, want string) int {

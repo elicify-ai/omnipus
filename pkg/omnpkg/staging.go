@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // Staging lifecycle states (Staging lifecycle table; FR-022, FR-039).
@@ -102,11 +104,43 @@ func (r *StagingRegistry) Reserve() (string, error) {
 		return "", fmt.Errorf("omnpkg: generate staging ID: %w", err)
 	}
 	id := u.String()
-	if err := os.MkdirAll(filepath.Join(r.base, id), 0o700); err != nil {
+	dir := filepath.Join(r.base, id)
+	if err := mkdirAllSynced(dir); err != nil {
+		if rmErr := os.Remove(dir); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("remove staging folder: %w", rmErr))
+		}
 		return "", fmt.Errorf("omnpkg: create staging folder: %w", err)
 	}
 	r.entries[id] = &stagingEntry{state: StagingReceiving}
 	return id, nil
+}
+
+// mkdirAllSynced creates dir and any missing ancestors, then syncs the parent
+// of every folder it created, so each new folder's entry is durable. The
+// journal written inside the staging folder later syncs only that folder, so
+// without this a power cut can lose the folder, journal included.
+func mkdirAllSynced(dir string) error {
+	var created []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		created = append(created, d)
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for _, d := range created {
+		if err := fileutil.SyncDir(filepath.Dir(d)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // MarkReady moves a receiving staging to ready; the expiry clock starts here.
