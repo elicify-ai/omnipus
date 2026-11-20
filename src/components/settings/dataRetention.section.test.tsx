@@ -29,17 +29,28 @@
  *   - FR-052: Memory & recaps shows no retention field, only a row "How
  *     long memory is kept" that opens Data & retention.
  *
- * Harness: the REAL DataSection (and MemorySection) with '@/lib/api' mocked
- * at the API boundary — the mock adds the section's future wrappers
- * `fetchRetentionSettings` / `updateRetentionSettings` (the generated client
- * does not carry them yet; regeneration is a GREEN-side step, contracts are
- * committed). "Uses the generated response validator" (order row note): the
- * REAL component consumes the generated client at GREEN; the mock stands in
- * for it here at the boundary. RED today: the section reads no
- * /settings/retention and renders no retention fields — assertions fail for
- * the spec's reason.
+ * Harness: the REAL section body the redesign gives Data & retention —
+ * DataRetentionSection, the component that holds the retention group (and
+ * embeds the storage counts and Danger zone) — plus the REAL MemorySection
+ * for FR-052. '@/lib/api' is mocked at the API boundary — the mock adds the
+ * section's future wrappers `fetchRetentionSettings` / `updateRetentionSettings`
+ * (the generated client does not carry them yet; regeneration is a GREEN-side
+ * step, contracts are committed). "Uses the generated response validator"
+ * (order row note): the REAL component consumes the generated client at
+ * GREEN; the mock stands in for it here at the boundary.
+ *
+ * Unit note (harness fix, oracles unchanged): an earlier revision of this
+ * file rendered `<DataSection />` directly — the pre-redesign file that
+ * happened to hold session retention then. On the redesign tree the
+ * retention UI lives in the section body, DataRetentionSection (the same
+ * component DataSection.backup-removal-1919.test.tsx loads), so that is the
+ * unit these scenarios drive. Loaded through import.meta.glob so the file
+ * compiles on the pre-redesign tree and fails loudly as BLOCKED RED there,
+ * never as an import error. RED today: no section body, no retention read,
+ * no retention fields — every case fails for the spec's reason.
  */
 
+import type { ComponentType } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -49,8 +60,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    // The section's CURRENT reads (DataSection today): the config view needs
-    // data.session_retention_days; stats need workspace_size_bytes.
+    // The section body's reads: the embedded storage counts + Danger zone
+    // (DataSection) and the app-state read the local/platform variant keys on.
+    fetchAppState: vi.fn(async () => ({ onboarding_complete: true })),
     fetchConfig: vi.fn(async () => ({ gateway: {}, data: { session_retention_days: 90 } })),
     fetchStorageStats: vi.fn(async () => ({
       workspace_size_bytes: 10,
@@ -58,6 +70,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       memory_entry_count: 5,
       warnings: [],
     })),
+    // FR-052's MemorySection read.
     fetchMemorySettings: vi.fn(async () => ({
       auto_recap_enabled: true,
       bootstrap_recap_enabled: true,
@@ -84,8 +97,23 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import * as api from '@/lib/api'
-import { DataSection } from './DataSection'
 import { MemorySection } from './MemorySection'
+
+// The Data & retention section body exists only on the redesign tree; a
+// missing module is a loud per-case failure, not a skipped test or an
+// import/collection error.
+const sectionModules = import.meta.glob<{ DataRetentionSection: ComponentType }>('./DataRetentionSection.tsx')
+async function loadDataRetentionSection() {
+  const load = sectionModules['./DataRetentionSection.tsx']
+  if (!load) {
+    expect.fail(
+      'BLOCKED RED (US-5/FR-040/FR-042/FR-043/FR-046/FR-048/FR-049/D-1 rows 6+10/S-Q13 A): DataRetentionSection.tsx not implemented — the Data & retention section body that must show and save the retention values',
+    )
+  }
+  const module = await load()
+  expect(module, 'the Data & retention section body must export DataRetentionSection').toHaveProperty('DataRetentionSection')
+  return module.DataRetentionSection
+}
 
 // The retention wrappers exist only inside this file's vi.mock (the real
 // module gains them when backend-lead regenerates the client at GREEN), so
@@ -110,10 +138,11 @@ beforeEach(() => {
 
 describe('US-5 — Data & retention shows and saves the retention values', () => {
   it('a fresh install shows 90 / 180 with Keep forever off (S-Q13 A)', async () => {
-    renderSection(<DataSection />)
+    const Section = await loadDataRetentionSection()
+    renderSection(<Section />)
     // The retention group sits under the block heading the UI table names
     // ("Counts, How long data is kept, Danger zone"; wireframe block).
-    expect(screen.getByText('How long data is kept')).toBeInTheDocument()
+    expect(await screen.findByText('How long data is kept')).toBeInTheDocument()
     expect(await screen.findByLabelText('Keep chat history for')).toHaveValue(90)
     expect(screen.getByLabelText('Keep memory for')).toHaveValue(180)
     // US-5 AS1's exact label: the switch is "Keep forever".
@@ -121,7 +150,8 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
   })
 
   it('saving 30 and 365 sends one update carrying both values, and they show after the section re-reads (one write path, FR-043)', async () => {
-    renderSection(<DataSection />)
+    const Section = await loadDataRetentionSection()
+    renderSection(<Section />)
     const chat = await screen.findByLabelText('Keep chat history for')
     await userEvent.clear(chat)
     await userEvent.type(chat, '30')
@@ -138,7 +168,8 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
   })
 
   it('366 is blocked with the exact range text and Save stays unavailable (D-1 row 6)', async () => {
-    renderSection(<DataSection />)
+    const Section = await loadDataRetentionSection()
+    renderSection(<Section />)
     const chat = await screen.findByLabelText('Keep chat history for')
     await userEvent.clear(chat)
     await userEvent.type(chat, '366')
@@ -155,7 +186,8 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
       memory_retros_forever: false,
       keep_everything_forever: false,
     })
-    renderSection(<DataSection />)
+    const Section = await loadDataRetentionSection()
+    renderSection(<Section />)
     const chat = await screen.findByLabelText('Keep chat history for')
     expect(chat).toHaveValue(500) // shown as stored — the read schema has no range
     expect(await screen.findByText('Enter a whole number from 1 to 365.')).toBeInTheDocument()
@@ -167,7 +199,8 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
   })
 
   it('with Keep forever on the day field is disabled and the body omits memory_retros_days (FR-040)', async () => {
-    renderSection(<DataSection />)
+    const Section = await loadDataRetentionSection()
+    renderSection(<Section />)
     const memory = await screen.findByLabelText('Keep memory for')
     await userEvent.clear(memory)
     await userEvent.type(memory, '999') // invalid on purpose: never validated while forever is on
@@ -179,7 +212,8 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
   })
 
   it('the switch description says older reflections are deleted at the next nightly clean-up when turned off (FR-049)', async () => {
-    renderSection(<DataSection />)
+    const Section = await loadDataRetentionSection()
+    renderSection(<Section />)
     expect(await screen.findByText(/nightly/i)).toBeInTheDocument()
     expect(screen.getByText(/older reflections are deleted/i)).toBeInTheDocument()
   })
@@ -191,7 +225,8 @@ describe('US-5 — Data & retention shows and saves the retention values', () =>
       memory_retros_forever: false,
       keep_everything_forever: true,
     })
-    renderSection(<DataSection />)
+    const Section = await loadDataRetentionSection()
+    renderSection(<Section />)
     expect(
       await screen.findByText(/kept forever because of a setting in the configuration file/i),
     ).toBeInTheDocument()
