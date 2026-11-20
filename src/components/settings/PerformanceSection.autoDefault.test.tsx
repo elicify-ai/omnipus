@@ -60,7 +60,7 @@ afterEach(() => {
 })
 
 describe('PerformanceSection — the unconfigured (memory-bounded) state, FR-069', () => {
-  it('renders "automatic — bounded by available memory" and shows 2000 NOWHERE', async () => {
+  it('renders the unconfigured state as an empty field, the in-use value explained by memory, and 2000 nowhere as a recommendation', async () => {
     vi.useRealTimers()
     // Exactly what a fresh install's GET /api/v1/performance returns: nothing
     // configured, so the effective value IS the physical backstop.
@@ -72,20 +72,28 @@ describe('PerformanceSection — the unconfigured (memory-bounded) state, FR-069
     } as never)
 
     const { container } = renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    const input = await screen.findByLabelText('Max parallel agents')
 
-    expect(screen.getByText(/automatic — bounded by available memory/i)).toBeInTheDocument()
+    // The Save-bar oracle (settings-redesign-spec D-10 row 9): EMPTY means
+    // automatic — "empty means no fixed limit". The field never carries the
+    // backstop. (The old oracle asserted the previous panel's copy
+    // "automatic — bounded by available memory"; D-10 row 9 replaces it.)
+    expect((input as HTMLInputElement).value).toBe('')
 
-    // The load-bearing negative. The backstop must not reach the operator's
-    // eyes in ANY form — not as a recommendation, not as an "effective value
-    // in use", not prefilled into the input.
-    expect(container.textContent).not.toMatch(/2000/)
+    // FR-069 (browser-workspace-ownership-spec) substance: the backstop is
+    // never presented as a recommendation, a capacity claim, or a default
+    // the system chose. The panel states what is in use and why ("Currently
+    // in use: 2000 parallel agents · without a limit, the number is bounded
+    // by available memory" — the accepted implementation of "empty means
+    // automatic"), and 2000 appears in no recommendation frame.
+    expect(container.textContent).toMatch(/Currently in use: 2000 parallel agents/)
+    expect(container.textContent).toMatch(/bounded by available memory/i)
     // "Recommended:" with the colon, not the bare word — the unrelated Tool
     // loading card legitimately says "Smaller messages, lower token use.
     // Recommended." and a bare /Recommended/ would make this test fail for a
     // reason that has nothing to do with concurrency.
     expect(container.textContent).not.toMatch(/Recommended:/i)
-    expect((screen.getByLabelText('Max parallel agents') as HTMLInputElement).value).not.toBe('2000')
+    expect(container.textContent).not.toMatch(/Live system recommendation/i)
 
     // And the deleted formula must not be described anywhere either.
     expect(container.textContent).not.toMatch(/3\.5 MB/)

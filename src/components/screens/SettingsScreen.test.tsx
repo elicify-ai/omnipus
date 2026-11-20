@@ -43,7 +43,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter, createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from '@/routeTree.gen'
-import { fetchAppState, fetchAboutInfo, getContextSettings, fetchPerformanceSettings } from '@/lib/api'
+import { fetchAboutInfo, getContextSettings, fetchPerformanceSettings } from '@/lib/api'
 import type { ContextSettings } from '@/lib/api'
 import { ContextSettings as ContextSettingsSchema } from '@/lib/api/generated/schemas'
 

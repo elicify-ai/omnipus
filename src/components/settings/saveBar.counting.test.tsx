@@ -76,14 +76,36 @@ const SHELL_LIMIT_FIELD = {
 
 async function renderSaveBar(fields: any[], props: Record<string, unknown> = {}) {
   const SaveBar = await loadSaveBar()
-  return render(
-    <SaveBar
-      section="gateway"
-      fields={fields}
-      onSave={props.onSave ?? vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }))}
-      onDiscard={props.onDiscard ?? vi.fn()}
-    />,
+  // FR-018's "Changes saved." goes to the shell's one page-level live region
+  // (FR-071). A Save bar rendered alone has no shell — its announce is a
+  // noop — so the harness supplies the shell boundary with a recorder: the
+  // same contract the real shell implements (SettingsShellContext.tsx). The
+  // announcement is asserted at that boundary; the live-region DOM itself is
+  // the shell's, covered by the shell tests.
+  const { SettingsShellContext } = await vi.importActual<any>('@/components/settings/SettingsShellContext')
+  const announceCalls: string[] = []
+  const view = render(
+    <SettingsShellContext.Provider
+      value={{
+        announce: (text: string) => announceCalls.push(text),
+        setDraftCount: () => {},
+        offerRestart: () => {},
+        refreshPendingRestart: () => {},
+        requestPassword: undefined,
+        saveBarVisible: false,
+        setSaveBarVisible: () => {},
+        standalone: false,
+      }}
+    >
+      <SaveBar
+        section="gateway"
+        fields={fields}
+        onSave={props.onSave ?? vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }))}
+        onDiscard={props.onDiscard ?? vi.fn()}
+      />
+    </SettingsShellContext.Provider>,
   )
+  return { ...view, announceCalls }
 }
 
 function changeByLabel(label: string, value: string) {
@@ -177,25 +199,31 @@ describe('FR-018 — the saved signal stays long enough to read', () => {
   }
 
   async function saveOnce(fields: any[]) {
-    await renderSaveBar(fields)
+    const view = await renderSaveBar(fields)
     fireEvent.change(screen.getByLabelText('Log level'), { target: { value: 'debug' } })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     })
+    return view
   }
 
   it('the bar shows "Saved at 14:07" (HH:MM, 24 h) and the live region announces "Changes saved." once', async () => {
     fakeClock()
-    await saveOnce([LOG_FIELD])
-    expect(await screen.findByText(/Saved at 14:07/)).toBeInTheDocument()
-    const announcements = screen.getAllByText('Changes saved.')
-    expect(announcements.length).toBe(1)
+    const view = await saveOnce([LOG_FIELD])
+    // Sync queries: findByText waits on the FAKE timers, whose queue never
+    // advances, so the lookup hung to the test timeout — the act-wrapped
+    // click above has already flushed the save, so the signal is in the DOM
+    // now (harness fix; the oracle is unchanged).
+    expect(screen.getByText('Saved at 14:07')).toBeInTheDocument()
+    // The announcement is observed at the shell boundary the standalone
+    // harness owns (see renderSaveBar): exactly once, with the spec's line.
+    expect(view.announceCalls).toEqual(['Changes saved.'])
   })
 
   it('the saved signal hides after 8 seconds', async () => {
     fakeClock()
     await saveOnce([LOG_FIELD])
-    expect(await screen.findByText(/Saved at/)).toBeInTheDocument()
+    expect(screen.getByText(/Saved at/)).toBeInTheDocument()
     await act(async () => {
       vi.advanceTimersByTime(8_000)
     })
@@ -210,7 +238,7 @@ describe('FR-018 — the saved signal stays long enough to read', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     })
-    expect(await screen.findByText(/Saved at/)).toBeInTheDocument()
+    expect(screen.getByText(/Saved at/)).toBeInTheDocument()
     await act(async () => {
       changeByLabel('Port', '8081')
     })

@@ -34,7 +34,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter, createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from '@/routeTree.gen'
@@ -106,6 +106,22 @@ vi.mock('@/lib/api', async (importOriginal) => {
       goal_stalled_checkin_minutes: 10,
       max_tool_iterations: 50,
     })),
+    // The read behind the Providers tab's "Voice input and web search" group
+    // (D-9 row 5): without it the section stays in its loading/error state
+    // and no Voice input row renders (the harness gap this test died of —
+    // its Voice input lookup timed out, not a spec oracle).
+    fetchIntegrationProviders: vi.fn(async () => ({
+      search: [
+        { id: 'brave', kind: 'search', display_name: 'Brave', configured: true, requires_key: true, usable: true, active: true },
+      ],
+      voice: [
+        { id: 'elevenlabs', kind: 'voice', display_name: 'ElevenLabs', configured: true, requires_key: true, usable: true, active: true },
+      ],
+      active_search: 'brave',
+      active_voice: 'elevenlabs',
+      default_search: 'brave',
+      fallback_search: null,
+    })),
   }
 })
 
@@ -176,12 +192,23 @@ describe('D-9 rows 1-2, row 12 — Limits holds the three groups', () => {
   it('Context and tool results, Model overrides (collapsed) and Agents and goals', async () => {
     await openSettings('?tab=limits')
     expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
-    const overridesToggle = screen.getByRole('button', { name: /Model overrides/i })
-    expect(overridesToggle).toHaveAttribute('aria-expanded', 'false') // S-Q12 A: collapsed
-    expect(screen.getByText('Context and tool results')).toBeInTheDocument()
-    expect(screen.getByText('Agents and goals')).toBeInTheDocument()
+    // FR-072 / S-Q12 A: every grouped list starts collapsed.
+    for (const group of ['Context and tool results', 'Model overrides', 'Agents and goals']) {
+      expect(
+        screen.getByRole('button', { name: new RegExp(group, 'i') }),
+        `BLOCKED RED (FR-072): the "${group}" group must render its collapsed toggle`,
+      ).toHaveAttribute('aria-expanded', 'false')
+    }
     // D-9 row 12: the tool-loading switch stays in Limits → Agents and goals.
-    expect(screen.getByRole('switch', { name: /Load tools on demand/i })).toBeInTheDocument()
+    // FR-072: a collapsed group renders no body, so the row is asserted after
+    // expanding the group. The row's name is the wireframe's ("Tool loading",
+    // one row description) — the old per-state copy "Load tools on demand" is
+    // retired (see PerformanceSection.test.tsx, "Tool loading" block).
+    const agentsToggle = screen.getByRole('button', { name: /Agents and goals/i })
+    fireEvent.click(agentsToggle)
+    const toggle = await screen.findByLabelText(/tool loading/i)
+    expect(toggle).toBeInTheDocument()
+    expect(screen.getByText(/Load tools only when an agent needs them/)).toBeInTheDocument()
     // D-9 rows 3, 13: no per-control save buttons — the Save bar owns saving.
     expect(screen.queryAllByRole('button', { name: /^save$/i })).toHaveLength(0)
   })
@@ -192,8 +219,14 @@ describe('D-9 rows 5-6, row 8 — Providers voice, moved-out skills, God Mode', 
     await openSettings('?tab=providers')
     expect(await screen.findByText('Voice input')).toBeInTheDocument()
     expect(screen.getByText('Active transcriber')).toBeInTheDocument()
-    // D-9 row 4: web search is absent (moved to Skills & Tools).
-    expect(screen.queryByText(/Web search/i)).not.toBeInTheDocument()
+    // TEAM-LEAD ACCEPTED STATE (2026-11-20, part-9 brief): FR-060 stays as
+    // written, but web search remains under Providers until Skills & Tools
+    // carries it — the same "Removed later" disposition as D-9 row 12's
+    // tool-loading switch — with the doc lines (DOC-007/DOC-011) saying so.
+    // The old oracle asserted absence; the accepted present state is pinned
+    // here (the tab's "Web Search" section heading) so the move-out (FR-060)
+    // flips this test when it lands.
+    expect(screen.getByText('Web Search')).toBeInTheDocument()
   })
 
   it('Protection announces tool permissions and skill trust live in Skills & Tools (D-9 row 6)', async () => {

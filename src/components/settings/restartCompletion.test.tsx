@@ -46,11 +46,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 // usePendingRestart: entries are the gateway's GET /config/pending-restart
-// answer (PendingRestartEntry shape). Mutable per test.
+// answer (PendingRestartEntry shape). Mutable per test. The mock mirrors the
+// real hook's return shape (`{ entries }`, src/hooks/restart.ts::usePendingRestart)
+// — the earlier `{ data }` shape was never the hook's contract.
 const restartState: { entries: any[] } = { entries: [] }
 const mockRefetchPending = vi.fn().mockResolvedValue(undefined)
 vi.mock('@/hooks/restart', () => ({
-  usePendingRestart: () => ({ refetch: mockRefetchPending, data: restartState.entries }),
+  usePendingRestart: () => ({ entries: restartState.entries, refetch: mockRefetchPending }),
 }))
 
 const addToast = vi.fn()
@@ -62,10 +64,19 @@ import { GatewayRestartModal } from './GatewayRestartModal'
 
 // fetch stub serving by URL; calls are recorded for the same-origin oracle.
 const calls: Array<{ url: string }> = []
+// Minimal fetch-like Response: the real request() (http.ts::performRequest)
+// reads res.headers.get('Content-Length') after res.ok/res.status and then
+// res.json(), and Zod-validates the body against the endpoint's schema — a
+// bare { ok, status, json } object throws at res.headers and the body never
+// parses (the harness gap the freshness test died of). The /about body
+// carries the fields AboutInfoSchema requires.
+function stubResponse(json: unknown, status = 200) {
+  return { ok: status >= 200 && status < 300, status, headers: new Headers(), json: async () => json }
+}
 const fetchBehavior: { health: () => Promise<any>; about: () => Promise<any>; pending: () => Promise<any> } = {
-  health: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok' }) }),
-  about: async () => ({ ok: true, status: 200, json: async () => ({ uptime_seconds: 999_999, pid: 1 }) }),
-  pending: async () => ({ ok: true, status: 200, json: async () => restartState.entries }),
+  health: async () => stubResponse({ status: 'ok' }),
+  about: async () => stubResponse({ version: '1.2.3', go_version: 'go1.24', os: 'linux', arch: 'amd64', uptime_seconds: 999_999 }),
+  pending: async () => stubResponse(restartState.entries),
 }
 vi.stubGlobal(
   'fetch',
@@ -75,11 +86,17 @@ vi.stubGlobal(
     if (url.includes('/health')) return fetchBehavior.health()
     if (url.includes('/about')) return fetchBehavior.about()
     if (url.includes('/config/pending-restart')) return fetchBehavior.pending()
-    return { ok: true, status: 200, json: async () => ({}) }
+    return stubResponse({})
   }),
 )
 
 const PORT_ENTRY = { key: 'gateway.port', applied_value: 8080, persisted_value: 8081, reason: 'restart_required' }
+// The direct case needs the page port to EQUAL the running port (FR-063's
+// precondition: "page port equals the running port"). jsdom serves this page
+// on localhost:3000, so the fixture's applied value is 3000 — a harness
+// accommodation to the test browser's own address, not a spec value; the
+// saved port 8081 is the spec's example new address.
+const DIRECT_PORT_ENTRY = { key: 'gateway.port', applied_value: 3000, persisted_value: 8081, reason: 'restart_required' }
 
 function renderModal() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -113,9 +130,9 @@ beforeEach(() => {
   restartState.entries = []
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
   vi.setSystemTime(new Date('2026-11-20T12:00:00Z'))
-  fetchBehavior.health = async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok' }) })
-  fetchBehavior.about = async () => ({ ok: true, status: 200, json: async () => ({ uptime_seconds: 999_999, pid: 1 }) })
-  fetchBehavior.pending = async () => ({ ok: true, status: 200, json: async () => restartState.entries })
+  fetchBehavior.health = async () => stubResponse({ status: 'ok' })
+  fetchBehavior.about = async () => stubResponse({ version: '1.2.3', go_version: 'go1.24', os: 'linux', arch: 'amd64', uptime_seconds: 999_999 })
+  fetchBehavior.pending = async () => stubResponse(restartState.entries)
 })
 
 afterEach(() => {
@@ -129,10 +146,16 @@ describe('FR-063 — restart completion is proved by a fresh /about uptime, not 
     await clickRestartNow()
     await drivePolls(5)
     // /about answered with uptime_seconds 999999 — far larger than the seconds
-    // since Restart now — so the old process is still in place: no success.
-    expect(screen.queryByText(/restarted successfully/i)).not.toBeInTheDocument()
+    // since Restart now — so the old process is still in place: no success
+    // (no success phase in the dialog, no success toast).
+    expect(screen.queryByText(/The gateway restarted/i)).not.toBeInTheDocument()
     expect(addToast).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: /restart now/i })).toBeInTheDocument()
+    // The restart is still being attempted: during the wait the control reads
+    // "Restarting…" (disabled), not "Restart now" — the spec's "keeps Restart
+    // now" wording is the no-come-back scenario's, asserted after its
+    // deadline below.
+    expect(screen.getByRole('button', { name: /restart/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /restart/i })).toBeDisabled()
   })
 
   it('success only when /about shows a fresh uptime AND pending-restart no longer lists the keys', async () => {
@@ -140,11 +163,7 @@ describe('FR-063 — restart completion is proved by a fresh /about uptime, not 
     renderModal()
     await clickRestartNow()
     // The new process answers: fresh uptime (1s old) and the key cleared.
-    fetchBehavior.about = async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ uptime_seconds: 1, pid: 2 }),
-    })
+    fetchBehavior.about = async () => stubResponse({ version: '1.2.3', go_version: 'go1.24', os: 'linux', arch: 'amd64', uptime_seconds: 1 })
     restartState.entries = []
     await drivePolls(3)
     // The success signal: the success toast fired and the pending list was
@@ -168,17 +187,24 @@ describe('FR-063 — restart completion is proved by a fresh /about uptime, not 
 
 describe('FR-063 — a changed port names the new address and the proxy instruction', () => {
   it('the window says the gateway will answer on the saved port and carries the proxy sentence', async () => {
-    restartState.entries = [PORT_ENTRY]
+    restartState.entries = [DIRECT_PORT_ENTRY]
     renderModal()
     // The Dialog renders synchronously; sync queries (fake timers make
-    // findBy* wait on faked intervals that never advance).
-    expect(screen.getByText(/restart required/i)).toBeInTheDocument()
-    expect(screen.getByText(/8081/)).toBeInTheDocument()
-    expect(screen.getByText(/If you reach Omnipus through a proxy, point it at port 8081/i)).toBeInTheDocument()
+    // findBy* wait on faked intervals that never advance). FR-063: BEFORE
+    // restarting, the window names the new address (page's own host, saved
+    // port), says the current address will stop working, and adds the proxy
+    // sentence — the "restart required" wording this test asserted before is
+    // not in the spec and named no address, so FR-063's wording replaces it.
+    expect(screen.getByText(/answers at http:\/\/localhost:8081/)).toBeInTheDocument()
+    expect(screen.getByText(/this address stops working/i)).toBeInTheDocument()
+    expect(screen.getByText(/If you reach Omnipus through a proxy, point it at port 8081 instead\./)).toBeInTheDocument()
+    // The new address is offered only once the page's own /health stops
+    // answering — not in the idle window.
+    expect(screen.queryByRole('link', { name: /open the new address/i })).not.toBeInTheDocument()
   })
 
   it('Open the new address appears only after the page own /health stops answering, linking to the restarted page', async () => {
-    restartState.entries = [PORT_ENTRY]
+    restartState.entries = [DIRECT_PORT_ENTRY]
     renderModal()
     await clickRestartNow()
     // The old address stops answering (the gateway is restarting on 8081).
@@ -205,7 +231,10 @@ describe('FR-063 — a changed port names the new address and the proxy instruct
       throw new TypeError('ECONNREFUSED')
     }
     await drivePolls(5)
-    expect(screen.getByText(/point it at port 8081|the proxy must point/i)).toBeInTheDocument()
+    // FR-063: a proxy gets the instruction ("says the proxy must point at the
+    // new port") and no address — no derived address sentence, no link.
+    expect(screen.getByText(/Point your proxy at port 8081/)).toBeInTheDocument()
+    expect(screen.queryByText(/answers at/)).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /open the new address/i })).not.toBeInTheDocument()
   })
 })
