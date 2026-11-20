@@ -7,6 +7,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -115,7 +116,7 @@ func TestPackages_StartupRecovery(t *testing.T) {
 		require.NoError(t, err, "FR-062: recovery failure must not abort boot")
 		require.Contains(t, workspaceTeam(t, api.homePath, ws), recoveryAgentID, "W still lists X when leave failed")
 		_, statErr := os.Stat(filepath.Join(api.homePath, "entities", "agents", recoveryAgentID+".json"))
-		require.True(t, os.IsNotExist(statErr), "X stays invisible")
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "X stays invisible")
 		// D7-23g: a failed leave keeps the staging for the next start.
 		_, statErr = os.Stat(filepath.Join(api.homePath, "backups", ".staging", "stg-23g"))
 		require.NoError(t, statErr, "needs-cleanup staging stays when recovery fails")
@@ -256,7 +257,7 @@ func requireNoRecoveryAgent(t *testing.T, home string) {
 		filepath.Join("agents", recoveryAgentID),
 	} {
 		_, err := os.Stat(filepath.Join(home, rel))
-		require.True(t, os.IsNotExist(err), "leftover %s", rel)
+		require.True(t, errors.Is(err, os.ErrNotExist), "leftover %s", rel)
 	}
 }
 

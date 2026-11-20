@@ -3,6 +3,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,7 +27,7 @@ type t5RollbackSnapshot struct {
 func t5AgentEntries(t *testing.T, home string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(home, "entities", "agents"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return []string{}
 	}
 	require.NoError(t, err, "absence oracle must not swallow a read error")

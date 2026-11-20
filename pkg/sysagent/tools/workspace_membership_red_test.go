@@ -58,7 +58,7 @@ func redLoadWorkspace(t *testing.T, home, wsID string) workspacepkg.Workspace {
 func redWorkspaceMissing(t *testing.T, home, wsID string) bool {
 	t.Helper()
 	_, err := os.Stat(filepath.Join(home, "workspaces", wsID+".json"))
-	return os.IsNotExist(err)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func redMemberOptions(home string) systools.WorkspaceMembershipOptions {
@@ -646,7 +646,7 @@ func TestRollbackOrder_C1ThenC2(t *testing.T) {
 	require.NoError(t, statErr, "the pending record exists when C2 starts")
 	require.NoError(t, agentstore.New(home).DiscardPending(pendingID), "C2 runs even though C1 only partially succeeded")
 	_, statErr = os.Stat(pendingPath)
-	require.True(t, os.IsNotExist(statErr), "C2 removed the pending record")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "C2 removed the pending record")
 	_, statErr = os.Stat(filepath.Join(home, "entities", "agents", pendingID+".json"))
-	require.True(t, os.IsNotExist(statErr), "C2 must not publish the record as a side effect")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "C2 must not publish the record as a side effect")
 }

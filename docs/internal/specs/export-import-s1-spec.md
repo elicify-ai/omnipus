@@ -1,4 +1,6 @@
-`Status: Final (review cap reached, revision 6), amended by revision 7 (founder decisions P-QR B and P-Q1 B, 2026-11-19), build S1a`
+Status: Approved
+
+Status note: final after the review cap (revision 6), amended by revision 7 (founder decisions P-QR B and P-Q1 B, 2026-11-19), build S1a
 
 `ADR: [ADR — Export / Import packages (.omnpkg), epic elicify-ai/omnipus#1094](ADR.md)` (status Proposed, 2026-11-19, with the 2026-11-19 amendments for S1; slice plan in [SLICES.md](SLICES.md), founder questions in [QUESTIONS.md](QUESTIONS.md))
 

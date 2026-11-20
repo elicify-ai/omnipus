@@ -11,6 +11,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -65,7 +66,7 @@ func packageStagingIDs(t *testing.T, home string) []string {
 	t.Helper()
 	dir := filepath.Join(home, "backups", ".staging")
 	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

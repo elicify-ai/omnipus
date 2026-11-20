@@ -63,7 +63,7 @@ func TestPackagesApply_NewMode(t *testing.T) {
 		require.NotEqual(t, specSourceID, res.Created[0].NewId, "FR-031 new UUID")
 		require.Equal(t, ws, res.Created[0].WorkspaceId)
 		_, statErr := os.Stat(filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
-		require.True(t, os.IsNotExist(statErr), "success deletes the staging folder")
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "success deletes the staging folder")
 		require.Equal(t, before, configBytes(t, api.homePath), "FR-034 config.json bytes unchanged")
 		after, err := os.Stat(filepath.Join(api.homePath, "config.json"))
 		require.NoError(t, err)
@@ -499,7 +499,7 @@ func TestPackagesApply_Rollback(t *testing.T) {
 			t5RequireOtherFiles(t, homeBefore, snapshotHome(t, api.homePath), id, ws)
 			if tc.code == omnpkg.CodeImportRolledBack {
 				_, err := os.Stat(filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
-				require.True(t, os.IsNotExist(err), "complete rollback retires the staging folder")
+				require.True(t, errors.Is(err, os.ErrNotExist), "complete rollback retires the staging folder")
 			}
 		})
 	}
@@ -872,7 +872,7 @@ func workspaceTeam(t *testing.T, home, id string) []string {
 func requireAgentInvisible(t *testing.T, api *restAPI, id string) {
 	t.Helper()
 	_, err := os.Stat(filepath.Join(api.homePath, "entities", "agents", id+".json"))
-	require.True(t, os.IsNotExist(err), "FR-049: %s.json must not exist before commit", id)
+	require.True(t, errors.Is(err, os.ErrNotExist), "FR-049: %s.json must not exist before commit", id)
 	list := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
 	api.HandleAgents(list, req)
@@ -942,7 +942,7 @@ func requireNoSessionNames(t *testing.T, api *restAPI, id string) {
 	}
 	for _, root := range roots {
 		if _, statErr := os.Stat(root); statErr != nil {
-			if os.IsNotExist(statErr) {
+			if errors.Is(statErr, os.ErrNotExist) {
 				continue
 			}
 			require.NoError(t, statErr, "session store %s", root)

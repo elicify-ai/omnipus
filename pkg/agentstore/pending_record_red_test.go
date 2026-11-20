@@ -45,7 +45,7 @@ func pendingTestAgent(id string) *config.AgentConfig {
 func pendingPathMissing(t *testing.T, path string) bool {
 	t.Helper()
 	_, err := os.Stat(path)
-	return os.IsNotExist(err)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // TestCreatePendingState_WritesPendingRecord pins mechanism step 1: the whole

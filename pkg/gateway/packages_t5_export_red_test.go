@@ -10,6 +10,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -456,7 +457,7 @@ func TestPackages_S1aRefusals(t *testing.T) {
 			got := callPackageImport(t, api, pkg)
 			requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeExternalWorkerNotSupported)
 			_, statErr := os.Stat(api.homePath + "/backups/.staging")
-			require.True(t, os.IsNotExist(statErr), "a refused upload must not keep a staging folder")
+			require.True(t, errors.Is(statErr, os.ErrNotExist), "a refused upload must not keep a staging folder")
 		}
 	})
 	t.Run("D12-2 only unknown elements is no_supported_element", func(t *testing.T) {

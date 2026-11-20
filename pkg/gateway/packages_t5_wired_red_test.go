@@ -9,6 +9,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -130,7 +131,7 @@ func TestPackagesApply_MainChatScope_Wired(t *testing.T) {
 	yId, err := session.MainSessionID(ws, y)
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(store.BaseDir(), yId))
-	require.True(t, os.IsNotExist(err), "fixture: Y has no main chat")
+	require.True(t, errors.Is(err, os.ErrNotExist), "fixture: Y has no main chat")
 	vId, err := session.MainSessionID(ws, v)
 	require.NoError(t, err)
 	vMeta := filepath.Join(store.BaseDir(), vId, "meta.json")
@@ -146,7 +147,7 @@ func TestPackagesApply_MainChatScope_Wired(t *testing.T) {
 	require.NotContains(t, string(got.Body), v, "V must not produce a warning")
 	requireOneRecoveredMain(t, api, ws, res.Created[0].NewId)
 	_, err = os.Stat(filepath.Join(store.BaseDir(), yId))
-	require.True(t, os.IsNotExist(err), "FR-036a: Y still has no main chat")
+	require.True(t, errors.Is(err, os.ErrNotExist), "FR-036a: Y still has no main chat")
 	gotV, err := os.ReadFile(vMeta)
 	require.NoError(t, err)
 	require.Equal(t, damaged, gotV, "FR-036a: V's damaged main chat is byte-identical")
@@ -182,7 +183,7 @@ func TestPackagesApply_NativeWorkerReachable_Wired(t *testing.T) {
 		mainID, err := session.MainSessionID(ws, id)
 		require.NoError(t, err)
 		_, statErr := os.Stat(filepath.Join(store.BaseDir(), mainID, "meta.json"))
-		require.True(t, os.IsNotExist(statErr), "FR-036b: a native worker has no main chat")
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "FR-036b: a native worker has no main chat")
 	}
 
 	path := filepath.Join(api.homePath, "entities", "delegation", ws+".json")
