@@ -34,7 +34,7 @@ type opencodeFix1895Frames struct {
 // opencodeFix1895Launch drives the real launcher/runner and real WS streamer /
 // session hub. Only the external program is a process-edge fixture. Both
 // subscribers bind before dispatch, as two people viewing the helper chat do.
-func opencodeFix1895Launch(t *testing.T, program, mode string) (*agent.AgentLoop, steer.LaunchResult, [2]*wsConn, net.Conn) {
+func opencodeFix1895Launch(t *testing.T, program, mode string, configure ...func(*config.Config, *bus.MessageBus)) (*agent.AgentLoop, steer.LaunchResult, [2]*wsConn, net.Conn) {
 	t.Helper()
 	addr, awaitProcess := opencodeFix1895Gate(t)
 	home := t.TempDir()
@@ -56,6 +56,9 @@ func opencodeFix1895Launch(t *testing.T, program, mode string) (*agent.AgentLoop
 	}
 	messages := bus.NewMessageBus()
 	t.Cleanup(messages.Close)
+	for _, setup := range configure {
+		setup(cfg, messages)
+	}
 	al := mustAgentLoop(t, cfg, messages, &opencodeFix1895NativeProvider{})
 	classifier := agent.NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())
 	al.SetSteerAudienceDeps(agent.NewSteerAudienceResolver(classifier), steer.NopBoundaryObserver{}, agent.NewSteerUpwardDeliverer())
