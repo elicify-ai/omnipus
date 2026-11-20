@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -13,6 +14,7 @@ const (
 	opencode1895LiveNativeID = "native-frame-conversation-1895"
 	opencode1895LiveFollowup = "person's live follow-up 1895"
 	opencode1895LiveAnswer   = "RESUMED helper answer streamed live 1895"
+	opencode1895FirstAnswer  = "Original helper text before the person interrupts 1895"
 )
 
 // Both invocations are real processes. The first announces its conversation
@@ -42,6 +44,9 @@ func opencodeFix1895LiveFollowupProcess(addr, resumeAddr, nativeID string, holdO
 		if resumed {
 			fmt.Printf("{\"type\":\"text\",\"sessionID\":%q,\"part\":{\"type\":\"text\",\"text\":%q}}\n", opencode1895LiveNativeID, opencode1895LiveAnswer)
 		} else {
+			if slices.Contains(os.Args, "--fixture-mode=live_followup_text") {
+				fmt.Printf("{\"type\":\"text\",\"sessionID\":%q,\"part\":{\"type\":\"text\",\"text\":%q}}\n", opencode1895LiveNativeID, opencode1895FirstAnswer)
+			}
 			fmt.Println(`{"type":"tool_use","part":{"type":"tool","id":"fixture-ready-1895","tool":"read_file","state":{"status":"completed","input":{"path":"fixture.txt"},"output":"ready"}}}`)
 		}
 	}
