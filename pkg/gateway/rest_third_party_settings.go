@@ -84,13 +84,11 @@ func thirdPartyAgentWritable(homePath string, cfg *config.Config) ([]string, err
 }
 
 // thirdPartySavedNotAppliedText is the 500 text when the write reached disk but
-// the running config could not be refreshed; thirdPartySavedNotAppliedCode lets
-// the Settings tab show it without calling the save a failure.
-const (
-	thirdPartySavedNotAppliedText = "third-party agent settings were saved, but they are not applied yet; " +
-		"save again or restart Omnipus to apply them"
-	thirdPartySavedNotAppliedCode = "saved_not_refreshed"
-)
+// the running config could not be refreshed; it is sent with code
+// saved_not_refreshed and details.keys (writeSavedNotRefreshed) so the
+// Settings tab shows it without calling the save a failure.
+const thirdPartySavedNotAppliedText = "third-party agent settings were saved, but they are not applied yet; " +
+	"save again or restart Omnipus to apply them"
 
 // putThirdPartyAgentSettings validates every row, then writes the whole
 // section in one config write and audits each changed path and preset. A
@@ -123,11 +121,17 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	var previous map[string]config.ThirdPartyCLIConfig
-	err = a.safeUpdateConfigJSON(func(m map[string]any) error {
+	var written []string
+	err = a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
 		previous = readThirdPartyRows(m)
+		before, copyErr := deepCopyJSONMap(m)
+		if copyErr != nil {
+			return copyErr
+		}
 		writeThirdPartyRows(m, rows)
+		written = changedConfigKeys(thirdPartySubtree(before), thirdPartySubtree(m))
 		return nil
-	})
+	}, func() []string { return written })
 	var refreshErr *configRefreshError
 	if err != nil && !errors.As(err, &refreshErr) {
 		logsafeError("rest: PUT /settings/third-party-agents: failed", "error", err)
@@ -136,8 +140,10 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 	}
 	a.auditThirdPartyChanges(r, previous, rows)
 	if refreshErr != nil {
+		// The changed keys were recorded as apply_failed inside the write
+		// lock (C-2 / FR-102); details.keys names them.
 		logsafeError("rest: PUT /settings/third-party-agents: saved but not applied", "error", err)
-		jsonErrCode(w, http.StatusInternalServerError, thirdPartySavedNotAppliedText, thirdPartySavedNotAppliedCode)
+		writeSavedNotRefreshed(w, thirdPartySavedNotAppliedText, written)
 		return
 	}
 	writeJSON(w, http.StatusOK, a.thirdPartySettingsView())
@@ -348,4 +354,19 @@ func setDetected[S ~string](installed *bool, path, link **string, source **S, re
 		s := S(wire)
 		*source = &s
 	}
+}
+
+// thirdPartySubtree returns {"sandbox": {"third_party_agents": ...}} from a
+// config map, so changedConfigKeys yields full dotted keys for that section
+// only.
+func thirdPartySubtree(m map[string]any) map[string]any {
+	sb, _ := m["sandbox"].(map[string]any)
+	if sb == nil {
+		return map[string]any{}
+	}
+	tp, present := sb["third_party_agents"]
+	if !present {
+		return map[string]any{}
+	}
+	return map[string]any{"sandbox": map[string]any{"third_party_agents": tp}}
 }

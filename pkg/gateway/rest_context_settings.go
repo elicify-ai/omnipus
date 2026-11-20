@@ -26,6 +26,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -230,8 +231,94 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start from the live values so an omitted field is genuinely unchanged.
-	next := cfg.Context
+	// C-6 / FR-021: merge under the write lock. The request's fields are
+	// applied to the STORED context section read inside the lock, never to
+	// a copy taken before it, so two Saves that change different fields both
+	// survive in either order (same field: the later write wins; a list is
+	// one field).
+	written := contextUpdateKeys(&req, clearsDefaultWindow)
+	err := a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
+		ctxSection := ensureMap(m, "context")
+		next, decodeErr := storedContextSettings(ctxSection)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		applyContextSettingsUpdate(&next, &req, clearsDefaultWindow)
+		// Prune on every write, incoming list or not (contract: "overrides
+		// whose provider no longer exists are pruned on write").
+		before := len(next.ModelOverrides)
+		next.ModelOverrides = pruneDeadOverrides(a.agentLoop.GetConfig(), next.ModelOverrides)
+		if len(next.ModelOverrides) != before && req.ModelOverrides == nil {
+			written = append(written, "context.model_overrides")
+		}
+		writeContextSection(ctxSection, next)
+		return nil
+	}, func() []string { return written })
+	var refreshErr *configRefreshError
+	switch {
+	case errors.As(err, &refreshErr):
+		logsafeError("rest: PUT /settings/context: saved but not refreshed", "error", err)
+		writeSavedNotRefreshed(w, savedNotRefreshedText, written)
+		return
+	case err != nil:
+		slog.Error("rest: PUT /settings/context: failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to update context settings")
+		return
+	}
+
+	// Every 200 write triggers a registry reload so the next turn resolves
+	// windows and caps from the new values without a restart. A failed
+	// reload leaves the write on disk: saved, not in use (FR-102). The keys
+	// are recorded before the answer; the reload runs outside the config
+	// write lock, so this record is made after it, not inside it.
+	if err := a.triggerReloadAndWait(); err != nil {
+		slog.Error("rest: PUT /settings/context: reload failed", "error", err)
+		a.applyFailed.record(applyFailedSourceRefresh, written)
+		writeSavedNotRefreshed(w, savedNotRefreshedText, written)
+		return
+	}
+
+	a.getContextSettings(w, r)
+}
+
+// contextUpdateKeys lists the dotted config keys a context update writes
+// (details.keys of a saved_not_refreshed answer, FR-102).
+func contextUpdateKeys(req *gen.ContextSettingsUpdate, clearsDefaultWindow bool) []string {
+	var keys []string
+	add := func(present bool, name string) {
+		if present {
+			keys = append(keys, "context."+name)
+		}
+	}
+	add(req.McpResultCap != nil, "mcp_result_cap")
+	add(req.BuiltinSuccessCap != nil, "builtin_success_cap")
+	add(req.BuiltinFailureCap != nil, "builtin_failure_cap")
+	add(req.ToolResultShareFraction != nil, "tool_result_share_fraction")
+	add(req.IngestBoundBytes != nil, "ingest_bound_bytes")
+	add(req.DefaultContextWindow != nil || clearsDefaultWindow, "default_context_window")
+	add(req.ModelOverrides != nil, "model_overrides")
+	return keys
+}
+
+// storedContextSettings decodes the stored context section the way
+// config.json loads it (defaults, then the stored keys). A section that does
+// not decode fails the write before anything is written.
+func storedContextSettings(section map[string]any) (config.ContextSettings, error) {
+	next := config.DefaultConfig().Context
+	raw, err := json.Marshal(section)
+	if err != nil {
+		return next, fmt.Errorf("encode stored context settings: %w", err)
+	}
+	if err := json.Unmarshal(raw, &next); err != nil {
+		return next, fmt.Errorf("stored context settings do not decode: %w", err)
+	}
+	return next, nil
+}
+
+// applyContextSettingsUpdate applies only the fields present in req. An
+// omitted field is unchanged; model_overrides, when present, replaces the
+// whole list; default_context_window explicitly null clears it.
+func applyContextSettingsUpdate(next *config.ContextSettings, req *gen.ContextSettingsUpdate, clearsDefaultWindow bool) {
 	if req.McpResultCap != nil {
 		next.McpResultCap = *req.McpResultCap
 	}
@@ -265,45 +352,27 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		next.ModelOverrides = rows
 	}
-	// Prune on every write, incoming list or not (contract: "overrides whose
-	// provider no longer exists are pruned on write").
-	next.ModelOverrides = pruneDeadOverrides(cfg, next.ModelOverrides)
+}
 
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		ctxSection := ensureMap(m, "context")
-		ctxSection["mcp_result_cap"] = next.McpResultCap
-		ctxSection["builtin_success_cap"] = next.BuiltinSuccessCap
-		ctxSection["builtin_failure_cap"] = next.BuiltinFailureCap
-		ctxSection["tool_result_share_fraction"] = next.ToolResultShareFraction
-		ctxSection["ingest_bound_bytes"] = next.IngestBoundBytes
-		if next.DefaultContextWindow != nil {
-			ctxSection["default_context_window"] = *next.DefaultContextWindow
-		} else {
-			delete(ctxSection, "default_context_window")
-		}
-		rows := make([]map[string]any, 0, len(next.ModelOverrides))
-		for _, o := range next.ModelOverrides {
-			rows = append(rows, map[string]any{
-				"provider":       o.Provider,
-				"model":          o.Model,
-				"context_window": o.ContextWindow,
-			})
-		}
-		ctxSection["model_overrides"] = rows
-		return nil
-	}); err != nil {
-		slog.Error("rest: PUT /settings/context: failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to update context settings")
-		return
+// writeContextSection writes the merged values into the stored section.
+func writeContextSection(ctxSection map[string]any, next config.ContextSettings) {
+	ctxSection["mcp_result_cap"] = next.McpResultCap
+	ctxSection["builtin_success_cap"] = next.BuiltinSuccessCap
+	ctxSection["builtin_failure_cap"] = next.BuiltinFailureCap
+	ctxSection["tool_result_share_fraction"] = next.ToolResultShareFraction
+	ctxSection["ingest_bound_bytes"] = next.IngestBoundBytes
+	if next.DefaultContextWindow != nil {
+		ctxSection["default_context_window"] = *next.DefaultContextWindow
+	} else {
+		delete(ctxSection, "default_context_window")
 	}
-
-	// Every 200 write triggers a registry reload so the next turn resolves
-	// windows and caps from the new values without a restart.
-	if err := a.triggerReloadAndWait(); err != nil {
-		slog.Error("rest: PUT /settings/context: reload failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "context settings written but the reload failed")
-		return
+	rows := make([]map[string]any, 0, len(next.ModelOverrides))
+	for _, o := range next.ModelOverrides {
+		rows = append(rows, map[string]any{
+			"provider":       o.Provider,
+			"model":          o.Model,
+			"context_window": o.ContextWindow,
+		})
 	}
-
-	a.getContextSettings(w, r)
+	ctxSection["model_overrides"] = rows
 }

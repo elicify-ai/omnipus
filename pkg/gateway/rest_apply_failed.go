@@ -74,15 +74,6 @@ func (r *applyFailedRegistry) clearSource(source applyFailedSource) {
 	}
 }
 
-// clearKeys removes the given keys, whatever recorded them.
-func (r *applyFailedRegistry) clearKeys(keys []string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, k := range keys {
-		delete(r.entries, k)
-	}
-}
-
 // keys returns the listed keys, sorted.
 func (r *applyFailedRegistry) keys() []string {
 	r.mu.Lock()
@@ -131,7 +122,8 @@ func (a *restAPI) safeUpdateConfigJSONRecorded(mutate func(m map[string]any) err
 }
 
 // changedConfigKeys returns the dotted leaf paths whose value differs between
-// before and after (objects are walked; any other value is a leaf).
+// before and after (objects are walked, also when only one side has one; any
+// other value is a leaf).
 func changedConfigKeys(before, after map[string]any) []string {
 	var out []string
 	var walk func(prefix string, b, a map[string]any)
@@ -152,7 +144,19 @@ func changedConfigKeys(before, after map[string]any) []string {
 			av, aok := a[k]
 			bm, bIsMap := bv.(map[string]any)
 			am, aIsMap := av.(map[string]any)
-			if bok && aok && bIsMap && aIsMap {
+			if bIsMap || aIsMap {
+				// A section added, removed or replaced by a scalar is listed
+				// by its leaves, so details.keys names dotted leaf keys
+				// (gateway.log_level, not gateway).
+				if bIsMap != aIsMap && ((bok && !bIsMap && bv != nil) || (aok && !aIsMap && av != nil)) {
+					out = append(out, path)
+				}
+				if bm == nil {
+					bm = map[string]any{}
+				}
+				if am == nil {
+					am = map[string]any{}
+				}
 				walk(path, bm, am)
 				continue
 			}
@@ -178,4 +182,35 @@ func deepCopyJSONMap(m map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// performancePendingApplyConfigKeys maps a PUT /performance pending_apply
+// field to the config key it saved (C-6 outcome table: a saved-but-not-applied
+// 200 is listed as apply_failed too). The pending_apply state is the single
+// record; it is marked inside the config write lock and cleared by the
+// performance writer's own rules.
+var performancePendingApplyConfigKeys = map[gen.PerformancePendingApplyChangedFields]string{
+	gen.PerformancePendingApplyChangedFieldsMaxParallelAgents:         "performance.max_parallel_agents",
+	gen.PerformancePendingApplyChangedFieldsToolsOnDemand:             "tools.manifest.compressed",
+	gen.PerformancePendingApplyChangedFieldsGoalMaxRounds:             "planning.goal_max_rounds",
+	gen.PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds:  "planning.goal_reminder_quiet_seconds",
+	gen.PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled: "planning.goal_stalled_checkin_enabled",
+	gen.PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes: "planning.goal_stalled_checkin_minutes",
+	gen.PerformancePendingApplyChangedFieldsMaxToolIterations:         "agents.defaults.max_tool_iterations",
+}
+
+// performancePendingApplyKeys returns the config keys of the current
+// PUT /performance pending_apply, or nil when nothing is pending.
+func (a *restAPI) performancePendingApplyKeys() []string {
+	snap := a.pendingApply.snapshot()
+	if snap == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(snap.ChangedFields))
+	for _, f := range snap.ChangedFields {
+		if k, ok := performancePendingApplyConfigKeys[f]; ok {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }

@@ -213,8 +213,8 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	diffs, err = a.appendApplyFailedEntries(diffs, persisted)
-	if err != nil {
+	diffs, appendErr := a.appendApplyFailedEntries(diffs, persisted)
+	if appendErr != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to read running config")
 		return
 	}
@@ -233,7 +233,7 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 // running config still holds (nil when the path is absent there). A key
 // already listed as restart_required is not listed twice.
 func (a *restAPI) appendApplyFailedEntries(diffs []pendingRestartEntry, persisted map[string]any) ([]pendingRestartEntry, error) {
-	keys := a.applyFailed.keys()
+	keys := append(a.applyFailed.keys(), a.performancePendingApplyKeys()...)
 	if len(keys) == 0 {
 		return diffs, nil
 	}
@@ -263,6 +263,7 @@ func (a *restAPI) appendApplyFailedEntries(diffs []pendingRestartEntry, persiste
 			AppliedValue:   getAtPath(running, key),
 			Reason:         gen.PendingRestartEntryReasonApplyFailed,
 		})
+		listed[key] = struct{}{}
 	}
 	return diffs, nil
 }
