@@ -57,7 +57,11 @@ import (
 // Acceptance: Plan 3 §1 — "Retention retroactive: lowering triggers immediate background sweep"
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 9
 func TestRetentionRetroactiveSweep(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+	// The 1-day retention window is seeded in the RUNNING config
+	// (newRetentionSweepAPI, rest_retention_test.go): the sweep reads the
+	// config the loop holds. The old seeding went through PUT
+	// /security/retention, which the Settings redesign removes (FR-047, C-3).
+	api := newRetentionSweepAPI(t, 1, false)
 
 	// The retention sweep uses GetSessionStore() whose baseDir is
 	// filepath.Dir(workspace)/sessions — NOT api.homePath/sessions.
@@ -88,14 +92,8 @@ func TestRetentionRetroactiveSweep(t *testing.T) {
 		require.NotEmpty(t, files, "session file must exist before sweep for %s", sid)
 	}
 
-	// Update retention to 1 day so the 2-day-old files are beyond the window.
-	putRetentionBody := `{"session_days":1}`
-	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/security/retention", strings.NewReader(putRetentionBody))
-	putReq.Header.Set("Content-Type", "application/json")
-	putReq = withAdminRole(putReq)
-	putW := httptest.NewRecorder()
-	api.HandleRetention(putW, putReq)
-	require.Equal(t, http.StatusOK, putW.Code, "PUT retention must succeed: %s", putW.Body)
+	// (The 1-day window is seeded before the sweep — see the harness comment
+	// above; PUT /security/retention no longer exists, FR-047.)
 
 	// Trigger the on-demand sweep.
 	sweepReq := httptest.NewRequest(http.MethodPost, "/api/v1/security/retention/sweep", nil)
