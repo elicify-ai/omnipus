@@ -178,7 +178,7 @@ func TestL11274CreatedExternalWorkerCanBeDelegatedToEachDriver(t *testing.T) {
 	for _, cli := range []string{"claude-code", "codex", "opencode"} {
 		t.Run(cli, func(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
-			path := l11274Executable(t, f.home, cli, true)
+			path := opencodeTrustedProgram(t, cli)
 			f.setProgram(t, cli, path)
 			result := f.execute(t, "create_agent", l11274CreateArgs("Created "+cli, cli))
 			id := l11274AssertCreated(t, f, result, cli, "#6E8BA8")
@@ -194,7 +194,7 @@ func TestL11274ExistingExternalWorkerDriverControls(t *testing.T) {
 	for _, cli := range []string{"claude-code", "codex", "opencode"} {
 		t.Run(cli, func(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
-			path := l11274Executable(t, f.home, cli, true)
+			path := opencodeTrustedProgram(t, cli)
 			id := "existing-" + cli
 			f.setProgram(t, cli, path)
 			l11274SeedWorker(t, f, id, &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: cli})
