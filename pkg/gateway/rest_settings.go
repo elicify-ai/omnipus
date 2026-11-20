@@ -245,16 +245,15 @@ func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, resp)
 }
 
-// deleteCredential removes a credential by key. Like setCredential, it requires
-// a re-auth consent token (FR-12.2, ADR-022) — deleting a stored secret is as
-// disruptive as writing one (it can revoke a channel or provider mid-session).
+// deleteCredential removes a credential by key. Unlike setCredential and
+// rotateCredentials it does NOT ask for a re-auth consent token: the Settings
+// screen asks one confirm before deleting instead (Settings redesign #1519,
+// B7 / FR-056, founder S-Q11 B and FQ-2 A; dated correction in ADR-022). It
+// stays behind sign-in (withAuth) and the authenticated-user check below.
 func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key string) {
 	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
 	if !ok || user == nil {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-	if !a.requireReAuth(w, r, user.Username) {
 		return
 	}
 	if err := validateEntityID(key); err != nil {
@@ -308,7 +307,7 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 }
 
 // rotateCredentials handles POST /api/v1/credentials/rotate (G5). It re-encrypts
-// the whole vault under a new passphrase-derived key. Like set/delete, it requires
+// the whole vault under a new passphrase-derived key. Like set, it requires
 // a re-auth consent token (FR-12.2, ADR-022) — rotation is a high-blast-radius
 // security operation. No restart needed: the store updates its in-memory key.
 func (a *restAPI) rotateCredentials(w http.ResponseWriter, r *http.Request) {
