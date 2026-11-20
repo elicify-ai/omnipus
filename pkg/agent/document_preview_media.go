@@ -410,10 +410,10 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 		}
 		return 0, nil
 	}
-	if d.Text == "" && len(d.PDF) > 0 && (forms.pdfRejected || noBudget != "") {
+	if d.Text == "" && len(d.PDF) > 0 && (forms.pdfRejected || noBudget != "" || countNote != "") {
 		// No stored text: recover with the text extracted from the same
-		// bytes, as an uploaded PDF does (provider rejection, or no budget
-		// for the newest preview's media).
+		// bytes, as an uploaded PDF does (provider rejection, no budget for
+		// the newest preview's media, or the per-request PDF count used up).
 		why := "; the provider rejected the native PDF"
 		if !forms.pdfRejected {
 			why = reason
