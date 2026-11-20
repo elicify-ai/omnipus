@@ -1509,8 +1509,10 @@ components:
       $ref: ./components/schemas/ChannelIdentity.yaml
     ChannelEntry:
       $ref: ./components/schemas/ChannelEntry.yaml
-    RetentionConfig:
-      $ref: ./components/schemas/RetentionConfig.yaml
+    RetentionSettings:
+      $ref: ./components/schemas/RetentionSettings.yaml
+    RetentionSettingsUpdate:
+      $ref: ./components/schemas/RetentionSettingsUpdate.yaml
     RetentionSweepResult:
       $ref: ./components/schemas/RetentionSweepResult.yaml
     SandboxConfig:
@@ -1794,8 +1796,6 @@ components:
       $ref: ./components/schemas/RateLimitsUpdateResponse.yaml
     SessionScopeUpdateResponse:
       $ref: ./components/schemas/SessionScopeUpdateResponse.yaml
-    RetentionUpdateResponse:
-      $ref: ./components/schemas/RetentionUpdateResponse.yaml
     AgentToolsResponse:
       $ref: ./components/schemas/AgentToolsResponse.yaml
     RunnerTestResponse:
@@ -1992,8 +1992,6 @@ components:
       $ref: ./components/schemas/CliValidateRequest.yaml
     CliValidateResponse:
       $ref: ./components/schemas/CliValidateResponse.yaml
-    RetentionUpdateRequest:
-      $ref: ./components/schemas/RetentionUpdateRequest.yaml
     McpToolsListResponse:
       $ref: ./components/schemas/McpToolsListResponse.yaml
     McpToolCallRequest:
@@ -4942,57 +4940,6 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
-  /security/retention:
-    get:
-      operationId: getRetention
-      summary: Get session retention configuration
-      description: 'Returns session_days and disabled flag from storage.retention.
-
-        '
-      tags:
-      - Security
-      responses:
-        '200':
-          description: Current retention configuration.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RetentionConfig'
-        '401':
-          description: Missing or invalid bearer token.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-    put:
-      operationId: updateRetention
-      summary: Update session retention configuration
-      description: "Partial update \u2014 any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string \"true\"/\"false\" rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false).\n"
-      tags:
-      - Security
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RetentionConfig'
-      responses:
-        '200':
-          description: Updated retention configuration.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RetentionUpdateResponse'
-        '400':
-          description: Type mismatch (float for session_days, string for disabled).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '503':
-          $ref: '#/components/responses/503BypassActive'
   /security/retention/sweep:
     post:
       operationId: triggerRetentionSweep
@@ -5241,13 +5188,18 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
     put:
       operationId: updateMemorySettings
-      summary: Update global memory and recap/retention settings
+      summary: Update global memory and recap settings
       description: >
-        Writes the global memory/recap and retention settings. Reads/writes
-        ONLY the MemorySettings fields — no merge of sibling config sections
-        or secrets (A2/G-02). Writable by any authenticated user (operator
-        decision, no admin gate). Uses safeUpdateConfigJSON server-side to
-        preserve all other config fields including API keys.
+        Writes the global memory/recap settings. Reads/writes ONLY the
+        MemorySettings fields — no merge of sibling config sections or secrets
+        (A2/G-02). Writable by any authenticated user (operator decision, no
+        admin gate). Uses safeUpdateConfigJSON server-side to preserve all
+        other config fields including API keys. Retention is NOT writable
+        here: a body carrying session_days or memory_retros_days is refused
+        with 400 naming the field, nothing in the body is applied — including
+        its other fields — and this holds whatever gateway.validate_inbound
+        is (Settings redesign #1519, FR-045). Retention is changed only
+        through PUT /settings/retention.
       tags:
         - Settings
       security:
@@ -5266,13 +5218,83 @@ paths:
               schema:
                 $ref: '#/components/schemas/MemorySettings'
         '400':
-          description: Invalid field value (e.g. negative session_days).
+          description: Invalid field value, or a retired retention field (session_days / memory_retros_days) in the body.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+  /settings/retention:
+    get:
+      operationId: getRetentionSettings
+      summary: Get the retention settings (Settings → Data & retention)
+      description: >
+        Returns RetentionSettings: how long chat history and memory are kept,
+        as stored. The read shape has no range so a hand-edited out-of-range
+        value can be shown and repaired; 0 or a negative stored day count is
+        returned as its effective default (90 / 180). keep_everything_forever
+        mirrors the legacy config-file-only storage.retention.disabled.
+        Writable by any authenticated user (withAuth + RequireNotBypass, the
+        /settings/memory posture; no password).
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The current retention settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionSettings'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+    put:
+      operationId: updateRetentionSettings
+      summary: Update the retention settings
+      description: >
+        The only write path for retention (Settings redesign #1519, C-3).
+        Takes RetentionSettingsUpdate, applies the sent fields to the stored
+        values read inside the config write lock, writes once, and answers
+        200 with RetentionSettings. Ranges are enforced in the handler
+        whatever gateway.validate_inbound is (review MAJ-004): session_days
+        1–365, memory_retros_days 1–730 (validated whenever sent, also while
+        memory_retros_forever is true), memory_retros_forever a boolean; a
+        body carrying keep_everything_forever or any unknown field, an empty
+        body, and a wrong type each answer 400 naming the field and its
+        range. Every other writer that would change the effective retention
+        values — the generic PUT /config included — is refused by effect
+        (FR-044).
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionSettingsUpdate'
+      responses:
+        '200':
+          description: The updated retention settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionSettings'
+        '400':
+          description: A field outside its range or type, an unknown or read-only field, or an empty body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /settings/context:
     get:
       operationId: getContextSettings
@@ -5314,6 +5336,17 @@ paths:
         Every 200 write triggers a registry reload so the next turn uses the
         new values without a restart; overrides whose provider no longer
         exists are pruned on write. Writable by any authenticated user (withAuth).
+        The sent fields are applied to the stored values read INSIDE the
+        config write lock (Settings redesign #1519, FR-021): two writes
+        changing different fields both survive in either order; on the same
+        field the later write wins; a list value is one field. When
+        config.json was written but the live refresh or reload failed
+        afterwards, the answer is 500 ErrorResponse with code
+        "saved_not_refreshed" and details.keys naming the changed
+        context.<field> paths — saved, not in use — and the keys are recorded
+        as apply_failed entries in GET /config/pending-restart inside the
+        write lock, before the response is sent (#995, FR-102). A failure
+        before config.json was written answers 500 without that code.
       tags:
         - Settings
       security:
@@ -5335,6 +5368,14 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '500':
+          description: >
+            Failed before the write (no code), or written and then the live
+            refresh/reload failed (code "saved_not_refreshed", details.keys).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /settings/third-party-agents:
     get:
       operationId: getThirdPartyAgentSettings
@@ -5377,7 +5418,11 @@ paths:
         (RequirePersonSession): no session 401, an agent or tool token 403;
         no password step. A 500 with code saved_not_refreshed means the write
         reached disk and the change is audited, but the running settings could
-        not be refreshed; saving again applies it.
+        not be refreshed; saving again applies it. That answer carries
+        details.keys naming the changed clis.<cli> dotted keys, and the keys
+        are recorded as apply_failed entries in GET /config/pending-restart
+        inside the write lock, before the response is sent (Settings redesign
+        #1519, FR-102).
       tags:
         - Settings
       security:
@@ -6292,6 +6337,96 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+  /config:
+    get:
+      operationId: getConfig
+      summary: Get the generic configuration map
+      description: >
+        Returns the full configuration (config.Config serialized; secrets
+        redacted as "[redacted]" placeholders). Read by Settings → Gateway and
+        the SPA's config round-trip.
+      tags:
+        - Config
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The configuration map.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    put:
+      operationId: updateConfig
+      summary: Update the generic configuration (deep merge, one level)
+      description: >
+        Deep-merges the body into config.json (maps merge one level deep;
+        scalars and arrays replace). Refusals, in order, before anything is
+        written: 403 for a credential-like field (providers, or a key whose
+        folded name contains api_key, secret or password — a raw GET /config
+        echo is refused here); 403 for a blocked path (sandbox, security,
+        credentials, gateway.users, agents.list, gateway.dev_mode_bypass, …);
+        400 for a merged result that changes any effective retention value —
+        "retention settings can only be changed through
+        PUT /api/v1/settings/retention" (Settings redesign #1519, FR-044) —
+        or any effective Performance value — "performance settings can only
+        be changed through PUT /api/v1/performance" (FR-100) — or that does
+        not decode into the configuration ("this write does not decode: …"),
+        or that would change the protected agent defaults (#904). A write
+        that stored config.json and then failed to refresh the live settings
+        answers 500 ErrorResponse with code "saved_not_refreshed" and
+        details.keys naming the dotted keys the body changed — saved, not in
+        use — with the keys recorded as apply_failed entries in
+        GET /config/pending-restart inside the write lock, before the
+        response is sent (FR-102). A failure before the write answers 500
+        without that code. A successful write answers 200 with the
+        configuration map (the GET shape).
+      tags:
+        - Config
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: The stored configuration after the write.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: >
+            Retention or Performance guard, protected agent defaults, or a
+            merged result that does not decode. Nothing was written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Credential-like field or blocked path. Nothing was written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          description: >
+            Failed before the write (no code), or written and then the live
+            refresh failed (code "saved_not_refreshed", details.keys).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /config/gateway/rotate-token:
     post:
       operationId: rotateGatewayToken
@@ -6325,10 +6460,25 @@ paths:
   /config/pending-restart:
     get:
       operationId: getPendingRestart
-      summary: Get pending restart-gated config changes
-      description: 'Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed.
-
-        '
+      summary: Get pending restart-gated and apply-failed config changes
+      description: >
+        Returns an array of entries: (a) config keys whose persisted (disk)
+        value differs from the boot-time applied value, with reason
+        "restart_required", and (b) hot-reloaded keys whose last save did not
+        apply since boot, with reason "apply_failed". The restart_required
+        key list (RestartGatedKeys): sandbox.mode, sandbox.audit_log,
+        sandbox.allowed_paths, sandbox.workspace_path_guard, session.dm_scope,
+        gateway.host, gateway.port, gateway.public_url,
+        tools.run_in_workspace.warmup_timeout_seconds,
+        sandbox.filesystem_model, tools.exec.enable_proxy,
+        security.platform_auth.issuer, security.platform_auth.client_id,
+        security.platform_auth.instance_id, security.platform_auth.keys.
+        Hot-reload keys (prompt-injection defense level, rate limits,
+        sandbox.auto_approve) and God Mode never appear as
+        restart_required. An empty array means no restart is needed. For an
+        apply_failed entry, persisted_value is read from config.json at
+        request time; a later successful apply of that key, or a restart,
+        removes the entry.
       tags:
       - Config
       responses:
@@ -6678,7 +6828,12 @@ paths:
     delete:
       operationId: deleteCredential
       summary: Delete a credential
-      description: Removes a credential by key. Returns 404 if not found.
+      description: >
+        Removes a credential by key. Returns 404 if not found. No
+        X-Reauth-Token and no password (Settings redesign #1519, B7 / FR-056;
+        ADR-022 corrected at landing): the existing sign-in, admin and bypass
+        guards and the audit entry stay. Setting (POST /credentials) and
+        rotating (POST /credentials/rotate) still require the reauth token.
       tags:
       - Settings
       parameters:

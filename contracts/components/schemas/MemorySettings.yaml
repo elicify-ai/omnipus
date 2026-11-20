@@ -1,9 +1,12 @@
 type: object
 description: >
-  Global memory and recap/retention settings. Backed by agents.defaults.* and
-  storage.retention fields in config.json. Readable and writable by any
-  authenticated user (operator decision, A2/G-02). Never exposes secrets —
-  the endpoint reads/writes only the listed fields.
+  Global memory and recap settings. Backed by agents.defaults.* fields in
+  config.json. Readable and writable by any authenticated user (operator
+  decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only
+  the listed fields. Retention moved out: chat-history and memory day counts
+  and the Keep-forever switch live only in RetentionSettings
+  (GET/PUT /settings/retention); a body carrying session_days or
+  memory_retros_days is refused with 400.
 additionalProperties: false
 properties:
   auto_recap_enabled:
@@ -148,16 +151,3 @@ properties:
       Least time between two boot-time recaps, in seconds. Default 1. A stored value outside the range is clamped on use.
       Maps to agents.defaults.bootstrap_recap_min_spacing_seconds.
     example: 1
-  session_days:
-    type: integer
-    description: >
-      Number of days to retain session JSONL files before the retention sweep
-      removes them. Maps to storage.retention.session_days.
-    example: 90
-  memory_retros_days:
-    type: integer
-    description: >
-      Number of days to retain memory retrospective files. Defaults longer than
-      session retention (180 vs 90) so reflections outlive their transcripts.
-      Maps to storage.retention.memory_retros_days.
-    example: 180
