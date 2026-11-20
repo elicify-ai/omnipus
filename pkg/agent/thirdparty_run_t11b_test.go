@@ -64,8 +64,8 @@ func TestNoSavedPath_RunRefusedWithRepairMessage(t *testing.T) {
 
 func TestSavedPath_RunUsesSettingsNotLegacyPath(t *testing.T) {
 	f := t8RunFixture(t)
-	program := l11274Executable(t, f.home, "codex", true)
-	legacy := l11274Executable(t, f.home, "codex", true)
+	program := opencodeTrustedProgram(t, "codex")
+	legacy := opencodeTrustedProgram(t, "codex")
 	f.setProgram(t, "codex", program)
 	t8SetPreset(t, f, "codex", "--max-turns 40")
 	t11bSeedCodexWorker(t, f, "t11b-saved-path", "", legacy)
@@ -80,7 +80,7 @@ func TestSavedPath_RunUsesSettingsNotLegacyPath(t *testing.T) {
 
 func TestPresetParams_AppliedLastUnfiltered_AgentFlagsFiltered(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	const bypass = "--dangerously-bypass-approvals-and-sandbox"
 	t8SetPreset(t, f, "codex", bypass+" --model gpt-5-codex")
 	t11bSeedCodexWorker(t, f, "t11b-preset-order", bypass+" --add-dir /allowed-extra", "")
@@ -138,7 +138,7 @@ func t11bReadRunAudit(t *testing.T, logger *audit.Logger, path string) []audit.R
 
 func TestPresetAudit_RecordsPresetUse(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	const secret = "t11b-registered-sensitive-value"
 	t8SetPreset(t, f, "codex", "--api-key "+secret+" --model gpt-5-codex")
 	f.al.GetConfig().RegisterSensitiveValues([]string{secret})
@@ -178,7 +178,7 @@ func TestPresetAudit_RecordsPresetUse(t *testing.T) {
 
 func TestPresetAudit_NoPresetProducesNoPresetNote(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	// Positive control uses the SAME writer/reader. A missing preset-note
 	// implementation cannot make the negative assertion pass vacuously.
 	t8SetPreset(t, f, "codex", "--model gpt-5-codex")
