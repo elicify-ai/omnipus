@@ -106,11 +106,17 @@ function stubFetch({ mode = 'local', reauth, write }: StubOptions = {}) {
     calls.push({ url, init: init ?? {} })
     // Content-Type matters: ApiError.fromResponse reads the body only for a
     // JSON response, and the D-11 rows assert the SERVER's message.
+    // text() must exist too: fromResponse reads the body with res.text()
+    // (api-error.ts::fromResponse) — a fake reply carrying only json() loses
+    // the body, and the server's message can never show. That missing member
+    // is what made D-11 row 7 look like a display-priority defect (fe
+    // r6-d11-row7-harness.diff: with text() added, 11/11 pass).
     const respond = (status: number, body: unknown) => ({
       ok: status >= 200 && status < 300,
       status,
       headers: new Headers({ 'Content-Type': 'application/json' }),
       json: async () => body,
+      text: async () => JSON.stringify(body),
     })
     if (url.includes('/state')) {
       return respond(200, { onboarding_complete: true, identity: { mode, edition: 'hosted', signed_in: true } })
