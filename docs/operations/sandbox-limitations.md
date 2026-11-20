@@ -79,14 +79,37 @@ too, so keep the data folder outside `/tmp`.
 LibreOffice also reads the list of user accounts (account names, home folders
 and login shells; no passwords, and every account on the computer can already
 read it), so that its connection point belongs to the account Omnipus runs as
-instead of being open to every account on the computer. With
-`sandbox.filesystem_model` set to `confined`, Omnipus's own sandbox on Linux
-also allows three reads, and nothing more: the list of user accounts
-(`/etc/passwd`) and the system font folders (`/usr/share/fonts` and, when it
-exists, `/usr/local/share/fonts`). They are there so previews keep the
-installed fonts and LibreOffice's connection point stays private to the
-account Omnipus runs as. They are read-only, and the separate sandbox Omnipus
-builds for each agent shell command does not include them.
+instead of being open to every account on the computer.
+
+With `sandbox.filesystem_model` set to `confined`, Omnipus's own sandbox on
+Linux is set up at startup with these extra permissions for document previews,
+and nothing more:
+
+| Extra permission | What it covers | Why |
+|---|---|---|
+| Read | The list of user accounts (`/etc/passwd`) and the system font folders (`/usr/share/fonts` and, when it exists, `/usr/local/share/fonts`) | Previews keep the installed fonts, and LibreOffice's connection point stays private to the account Omnipus runs as |
+| Read and run | The Office preview and PDF preview program folders installed with Omnipus: `/usr/share/omnipus/office` and `/usr/share/omnipus/pdfium` for the `.deb` and `.rpm` packages, `/usr/local/share/omnipus/office` and `/usr/local/share/omnipus/pdfium` for the one-line installer's default and the Docker image, `<install folder>/../share/omnipus/office` and `…/pdfium` for another installer folder | Without it, the preview programs cannot read their own files in this mode and every preview fails |
+| Read and run | Each folder registered with `omnipus office register` or `omnipus pdf-renderer register` | The same, for a copy you installed yourself |
+| Read and run | The Omnipus program file itself (only the file, not its folder) | Omnipus starts each preview program through itself |
+
+Only folders that are installed when Omnipus starts get these permissions, and
+never for writing. The folders around them are not included (for example not
+the whole `/usr/local/bin` or `/usr/share/omnipus`). The whole file system
+(`/`), a protected system folder such as `/etc`, and any folder that lies
+inside or contains a folder Omnipus or an agent can write (the Omnipus data
+folder, `/tmp` and folders allowed for writing) are refused, and a preview
+that needs such a folder says so. These permissions belong to Omnipus's own
+startup sandbox only: the separate sandbox Omnipus builds for each agent shell
+command includes none of them, so agents can neither read nor run these
+programs. The default `open` mode needs none of this, because it already
+allows reading and running programs everywhere.
+
+A preview program installed, registered, moved or reinstalled while Omnipus
+runs is used only after Omnipus is stopped and started (for example with your
+service manager). The in-app restart is not enough in the confined sandbox,
+because the restarted Omnipus can keep the permissions of the first start.
+Until then a preview says so, and `omnipus office register` and
+`omnipus pdf-renderer register` print a reminder.
 
 A stricter setup, with a separate private folder for each preview and a block
 on LibreOffice opening network connections itself, is not switched on yet; it

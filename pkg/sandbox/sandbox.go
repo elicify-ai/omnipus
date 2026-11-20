@@ -564,9 +564,36 @@ func DefaultPolicyForModel(
 	warnFn func(msg string, path string),
 	bindPorts []uint16,
 ) SandboxPolicy {
+	return DefaultBootPolicyForModel(model, homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts, nil)
+}
+
+// DefaultBootPolicyForModel is DefaultPolicyForModel plus the Office preview
+// startup grants (office-preview spec §3.8 BR-2.2, founder Q100 A). Only the
+// gateway startup calls it with grants; DefaultPolicyForModel delegates here
+// with startupGrants = nil, so no other caller can receive them, and
+// basePolicyForModel (and with it DeriveKernelPolicy and every per-turn or
+// tool policy) never sees them (BR-2.4).
+//
+// On Linux under the confined model each accepted grant becomes one
+// read+execute rule, appended after every other rule in the order given; a
+// path listed twice is granted once. Refusals reuse buildExecPathRules's
+// rules (BR-2.3, see ClassifyStartupGrant): a refused entry gets no rule and
+// one warning. The open model, macOS and Windows ignore startupGrants, so
+// their result is identical to the result without it.
+func DefaultBootPolicyForModel(
+	model FilesystemModel,
+	homePath string,
+	allowedPaths []string,
+	allowedExecPaths []string,
+	warnFn func(msg string, path string),
+	bindPorts []uint16,
+	startupGrants []string,
+) SandboxPolicy {
 	policy := basePolicyForModel(model, homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
 	if model != FilesystemModelOpen && runtime.GOOS == "linux" {
 		policy.FilesystemRules = append(policy.FilesystemRules, confinedBootExtraReads...)
+		policy.FilesystemRules = append(policy.FilesystemRules,
+			buildStartupGrantRules(startupGrants, WritableRoots(policy), warnFn)...)
 	}
 	return policy
 }

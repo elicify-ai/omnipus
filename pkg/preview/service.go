@@ -279,7 +279,7 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 		confine: confinement{readExec: []string{filepath.Dir(s.cfg.Self)}}, call: c, maxInput: maxInput}
 	var render *protocolProgram
 	if renderer != nil {
-		render = &protocolProgram{self: s.cfg.Self, target: renderer.Executable,
+		render = &protocolProgram{self: s.cfg.Self, target: renderer.Executable, observe: testHookRendererStart,
 			// run-limited (the omnipus executable) runs first and becomes the
 			// renderer by execve: both folders need read + execute.
 			confine: confinement{readExec: []string{renderer.Root, filepath.Dir(s.cfg.Self)}}, call: c, maxInput: maxInput}
@@ -483,8 +483,13 @@ func (s *Service) writeRoots(caller []component.WriteRoot) []component.WriteRoot
 func (s *Service) rendererComponent(caller []component.WriteRoot) (*component.Component, string, string) {
 	comp, problem := s.cfg.Resolver.Resolve(component.KindPDFRenderer)
 	if problem != nil {
-		if problem.Status == component.StatusMissing {
+		switch problem.Status {
+		case component.StatusMissing:
 			return nil, ReasonRendererMissing, "PDF renderer not installed"
+		case component.StatusAfterStart:
+			return nil, ReasonRendererDamaged, rendererAfterStartText
+		case component.StatusUnsafe:
+			return nil, ReasonRendererDamaged, fmt.Sprintf("PDF renderer is in a folder an agent can write (%s); disabled until that access is removed", problem.Reason)
 		}
 		return nil, ReasonRendererDamaged, "PDF renderer damaged (" + problem.Reason + ")"
 	}
@@ -507,6 +512,12 @@ func (s *Service) officeComponent(caller []component.WriteRoot) (*component.Comp
 		s.office = nil
 	}
 	if s.office != nil {
+		// A folder replaced in place after the start is no longer the one
+		// the startup rules granted (BR-2.5): check before reading it.
+		if problem := component.CheckStartupGrant(s.office.Root); problem != nil {
+			s.office = nil
+			return nil, officeProblem(problem)
+		}
 		if problem := s.office.VerifyIfChanged(); problem != nil {
 			s.office = nil
 			return nil, officeProblem(problem)
@@ -539,9 +550,22 @@ func registrationIdentity(home string, kind component.Kind) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// The BR-2.5 texts (office-preview spec §3.8, MV-1): a component installed,
+// registered or replaced after a confined Linux start is not used until
+// Omnipus is stopped and started.
+const (
+	officeAfterStartText   = "Office preview was installed or registered after Omnipus started. Stop and start Omnipus (for example with your service manager) to use it; the in-app restart is not enough in the confined sandbox."
+	rendererAfterStartText = "PDF renderer was installed or registered after Omnipus started; stop and start Omnipus (for example with your service manager) to use it; the in-app restart is not enough in the confined sandbox"
+)
+
 func officeProblem(p *component.ComponentError) *failure {
-	if p.Status == component.StatusMissing {
+	switch p.Status {
+	case component.StatusMissing:
 		return docFailure(`Office preview is not installed. Re-run the Omnipus installer with the Office preview component, or register LibreOffice with "omnipus office register" (PDF preview works without it).`)
+	case component.StatusAfterStart:
+		return docFailure(officeAfterStartText)
+	case component.StatusUnsafe:
+		return docFailure(fmt.Sprintf("Office preview is in a folder an agent can write (%s); disabled until that access is removed.", p.Reason))
 	}
 	return docFailure("Office preview is damaged (" + p.Reason + "). Reinstall or re-register the Office preview component.")
 }

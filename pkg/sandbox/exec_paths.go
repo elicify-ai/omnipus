@@ -142,17 +142,8 @@ func expandUserPath(raw string) (string, bool) {
 //   - /private aliasing: "/private/tmp/x" is textually unlike the built-in
 //     "/tmp" writable root, and "/private/var/folders/…" unlike $TMPDIR.
 func overlapsAny(path string, others []string) bool {
-	candidates := comparisonForms(path)
-	for _, other := range others {
-		for _, o := range comparisonForms(other) {
-			for _, c := range candidates {
-				if pathCoversFold(o, c) || pathCoversFold(c, o) {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	_, found := firstOverlap(path, others)
+	return found
 }
 
 // comparisonForms returns every form a path must be compared in: the cleaned

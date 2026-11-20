@@ -67,6 +67,11 @@ type converterStart struct {
 // by the test).
 var testHookConverterStart func(converterStart)
 
+// testHookRendererStart, when set, is called once per confined PDF renderer
+// start, synchronously and before the program runs. Only tests set it (spec
+// §13 T-128 (a): an after-start renderer is never started).
+var testHookRendererStart func(converterStart)
+
 // observedBy returns h with observe called once per start, after prepare
 // (the command line then carries the sandbox wrap) or before start. h is
 // unchanged when observe is nil or h applies no policy.
