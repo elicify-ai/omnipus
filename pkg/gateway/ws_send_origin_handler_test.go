@@ -172,7 +172,7 @@ func TestSendOriginHandler_SV2_RedirectRefused_ThenControlledReceipt(t *testing.
 	soSend(t, conn, generated.RedirectFrame{Type: "redirect", SessionId: b, Instruction: "sv2 matching instruction",
 		Origin: soChatOrigin(b), ClientFrameId: strPtr("so-r2")})
 	frames = soWindow(t, conn, soRequesterWindow)
-	idxReceipt := indexOf(soTypes(frames), "command_received")
+	idxReceipt := soIndexOf(soTypes(frames), "command_received")
 	require.Greater(t, idxReceipt, -1, "SV-2 control: the accepted redirect must get command_received (window: %v)", soTypes(frames))
 	var receipt generated.CommandReceivedFrame
 	require.NoError(t, json.Unmarshal(frames[idxReceipt].Raw, &receipt))
@@ -446,7 +446,7 @@ func TestSendOriginHandler_SV19_RefusalSnapshot(t *testing.T) {
 	t.Run("k direct failing on closing connection", soSV19K)
 }
 
-func indexOf(haystack []string, needle string) int {
+func soIndexOf(haystack []string, needle string) int {
 	for i, s := range haystack {
 		if s == needle {
 			return i
