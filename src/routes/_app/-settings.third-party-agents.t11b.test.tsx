@@ -53,8 +53,14 @@ function openSettings(url: string) {
   return router
 }
 
-async function expectThirdPartyTab() {
-  await waitFor(() => expect(screen.getByTestId('settings-tab-third-party-agents')).toHaveAttribute('data-state', 'active'))
+async function expectThirdPartySection() {
+  // The redesign retires the tab strip: the open section is named in the
+  // address (FR-002) and marked by aria-current on its list link (FR-001,
+  // "The section list is a list of links with aria-current on the open one").
+  // The receiving-section oracle is unchanged: the actual section renders.
+  await waitFor(() =>
+    expect(screen.getByTestId('settings-nav-third-party-agents')).toHaveAttribute('aria-current', 'page'),
+  )
   expect(await screen.findByRole('textbox', { name: 'Codex program path' })).toHaveValue('/opt/t11b/codex')
   expect(screen.getByRole('textbox', { name: 'Codex parameters' })).toHaveValue('--model saved-model')
   expect(screen.getByTestId('third-party-agents-section')).toBeVisible()
@@ -63,22 +69,22 @@ async function expectThirdPartyTab() {
 describe('T11-B receiving Settings link (CHECK F5)', () => {
   it('cold /settings?tab=third-party-agents opens the actual section, not Providers', async () => {
     const router = openSettings('/settings?tab=third-party-agents')
-    await expectThirdPartyTab()
+    await expectThirdPartySection()
     expect(router.state.location.pathname).toBe('/settings')
     expect(router.state.location.search).toEqual({ tab: 'third-party-agents' })
   })
 
   it('a search-only navigation switches the mounted Settings screen to Third-party agents', async () => {
     const router = openSettings('/settings?tab=providers')
-    await waitFor(() => expect(screen.getByRole('tab', { name: /^providers$/i })).toHaveAttribute('data-state', 'active'))
+    await waitFor(() => expect(screen.getByTestId('settings-nav-providers')).toHaveAttribute('aria-current', 'page'))
     expect(screen.queryByTestId('third-party-agents-section')).not.toBeInTheDocument()
     await act(async () => { await router.navigate({ to: '/settings', search: { tab: 'third-party-agents' } }) })
-    await expectThirdPartyTab()
+    await expectThirdPartySection()
   })
 
-  it('a misspelled query value does not accidentally select the Third-party agents tab', async () => {
+  it('a misspelled query value does not accidentally open the Third-party agents section', async () => {
     const router = openSettings('/settings?tab=third-party-agent')
-    await waitFor(() => expect(screen.getByRole('tab', { name: /^providers$/i })).toHaveAttribute('data-state', 'active'))
+    await waitFor(() => expect(screen.getByTestId('settings-nav-providers')).toHaveAttribute('aria-current', 'page'))
     expect(screen.queryByTestId('third-party-agents-section')).not.toBeInTheDocument()
     expect(router.state.location.search).not.toEqual({ tab: 'third-party-agents' })
   })
