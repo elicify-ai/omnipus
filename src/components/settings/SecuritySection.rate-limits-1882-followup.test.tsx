@@ -1,0 +1,315 @@
+/**
+ * SecuritySection.rate-limits-1882-followup.test.tsx — #1882 follow-up, gate
+ * findings F-PTA-1 and F-PTA-2 (test-author half; RED/GREEN/CHECK split).
+ *
+ * Oracles — the specification and the contracts, never the component under
+ * test:
+ *   - F-PTA-1: docs/settings.md (Security rate limits) promises "Leave either
+ *     blank, or enter 0, for no limit", and the wire contracts spell that as
+ *     0 (contracts/components/schemas/RateLimitsUpdateRequest.yaml and
+ *     RateLimitConfig.yaml: "0 = unlimited"). So clearing a field must save
+ *     0 for that field while the untouched field keeps the value the
+ *     GET /api/v1/security/rate-limits route returned.
+ *   - F-PTA-2: on a failing rate-limits GET the section must show its
+ *     load-failure banner and must send no rate-limit save: the limits never
+ *     hydrate, autosave stays off, and the banner is the only signal (the
+ *     exact silent-failure class #1882 was filed to fix).
+ *     The banner's exact wording is NOT given by docs/settings.md (checked);
+ *     it is pinned from the product copy source and marked
+ *     `characterization test` — the behavioural assertions (banner shown on
+ *     GET failure, no save sent) are the verification; a wording change
+ *     updates the pin.
+ *
+ * Harness: the sibling SecuritySection.rate-limits-1882.test.tsx mock set
+ * (the two rate-limit client functions are not mocked — they go through the
+ * generated client's request() transport and are stubbed at the global fetch
+ * boundary, where every request is recorded).
+ *
+ * Every failure message names #1882 and states expected and seen.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchConfig: vi.fn(),
+    updateConfig: vi.fn(),
+    fetchGatewayStatus: vi.fn(),
+    fetchCredentials: vi.fn(),
+    fetchBuiltinTools: vi.fn(),
+    fetchRegistryTools: vi.fn(),
+    fetchGlobalToolPolicies: vi.fn(),
+    updateGlobalToolPolicies: vi.fn(),
+    fetchDoctorResults: vi.fn(),
+    fetchSkillTrust: vi.fn(),
+    fetchAppState: vi.fn(),
+    fetchSandboxConfig: vi.fn(),
+    updateSandboxConfig: vi.fn(),
+    fetchSandboxStatus: vi.fn(),
+  }
+})
+
+vi.mock('@/store/ui', () => ({
+  useUiStore: vi.fn(() => ({ addToast: vi.fn() })),
+}))
+
+vi.mock('@/store/auth', () => ({
+  useAuthStore: vi.fn((selector: (s: { role: string }) => unknown) => selector({ role: 'admin' })),
+}))
+
+import {
+  fetchConfig,
+  updateConfig,
+  fetchGatewayStatus,
+  fetchCredentials,
+  fetchBuiltinTools,
+  fetchGlobalToolPolicies,
+  fetchDoctorResults,
+  fetchSkillTrust,
+  fetchAppState,
+  fetchSandboxConfig,
+  fetchSandboxStatus,
+} from '@/lib/api'
+import type { AppState } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
+import { SecuritySection } from './SecuritySection'
+
+const RATE_LIMITS_PATH = '/api/v1/security/rate-limits'
+
+// Distinct, recognisable values for what the route holds, so a body that
+// keeps a field's value can only be explained by the GET hydration, and a
+// 0 can only be explained by the cleared field (never a stray default).
+const ROUTE_LLM = 7
+const ROUTE_TOOL = 9
+
+/**
+ * characterization test (wording only): the load-failure banner's copy, read
+ * from the product copy source because docs/settings.md gives no wording for
+ * it. The behavioural oracle of F-PTA-2 — the banner shows on a failing GET
+ * and no save is sent — is verified regardless of the wording.
+ */
+const LOAD_FAILURE_BANNER_TEXT =
+  'The current limits could not be loaded, so changes here are not saved. Reload the page to try again.'
+
+const CONFIG = {
+  security: {
+    exec_timeout_seconds: 0,
+    max_background_seconds: 0,
+    rate_limits: {
+      max_agent_llm_calls_per_hour: 111,
+      max_agent_tool_calls_per_minute: 222,
+    },
+  },
+  gateway: { bind_address: '127.0.0.1', port: 5000, token: 'test-token', hot_reload: false, log_level: 'info' },
+  agents: { defaults: { default_agent_id: '' } },
+}
+
+interface Recorded {
+  method: string
+  path: string
+  body: string | null
+  /** HTTP status the stub answered with. */
+  status: number
+}
+
+let recorded: Recorded[] = []
+let rateLimitsGetStatus = 200
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+function stubFetch() {
+  recorded = []
+  rateLimitsGetStatus = 200
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      // Normalise every legal fetch call shape (T1-5 a): fetch(url, init),
+      // fetch(URL, init) and fetch(new Request(...), init?), where init
+      // overrides the Request. The generated client's fetch adapter sends a
+      // Request object, so the method and body must be read from it too.
+      const isRequest = typeof Request !== 'undefined' && input instanceof Request
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
+      const path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0]
+      const method = (init?.method ?? (isRequest ? input.method : 'GET')).toUpperCase()
+      let body: string | null = null
+      if (typeof init?.body === 'string') {
+        body = init.body
+      } else if (init?.body == null && isRequest) {
+        const text = await input.clone().text()
+        body = text === '' ? null : text
+      }
+      const entry: Recorded = { method, path, body, status: 404 }
+      recorded.push(entry)
+      const answer = (status: number, payload: unknown) => {
+        entry.status = status
+        return jsonResponse(status, payload)
+      }
+      if (path === RATE_LIMITS_PATH && method === 'GET') {
+        if (rateLimitsGetStatus !== 200) return answer(rateLimitsGetStatus, { error: 'rate limits unavailable' })
+        return answer(200, {
+          enabled: true,
+          max_agent_llm_calls_per_hour: ROUTE_LLM,
+          max_agent_tool_calls_per_minute: ROUTE_TOOL,
+        })
+      }
+      if (path === RATE_LIMITS_PATH && method === 'PUT') {
+        return answer(200, { saved: true, requires_restart: false })
+      }
+      return answer(404, { error: 'not stubbed' })
+    }),
+  )
+}
+
+const rateLimitPuts = () => recorded.filter((r) => r.method === 'PUT' && r.path === RATE_LIMITS_PATH)
+const rateLimitGets = () => recorded.filter((r) => r.method === 'GET' && r.path === RATE_LIMITS_PATH)
+
+function renderSection() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <SecuritySection />
+    </QueryClientProvider>,
+  )
+}
+
+/** Open Advanced and return the two rate-limit inputs once they exist. */
+async function openAdvanced() {
+  await waitFor(() => expect(screen.getByTestId('security-health-header')).toBeInTheDocument())
+  fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+  const llm = (await screen.findByLabelText('LLM calls / hour')) as HTMLInputElement
+  const tool = (await screen.findByLabelText('Tool calls / minute')) as HTMLInputElement
+  return { llm, tool }
+}
+
+/** Wait (bounded) for an input to show a value; a miss fails the test with a #1882 message (T1-5, F3). */
+async function settleTo(input: HTMLInputElement, want: string) {
+  await waitFor(
+    () => expect(input.value, `#1882: the field must settle to the GET ${RATE_LIMITS_PATH} value "${want}", saw "${input.value}"`).toBe(want),
+    { timeout: 1500 },
+  )
+}
+
+/** Wait out the autosave debounce window (500 ms) plus round-trip slack. */
+async function waitPastDebounce() {
+  await new Promise((resolve) => setTimeout(resolve, 1400))
+}
+
+const APP_STATE = { onboarding_complete: true, identity: { mode: 'platform', edition: 'hosted', signed_in: true } } as AppState
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(useUiStore).mockReturnValue({ addToast: vi.fn() } as never)
+  vi.mocked(fetchConfig).mockResolvedValue(CONFIG as never)
+  vi.mocked(updateConfig).mockResolvedValue({} as never)
+  vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
+  vi.mocked(fetchCredentials).mockResolvedValue([])
+  vi.mocked(fetchBuiltinTools).mockResolvedValue([])
+  vi.mocked(fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
+  vi.mocked(fetchDoctorResults).mockResolvedValue(null)
+  vi.mocked(fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' as const })
+  vi.mocked(fetchAppState).mockResolvedValue(APP_STATE)
+  vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+  vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
+  // The SPA refuses a state-changing call without the CSRF cookie.
+  document.cookie = 'csrf=test-csrf-1882'
+  stubFetch()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  document.cookie = 'csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+})
+
+describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) through the rate-limit route', () => {
+  it('clearing "LLM calls / hour" PUTs max_agent_llm_calls_per_hour: 0 and keeps the tool value', async () => {
+    renderSection()
+    const { llm, tool } = await openAdvanced()
+    // Both fields must show the route's stored values BEFORE the edit, so
+    // the "keeps the other field's value" half of the oracle is grounded:
+    // the 9 in the PUT body can only come from the GET hydration.
+    await settleTo(llm, String(ROUTE_LLM))
+    await settleTo(tool, String(ROUTE_TOOL))
+    fireEvent.change(llm, { target: { value: '' } })
+    await waitPastDebounce()
+
+    const puts = rateLimitPuts()
+    expect.soft(
+      puts.length,
+      `#1882 F-PTA-1: expected exactly 1 PUT ${RATE_LIMITS_PATH} after clearing the LLM field, saw ${puts.length}`,
+    ).toBe(1)
+    if (puts.length === 1) {
+      expect(
+        JSON.parse(puts[0].body ?? 'null'),
+        `#1882 F-PTA-1: the cleared LLM field must save 0 (the route's spelling of Unlimited, docs/settings.md) and the untouched tool field must keep the route value ${ROUTE_TOOL}; saw body ${puts[0].body}`,
+      ).toEqual({
+        max_agent_llm_calls_per_hour: 0,
+        max_agent_tool_calls_per_minute: ROUTE_TOOL,
+      })
+    }
+  })
+
+  it('clearing "Tool calls / minute" PUTs max_agent_tool_calls_per_minute: 0 and keeps the LLM value', async () => {
+    renderSection()
+    const { llm, tool } = await openAdvanced()
+    await settleTo(llm, String(ROUTE_LLM))
+    await settleTo(tool, String(ROUTE_TOOL))
+    fireEvent.change(tool, { target: { value: '' } })
+    await waitPastDebounce()
+
+    const puts = rateLimitPuts()
+    expect.soft(
+      puts.length,
+      `#1882 F-PTA-1: expected exactly 1 PUT ${RATE_LIMITS_PATH} after clearing the tool field, saw ${puts.length}`,
+    ).toBe(1)
+    if (puts.length === 1) {
+      expect(
+        JSON.parse(puts[0].body ?? 'null'),
+        `#1882 F-PTA-1: the cleared tool field must save 0 (the route's spelling of Unlimited, docs/settings.md) and the untouched LLM field must keep the route value ${ROUTE_LLM}; saw body ${puts[0].body}`,
+      ).toEqual({
+        max_agent_llm_calls_per_hour: ROUTE_LLM,
+        max_agent_tool_calls_per_minute: 0,
+      })
+    }
+  })
+})
+
+describe('#1882 follow-up F-PTA-2 — a failing rate-limits GET shows the load-failure banner and saves nothing', () => {
+  it('shows the load-failure banner and sends no rate-limit save after edits when the GET fails', async () => {
+    rateLimitsGetStatus = 500
+    renderSection()
+    await openAdvanced()
+
+    // Instrument check: the failure must come from the real GET having been
+    // made and answered 500 — not from a never-fired request.
+    const gets = rateLimitGets()
+    expect(
+      gets.map((r) => r.status),
+      `#1882 F-PTA-2: expected the screen to GET ${RATE_LIMITS_PATH} and be answered 500; requests seen: ${JSON.stringify(recorded.map((r) => `${r.method} ${r.path} -> ${r.status}`))}`,
+    ).toEqual([500])
+
+    // Before the edit, no banner may be present that predates the failure,
+    // and after the failure the banner must be the one shown. (The GET is
+    // stubbed to fail from the start, so the banner must already be up here.)
+    const banner = screen.getByText(LOAD_FAILURE_BANNER_TEXT)
+    expect(banner, '#1882 F-PTA-2: the load-failure banner must be shown when the rate-limits GET fails').toBeInTheDocument()
+
+    // The person edits both fields while the limits are unloaded. The limits
+    // never hydrated and autosave stays off, so no save may be sent — for
+    // the edited fields and the untouched ones alike (a save of the untouched
+    // fields would write 0 over caps the screen never read).
+    fireEvent.change(screen.getByLabelText('LLM calls / hour'), { target: { value: '25' } })
+    fireEvent.change(screen.getByLabelText('Tool calls / minute'), { target: { value: '60' } })
+    await waitPastDebounce()
+
+    expect(
+      rateLimitPuts(),
+      `#1882 F-PTA-2: with the limits unloaded, no save may be sent after edits; saw ${JSON.stringify(rateLimitPuts().map((r) => r.body))}`,
+    ).toEqual([])
+  })
+})

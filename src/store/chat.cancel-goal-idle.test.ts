@@ -14,6 +14,16 @@ import { useUiStore } from './ui'
 // REAL: chat/session/connection stores and cancelStream. FAKE: the socket.
 const SID = 'sess-goal-idle'
 const sender = { send: vi.fn<WsConnection['send']>() }
+// Spec 4.7: every cancel carries the chat origin and a client_frame_id.
+const FRAME_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+function boundCancel(sessionId: string) {
+  return {
+    type: 'cancel',
+    session_id: sessionId,
+    origin: { kind: 'chat', session_id: sessionId },
+    client_frame_id: expect.stringMatching(FRAME_ID),
+  }
+}
 
 function goalFrame(state: GoalStatusFrame['state']): GoalStatusFrame {
   return {
@@ -37,6 +47,8 @@ beforeEach(() => {
   act(() => {
     useSessionStore.getState().setActiveSession(SID, 'jim')
     useConnectionStore.getState().setConnection(sender as unknown as WsConnection)
+    // Spec 4.10: a stand-in sends only while marked connected.
+    useConnectionStore.getState().setConnected(true)
   })
 })
 afterEach(reset)
@@ -46,7 +58,7 @@ describe('cancelStream in the idle gap of a goal (G1)', () => {
     act(() => { useChatStore.getState().handleFrame(goalFrame(state)) })
     expect(useChatStore.getState().isStreaming).toBe(false)
     act(() => { useChatStore.getState().cancelStream() })
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel(SID)]])
   })
 
   it('sends nothing when not streaming and there is no goal (negative guard)', () => {
@@ -111,7 +123,7 @@ describe('cancelStream is honest about what it did (round-1 review)', () => {
     let delivered: boolean | undefined
     act(() => { delivered = useChatStore.getState().cancelStream() })
     expect(delivered).toBe(true)
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel(SID)]])
     expect(snapshot()).toEqual(before)
   })
 
@@ -123,7 +135,7 @@ describe('cancelStream is honest about what it did (round-1 review)', () => {
     act(() => { useChatStore.getState().cancelStream(SID_B) })
     expect(sender.send).not.toHaveBeenCalled()
     act(() => { useChatStore.getState().cancelStream(SID_A) })
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID_A }]])
+    expect(sender.send.mock.calls).toEqual([[boundCancel(SID_A)]])
   })
 })
 

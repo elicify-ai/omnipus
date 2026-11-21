@@ -320,7 +320,13 @@ const (
 // TurnStartPayload describes the start of a turn.
 type TurnStartPayload struct {
 	// ChatNotice is internal plumbing: only the generated frame reaches viewers.
-	ChatNotice  *generated.ReplayMessageFrame `json:"-"`
+	ChatNotice *generated.ReplayMessageFrame `json:"-"`
+	// SessionID is the turn's transcript session — the key
+	// ActiveForegroundTurnInfo reads — and StartedAt the instant it reports.
+	// The gateway names the turn to that chat's tabs from these (#1428 step 2
+	// turn_started); never look the session up from ChatID.
+	SessionID   string
+	StartedAt   time.Time
 	Channel     string
 	ChatID      string
 	UserMessage string

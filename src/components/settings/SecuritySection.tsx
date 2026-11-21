@@ -44,7 +44,8 @@ import {
 import { Separator } from '@/components/ui/separator'
 import {
   fetchConfig,
-  updateConfig,
+  fetchRateLimits,
+  updateRateLimits,
   fetchCredentials,
   addCredential,
   deleteCredential,
@@ -312,12 +313,17 @@ export function AutoApproveControl() {
 
 // ── SecuritySection ────────────────────────────────────────────────────────────
 
+/** #1882: DOM id of the rate-limit save-status live region. */
+const RATE_LIMITS_SAVE_STATUS_ID = 'security-rate-limits-save-status'
+
 export function SecuritySection() {
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
 
-  const { data: config, isLoading, isError: configError } = useQuery({
+  // The config read still decides the section's loading and error states; the
+  // per-agent limits come from their own route below (#1882).
+  const { isLoading, isError: configError } = useQuery({
     queryKey: ['config'],
     queryFn: fetchConfig,
   })
@@ -328,17 +334,25 @@ export function SecuritySection() {
     retry: false,
   })
 
+  // #1882: the per-agent limits live behind their own route. PUT /config
+  // refuses `security.*` by design, so they are read and saved there only.
+  const { data: rateLimits, isError: rateLimitsError } = useQuery({
+    queryKey: ['security', 'rate-limits'],
+    queryFn: fetchRateLimits,
+    retry: false,
+  })
+
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
 
   // ADR-053 D12: dailyCostCap state retired alongside the SEC-26 USD cap.
+  // #1882 (chief ruling Q1 A): the exec timeout and background timeout fields
+  // are not offered until a server reads them (issue #1900).
   const [agentLlmCallsPerHour, setAgentLlmCallsPerHour] = useState('')
   const [agentToolCallsPerMin, setAgentToolCallsPerMin] = useState('')
-  const [execTimeoutSecs, setExecTimeoutSecs] = useState('')
-  const [maxBackgroundSecs, setMaxBackgroundSecs] = useState('')
   // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
-  // `!config` check useAutoSave's `disabled` option used to key off of.
-  // `config` turns truthy in the SAME commit the hydration effect below is
+  // `!rateLimits` check useAutoSave's `disabled` option would key off of.
+  // `rateLimits` turns truthy in the SAME commit the hydration effect below is
   // SCHEDULED, but the effect's own setState calls don't land until the
   // NEXT commit — so `disabled: !config` flipped false one render too
   // early, letting useAutoSave capture the hardcoded useState defaults as
@@ -363,38 +377,28 @@ export function SecuritySection() {
   // control" is a UI grouping, not a licence to gate once (spec FR-OB-040).
 
   useEffect(() => {
-    if (!config) return
+    if (!rateLimits) return
     if (isDirtyRef.current) return
-    setAgentLlmCallsPerHour(config.security.rate_limits.max_agent_llm_calls_per_hour?.toString() ?? '')
-    setAgentToolCallsPerMin(config.security.rate_limits.max_agent_tool_calls_per_minute?.toString() ?? '')
-    setExecTimeoutSecs(config.security.exec_timeout_seconds?.toString() ?? '')
-    setMaxBackgroundSecs(config.security.max_background_seconds?.toString() ?? '')
+    setAgentLlmCallsPerHour(rateLimits.max_agent_llm_calls_per_hour.toString())
+    setAgentToolCallsPerMin(rateLimits.max_agent_tool_calls_per_minute.toString())
     setSecurityHydrated(true)
-  }, [config])
+  }, [rateLimits])
 
   const securityFormData = useMemo(() => ({
-    exec_timeout_seconds: execTimeoutSecs,
-    max_background_seconds: maxBackgroundSecs,
     agent_llm_calls_per_hour: agentLlmCallsPerHour,
     agent_tool_calls_per_min: agentToolCallsPerMin,
-  }), [execTimeoutSecs, maxBackgroundSecs, agentLlmCallsPerHour, agentToolCallsPerMin])
+  }), [agentLlmCallsPerHour, agentToolCallsPerMin])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     securityFormData,
     async () => {
-      await updateConfig({
-        security: {
-          exec_timeout_seconds: execTimeoutSecs ? parseInt(execTimeoutSecs, 10) : undefined,
-          max_background_seconds: maxBackgroundSecs ? parseInt(maxBackgroundSecs, 10) : undefined,
-          rate_limits: {
-            ...config?.security.rate_limits,
-            max_agent_llm_calls_per_hour: agentLlmCallsPerHour ? parseInt(agentLlmCallsPerHour, 10) : undefined,
-            max_agent_tool_calls_per_minute: agentToolCallsPerMin ? parseInt(agentToolCallsPerMin, 10) : undefined,
-          },
-        },
+      // An empty field means "Unlimited", which the route spells as 0.
+      await updateRateLimits({
+        max_agent_llm_calls_per_hour: agentLlmCallsPerHour ? parseInt(agentLlmCallsPerHour, 10) : 0,
+        max_agent_tool_calls_per_minute: agentToolCallsPerMin ? parseInt(agentToolCallsPerMin, 10) : 0,
       })
       isDirtyRef.current = false
-      queryClient.invalidateQueries({ queryKey: ['config'] })
+      queryClient.invalidateQueries({ queryKey: ['security', 'rate-limits'] })
     },
     { disabled: !securityHydrated },
   )
@@ -504,7 +508,9 @@ export function SecuritySection() {
             Control how protected your setup is and adjust agent boundaries.
           </p>
         </div>
-        <AutoSaveIndicator status={saveStatus} error={saveError} />
+        {/* #1882: the rate-limit inputs name this live region with
+            aria-describedby, so their save status has a stable identity. */}
+        <AutoSaveIndicator id={RATE_LIMITS_SAVE_STATUS_ID} status={saveStatus} error={saveError} />
       </div>
 
       {/* ── PRIMARY LAYER (US-B1): Security health + plain outcome controls ──── */}
@@ -546,50 +552,6 @@ export function SecuritySection() {
               Tool Access — Global Policies
             </p>
             <GlobalToolPoliciesSection />
-          </section>
-
-          <Separator />
-
-          {/* Command Execution Internals */}
-          <section>
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
-              Command Execution
-            </p>
-            <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="exec-timeout-seconds">Exec timeout (seconds)</Label>
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Max time for a single command, 0 = no limit</p>
-                </div>
-                <Input
-                  id="exec-timeout-seconds"
-                  type="number"
-                  min="0"
-                  value={execTimeoutSecs}
-                  onChange={(e) => { markDirty(); setExecTimeoutSecs(e.target.value) }}
-                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
-                  placeholder="0"
-                />
-              </div>
-
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="max-background-seconds">Background timeout (seconds)</Label>
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Max time for background processes, 0 = no limit</p>
-                </div>
-                <Input
-                  id="max-background-seconds"
-                  type="number"
-                  min="0"
-                  value={maxBackgroundSecs}
-                  onChange={(e) => { markDirty(); setMaxBackgroundSecs(e.target.value) }}
-                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
-                  placeholder="0"
-                />
-              </div>
-            </Card>
           </section>
 
           <Separator />
@@ -642,6 +604,11 @@ export function SecuritySection() {
               Per-Agent Rate Limits
             </p>
             <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
+              {rateLimitsError && (
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-text-error)]">
+                  The current limits could not be loaded, so changes here are not saved. Reload the page to try again.
+                </p>
+              )}
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="agent-llm-calls-per-hour">LLM calls / hour</Label>
@@ -649,6 +616,7 @@ export function SecuritySection() {
                 </div>
                 <Input
                   id="agent-llm-calls-per-hour"
+                  aria-describedby={RATE_LIMITS_SAVE_STATUS_ID}
                   type="number"
                   min="0"
                   value={agentLlmCallsPerHour}
@@ -664,6 +632,7 @@ export function SecuritySection() {
                 </div>
                 <Input
                   id="agent-tool-calls-per-minute"
+                  aria-describedby={RATE_LIMITS_SAVE_STATUS_ID}
                   type="number"
                   min="0"
                   value={agentToolCallsPerMin}

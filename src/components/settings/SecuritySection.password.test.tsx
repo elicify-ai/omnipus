@@ -37,6 +37,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     updateSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
     reAuth: vi.fn(),
+    fetchRateLimits: vi.fn(),
   }
 })
 
@@ -61,6 +62,7 @@ import {
   fetchSkillTrust,
   fetchAppState,
   reAuth,
+  fetchRateLimits,
 } from '@/lib/api'
 import type { AppState, RegistryTool } from '@/lib/api'
 import { SecuritySection } from './SecuritySection'
@@ -131,6 +133,7 @@ beforeEach(() => {
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
   vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
   vi.mocked(fetchAppState).mockResolvedValue(LOCAL_APP_STATE)
+  vi.mocked(fetchRateLimits).mockResolvedValue({ enabled: true, max_agent_llm_calls_per_hour: 0, max_agent_tool_calls_per_minute: 0 } as never)
 })
 
 describe('SecuritySection — password mode (local edition)', () => {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -417,11 +418,41 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 			"connect_rules", len(policy.ConnectPortRules))
 	}
 
+	// #1909: PR_SET_NO_NEW_PRIVS and landlock_restrict_self both act on the
+	// calling OS thread only, and restrict_self fails with EPERM on a thread
+	// without no_new_privs. Pin the goroutine for the whole enforce sequence
+	// so both calls hit the same thread no matter how the scheduler moves
+	// goroutines. The matching unlock returns the restricted thread to the
+	// pool exactly as before this pin (the gateway's later binds and the
+	// per-thread re-apply in hardened_exec rely on that); the lock is
+	// counted, so a caller that already holds one keeps it. Permissive mode
+	// is not pinned: it never calls restrict_self.
+	if mode == ModeEnforce {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+	}
+
+	// #1909: once the bind-port list is in force, a listen on 127.0.0.1:0
+	// is denied (port 0 is never on the list), so in enforce mode the egress
+	// proxy's listener is taken now, while bind is still unrestricted, and
+	// parked for NewEgressProxy. No port-0 rule is added: sandboxed code and
+	// children keep being denied port 0 and every unlisted port. A failure
+	// here is not fatal to the sandbox: NewEgressProxy then makes its own
+	// listen and returns that error, which buildEgressProxyOrAbort turns into
+	// a boot abort when an egress allow-list is configured.
+	if mode == ModeEnforce && effectiveHandledAccessNet(lb, policy)&landlockAccessNetBindTcp != 0 {
+		if err := reserveEgressListener(); err != nil {
+			slog.Warn("egress_proxy: pre-restriction listener reservation failed; the proxy will listen on its own",
+				"error", err)
+		}
+	}
+
 	// Set no_new_privs unconditionally — seccomp install (which runs after
 	// this) requires NNP, and NNP is also a prerequisite for Landlock's
 	// restrict_self. This is safe in permissive mode because NNP by itself
 	// enforces nothing; it only disables setuid/setgid and seccomp-bypass.
 	if _, _, prctlErrno := unix.RawSyscall(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); prctlErrno != 0 {
+		releaseReservedEgressListener()
 		return fmt.Errorf("landlock: prctl(PR_SET_NO_NEW_PRIVS) failed: %w", prctlErrno)
 	}
 
@@ -447,6 +478,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	// activates policy enforcement on this thread and all future children.
 	_, _, errno = unix.Syscall(sysLandlockRestrictSelf, rulesetFd, 0, 0)
 	if errno != 0 {
+		releaseReservedEgressListener()
 		return fmt.Errorf("landlock: restrict_self failed: %w", errno)
 	}
 

@@ -1,27 +1,24 @@
 /**
  * omnipus-runtime.model-name.test.ts
  *
- * W4-21 — FR-010: useOmnipusRuntime.onNew → model_name plumbing.
- *
- * The AssistantUI external-store runtime adapter reads the chat store's
- * `nextModel` value at the moment the user sends a message. If the user
- * picked a model in the picker, `nextModel` is a string and onNew MUST
- * thread it into `sendMessage` as `opts.model_name`. If the user never
- * picked, `nextModel` is null and the opts arg MUST NOT include
- * `model_name` (server falls back to the agent's `model` config).
+ * W4-21 — FR-010, moved onto the r9 send (spec 4.5 rule 5).
+ * A runtime append calls submitText. The model is read at capture
+ * (modelChoiceNow) and leaves on the bound message frame as
+ * metadata.model_name. The same slug, the same absence, and the same
+ * sticky second send as the old sendMessage opts.
  *
  * Spec ref: docs/internal/specs/phase-1-chat-model-and-errors.md
  *   - §13 FR-010 (nextMessage picker → metadata.model_name on send)
- *   - §18 Q3 (picker is forward-looking, not persisted)
- *
- * Approach: drive the real useExternalStoreRuntime composer
- * (setText → send) with a mocked sendMessage transport, then assert the
- * captured opts. We do NOT mock the runtime hook itself — we exercise
- * the actual onNew closure.
+ *   - §18 Q3 (picker is forward-looking, not persisted; absent means no key)
  */
-
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
+import type { WsConnection } from '@/lib/ws'
+import { useSessionStore } from '@/store/session'
+import { useChatStore } from '@/store/chat'
+import { useConnectionStore } from '@/store/connection'
+import { useUiStore } from '@/store/ui'
+import { useOmnipusRuntime } from './omnipus-runtime'
 
 vi.mock('@/lib/api', () => ({
   uploadFiles: vi.fn(),
@@ -32,41 +29,34 @@ vi.mock('@/components/chat/AttachmentCard', () => ({
   isImageAttachment: vi.fn(),
 }))
 
-import { useSessionStore } from '@/store/session'
-import { useChatStore } from '@/store/chat'
-import { useUiStore } from '@/store/ui'
-import { useOmnipusRuntime } from './omnipus-runtime'
+const sent: unknown[] = []
 
-describe('useOmnipusRuntime — onNew → model_name plumbing (FR-010 / W4-21)', () => {
-  let sendSpy: ReturnType<typeof vi.fn>
+function messageFrames(): { content?: string; metadata?: { model_name?: string } }[] {
+  return sent.filter((frame) => (frame as { type?: string }).type === 'message') as { content?: string; metadata?: { model_name?: string } }[]
+}
 
+describe('useOmnipusRuntime — onNew → model_name on the bound frame (FR-010 / spec 4.5 rule 5)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    sent.length = 0
     useSessionStore.setState({
+      ...useSessionStore.getInitialState(),
       activeSessionId: 'sess_mn',
       activeAgentId: 'jim',
       activeAgentType: null,
     })
-    sendSpy = vi.fn()
-    useChatStore.setState({
-      messages: [],
-      toolCalls: {},
-      toolCallOrder: [],
-      textAtToolCallStart: {},
-      isStreaming: false,
-      // nextModel is the field under test — start null (no user pick).
-      nextModel: null,
-      sendMessage: sendSpy as never,
-      cancelStream: vi.fn(),
+    useChatStore.setState({ ...useChatStore.getInitialState(), nextModel: null })
+    useConnectionStore.setState({
+      ...useConnectionStore.getInitialState(),
+      connection: { send: (frame: unknown) => { sent.push(frame); return true } } as unknown as WsConnection,
+      isConnected: true,
     })
-    useUiStore.setState({ addToast: vi.fn() })
+    useUiStore.setState(useUiStore.getInitialState(), true)
   })
 
-  it('threads nextModel into sendMessage as opts.model_name when the user picked a model', async () => {
-    // FR-010: the user picked "z-ai/glm-5.2" in the composer picker.
-    // The next message MUST be routed via that model — the runtime
-    // adapter reads `nextModel` from the chat store and writes it to
-    // `opts.model_name`.
+  it('puts the picked model on the message frame as metadata.model_name', async () => {
+    // FR-010: the user picked "z-ai/glm-5.2". Spec 4.5 rule 5 reads it at
+    // capture, so the frame that leaves carries that slug.
     useChatStore.getState().setNextModel('z-ai/glm-5.2')
 
     const { result } = renderHook(() => useOmnipusRuntime())
@@ -77,22 +67,14 @@ describe('useOmnipusRuntime — onNew → model_name plumbing (FR-010 / W4-21)',
       await composer.send()
     })
 
-    // sendMessage was called exactly once with the text + opts.
-    expect(sendSpy).toHaveBeenCalledTimes(1)
-    const [text, opts] = sendSpy.mock.calls[0]
-    expect(text).toBe('hello')
-    expect(opts).toBeDefined()
-    // The picked model slug MUST be present in opts.model_name.
-    expect(opts?.model_name).toBe('z-ai/glm-5.2')
+    expect(messageFrames(), 'spec 4.5 rule 5: one runtime append leaves one message').toHaveLength(1)
+    expect(messageFrames()[0]?.content).toBe('hello')
+    expect(messageFrames()[0]?.metadata?.model_name).toBe('z-ai/glm-5.2')
   })
 
-  it('omits opts.model_name when nextModel is null (user never picked)', async () => {
-    // Spec §18 Q3: the picker is forward-looking. If the user never
-    // touched it, the runtime MUST NOT pass model_name — the server
-    // falls back to the agent's `model` config. A spurious
-    // `model_name: undefined` would still appear on the wire as a key
-    // in the WS metadata (object spread semantics), so we assert that
-    // the key is absent, not merely falsy.
+  it('omits metadata.model_name when nextModel is null (user never picked)', async () => {
+    // Spec §18 Q3: no pick means the key is absent, not model_name: undefined.
+    // The server then uses the agent's model config.
     useChatStore.getState().setNextModel(null)
 
     const { result } = renderHook(() => useOmnipusRuntime())
@@ -103,47 +85,32 @@ describe('useOmnipusRuntime — onNew → model_name plumbing (FR-010 / W4-21)',
       await composer.send()
     })
 
-    expect(sendSpy).toHaveBeenCalledTimes(1)
-    const [text, opts] = sendSpy.mock.calls[0]
-    expect(text).toBe('hello')
-    // The spec says: "If the user never picked it, model_name is
-    // absent and the server uses the agent's `model` config." The
-    // runtime passes `undefined` as opts in that case, which the
-    // store-level sendMessage translates to "no metadata key on the
-    // frame." The wire-format invariant is enforced by the
-    // ChatScreen.test.tsx::sendMessage-forwards-nextModel test.
-    if (opts !== undefined) {
-      expect(Object.prototype.hasOwnProperty.call(opts, 'model_name')).toBe(false)
-    }
+    expect(messageFrames()).toHaveLength(1)
+    expect(messageFrames()[0]?.content).toBe('hello')
+    expect(Object.prototype.hasOwnProperty.call(messageFrames()[0]?.metadata ?? {}, 'model_name')).toBe(false)
   })
 
-  it('keeps the picked model on subsequent sends (sticky — the store no longer clears nextModel)', async () => {
-    // Sticky model selection: a pick PERSISTS across sends (it is no longer
-    // cleared after the first send), so a second send without a re-pick MUST
-    // still carry the same model. This is the fix for the composer selector
-    // snapping back to the agent default after every message.
+  it('keeps the picked model on the next message frame (sticky — nextModel is not cleared)', async () => {
+    // A pick persists across sends, so a second append without a re-pick
+    // still carries the same model_name.
     useChatStore.getState().setNextModel('z-ai/glm-5.2')
 
     const { result } = renderHook(() => useOmnipusRuntime())
     const composer = result.current.thread.composer
 
-    // First send — model is forwarded.
     await act(async () => {
       composer.setText('first message')
       await composer.send()
     })
-    expect(sendSpy).toHaveBeenCalledTimes(1)
-    const [, opts1] = sendSpy.mock.calls[0]
-    expect(opts1?.model_name).toBe('z-ai/glm-5.2')
+    expect(messageFrames()).toHaveLength(1)
+    expect(messageFrames()[0]?.metadata?.model_name).toBe('z-ai/glm-5.2')
 
-    // Second send WITHOUT a re-pick — the pick is sticky, so the same model
-    // is still forwarded (nextModel was not cleared).
     await act(async () => {
       composer.setText('second message')
       await composer.send()
     })
-    expect(sendSpy).toHaveBeenCalledTimes(2)
-    const [, opts2] = sendSpy.mock.calls[1]
-    expect(opts2?.model_name).toBe('z-ai/glm-5.2')
+    expect(messageFrames()).toHaveLength(2)
+    expect(messageFrames()[1]?.content).toBe('second message')
+    expect(messageFrames()[1]?.metadata?.model_name).toBe('z-ai/glm-5.2')
   })
 })

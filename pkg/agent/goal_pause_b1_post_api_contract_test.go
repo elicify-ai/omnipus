@@ -95,9 +95,9 @@ func b1PostAPIMetadataReadError(t *testing.T) {
 	require.Same(t, reader, al.ResolveSessionStore(fault.ID), "SETUP: real non-ENOENT read error must retain the owning store")
 	al.notifyGoalPaused(fault.ID, goalID, "blocked", reason)
 	require.Len(t, notices, 1, "real unreadable metadata must not invoke the hook as an empty/shared owner")
-	// Existing fixed public error surface required by the brief. Its stable copy
-	// is frozen BEFORE running; this does not substitute source text for behavior.
-	expected := "Goal state could not be read; deliver goal-pause bell warning (notification not sent) deferred: chat ownership metadata could not be read"
+	// #1857 §13.8.5 B26 / T-55: the event carries the goal-state code
+	// and its fixed safe catalogue sentence, never the raw metadata error.
+	expected := UserMessageForCode(CodeGoalStateUnavailable)
 	errorsSeen := []ErrorPayload{}
 	for _, event := range b1PostAPIEvents(sub) {
 		if event.Kind != EventKindError {
@@ -110,7 +110,7 @@ func b1PostAPIMetadataReadError(t *testing.T) {
 			errorsSeen = append(errorsSeen, payload)
 		}
 	}
-	require.Equal(t, []ErrorPayload{{Stage: "goal_record_read", Code: string(CodeUnknown), Message: expected, SessionID: fault.ID}}, errorsSeen, "actual fixed same-session visible error is required, never just empty capture or a log")
+	require.Equal(t, []ErrorPayload{{Stage: "goal_record_read", Code: "goal_state_unavailable", Message: expected, SessionID: fault.ID}}, errorsSeen, "B26/T-55: actual same-session event must carry the typed goal-state code and fixed safe catalogue copy, never raw metadata failure text")
 }
 
 func b1PostAPIRepeatedClaim(t *testing.T, status string) {

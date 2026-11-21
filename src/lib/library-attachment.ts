@@ -18,39 +18,27 @@
 // chips via the `useLibraryAttachments()` hook (useSyncExternalStore), so add /
 // remove updates the chip row synchronously without prop-drilling.
 
-import { useSyncExternalStore } from 'react'
+// #1428 step 2 (spec 4.4.3): the pending set is no longer a module-level
+// list shared by every chat. It is the open chat's draft `libraryPicks` in
+// the draft store, so a pick made in one chat never rides another chat's
+// message. The functions below keep their names and act on the open draft.
 
-/** One pending library-ref attachment, drained by onNew on send. */
-export interface LibraryAttachment { // not-wire-format: client-side UI store for pending composer attachments; never serialized over the wire
-  /** Stable client-side id (used as the React key + remove target). */
-  id: string
-  /** The media-library entry id (UUID) within the workspace. */
-  mediaId: string
-  /** Fully-qualified ref threaded into the WS `media` field. */
-  ref: string
-  /** Display filename (from the manifest, not a local File). */
-  filename: string
-  /** MIME sniffed from the stored bytes. */
-  contentType: string
-}
+import { useSessionStore } from '@/store/session'
+import {
+  NO_CHAT_KEY,
+  addLibraryPick,
+  clearLibraryPicks,
+  getDraft,
+  openDraftKey,
+  removeLibraryPick,
+  useDrafts,
+  type LibraryPick,
+} from '@/store/chat/drafts'
 
-let attachments: LibraryAttachment[] = []
-const listeners = new Set<() => void>()
+/** A staged workspace-library entry: the open draft's library pick. */
+export type LibraryAttachment = LibraryPick
 
-function emit(): void {
-  for (const l of listeners) l()
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
-}
-
-function getSnapshot(): LibraryAttachment[] {
-  return attachments
-}
-
-let counter = 0
+const NO_PICKS: LibraryAttachment[] = []
 
 /** Discriminator prefix for workspace-library media refs — mirrors the Go
  * side's `media.WorkspaceRefPrefix` (pkg/media/resolve.go). */
@@ -86,52 +74,43 @@ export function mediaRefURL(ref: string): string {
   return `/api/v1/media/${ref.replace(/^media:\/\//, '')}`
 }
 
-/** Add a pending library attachment. Returns the new attachment's id. */
+/** Stage a library entry on the open chat's draft. Returns its id. */
 export function addLibraryAttachment(
   entry: Omit<LibraryAttachment, 'id'>,
 ): string {
-  const id = `lib-${Date.now()}-${counter++}`
-  attachments = [...attachments, { id, ...entry }]
-  emit()
-  return id
+  return addLibraryPick(openDraftKey(), entry)
 }
 
-/** Remove a pending library attachment by its client-side id. */
+/** Remove a staged entry from the open chat's draft. */
 export function removeLibraryAttachment(id: string): void {
-  if (!attachments.some((a) => a.id === id)) return
-  attachments = attachments.filter((a) => a.id !== id)
-  emit()
+  removeLibraryPick(openDraftKey(), id)
 }
 
-/** Drop every pending library attachment (e.g. on session/workspace change). */
+/** Clear the open chat's staged entries. */
 export function clearLibraryAttachments(): void {
-  if (attachments.length === 0) return
-  attachments = []
-  emit()
+  clearLibraryPicks(openDraftKey())
 }
 
-/**
- * Drain (return and clear) every pending library attachment. Called by
- * omnipus-runtime.ts::onNew when the composer sends, mirroring
- * takeResolvedUpload for the File-based path. Draining (not just reading) on
- * send guarantees a single send cannot re-thread the same ref into a later
- * message if the send itself fails downstream.
- */
+/** Drain the open chat's staged entries (a send that carries them). */
 export function takeLibraryAttachments(): LibraryAttachment[] {
-  const drained = attachments
-  if (drained.length > 0) {
-    attachments = []
-    emit()
-  }
+  const key = openDraftKey()
+  const drained = getDraft(key).libraryPicks
+  if (drained.length > 0) clearLibraryPicks(key)
   return drained
 }
 
-/** Reactive read of the pending set for the composer chip row. */
+/** React subscription to the open chat's staged entries. */
 export function useLibraryAttachments(): LibraryAttachment[] {
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  const sid = useSessionStore((s) => s.activeSessionId)
+  const newChatKey = useSessionStore((s) => s.newChatKey)
+  const raw = sid && sid !== '__pending' ? sid : newChatKey
+  return useDrafts((s) => {
+    const key = raw ? (s.aliasByKey[raw] ?? raw) : NO_CHAT_KEY
+    return s.drafts[key]?.libraryPicks ?? NO_PICKS
+  })
 }
 
-/** Non-reactive read of the pending set (for inspection outside React). */
+/** The open chat's staged entries, outside React. */
 export function getLibraryAttachments(): LibraryAttachment[] {
-  return attachments
+  return getDraft(openDraftKey()).libraryPicks
 }

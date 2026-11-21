@@ -23,6 +23,15 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 // requestScopedStopShown is requestScopedStop carrying the web client's
 // screen checkpoint (#1534) for the requested session's own turn.
 func (h *WSHandler) requestScopedStopShown(wc *wsConn, sessionID string, stopAll bool, shown *agent.StopShown) (report steer.CancelReport, cascaded bool, outcome agent.CancelOutcome, staged bool, err error) {
+	report, cascaded, outcome, staged, _, err = h.requestScopedStopCounted(wc, sessionID, stopAll, shown)
+	return report, cascaded, outcome, staged, err
+}
+
+// requestScopedStopCounted is requestScopedStopShown that also returns how
+// many queued inputs this Stop discarded (StopResult.Discarded), which the
+// #1841 idle predicate needs: "Nothing to stop" must never accompany a
+// "queued message discarded" announcement.
+func (h *WSHandler) requestScopedStopCounted(wc *wsConn, sessionID string, stopAll bool, shown *agent.StopShown) (report steer.CancelReport, cascaded bool, outcome agent.CancelOutcome, staged bool, discarded int, err error) {
 	// Timers can fire while a large durable cascade is still being collected.
 	// Publish an immutable report atomically; never race a timer with appends.
 	var stageReport atomic.Pointer[steer.CancelReport]
@@ -68,17 +77,18 @@ func (h *WSHandler) requestScopedStopShown(wc *wsConn, sessionID string, stopAll
 		res.Durable = true // publish the existing partial-failure report
 	}
 	stageReport.Store(&res.Report)
+	discarded = len(res.Discarded)
 	if err != nil {
-		return res.Report, res.Durable, res.Root, stageSent.Load(), errors.Join(err, res.RootErr)
+		return res.Report, res.Durable, res.Root, stageSent.Load(), discarded, errors.Join(err, res.RootErr)
 	}
 	if !res.Durable {
-		return res.Report, false, res.Root, stageSent.Load(), res.RootErr
+		return res.Report, false, res.Root, stageSent.Load(), discarded, res.RootErr
 	}
 	stageReport.Store(&res.Report)
 	root := res.Root
 	root.BackgroundSessionsKilled = res.BackgroundKilled
 	root.BackgroundSessionsFailed = res.BackgroundFailed
-	return res.Report, true, root, stageSent.Load(), res.RootErr
+	return res.Report, true, root, stageSent.Load(), discarded, res.RootErr
 }
 
 // stopHooks are the web transport hooks for one reached session.

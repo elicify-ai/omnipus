@@ -148,6 +148,11 @@ type ErrorEvent struct {
 	Message string
 	// Fatal is true when the run cannot continue after this error.
 	Fatal bool
+	// Type is the structured error kind the CLI reported in its own error
+	// envelope (e.g. OpenCode's error.type "provider.no-route"), or "" when
+	// the CLI reported none. #1857 (§13.8.2 C2): the CLI-only classifier
+	// reads this field instead of matching message wording.
+	Type string
 }
 
 // PermissionDecision is the verdict returned to the external agent for a

@@ -271,13 +271,20 @@ func TestModelRetired_NearMisses_StayUnknown_C24(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, commonErr := boundaryPair(t, tc.status, nil, tc.body)
 			llm := TranslateTurnError(commonErr)
-			if llm.Code != CodeUnknown {
-				t.Fatalf("code = %q, want %q (MR-2/MR-3: near-miss never reads model_retired)", llm.Code, CodeUnknown)
+			// #1857 R-4 (chief ruling Q2 A, 2026-11-18): a received HTTP status
+			// above 400 whose body matched nothing is named provider_error at
+			// the terminal presentation. The near-miss still never reads
+			// model_retired (MR-2/MR-3). The old name "StayUnknown" refers to
+			// the recovery classification, which stays CodeUnknown.
+			if llm.Code != CodeProviderError {
+				t.Fatalf("code = %q, want %q (R-4: residual status >= 400 is provider_error; MR-2/MR-3: never model_retired)", llm.Code, CodeProviderError)
 			}
-			// Byte-identical residual: the unknown verdict's copy is the
-			// catalogue's unknown sentence, unchanged.
-			if llm.Message != defaultUserMessage(CodeUnknown) {
-				t.Fatalf("message = %q, want the residual catalogue copy %q byte-identical (row 22)", llm.Message, defaultUserMessage(CodeUnknown))
+			// The message is the catalogue's provider_error sentence: the
+			// no-facts form or the provider/model form with every slot filled.
+			plain := defaultUserMessage(CodeProviderError)
+			withFacts := providerMessageFor(CodeProviderError, llm.Provider, llm.Model)
+			if llm.Message != plain && (withFacts == "" || llm.Message != withFacts) {
+				t.Fatalf("message = %q, want the provider_error catalogue sentence %q or its provider/model form %q (R-4)", llm.Message, plain, withFacts)
 			}
 		})
 	}

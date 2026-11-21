@@ -120,7 +120,11 @@ func providerMessageFor(code LLMErrorCode, providerID, modelID string) string {
 //     identity → facts absent. NO retry keys under facts (OBS-103).
 //  4. provider_message: set when the final code has a §6 provider-message
 //     template AND identity is present — the marker that the message on
-//     the wire is the assembled sentence (MAJ-103/C-14 write-side).
+//     the wire is the assembled sentence (MAJ-103/C-14 write-side) — OR
+//     when the code's catalogue sentence carries message slots and
+//     assembledCatalogueSentence proved the message is that sentence with
+//     every slot filled (or replaced it with the generic sentence): #1857
+//     design note D-A option 1, server layer.
 func WireLLMError(p ErrorPayload) generated.LLMError {
 	translated := TranslateLLMError(p.ProviderError, p.Message)
 	code := translated.Code
@@ -144,13 +148,14 @@ func WireLLMError(p ErrorPayload) generated.LLMError {
 		requestID = pe.RequestID
 	}
 
+	message, assembled := assembledCatalogueSentence(code, message)
 	out := generated.LLMError{
 		Code:      string(code),
 		Message:   message,
 		Retryable: retryable,
 		Detail:    &detail,
 	}
-	if providerMessageFor(code, providerID, modelID) != "" {
+	if assembled || providerMessageFor(code, providerID, modelID) != "" {
 		flag := true
 		out.ProviderMessage = &flag
 	}

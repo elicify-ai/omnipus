@@ -68,7 +68,9 @@ async function unavailable(current: NonNullable<typeof app>, seq: number) {
   ])
   await waitFor(() => expect(useChatStore.getState().sessionsById[MAIN_ID].cursor).toStrictEqual({ bootId: 'history-boot', seq }))
   expect(useChatStore.getState().history.serverState).toStrictEqual({ status: 'unavailable', reason: 'index_missing', message: UNAVAILABLE })
-  const failure = screen.getByRole('alert')
+  // Spec 4.10: session_state as the first frame is the version banner, a second alert.
+  const failure = screen.getByText(UNAVAILABLE).closest('[role="alert"]')
+  if (!(failure instanceof HTMLElement)) throw new Error('the unavailable-history failure is not an alert')
   expect(failure).toHaveTextContent(UNAVAILABLE)
   return { failure, retry: within(failure).getByRole('button', { name: /^Retry$/ }) }
 }
@@ -95,7 +97,10 @@ describe('seam U — historical cached reader receives unsolicited unavailable h
     await user.type(input, ' — still editable')
     expect(input).toHaveValue(`${DRAFT} — still editable`)
     await user.click(screen.getByRole('button', { name: /^Stop/ }))
-    expect(current.socket.sent.filter(frame => frame.type === 'cancel'), 'D7a actual current-chat Stop remains callable').toStrictEqual([{ type: 'cancel', session_id: MAIN_ID, shown: { code_points: 0, turn_id: 'unavailable-current-turn' } }])
+    // Spec 4.10: this socket's first frame is session_state, so it is unsupported.
+    // Stop stays enabled (asserted above) and sends nothing; the notice is shown.
+    expect(current.socket.sent.filter(frame => frame.type === 'cancel'), 'D7a Stop stays callable, and spec 4.10 sends no cancel on an unsupported socket').toStrictEqual([])
+    expect(screen.getByText('Not stopped. Press Stop again.')).toBeInTheDocument()
     expect(sentMessages(current.socket)).toStrictEqual([])
   })
 
@@ -143,7 +148,10 @@ describe('seam U — historical cached reader receives unsolicited unavailable h
     await waitFor(() => expect(useChatStore.getState().history.requests.refresh.status).toBe('idle'))
     expectCachedReader()
     expect(screen.queryByText('Saved row 160', { exact: true }), 'fresh tail is not passively grafted into old history').not.toBeInTheDocument()
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    // Spec 4.10: recovery clears the history failure. The version banner stays.
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts, 'a recovered reader does not keep the history failure').toHaveLength(1)
+    expect(alerts[0]).toHaveTextContent('This page and the server are different versions. Your unsent text is kept below. Reload the page to send.')
     expect(sentMessages(current.socket)).toStrictEqual([])
 
     const latest = screen.getByRole('button', latestName)

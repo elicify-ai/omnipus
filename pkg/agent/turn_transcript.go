@@ -55,7 +55,11 @@ func TranscriptWriteFailures() uint64 {
 // strip-retry. A later distinct classified failure must keep its own code
 // — otherwise reload tells the user the model rejected an image.
 func outcomeRelabelApplies(current, relabel LLMErrorCode) bool {
-	return relabel != "" && (current == "" || current == CodeUnknown || current == CodeProviderRequestRejected)
+	// #1857 R-4: provider_error is, like provider_request_rejected, a
+	// residual promoted at the terminal presentation; a classified media
+	// relabel still wins over it.
+	return relabel != "" && (current == "" || current == CodeUnknown ||
+		current == CodeProviderRequestRejected || current == CodeProviderError)
 }
 
 // warnAbandonedTranscriptWrite emits the ADR-057 FR-003/BDD-04 WARN record
@@ -550,7 +554,7 @@ func (ts *turnState) writeErrorTranscriptCore(
 		if allowAbandoned || trustedMessage {
 			llm.Message = message
 		} else {
-			llm.Message = defaultUserMessage(code)
+			llm.Message = persistedCatalogueMessage(code, message)
 		}
 	}
 	// Belt for the one uncoded producer that is unambiguous: an internal
@@ -622,6 +626,12 @@ func (ts *turnState) canWriteErrorTranscript(kind, stage, message string, allowA
 }
 
 func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, content string, providerMessage bool) {
+	// #1857 design note D-A option 1 (server layer, persisted record): the
+	// same trust decision as the live frame (WireLLMError), so a reload
+	// shows the same text and flag. A slotted code keeps only its filled
+	// catalogue sentence; anything else becomes the generic sentence.
+	content, assembled := assembledCatalogueSentence(llm.Code, content)
+	providerMessage = providerMessage || assembled
 	entry := session.TranscriptEntry{
 		ID:             uuid.New().String(),
 		Type:           session.EntryTypeSystem,

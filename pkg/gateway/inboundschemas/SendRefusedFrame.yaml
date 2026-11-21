@@ -1,0 +1,67 @@
+title: SendRefusedFrame
+description: >
+  Server → client. #1428 step 2 (option C). A `message`, `redirect` or
+  `cancel` frame that carried an `origin` key was refused before any side
+  effect: nothing was saved, sent to an agent, redirected or cancelled.
+  Sent only to the connection that sent the refused frame, unsequenced.
+
+  Echo rule: a field is echoed only when the refused frame carried a valid
+  value for it. `session_id` is echoed when the target was a string of
+  length 1..255; `origin` only when it passed the SendOrigin rules;
+  `client_message_id` / `client_frame_id` only when a string of length
+  1..128. A refusal without a valid correlation id matches no pending
+  submission on the client and must not touch any turn.
+
+  This frame is never an error frame and never ends a turn. An accepted idle
+  cancel is not refused (see cancel_idle).
+type: object
+required:
+  - type
+  - reason
+  - refused_frame
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: send_refused
+  reason:
+    type: string
+    enum:
+      - wrong_chat
+      - origin_malformed
+      - origin_unverified
+      - frame_malformed
+    description: >
+      wrong_chat — origin and target name different chats (or a new-chat key
+      that does not belong to the target chat).
+      origin_malformed — `origin` was present (including null) but broke the
+      SendOrigin rules.
+      origin_unverified — the server could not read the target chat's saved
+      new-chat key, so it could not check the origin; nothing was done.
+      frame_malformed — `origin` was valid, but a present target or
+      correlation field broke its bounds.
+  refused_frame:
+    type: string
+    enum:
+      - message
+      - redirect
+      - cancel
+    description: Type of the refused frame.
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: The refused frame's target, echoed only when it was valid.
+  origin:
+    $ref: ./SendOrigin.yaml
+    description: The refused frame's origin, echoed only when it passed validation.
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The refused message's correlation id, echoed only when valid.
+  client_frame_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The refused redirect's or cancel's correlation id, echoed only when valid.

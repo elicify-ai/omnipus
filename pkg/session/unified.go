@@ -599,6 +599,28 @@ func (us *UnifiedStore) NewSession(
 	return us.createSessionLocked(sessionID, sessionType, channel, creatingAgentID)
 }
 
+// NewSessionKeyed is NewSession that also saves the browser's new-chat key
+// (#1428 step 2, spec 4.3.3) in the SAME creation write: there is never a
+// created-but-unkeyed chat on disk. A failed write returns the error and no
+// session. An empty newChatKey makes it exactly NewSession.
+func (us *UnifiedStore) NewSessionKeyed(
+	sessionType UnifiedSessionType,
+	channel string,
+	creatingAgentID string,
+	newChatKey string,
+) (*UnifiedMeta, error) {
+	sessionID, err := NewSessionID()
+	if err != nil {
+		return nil, err
+	}
+
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
+	meta := newSessionMeta(sessionID, sessionType, channel, creatingAgentID)
+	meta.NewChatKey = newChatKey
+	return us.persistNewSessionLocked(sessionID, meta)
+}
+
 // NewChannelSession creates a new shared session for (channel, peerID).
 // Unlike NewSession it writes PeerID and Title atomically so the caller does
 // not need a follow-up SetMeta call.
@@ -637,6 +659,12 @@ func (us *UnifiedStore) createSessionLocked(
 	channel string,
 	creatingAgentID string,
 ) (*UnifiedMeta, error) {
+	return us.persistNewSessionLocked(sessionID, newSessionMeta(sessionID, sessionType, channel, creatingAgentID))
+}
+
+// newSessionMeta builds the identity of a freshly created session (shared by
+// createSessionLocked and NewSessionKeyed so both write the same shape).
+func newSessionMeta(sessionID string, sessionType UnifiedSessionType, channel, creatingAgentID string) *UnifiedMeta {
 	now := time.Now().UTC()
 	// NOTE (session-core U1, DEL-11): a freshly created session records NO
 	// ActiveAgentID. The field is the mutable HANDOVER owner — the agent a
@@ -646,7 +674,7 @@ func (us *UnifiedStore) createSessionLocked(
 	// redundant second owner on every meta.json and made a session look
 	// handed-over the moment it was created. Nothing writes it any more: the
 	// switch_agent tool and UnifiedStore.SwitchAgent were deleted (DEL-07).
-	meta := &UnifiedMeta{
+	return &UnifiedMeta{
 		SessionMeta: SessionMeta{
 			ID:        sessionID,
 			AgentID:   creatingAgentID,
@@ -658,7 +686,6 @@ func (us *UnifiedStore) createSessionLocked(
 		},
 		Type: sessionType,
 	}
-	return us.persistNewSessionLocked(sessionID, meta)
 }
 
 // persistNewSessionLocked materialises an already-built session meta: the

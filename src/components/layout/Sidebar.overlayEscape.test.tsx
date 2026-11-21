@@ -130,7 +130,9 @@ vi.mock('@/store/auth', () => {
   const useAuthStore = (selector?: (s: typeof mockState) => unknown) =>
     selector ? selector(mockState) : mockState
   useAuthStore.getState = () => mockState
-  return { useAuthStore }
+  // bound-send.ts registers a sign-out listener at load. The real export
+  // returns an unsubscribe.
+  return { useAuthStore, onSignOut: () => () => {} }
 })
 
 // Mock framer-motion — AnimatePresence/motion render children without

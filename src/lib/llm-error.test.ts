@@ -75,6 +75,22 @@ const ALL_CODES: LLMErrorCode[] = [
   'bad_model',
   'provider_request_rejected',
   'model_route_unavailable',
+  // #1857 (R3 / design-note C2): the 13 codes the backend round added. Listed
+  // explicitly so the bijection assertion above and every per-code loop below
+  // (copy rules, attribution, display copy) cover them.
+  'external_cli_invalid_args',
+  'external_cli_model_unavailable',
+  'external_cli_needs_signin',
+  'external_cli_failed',
+  'external_cli_turn_limit',
+  'external_cli_upstream_refused',
+  'provider_error',
+  'agent_request_limit',
+  'tool_assembly_duplicate',
+  'transcript_save_failed',
+  'goal_state_unavailable',
+  'external_cli_not_found',
+  'external_cli_invalid_config',
   'unknown',
 ]
 
@@ -443,7 +459,15 @@ describe('provider-messages — subtype trust gate (rows 12, 30)', () => {
         expect(display.message).toBe(le.message)
         continue
       }
-      expect(display.message).toBe(codeToDisplay[code]) // pin: passes today; the gate must never regress it
+      // #1857 D-A (chief ruling B): an unflagged error is untrusted and goes
+      // through the codeToMessage guard. The expectation is derived from the
+      // generated template itself, never by calling the code under test: a
+      // slotted catalogue sentence must never reach the screen raw, so the
+      // generic `unknown` sentence is shown; a slot-free code keeps its own copy.
+      const template = codeToDisplay[code]
+      const want = /\{[a-z_]+\}/.test(template) ? codeToDisplay.unknown : template
+      expect(display.message).toBe(want) // pin: slot-free codes stay byte-identical; slotted never raw
+      expect(display.message).not.toMatch(/\{[a-z_]+\}/)
     }
   })
 

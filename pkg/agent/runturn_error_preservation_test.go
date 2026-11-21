@@ -34,7 +34,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +44,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -187,23 +187,42 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 		"transcript must contain at least one EntryTypeSystem entry describing the rate-limit denial; "+
 			"all entries: %+v", entries)
 
-	// At least one system entry must reference the rate-limit policy. We
-	// search by substring because the wire format of the payload is part of
-	// the contract under design review — we want a stable assertion that
-	// catches "payload not written" AND "wrong entry type".
+	// #1857 D-A (design-note-frontend-round.md): the saved record no longer
+	// holds the internal "rate limit: ... retry after ..." text. It holds the
+	// error code agent_request_limit with either the catalogue sentence for
+	// that code (every slot filled) or, when a fact is missing (known limit
+	// F4), the generic unknown sentence. The entry being written is this
+	// test's original purpose (FR-001).
 	var rlEntry *session.TranscriptEntry
 	for i := range systemEntries {
-		c := systemEntries[i]
-		if strings.Contains(strings.ToLower(c.Content), "rate limit") ||
-			strings.Contains(strings.ToLower(c.Content), "rate_limit") {
-			cp := c
+		if systemEntries[i].ErrorCode == string(CodeAgentRequestLimit) {
+			cp := systemEntries[i]
 			rlEntry = &cp
 			break
 		}
 	}
 	require.NotNil(t, rlEntry,
-		"transcript must contain a system entry referencing the rate-limit; "+
-			"system entries found: %+v", systemEntries)
+		"transcript must contain a system entry with error_code %q; system entries found: %+v",
+		CodeAgentRequestLimit, systemEntries)
+
+	variants := generated.LLMErrorMessageVariants[string(CodeAgentRequestLimit)]
+	templates := make([]string, 0, 1+len(variants))
+	templates = append(templates, generated.LLMErrorUserMessages[string(CodeAgentRequestLimit)])
+	for _, v := range variants {
+		templates = append(templates, v)
+	}
+	isCatalogue := rlEntry.Content == generated.LLMErrorUserMessages[string(CodeUnknown)]
+	for _, tmpl := range templates {
+		if tmpl != "" && renderedFromTemplate(rlEntry.Content, tmpl) {
+			isCatalogue = true
+		}
+	}
+	assert.True(t, isCatalogue,
+		"the saved content must be the agent_request_limit catalogue sentence with every slot filled, or the generic unknown sentence; got %q", rlEntry.Content)
+	lowered := strings.ToLower(rlEntry.Content)
+	assert.NotContains(t, lowered, "rate limit:", "the saved content must not carry the internal rate-limit text")
+	assert.NotContains(t, lowered, "retry after", "the saved content must not carry the internal retry-after text")
+	assert.False(t, messageHasSlots(rlEntry.Content), "the saved content must never carry a raw {slot}: %q", rlEntry.Content)
 
 	// The entry must carry the agent ID so the replay path can attribute it.
 	assert.Equal(t, customAgentID, rlEntry.AgentID,
@@ -247,33 +266,41 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 		"EventKindRateLimit with RateLimitPayload must still be emitted (no regression on the WS frame side)")
 
 	// ---------------------------------------------------------------------
-	// Assert (D): the transcript entry carries the typed LLMError code
-	// (BLOCK 2 / FR-008). The persisted ErrorCode must equal "rate_limited"
-	// so the replay path can render the same banner.
+	// Assert (D): #1857 §13.8.5 B3 / T-55 requires the own limiter's
+	// config-attributed agent_request_limit code in the saved chat record,
+	// never the provider's rate_limited code (BLOCK 2 / FR-008 replay).
 	// ---------------------------------------------------------------------
-	assert.Equal(t, "rate_limited", rlEntry.ErrorCode,
-		"transcript entry must carry the typed rate_limited code")
+	assert.Equal(t, "agent_request_limit", rlEntry.ErrorCode,
+		"B3/T-55: transcript must identify the agent's configured request limit, not a provider rate limit")
 	assert.True(t, rlEntry.ErrorRetryable,
 		"rate-limit entries must mark ErrorRetryable=true")
-	expectedRateLimitCopy := fmt.Sprintf("rate limit: %s (retry after %.0fs)",
-		rateLimitPayload.PolicyRule, rateLimitPayload.RetryAfterSeconds)
-	assert.Equal(t, expectedRateLimitCopy, rlEntry.Content,
-		"transcript must preserve the friendly rate-limit copy")
+	// #1857 D-A (T1-3): the saved content is no longer the internal
+	// "rate limit: <rule> (retry after Ns)" text; it is the catalogue sentence
+	// or the generic sentence, asserted above on the same entry. The policy
+	// rule and retry delay stay on the EventKindRateLimit payload.
+	assert.NotEmpty(t, rateLimitPayload.PolicyRule,
+		"the EventKindRateLimit payload must still carry the policy rule")
+	assert.Positive(t, rateLimitPayload.RetryAfterSeconds,
+		"the EventKindRateLimit payload must still carry the retry delay")
 
 	// ---------------------------------------------------------------------
 	// Assert (D): audit row was written (regression on the existing test).
 	// ---------------------------------------------------------------------
 	auditPath := filepath.Join(tmpHome, "system", "audit.jsonl")
-	if entries, err := readAuditEntries(auditPath); err == nil {
-		var saw bool
-		for _, e := range entries {
-			if e["event"] == audit.EventRateLimit {
-				saw = true
-				break
-			}
+	// T2-5 (CHECK N1): the setup turns the audit log on (Sandbox.AuditLog:
+	// true), so the audit file must exist and be readable. A read error is a
+	// failure, never a silent skip.
+	auditEntries, auditErr := readAuditEntries(auditPath)
+	require.NoError(t, auditErr,
+		"audit.jsonl must be readable: the setup enables Sandbox.AuditLog, so a missing or unreadable audit file is a regression")
+	var saw bool
+	for _, e := range auditEntries {
+		if e["event"] == audit.EventRateLimit {
+			saw = true
+			break
 		}
-		assert.True(t, saw, "audit.jsonl must still contain a rate_limit event (no regression)")
 	}
+	assert.True(t, saw, "audit.jsonl must still contain a rate_limit event (no regression)")
 }
 
 // TestRunTurn_ProviderError_WritesErrorEntryToTranscript is the FIX-1 /

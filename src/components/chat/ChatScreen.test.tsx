@@ -297,8 +297,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
       useSessionStore.setState({ activeAgentId: 'general-assistant', activeSessionId: 'sess_1' })
     })
     let composerText = '/clear'
-    const sentTexts: string[] = []
-    mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
+    act(() => { useChatStore.setState({ outboundQueue: [] }) })
     vi.mocked(useComposerRuntime).mockReturnValue({
       getState: () => ({ text: composerText }),
       setText: vi.fn((text: string) => { composerText = text }),
@@ -321,9 +320,13 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
     })
 
     // The selected palette closes, but the existing conversation is intact.
+    // Spec 4.5: the binding sends the server command. The primitive send never runs.
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
-    expect(mockComposerSend).toHaveBeenCalledTimes(1)
-    expect(sentTexts).toEqual(['/clear'])
+    expect(mockComposerSend).not.toHaveBeenCalled()
+    const queued = useChatStore.getState().outboundQueue
+    expect(queued, 'the listed server /clear is sent unchanged').toHaveLength(1)
+    const queuedItem = queued[0]
+    expect(typeof queuedItem === 'string' ? queuedItem : queuedItem.content).toBe('/clear')
     expect(useSessionStore.getState().activeSessionId).toBe('sess_1')
     expect(useChatStore.getState().messages).toHaveLength(1)
     expect(useChatStore.getState().messages[0]).toEqual({ id: 'msg1', role: 'user', content: 'hi', timestamp: '', status: 'done' })

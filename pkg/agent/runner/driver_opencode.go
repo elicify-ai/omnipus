@@ -704,7 +704,9 @@ func parseOpencodeError(raw []byte, runID string) []RunEvent {
 	return []RunEvent{{
 		Kind:  EventKindError,
 		RunID: runID,
-		Err:   &ErrorEvent{Message: msg, Fatal: true},
+		// Type is the structured error.type alone (#1857), the classifier's
+		// input; the 1.x error name only names the error in msg and the log.
+		Err: &ErrorEvent{Message: msg, Fatal: true, Type: rawJSONString(rawJSONObject(raw, "error"), "type")},
 	}}
 }
 

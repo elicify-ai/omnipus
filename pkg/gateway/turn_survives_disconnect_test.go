@@ -352,6 +352,9 @@ func TestReconnectMidTurn_CatchUpThenLive(t *testing.T) {
 	connB := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = connB.Close() })
 	sendWSAuthFrameDevMode(t, connB)
+	// #1428 §4.10 / S-11: admission is not evidence of an attach bind.
+	_, capability := readFirstApplicationFrame(t, connB)
+	requireServerCapabilitiesFirst(t, capability, "mid-turn reconnect admission")
 
 	attachFrame := wsClientFrameTestHelper{Type: "attach_session", SessionID: sessionID}
 	attachData, err := json.Marshal(attachFrame)
@@ -363,10 +366,10 @@ func TestReconnectMidTurn_CatchUpThenLive(t *testing.T) {
 	// bind+snapshot is the FIRST thing it does, strictly before ANY
 	// attach-related frame (replay history, catch-up, or live) is emitted
 	// to B — so receiving an attach-related frame proves the bind already
-	// happened. The VERY first frame on a fresh connection is always the
-	// connection-open session_state one-shot (emitted before the client's
-	// attach_session message can even be read by the server) — skip past
-	// that, it proves nothing about the attach. Without this wait,
+	// happened. After the capability handshake checked above, the
+	// connection-open session_state one-shot still precedes the client's
+	// attach_session processing — skip past it, as it proves nothing about
+	// the attach. Without this wait,
 	// resuming immediately after the client-side Write races the server's
 	// own processing: if a live token's Update() ran (and captured its
 	// target list) before B's bind, that token becomes part of B's

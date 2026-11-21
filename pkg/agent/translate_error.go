@@ -40,6 +40,52 @@ const (
 	CodeModelRouteUnavailable LLMErrorCode = "model_route_unavailable"
 )
 
+// #1857 (notifications spec §13.8): failure kinds the server knows a safe
+// reason for. The external_cli_* codes come only from the CLI-only
+// classifier (cli_failure_kinds.go, R-2) — classifyByMessage never yields
+// them, and the CLI path never yields a provider or network code.
+const (
+	// CodeExternalCLIInvalidArgs: the CLI rejected its own command line (C1).
+	CodeExternalCLIInvalidArgs LLMErrorCode = "external_cli_invalid_args"
+	// CodeExternalCLIModelUnavailable: the CLI could not use or route the
+	// model (C2, OpenCode's structured error.type provider.no-route).
+	CodeExternalCLIModelUnavailable LLMErrorCode = "external_cli_model_unavailable"
+	// CodeExternalCLINeedsSignin: the CLI is not signed in on its machine (C3).
+	CodeExternalCLINeedsSignin LLMErrorCode = "external_cli_needs_signin"
+	// CodeExternalCLIFailed: the CLI run failed with no recognised cause (C4),
+	// its output could not be read (C6) or it could not start (C7).
+	CodeExternalCLIFailed LLMErrorCode = "external_cli_failed"
+	// CodeExternalCLITurnLimit: the CLI worker reached its turn cap (C5).
+	CodeExternalCLITurnLimit LLMErrorCode = "external_cli_turn_limit"
+	// CodeExternalCLIUpstreamRefused: the CLI's own model provider refused
+	// (rate limit or out of credit) — never Omnipus's providers (C9).
+	CodeExternalCLIUpstreamRefused LLMErrorCode = "external_cli_upstream_refused"
+	// CodeProviderError is the terminal-presentation name of a residual
+	// dispatched-provider failure (A4/A5, R-4): an HTTP status above 400
+	// whose body matched nothing, or a 200 stream that ended with an
+	// unrecognised error. Never returned by TranslateLLMError — the recovery
+	// classification stays CodeUnknown so the media strip-retry still fires.
+	CodeProviderError LLMErrorCode = "provider_error"
+	// CodeAgentRequestLimit: Omnipus's own per-agent hourly model-request
+	// limit (SEC-26) refused the iteration (B3) — never the provider's.
+	CodeAgentRequestLimit LLMErrorCode = "agent_request_limit"
+	// CodeToolAssemblyDuplicate: the agent's tool set held two tools with the
+	// same name, so the request was not sent (B10).
+	CodeToolAssemblyDuplicate LLMErrorCode = "tool_assembly_duplicate"
+	// CodeTranscriptSaveFailed: a record of the conversation could not be
+	// saved (B25: the settlement after an ordinary wake).
+	CodeTranscriptSaveFailed LLMErrorCode = "transcript_save_failed"
+	// CodeGoalStateUnavailable: the goal state could not be read (B26).
+	CodeGoalStateUnavailable LLMErrorCode = "goal_state_unavailable"
+	// CodeExternalCLINotFound: the configured CLI program path is missing or
+	// fails its check, so the run was refused (C8).
+	CodeExternalCLINotFound LLMErrorCode = "external_cli_not_found"
+	// CodeExternalCLIInvalidConfig: the CLI worker's executor settings cannot
+	// be used — no executor config, no CLI, a driver that could not be built
+	// (B16-config) or an unusable turn cap (B17b).
+	CodeExternalCLIInvalidConfig LLMErrorCode = "external_cli_invalid_config"
+)
+
 const (
 	// CodeMediaUnsupported: provider rejected a media block (image or PDF).
 	// Either capability-absence (model has no vision) or format-rejection
@@ -340,6 +386,12 @@ type LLMError struct {
 	Model           string
 	RequestID       string
 	ProviderMessage bool
+
+	// NeutralMessage is Message in the neutral voice (#1857 design note
+	// D-B B1), Go-only and never on the wire: set by a known-cause producer
+	// that rendered both voices from the same facts, for surfaces outside a
+	// chat (turnErrorUserText). "" when the producer rendered only Message.
+	NeutralMessage string
 }
 
 // userMessages maps each code to its generic user-facing message. Generic
@@ -946,6 +998,12 @@ func TranslateTurnError(err error) LLMError {
 	if code, ok := typedExitCode(err); ok {
 		return typedExitError(code, err)
 	}
+	// #1857: causes whose code the producer already knows (a classified
+	// external-CLI failure, the own request limiter, a duplicate tool name)
+	// carry it to every surface — never re-classified from their text.
+	if llm, ok := translateKnownCauseError(err); ok {
+		return llm
+	}
 	var route *providers.ModelRouteUnavailableError
 	if errors.As(err, &route) {
 		return translateModelRouteUnavailable(route)
@@ -1000,6 +1058,11 @@ func TranslateTurnError(err error) LLMError {
 			code = CodeProviderRejected
 		case common.StreamErrorContentPolicy:
 			code = CodeContentPolicy
+		case common.StreamErrorOther:
+			// #1857 R-4 (A4): a 200 stream that ended with an error code
+			// the kind table does not know is a dispatched provider
+			// failure, named at this terminal presentation only.
+			code = CodeProviderError
 		}
 		return LLMError{
 			Code:      code,
@@ -1154,6 +1217,13 @@ func TranslateTurnError(err error) LLMError {
 		code = CodeBadModel
 	} else if code == CodeUnknown && pe != nil && pe.Status == 400 {
 		code = CodeProviderRequestRejected
+	} else if code == CodeUnknown && pe != nil && pe.Status > 400 {
+		// #1857 R-4 (A4/A5): an HTTP status above 400 was received and its
+		// body matched nothing. Promoted here, at the terminal presentation,
+		// never inside classifyByProviderError: the recovery classification
+		// stays CodeUnknown so outcomeFallbackEligible keeps firing. A
+		// pre-send or no-status failure (pe nil or Status 0) stays unknown.
+		code = CodeProviderError
 	}
 	if code != llm.Code {
 		llm.Code = code
@@ -1209,7 +1279,11 @@ func (e *authoredRefusalError) RefusalText() string { return e.text }
 func turnErrorUserText(err error) string {
 	llm := TranslateTurnError(err)
 	var curated *curatedTurnError
-	if errors.As(err, &curated) && llm.Code == CodeUnknown {
+	if errors.As(err, &curated) && (llm.Code == CodeUnknown || errors.As(err, new(*externalCLIRefusalError))) {
+		// #1857 C8: a typed pre-run refusal that carries Omnipus's own
+		// curated refusal (the program-path check) keeps showing that text
+		// on task surfaces as written (r17 §3.6 step 5); its code still
+		// travels on the frame and the persisted record.
 		return curated.Error()
 	}
 	// Task surfaces carry the PLAIN catalogue message for the typed code —
@@ -1218,7 +1292,18 @@ func turnErrorUserText(err error) string {
 	// variant, set on LLMError.Message when TranslateLLMError has identity)
 	// is the chat-surface text delivered through WireLLMError, never this
 	// function's.
-	return defaultUserMessage(llm.Code)
+	//
+	// #1857 (design note D-B B1): task surfaces are outside the chat, so they
+	// carry the NEUTRAL form. A known-cause producer rendered it from the same
+	// observed facts as the chat form (never provider text), so that
+	// rendering is the plain message here.
+	if llm.NeutralMessage != "" {
+		return llm.NeutralMessage
+	}
+	if messageHasSlots(defaultUserMessage(llm.Code)) {
+		return llm.Message
+	}
+	return neutralCatalogueSentence(llm.Code, "")
 }
 
 // userVisibleTurnError is what the session worker publishes as a failed
@@ -1315,6 +1400,11 @@ func typedExitError(code LLMErrorCode, cause error) LLMError {
 func isRetryable(code LLMErrorCode) bool {
 	switch code {
 	case CodeRateLimited, CodeNetwork, CodeProviderStalled, CodeProviderEmptyReply, CodeTurnTimedOut:
+		return true
+	case CodeAgentRequestLimit:
+		// #1857 B3: the agent's own hourly request limit clears by itself
+		// once the wait passes (W11 "I can continue in {minutes} minutes"),
+		// exactly like the rate_limited denial it replaces.
 		return true
 	}
 	// CodeToolCallTruncated falls through to false with everything else:

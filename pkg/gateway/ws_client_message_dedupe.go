@@ -105,6 +105,22 @@ func (hcm *wsHandlerHandleChatMessage) digestFirstMessageRequest() firstClientMe
 		}
 	}
 	_, _ = digest.Write([]byte{autoChoice})
+	// #1428 step 2 (spec 4.3.5): the origin is part of the request, so the
+	// same id with a different origin is a conflict, not a retry. Kind, then
+	// the session id or key, each length-prefixed; an absent origin hashes as
+	// an empty kind.
+	originKind, originValue := "", ""
+	if hcm.origin != nil {
+		originKind = hcm.origin.Kind
+		switch {
+		case hcm.origin.SessionId != nil:
+			originValue = *hcm.origin.SessionId
+		case hcm.origin.NewChatKey != nil:
+			originValue = *hcm.origin.NewChatKey
+		}
+	}
+	writeString(originKind)
+	writeString(originValue)
 	var result firstClientMessageDigest
 	copy(result[:], digest.Sum(nil))
 	return result

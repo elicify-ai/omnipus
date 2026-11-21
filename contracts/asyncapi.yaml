@@ -111,6 +111,14 @@ channels:
         $ref: '#/components/messages/ReplayWarningFrame'
       CancelStageFrame:
         $ref: '#/components/messages/CancelStageFrame'
+      CancelIdleFrame:
+        $ref: '#/components/messages/CancelIdleFrame'
+      SendRefusedFrame:
+        $ref: '#/components/messages/SendRefusedFrame'
+      ServerCapabilitiesFrame:
+        $ref: '#/components/messages/ServerCapabilitiesFrame'
+      CommandReceivedFrame:
+        $ref: '#/components/messages/CommandReceivedFrame'
       PongFrame:
         $ref: '#/components/messages/PongFrame'
       SessionModeUpdateFrame:
@@ -175,6 +183,8 @@ channels:
         $ref: '#/components/messages/RoomMetaFrame'
       OpenInLibraryFrame:
         $ref: '#/components/messages/OpenInLibraryFrame'
+      TurnStartedFrame:
+        $ref: '#/components/messages/TurnStartedFrame'
       ChatPresenceFrame:
         $ref: '#/components/messages/ChatPresenceFrame'
   browser:
@@ -273,7 +283,8 @@ operations:
     channel:
       $ref: '#/channels/chat'
     summary: 'Request cancellation of the in-progress agent turn for a session. The server responds with cancel_stage frames
-      (graceful → hard → detached) and eventually a done frame.
+      (graceful → hard → detached) and eventually a done frame, or with cancel_idle when nothing was running (#1841).
+      With origin and client_frame_id (#1428 step 2) it is first answered with command_received or send_refused.
 
       '
     messages:
@@ -723,6 +734,57 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/CancelStageFrame'
+  receiveCancelIdle:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: '#1841. Answer to an accepted cancel that found nothing to stop. Sent only to the requesting connection, unsequenced;
+      never journaled or replayed. Follows command_received when the cancel carried client_frame_id.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/CancelIdleFrame'
+  receiveSendRefused:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: '#1428 step 2. A message, redirect or cancel that carried origin was refused before any side effect. Sent only
+      to the sending connection, unsequenced. Never an error frame; never ends a turn.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SendRefusedFrame'
+  receiveServerCapabilities:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: '#1428 step 2. First frame on every connection, enqueued right after authentication and before any other frame.
+      A client that does not see it first must not send message, redirect or cancel on that connection.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ServerCapabilitiesFrame'
+  receiveCommandReceived:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: '#1428 step 2. Receipt for an accepted redirect or cancel carrying a valid client_frame_id: it passed the origin
+      check and was handed to its handler (not "applied"). Enqueued before the handler acts.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/CommandReceivedFrame'
+  receiveTurnStarted:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: '#1428 step 2. Live-only notice that a foreground turn of the chat started, naming it before its first token.
+      Delivered unsequenced to the connections bound to the session at that moment, always after the previous turn''s
+      done; never journaled, persisted or replayed (a reconnecting tab reads session_state.active_turn instead).
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/TurnStartedFrame'
   receivePong:
     action: receive
     channel:
@@ -1342,6 +1404,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/OpenInLibraryFrame'
+    TurnStartedFrame:
+      name: TurnStartedFrame
+      title: turn_started
+      summary: Live-only notice naming a foreground turn as it starts (server → client, #1428 step 2).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/TurnStartedFrame'
     ToolApprovalRequiredFrame:
       name: ToolApprovalRequiredFrame
       title: tool_approval_required
@@ -1398,6 +1467,34 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/CancelStageFrame'
+    CancelIdleFrame:
+      name: CancelIdleFrame
+      title: cancel_idle
+      summary: Accepted cancel found nothing to stop (server → client, requester only, #1841).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CancelIdleFrame'
+    SendRefusedFrame:
+      name: SendRefusedFrame
+      title: send_refused
+      summary: Message, redirect or cancel refused by the origin check (server → client, sender only, #1428 step 2).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SendRefusedFrame'
+    ServerCapabilitiesFrame:
+      name: ServerCapabilitiesFrame
+      title: server_capabilities
+      summary: First frame on every connection; announces the origin check (server → client, #1428 step 2).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ServerCapabilitiesFrame'
+    CommandReceivedFrame:
+      name: CommandReceivedFrame
+      title: command_received
+      summary: Receipt for an accepted redirect or cancel carrying client_frame_id (server → client, sender only, #1428 step 2).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CommandReceivedFrame'
     PongFrame:
       name: PongFrame
       title: pong
@@ -2837,6 +2934,43 @@ components:
       - room_meta
       - open_in_library
       - chat_presence
+      - cancel_idle
+      - send_refused
+      - server_capabilities
+      - command_received
+      - turn_started
+    SendOrigin:
+      title: SendOrigin
+      description: >
+        #1428 step 2 (option C). The chat the input was written in, carried next
+        to the frame's target (session_id) on message, redirect and cancel. A
+        consistency control, not proof of authorship and not an access check.
+        Exactly the field of its kind must be present (session_id for chat,
+        new_chat_key for new_chat); the server enforces that rule (no oneOf) and
+        answers any other shape with send_refused origin_malformed. The
+        new_chat_key is saved in the created chat's metadata and never returned.
+        Mirrors contracts/components/schemas/SendOrigin.yaml.
+      type: object
+      required:
+      - kind
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - chat
+          - new_chat
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The existing chat the input was written in (kind chat only).
+        new_chat_key:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Browser-minted key of the "no chat yet" screen (kind new_chat only).
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -2904,6 +3038,16 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+          description: The frame's target (absent = create a new chat); compare origin.
+        origin:
+          $ref: '#/components/schemas/SendOrigin'
+          description: >
+            #1428 step 2. The chat the message was written in. Checked against
+            the target before any side effect; a mismatch is refused with
+            send_refused. A consistency control, not authorization. A browser
+            connection must send it (an origin-less message there gets an
+            out-of-date reply); other connections may omit it. `origin: null`
+            is malformed, not absent. Part of the first-message retry identity.
         recipient:
           type: object
           required:
@@ -3017,7 +3161,8 @@ components:
               example: true
     CancelFrame:
       title: CancelFrame
-      description: Client → server cancel in-progress turn.
+      description: Client → server cancel in-progress turn. A cancel that finds nothing to stop is answered with cancel_idle
+        (#1841) to the sending connection only.
       type: object
       required:
       - type
@@ -3031,6 +3176,25 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+          description: The frame's target; compare origin.
+        origin:
+          $ref: '#/components/schemas/SendOrigin'
+          description: >
+            #1428 step 2. The chat the Stop or typed /cancel came from. Checked
+            against the target before any side effect; a mismatch is refused
+            with send_refused and nothing is cancelled. A consistency control,
+            not authorization. A browser connection must send it (an
+            origin-less cancel there gets an out-of-date reply); other
+            connections may omit it. `origin: null` is malformed, not absent.
+        client_frame_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            #1428 step 2. Correlation id; when present and valid the server
+            answers with exactly one command_received (before any cancel_stage
+            or cancel_idle for it) or one send_refused carrying it. Optional
+            for older clients; a current client sets it on every cancel.
         scope:
           type: string
           enum:
@@ -3085,6 +3249,25 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+          description: The frame's target; compare origin.
+        origin:
+          $ref: '#/components/schemas/SendOrigin'
+          description: >
+            #1428 step 2. The chat the command was typed in. Checked against
+            the target before any side effect; a mismatch is refused with
+            send_refused and nothing is redirected. A consistency control, not
+            authorization. A browser connection must send it (an origin-less
+            redirect there gets an out-of-date reply); other connections may
+            omit it. `origin: null` is malformed, not absent.
+        client_frame_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            #1428 step 2. Correlation id; when present and valid the server
+            answers with exactly one command_received or one send_refused
+            carrying it. Optional for older clients; a current client sets it
+            on every redirect.
         instruction:
           type: string
           minLength: 1
@@ -3767,6 +3950,84 @@ components:
           message: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
           attribution: config
           provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
+        external_cli_invalid_args:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W1 (C1).
+          message: "I couldn't start {cli}: it rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting."
+          attribution: config
+          neutral: "{cli} rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting."
+        external_cli_model_unavailable:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W2 (C2).
+          message: "I couldn't run the task in {cli}: it couldn't use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings."
+          attribution: config
+          neutral: "The run in {cli} could not use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings."
+        external_cli_needs_signin:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W3 (C3); one sentence serves both voices.
+          message: "{cli} is not signed in on the machine it runs on, so the run stopped. Sign in to {cli} there, then retry the task."
+          attribution: user
+        external_cli_failed:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W4 (C4); variants W6 (C6 stream_read), W7 (C7 start).
+          message: "I couldn't finish the run in {cli}: it stopped with an error I couldn't identify. Retry the task; if it keeps happening, check that {cli} works on its own."
+          attribution: ambiguous
+          neutral: "The run in {cli} stopped with an error that could not be identified. Retry the task; if it keeps happening, check that {cli} works on its own."
+          variants:
+            stream_read: "I couldn't finish the run in {cli}: reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own."
+            start: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+          neutral_variants:
+            stream_read: "The run in {cli} ended because reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own."
+            start: "{cli} could not be launched. Check the CLI worker's program path in Settings."
+        external_cli_turn_limit:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W5 (C5).
+          message: "I stopped the run in {cli}: it reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings."
+          attribution: config
+          neutral: "The run in {cli} reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings."
+        external_cli_upstream_refused:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W13 limit form (C9); variant W13 out-of-credit form; one sentence serves both voices.
+          message: "The model {cli} uses is limiting requests right now. Try the task again in a moment."
+          attribution: ambiguous
+          variants:
+            out_of_credit: "{cli}'s model provider account is out of credit. Top up that account to run tasks with {cli}."
+        provider_error:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. no facts-absent W form (W12 needs {provider} and {host}) — existing generic sentence (A4/A5, R-4).
+          message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
+          attribution: provider
+        agent_request_limit:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W11 (B3, founder E2; W11 A).
+          message: "I've reached my limit of model requests for this hour. I can continue in {minutes} minutes, or you can raise the limit in Settings."
+          attribution: config
+          neutral: "This agent reached its limit of model requests for this hour. It can continue in {minutes} minutes, or the limit can be raised in Settings."
+        tool_assembly_duplicate:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W21 (B10, no MCP tool involved — the fail-closed class); variant mcp W20 (B10, an MCP tool involved).
+          message: "I couldn't get my tools ready because two of them have the same name, so this turn didn't run. We don't know why this happened; if it keeps happening, please report it to the Omnipus.ai team."
+          attribution: ambiguous
+          neutral: "The agent's tools could not be made ready because two of them have the same name, so the turn didn't run. Why this happened is not known; if it keeps happening, please report it to the Omnipus.ai team."
+          variants:
+            mcp: "I couldn't get my tools ready: two tools have the same name, and one comes from a connected MCP server. Check this agent's tools and MCP servers."
+          neutral_variants:
+            mcp: "The agent's tools could not be made ready: two tools have the same name, and one comes from a connected MCP server. Check the agent's tools and MCP servers."
+        transcript_save_failed:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W17 (B25 settlement).
+          message: "This turn finished, but I couldn't save its final state. Recent messages may be missing from your history; check the answer above before repeating anything."
+          attribution: ambiguous
+          neutral: "The run finished, but its final state could not be saved. Recent messages may be missing from the history; check the result before repeating any part of the task."
+        goal_state_unavailable:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W18 (B26/B22).
+          message: "I couldn't read the goal for this conversation, so I didn't continue working on it. Try again in a moment."
+          attribution: ambiguous
+          neutral: "The goal for this conversation could not be read, so the work did not continue. Try again in a moment."
+        external_cli_not_found:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18) (C8 program-path refusal).
+          message: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+          attribution: config
+          neutral: "{cli} could not be launched. Check the CLI worker's program path in Settings."
+        external_cli_invalid_config:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18) (B16 config gap with a known program, B17b invalid turn cap); variant no_program W19 (B16 pre-checks, no program known).
+          message: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+          attribution: config
+          neutral: "{cli} could not be launched. Check the CLI worker's program path in Settings."
+          variants:
+            no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings."
+          neutral_variants:
+            no_program: "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -3806,6 +4067,19 @@ components:
             - bad_model
             - provider_request_rejected
             - model_route_unavailable
+            - external_cli_invalid_args
+            - external_cli_model_unavailable
+            - external_cli_needs_signin
+            - external_cli_failed
+            - external_cli_turn_limit
+            - external_cli_upstream_refused
+            - provider_error
+            - agent_request_limit
+            - tool_assembly_duplicate
+            - transcript_save_failed
+            - goal_state_unavailable
+            - external_cli_not_found
+            - external_cli_invalid_config
             - unknown
         message:
           type: string
@@ -3849,8 +4123,8 @@ components:
           type: boolean
           description: >-
             Server-authored subtype/trust flag (MAJ-104, C-14) — when true, `message`
-            carries the server-assembled provider-message sentence and the SPA renders
-            it; when absent or false, the SPA keeps today's catalogue-copy rendering
+            carries the server-assembled catalogue sentence, every slot filled (any code),
+            and the SPA renders it; when absent or false, the SPA keeps today's catalogue-copy rendering
             keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2).
             Set at write time by the agent's assembly path; the replay shape carries
             the same flag so a reloaded session renders identically.
@@ -4044,6 +4318,84 @@ components:
           message: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
           attribution: config
           provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
+        external_cli_invalid_args:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W1 (C1).
+          message: "I couldn't start {cli}: it rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting."
+          attribution: config
+          neutral: "{cli} rejected its own command line, so nothing ran. Check the worker's Additional CLI arguments setting."
+        external_cli_model_unavailable:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W2 (C2).
+          message: "I couldn't run the task in {cli}: it couldn't use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings."
+          attribution: config
+          neutral: "The run in {cli} could not use the model {model}. Set this worker's model to one {cli} supports, in the agent's settings."
+        external_cli_needs_signin:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W3 (C3); one sentence serves both voices.
+          message: "{cli} is not signed in on the machine it runs on, so the run stopped. Sign in to {cli} there, then retry the task."
+          attribution: user
+        external_cli_failed:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W4 (C4); variants W6 (C6 stream_read), W7 (C7 start).
+          message: "I couldn't finish the run in {cli}: it stopped with an error I couldn't identify. Retry the task; if it keeps happening, check that {cli} works on its own."
+          attribution: ambiguous
+          neutral: "The run in {cli} stopped with an error that could not be identified. Retry the task; if it keeps happening, check that {cli} works on its own."
+          variants:
+            stream_read: "I couldn't finish the run in {cli}: reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own."
+            start: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+          neutral_variants:
+            stream_read: "The run in {cli} ended because reading its output failed. Retry the task; if it keeps happening, check that {cli} works on its own."
+            start: "{cli} could not be launched. Check the CLI worker's program path in Settings."
+        external_cli_turn_limit:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W5 (C5).
+          message: "I stopped the run in {cli}: it reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings."
+          attribution: config
+          neutral: "The run in {cli} reached its limit of {n} turns for this task. Split the work into smaller steps, or raise the limit in the agent's settings."
+        external_cli_upstream_refused:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W13 limit form (C9); variant W13 out-of-credit form; one sentence serves both voices.
+          message: "The model {cli} uses is limiting requests right now. Try the task again in a moment."
+          attribution: ambiguous
+          variants:
+            out_of_credit: "{cli}'s model provider account is out of credit. Top up that account to run tasks with {cli}."
+        provider_error:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. no facts-absent W form (W12 needs {provider} and {host}) — existing generic sentence (A4/A5, R-4).
+          message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
+          attribution: provider
+        agent_request_limit:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W11 (B3, founder E2; W11 A).
+          message: "I've reached my limit of model requests for this hour. I can continue in {minutes} minutes, or you can raise the limit in Settings."
+          attribution: config
+          neutral: "This agent reached its limit of model requests for this hour. It can continue in {minutes} minutes, or the limit can be raised in Settings."
+        tool_assembly_duplicate:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W21 (B10, no MCP tool involved — the fail-closed class); variant mcp W20 (B10, an MCP tool involved).
+          message: "I couldn't get my tools ready because two of them have the same name, so this turn didn't run. We don't know why this happened; if it keeps happening, please report it to the Omnipus.ai team."
+          attribution: ambiguous
+          neutral: "The agent's tools could not be made ready because two of them have the same name, so the turn didn't run. Why this happened is not known; if it keeps happening, please report it to the Omnipus.ai team."
+          variants:
+            mcp: "I couldn't get my tools ready: two tools have the same name, and one comes from a connected MCP server. Check this agent's tools and MCP servers."
+          neutral_variants:
+            mcp: "The agent's tools could not be made ready: two tools have the same name, and one comes from a connected MCP server. Check the agent's tools and MCP servers."
+        transcript_save_failed:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W17 (B25 settlement).
+          message: "This turn finished, but I couldn't save its final state. Recent messages may be missing from your history; check the answer above before repeating anything."
+          attribution: ambiguous
+          neutral: "The run finished, but its final state could not be saved. Recent messages may be missing from the history; check the result before repeating any part of the task."
+        goal_state_unavailable:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W18 (B26/B22).
+          message: "I couldn't read the goal for this conversation, so I didn't continue working on it. Try again in a moment."
+          attribution: ambiguous
+          neutral: "The goal for this conversation could not be read, so the work did not continue. Try again in a moment."
+        external_cli_not_found:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18) (C8 program-path refusal).
+          message: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+          attribution: config
+          neutral: "{cli} could not be launched. Check the CLI worker's program path in Settings."
+        external_cli_invalid_config:
+          # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W7 reused by chief ruling Q1 A (2026-11-18) (B16 config gap with a known program, B17b invalid turn cap); variant no_program W19 (B16 pre-checks, no program known).
+          message: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings."
+          attribution: config
+          neutral: "{cli} could not be launched. Check the CLI worker's program path in Settings."
+          variants:
+            no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings."
+          neutral_variants:
+            no_program: "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -4083,6 +4435,19 @@ components:
             - bad_model
             - provider_request_rejected
             - model_route_unavailable
+            - external_cli_invalid_args
+            - external_cli_model_unavailable
+            - external_cli_needs_signin
+            - external_cli_failed
+            - external_cli_turn_limit
+            - external_cli_upstream_refused
+            - provider_error
+            - agent_request_limit
+            - tool_assembly_duplicate
+            - transcript_save_failed
+            - goal_state_unavailable
+            - external_cli_not_found
+            - external_cli_invalid_config
             - unknown
         message:
           type: string
@@ -4095,7 +4460,8 @@ components:
           description: >-
             Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the
             live LLMError flag — when true, `message` carries the persisted
-            provider-message sentence and the SPA renders it after reload; when
+            server-assembled catalogue sentence, every slot filled (any code),
+            and the SPA renders it after reload; when
             absent or false, catalogue copy keyed on `code`, byte-identical to today
             (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted
             message itself carries the provider naming, C-13).
@@ -6644,6 +7010,40 @@ components:
         started_at:
           type: string
           format: date-time
+    TurnStartedFrame:
+      title: TurnStartedFrame
+      description: >
+        Server → client, live only (#1428 step 2, UAT-15 option A). Sent when a
+        foreground turn of the chat session starts, to every connection bound to
+        that session at that moment, so a tab knows the running turn's id before
+        its first token (or when it never streams a token). Sent for every turn
+        start: a new message, a queued follow-up, a redirect's new turn and a
+        revived helper. The previous turn's done is always delivered before the
+        next turn's turn_started. Delivered unsequenced: never numbered,
+        journaled, persisted or replayed, so it has no seq property; a tab that
+        reconnects learns the running turn from session_state.active_turn, which
+        names the same turn. Keep in sync by hand with
+        contracts/components/schemas/TurnStartedFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - active_turn
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: turn_started
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Chat session the turn runs in.
+        active_turn:
+          $ref: '#/components/schemas/SessionStateActiveTurn'
+          description: >
+            The turn that just started, in the same shape (and with the same values)
+            as session_state.active_turn reports while it runs.
     SessionStateFrame:
       title: SessionStateFrame
       description: 'Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array
@@ -6897,6 +7297,143 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/CancelStageFrame.yaml.
+    CancelIdleFrame:
+      title: CancelIdleFrame
+      description: >
+        Server → client. #1841. Answer to an accepted cancel that found nothing
+        to stop in its scope (no turn running or latched, no session stopped, no
+        background shell killed, no queued input discarded). Sent only to the
+        requesting connection, unsequenced; never journaled or replayed, and it
+        changes no cancel_stage frame. After command_received when the cancel
+        carried client_frame_id. Never for a refused cancel or an armed
+        pre-registration latch. Mirrors
+        contracts/components/schemas/CancelIdleFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: cancel_idle
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The cancel's target, in which nothing was running.
+    SendRefusedFrame:
+      title: SendRefusedFrame
+      description: >
+        Server → client. #1428 step 2. A message, redirect or cancel that carried
+        an origin key was refused before any side effect. Sent only to the
+        sending connection, unsequenced. Echo rule: each optional field is
+        echoed only when the refused frame carried a valid value for it. Never
+        an error frame; never ends a turn. Mirrors
+        contracts/components/schemas/SendRefusedFrame.yaml.
+      type: object
+      required:
+      - type
+      - reason
+      - refused_frame
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: send_refused
+        reason:
+          type: string
+          enum:
+          - wrong_chat
+          - origin_malformed
+          - origin_unverified
+          - frame_malformed
+          description: >
+            wrong_chat — origin and target name different chats.
+            origin_malformed — origin present (including null) but invalid.
+            origin_unverified — the target's saved new-chat key could not be read.
+            frame_malformed — origin valid, but a present target or correlation
+            field broke its bounds.
+        refused_frame:
+          type: string
+          enum:
+          - message
+          - redirect
+          - cancel
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The refused frame's target, echoed only when valid.
+        origin:
+          $ref: '#/components/schemas/SendOrigin'
+          description: The refused frame's origin, echoed only when it passed validation.
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The refused message's correlation id, echoed only when valid.
+        client_frame_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The refused redirect's or cancel's correlation id, echoed only when valid.
+    ServerCapabilitiesFrame:
+      title: ServerCapabilitiesFrame
+      description: >
+        Server → client. #1428 step 2. First frame on every connection, enqueued
+        right after authentication succeeds and before any other frame; not sent
+        when authentication fails. Obligation: a server that sends
+        send_origin true MUST answer every accepted redirect and cancel carrying
+        a valid client_frame_id with exactly one command_received, and every
+        refused one with send_refused. Mirrors
+        contracts/components/schemas/ServerCapabilitiesFrame.yaml.
+      type: object
+      required:
+      - type
+      - send_origin
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: server_capabilities
+        send_origin:
+          type: boolean
+          const: true
+          description: The server checks origin on message, redirect and cancel and accepts new_chat_key on creation.
+    CommandReceivedFrame:
+      title: CommandReceivedFrame
+      description: >
+        Server → client. #1428 step 2. Receipt for a redirect or cancel carrying
+        a valid client_frame_id: it passed the origin check and was handed to
+        its handler (not "applied"). Enqueued before the handler acts. Sender
+        only, unsequenced. Never for refused frames or a missing/malformed
+        client_frame_id. Mirrors
+        contracts/components/schemas/CommandReceivedFrame.yaml.
+      type: object
+      required:
+      - type
+      - command
+      - client_frame_id
+      - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: command_received
+        command:
+          type: string
+          enum:
+          - redirect
+          - cancel
+        client_frame_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
     SessionModeUpdateFrame:
       title: SessionModeUpdateFrame
       description: >

@@ -270,8 +270,10 @@ func (al *AgentLoop) reportOrdinarySettlementFailure(msg bus.InboundMessage, err
 	logger.ErrorCF("agent.worker", "the turn finished, but saving its final state failed",
 		map[string]any{"session_id": msg.SessionID, "error": err.Error()})
 	al.emitEvent(EventKindError, EventMeta{SessionKey: msg.SessionKey, TracePath: "turn.settlement"}, ErrorPayload{
-		Stage: "settlement", Code: "settlement_failed",
-		Message:   "This turn finished, but saving the conversation's final state failed. Repair the gateway storage, then continue: " + err.Error(),
+		// #1857 B25 (sec2 A): the typed transcript_save_failed code and its
+		// catalogue sentence; the raw error reaches the log line above only.
+		Stage: "settlement", Code: string(CodeTranscriptSaveFailed),
+		Message:   defaultUserMessage(CodeTranscriptSaveFailed),
 		ChatID:    msg.ChatID,
 		SessionID: msg.SessionID,
 	})

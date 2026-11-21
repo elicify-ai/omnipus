@@ -169,6 +169,7 @@ function resetStores() {
       toolCalls: {},
       sessionTokens: 0,
       sessionCost: 0,
+      outboundQueue: [],
     })
     useConnectionStore.setState({
       connection: null,
@@ -200,10 +201,6 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     // send-path-interception test, which does the same for the Enter path.
     const { useComposerRuntime } = await import('@assistant-ui/react')
     let composerText = '/clear'
-    const sentTexts: string[] = []
-    // Observe text at the actual send callback. setText updates live state so
-    // a client rewrite before sending cannot masquerade as an unchanged send.
-    mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
     ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
       getState: () => ({ text: composerText }),
       setText: vi.fn((text: string) => { composerText = text }),
@@ -221,9 +218,13 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
       act(() => { fireEvent.click(sendButton) })
 
       // Founder X3: /clear is server-owned, not a client new-chat command.
+      // Spec 4.5: the binding submits it. The primitive send never runs.
       expect(startNewSession).not.toHaveBeenCalled()
-      expect(mockComposerSend).toHaveBeenCalledTimes(1)
-      expect(sentTexts).toEqual(['/clear'])
+      expect(mockComposerSend).not.toHaveBeenCalled()
+      const queued = useChatStore.getState().outboundQueue
+      expect(queued, '/clear is sent unchanged, not turned into a new chat').toHaveLength(1)
+      const queuedItem = queued[0]
+      expect(typeof queuedItem === 'string' ? queuedItem : queuedItem.content).toBe('/clear')
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }
@@ -245,9 +246,12 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     act(() => { fireEvent.change(input, { target: { value: 'hello, how are you?' } }) })
     act(() => { fireEvent.click(sendButton) })
 
-    // Not a client command — interceptClientCommand returns false, no
-    // preventDefault, so the internal send callback runs normally.
-    expect(mockComposerSend).toHaveBeenCalledTimes(1)
+    // Spec 4.5: not a client command, so the binding submits it. The primitive send never runs.
+    expect(mockComposerSend).not.toHaveBeenCalled()
+    const queued = useChatStore.getState().outboundQueue
+    expect(queued, 'a normal message is not swallowed').toHaveLength(1)
+    const queuedItem = queued[0]
+    expect(typeof queuedItem === 'string' ? queuedItem : queuedItem.content).toBe('hello, how are you?')
   })
 
   it('typing "/help" (also a client command) and clicking Send appends a local system message instead of sending', async () => {

@@ -2623,6 +2623,62 @@ type MailAttachmentSaveResponse = {
   audit_status: "recorded" | "disabled" | "failed";
   warning_code: "audit_write_failed" | null;
 };
+type PackageImportPreview = {
+  staging_id: string;
+  expires_at: string;
+  manifest: PackageManifest;
+  will_add: Array<{
+    type: string;
+    source_id: string;
+    source_name: string;
+    proposed_name: string;
+    renamed: boolean;
+  }>;
+  skipped_elements: Array<{
+    type: string;
+    source_id: string;
+    name?: string | undefined;
+  }>;
+  warnings: Array<{
+    code: string;
+    element_source_id?: string | undefined;
+    message: string;
+    items?: Array<string> | undefined;
+  }>;
+  needs_secrets: Array<{
+    name: string;
+    used_by: string;
+    kind: string;
+  }>;
+};
+type PackageManifest = {
+  format: "omnpkg";
+  format_version: number;
+  scope: "workspace" | "system" | "custom";
+  elements: Array<
+    {
+      type: string;
+      schema: number;
+      source_id: string;
+      name: string;
+      files: Array<string>;
+    } & {
+      [key: string]: any;
+    }
+  >;
+  counts: {};
+  files: {};
+  source_build: string;
+  created_at: string;
+  includes_sessions: boolean;
+  needs_secrets: Array<{
+    name: string;
+    used_by: string;
+    kind: string;
+  }>;
+} & {
+  [key: string]: any;
+};
 type OperationResult = {
   success: boolean;
   error?: string | undefined;
@@ -3977,6 +4033,12 @@ export const SessionCreateRequest = z.object({
   agent_id: z.string().min(1),
   type: z.enum(["chat", "task", "channel"]).optional(),
   workspace_id: z.string().max(128).optional(),
+  new_chat_key: z
+    .string()
+    .min(16)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/)
+    .optional(),
 });
 export const Attachment: z.ZodType<Attachment> = z.object({
   type: z.enum(["image", "audio", "video", "file"]),
@@ -5720,12 +5782,101 @@ export const CredentialSetRequest = z.object({
 export const CredentialRotateRequest = z.object({
   new_passphrase: z.string().min(1),
 });
-export const BackupCreateResponse = z.object({
-  path: z.string(),
-  size_bytes: z.number().int().gte(0),
-  created_at: z.string().datetime({ offset: true }),
+export const PackageExportRequest = z.object({
+  agent_ids: z.array(z.string()),
 });
-export const RestoreBackupRequest = z.object({ filename: z.string() });
+export const PackageManifest: z.ZodType<PackageManifest> = z
+  .object({
+    format: z.literal("omnpkg"),
+    format_version: z.number().int().gte(1),
+    scope: z.enum(["workspace", "system", "custom"]),
+    elements: z.array(
+      z
+        .object({
+          type: z.string(),
+          schema: z.number().int().gte(1),
+          source_id: z.string(),
+          name: z.string(),
+          files: z.array(z.string()),
+        })
+        .passthrough()
+    ),
+    counts: z.record(z.number().int().gte(0)),
+    files: z.record(
+      z.object({
+        sha256: z.string().regex(/^[0-9a-f]{64}$/),
+        size: z.number().int().gte(0),
+      })
+    ),
+    source_build: z.string(),
+    created_at: z.string().datetime({ offset: true }),
+    includes_sessions: z.boolean(),
+    needs_secrets: z.array(
+      z.object({ name: z.string(), used_by: z.string(), kind: z.string() })
+    ),
+  })
+  .passthrough();
+export const PackageImportPreview: z.ZodType<PackageImportPreview> = z.object({
+  staging_id: z.string(),
+  expires_at: z.string().datetime({ offset: true }),
+  manifest: PackageManifest,
+  will_add: z.array(
+    z.object({
+      type: z.string(),
+      source_id: z.string(),
+      source_name: z.string(),
+      proposed_name: z.string(),
+      renamed: z.boolean(),
+    })
+  ),
+  skipped_elements: z.array(
+    z.object({
+      type: z.string(),
+      source_id: z.string(),
+      name: z.string().optional(),
+    })
+  ),
+  warnings: z.array(
+    z.object({
+      code: z.string(),
+      element_source_id: z.string().optional(),
+      message: z.string(),
+      items: z.array(z.string()).optional(),
+    })
+  ),
+  needs_secrets: z.array(
+    z.object({ name: z.string(), used_by: z.string(), kind: z.string() })
+  ),
+});
+export const PackageImportApplyRequest = z.object({
+  mode: z.enum(["replace", "merge", "new"]),
+  workspace_id: z.string().optional(),
+});
+export const PackageImportResult = z.object({
+  mode: z.enum(["replace", "merge", "new"]),
+  created: z.array(
+    z.object({
+      type: z.string(),
+      source_id: z.string(),
+      new_id: z.string(),
+      name: z.string(),
+      workspace_id: z.string(),
+    })
+  ),
+  warnings: z.array(
+    z.object({
+      code: z.string(),
+      element_source_id: z.string().optional(),
+      message: z.string(),
+      items: z.array(z.string()).optional(),
+    })
+  ),
+  needs_secrets: z.array(
+    z.object({ name: z.string(), used_by: z.string(), kind: z.string() })
+  ),
+  activation: z.enum(["active", "pending"]),
+  activation_message: z.string().optional(),
+});
 export const StorageStats = z
   .object({
     workspace_size_bytes: z.number().int().gte(0),
@@ -8360,11 +8511,6 @@ export const PerformanceReloadFailedError: z.ZodType<PerformanceReloadFailedErro
     code: z.string(),
     details: PerformanceReloadFailedDetails,
   });
-export const BackupEntry = z.object({
-  filename: z.string(),
-  size_bytes: z.number().int().gte(0),
-  created_at: z.string().datetime({ offset: true }),
-});
 export const CreateEmailDraftResult = z.object({
   created: z.boolean(),
   message_id: z.string(),
@@ -10056,56 +10202,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 429,
         description: `Rate limit exceeded.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/backup",
-    alias: "createBackup",
-    description: `Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories. The archive is written atomically to ~/.omnipus/backups/.
-`,
-    requestFormat: "json",
-    response: BackupCreateResponse,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/backups",
-    alias: "listBackups",
-    description: `Lists all .tar.gz files in ~/.omnipus/backups/ with filename, size, and creation time. Returns an empty array when no backups exist.
-`,
-    requestFormat: "json",
-    response: z.array(
-      z
-        .object({
-          filename: z.string(),
-          size_bytes: z.number().int().gte(0),
-          created_at: z.string().datetime({ offset: true }),
-        })
-        .passthrough()
-    ),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
         schema: ErrorResponse,
       },
     ],
@@ -13271,6 +13367,165 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
     ],
   },
   {
+    method: "post",
+    path: "/packages/export",
+    alias: "exportPackage",
+    description: `Packs exactly one user-created agent (its cleaned record, SOUL.md and, when present, AGENT.md) into a zstd-compressed tar whose first entry is manifest.json. Built-in agents are refused, and so are external workers until S1b. Stored credentials, keys, tokens and config.json are never read; SOUL.md and AGENT.md are copied as they are. Local mode only; refused while developer bypass mode is on. One audit entry per export; if it cannot be written the export is refused and no bytes are sent.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PackageExportRequest,
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `agent_ids does not hold exactly one ID (export_selection_invalid).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Agent not found (agent_not_found).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 413,
+        description: `JSON body over 1 MiB.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `The agent cannot be exported (core_agent_not_exportable, agent_prompt_missing, element_not_creatable, agent_file_unreadable, external_worker_not_supported_yet).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The audit entry could not be written (audit_failed); no bytes were sent.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/packages/import",
+    alias: "uploadPackage",
+    description: `Copies the whole body (at most 64 MiB) into a staging folder, then runs every format check (bounded zstd decoding, manifest, checksums, entry paths and types, agent layout) and a dry run of the create rules. Nothing outside the staging folder, staging maintenance and the audit log is changed. The preview is provisional; the staging expires 30 minutes after it became ready. At most 5 stagings are kept at once.
+`,
+    requestFormat: "binary",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.instanceof(File),
+      },
+    ],
+    response: PackageImportPreview,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `All 5 upload slots are taken (too_many_staged_imports).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 413,
+        description: `Body over 64 MiB, or a decoded size limit was passed (package_too_large, details.limit).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `The package was refused (not_a_package, package_too_new, element_schema_too_new, package_too_large with details.limit window, checksum_mismatch, manifest_mismatch, unsafe_path, unsafe_entry_type, no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable, external_worker_not_supported_yet).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/packages/import/:staging_id/apply",
+    alias: "applyPackageImport",
+    description: `Re-runs the preview checks on the current state, then imports in the requested mode (S1: new only). The new agent stays invisible until the commit point; a failure before it is rolled back (import_rolled_back), and a rollback that could not finish is reported with its leftovers (import_rollback_incomplete) and finished at the next gateway start. Only one apply runs at a time.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PackageImportApplyRequest,
+      },
+      {
+        name: "staging_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: PackageImportResult,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Staging unknown, expired or used (staging_not_found), or the workspace is unknown (workspace_not_found).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Another apply is running (import_in_progress), no workspace named and no default workspace (default_workspace_missing), or every name suffix is taken (name_suffix_exhausted).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 413,
+        description: `JSON body over 1 MiB.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Mode replace or merge (import_mode_not_available), or the record now breaks a create rule (element_not_creatable).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The import failed before the commit point and was rolled back (import_rolled_back), or the rollback could not finish (import_rollback_incomplete).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/performance",
     alias: "getPerformanceSettings",
@@ -14076,46 +14331,6 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     ],
   },
   {
-    method: "post",
-    path: "/restore",
-    alias: "restoreBackup",
-    description: `Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: z.object({ filename: z.string() }),
-      },
-    ],
-    response: z
-      .object({ status: z.literal("restored"), filename: z.string() })
-      .passthrough(),
-    errors: [
-      {
-        status: 400,
-        description: `Invalid filename (path traversal, missing .tar.gz).`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Backup file not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 422,
-        description: `Filename field is required.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
     method: "get",
     path: "/rooms/:id",
     alias: "getRoom",
@@ -14840,7 +15055,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/security/rate-limits",
     alias: "getRateLimits",
-    description: `Returns the current rate-limit config and the live daily LLM cost. Hot-reloaded — requires_restart is always false on PUT.
+    description: `Returns the current per-agent sliding-window rate-limit config: the two caps max_agent_llm_calls_per_hour and max_agent_tool_calls_per_minute (0 &#x3D; unlimited), and enabled, true when either cap is above 0. Per ADR-053 D12 the SEC-26 USD daily cost cap was retired; no cost is returned. Hot-reloaded — requires_restart is always false on PUT.
 `,
     requestFormat: "json",
     response: RateLimitsResponse,
@@ -14856,7 +15071,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/security/rate-limits",
     alias: "updateRateLimits",
-    description: `Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).
+    description: `Partial update — any subset of the two per-agent cap fields (max_agent_llm_calls_per_hour, max_agent_tool_calls_per_minute). The retired daily_cost_cap_usd field (ADR-053 D12) is rejected with HTTP 400. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).
 `,
     requestFormat: "json",
     parameters: [
@@ -16967,7 +17182,9 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     alias: "uploadFiles",
     description: `Streams multipart file uploads. Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory. Returns HTTP 201 on success.
 
-Two destinations. With workspace_id (query parameter, or a form field before the file parts) each file is stored in that workspace&#x27;s media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/&lt;id&gt;/media/ (returned as a media://workspace/&lt;id&gt;/&lt;uuid&gt; ref) and the Library file under the workspace&#x27;s .library folder; no session is used or created. When both workspace_id and session_id are given, workspace_id routes to the library and session_id is ignored. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id (query parameter or form field) is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path).
+Routing fields (#1428 step 2, C1). The routing fields are session_id and workspace_id, taken from the query string and from multipart form fields that appear BEFORE the first file part (the routing prefix). At the first file part the prefix is frozen and checked; only then is the first file written. A routing form field that appears after a file part is refused with 400, code upload_routing_field_late; files already written by earlier parts of the same request stay where the checked prefix routed them (there is no whole-request no-write guarantee). A second, different value for an already-set routing field before the first file part is refused with 400, code upload_routing_conflict, and nothing is written; a repeated identical value is accepted.
+
+Two destinations. With workspace_id each file is stored in that workspace&#x27;s media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/&lt;id&gt;/media/ (returned as a media://workspace/&lt;id&gt;/&lt;uuid&gt; ref) and the Library file under the workspace&#x27;s .library folder; no session is used or created. When both workspace_id and session_id are given, session_id must name a chat that belongs to that workspace, checked before any file is written: an unknown chat is 404; a chat in another workspace (or in no workspace) is 409, code upload_workspace_mismatch; a failure to read the chat&#x27;s metadata is 500. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path). Workspace-only and session-only uploads keep their behaviour. Every error uses the standard ErrorResponse body.
 `,
     requestFormat: "form-data",
     parameters: [
@@ -16991,7 +17208,8 @@ Two destinations. With workspace_id (query parameter, or a form field before the
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Bad request: a missing or invalid field, a routing form field after a file part (code upload_routing_field_late), or two different values for the same routing field (code upload_routing_conflict).
+`,
         schema: ErrorResponse,
       },
       {
@@ -17000,8 +17218,26 @@ Two destinations. With workspace_id (query parameter, or a form field before the
         schema: ErrorResponse,
       },
       {
+        status: 404,
+        description: `session_id and workspace_id were both given and session_id names no chat. Nothing was stored.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `session_id and workspace_id were both given and the chat belongs to another workspace or to none (code upload_workspace_mismatch). Nothing was stored.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The chat&#x27;s metadata could not be read while checking the session_id/workspace_id pair. Nothing was stored.
+`,
         schema: ErrorResponse,
       },
       {
@@ -18832,7 +19068,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_status", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta", "open_in_library", "chat_presence"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_status", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta", "open_in_library", "chat_presence", "cancel_idle", "send_refused", "server_capabilities", "command_received", "turn_started"]);
 
 export const HistoryEntryOrigin = z
   .object({
@@ -19072,6 +19308,14 @@ export const ChatParticipant = z
   })
   .strict();
 
+export const SendOrigin = z
+  .object({
+    kind: z.enum(["chat", "new_chat"]),
+    session_id: z.string().min(1).max(255).optional(),
+    new_chat_key: z.string().min(16).max(128).regex(/^[A-Za-z0-9_-]+$/).optional(),
+  })
+  .strict();
+
 export const AuthFrame = z
   .object({
     type: z.literal("auth"),
@@ -19086,6 +19330,7 @@ export const MessageFrameBase = z
     client_message_id: z.string().min(1).max(128).optional(),
     content: z.string().max(5242880),
     session_id: z.string().min(1).max(255).optional(),
+    origin: SendOrigin.optional(),
     recipient: z
     .object({
       workspace_id: z.string().min(1).max(128),
@@ -19128,6 +19373,8 @@ export const CancelFrame = z
   .object({
     type: z.literal("cancel"),
     session_id: z.string().min(1).max(255),
+    origin: SendOrigin.optional(),
+    client_frame_id: z.string().min(1).max(128).optional(),
     scope: z.enum(["session", "tree"]).optional(),
     shown: z
     .object({
@@ -19143,6 +19390,8 @@ export const RedirectFrame = z
   .object({
     type: z.literal("redirect"),
     session_id: z.string().min(1).max(255),
+    origin: SendOrigin.optional(),
+    client_frame_id: z.string().min(1).max(128).optional(),
     instruction: z.string().min(1).max(16384).regex(/\S/),
   })
   .strict();
@@ -19262,7 +19511,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -19279,7 +19528,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     provider_message: z.boolean().optional(),
@@ -19859,6 +20108,14 @@ export const SessionStateActiveTurn = z
   })
   .strict();
 
+export const TurnStartedFrame = z
+  .object({
+    type: z.literal("turn_started"),
+    session_id: z.string().min(1).max(255),
+    active_turn: SessionStateActiveTurn,
+  })
+  .strict();
+
 export const SessionStateFrame = z
   .object({
     history_state: SessionHistoryState.optional(),
@@ -19917,6 +20174,41 @@ export const CancelStageFrame = z
     skipped_terminal: z.array(z.string()).optional(),
     partial: z.boolean().optional(),
     seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const CancelIdleFrame = z
+  .object({
+    type: z.literal("cancel_idle"),
+    session_id: z.string().min(1).max(255),
+  })
+  .strict();
+
+export const SendRefusedFrame = z
+  .object({
+    type: z.literal("send_refused"),
+    reason: z.enum(["wrong_chat", "origin_malformed", "origin_unverified", "frame_malformed"]),
+    refused_frame: z.enum(["message", "redirect", "cancel"]),
+    session_id: z.string().min(1).max(255).optional(),
+    origin: SendOrigin.optional(),
+    client_message_id: z.string().min(1).max(128).optional(),
+    client_frame_id: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
+export const ServerCapabilitiesFrame = z
+  .object({
+    type: z.literal("server_capabilities"),
+    send_origin: z.literal(true),
+  })
+  .strict();
+
+export const CommandReceivedFrame = z
+  .object({
+    type: z.literal("command_received"),
+    command: z.enum(["redirect", "cancel"]),
+    client_frame_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
   })
   .strict();
 
@@ -20657,10 +20949,15 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolApprovalResolvedFrame,
   AskUserQuestionFrame,
   AskUserAnswerFrame,
+  TurnStartedFrame,
   SessionStateFrame,
   SystemOverloadFrame,
   ReplayWarningFrame,
   CancelStageFrame,
+  CancelIdleFrame,
+  SendRefusedFrame,
+  ServerCapabilitiesFrame,
+  CommandReceivedFrame,
   SessionModeUpdateFrame,
   SessionModeUpdatedFrame,
   DevicePairingRequestFrame,

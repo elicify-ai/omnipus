@@ -21,10 +21,10 @@ import (
 //     AND durably. A system-only context message or turn.end is not that notice.
 //   - Rejection oracle: tool-registry-redesign-spec.md FR-066 requires failure
 //     of the provider call on an internal duplicate-name invariant violation.
-//   - User-copy oracle: contracts/components/schemas/LLMError.yaml,
-//     x-user-messages.unknown. No new error code or copy is invented here —
-//     the expected text is read from the canonical catalogue
-//     (UserMessageForCode(CodeUnknown)), not pasted by hand; see
+//   - #1857 oracle: notifications-spec.md §13.8.5 B10 / T-54 requires
+//     tool_assembly_duplicate, including the no-MCP case. Its safe expected
+//     text comes from the canonical contract catalogue, not observed output
+//     or pending proposed wording; see
 //     pkg/api/generated/llm_error_no_hardcopy_test.go.
 //   - Real boundary: runAgentLoop, request assembly, registry, event bus, and
 //     session storage are real. The provider and external tool descriptors are
@@ -36,13 +36,12 @@ import (
 //     the synthetic system payload. GREEN and mutation proof belong to CHECK.
 //   - Not covered: production collision races, frontend rendering, cancellation,
 //     limit validation, or historical occurrence of this exit.
-var terminalDuplicateUnknownNotice = UserMessageForCode(CodeUnknown)
-
 func TestRunTurn_DuplicateToolDefinitions_DeliversTerminalMessage(t *testing.T) {
 	const probeName = "terminal_duplicate_probe"
 	const spareName = "terminal_duplicate_spare"
 	const narration = "I will run the probe."
 	const finalAnswer = "The probe completed."
+	duplicateNotice := UserMessageForCode(CodeToolAssemblyDuplicate)
 	cases := []struct {
 		name        string
 		beforeFirst bool
@@ -146,15 +145,15 @@ func TestRunTurn_DuplicateToolDefinitions_DeliversTerminalMessage(t *testing.T) 
 			// even when the first terminal surface is missing.
 			if assert.Len(t, terminalErrors, 1, "TRANSCRIPT must record exactly one classified terminal error, not just synthetic context") {
 				terminal := terminalErrors[0]
-				assert.Equal(t, "unknown", terminal.ErrorCode)
-				assert.Equal(t, terminalDuplicateUnknownNotice, terminal.Content)
+				assert.Equal(t, "tool_assembly_duplicate", terminal.ErrorCode)
+				assert.Equal(t, duplicateNotice, terminal.Content)
 				assert.Equal(t, inst.ID, terminal.AgentID)
 				assert.Equal(t, terminal.ID, entries[len(entries)-1].ID,
 					"the stop explanation must be the turn's final transcript entry")
 			}
 			if assert.Len(t, liveErrors, 1, "LIVE must emit exactly one typed terminal error; turn.end alone is not an explanation") {
-				assert.Equal(t, "unknown", liveErrors[0].Code)
-				assert.Equal(t, terminalDuplicateUnknownNotice, liveErrors[0].Message)
+				assert.Equal(t, "tool_assembly_duplicate", liveErrors[0].Code)
+				assert.Equal(t, duplicateNotice, liveErrors[0].Message)
 				assert.Equal(t, sessionID, liveErrors[0].SessionID)
 				assert.Equal(t, sessionID, liveErrors[0].ChatID)
 			}

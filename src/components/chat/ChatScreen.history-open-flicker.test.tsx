@@ -190,7 +190,14 @@ describe('F-FLICKER: opening an already-running conversation', () => {
     await settleRows()
     await waitFor(() => expect(covered(region), 'failure must reveal recovery, not keep spinning').toBe(false))
     expect(screen.queryByTestId('chat-open-cover'), 'there is no endless opening spinner after a declared failure').toBeNull()
-    const failure = screen.getByRole('alert')
+    // Spec 4.10: this open's first application frame is session_state, so the
+    // connection is unsupported and the version banner is a second alert. The
+    // history failure stays the alert that carries UNAVAILABLE, with the same
+    // enabled Retry. The banner sentence is not this oracle.
+    const failure = screen.getByText(UNAVAILABLE).closest('[role="alert"]')
+    if (!(failure instanceof HTMLElement)) {
+      throw new Error('D8: the fixed history failure is not an alert')
+    }
     expect(failure, 'D8: the fixed history failure is shown, not a fabricated empty conversation').toHaveTextContent(UNAVAILABLE)
     const retry = within(failure).getByRole('button', { name: 'Retry' })
     expect(retry, 'the existing recovery action remains reachable').toBeEnabled()

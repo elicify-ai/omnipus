@@ -1,5 +1,9 @@
 # ADR-024 — CLI Minimization: a thin one-shot task-runner over the engine
 
+## Amended 2026-11-19 — agent packages (ADR-export-import-packages A1)
+
+Besides chat and `records`, the CLI may run the owner commands `export`, `import` and `package inspect` / `package verify`. `export` and `import` are thin gateway clients: they call the REST endpoints with the CLI token and never read or write the data folder themselves, except `cli.token` and the gateway address (read from `config.json`'s `gateway.port` when it is needed). `package inspect` and `package verify` read only the package file the owner names, need no gateway and write nothing. No other engine logic moves into the CLI. Precedent: the `records` owner command.
+
 ## Amended 2026-10-07 — session-core founder decisions
 
 **Dated correction of D4 worker targeting.** Fresh one-shot worker chat targets remain excluded, but an authenticated human may type into an existing worker/child conversation. A finished task conversation continues without rerunning the task.

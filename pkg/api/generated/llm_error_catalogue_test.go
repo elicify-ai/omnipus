@@ -42,6 +42,11 @@ type llmErrorCatalogue struct {
 	codes        []string
 	attributions []string
 	messages     map[string]map[string]string // code → {message, attribution}
+	// #1857 D-B B1: the optional neutral twin of each chat sentence and of each
+	// variant. Compared across all four copies so a neutral edit in one copy
+	// and not the others fails here.
+	neutral         map[string]string            // code → neutral sentence (absent = no twin)
+	neutralVariants map[string]map[string]string // code → variant key → neutral sentence
 }
 
 // loadCatalogueFrom extracts the comparable slice out of one parsed schema map.
@@ -53,7 +58,11 @@ func loadCatalogueFrom(t *testing.T, label string, schema map[string]any) llmErr
 	codeProp, ok := properties["code"].(map[string]any)
 	require.True(t, ok, "%s: missing properties.code", label)
 
-	out := llmErrorCatalogue{messages: map[string]map[string]string{}}
+	out := llmErrorCatalogue{
+		messages:        map[string]map[string]string{},
+		neutral:         map[string]string{},
+		neutralVariants: map[string]map[string]string{},
+	}
 
 	rawCodes, ok := codeProp["enum"].([]any)
 	require.True(t, ok, "%s: properties.code.enum must be a list", label)
@@ -79,6 +88,17 @@ func loadCatalogueFrom(t *testing.T, label string, schema map[string]any) llmErr
 		message, _ := entry["message"].(string)
 		attribution, _ := entry["attribution"].(string)
 		out.messages[code] = map[string]string{"message": message, "attribution": attribution}
+		if twin, ok := entry["neutral"].(string); ok {
+			out.neutral[code] = twin
+		}
+		if rawVariants, ok := entry["neutral_variants"].(map[string]any); ok {
+			variants := map[string]string{}
+			for key, rawSentence := range rawVariants {
+				sentence, _ := rawSentence.(string)
+				variants[key] = sentence
+			}
+			out.neutralVariants[code] = variants
+		}
 	}
 
 	return out
@@ -142,6 +162,11 @@ func TestContract_LLMErrorCatalogue_AllFourCopiesAgree(t *testing.T) {
 			assert.Equal(t, reference.messages, other.messages,
 				"%s: x-user-messages differs from the reference copy — a message edited in one "+
 					"copy and not the others ships the stale text from whichever copy codegen reads", label)
+			assert.Equal(t, reference.neutral, other.neutral,
+				"%s: D-B neutral twins differ from the reference copy; neutral and neutral_variants "+
+					"must be identical in all four copies (#1857)", label)
+			assert.Equal(t, reference.neutralVariants, other.neutralVariants,
+				"%s: D-B neutral_variants differ from the reference copy (#1857)", label)
 		})
 	}
 }

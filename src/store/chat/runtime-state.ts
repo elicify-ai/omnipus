@@ -145,6 +145,8 @@ export const SESSION_SCOPED_FRAME_TYPES = new Set([
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'cancel_stage',
   'message_status',
+  // #1428 UAT-15 option A: TurnStartedFrame.session_id is required.
+  'turn_started',
   // ADR-092: SessionModeUpdatedFrame.session_id is required (min length 1) —
   // same "drop in production when missing" contract as cancel_stage above.
   'session_mode_updated',

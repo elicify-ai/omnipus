@@ -71,7 +71,10 @@ describe('T33 actual identity consumers with unavailable history — B31/B51', (
         throw new Error('Unavailable first attach has not applied its actual live_only completion')
       }
     })
-    expect(await screen.findByRole('alert')).toHaveTextContent(UNAVAILABLE)
+    // Spec 4.10: a first frame of session_state is the version banner, a second alert.
+    const failure = (await screen.findByText(UNAVAILABLE)).closest('[role="alert"]')
+    if (!(failure instanceof HTMLElement)) throw new Error('the history failure is not an alert')
+    expect(failure).toHaveTextContent(UNAVAILABLE)
     expect(screen.getByTestId('chat-input')).toBeEnabled()
     expect(screen.queryByText('Session not found', { exact: true })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', WELCOME_HEADING)).not.toBeInTheDocument()
@@ -105,7 +108,10 @@ describe('T33 actual identity consumers with unavailable history — B31/B51', (
     expect(useChatStore.getState().sessionsById[target].replayCompletedForSession, 'D7a does not erase a prior legitimate history completion').toBe(target)
     expect(useChatStore.getState().sessionsById[target].history.historyLoaded, 'live_only is not current history readiness').toBe(false)
     expect(useChatStore.getState().sessionsById[target].isReplaying).toBe(false)
-    expect(await screen.findByRole('alert')).toHaveTextContent(UNAVAILABLE)
+    // Spec 4.10: a first frame of session_state is the version banner, a second alert.
+    const failure = (await screen.findByText(UNAVAILABLE)).closest('[role="alert"]')
+    if (!(failure instanceof HTMLElement)) throw new Error('the history failure is not an alert')
+    expect(failure).toHaveTextContent(UNAVAILABLE)
     expect(screen.getByTestId('chat-input')).toBeEnabled()
     expect(screen.queryByRole('heading', WELCOME_HEADING)).not.toBeInTheDocument()
     expect(network.unexpected).toStrictEqual([])
