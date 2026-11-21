@@ -333,10 +333,16 @@ async function jumpViaEntry(label: string): Promise<void> {
 
 /**
  * FR-075: "a row inside a group that is closed opens that group first" —
- * the named group's own toggle must be expanded by the jump.
+ * the named group's own toggle must be expanded by the jump. The toggle is
+ * located by its accessible NAME — the group header's label, the same name
+ * the search index entry carries — never "the group's one button": once the
+ * jump has opened the group, its body legitimately carries more buttons
+ * (the overrides group's Add-override action), and an unnamed locator
+ * cannot say which button it means (the part-22 reconciliation at
+ * c12cbeffe0: round 16's opening made that locator ambiguous).
  */
-async function expectGroupOpen(testId: string): Promise<void> {
-  const toggle = within(screen.getByTestId(testId)).getByRole('button')
+async function expectGroupOpen(testId: string, headerName: string): Promise<void> {
+  const toggle = within(screen.getByTestId(testId)).getByRole('button', { name: headerName })
   await waitFor(
     () =>
       expect(
@@ -650,7 +656,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     // "the section opens": the row's own section.
     expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
     // "a row inside a group that is closed opens that group first."
-    await expectGroupOpen('limits-group-overrides')
+    await expectGroupOpen('limits-group-overrides', 'Model overrides')
     // And the marked row is that one row, with its aria-current identity.
     await expectExactlyThisRowMarked(
       await rowFor('model-overrides', 'RED (FR-075): the indexed Model-overrides row must render — its group opened and its identity reached the DOM'),
@@ -660,7 +666,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
   it('a deep link to a row inside a closed group opens that group and marks exactly that row', async () => {
     await openSettings('?tab=limits&row=model-overrides')
     expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
-    await expectGroupOpen('limits-group-overrides')
+    await expectGroupOpen('limits-group-overrides', 'Model overrides')
     await expectExactlyThisRowMarked(
       await rowFor('model-overrides', 'RED (FR-075): the indexed Model-overrides row must render — its group opened and its identity reached the DOM'),
     )
