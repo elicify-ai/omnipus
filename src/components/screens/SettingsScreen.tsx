@@ -73,10 +73,24 @@ export function SettingsScreen({
 
   // ── Live region (FR-018/FR-071) ────────────────────────────────────────
   const [announcement, setAnnouncement] = useState('')
+  // One pending announcement at a time; a newer one replaces it, and none
+  // may fire after the screen is gone.
+  const announceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const announce = useCallback((text: string) => {
     setAnnouncement('')
-    setTimeout(() => setAnnouncement(text), 30)
+    if (announceTimerRef.current !== null) clearTimeout(announceTimerRef.current)
+    announceTimerRef.current = setTimeout(() => {
+      announceTimerRef.current = null
+      setAnnouncement(text)
+    }, 30)
   }, [])
+  useEffect(
+    () => () => {
+      if (announceTimerRef.current !== null) clearTimeout(announceTimerRef.current)
+      announceTimerRef.current = null
+    },
+    [],
+  )
 
   // ── Drafts of the open section (FR-014) and the Save bar's gold button ─
   // A section can hold more than one Save bar (Limits: Context and Agents and
