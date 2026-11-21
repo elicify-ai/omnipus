@@ -1998,7 +1998,7 @@ Numbers are grouped by area; gaps are left on purpose. Numbers never move: requi
 - **FR-072**: Every grouped list MUST start collapsed (`aria-expanded="false"`), including Model overrides (S-Q12 A).
 - **FR-073**: No on-screen text MUST contain an issue number, a requirement tag (R30, S-Q8 and similar) or "contact support".
 - **FR-074**: *Moved to `signed-in-browsers-spec.md`.*
-- **FR-075**: Under reduced motion, Skeleton pulse, spinner rotation and row highlight MUST stop. The row highlight is the short flash on the setting row a person reaches from a Settings search result or a deep link: the section opens, the row scrolls into view and flashes once (normal motion); under reduced motion the row is still scrolled into view and marked, without animation (team-lead clarification 2026-11-21, CHECK R4-05).
+- **FR-075**: Under reduced motion, Skeleton pulse, spinner rotation and row highlight MUST stop. The row highlight is the short flash on the setting row a person reaches from a Settings search result or a deep link: the section opens, the row scrolls into view and flashes once (normal motion); under reduced motion the row is still scrolled into view and marked, without animation. Focus does not move to the row: it stays where opening the section puts it, and the mark is exposed to assistive technology as the current item. A row inside a group that is closed opens that group first; every setting the search index names must be reachable this way (team-lead clarification 2026-11-21, CHECK R4-05, R5-01).
 
 ### Moved to `signed-in-browsers-spec.md`
 
