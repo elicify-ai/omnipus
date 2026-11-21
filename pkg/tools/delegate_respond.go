@@ -199,14 +199,28 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 			"delegate: respond: not_steerable: external command-line session %s cannot receive an answer from this "+
 				"steering sink; start a new delegation instead", dt.sessionID)), true
 	}
-	if _, derr := deliverer.DeliverExternalCLIInstruction(dt.ctx, dt.sessionID, dt.rec.AgentID,
-		providers.Message{Role: "user", Content: dt.text}, dt.correlationID); derr != nil {
+	_, how, derr := deliverExternalCLI(dt.ctx, deliverer, dt.sessionID, dt.rec.AgentID,
+		providers.Message{Role: "user", Content: dt.text}, dt.correlationID)
+	if derr != nil {
 		if text, shown := displayableCause(derr); shown {
 			return ErrorResult("delegate: respond: not_steerable: " + text).WithError(derr), true
 		}
 		return controlFailure("respond", fmt.Sprintf("not_steerable: the answer for session %s could not be delivered right now; retry shortly", dt.sessionID), derr), true
 	}
-	return dt.acknowledgedRespond("Answer delivered to the external CLI conversation by interrupt + resume."), true
+	return dt.acknowledgedRespond(externalRespondNote(how)), true
+}
+
+// externalRespondNote states what happened to an answer for an external CLI
+// child (A1).
+func externalRespondNote(how externalDelivery) string {
+	switch how {
+	case externalDeliveryInterrupted:
+		return "Answer delivered to the external CLI conversation by interrupt + resume."
+	case externalDeliveryQueued:
+		return "Answer queued for the external CLI conversation; it reaches the same conversation after the current run ends."
+	default:
+		return "Answer delivered to the external CLI conversation."
+	}
 }
 
 // deliverNative delivers the answer to a native child as an ordinary

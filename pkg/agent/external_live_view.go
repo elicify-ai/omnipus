@@ -94,11 +94,16 @@ func (ts *turnState) liveViewContext() context.Context {
 func (al *AgentLoop) finishExternalLiveView(ctx context.Context, ts *turnState, runErr error) error {
 	failed := runErr != nil && !errors.Is(runErr, context.Canceled)
 	if failed && !ts.externalErrorAnnounced.Load() {
-		al.emitExternalErrorFrame(ts, "external_cli", TranslateTurnError(runErr), "")
+		// A5: like every other external error site, the failure is saved in
+		// the helper's chat as well as shown live, so a reload keeps it.
+		llm := TranslateTurnError(runErr)
+		al.emitExternalErrorFrame(ts, "external_cli", llm, "")
+		ts.appendClassifiedError(EventKindError.String(), "external_cli", llm)
 	}
 	if failed {
 		ts.markTurnFailed()
 	}
+	al.announceExternalSaveFailure(ts)
 	ts.mu.RLock()
 	active := ts.lastStreamer != nil
 	ts.mu.RUnlock()
@@ -186,5 +191,67 @@ func (al *AgentLoop) settleDeferredExternalLiveDone(ctx context.Context, last *t
 	if last == nil || !last.externalLiveDoneDeferred.Swap(false) {
 		return nil
 	}
+	// A4: the viewers' done handler closes whatever turn is active in the
+	// chat. When another execution now owns the session (a revival, or any
+	// other live turn on it), the old turn's done would end that turn's
+	// working state, so it is not sent; the newer run's own live view and
+	// done close the chat. Its stream ownership was already released.
+	if al.otherExecutionOwnsSession(last) {
+		return nil
+	}
 	return al.finishExternalLiveView(ctx, last, nil)
+}
+
+// otherExecutionOwnsSession reports whether an execution other than ts's own
+// now owns ts's session: the lifecycle record names a different execution
+// (a Stop and revival replaced it), or a live turn of a different execution
+// is registered for the same chat session. A turn of ts's own execution (the
+// original turn or a continuation of it) does not count. An unreadable record
+// is not treated as a replacement; the registered-turn check still applies.
+func (al *AgentLoop) otherExecutionOwnsSession(ts *turnState) bool {
+	claim := al.tsExecutionClaim(ts, "")
+	if store := al.GetSessionLifecycleStore(); store != nil && claim.RunID != "" && claim.SessionID != "" {
+		if rec, err := store.Load(claim.SessionID); err == nil && rec != nil && !claim.matches(rec) {
+			return true
+		}
+	}
+	sessionID := ts.transcriptSessionID
+	if sessionID == "" {
+		return false
+	}
+	found := false
+	al.activeTurnStates.Range(func(_, value any) bool {
+		other, ok := value.(*turnState)
+		if !ok || other == ts || other.transcriptSessionID != sessionID || !other.IsAlive() {
+			return true
+		}
+		if al.tsExecutionClaim(other, "") == claim {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
+// announceExternalSaveFailure makes a transcript-save failure latched on an
+// external-CLI turn visible once (SFH-1): the typed transcript_save_failed
+// notice to the helper's own chat, a saved row where the store accepts it, and
+// an error-level log with the cause. The raw store error stays in the log.
+// While another execution owns the session the live frame is not sent, since
+// the viewers' error handler would end that execution's working state (A4);
+// the saved row shows the notice on the next load.
+func (al *AgentLoop) announceExternalSaveFailure(ts *turnState) {
+	saveErr := ts.callAccountingError()
+	if saveErr == nil || !ts.externalSaveFailureAnnounced.CompareAndSwap(false, true) {
+		return
+	}
+	logger.ErrorCF("agent", "external-cli: a helper message could not be saved to the transcript",
+		map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "error": saveErr.Error()})
+	ts.markTurnFailed()
+	llm := LLMError{Code: CodeTranscriptSaveFailed, Message: defaultUserMessage(CodeTranscriptSaveFailed)}
+	if !al.otherExecutionOwnsSession(ts) {
+		al.emitExternalErrorFrame(ts, "session_save", llm, "")
+	}
+	ts.appendClassifiedError(EventKindError.String(), "session_save", llm)
 }

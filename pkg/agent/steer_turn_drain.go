@@ -51,6 +51,8 @@ func (al *AgentLoop) drainSteeredTurn(
 	initialResult turnResult,
 	initialErr error,
 ) (finalTS *turnState, finalResult turnResult, finalErr error) {
+	// ranTurns are every turn this drain ran, the original first.
+	ranTurns := []*turnState{initialTS}
 	defer func() {
 		if liveErr := al.settleDeferredExternalLiveDone(ctx, finalTS); liveErr != nil {
 			finalErr = errors.Join(finalErr, liveErr)
@@ -58,6 +60,15 @@ func (al *AgentLoop) drainSteeredTurn(
 			if finalResult.finalContent == "" {
 				finalResult.finalContent = liveErr.Error()
 			}
+		}
+		// SFH-1: a transcript-save failure latched on any external-CLI turn of
+		// this drain (the original, or a continuation replaced since) is not
+		// lost when a later turn succeeds or is cancelled: it is announced on
+		// the turn it belongs to and carried in the result, not the error, so
+		// the callers' stop and drain-retry handling is unchanged.
+		if saveErr := al.drainSaveFailures(initialResult.saveFailure, ranTurns); saveErr != nil {
+			finalResult.saveFailure = saveErr
+			finalResult.status, finalResult.turnFailed = TurnEndStatusError, true
 		}
 	}()
 	lastTS, lastResult, lastErr := initialTS, initialResult, initialErr
@@ -94,6 +105,7 @@ func (al *AgentLoop) drainSteeredTurn(
 
 		if attempted.turnRan {
 			lastTS, lastResult, lastErr = attempted.ts, attempted.result, attempted.runErr
+			ranTurns = append(ranTurns, attempted.ts)
 		}
 		if continueErr != nil {
 			switch {
@@ -315,4 +327,27 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 		al.deliverSubagentMessage(parentID, childRec, "error",
 			fmt.Sprintf("Queued follow-up %q: %s", itemID, notice), nil)
 	}
+}
+
+// drainSaveFailures announces every transcript-save failure latched on the
+// drain's external-CLI turns (each once, on its own turn) and returns them
+// joined with the one an earlier drain already carried, nil when every turn's
+// rows were saved (SFH-1). A native turn reports its own save failure through
+// its model-call path (loop_run_turn.go), so it is not announced again here.
+func (al *AgentLoop) drainSaveFailures(carried error, turns []*turnState) error {
+	joined := carried
+	for _, ts := range turns {
+		if ts == nil || !ts.externalLiveOutput {
+			continue
+		}
+		saveErr := ts.callAccountingError()
+		if saveErr == nil {
+			continue
+		}
+		al.announceExternalSaveFailure(ts)
+		if joined == nil || !errors.Is(joined, saveErr) {
+			joined = errors.Join(joined, saveErr)
+		}
+	}
+	return joined
 }

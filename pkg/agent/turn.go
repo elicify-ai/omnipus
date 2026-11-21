@@ -86,6 +86,11 @@ type turnResult struct {
 	turnID string
 	// goalID preserves the producing turn's immutable goal association.
 	goalID string
+	// saveFailure is a transcript-save failure latched on an external-CLI turn
+	// of a steered drain, kept here so a later successful or cancelled
+	// continuation cannot erase it (SFH-1). The chat was already told
+	// (announceExternalSaveFailure); completionDisposition tells the parent.
+	saveFailure error
 }
 
 type turnState struct {
@@ -631,6 +636,10 @@ type turnState struct {
 	// (#1895, #1899 B). drainSteeredTurn sends the held done if no resumed run follows
 	// (settleDeferredExternalLiveDone).
 	externalLiveDoneDeferred atomic.Bool
+	// externalSaveFailureAnnounced records that a transcript-save failure
+	// latched on this external-CLI turn was announced once
+	// (announceExternalSaveFailure, SFH-1).
+	externalSaveFailureAnnounced atomic.Bool
 
 	// mediaRetryDone is the per-turn guard for the RD2 media-downgrade retry
 	// (ADR-051 §RD2 / FR-007 / FR-008). When true, the loop's classifier-gated

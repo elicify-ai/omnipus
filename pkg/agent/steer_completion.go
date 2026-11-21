@@ -719,6 +719,12 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 	// its real cause below, never "exceeded its lifetime limit".
 	switch {
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
+		// SFH-1: a cancelled run is still a Stop, but a save failure on an
+		// earlier turn of it is not hidden behind the cancellation.
+		if result.saveFailure != nil {
+			return steer.OutcomeInterrupted, session.LifecycleStopped,
+				"interrupted: the session was cancelled. " + transcriptSaveFailedNeutral()
+		}
 		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
 	case errors.As(runErr, new(*externalCLIRunError)):
 		// #1857 (§13.8.4 parent completion row): a classified CLI failure
@@ -740,6 +746,10 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 		// stream code with no HTTP facts. Only curated Omnipus text bypasses
 		// translation, through userVisibleTurnError's existing exception.
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + userVisibleTurnError(runErr)
+	case result.saveFailure != nil:
+		// SFH-1: the run's answer arrived, but some of its messages were not
+		// saved; the parent is not handed a clean success.
+		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + transcriptSaveFailedNeutral()
 	case result.finalContent == toolLimitResponse:
 		// The turn hit the tool-iteration ceiling with no final response
 		// (loop_run_turn.go::finalizeTurn sets finalContent to the
@@ -1204,4 +1214,13 @@ func (al *AgentLoop) claimOwnsCurrentRecord(sessionID string, claim executionCla
 		return false
 	}
 	return claim.matches(cur)
+}
+
+// transcriptSaveFailedNeutral is transcript_save_failed's neutral-voice
+// sentence, the form for the parent agent (#1857 rule 4).
+func transcriptSaveFailedNeutral() string {
+	if twin := generated.LLMErrorNeutralMessages[string(CodeTranscriptSaveFailed)]; twin != "" {
+		return twin
+	}
+	return defaultUserMessage(CodeTranscriptSaveFailed)
 }
