@@ -527,47 +527,62 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     release?.()
     await expect(page.getByRole('heading', { name: 'Data & retention', level: 2 })).toBeVisible({ timeout: 10_000 })
 
-    // FR-075 (R3-06): the row highlight the spec names is the SEARCHED or
-    // deep-linked setting row's flash — the trigger is the search jump onto a
-    // setting row, not a static nav hover (the old action hovered a
-    // non-animated Providers nav link, so the real highlight could keep
-    // animating and this check would still pass). Drive the real search jump
-    // to the Port row; under reduced motion neither the row nor its
-    // pseudo-element highlight layers may run an animation.
+    // FR-075 (R4-05): the row highlight the spec names is the flash on the
+    // setting row a person reaches from a Settings SEARCH RESULT or a deep
+    // link — driven here through the real search jump onto the Port row.
+    // Under reduced motion the row is still scrolled into view and MARKED
+    // (the mark reaching assistive tech), and no highlight layer — the row
+    // or either pseudo-element — may animate. Replaces the R3-06 locator
+    // (`getByLabel('Port')` → ancestor `[data-settings-field]`), which named
+    // an attribute the Gateway rows do not carry; the replaced assertions
+    // cite FR-075's clarified definition (spec :2001, team-lead
+    // clarification 2026-11-21, CHECK R4-05). The `data-settings-row*`
+    // names are the build's selectors, not the oracle.
     await page.getByTestId('settings-search').fill('port')
     await page.getByTestId('settings-search-results').getByRole('link').first().click()
     await expect(page.getByRole('heading', { name: 'Gateway', level: 2 })).toBeVisible({ timeout: 10_000 })
-    const row = page.getByLabel('Port').locator('xpath=ancestor::*[@data-settings-field][1]')
-    await expect(row).toBeVisible()
+    const row = page.locator('[data-settings-row="port"]')
+    await expect(row, 'RED (FR-075/R4-05): the searched row must exist in the opened section').toBeVisible()
+    await expect(row,
+      'RED (FR-075/R4-05): under reduced motion the reached row must still be MARKED').toHaveAttribute('data-settings-row-target')
+    await expect(row,
+      'RED (FR-075/R4-05): the mark must reach assistive tech (aria-current)').toHaveAttribute('aria-current', 'true')
     const highlightAnimated = await row.evaluate((el) => [
       getComputedStyle(el).animationName,
       getComputedStyle(el, '::before').animationName,
       getComputedStyle(el, '::after').animationName,
     ].filter((name) => name && name !== 'none'))
     expect(highlightAnimated,
-      'RED (FR-075/R3-06): the searched setting row\'s highlight must not animate under reduced motion').toEqual([])
+      'RED (FR-075/R4-05): the searched setting row\'s highlight must not animate under reduced motion').toEqual([])
   })
 
-  test('FR-075 (R3-06): the searched setting-row highlight animates under normal motion — the positive witness the reduced-motion check needs', async ({ page }) => {
+  test('FR-075 (R4-05): the searched setting-row flash runs once under normal motion — the positive witness the reduced-motion check needs', async ({ page }) => {
     // Without this witness a MISSING row highlight would pass the
     // reduced-motion check vacuously (nothing there cannot animate). FR-075
-    // names a row highlight, so under normal motion the landed row must
+    // names a row highlight, so under normal motion the reached row must
     // actually run one; its absence is a production finding, not a pass.
     // Same real trigger as the reduced-motion leg: the search jump onto the
-    // Port row.
+    // Port row. FR-075 (spec :2001, CHECK R4-05): the flash runs ONCE, so
+    // the witness pins a running animation AND its one-iteration count — a
+    // persistent or looping glow is not the flash the spec names.
     await openSettings(page)
     await page.getByTestId('settings-search').fill('port')
     await page.getByTestId('settings-search-results').getByRole('link').first().click()
     await expect(page.getByRole('heading', { name: 'Gateway', level: 2 })).toBeVisible({ timeout: 10_000 })
-    const row = page.getByLabel('Port').locator('xpath=ancestor::*[@data-settings-field][1]')
-    await expect(row).toBeVisible()
+    const row = page.locator('[data-settings-row="port"]')
+    await expect(row, 'RED (FR-075/R4-05): the searched row must exist in the opened section').toBeVisible()
+    await expect(row,
+      'RED (FR-075/R4-05): the reached row must be MARKED under normal motion').toHaveAttribute('data-settings-row-target')
     const highlight = await row.evaluate((el) => [
       getComputedStyle(el).animationName,
       getComputedStyle(el, '::before').animationName,
       getComputedStyle(el, '::after').animationName,
     ].filter((name) => name && name !== 'none'))
     expect(highlight,
-      'RED (FR-075/R3-06): the searched setting row must carry a highlight animation under normal motion — the SPA implements none today, so the row-highlight clause of FR-075 has no referent yet').not.toEqual([])
+      'RED (FR-075/R4-05): the searched setting row must carry a highlight animation under normal motion — without it the reduced-motion check passes vacuously').not.toEqual([])
+    const iterations = await row.evaluate((el) => getComputedStyle(el).animationIterationCount)
+    expect(iterations,
+      'FR-075: the flash runs once — the highlight must be a one-iteration animation, not a persistent or looping glow').toBe('1')
   })
 
   test('FR-063 (G-10 new-address leg): restarted=1 says the gateway restarted on an empty list, shows the banner when a key is still listed', async ({ page }) => {
