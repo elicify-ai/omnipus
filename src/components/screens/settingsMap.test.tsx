@@ -126,6 +126,33 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // FR-057: the rotate call must be observable — Cancel keeps the token,
     // so the mock records and the test asserts it was never called.
     rotateGatewayToken: vi.fn(async () => ({ token: 'rotated-token' })),
+    // Section reads the FR-073 sweep's witnesses depend on (R2-06): without
+    // them the tab renders no section content at all and the sweep would
+    // pass on an empty screen. Shapes follow the generated contract types.
+    fetchMemorySettings: vi.fn(async () => ({})), // formFromSettings applies defaults
+    fetchProviders: vi.fn(async () => []),
+    getThirdPartyAgentSettings: vi.fn(async () => ({
+      clis: {
+        codex: { path: '', preset_args: '', detected: { installed: false } },
+        'claude-code': { path: '', preset_args: '', detected: { installed: false } },
+        opencode: { path: '', preset_args: '', detected: { installed: false } },
+      },
+    })),
+    fetchSandboxStatus: vi.fn(async () => ({
+      backend: 'landlock',
+      available: true,
+      kernel_level: true,
+      policy_applied: true,
+      seccomp_enabled: true,
+      bind_ports_count: 0,
+    })),
+    fetchSandboxConfig: vi.fn(async () => ({
+      mode: 'permissive',
+      allowed_paths: [],
+      ssrf: { allow_internal: [] },
+      requires_restart: false,
+    })),
+    fetchCredentials: vi.fn(async () => []),
   }
 })
 
@@ -298,6 +325,31 @@ describe('FR-073 — on-screen text sweep (no tags, no issue numbers, no support
     'providers', 'memory', 'system-agents', 'third-party-agents', 'limits',
     'protection', 'sandbox', 'keys', 'gateway', 'data', 'about',
   ] as const
+  // R2-06: the sweep must be PROVEN to have swept real section content — a
+  // pass over an empty or unloaded section proves nothing (it is how
+  // forbidden text in a rendered Gateway label once survived: the captured
+  // text never contained it). Each tab pins a witness — the section's own
+  // heading (the shell's h2, SettingsScreen.tsx) and one real control of
+  // that section — asserted before any text is captured.
+  const WITNESS: Record<(typeof TABS)[number], { heading: string; control: () => Promise<HTMLElement> }> = {
+    providers: { heading: 'Providers', control: () => screen.findByText('Active transcriber') },
+    memory: { heading: 'Memory & recaps', control: () => screen.findByRole('switch', { name: 'Auto recap' }) },
+    'system-agents': {
+      heading: 'System agents',
+      control: () => screen.findAllByRole('button', { name: /^Edit/ }).then((rows) => rows[0]),
+    },
+    'third-party-agents': {
+      heading: 'Third-party agents',
+      control: () => screen.findAllByRole('textbox', { name: /program path/i }).then((rows) => rows[0]),
+    },
+    limits: { heading: 'Limits', control: () => screen.findByRole('button', { name: /Agents and goals/i }) },
+    protection: { heading: 'Protection', control: () => screen.findByRole('button', { name: /Turn (on|off) God Mode/i }) },
+    sandbox: { heading: 'Sandbox & network', control: () => screen.findByRole('textbox', { name: /new allowed path/i }) },
+    keys: { heading: 'Keys & secrets', control: () => screen.findByRole('button', { name: /Add key/ }) },
+    gateway: { heading: 'Gateway', control: () => screen.findByLabelText(/Log level/) },
+    data: { heading: 'Data & retention', control: () => screen.findByText(/Clear all chat history/) },
+    about: { heading: 'About', control: () => screen.findByText('abc1234') },
+  }
   // The spec's banned classes: an issue number (#936-style), a requirement
   // tag ("R30, S-Q8 and similar" — the spec's own tag vocabulary), or the
   // support line. A hit is a violation; the sweep is the guard.
@@ -317,13 +369,37 @@ describe('FR-073 — on-screen text sweep (no tags, no issue numbers, no support
 
   for (const tab of TABS) {
     it(`${tab} carries no issue number, requirement tag or support line`, async () => {
+      const { heading, control } = WITNESS[tab]
       await openSettings(`?tab=${tab}`)
-      // Every visible section must settle out of its loading state first —
+      // Witness (R2-06): the section and one of its real controls must be
+      // loaded before anything is swept — an unloaded section must fail the
+      // witness, not pass the sweep.
+      expect(
+        await screen.findByRole('heading', { name: heading, level: 2 }),
+        `BLOCKED (FR-073 witness): ${tab} did not render its section — the sweep would cover nothing`,
+      ).toBeInTheDocument()
+      expect(
+        await control(),
+        `BLOCKED (FR-073 witness): ${tab} rendered none of its section's controls — the sweep would cover an unloaded section`,
+      ).toBeInTheDocument()
+      // Every visible section must settle out of its loading state —
       // sweeping mid-load would sweep less text than a person sees.
       await waitFor(() => {
         expect(screen.queryByText(/^Loading /i)).not.toBeInTheDocument()
       }, { timeout: 5_000 })
-      const text = document.body.innerText ?? ''
+      // FR-072: grouped lists start collapsed and a collapsed group renders
+      // no body — expand every disclosure so the sweep covers group content
+      // too. Pickers (aria-haspopup) open lists, not groups; leave them.
+      for (const el of Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-expanded="false"]'))) {
+        if (!el.hasAttribute('aria-haspopup')) fireEvent.click(el)
+      }
+      // The captured text must be real, non-empty section text. jsdom has no
+      // innerText — textContent is the source the sweep can actually read
+      // (PerformanceSection.test.tsx documents the same constraint), so an
+      // empty capture fails loudly instead of sweeping nothing.
+      const text = document.body.textContent ?? ''
+      expect(text.trim().length, `BLOCKED (FR-073 witness): ${tab} captured no text to sweep`).toBeGreaterThan(0)
+      expect(text, `BLOCKED (FR-073 witness): ${tab} captured text without its own section heading`).toContain(heading)
       for (const [pattern, what] of BANNED) {
         const hit = text.match(pattern)
         expect(hit, `RED (FR-073): ${tab} on-screen text contains ${what}`).toBeNull()
