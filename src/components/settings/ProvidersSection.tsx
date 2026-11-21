@@ -384,15 +384,24 @@ function ProviderConfigSheet({
         className="p-0"
         data-testid="provider-config-sheet"
         ref={sheetRef}
-        // FR-069: Radix gives focus back to the sheet's opener when it closes;
-        // when that control is gone, focus goes to the section heading.
+        // FR-069: when the sheet closes, focus goes back to the control that
+        // opened it (Configure), or to the section heading when that control
+        // is gone. The sheet is opened by state, not by a Radix Trigger, so
+        // Radix's own close handler would focus nothing (its trigger ref is
+        // empty) and also blocks the generic focus restore: this handler
+        // does the return itself and stops Radix's handler from running.
         onOpenAutoFocus={() => {
-          sheetOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+          const active = document.activeElement
+          sheetOpenerRef.current = active instanceof HTMLElement && active !== document.body ? active : null
         }}
         onCloseAutoFocus={(e) => {
           const opener = sheetOpenerRef.current
           sheetOpenerRef.current = null
-          if (opener?.isConnected) return
+          if (opener?.isConnected) {
+            e.preventDefault()
+            opener.focus()
+            return
+          }
           if (!shell.focusHeading) return
           e.preventDefault()
           shell.focusHeading()
