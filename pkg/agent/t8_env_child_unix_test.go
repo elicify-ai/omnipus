@@ -19,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +31,7 @@ func TestT8Env_ApprovedWriterReachesRealChildUnmasked(t *testing.T) {
 	cfg.Sandbox.ToolPolicies["update_agent"] = "ask"
 	const secret = "t8-artificial-child-token-24680"
 	capture := filepath.Join(t.TempDir(), "actual-child-token.txt")
-	program := filepath.Join(t.TempDir(), "claude-runtime-fixture")
+	program := filepath.Join(t11combined.TrustedProgramDir(t), "claude-runtime-fixture")
 	body := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '2.0.0\\n'; exit 0; fi\nprintf '%%s' \"$TOKEN\" > '%s'\nprintf '%%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"child completed\"}'\n", capture)
 	require.NoError(t, os.WriteFile(program, []byte(body), 0o700))
 	raw, err := json.Marshal(cfg)

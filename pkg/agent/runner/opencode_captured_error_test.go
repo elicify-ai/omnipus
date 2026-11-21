@@ -21,8 +21,8 @@ func TestOpencodeCapturedError_PreservesProviderDiagnosticAndLegacyShapes(t *tes
 	typedCapture, err := os.ReadFile(filepath.Join("testdata", "opencode-2.2.6", "badmodel.stdout.ndjson"))
 	require.NoError(t, err)
 	for _, tc := range []struct {
-		name, input, exact string
-		parts              []string
+		name, input, exact, errType string
+		parts                       []string
 	}{
 		{
 			name:  "captured_1_18_18_nested_data",
@@ -30,9 +30,10 @@ func TestOpencodeCapturedError_PreservesProviderDiagnosticAndLegacyShapes(t *tes
 			parts: []string{"UnknownError", "Unexpected server error. Check server logs for details.", "err_0be266a4"},
 		},
 		{
-			name:  "captured_2_2_6_typed_message",
-			input: string(typedCapture),
-			exact: "Model unavailable: openrouter/no-such-vendor/no-such-model",
+			name:    "captured_2_2_6_typed_message",
+			input:   string(typedCapture),
+			exact:   "Model unavailable: openrouter/no-such-vendor/no-such-model",
+			errType: "provider.no-route", // #1857 C2, matching TestOpencode226R2_LiveRunTerminalOutcome.
 		},
 		{
 			name:  "legacy_top_level_message",
@@ -60,7 +61,7 @@ func TestOpencodeCapturedError_PreservesProviderDiagnosticAndLegacyShapes(t *tes
 			assert.Equal(t, runID, events[0].RunID)
 			require.NotNil(t, events[0].Err, "the provider failure must have a public diagnostic payload")
 			if tc.exact != "" {
-				assert.Equal(t, &ErrorEvent{Message: tc.exact, Fatal: true}, events[0].Err,
+				assert.Equal(t, &ErrorEvent{Message: tc.exact, Fatal: true, Type: tc.errType}, events[0].Err,
 					"legacy and typed provider messages must remain verbatim fatal errors")
 				return
 			}

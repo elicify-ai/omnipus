@@ -12,6 +12,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +30,7 @@ func TestT8ExternalWorker_SoulNeverReachesRunner(t *testing.T) {
 	// Populate the specified config boundary without declaring a parallel Go
 	// config field. An implementation that drops the new JSON setting will
 	// fail its real dispatch/read tests, not be masked by a test-owned accessor.
-	program := filepath.Join(t.TempDir(), "codex")
+	program := filepath.Join(t11combined.TrustedProgramDir(t), "codex")
 	require.NoError(t, os.WriteFile(program, []byte("test process edge"), 0o755))
 	raw, err := json.Marshal(al.GetConfig())
 	require.NoError(t, err)
