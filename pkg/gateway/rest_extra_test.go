@@ -279,6 +279,24 @@ func TestDoctorIssuesHaveActionLinks(t *testing.T) {
 		assert.True(t, hasLabel, "issue[%d] (id=%s) must have 'action_label'", i, issue["id"])
 		assert.NotEmpty(t, actionLabel, "issue[%d] action_label must not be empty", i)
 	}
+
+	// R2-07 note: the destinations are pinned exactly, not just non-empty —
+	// a health hint is only useful when it lands where the person acts (the
+	// spec's deep links). The sandbox-off issue is present in the default
+	// test config, so its exact deep link is pinned here.
+	var sandboxIssue map[string]any
+	for _, rawIssue := range issues {
+		issue, _ := rawIssue.(map[string]any)
+		if issue["id"] == "sandbox-disabled" {
+			sandboxIssue = issue
+			break
+		}
+	}
+	require.NotNil(t, sandboxIssue, "the default test config must produce the sandbox-disabled issue")
+	assert.Equal(t, "/settings?tab=sandbox", sandboxIssue["action_link"],
+		"the sandbox-off hint must deep-link to the Sandbox & network section")
+	assert.Equal(t, "Open Sandbox & network", sandboxIssue["action_label"],
+		"the sandbox-off hint's label must name its destination section")
 }
 
 // TestDoctorGodModeArmed_HighSeverity proves runDiagnosticChecks (D6) flags an
@@ -328,6 +346,10 @@ func TestDoctorGodModeArmed_HighSeverity(t *testing.T) {
 	assert.NotEmpty(t, found["title"])
 	assert.NotEmpty(t, found["description"])
 	assert.NotEmpty(t, found["recommendation"])
-	assert.NotEmpty(t, found["action_link"])
-	assert.NotEmpty(t, found["action_label"])
+	// R2-07 note: the destination is pinned exactly — the God Mode hint must
+	// deep-link into Protection with the focus targeting the God Mode control.
+	assert.Equal(t, "/settings?tab=protection&focus=god-mode", found["action_link"],
+		"the god-mode-armed hint must deep-link to Protection focused on the God Mode control")
+	assert.Equal(t, "Open Protection", found["action_label"],
+		"the god-mode-armed hint's label must name its destination section")
 }
