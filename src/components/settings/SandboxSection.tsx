@@ -807,7 +807,7 @@ const SANDBOX_MODES: Array<{ value: 'enforce' | 'permissive' | 'off'; label: str
     {
       value: 'off',
       label: 'Off',
-      desc: 'No operating-system protection: a program an agent starts can reach whatever your own account can reach. Development only \u2014 the production warning banner will fire. This does not switch off the shell workspace limit or the blocked command patterns below; those are separate rules with their own settings.',
+      desc: 'No operating-system protection: a program an agent starts can reach whatever your own account can reach. Development only \u2014 the production warning banner will fire. It does not switch off the shell workspace limit below or the shell command rules in your configuration file; those are separate rules.',
     },
   ]
 
@@ -825,7 +825,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
   {
     value: 'off',
     label: 'Any path on this machine',
-    desc: 'Shell commands may name files anywhere your own account can reach. Blocked command patterns and the process sandbox above still apply \u2014 this setting lifts neither.',
+    desc: 'Shell commands may name files anywhere your own account can reach. The shell command rules in your configuration file and the process sandbox above still apply \u2014 this setting lifts neither.',
   },
 ]
 
