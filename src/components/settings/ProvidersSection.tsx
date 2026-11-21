@@ -98,6 +98,7 @@ import type {
   ProviderUpdateRequest,
   EntitlementResponse,
 } from '@/lib/api/generated/openapi-types'
+import { usePrimaryVariant } from './SaveBar'
 
 // The item shown in the Sheet — either an existing configured provider (configure
 // mode) or a catalog entry for first-time setup (connect mode).
@@ -249,6 +250,7 @@ function ProviderConfigSheet({
   onRemove,
   obscuredByDialog,
 }: ProviderConfigSheetProps) {
+  const primaryVariant = usePrimaryVariant()
   // FR-033: an accidental close (Esc / overlay) with a dirty key does not
   // close — it asks. This flag is the inline "Discard key?" prompt's state.
   // Declared before the `!target` guard so the hook order never changes.
@@ -666,6 +668,7 @@ function ProviderConfigSheet({
                 Cancel
               </Button>
               <Button
+                variant={primaryVariant}
                 size="sm"
                 onClick={() => {
                   const key = (apiKeys[draftKey] ?? '').trim()
@@ -705,6 +708,7 @@ function ProviderConfigSheet({
 // ---------------------------------------------------------------------------
 
 export function ProvidersSection() {
+  const primaryVariant = usePrimaryVariant()
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const stepUp = useStepUp()
@@ -1190,6 +1194,7 @@ export function ProvidersSection() {
             at once. */}
         {(hasConfigured || providersError) && (
           <Button
+            variant={primaryVariant}
             size="sm"
             onClick={openPicker}
             className="h-8 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] shrink-0 gap-[var(--space-1)]"
@@ -1328,6 +1333,7 @@ export function ProvidersSection() {
         >
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No providers configured yet.</p>
           <Button
+            variant={primaryVariant}
             onClick={openPicker}
             className="gap-[var(--space-1)]"
             data-testid="connect-provider-btn"

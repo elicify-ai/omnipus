@@ -402,6 +402,7 @@ export function IntegrationsSection() {
                 Cancel
               </Button>
               <Button
+                variant={primaryVariant}
                 size="sm"
                 onClick={() =>
                   requestChange(

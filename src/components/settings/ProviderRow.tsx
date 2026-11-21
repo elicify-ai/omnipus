@@ -26,6 +26,7 @@ import {
 import type { ProviderValidation, Provider, EntitlementResponse } from '@/lib/api/generated/openapi-types'
 import type { CatalogProvider, CatalogModel } from '@/lib/api/generated/openapi-types'
 import { catalogLogoSlug, catalogSubtitle } from '@/lib/catalogDisplay'
+import { usePrimaryVariant } from './SaveBar'
 
 // See ProvidersSection.tsx's file header for the FIX-N legend. `entry` is the
 // registry-fed CatalogProvider resolved for this configured row (ADR-068
@@ -364,6 +365,7 @@ export function ProviderRow({
   entitlement,
   entitlementError,
 }: ProviderRowProps) {
+  const primaryVariant = usePrimaryVariant()
   const [expanded, setExpanded] = useState(false)
   const connected = provider.status === 'connected'
   const signInCapable = isSignInCapable(provider, entry)
@@ -488,7 +490,7 @@ export function ProviderRow({
           {signInCapable && provider.status !== 'unknown-provider' ? (
             <Button
               size="sm"
-              variant={signInActionLabel(provider.status) === 'Manage' ? 'outline' : 'default'}
+              variant={signInActionLabel(provider.status) === 'Manage' ? 'outline' : primaryVariant}
               onClick={handleSignInAction}
               disabled={signingIn}
               className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
@@ -502,6 +504,7 @@ export function ProviderRow({
             </Button>
           ) : !signInCapable ? (
             <Button
+              variant={primaryVariant}
               size="sm"
               onClick={onConfigure}
               className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
