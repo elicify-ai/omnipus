@@ -144,6 +144,15 @@ beforeEach(() => {
       const detect: CliDetect = { claude: stored.clis['claude-code'].detected, codex: stored.clis.codex.detected, opencode: stored.clis.opencode.detected }
       return json(detect)
     }
+    // C-6 saved-state check seam (FR-020 outcome 4, spec :246): after an
+    // unknown result the screen reads GET /config/pending-restart through
+    // the raw fetch edge (saveOutcome.ts::readPendingRestartFresh). An empty
+    // list leaves the written keys unlisted, so the saved value equals the
+    // running read — what lets the check conclude at all. The reply mirrors
+    // readPendingRestartFresh's expectations (ok + a JSON array body).
+    if (path === '/api/v1/config/pending-restart' && method === 'GET') {
+      return { ok: true, status: 200, json: async () => [] as unknown[] }
+    }
     throw new Error(`Unexpected HTTP boundary call: ${method} ${path}`)
   }))
 })

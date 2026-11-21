@@ -47,14 +47,19 @@
  * pending-restart entry can exist for its key — cases A (listed key) and B
  * are meaningless there; C and D cover its saved-state surface.
  *
- * Fixture keys are the BACKEND's canonical dotted keys, the values the
- * gateway itself names in a saved_not_refreshed answer's details.keys
+ * Fixture keys are the BACKEND's canonical dotted keys — the spec's entry
+ * keys (spec :107: "The entry key is the dotted config path of each stored
+ * field (for example gateway.log_level, context.mcp_result_cap,
+ * sandbox.third_party_agents.clis.codex.path)"), which is what a
+ * saved_not_refreshed answer's details.keys carries
  * (pkg/gateway/rest_apply_failed.go::performancePendingApplyConfigKeys,
  * pkg/gateway/rest_context_settings.go + rest_settings_merge_c6_test.go for
- * context.mcp_result_cap, pkg/gateway/rest_third_party_settings.go for
- * clis.<cli>.path). If the four-way fix looks its keys up under other
- * spellings, that mismatch is a test-side reconciliation owned by the test
- * author — never a reason to weaken these oracles.
+ * context.mcp_result_cap, rest_third_party_settings.go writing under
+ * sandbox.third_party_agents). `clis.<cli>.path` is that endpoint's 400
+ * refusal `field`, never a pending-restart key. If the four-way fix looks
+ * its keys up under other spellings, that mismatch is a test-side
+ * reconciliation owned by the test author — never a reason to weaken these
+ * oracles.
  *
  * Harness boundary (stated honestly): reads are mocked at '@/lib/api' and
  * the writes reject with a plain Error — the same classification seam a lost
@@ -314,6 +319,10 @@ async function waitForWrite(fn: unknown) {
 describe('F01 — after a lost write answer, the real forms run the C-6 saved-state check (FR-020 outcome 4, spec :1924; C-6, spec :246)', () => {
   it('Performance, case A — pending-restart lists the key with the draft as its persisted value while the running read still holds the old value: the form says Saved, but not in use yet', async () => {
     const wireCalls = stubPendingRestartWire()
+    // Case A's premise (C-6, spec :246): the key IS listed, and its
+    // persisted_value (read from config.json) is the draft. Without this
+    // entry the fixture degenerates into case B (unlisted → not saved).
+    pendingRestart.entries = [pendingEntry('performance.max_parallel_agents', 8, 4)]
     renderWith(<PerformanceSection />)
     const input = await screen.findByLabelText('Max parallel agents')
     await waitFor(() => expect(input).toHaveValue('4'))
@@ -438,9 +447,12 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     expect(screen.getByLabelText('MCP tool result cap')).toHaveValue('50')
   })
 
-  it('Third-party agents, case A — pending-restart lists clis.codex.path with the draft as its persisted value: the section says Saved, but not in use yet', async () => {
+  it('Third-party agents, case A — pending-restart lists sandbox.third_party_agents.clis.codex.path with the draft as its persisted value: the section says Saved, but not in use yet', async () => {
     stubPendingRestartWire()
-    pendingRestart.entries = [pendingEntry('clis.codex.path', '/opt/codex/bin/codex', '/usr/local/bin/codex')]
+    // The entry key is the dotted CONFIG path (spec :107 names
+    // sandbox.third_party_agents.clis.codex.path as the example);
+    // clis.codex.path is the 400 refusal's field name, not this list's key.
+    pendingRestart.entries = [pendingEntry('sandbox.third_party_agents.clis.codex.path', '/opt/codex/bin/codex', '/usr/local/bin/codex')]
     renderWith(<ThirdPartyAgentsSection />)
     const path = await screen.findByLabelText('Codex program path')
     await waitFor(() => expect(path).toHaveValue('/usr/local/bin/codex'))
@@ -471,6 +483,15 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     reads.defaultModel = { value: { provider: 'google', model: 'gemini-3-pro' }, fail: false }
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitForWrite(api.putDefaultModel)
+    // PRODUCTION-SIDE (kept RED on landing 21c5c9b423, reported to
+    // team-lead): FR-020's outcome-4 branches are classified in order and
+    // C-6's carve-out (spec :246) reserves only the "not saved" conclusion
+    // for writers that record no failed applies — a third value is the
+    // changed-elsewhere branch for every Save-bar write. Landing's
+    // saveOutcome.ts::savedStateCheck short-circuits recorded:false to
+    // unknown BEFORE that branch; the fix exists on the frontend branch
+    // (round 11, c884413e0c) and lands with its next merge. The oracle
+    // stays the spec, not the FE.
     expect(await screen.findByText(/changed somewhere else/i)).toBeInTheDocument()
     expect(screen.getByText(/Saved value/i)).toBeInTheDocument()
     // The draft pick stays on the card and on the bar (FR-012).

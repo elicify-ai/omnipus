@@ -437,8 +437,12 @@ describe(SUITE, () => {
     expect(screen.queryByTestId('performance-lowered-summary')).not.toBeInTheDocument()
     // Retired with the old flow is only the trigger: the edit is a draft on
     // the bar (FR-010) — no fresh preview, no second prompt, no second write
-    // until the next Save changes.
-    expect(api.fetchMaxToolIterationsLoweringPreview).not.toHaveBeenCalled()
+    // until the next Save changes. The ONE preview call so far is the first
+    // Save's own required lowering preview (#904 US-6 AS-1, before its
+    // confirm dialog); the next edit must add none.
+    const previewsBefore = vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mock.calls.length
+    expect(previewsBefore).toBe(1)
+    expect(api.fetchMaxToolIterationsLoweringPreview).toHaveBeenCalledTimes(previewsBefore)
     expect(api.updatePerformanceSettings).toHaveBeenCalledTimes(1)
     expect(activePrompt.prompts).toHaveLength(1)
   })
@@ -517,6 +521,21 @@ describe(SUITE, () => {
     vi.mocked(api.updatePerformanceSettings).mockRejectedValue(
       new api.ApiError(500, text, { code: 'max_tool_iterations_rollback_incomplete' }),
     )
+    // FR-020 outcome 4 (spec :1924): a 500 without a recognized signal is
+    // UNKNOWN, so the screen runs the C-6 saved-state check (spec :246).
+    // Its first read is GET /config/pending-restart on the raw fetch edge
+    // (saveOutcome.ts::readPendingRestartFresh). An empty list leaves the
+    // key unlisted, so the saved value is the running read — the pre-Save
+    // 300 served by the mocked section read — and the check concludes the
+    // change was NOT saved. #904 (:105) keeps the server's own error text
+    // inline for this code.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/config/pending-restart')) {
+        return { ok: true, status: 200, json: async () => [] }
+      }
+      throw new Error(`toolIterations: unexpected fetch ${url}`)
+    }))
     renderSectionWithShell()
     await waitFor(() => screen.getByLabelText(LABEL))
     fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '150' } })
@@ -524,18 +543,20 @@ describe(SUITE, () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(activePrompt.prompts.length).toBe(1))
     await activePrompt.resolveWith('reauth_tok')
-    // FR-020 outcome 3's not-saved banner — present on the FE checkout.
+    // FR-020 outcome 4 → the C-6 check concludes NOT SAVED (the running read
+    // still holds the pre-Save 300); the check's not-saved line is the
+    // hook's wording for the outcome (exact text not drawn in the wireframe,
+    // spec :651) and the bar counts the refused change (spec :484).
     expect(await screen.findByText('These changes were not saved. Save them again.', {}, WAIT)).toBeInTheDocument()
-    // PRODUCTION-SIDE (kept RED on the FE checkout, reported to team-lead):
-    // the refused PUT's server message must show inline —
-    // tool-iteration-limit-spec.md line 368 (500 codes shown as their
-    // `error` text) + FR-020 outcome 3 "not-saved with server message under
-    // field" — but the FE shows only the generic banner above, no toast.
-    // The oracle stays the spec, not the FE.
+    expect(screen.getByText(/1 change could not be saved/)).toBeInTheDocument()
+    // #904 line 368: the 500 codes are shown as their `error` text — the
+    // server's own rollback message inline (FR-020 outcome 3's
+    // message-under-the-field presentation for a not-saved outcome).
     const inline = await screen.findByText(text, { selector: '[role="alert"]' }, WAIT)
     expect(inline).toBeInTheDocument()
-    // FR-020 outcome 3: the refused draft is kept with the message.
+    // FR-020 outcome 3's presentation: the refused draft is kept.
     expect(screen.getByLabelText(LABEL)).toHaveValue(150)
+    vi.unstubAllGlobals()
   })
 
   it.each([

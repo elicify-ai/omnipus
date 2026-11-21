@@ -21,9 +21,11 @@
  *     and the second Save asks again before its write (FR-026); the retired
  *     automatic re-consent queue has no successor (FR-010 removed the queue
  *     by removing the always-writing model it fed);
- *   - TM5 (older save fails): the refused draft is kept with the not-saved
- *     banner (FR-020 outcome 3) and the newer value then saves with fresh
- *     consent (FR-026).
+ *   - TM5 (older save fails): a failed save is UNKNOWN (FR-020 outcome 4 —
+ *     a 500 is not a refusal), so the C-6 saved-state check decides; with
+ *     the key unlisted and the running read holding the pre-Save value it
+ *     ends not saved with the draft kept, and the newer value then saves
+ *     with fresh consent (FR-026).
  *
  * The local-mode consent queue (in-product password dialog racing a held
  * PUT) is retired with the same machinery; the prompt boundary contract
@@ -109,6 +111,11 @@ beforeEach(() => {
     if (path === '/api/v1/state') {
       return json({ onboarding_complete: true, identity: { mode: 'platform', edition: 'hosted', signed_in: true } })
     }
+    // C-6 saved-state check seam (FR-020 outcome 4, spec :246): the check's
+    // first read is GET /config/pending-restart on the raw fetch edge
+    // (saveOutcome.ts::readPendingRestartFresh). An empty list leaves the
+    // written key unlisted, so the saved value equals the running read.
+    if (path === '/api/v1/config/pending-restart') return json([])
     if (path !== '/api/v1/performance') throw new Error('Unexpected gate1 HTTP fixture request')
     if (options?.method !== 'PUT') {
       reads += 1
@@ -340,15 +347,21 @@ describe('TM5 consent cadence for timer edits (FR-026)', () => {
     expect(server.goal_stalled_checkin_minutes).toBe(75)
   })
 
-  it('TM5 an older save that fails keeps its draft with the not-saved banner; the newer value then saves with fresh consent (FR-020 outcome 3, FR-026)', async () => {
+  it('TM5 an older save that fails with a 500 runs the C-6 saved-state check, which finds the old value and ends not saved with the draft kept; the newer value then saves with fresh consent (FR-020 outcome 4, FR-026)', async () => {
     const view = await mount()
     failNextPut = true
     await typeDraft(timerControls().minutes, '45')
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(recorder.prompts.length).toBe(1))
     await waitFor(() => expect(puts).toHaveLength(1))
-    // FR-020 outcome 3: the refused draft is kept with the banner.
+    // FR-020 outcome 4 (spec :1924): a 500 without a recognized signal is
+    // UNKNOWN, never a refusal — so the screen runs the C-6 saved-state
+    // check. The key is unlisted and the running read still holds the
+    // pre-Save 30, so the check concludes NOT SAVED: the draft is kept with
+    // the not-saved line (the check's wording, spec :651) and the bar counts
+    // the failed change (spec :484).
     expect(await screen.findByText('These changes were not saved. Save them again.')).toBeInTheDocument()
+    expect(screen.getByText(/1 change could not be saved/)).toBeInTheDocument()
     expect(timerControls().minutes).toHaveValue(45)
     expect(server.goal_stalled_checkin_minutes).toBe(30)
     // The newer value replaces the refused draft on the bar (FR-010: a

@@ -190,22 +190,27 @@ describe('FR-020 — each write ends in one of four outcomes', () => {
     expect(screen.getByLabelText('Log level')).toHaveValue('debug')
     // FR-012 (spec:1916): for a write whose result is still unknown, its
     // confirm says the server may already hold the new value. Pressing
-    // Discard must NOT silently clear an unknown write.
+    // Discard must NOT silently clear an unknown write. The confirm is the
+    // catalogued ConfirmDialog (a Radix AlertDialog → role "alertdialog");
+    // its exact wording pins the FR-012 meaning, and its safe default is
+    // "Keep changes" (Cancel), with Discard as the destructive confirm.
     await userEvent.click(screen.getByRole('button', { name: /discard/i }))
-    const confirm = await screen.findByRole('dialog')
+    const confirm = await screen.findByRole('alertdialog')
     expect(confirm).toHaveTextContent(/already hold/i)
-    // Cancel: the unknown result and the draft stay exactly as they were.
-    await userEvent.click(within(confirm).getByRole('button', { name: /cancel/i }))
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(confirm).toHaveTextContent(/does not undo a stored value/i)
+    // Cancel ("Keep changes"): the unknown result and the draft stay exactly
+    // as they were.
+    await userEvent.click(within(confirm).getByRole('button', { name: /keep changes/i }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
     expect(screen.getByText(/1 change may not have been saved/i)).toBeInTheDocument()
     expect(screen.getByLabelText('Log level')).toHaveValue('debug')
     // Confirmed Discard stores nothing: no further write goes out (one Save
     // so far), the draft returns to the saved value and the unknown result
     // is dismissed by the person who was told the server may hold it.
     await userEvent.click(screen.getByRole('button', { name: /discard/i }))
-    const confirm2 = await screen.findByRole('dialog')
-    await userEvent.click(within(confirm2).getByRole('button', { name: /discard|confirm/i }))
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    const confirm2 = await screen.findByRole('alertdialog')
+    await userEvent.click(within(confirm2).getByRole('button', { name: 'Discard' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
     expect(onSave).toHaveBeenCalledTimes(1)
     expect(screen.getByLabelText('Log level')).toHaveValue('info')
     expect(screen.queryByText(/1 change may not have been saved/i)).not.toBeInTheDocument()

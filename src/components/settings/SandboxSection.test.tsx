@@ -1242,7 +1242,12 @@ describe('shell workspace limit', () => {
 
   it('a refused Save keeps the drafted selection; the bar says the change could not be saved (FR-015, FR-020 outcome 3)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
-    vi.mocked(updateSandboxConfig).mockRejectedValue(new ApiError(500, 'boom'))
+    // FR-020 outcome 3 is a 4xx REFUSAL (C-6 outcome table, spec :231): a 400
+    // refusal ends "not saved" directly. The old 500 here classified as
+    // outcome 4 (unknown → the saved-state check), whose bar line is the
+    // different "may not have been saved" wording — a 500 was the wrong seam
+    // for the outcome-3 oracle this test pins.
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new ApiError(400, 'the workspace limit must be a whole number of megabytes'))
     const { requestPassword } = promptRecorder()
     await renderSectionWithShell(requestPassword)
 

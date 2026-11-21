@@ -241,8 +241,10 @@ describe('GatewaySection — a newer edit of the same field survives an older in
     expect(vi.mocked(updateConfig).mock.calls[0][0]).toEqual({ gateway: { log_level: 'debug' } })
 
     // The newer edit of the SAME field, typed while the older write is
-    // still pending.
-    fireEvent.change(screen.getByLabelText(/log level/i), { target: { value: 'warning' } })
+    // still pending. Log level's options are the gateway's own levels
+    // (debug, info, warn, error — spec :953 names "saved Warn"), so the
+    // newer value is 'warn'.
+    fireEvent.change(screen.getByLabelText(/log level/i), { target: { value: 'warn' } })
     expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
     // The older response lands now.
@@ -251,7 +253,7 @@ describe('GatewaySection — a newer edit of the same field survives an older in
     })
     // The newer draft must survive the older completion: the field keeps
     // it, the bar still counts it, and no second write went out.
-    await waitFor(() => expect(screen.getByLabelText(/log level/i)).toHaveValue('warning'))
+    await waitFor(() => expect(screen.getByLabelText(/log level/i)).toHaveValue('warn'))
     expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
     expect(updateConfig).toHaveBeenCalledTimes(1)
 
@@ -260,7 +262,7 @@ describe('GatewaySection — a newer edit of the same field survives an older in
     vi.mocked(updateConfig).mockResolvedValueOnce(makeConfig({}) as never)
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(2))
-    expect(vi.mocked(updateConfig).mock.calls[1][0]).toEqual({ gateway: { log_level: 'warning' } })
+    expect(vi.mocked(updateConfig).mock.calls[1][0]).toEqual({ gateway: { log_level: 'warn' } })
     await screen.findByText(/Saved at/)
   })
 })

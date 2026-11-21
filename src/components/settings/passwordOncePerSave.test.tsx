@@ -94,7 +94,7 @@ const PLAIN_FIELD = {
 type Call = { url: string; init: RequestInit }
 type StubOptions = {
   mode?: 'local' | 'platform'
-  reauth?: (url: string) => { status: number; body: unknown }
+  reauth?: (url: string, init?: RequestInit) => { status: number; body: unknown }
   write?: (attempt: number, url: string) => { status: number; body: unknown }
 }
 
@@ -122,7 +122,7 @@ function stubFetch({ mode = 'local', reauth, write }: StubOptions = {}) {
       return respond(200, { onboarding_complete: true, identity: { mode, edition: 'hosted', signed_in: true } })
     }
     if (url.includes('/auth/reauth')) {
-      const r = reauth?.(url) ?? { status: 200, body: { verified: true, token: 'rt', expires_in: 300 } }
+      const r = reauth?.(url, init) ?? { status: 200, body: { verified: true, token: 'rt', expires_in: 300 } }
       return respond(r.status, r.body)
     }
     if (url.includes(PROTECTED_ENDPOINT)) {
@@ -361,7 +361,21 @@ describe('FR-028 — the typed password is cleared whatever the reauth returns',
   })
 
   it('after a 401: the prompt stays open with its message and focus, and the field it refocuses is EMPTY (FR-028, FR-029)', async () => {
-    const calls = stubFetch({ reauth: () => ({ status: 401, body: { error: 'invalid password' } }) })
+    // The wrong password is refused; the RETYPED one passes. Branching on
+    // the typed password (the body reAuth sends, src/lib/api/auth.ts) also
+    // proves the retry carries what was retyped into the wiped field — an
+    // always-401 stub could never let the retry through at all.
+    const calls = stubFetch({
+      reauth: (_url, init) => {
+        let password = ''
+        try {
+          password = String(JSON.parse(String(init?.body ?? '{}'))?.password ?? '')
+        } catch { /* a body the stub cannot parse is not the right password */ }
+        return password === 'correct horse'
+          ? { status: 200, body: { verified: true, token: 'rt', expires_in: 300 } }
+          : { status: 401, body: { error: 'invalid password' } }
+      },
+    })
     await renderAndSave([FS_MODEL_FIELD])
     await userEvent.type(screen.getByTestId('reauth-password-input'), 'wrong')
     await userEvent.click(screen.getByTestId('reauth-confirm'))
