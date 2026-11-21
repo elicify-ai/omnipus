@@ -1004,7 +1004,12 @@ func (c pathUseClassifier) isSegmentSeparator(i int) bool {
 		return false
 	}
 	switch c.cmd[i] {
-	case '|', ';', '\n', '\r':
+	case '|':
+		// `>|` (and `2>|`) is bash's noclobber-override OUTPUT REDIRECTION,
+		// not a pipe (re-check R2). Splitting there would make its target the
+		// first word of a new segment — a "program" — instead of a write.
+		return i == 0 || c.mask[i-1] || c.cmd[i-1] != '>'
+	case ';', '\n', '\r':
 		return true
 	case '&':
 		// `2>&1`, `<&-`: an `&` bound to a redirection operator on its left is
@@ -1110,7 +1115,7 @@ func (c pathUseClassifier) commandWordRoles(segStart, segEnd int) (programs, ass
 			name = name[slash+1:]
 		}
 		n, isWrapper := shellrule.WrapperArgCount(name, texts[i+1:])
-		if !isWrapper || slices.ContainsFunc(texts[i+1:i+1+n], ambiguousWrapperOption) {
+		if !isWrapper || !wrapperOptionsRecognised(lowerASCII(name), texts[i+1:i+1+n]) {
 			break
 		}
 		for k := i + 1; k <= i+n; k++ {
@@ -1123,21 +1128,72 @@ func (c pathUseClassifier) commandWordRoles(segStart, segEnd int) (programs, ass
 	return programs, assignments
 }
 
-// ambiguousWrapperOption reports a wrapper option after which the guard can no
-// longer be sure which word is the program (CHECK F1): env's split-string
-// option (`-S`, `--split-string`), whose value is itself a command line, and
-// any short-option cluster or attached value (`-ao FILE`, `-iS`, `-n10`),
-// whose letters the shared wrapper table does not split. Unwrapping stops
-// there, so every later word stays an ordinary operand: conservative, never a
-// wider allowance.
-func ambiguousWrapperOption(tok string) bool {
-	if tok == "--split-string" || strings.HasPrefix(tok, "--split-string=") {
-		return true
+// wrapperOptionSpec lists the options of one command wrapper that the path
+// guard positively recognises: noValue options take no argument, value
+// options take exactly one (the next word, or `--long=value`).
+type wrapperOptionSpec struct{ noValue, value map[string]bool }
+
+// wrapperOptions is the guard's allowlist of wrapper options it may step over
+// to find the program a wrapper runs (#1960 S0; CHECK F1, re-check R1). It is
+// deliberately an ALLOWLIST: an option not named here — an abbreviation GNU
+// accepts (`--split-s=`), a short-option cluster or attached value (`-ao`,
+// `-n10`), a split-string option whose value is itself a command (`env -S`),
+// or anything unknown — stops program detection, and every later word is
+// judged as an ordinary operand. A wrapper with no entry admits no options.
+//
+// Every value option here is a value flag in shellrule's wrapperSpecs and no
+// noValue option is (TestGuard1960_WrapperOptionTableMatchesShellrule), so
+// shellrule.WrapperArgCount and this table agree on which word is a value.
+var wrapperOptions = map[string]wrapperOptionSpec{
+	"env": {
+		noValue: setOf("-i", "--ignore-environment", "-0", "--null", "-v", "--debug"),
+		value:   setOf("-u", "--unset", "-C", "--chdir"),
+	},
+	"timeout": {
+		noValue: setOf("--preserve-status", "--foreground", "-v", "--verbose"),
+		value:   setOf("-s", "--signal", "-k", "--kill-after"),
+	},
+	"nice":   {value: setOf("-n", "--adjustment")},
+	"time":   {noValue: setOf("-p", "--portability", "-v", "--verbose", "-a", "--append", "-q", "--quiet"), value: setOf("-o", "--output")},
+	"sudo":   {noValue: setOf("-E", "-H", "-n", "-k"), value: setOf("-u", "--user", "-g", "--group")},
+	"setsid": {noValue: setOf("-w", "--wait", "-f", "--fork", "-c", "--ctty")},
+	"stdbuf": {value: setOf("-i", "--input", "-o", "--output", "-e", "--error")},
+}
+
+func setOf(names ...string) map[string]bool {
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
+		m[n] = true
 	}
-	if !strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "--") {
-		return false
+	return m
+}
+
+// wrapperOptionsRecognised reports whether every option among a wrapper's own
+// argument words (as shellrule.WrapperArgCount counted them) is one the guard
+// positively recognises (wrapperOptions). Non-option words — `NAME=value`
+// assignments, timeout's duration, option values — and `--` pass.
+func wrapperOptionsRecognised(wrapper string, toks []string) bool {
+	spec := wrapperOptions[wrapper]
+	for k := 0; k < len(toks); k++ {
+		tok := toks[k]
+		if tok == "--" || tok == "-" || !strings.HasPrefix(tok, "-") {
+			continue
+		}
+		name, _, attached := strings.Cut(tok, "=")
+		if attached && !strings.HasPrefix(name, "--") {
+			return false // `-n=10` is not getopt syntax the guard models
+		}
+		switch {
+		case spec.noValue[name] && !attached:
+		case spec.value[name]:
+			if !attached {
+				k++ // the next word is this option's value
+			}
+		default:
+			return false
+		}
 	}
-	return tok == "-S" || len(tok) > 2
+	return true
 }
 
 // segmentCommandWords splits the segment into shell words as [start, end)
@@ -1193,7 +1249,9 @@ func (c pathUseClassifier) precededByOutputRedirect(word, segStart int) bool {
 	if c.cmd[i] == '>' {
 		return true
 	}
-	if c.cmd[i] == '&' && i-1 >= segStart && !c.mask[i-1] && c.cmd[i-1] == '>' {
+	// `>&target` and `>|target` (re-check R2): the operator's second
+	// character sits right before the word.
+	if (c.cmd[i] == '&' || c.cmd[i] == '|') && i-1 >= segStart && !c.mask[i-1] && c.cmd[i-1] == '>' {
 		return true
 	}
 	return false
@@ -1212,6 +1270,9 @@ func (c pathUseClassifier) redirectTargetsAreLiteral(segStart, segEnd int) bool 
 		}
 		j := i + 1
 		for j < segEnd && !c.mask[j] && c.cmd[j] == '>' { // `>>`
+			j++
+		}
+		if j < segEnd && !c.mask[j] && c.cmd[j] == '|' { // `>|` (re-check R2)
 			j++
 		}
 		for j < segEnd && !c.mask[j] && (c.cmd[j] == ' ' || c.cmd[j] == '\t') {

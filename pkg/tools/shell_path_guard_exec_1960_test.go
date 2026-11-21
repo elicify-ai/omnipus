@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -40,6 +41,15 @@ import (
 // only reads command text; no test here runs these commands.
 const marker1960 = "/tmp/omnipus-probe-marker-1960"
 
+// skipOnWindows1960 is a platform prerequisite, not a result-dependent skip
+// (re-check R3 disposition): these rows are written in POSIX shell syntax and
+// paths (`/usr/local/bin/gh`, `/tmp/...`, `#!/bin/sh` fixtures, symlinks,
+// env/timeout/nohup wrappers). On Windows the path scanner extracts drive
+// paths only up to the first backslash, so the same rows would not test the
+// same thing. Windows coverage for #1960 is the Windows-only
+// TestGuard1960_WindowsCrossDriveProgramRuns plus the T11 command-position
+// row (C:\Windows\System32\cmd.exe); a native Windows execution proof is not
+// claimed.
 func skipOnWindows1960(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -303,4 +313,31 @@ func TestExecTool1960_ProgramOwnErrorPassesThrough(t *testing.T) {
 		"FR-6: the program's own error passes through unchanged")
 	require.NotNil(t, result.ExitCode, "the program's own exit code is reported")
 	assert.Equal(t, 4, *result.ExitCode, "the program's own exit code is reported unchanged")
+}
+
+// TestGuard1960_WrapperOptionTableMatchesShellrule keeps the guard's option
+// allowlist (wrapperOptions) aligned with shellrule's wrapper table: a value
+// option must consume exactly one following word there, and a no-value
+// option none, or the two would disagree about which word is the program
+// (re-check R1). Added with the table it checks (fix round 2).
+func TestGuard1960_WrapperOptionTableMatchesShellrule(t *testing.T) {
+	for wrapper, spec := range wrapperOptions {
+		// timeout's leading duration is one more word before the program.
+		var lead []string
+		if wrapper == "timeout" {
+			lead = []string{"5"}
+		}
+		for opt := range spec.value {
+			args := append(append([]string{opt, "VALUE"}, lead...), "/opt/prog")
+			n, ok := shellrule.WrapperArgCount(wrapper, args)
+			require.True(t, ok, "%s %s", wrapper, opt)
+			require.Equal(t, 2+len(lead), n, "%s: %s must take exactly one value word in shellrule too", wrapper, opt)
+		}
+		for opt := range spec.noValue {
+			args := append(append([]string{opt}, lead...), "/opt/prog")
+			n, ok := shellrule.WrapperArgCount(wrapper, args)
+			require.True(t, ok, "%s %s", wrapper, opt)
+			require.Equal(t, 1+len(lead), n, "%s: %s must take no value word in shellrule either", wrapper, opt)
+		}
+	}
 }
