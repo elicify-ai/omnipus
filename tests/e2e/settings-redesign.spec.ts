@@ -579,11 +579,18 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     expect(workspaceResp.ok(), `POST /workspaces failed: ${workspaceResp.status()} ${await workspaceResp.text()}`).toBe(true)
     const workspace = (await workspaceResp.json()) as { id: string }
 
-    // The worker's Team tab: its card opens the shared editor; the Runtime
-    // tab carries the Program line with the Change-in-Settings link
+    // The worker's Team tab: its card opens the shared editor through its
+    // REAL controls — Actions (TeamListView.tsx::TeamAgentCard's Popover) and
+    // its Edit button — the only path that opens the shared editor; clicking
+    // the plain name never reaches the overlay under test (R3-04). The
+    // Runtime tab carries the Program line with the Change-in-Settings link
     // (r17 17.6 / T11 FR-8).
     await page.goto(`/#/workspaces/${workspace.id}/team`)
-    await page.getByText(worker.name).first().click()
+    const card = page.getByTestId(`team-card-${worker.id}`)
+    await expect(card,
+      'BLOCKED RED (FR-109): the external worker\'s card must render on the Team tab').toBeVisible()
+    await page.getByTestId(`team-card-actions-${worker.id}`).click()
+    await page.getByRole('button', { name: `Edit ${worker.name}`, exact: true }).click()
     const runtime = page.getByTestId('tab-runtime')
     await expect(runtime,
       'BLOCKED RED (FR-109): the external worker must expose the Runtime tab').toBeVisible()
