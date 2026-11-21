@@ -24,7 +24,7 @@ import {
 import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
 import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { PasswordBadge, RestartBadge, SaveBarPanel, SaveOutcomeLine } from './SaveBar'
-import { toWriteResponse } from './saveOutcome'
+import { toWriteResponse, type PartCheck } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 import { AllowedPathsEditor } from './AllowedPathsEditor'
 import { SsrfEditor, SSRF_PRESETS } from './SsrfEditor'
@@ -456,10 +456,12 @@ export function SandboxSection(): React.ReactElement {
       setSsrfAdvancedErrors({})
       return toWriteResponse(() => updateSandboxConfig(body, reauthToken))
     },
-    check: async () => {
+    // C-6: PUT /security/sandbox-config does not record failed applies, so
+    // the read can only prove "saved"; any other answer stays unknown.
+    check: async (): Promise<PartCheck> => {
       const sent = sentRef.current
+      if (!sent) return { kind: 'unknown' }
       const fresh = await fetchSandboxConfig()
-      if (!sent) return 'not-saved'
       const ok =
         (sent.mode === undefined || fresh.mode === sent.mode) &&
         (sent.filesystem_model === undefined || fresh.filesystem_model === sent.filesystem_model) &&
@@ -467,7 +469,7 @@ export function SandboxSection(): React.ReactElement {
         (sent.ssrf?.allow_internal === undefined || sameList(fresh.ssrf?.allow_internal ?? [], sent.ssrf.allow_internal)) &&
         WORKSPACE_LIMIT_KEYS.every((k) => sent[k] === undefined || readWorkspaceLimit(fresh)?.value === sent[k])
       if (ok) queryClient.setQueryData(['sandbox-config'], fresh)
-      return ok ? 'saved' : 'not-saved'
+      return ok ? { kind: 'saved', inUse: true } : { kind: 'unknown' }
     },
     onOutcome: (outcome) => {
       if (outcome.kind === 'saved' || outcome.kind === 'saved-not-in-use') {

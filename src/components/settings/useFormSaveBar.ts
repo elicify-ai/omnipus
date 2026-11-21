@@ -18,7 +18,7 @@
 //   - "Saved at HH:MM" for 8 seconds and the restart offer (FR-018, FR-033).
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { classifyWrite, type WriteOutcome, type WriteResponse } from './saveOutcome'
+import { classifyWrite, type PartCheck, type WriteOutcome, type WriteResponse } from './saveOutcome'
 import { useSettingsShell } from './SettingsShellContext'
 import { useShellDrafts } from './useShellDrafts'
 import {
@@ -51,8 +51,14 @@ export interface FormSavePart { // not-wire-format: one endpoint's share of a se
    * of this Save is sent.
    */
   stopsSave?: (outcome: WriteOutcome) => boolean
-  /** Saved-state check after an unknown result (C-6). */
-  check?: () => Promise<'saved' | 'not-saved'>
+  /**
+   * Saved-state check after an unknown result (C-6, FR-020 outcome 4): the
+   * part classifies its sent values with GET /config/pending-restart plus its
+   * section read (`checkFormPart`). On "changed somewhere else" the part
+   * itself takes the read values as its saved values and keeps its drafts.
+   * A failed read throws (the result stays unknown).
+   */
+  check?: () => Promise<PartCheck>
   /** Runs after this part's write reached an outcome. */
   onOutcome?: (outcome: WriteOutcome) => void
   /** Moves focus to the part's first invalid value. */
@@ -68,6 +74,9 @@ interface PartResult { // not-wire-format: screen state of one part after a Save
 }
 
 const EMPTY: PartResult = { failed: 0, unknown: 0, message: null }
+
+/** A part's outcome after a Save: a write outcome, or a value changed elsewhere. */
+type PartOutcome = WriteOutcome | { kind: 'changed-elsewhere'; text: string }
 
 export function useFormSaveBar(parts: FormSavePart[]) {
   const shell = useSettingsShell()
@@ -94,8 +103,11 @@ export function useFormSaveBar(parts: FormSavePart[]) {
     return () => clearTimeout(t)
   }, [savedAt])
 
-  const resultOf = (outcome: WriteOutcome, n: number): PartResult => {
+  const resultOf = (outcome: PartOutcome, n: number): PartResult => {
     switch (outcome.kind) {
+      case 'changed-elsewhere':
+        // The draft stays an unsaved change; the field names the saved value.
+        return { failed: 0, unknown: 0, message: { tone: 'error', text: outcome.text } }
       case 'saved':
         return EMPTY
       case 'saved-not-in-use':
@@ -107,25 +119,34 @@ export function useFormSaveBar(parts: FormSavePart[]) {
     }
   }
 
-  const checkUnknown = useCallback(async (part: FormSavePart): Promise<WriteOutcome | null> => {
+  const checkUnknown = useCallback(async (part: FormSavePart): Promise<PartOutcome | null> => {
     if (!part.check) return null
     try {
       const state = await part.check()
-      return state === 'saved'
-        ? { kind: 'saved', body: undefined }
-        : { kind: 'not-saved', message: 'These changes were not saved. Save them again.', status: 0, body: undefined }
+      switch (state.kind) {
+        case 'saved':
+          return state.inUse
+            ? { kind: 'saved', body: undefined }
+            : { kind: 'saved-not-in-use', keys: [], body: undefined, requiresRestart: true }
+        case 'not-saved':
+          return { kind: 'not-saved', message: 'These changes were not saved. Save them again.', status: 0, body: undefined }
+        case 'changed-elsewhere':
+          return { kind: 'changed-elsewhere', text: state.text }
+        case 'unknown':
+          return null
+      }
     } catch {
       return null
     }
   }, [])
 
   const finish = useCallback(
-    (outcomes: { part: FormSavePart; outcome: WriteOutcome; n: number }[]) => {
+    (outcomes: { part: FormSavePart; outcome: PartOutcome; n: number }[]) => {
       const next: Record<string, PartResult> = {}
       let restart = false
       let notInUse = false
       for (const { part, outcome, n } of outcomes) {
-        part.onOutcome?.(outcome)
+        if (outcome.kind !== 'changed-elsewhere') part.onOutcome?.(outcome)
         next[part.id] = resultOf(outcome, n)
         if (outcome.kind === 'saved' || outcome.kind === 'saved-not-in-use') {
           if (part.restartLabels?.length) restart = true
@@ -177,13 +198,13 @@ export function useFormSaveBar(parts: FormSavePart[]) {
     const ordered = [...changed].sort((a, b) => Number(!!b.passwordLabels?.length) - Number(!!a.passwordLabels?.length))
     setSaving(true)
     try {
-      const outcomes: { part: FormSavePart; outcome: WriteOutcome; n: number }[] = []
+      const outcomes: { part: FormSavePart; outcome: PartOutcome; n: number }[] = []
       for (const part of ordered) {
         const usesToken = !!part.passwordLabels?.length
-        let outcome = await classifyWrite(() => part.write({ reauthToken: usesToken ? reauthToken : undefined }))
-        if (outcome.kind === 'unknown') outcome = (await checkUnknown(part)) ?? outcome
+        const written = await classifyWrite(() => part.write({ reauthToken: usesToken ? reauthToken : undefined }))
+        const outcome: PartOutcome = written.kind === 'unknown' ? ((await checkUnknown(part)) ?? written) : written
         outcomes.push({ part, outcome, n: part.count })
-        if (part.stopsSave?.(outcome)) break
+        if (outcome.kind !== 'changed-elsewhere' && part.stopsSave?.(outcome)) break
       }
       finish(outcomes)
     } finally {
@@ -194,7 +215,7 @@ export function useFormSaveBar(parts: FormSavePart[]) {
   const retry = useCallback(async () => {
     const pending = parts.filter((p) => (results[p.id]?.unknown ?? 0) > 0)
     if (!pending.length) return
-    const outcomes: { part: FormSavePart; outcome: WriteOutcome; n: number }[] = []
+    const outcomes: { part: FormSavePart; outcome: PartOutcome; n: number }[] = []
     for (const part of pending) {
       const outcome = await checkUnknown(part)
       if (outcome) outcomes.push({ part, outcome, n: results[part.id].unknown })

@@ -79,6 +79,25 @@ function endpointFor(section: string, field: PlannedField): string {
 }
 
 /**
+ * The writers that record a failed apply in GET /config/pending-restart
+ * before they answer (C-6 write outcome table). Only for these may the
+ * saved-state check conclude "not saved" or "changed somewhere else".
+ */
+const RECORDING_ENDPOINTS: ReadonlySet<string> = new Set([
+  '/api/v1/config',
+  '/api/v1/settings/context',
+  '/api/v1/settings/third-party-agents',
+  '/api/v1/security/prompt-guard',
+  '/api/v1/security/rate-limits',
+  '/api/v1/performance',
+])
+
+/** True when the endpoint this value is written to records failed applies (C-6). */
+export function recordsFailedApplies(section: string, field: PlannedField): boolean {
+  return RECORDING_ENDPOINTS.has(endpointFor(section, field))
+}
+
+/**
  * Plans the requests of one Save: one request per endpoint, holding every
  * changed value that endpoint takes. Password-marked values all go to the
  * section's one protected endpoint (C-4).

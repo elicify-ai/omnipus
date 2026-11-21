@@ -13,9 +13,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShellDrafts } from './useShellDrafts'
-import { classifyWrite, savedStateCheck, sameValue, type WriteOutcome, type WriteResponse } from './saveOutcome'
+import { classifyWrite, displaySavedValue, savedStateCheck, sameValue, type WriteOutcome, type WriteResponse } from './saveOutcome'
 import { useSettingsShell } from './SettingsShellContext'
-import { assertOneProtectedEndpointPerSection, planSectionSave } from './savePlanner'
+import { assertOneProtectedEndpointPerSection, planSectionSave, recordsFailedApplies } from './savePlanner'
 
 export type SaveBarValue = string | number | boolean | null
 
@@ -98,11 +98,6 @@ export function formatTime(d: Date): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-function display(v: unknown): string {
-  if (v === null || v === undefined || v === '') return 'empty'
-  return typeof v === 'string' ? v : JSON.stringify(v)
-}
-
 export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved, onDiscard }: UseSaveBarOptions) {
   const shell = useSettingsShell()
   const [drafts, setDrafts] = useState<Record<string, SaveBarValue>>({})
@@ -113,6 +108,9 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<string | null>(null)
   const beforeRef = useRef<Record<string, SaveBarValue>>({})
+  // What the last Save sent for each key whose result is still unknown, so
+  // Retry checks the sent value, not a newer draft.
+  const unknownSentRef = useRef<Record<string, SaveBarValue>>({})
 
   const byKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields])
 
@@ -233,16 +231,27 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
     async (keys: string[], sentDrafts: Record<string, SaveBarValue>) => {
       try {
         const states = await savedStateCheck(
-          keys.map((key) => ({ key, draft: sentDrafts[key], before: beforeRef.current[key] })),
+          keys.map((key) => {
+            const f = byKey.get(key)
+            return {
+              key,
+              draft: sentDrafts[key],
+              before: beforeRef.current[key],
+              recorded: recordsFailedApplies(section, { key, value: sentDrafts[key], password: f?.password, target: f?.target }),
+            }
+          }),
           readBack,
         )
         const known: Record<string, SaveBarValue> = {}
         const msgs: Record<string, FieldMessage> = {}
         const resolved: string[] = []
+        const unknown: string[] = []
         let failed = 0
         for (const key of keys) {
           const st = states[key]
-          if (st.kind === 'saved') {
+          if (st.kind === 'unknown') {
+            unknown.push(key)
+          } else if (st.kind === 'saved') {
             known[key] = sentDrafts[key]
             resolved.push(key)
             if (!st.inUse) msgs[key] = { tone: 'warning', text: NOT_IN_USE_MESSAGE }
@@ -253,16 +262,16 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
             known[key] = st.savedValue as SaveBarValue
             msgs[key] = {
               tone: 'error',
-              text: `This setting was changed somewhere else while you were saving. Saved value: ${display(st.savedValue)}.`,
+              text: `This setting was changed somewhere else while you were saving. Saved value: ${displaySavedValue(st.savedValue)}.`,
             }
           }
         }
-        return { ok: true as const, known, msgs, resolved, failed }
+        return { ok: true as const, known, msgs, resolved, failed, unknown }
       } catch {
         return { ok: false as const }
       }
     },
-    [readBack],
+    [readBack, byKey, section],
   )
 
   const finish = useCallback(
@@ -273,6 +282,7 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
       failed: number,
       unknown: string[],
       restartLabels: string[],
+      sentDrafts: Record<string, SaveBarValue>,
     ) => {
       setKnownSaved((prev) => ({ ...prev, ...known }))
       setMessages((prev) => {
@@ -280,12 +290,18 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
         for (const k of resolved) delete next[k]
         return { ...next, ...msgs }
       })
+      // A key is cleared only when its draft is still what this Save sent: a
+      // newer value typed while the Save was on its way stays a draft
+      // (FR-010, FR-011).
       setDrafts((prev) => {
         const next = { ...prev }
-        for (const k of resolved) delete next[k]
+        for (const k of resolved) if (k in next && sameValue(next[k], sentDrafts[k])) delete next[k]
         return next
       })
       setFailedCount(failed)
+      const sentUnknown: Record<string, SaveBarValue> = {}
+      for (const k of unknown) sentUnknown[k] = sentDrafts[k]
+      unknownSentRef.current = sentUnknown
       setUnknownKeys(unknown)
       if (resolved.length) onSaved?.(resolved)
       shell.refreshPendingRestart()
@@ -357,12 +373,12 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
       if (a.unknown.length) {
         const c = await runCheck(a.unknown, sentDrafts)
         if (c.ok) {
-          finish({ ...a.nextKnown, ...c.known }, { ...a.nextMessages, ...c.msgs }, [...a.resolved, ...c.resolved], a.failed + c.failed, [], a.restartLabels)
+          finish({ ...a.nextKnown, ...c.known }, { ...a.nextMessages, ...c.msgs }, [...a.resolved, ...c.resolved], a.failed + c.failed, c.unknown, a.restartLabels, sentDrafts)
         } else {
-          finish(a.nextKnown, a.nextMessages, a.resolved, a.failed, a.unknown, a.restartLabels)
+          finish(a.nextKnown, a.nextMessages, a.resolved, a.failed, a.unknown, a.restartLabels, sentDrafts)
         }
       } else {
-        finish(a.nextKnown, a.nextMessages, a.resolved, a.failed, [], a.restartLabels)
+        finish(a.nextKnown, a.nextMessages, a.resolved, a.failed, [], a.restartLabels, sentDrafts)
       }
     } finally {
       setSaving(false)
@@ -372,11 +388,10 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
   const retry = useCallback(async () => {
     const keys = unknownKeys
     if (!keys.length) return
-    const sentDrafts: Record<string, SaveBarValue> = {}
-    for (const k of keys) sentDrafts[k] = drafts[k]
+    const sentDrafts = unknownSentRef.current
     const c = await runCheck(keys, sentDrafts)
-    if (c.ok) finish(c.known, c.msgs, c.resolved, failedCount + c.failed, [], [])
-  }, [unknownKeys, drafts, runCheck, finish, failedCount])
+    if (c.ok) finish(c.known, c.msgs, c.resolved, failedCount + c.failed, c.unknown, [], sentDrafts)
+  }, [unknownKeys, runCheck, finish, failedCount])
 
   const discard = useCallback(() => {
     setDrafts({})
@@ -386,6 +401,7 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
       return next
     })
     setFailedCount(0)
+    unknownSentRef.current = {}
     setUnknownKeys([])
     onDiscard?.()
   }, [onDiscard])

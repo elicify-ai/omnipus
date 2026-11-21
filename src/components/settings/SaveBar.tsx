@@ -13,7 +13,7 @@
 //     useSaveBar. Sections with richer controls use useSaveBar, SettingRow and
 //     SaveBarPanel directly.
 
-import { useId } from 'react'
+import { useId, useState } from 'react'
 import { useBlocker, useRouter } from '@tanstack/react-router'
 import { ArrowClockwise, Lock, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
@@ -112,6 +112,9 @@ export function SaveBarPanel({
   onDiscard,
   onRetry,
 }: SaveBarPanelProps) {
+  // FR-012: while a result is unknown, Discard first says the server may
+  // already hold the new value.
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   if (!visible) return null
   if (count === 0 && unknownCount === 0 && invalidCount === 0) {
     return (
@@ -165,7 +168,7 @@ export function SaveBarPanel({
             Retry
           </Button>
         )}
-        <Button variant="ghost" onClick={onDiscard} disabled={saving}>
+        <Button variant="ghost" onClick={() => (unknownCount > 0 ? setConfirmDiscard(true) : onDiscard())} disabled={saving}>
           Discard
         </Button>
         <Button
@@ -177,6 +180,19 @@ export function SaveBarPanel({
           Save changes
         </Button>
       </div>
+      <ConfirmDialog
+        open={confirmDiscard}
+        onOpenChange={setConfirmDiscard}
+        title="Discard changes?"
+        description="The gateway did not confirm the save, so the server may already hold the new value. Discard only resets this page; it does not undo a stored value."
+        cancelLabel="Keep changes"
+        confirmLabel="Discard"
+        destructive
+        onConfirm={() => {
+          setConfirmDiscard(false)
+          onDiscard()
+        }}
+      />
     </div>
   )
 }

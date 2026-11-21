@@ -50,7 +50,7 @@ import { useUiStore } from '@/store/ui'
 import { savedStateWarning, MAX_TOOL_ITERATIONS_MIN, MAX_TOOL_ITERATIONS_MAX } from './MaxToolIterationsCard'
 import { MaxToolIterationsLoweringDialog } from './MaxToolIterationsLoweringDialog'
 import { FormRow, SaveBarPanel, SaveOutcomeLine } from './SaveBar'
-import { toWriteResponse, type WriteResponse } from './saveOutcome'
+import { checkFormPart, toWriteResponse, type PartCheck, type WriteResponse } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 
 export const PERFORMANCE_QUERY_KEY = ['performance-settings'] as const
@@ -148,6 +148,34 @@ function bodyOf(changed: Key[], v: Values): PerformanceSettingsUpdate {
   return body
 }
 
+/**
+ * The config key each value is saved under; GET /config/pending-restart names
+ * a saved-but-not-applied value by it (gateway rest_apply_failed.go,
+ * performancePendingApplyConfigKeys).
+ */
+const CONFIG_KEYS: Record<Key, string> = {
+  max_parallel_agents: 'performance.max_parallel_agents',
+  tools_on_demand: 'tools.manifest.compressed',
+  goal_max_rounds: 'planning.goal_max_rounds',
+  goal_reminder_quiet_seconds: 'planning.goal_reminder_quiet_seconds',
+  goal_stalled_checkin_enabled: 'planning.goal_stalled_checkin_enabled',
+  goal_stalled_checkin_minutes: 'planning.goal_stalled_checkin_minutes',
+  max_tool_iterations: 'agents.defaults.max_tool_iterations',
+}
+
+/** A form value as the write sends it (an empty limit is 0). */
+function wireValue(raw: string | boolean): number | boolean {
+  if (typeof raw === 'boolean') return raw
+  return raw.trim() === '' ? 0 : Number(raw.trim())
+}
+
+/** A stored value back as the form shows it. */
+function formValue(k: Key, stored: unknown): string | boolean {
+  if (typeof stored === 'boolean') return stored
+  if (k === 'max_parallel_agents' && (stored === 0 || stored === null || stored === undefined)) return ''
+  return stored === null || stored === undefined ? '' : String(stored)
+}
+
 function loweredSummaryText(agents: MaxToolIterationAgentChange[]): string {
   const list = agents.map((a) => `${a.agent_name} ${a.old_value} → ${a.new_value}`).join(', ')
   return `Lowered ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}: ${list}`
@@ -193,7 +221,7 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
   // preview that could not be read, or a refused write (FR-020 outcome 3).
   const [toolIterError, setToolIterError] = useState<string | null>(null)
   const confirmedRef = useRef<{ value: number; agents: MaxToolIterationAgentChange[] } | null>(null)
-  const sentRef = useRef<{ keys: Key[]; values: Values } | null>(null)
+  const sentRef = useRef<{ keys: Key[]; values: Values; before: Partial<Values> } | null>(null)
 
   const server = useMemo(() => (data ? valuesOf(data) : null), [data])
   const saved = useCallback((k: Key): string | boolean => (k in known ? known[k]! : server ? server[k] : ''), [known, server])
@@ -212,7 +240,12 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
   }, [drafts, server, value])
 
   const setDraft = (k: Key, v: string | boolean) => {
-    if (k === 'max_tool_iterations') setToolIterError(null)
+    if (k === 'max_tool_iterations') {
+      setToolIterError(null)
+      // The lowering summary stays until the next edit of this field or
+      // until the page is left (tool-iteration-limit spec, UI states; #904).
+      setLoweredSummary(null)
+    }
     setDrafts((prev) => {
       const next = { ...prev }
       if (same(v, saved(k))) delete next[k]
@@ -258,7 +291,11 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
     if (body.max_tool_iterations !== undefined && confirmedRef.current?.value === body.max_tool_iterations) {
       body.confirmed_lowering = confirmedRef.current.agents.map((a) => ({ agent_id: a.agent_id, old_value: a.old_value }))
     }
-    sentRef.current = { keys: [...changed], values: current }
+    sentRef.current = {
+      keys: [...changed],
+      values: current,
+      before: Object.fromEntries(changed.map((k) => [k, saved(k)])) as Partial<Values>,
+    }
     try {
       const resp = await updatePerformanceSettings(body, reauthToken)
       return { ok: true, status: 200, json: async () => resp }
@@ -317,11 +354,35 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
     }
   }
 
-  const check = async (): Promise<'saved' | 'not-saved'> => {
+  // C-6 saved-state check: pending-restart's persisted value for a listed
+  // key, else the section read (FR-020 outcome 4).
+  const check = async (): Promise<PartCheck> => {
     const sent = sentRef.current
-    const fresh = valuesOf(await fetchPerformanceSettings())
-    if (!sent) return 'not-saved'
-    return sent.keys.every((k) => same(fresh[k], sent.values[k])) ? 'saved' : 'not-saved'
+    if (!sent) return { kind: 'unknown' }
+    let fresh: Values | null = null
+    const keyOf = (configKey: string) => sent.keys.find((k) => CONFIG_KEYS[k] === configKey)!
+    const result = await checkFormPart(
+      sent.keys.map((k) => ({
+        key: CONFIG_KEYS[k],
+        label: LABELS[k],
+        draft: wireValue(sent.values[k]),
+        before: wireValue(sent.before[k] ?? ''),
+      })),
+      async (configKey) => {
+        fresh ??= valuesOf(await fetchPerformanceSettings())
+        return wireValue(fresh[keyOf(configKey)])
+      },
+    )
+    if (result.kind === 'changed-elsewhere') {
+      // The read value becomes the saved value; the draft stays (FR-020).
+      const next: Partial<Values> = {}
+      for (const [configKey, stored] of Object.entries(result.saved)) {
+        const k = keyOf(configKey)
+        next[k] = formValue(k, stored)
+      }
+      setKnown((prev) => ({ ...prev, ...next }))
+    }
+    return result
   }
 
   const discard = () => setDrafts({})

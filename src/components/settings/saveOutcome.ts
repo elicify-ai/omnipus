@@ -134,15 +134,43 @@ export function sameValue(a: unknown, b: unknown): boolean {
     if (v === undefined || v === null || v === '') return ''
     if (typeof v === 'number' || typeof v === 'boolean') return String(v)
     if (typeof v === 'string') return v.trim().toLowerCase()
-    return JSON.stringify(v)
+    return canonicalJson(v)
   }
   return norm(a) === norm(b)
+}
+
+/** JSON with object keys sorted, so the same value read two ways compares equal. */
+function canonicalJson(v: unknown): string {
+  return JSON.stringify(v, (_k, val: unknown) =>
+    val && typeof val === 'object' && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : val,
+  )
 }
 
 export type CheckedState = // not-wire-format: result of the saved-state check for one key
   | { kind: 'saved'; inUse: boolean }
   | { kind: 'not-saved' }
   | { kind: 'changed-elsewhere'; savedValue: unknown }
+  /** The running read differs from the draft for a writer that does not
+   *  record failed applies: nothing can be concluded (C-6). */
+  | { kind: 'unknown' }
+
+/** One value of a Save whose answer was lost, for the saved-state check. */
+export interface SavedStateItem { // not-wire-format: screen-side input of the C-6 check
+  /** Dotted config key, as GET /config/pending-restart names it. */
+  key: string
+  /** The value the Save sent. */
+  draft: unknown
+  /** The saved value before the Save. */
+  before: unknown
+  /**
+   * False when the endpoint is not one of the C-6 writers that record a
+   * failed apply in GET /config/pending-restart. Its running read then can
+   * only prove "saved"; it never proves "not saved" (C-6).
+   */
+  recorded?: boolean
+}
 
 /**
  * The saved-state check of C-6 (FR-020 outcome 4). For a key the gateway
@@ -152,7 +180,7 @@ export type CheckedState = // not-wire-format: result of the saved-state check f
  * either read fails, so the caller can say "may not have been saved".
  */
 export async function savedStateCheck(
-  items: { key: string; draft: unknown; before: unknown }[],
+  items: SavedStateItem[],
   readBack: ((key: string) => Promise<unknown>) | undefined,
 ): Promise<Record<string, CheckedState>> {
   const pending = await readPendingRestartFresh()
@@ -167,8 +195,52 @@ export async function savedStateCheck(
       saved = await readBack(item.key)
     }
     if (sameValue(saved, item.draft)) result[item.key] = { kind: 'saved', inUse: !entry }
+    else if (!entry && item.recorded === false) result[item.key] = { kind: 'unknown' }
     else if (sameValue(saved, item.before)) result[item.key] = { kind: 'not-saved' }
     else result[item.key] = { kind: 'changed-elsewhere', savedValue: saved }
   }
   return result
+}
+
+/** The saved-state check's answer for one form part (one write). */
+export type PartCheck = // not-wire-format: screen-side result of the C-6 check for a form part
+  | { kind: 'saved'; inUse: boolean }
+  | { kind: 'not-saved' }
+  /** At least one value holds a third value; `saved` maps each such key to it. */
+  | { kind: 'changed-elsewhere'; text: string; saved: Record<string, unknown> }
+  | { kind: 'unknown' }
+
+/** Shows a saved value in the "changed somewhere else" line. */
+export function displaySavedValue(v: unknown): string {
+  if (v === null || v === undefined || v === '') return 'empty'
+  return typeof v === 'string' ? v : JSON.stringify(v)
+}
+
+/**
+ * The C-6 saved-state check for a form part whose one write has an unknown
+ * result (FR-020 outcome 4). Every value of the write is classified; the part
+ * is saved only when every value holds its draft. A value that holds a third
+ * value wins over the rest; then any value still holding its old value makes
+ * the part not saved. Throws when either read fails.
+ */
+export async function checkFormPart(
+  items: (SavedStateItem & { label: string })[],
+  readBack: (key: string) => Promise<unknown>,
+): Promise<PartCheck> {
+  const states = await savedStateCheck(items, readBack)
+  const elsewhere = items.filter((i) => states[i.key].kind === 'changed-elsewhere')
+  if (elsewhere.length) {
+    const saved: Record<string, unknown> = {}
+    for (const i of elsewhere) saved[i.key] = (states[i.key] as { savedValue: unknown }).savedValue
+    const text =
+      elsewhere.length === 1
+        ? `This setting was changed somewhere else while you were saving. Saved value: ${displaySavedValue(saved[elsewhere[0].key])}.`
+        : `These settings were changed somewhere else while you were saving. Saved values: ${elsewhere
+            .map((i) => `${i.label} ${displaySavedValue(saved[i.key])}`)
+            .join(', ')}.`
+    return { kind: 'changed-elsewhere', text, saved }
+  }
+  if (items.some((i) => states[i.key].kind === 'unknown')) return { kind: 'unknown' }
+  if (items.some((i) => states[i.key].kind === 'not-saved')) return { kind: 'not-saved' }
+  return { kind: 'saved', inUse: items.every((i) => (states[i.key] as { inUse?: boolean }).inUse !== false) }
 }
