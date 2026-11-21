@@ -434,27 +434,34 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     await expect(keyInput,
       'RED (FR-069/R3-06): focus must return to the exact control that opened the confirm — the key input').toBeFocused()
 
-    // The absent-opener fallback, under the amended FR-069 (team-lead
-    // ruling 2026-11-21, spec :1995, CHECK R4-06): the fallback order is —
-    // the opener, when it exists; the dialog it sat in (its first focusable
-    // control), when the inner opener is gone but that dialog is still
-    // open; the section heading only when NO dialog is left open. This
-    // panel's discard tears the confirm and the sheet down together, so the
-    // confirm's opener (the key input) is gone AND no dialog is left open:
-    // the leg exercises the ruling's LAST arm, and the heading — not the
-    // panel's own still-existing Configure opener — is the ruled target.
+    // Discard closes SEVERAL stacked dialogs at once (FR-069, clarified:
+    // spec :1995, team-lead clarification 2026-11-21 — commit 993eecf061,
+    // CHECK R4-06): one action tears the confirm AND its side panel down
+    // together, so focus goes to the control that opened the OUTERMOST
+    // dialog that closed — this panel's own Configure opener, still in the
+    // section's row list. Replaces part 19's heading oracle (5dd3db78b9),
+    // which read the first wording's "no dialog is left open" as the
+    // heading arm's premise; the clarified rule names the outermost opener,
+    // and the section heading applies ONLY when that control no longer
+    // exists either. The heading arm is deliberately not exercised here:
+    // no gesture in this suite removes the row's Configure button while its
+    // sheet is open — FR-069's own one-at-a-time rule closes the sheet
+    // before any such gesture — and the picker → connect flow restores
+    // focus to the persistent Connect-a-provider control, so the arm has no
+    // stable real witness in the UI (reported to team-lead; the build keeps
+    // the focusHeading wiring for the arm).
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('discard-key-keep'),
       'the third Escape must ask once more before the Discard leg').toBeVisible()
     await page.getByTestId('discard-key-discard').click()
-    // The premise, asserted before the focus oracle: no dialog is left open
-    // (the confirm is gone and the panel is gone), so the heading arm —
-    // and only that arm — applies.
+    // The premise, asserted before the focus oracle: one action closed the
+    // confirm AND the panel — the stacked-closing case the clarified rule
+    // writes down.
     await expect(page.getByTestId('discard-key-keep'),
       'FR-069 ruling premise: the confirm is closed').not.toBeVisible()
-    await expect(sheet, 'FR-069 ruling premise: the panel is closed — no dialog is left open').not.toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Providers', level: 2 }),
-      'RED (FR-069/R4-06): with the opener gone and no dialog left open, focus must go to the section heading').toBeFocused()
+    await expect(sheet, 'FR-069 ruling premise: the panel is closed — both stacked dialogs closed at once').not.toBeVisible()
+    await expect(page.getByRole('button', { name: openerName, exact: true }),
+      'RED (FR-069/R4-06 clarified): after one action closes the confirm and its side panel, focus must go to the control that opened the outermost dialog that closed — the Configure opener').toBeFocused()
   })
 
   test('FR-065: every section shows Loading with a spinner and skeleton cards while its reads answer (R2-05: all eleven sections)', async ({ page }) => {
