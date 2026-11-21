@@ -275,16 +275,10 @@ func TestGuardCommand_FailsClosedOnAmbiguity(t *testing.T) {
 			cmd:  `C=cat; $C /etc/passwd`,
 			why:  "the head resolves at runtime; a text guard cannot know what runs",
 		},
-		{
-			name: "absolute path in command position after a semicolon",
-			cmd:  `echo hi;/etc/shadow`,
-			why:  "that is an EXEC, not a read; ADR-068 rules on reads only",
-		},
-		{
-			name: "absolute path in command position after a pipe",
-			cmd:  `echo hi|/bin/sh`,
-			why:  "same, mid-pipeline",
-		},
+		// #1960 S0 (FR-1): `echo hi;/etc/shadow` and `echo hi|/bin/sh` used to
+		// be pinned here as refused EXECs. A program in command position is no
+		// longer refused for lying outside the workspace; both rows now live in
+		// TestGuard1960_ProgramByAbsolutePathRuns as allowed commands.
 		{
 			name: "bracket-adjacent absolute path",
 			cmd:  `cat[/etc/shadow]`,

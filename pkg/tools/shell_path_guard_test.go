@@ -66,7 +66,7 @@ package tools
 //
 // Everything else in TestGuardCommand_TruePositivesStillBlocked survives
 // untouched, and that matters: the `../` traversal case, the two
-// command-position cases and the attached-flag cases are the tripwires that
+// after-an-operator cases (write-shaped since #1960 S0) and the attached-flag cases are the tripwires that
 // prove ADR-068 opened reads and nothing else.
 //
 // Neither `sudo -n true` nor `rm -rf /` names an absolute-path CANDIDATE
@@ -197,14 +197,20 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 			cmd:  `cat ../../../../etc/passwd`,
 			want: "path traversal detected",
 		},
+		// #1960 S0 (FR-1) retargeted the two command-position rows: running
+		// `/etc/shadow` or `/bin/sh` as a PROGRAM after `;` or `|` is no longer
+		// refused only for lying outside the workspace (both commands are now
+		// allowed rows of TestGuard1960_ProgramByAbsolutePathRuns). The
+		// tripwire they kept — a segment after an operator is still scanned —
+		// is pinned with a WRITE after the same operators.
 		{
 			name: "absolute path after an operator",
-			cmd:  `echo hi;/etc/shadow`,
+			cmd:  `echo hi;touch /etc/shadow`,
 			want: "path outside working dir",
 		},
 		{
 			name: "absolute path after a pipe",
-			cmd:  `echo hi|/bin/sh`,
+			cmd:  `echo hi|tee /etc/shadow`,
 			want: "path outside working dir",
 		},
 		{

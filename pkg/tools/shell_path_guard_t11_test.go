@@ -349,14 +349,15 @@ func TestGuard_RealOutsideWritesStillRefused(t *testing.T) {
 		t11RequireRefused(t, tool, cwd, cmd, outside, "a write to a sibling of the working folder")
 	})
 
-	t.Run("command position stays refused", func(t *testing.T) {
-		// Spec §3.1: command-position handling runs unchanged and first.
-		// /bin/ls is an absolute program path; executing it is not a read.
+	t.Run("command position runs the program", func(t *testing.T) {
+		// #1960 S0 (FR-1) replaces the earlier T11 expectation: an absolute
+		// program path in command position is no longer refused only because
+		// it lies outside the working folder.
 		cmd := "/bin/ls"
 		if runtime.GOOS == "windows" {
 			cmd = `C:\Windows\System32\cmd.exe`
 		}
-		t11RequireRefused(t, tool, cwd, cmd, "RUNNING a program", "command position")
+		require.Empty(t, tool.guardCommand(context.Background(), cmd, cwd), "FR-1: %s must run", cmd)
 	})
 
 	t.Run("unresolvable expansion stays refused", func(t *testing.T) {
