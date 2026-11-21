@@ -34,10 +34,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter, createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from '@/routeTree.gen'
+import { rotateGatewayToken } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -122,6 +123,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
       default_search: 'brave',
       fallback_search: null,
     })),
+    // FR-057: the rotate call must be observable — Cancel keeps the token,
+    // so the mock records and the test asserts it was never called.
+    rotateGatewayToken: vi.fn(async () => ({ token: 'rotated-token' })),
   }
 })
 
@@ -267,4 +271,63 @@ describe('D-9 rows 10-11 + FR-108 rider — removals, hidden devices, wording', 
     await openSettings('?tab=about')
     expect(await screen.findByText('abc1234')).toBeInTheDocument()
   })
+})
+
+describe('FR-057 — rotating the gateway token asks first', () => {
+  it('the confirm names the sign-out consequence; Cancel keeps the token', async () => {
+    await openSettings('?tab=gateway')
+    expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
+    const rotate = await screen.findByRole('button', { name: 'Rotate gateway token' })
+    fireEvent.click(rotate)
+    // FR-057: the confirm must SAY what happens — every app and program
+    // using the token is signed out (must sign in again with the new one).
+    const confirm = await screen.findByRole('alertdialog', { name: /rotate the gateway token/i })
+    expect(confirm, 'RED (FR-057): the confirm must name the signed-out consequence').toHaveTextContent(
+      /every app and program/i,
+    )
+    expect(confirm, 'RED (FR-057): the confirm must say the sign-in consequence').toHaveTextContent(/sign/i)
+    // Cancel keeps the token: the dialog closes and NO rotate call fires.
+    fireEvent.click(within(confirm).getByRole('button', { name: /cancel/i }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(rotateGatewayToken, 'FR-057: Cancel keeps the token — no rotate call').not.toHaveBeenCalled()
+  })
+})
+
+describe('FR-073 — on-screen text sweep (no tags, no issue numbers, no support line)', () => {
+  const TABS = [
+    'providers', 'memory', 'system-agents', 'third-party-agents', 'limits',
+    'protection', 'sandbox', 'keys', 'gateway', 'data', 'about',
+  ] as const
+  // The spec's banned classes: an issue number (#936-style), a requirement
+  // tag ("R30, S-Q8 and similar" — the spec's own tag vocabulary), or the
+  // support line. A hit is a violation; the sweep is the guard.
+  const BANNED: Array<[RegExp, string]> = [
+    [/#\d{3,}/, 'an issue number'],
+    [/\bR\d+\b/, 'a requirement tag (R…)'],
+    [/\bS-Q\d+\b/, 'a requirement tag (S-Q…)'],
+    [/\bD-\d+\b/, 'a dataset tag (D-…)'],
+    [/\bC-\d+\b/, 'a rider tag (C-…)'],
+    [/\bFR-\d+\b/, 'a requirement tag (FR-…)'],
+    [/\bUS-\d+\b/, 'a user-story tag (US-…)'],
+    [/\bMAJ-\d+\b/, 'a review tag (MAJ-…)'],
+    [/\bCRIT-\d+\b/, 'a review tag (CRIT-…)'],
+    [/\bAS\d+\b/, 'an acceptance-scenario tag (AS…)'],
+    [/contact support/i, 'the support line'],
+  ]
+
+  for (const tab of TABS) {
+    it(`${tab} carries no issue number, requirement tag or support line`, async () => {
+      await openSettings(`?tab=${tab}`)
+      // Every visible section must settle out of its loading state first —
+      // sweeping mid-load would sweep less text than a person sees.
+      await waitFor(() => {
+        expect(screen.queryByText(/^Loading /i)).not.toBeInTheDocument()
+      }, { timeout: 5_000 })
+      const text = document.body.innerText ?? ''
+      for (const [pattern, what] of BANNED) {
+        const hit = text.match(pattern)
+        expect(hit, `RED (FR-073): ${tab} on-screen text contains ${what}`).toBeNull()
+      }
+    })
+  }
 })
