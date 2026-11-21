@@ -40,15 +40,31 @@ vi.mock('@/lib/api/packages', async (importOriginal) => ({
 import { Route } from '@/routes/_app/export-import'
 import { rememberIdentityMode } from '@/lib/api/identityMode'
 import { useUiStore } from '@/store/ui'
+import { PackageImportPreviewSchema } from '@/lib/api/packages'
 
-const preview: PackageImportPreview = {
+// Generated wire shape (CHECK F02); the expiry derives from Date.now() with a
+// 30-minute window (CHECK F07 — no wall-clock-pinned fixture). A fixture that
+// fails its own schema is a harness bug, so it is parsed here.
+const preview: PackageImportPreview = PackageImportPreviewSchema.parse({
   staging_id: 'S1',
-  expires_at: '2026-11-21T09:30:00Z',
-  will_add: [{ source_id: 'a-writer', source_name: 'Writer', final_name: 'Writer' }],
-  skipped: [],
+  expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+  manifest: {
+    format: 'omnpkg',
+    format_version: 1,
+    scope: 'custom',
+    elements: [{ type: 'agent', schema: 1, source_id: 'a-writer', name: 'Writer', files: ['agent.json'] }],
+    counts: {},
+    files: {},
+    source_build: 'v0.1.1',
+    created_at: new Date(Date.now() - 60_000).toISOString(),
+    includes_sessions: false,
+    needs_secrets: [],
+  },
+  will_add: [{ type: 'agent', source_id: 'a-writer', source_name: 'Writer', proposed_name: 'Writer', renamed: false }],
+  skipped_elements: [],
   warnings: [],
   needs_secrets: [],
-}
+})
 
 beforeEach(() => {
   mockSearch = { wizard: 'import' }
@@ -70,14 +86,11 @@ function renderPage() {
 }
 
 async function chooseFile(bytes = 128, name = 'bundle.omnpkg') {
-  const input = (await screen.findByRole('button', { name: 'Choose a bundle file' }))
-    .closest('div')
-    ?.querySelector('input[type="file"]') as HTMLInputElement
-    ?? (document.querySelector('input[type="file"]') as HTMLInputElement)
-  expect(input, 'the file button is backed by a file input').not.toBeNull()
+  const input = document.querySelector('input[type="file"]') as HTMLInputElement | null
+  expect(input, 'the File step renders a bundle-file input before the change event fires').not.toBeNull()
   const file = new File([new Uint8Array(bytes)], name, { type: 'application/octet-stream' })
   await act(async () => {
-    fireEvent.change(input, { target: { files: [file] } })
+    fireEvent.change(input!, { target: { files: [file] } })
   })
   return file
 }

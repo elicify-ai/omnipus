@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -216,6 +217,43 @@ func TestStagingRegistry_CancelReadyOnly(t *testing.T) {
 		wantCode(t, err, "staging_not_found")
 	})
 
+	// CHECK W02 row 5: cleanup must also be exercised CONTINUING to fail —
+	// successive upload sweeps each retry the removal while the disk problem
+	// lasts, and the first success ends it.
+	t.Run("a removal that keeps failing: every successive upload sweep retries; the first success ends it", func(t *testing.T) {
+		clk := newClock()
+		base := t.TempDir()
+		reg := omnpkg.NewStagingRegistry(base, clk.Now)
+		removals := 0
+		reg.RemoveDir = func(dir string) error {
+			removals++
+			if removals <= 2 {
+				return os.ErrPermission // the cancel's removal and the FIRST sweep's retry fail
+			}
+			return os.RemoveAll(dir)
+		}
+		id := stageWithFolder(t, reg, base)
+
+		wantCode(t, reg.Cancel(id), "staging_cleanup_failed")
+		require.Equal(t, 1, removals)
+		dir := filepath.Join(base, id)
+
+		require.Empty(t, reg.Sweep(), "the next upload's sweep retries the removal")
+		require.Equal(t, 2, removals, "the sweep attempted the removal again")
+		_, statErr := os.Stat(dir)
+		require.NoError(t, statErr, "the folder survives a failed sweep attempt")
+		st, err := reg.State(id)
+		require.NoError(t, err)
+		require.Equal(t, omnpkg.StagingCancelled, st, "the entry stays cancelled while the removal fails")
+
+		require.Empty(t, reg.Sweep(), "the second upload's sweep retries once more")
+		require.Equal(t, 3, removals)
+		_, statErr = os.Stat(dir)
+		require.ErrorIs(t, statErr, os.ErrNotExist, "the first successful attempt ends the clean-up")
+		_, err = reg.State(id)
+		wantCode(t, err, "staging_not_found")
+	})
+
 	t.Run("a restart alone removes nothing; the next upload's sweep does", func(t *testing.T) {
 		clk := newClock()
 		reg, _, base := cancelSeamedRegistry(t, clk)
@@ -266,6 +304,10 @@ func TestStagingRegistry_CancelApplyInterleavings(t *testing.T) {
 		require.NoError(t, err)
 
 		// The apply pauses right after BeginApply (seam, channel handshake).
+		// Release and join are DEFERRED (CHECK W02 5a): every failure path —
+		// a fatal assertion, a red cancel, a killed mutant — unblocks the
+		// paused goroutine and waits for it, so no seam state outlives the
+		// subtest.
 		paused := make(chan struct{})
 		release := make(chan struct{})
 		reg.AfterBeginApply = func(string) {
@@ -274,6 +316,16 @@ func TestStagingRegistry_CancelApplyInterleavings(t *testing.T) {
 		}
 		applyDone := make(chan error, 1)
 		go func() { applyDone <- reg.BeginApply(id) }()
+		closeRelease := sync.OnceFunc(func() { close(release) })
+		joined := false
+		t.Cleanup(func() {
+			// Every failure path (fatal assertion, red cancel, killed mutant)
+			// unblocks the paused apply and waits for it before leaving.
+			closeRelease()
+			if !joined {
+				<-applyDone
+			}
+		})
 		<-paused
 
 		wantCode(t, reg.Cancel(id), "staging_busy")
@@ -288,8 +340,10 @@ func TestStagingRegistry_CancelApplyInterleavings(t *testing.T) {
 
 		// The pause is released: the apply ends in its normal way — here the
 		// unchanged lifecycle's success path (FinishApply removes the folder).
-		close(release)
-		require.NoError(t, <-applyDone, "the refused cancel had no effect on the apply")
+		closeRelease()
+		applyErr := <-applyDone
+		joined = true // consumed; the cleanup's join is a no-op now
+		require.NoError(t, applyErr, "the refused cancel had no effect on the apply")
 		require.NoError(t, reg.FinishApply(id))
 		_, statErr = os.Stat(dir)
 		require.ErrorIs(t, statErr, os.ErrNotExist, "FinishApply removes the folder, as today")

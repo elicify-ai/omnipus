@@ -11,10 +11,13 @@ const exportSteps = ['Choose agent', 'Review', 'Download']
 const importSteps = ['Choose file', 'Preview', 'Confirm', 'Result']
 
 describe('Stepper', () => {
-  it('renders an ordered list of the step labels in order', () => {
+  it('renders an ORDERED list (an <ol> element, not just any list role) of the step labels in order', () => {
     render(<Stepper steps={exportSteps} current={0} label="Export steps" />)
     const list = screen.queryByRole('list')
-    expect(list, 'the stepper renders a list element (an ol for an ordered list)').not.toBeNull()
+    expect(list, 'the stepper renders a list element').not.toBeNull()
+    // The spec says ORDERED list: role="list" alone is also true of a <ul>,
+    // so the tag name itself is asserted (CHECK W02).
+    expect(list!.tagName.toUpperCase(), 'the stepper is an <ol>').toBe('OL')
     const items = within(list as HTMLElement).getAllByRole('listitem')
     expect(items.map((li) => li.textContent)).toEqual(exportSteps)
   })
@@ -32,10 +35,14 @@ describe('Stepper', () => {
     })
   })
 
-  it('accompanies the current step with a visually hidden "Step n of m"', () => {
+  it('accompanies the current step with a VISUALLY HIDDEN "Step n of m"', () => {
     render(<Stepper steps={exportSteps} current={1} label="Export steps" />)
-    // "Step 2 of 3" — 1-based n, m = total steps.
-    expect(screen.getByText('Step 2 of 3')).toBeInTheDocument()
+    // "Step 2 of 3" — 1-based n, m = total steps. Visually hidden is asserted,
+    // not assumed: the element carrying the text must carry the project's
+    // sr-only utility (CHECK W02), so a visible duplicate label cannot pass.
+    const stepText = screen.getByText('Step 2 of 3')
+    expect(stepText).toBeInTheDocument()
+    expect(stepText.className, 'the "Step n of m" text is visually hidden via sr-only').toContain('sr-only')
   })
 
   it('exposes the list under its accessible label', () => {

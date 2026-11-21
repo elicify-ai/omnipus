@@ -233,7 +233,11 @@ func TestPlanExport_LeftOutRulesPerKind(t *testing.T) {
 		require.Equal(t, []string{recordPath(testSourceID), instructionsPath(testSourceID)},
 			paths, "an external worker packages agent.json (+ AGENT.md) and never SOUL.md")
 
-		require.Len(t, plan.LeftOut, 8, "four fixed + host_path + env secret_value + cli_args secret_value")
+		// The spec's external-worker left-out list: the four fixed rows plus
+		// exactly three runtime rows — program path, env override values, and
+		// extra command-line arguments (CHECK F03: the count was 8 in the RED
+		// pack; the spec enumerates 4 + 3 = 7, so the count follows the spec).
+		require.Len(t, plan.LeftOut, 7, "four fixed rows + program path + env override values + extra CLI arguments")
 		b1FixedLeftOut(t, plan.LeftOut)
 		wantLeftOutRow(t, plan.LeftOut, 4, "agent_setting", "host_path",
 			"The program path is not included. The other install uses its own setting for this tool.", nil)
@@ -453,6 +457,13 @@ func TestPlanExport_WordingMatchesDecodedBundle(t *testing.T) {
 	}
 	require.True(t, hasSkill, "the review lists the skill row")
 	require.True(t, hasConnector, "the review lists the connector row with reason not_restored")
+
+	// Import-side coverage note (CHECK W02, spec row 3a's "matches the real
+	// bundle" promise covers the export side; the import side reading this
+	// same record shape is pinned where the import lives, and is NOT
+	// duplicated here): element validation of the uploaded agent.json —
+	// element_agent_test.go::TestAgentElement_S1aRefusals and the happy
+	// mapping path field_mapping_import_test.go::TestFieldMapping_Import.
 }
 
 // b1D6Canaries are the Dataset D6 values that must never appear in any review
@@ -495,10 +506,31 @@ func TestPlanExport_NoValuesInPlan(t *testing.T) {
 		}},
 	})
 	home := src.withAgent(t, testSourceID, rec, nil, []byte(testAgentBody))
-	// Plant the file-shaped canaries in the home so a leak would have a source.
-	require.NoError(t, os.WriteFile(filepath.Join(home, "credentials.json"),
-		[]byte(`{"vault":"CANARY_CRED_VAULT"}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(`"CANARY_AUTH_JSON"`), 0o600))
+	// Plant the file-shaped canaries at their real store locations (D6-1…4,
+	// with D6-5/6 riding inside credentials.json as the store's entries) so a
+	// leak would have a source. Each seed is asserted present BEFORE the
+	// review runs — an unseeded source proves nothing (CHECK F08).
+	d6Seeds := []struct {
+		name    string
+		canary  string
+		content []byte
+	}{
+		{"credentials.json", "CANARY_CRED_VAULT", []byte(`{"entries":{"inst":{"value":"CANARY_CRED_VAULT"}},` +
+			`"providers":{"p1":{"api_key":"CANARY_PROVIDER_KEY"}},` +
+			`"channels":{"c1":{"token":"CANARY_CHANNEL_TOKEN"}}}`)},
+		{"master.key", "CANARY_MASTER_KEY", []byte("CANARY_MASTER_KEY")},
+		{"cli.token", "CANARY_CLI_TOKEN", []byte("CANARY_CLI_TOKEN")},
+		{"auth.json", "CANARY_AUTH_JSON", []byte(`"CANARY_AUTH_JSON"`)},
+	}
+	for _, seed := range d6Seeds {
+		require.NoError(t, os.WriteFile(filepath.Join(home, seed.name), seed.content, 0o600))
+	}
+	for _, seed := range d6Seeds {
+		seeded, err := os.ReadFile(filepath.Join(home, seed.name))
+		require.NoError(t, err, "the D6 seed %s must exist before the review runs", seed.name)
+		require.Contains(t, string(seeded), seed.canary,
+			"the seed %s must carry its canary before the review runs", seed.name)
+	}
 
 	plan := planAt(t, src, testSourceID, now)
 	marshalled, err := json.Marshal(plan)

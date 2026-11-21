@@ -5,7 +5,7 @@
 // request). Package API module mocked.
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { ApiError } from '@/lib/api-error'
 
 let mockSearch: Record<string, string | undefined> = {}
@@ -43,10 +43,12 @@ import { Route } from '@/routes/_app/export-import'
 import { rememberIdentityMode } from '@/lib/api/identityMode'
 import { useUiStore } from '@/store/ui'
 
+// Plan validity derives from the real clock (CHECK F07): created one minute
+// ago, valid for 30 minutes. No wall-clock-pinned fixture.
 const plan = {
   plan_id: 'P1',
-  created_at: '2026-11-21T09:00:00Z',
-  expires_at: '2026-11-21T09:30:00Z',
+  created_at: new Date(Date.now() - 60_000).toISOString(),
+  expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
   scope: 'agents',
   elements: [
     {
@@ -120,13 +122,18 @@ describe('Export Download (US-2.4)', () => {
   })
 
   it('re-read just before the download answers 404: Choose with the expired notice and NO export request', async () => {
-    mockPlanRead.mockRejectedValue(new ApiError(404, 'gone', { code: 'plan_not_found' }))
+    // Sequence the reads (CHECK F07/W02): the FIRST read — the review render —
+    // succeeds, so the row reaches Download; only the RE-READ at download
+    // time 404s. A blanket rejection would fail the render instead.
+    mockPlanRead.mockReset()
+    mockPlanRead.mockResolvedValueOnce(plan).mockRejectedValueOnce(new ApiError(404, 'gone', { code: 'plan_not_found' }))
     mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
     renderPage()
     await screen.findByText('Settings')
+    expect(mockPlanRead).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Download' }))
     expect(await screen.findByText('The review expired. Check your choice and review again.')).toBeInTheDocument()
-    await waitFor(() => expect(mockPlanRead).toHaveBeenCalled())
+    expect(mockPlanRead).toHaveBeenCalledTimes(2)
     expect(mockExport, 'the export never runs on an expired review').not.toHaveBeenCalled()
   })
 })

@@ -62,18 +62,17 @@ describe('Quick Export visibility (US-3.2)', () => {
 })
 
 describe('Quick Export click (US-3.1)', () => {
-  it('closes the sheet and navigates to the choose step with the agent preselected', () => {
+  it('closes the sheet and navigates to the EXACT address with the agent preselected', () => {
     const onClose = vi.fn()
     renderButton(writer({ id: 'a-writer' }), onClose)
     fireEvent.click(screen.getByRole('button', { name: 'Export' }))
     expect(onClose, 'the sheet closes').toHaveBeenCalledTimes(1)
-    expect(navigateSpy).toHaveBeenCalledTimes(1)
-    // The exact address, independent of the navigate() call convention.
-    const arg = JSON.stringify(navigateSpy.mock.calls[0])
-    expect(arg).toContain('export-import')
-    expect(arg).toContain('choose')
-    expect(arg).toContain('agents')
-    expect(arg).toContain('preselect')
-    expect(arg).toContain('agent:a-writer')
+    expect(navigateSpy, 'exactly one navigation').toHaveBeenCalledTimes(1)
+    // The exact address as structured args (CHECK W02): substring checks
+    // cannot catch a wrong step or a renamed search key — this can.
+    expect(navigateSpy.mock.calls[0]).toHaveLength(1)
+    const arg = navigateSpy.mock.calls[0][0] as { to?: string; search?: Record<string, string> }
+    expect(arg.to).toBe('/export-import')
+    expect(arg.search).toEqual({ wizard: 'export', step: 'choose', scope: 'agents', preselect: 'agent:a-writer' })
   })
 })

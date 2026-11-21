@@ -6,7 +6,7 @@
 // wizard-step tests mock the package API module).
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { ApiError } from '@/lib/api-error'
 
 let mockSearch: Record<string, string | undefined> = {}
@@ -75,22 +75,49 @@ function renderPage() {
   return render(<Component />)
 }
 
+// The radio's ACCESSIBLE name (label text or aria-label), not raw DOM
+// textContent — the ordering assertions survive markup changes (CHECK W02).
+function accessibleName(el: Element): string {
+  const labelled = el.getAttribute('aria-label')
+  if (labelled) return labelled
+  const label = el.closest('label')
+  return (label?.textContent ?? '').replace(/\s+/g, ' ').trim()
+}
+
 describe('Export Choose — the own-agent list (US-2.1)', () => {
   it('lists only own agents sorted by name, with kind labels, and the one-agent note', async () => {
     renderPage()
     expect(await screen.findByRole('radio', { name: /Writer/ })).toBeInTheDocument()
     const radios = screen.getAllByRole('radio')
-    const labels = radios.map((r) => (r as HTMLElement).textContent ?? '')
-    expect(labels.some((l) => l.includes('Mia')), 'built-in Mia is not listed').toBe(false)
-    expect(labels.some((l) => l.includes('Planner')), 'locked Planner is not listed').toBe(false)
-    expect(labels.some((l) => l.includes('Judge')), 'system Judge is not listed').toBe(false)
-    // Sorted by name; each with its kind label.
-    const names = ['Coder', 'Helper', 'Writer'].map((n) => radios.findIndex((r) => (r as HTMLElement).textContent?.includes(n)))
-    expect(names).toEqual([...names].sort((a, b) => a - b))
+    const names = radios.map(accessibleName)
+    expect(names.some((l) => l.includes('Mia')), 'built-in Mia is not listed').toBe(false)
+    expect(names.some((l) => l.includes('Planner')), 'locked Planner is not listed').toBe(false)
+    expect(names.some((l) => l.includes('Judge')), 'system Judge is not listed').toBe(false)
+    // Sorted by name (spec: Coder, Helper, Writer): the exact expected order,
+    // each agent exactly once, in accessible-name order.
+    const positions = ['Coder', 'Helper', 'Writer'].map((n) => {
+      const matches = radios.filter((r) => accessibleName(r).includes(n))
+      expect(matches, `${n} is listed exactly once`).toHaveLength(1)
+      return radios.indexOf(matches[0])
+    })
+    expect(positions, 'rows are sorted by name').toEqual([0, 1, 2])
     expect(screen.getByText('External worker')).toBeInTheDocument()
     expect(screen.getByText('Worker')).toBeInTheDocument()
     expect(screen.getByText('Main')).toBeInTheDocument()
     expect(screen.getByText('A bundle holds one agent in this version.')).toBeInTheDocument()
+  })
+
+  it('two own agents with the same name are both listed and disambiguated (ID prefix, FR-016)', async () => {
+    mockAgents.mockResolvedValue([
+      { id: 'a-writer-main-41', name: 'Writer', type: 'Main', locked: false, description: 'writes' },
+      { id: 'a-writer-main-77', name: 'Writer', type: 'Main', locked: false, description: 'also writes' },
+    ])
+    renderPage()
+    const radios = await screen.findAllByRole('radio')
+    expect(radios, 'both same-name agents are listed').toHaveLength(2)
+    const names = radios.map((r) => accessibleName(r))
+    expect(names.every((n) => n.includes('Writer')), 'both rows carry the agent name').toBe(true)
+    expect(new Set(names).size, 'duplicate names are disambiguated so each row is addressable').toBe(2)
   })
 
   it('choosing one agent un-chooses any other', async () => {
@@ -124,6 +151,54 @@ describe('Export Choose — the own-agent list (US-2.1)', () => {
       ),
     ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Review' })).toBeNull()
+  })
+})
+
+describe('Export Choose — the filter field (FR-016, D3)', () => {
+  async function openList() {
+    renderPage()
+    await screen.findByRole('radio', { name: /Writer/ })
+  }
+
+  function filterField(): HTMLInputElement {
+    const fields = screen.getAllByRole('textbox')
+    expect(fields, 'the Choose step has exactly one filter field').toHaveLength(1)
+    return fields[0] as HTMLInputElement
+  }
+
+  it('a matching query narrows the list to the matching agent', async () => {
+    await openList()
+    await act(async () => {
+      fireEvent.change(filterField(), { target: { value: 'wri' } })
+    })
+    expect(screen.getByRole('radio', { name: /Writer/ })).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: /Coder/ })).toBeNull()
+    expect(screen.queryByRole('radio', { name: /Helper/ })).toBeNull()
+  })
+
+  it('a query with no match shows "No agent matches." and no rows', async () => {
+    await openList()
+    await act(async () => {
+      fireEvent.change(filterField(), { target: { value: 'zzz' } })
+    })
+    expect(screen.getByText('No agent matches.')).toBeInTheDocument()
+    expect(screen.queryByRole('radio')).toBeNull()
+  })
+
+  it('clearing the filter restores the full list', async () => {
+    await openList()
+    const field = filterField()
+    await act(async () => {
+      fireEvent.change(field, { target: { value: 'zzz' } })
+    })
+    expect(screen.getByText('No agent matches.')).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.change(field, { target: { value: '' } })
+    })
+    expect(screen.queryByText('No agent matches.')).toBeNull()
+    expect(screen.getByRole('radio', { name: /Coder/ })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Helper/ })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Writer/ })).toBeInTheDocument()
   })
 })
 

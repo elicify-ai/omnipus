@@ -149,12 +149,21 @@ describe('Sidebar — the Export & Import entry (US-1)', () => {
     rememberIdentityMode('local')
     renderSidebar()
     const assets = await screen.findByRole('group', { name: 'Assets' })
-    const links = within(assets).getAllByRole('link')
-    const labels = links.map((a) => a.textContent?.trim() ?? '')
-    expect(labels).toContain(ENTRY)
-    const at = labels.indexOf(ENTRY)
-    expect(labels[at - 1]).toBe('Connectors')
-    expect(labels[at + 1]).toBe('Library')
+    // The order spans BOTH links and buttons (CHECK F10): Library is a button
+    // (it opens the Library panel), so a links-only sweep cannot see it and
+    // the ordering claim would survive an entry placed after it. DOM order of
+    // the group's interactive children is the spec's sidebar order.
+    const items = Array.from(assets.querySelectorAll('a, button')).map((el) => ({
+      tag: el.tagName.toLowerCase(),
+      name: (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    }))
+    const names = items.map((i) => i.name)
+    const at = names.indexOf(ENTRY)
+    expect(at, 'the Export & Import entry is in the Assets group').toBeGreaterThan(-1)
+    expect(names[at - 1]).toBe('Connectors')
+    expect(items[at - 1].tag, 'Connectors is a link').toBe('a')
+    expect(names[at + 1]).toBe('Library')
+    expect(items[at + 1].tag, 'Library is a button').toBe('button')
   })
 
   it('local edition: the entry links to /export-import', async () => {

@@ -8,12 +8,40 @@
 // (`csrfRetry: false`, `plantedCookieToast: false`, `retry: false`), the
 // export download must return the blob and the Content-Disposition name, and
 // the upload must send the raw bytes. Nothing here is implemented yet.
-// The interfaces below are the spec's field tables as test scaffolding; GREEN
-// re-binds them to the generated schemas (Hard Constraint #8).
+//
+// Wire types are the GENERATED contracts (Hard Constraint #8): the import
+// preview/result/apply re-export the existing generated schemas unchanged.
+// PackageExportPlan is the NEW B1 review contract — the schema files are
+// backend-lead's contract-first work; until the generated types land, the
+// interface below is the spec's field table used as test scaffolding ONLY
+// (CHECK F02: no parallel hand-written wire model for anything that already
+// exists in contracts/).
+import type {
+  PackageImportPreview,
+  PackageImportApplyRequest,
+  PackageImportResult,
+  PackageManifest,
+} from './generated/openapi-types'
+import {
+  PackageImportPreview as PackageImportPreviewSchema,
+  PackageImportResult as PackageImportResultSchema,
+} from './generated/schemas'
+
+export type {
+  PackageImportPreview,
+  PackageImportApplyRequest,
+  PackageImportResult,
+  PackageManifest,
+}
+
+// The schemas, exported for tests that validate fixtures against the real
+// generated contract (CHECK F02: every successful fixture must parse).
+export { PackageImportPreviewSchema, PackageImportResultSchema }
 
 // ---------------------------------------------------------------------------
-// Types (wire shapes come from the generated schemas; GREEN regenerates and
-// re-binds these to src/lib/api/generated — see the plan's known gaps).
+// The NEW B1 review contract (spec "PackageExportPlan fields"). Not yet in
+// contracts/ — backend-lead adds the schema and regenerates; GREEN re-binds
+// this interface to the generated type and deletes the scaffold.
 // ---------------------------------------------------------------------------
 
 export interface PackageExportPlanRequest {
@@ -66,34 +94,6 @@ export interface PackageExportPlan {
   file_name: string
 }
 
-export interface PackageImportPreview {
-  staging_id: string
-  expires_at?: string
-  will_add?: Array<{ source_id?: string; source_name?: string; final_name?: string }>
-  skipped?: Array<{ source_id?: string; source_name?: string; reason?: string }>
-  warnings?: Array<{ code?: string; message?: string; items?: string[] }>
-  needs_secrets?: PackageExportPlanNeedsSecret[]
-}
-
-export interface PackageImportApplyRequest {
-  mode: 'new' | 'replace' | 'merge'
-  workspace_id?: string
-}
-
-export interface PackageImportResult {
-  mode?: string
-  created?: Array<{
-    type?: string
-    source_id?: string
-    name?: string
-    new_id?: string
-    workspace_id?: string
-    activation?: string
-  }>
-  warnings?: Array<{ code?: string; message?: string; items?: string[] }>
-  needs_secrets?: PackageExportPlanNeedsSecret[]
-}
-
 /** The download outcome: the bundle bytes and the server's file name. */
 export interface PackageDownload {
   blob: Blob
@@ -144,7 +144,8 @@ export function packageErrorTextFor(code: string, serverText: string, ctx?: Pack
  *   - 'cleanup_pending':  500 import_rollback_incomplete
  *   - 'unknown':          network failure or abort (status 0); timeout; any 5xx without one of the
  *                         codes above (including uncoded proxy 502/503/504 and the uncoded
- *                         developer-bypass 503); any other status
+ *                         developer-bypass 503); 200 whose body fails the generated
+ *                         PackageImportResult schema; any other status
  *
  * RED STUB: throws. GREEN implements the table from the spec (never from a
  * server answer observed in a test).

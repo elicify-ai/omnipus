@@ -7,39 +7,51 @@
 // spec), "Other apply failures", "Unknown apply outcome, never resent",
 // "Expired upload at confirm"; the Import record transitions table.
 //
-// The packages module stays REAL: the wizard runs its calls through the
-// production transport, and fetch is mocked per row (state + apply URLs).
-import React from 'react'
+// The step is rendered at its PUBLIC boundary (CHECK F06): a fresh Confirm
+// reaches this component through the wizard's in-memory transition, not by
+// mounting the route at a confirm address — an initial-URL mount with a
+// previewed record IS the reload state and must cancel, which is row 28's
+// contract. The record the wizard wrote at Preview time is seeded as the step
+// receives it; its transitions around the apply call are asserted.
+//
+// The packages module stays REAL: the step's calls run through the production
+// transport over a mocked fetch (state + apply URLs), and mutations run under
+// a production-defaults QueryClient (CHECK F04).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { shouldRetryMutation, mutationRetryDelay } from '@/lib/queryClient'
+import {
+  PackageImportPreviewSchema,
+  PackageImportResultSchema,
+  type PackageImportPreview,
+  type PackageImportResult,
+} from '@/lib/api/packages'
 
 const RECORD_KEY = 'omnipus.exportImport.import'
 
-let mockSearch: Record<string, string | undefined> = {}
-
-const { navigateSpy, mockAgents, mockWorkspaces, addToastSpy } = vi.hoisted(() => ({
+const { navigateSpy, mockWorkspaces, addToastSpy, onAppliedSpy, onBackSpy } = vi.hoisted(() => ({
   navigateSpy: vi.fn(),
-  mockAgents: vi.fn(),
   mockWorkspaces: vi.fn(),
   addToastSpy: vi.fn(),
+  onAppliedSpy: vi.fn(),
+  onBackSpy: vi.fn(),
 }))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...actual,
-    createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts, useSearch: () => mockSearch }),
     useNavigate: () => navigateSpy,
   }
 })
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
-  fetchAgents: mockAgents,
   fetchWorkspaces: mockWorkspaces,
 }))
 
-import { Route } from '@/routes/_app/export-import'
+import { ImportConfirmStep } from './ImportConfirmStep'
 import { rememberIdentityMode } from '@/lib/api/identityMode'
 import { useUiStore } from '@/store/ui'
 
@@ -64,33 +76,54 @@ const workspaces = [
   { id: 'ws-marketing', name: 'Marketing', is_default: false, pinned: false },
 ]
 
-const okResult = {
-  mode: 'new',
-  created: [
-    {
-      type: 'agent',
-      source_id: 'a-writer',
-      source_name: 'Writer',
-      name: 'Writer (imported)',
-      new_id: 'a-new',
-      workspace_id: 'ws-marketing',
-      activation: 'active',
+function validPreview(): PackageImportPreview {
+  const preview: PackageImportPreview = {
+    staging_id: 'S',
+    expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+    manifest: {
+      format: 'omnpkg',
+      format_version: 1,
+      scope: 'custom',
+      elements: [{ type: 'agent', schema: 1, source_id: 'a-writer', name: 'Writer', files: ['agent.json', 'SOUL.md'] }],
+      counts: {},
+      files: {},
+      source_build: 'v0.1.1',
+      created_at: new Date(Date.now() - 60_000).toISOString(),
+      includes_sessions: false,
+      needs_secrets: [],
     },
-  ],
-  warnings: [],
-  needs_secrets: [],
+    will_add: [{ type: 'agent', source_id: 'a-writer', source_name: 'Writer', proposed_name: 'Writer (imported)', renamed: true }],
+    skipped_elements: [],
+    warnings: [],
+    needs_secrets: [],
+  }
+  PackageImportPreviewSchema.parse(preview)
+  return preview
 }
 
-interface Row {
-  answer: (url: string, init: RequestInit | undefined) => Response
-  onApply?: (init: RequestInit | undefined) => void
+function okResult(activation: 'active' | 'pending' = 'active', workspaceId = 'ws-marketing'): PackageImportResult {
+  const result: PackageImportResult = {
+    mode: 'new',
+    created: [{ type: 'agent', source_id: 'a-writer', new_id: 'a-new', name: 'Writer (imported)', workspace_id: workspaceId }],
+    warnings: [],
+    needs_secrets: [],
+    activation,
+  }
+  PackageImportResultSchema.parse(result)
+  return result
 }
 
-// Installs the fetch double for one row. The apply URL's answer comes from
-// `row`; /api/v1/state always answers (the recovery read). The record value
-// AT THE MOMENT the apply request leaves is captured.
-function installFetch(row: Row): { applyCalls: Array<RequestInit | undefined>; stateCount: () => number; recordAtApply: Array<string | null> } {
-  const applyCalls: Array<RequestInit | undefined> = []
+const CSRF_403 = () => jsonResponse(403, { error: 'csrf token mismatch' })
+const PLANTED_403 = () => jsonResponse(403, { code: 'planted_cookie_cleared', error: 'planted' })
+
+// Installs the fetch double for one row and returns LIVE counters. The record
+// value AT THE MOMENT the apply request leaves is captured per call.
+function installFetch(answer: () => Response): {
+  applyBodies: string[]
+  recordAtApply: Array<string | null>
+  stateCount: () => number
+} {
+  const applyBodies: string[] = []
   const recordAtApply: Array<string | null> = []
   let stateReads = 0
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
@@ -100,40 +133,43 @@ function installFetch(row: Row): { applyCalls: Array<RequestInit | undefined>; s
       return jsonResponse(200, { onboarding_complete: true, dev_mode_bypass: false })
     }
     if (u.includes('/packages/import/S/apply')) {
-      applyCalls.push(init)
+      applyBodies.push(String((init as RequestInit | undefined)?.body))
       recordAtApply.push(sessionStorage.getItem(RECORD_KEY))
-      row.onApply?.(init)
-      return row.answer(u, init)
+      return answer()
     }
     throw new Error(`unexpected fetch in test: ${u}`)
   })
-  return { applyCalls, recordAtApply, stateCount: () => stateReads }
+  return { applyBodies, recordAtApply, stateCount: () => stateReads }
 }
 
-function openConfirm(record: Record<string, unknown> = {
-  staging_id: 'S',
-  phase: 'previewed',
-  workspace_id: 'ws-general',
-  workspace_name: 'General',
-  written_at: new Date().toISOString(),
-}) {
-  seedRecord(record)
-  mockSearch = { wizard: 'import', step: 'confirm', staging_id: 'S' }
-  const Component = (Route as unknown as { component: React.ComponentType }).component
-  render(<Component />)
+// A production-defaults client (the real exported predicates — CHECK F04);
+// the step's queries/mutations ride these defaults.
+function makeProductionQueryClient(): QueryClient {
+  return new QueryClient({ defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } } })
 }
 
-const NO_WORKSPACE_RECORD = {
-  staging_id: 'S',
-  phase: 'previewed',
-  written_at: new Date().toISOString(),
+// Renders the step at its public boundary (fresh Confirm, NOT the reload
+// state — CHECK F06), with the record the wizard wrote at Preview time.
+function renderConfirm(workspaceInRecord = true) {
+  seedRecord({
+    staging_id: 'S',
+    phase: 'previewed',
+    ...(workspaceInRecord ? { workspace_id: 'ws-general', workspace_name: 'General' } : {}),
+    written_at: new Date().toISOString(),
+  })
+  render(
+    <QueryClientProvider client={makeProductionQueryClient()}>
+      <ImportConfirmStep stagingId="S" preview={validPreview()} onApplied={onAppliedSpy} onBack={onBackSpy} />
+    </QueryClientProvider>,
+  )
 }
 
 beforeEach(() => {
-  mockSearch = {}
   navigateSpy.mockReset()
-  mockAgents.mockResolvedValue([])
   mockWorkspaces.mockReset().mockResolvedValue(workspaces)
+  onAppliedSpy.mockReset()
+  onBackSpy.mockReset()
+  addToastSpy.mockClear()
   rememberIdentityMode('local')
   useUiStore.setState({ addToast: addToastSpy as unknown as () => void })
   document.cookie = 'csrf=import-confirm-test; path=/'
@@ -148,8 +184,8 @@ afterEach(() => {
 
 describe('Import Confirm (US-4.3)', () => {
   it('states the mode and pre-chooses the default workspace', async () => {
-    installFetch({ answer: () => jsonResponse(200, okResult) })
-    openConfirm()
+    installFetch(() => jsonResponse(200, okResult()))
+    renderConfirm()
     expect(await screen.findByText('Added as new. Existing agents are never changed.')).toBeInTheDocument()
     const select = await screen.findByRole('combobox')
     expect((select as HTMLSelectElement).value).toBe('ws-general')
@@ -160,8 +196,8 @@ describe('Import Confirm (US-4.3)', () => {
       { id: 'ws-a', name: 'A', is_default: false, pinned: false },
       { id: 'ws-b', name: 'B', is_default: false, pinned: false },
     ])
-    installFetch({ answer: () => jsonResponse(200, okResult) })
-    openConfirm(NO_WORKSPACE_RECORD)
+    installFetch(() => jsonResponse(200, okResult()))
+    renderConfirm(false)
     const select = await screen.findByRole('combobox')
     expect((select as HTMLSelectElement).value).toBe('')
     expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled()
@@ -173,27 +209,15 @@ describe('Import Confirm (US-4.3)', () => {
 
   it('no active workspace: "Create a workspace first." and no Import action', async () => {
     mockWorkspaces.mockResolvedValue([])
-    installFetch({ answer: () => jsonResponse(200, okResult) })
-    openConfirm(NO_WORKSPACE_RECORD)
+    installFetch(() => jsonResponse(200, okResult()))
+    renderConfirm(false)
     expect(await screen.findByText('Create a workspace first.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Import' })).toBeNull()
   })
 
   it('Import sends the exact {mode, workspace_id} body with the record at apply_sent before the request', async () => {
-    const row: Row = {
-      answer: () => jsonResponse(200, okResult),
-      onApply: () => {
-        /* record read already captured */
-      },
-    }
-    const { applyCalls, recordAtApply } = installFetch(row)
-    openConfirm({
-      staging_id: 'S',
-      phase: 'previewed',
-      workspace_id: 'ws-general',
-      workspace_name: 'General',
-      written_at: new Date().toISOString(),
-    })
+    const { applyBodies, recordAtApply } = installFetch(() => jsonResponse(200, okResult()))
+    renderConfirm()
     const select = await screen.findByRole('combobox')
     await act(async () => {
       fireEvent.change(select, { target: { value: 'ws-marketing' } })
@@ -201,10 +225,11 @@ describe('Import Confirm (US-4.3)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Import' }))
     })
-    await screen.findByText('Writer (imported) was added to Marketing.')
-    expect(applyCalls).toHaveLength(1)
-    const body = JSON.parse(String(applyCalls[0]?.body))
-    expect(body).toEqual({ mode: 'new', workspace_id: 'ws-marketing' })
+    await act(async () => {})
+    expect(onAppliedSpy).toHaveBeenCalledTimes(1)
+    expect(onAppliedSpy.mock.calls[0][0]).toMatchObject({ created: [{ new_id: 'a-new' }], activation: 'active' })
+    expect(applyBodies).toHaveLength(1)
+    expect(JSON.parse(applyBodies[0])).toEqual({ mode: 'new', workspace_id: 'ws-marketing' })
     const atRequest = JSON.parse(recordAtApply[0] ?? 'null') as Record<string, unknown> | null
     expect(atRequest?.phase, 'phase apply_sent is written before the request leaves').toBe('apply_sent')
     expect(atRequest?.staging_id).toBe('S')
@@ -215,28 +240,27 @@ describe('Session refresh on apply is not replayed (US-5, D4-11a/11b)', () => {
   const SESSION_TEXT = 'Your session needed refreshing. Nothing was imported. Select Import again.'
 
   it('a server CSRF 403: one apply, one recovery read, no toast, record previewed', async () => {
-    const { applyCalls, stateCount } = installFetch({ answer: () => jsonResponse(403, { error: 'csrf token mismatch' }) })
-    openConfirm()
+    const { applyBodies, stateCount } = installFetch(CSRF_403)
+    renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
     await screen.findByText(SESSION_TEXT)
-    expect(applyCalls).toHaveLength(1)
+    expect(applyBodies).toHaveLength(1)
     expect(stateCount(), 'exactly one recovery read GET /api/v1/state').toBe(1)
     expect(addToastSpy).not.toHaveBeenCalled()
     expect(readRecord()?.phase).toBe('previewed')
+    expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled()
   })
 
   it('a planted_cookie_cleared 403: one apply, one recovery read, no toast', async () => {
-    const { applyCalls, stateCount } = installFetch({
-      answer: () => jsonResponse(403, { code: 'planted_cookie_cleared', error: 'planted' }),
-    })
-    openConfirm()
+    const { applyBodies, stateCount } = installFetch(PLANTED_403)
+    renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
     await screen.findByText(SESSION_TEXT)
-    expect(applyCalls).toHaveLength(1)
+    expect(applyBodies).toHaveLength(1)
     expect(stateCount()).toBe(1)
     expect(addToastSpy).not.toHaveBeenCalled()
     expect(readRecord()?.phase).toBe('previewed')
@@ -244,13 +268,13 @@ describe('Session refresh on apply is not replayed (US-5, D4-11a/11b)', () => {
 
   it('client csrf_missing: ZERO apply requests, one recovery read; the next click sends the first', async () => {
     document.cookie = 'csrf=; max-age=0; path=/'
-    const { applyCalls, stateCount } = installFetch({ answer: () => jsonResponse(200, okResult) })
-    openConfirm()
+    const { applyBodies, stateCount } = installFetch(() => jsonResponse(200, okResult()))
+    renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
     await screen.findByText(SESSION_TEXT)
-    expect(applyCalls, 'the real cookie gate refuses before any request').toHaveLength(0)
+    expect(applyBodies, 'the real cookie gate refuses before any request').toHaveLength(0)
     expect(stateCount(), 'exactly one recovery read').toBe(1)
     expect(readRecord()?.phase).toBe('previewed')
 
@@ -259,29 +283,30 @@ describe('Session refresh on apply is not replayed (US-5, D4-11a/11b)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Import' }))
     })
-    await screen.findByText('Writer (imported) was added to Marketing.')
-    expect(applyCalls, 'this click sends the FIRST apply').toHaveLength(1)
+    await act(async () => {})
+    expect(onAppliedSpy).toHaveBeenCalledTimes(1)
+    expect(applyBodies, 'this click sends the FIRST apply').toHaveLength(1)
   })
 })
 
 describe('Another import is running + Try again (US-5, D4-6)', () => {
   it('409 import_in_progress: message and Try again; the retry sends the same body once more', async () => {
-    const { applyCalls, recordAtApply } = installFetch({ answer: () => jsonResponse(409, { code: 'import_in_progress' }) })
-    openConfirm()
+    const { applyBodies, recordAtApply } = installFetch(() => jsonResponse(409, { code: 'import_in_progress' }))
+    renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
     expect(await screen.findByText('Another import is running. Try again in a moment.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
     expect(readRecord()?.phase).toBe('previewed')
-    expect(applyCalls).toHaveLength(1)
+    expect(applyBodies).toHaveLength(1)
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     })
     await screen.findByText('Another import is running. Try again in a moment.')
-    expect(applyCalls, 'exactly one second apply with the same body').toHaveLength(2)
-    expect(JSON.parse(String(applyCalls[1]?.body))).toEqual(JSON.parse(String(applyCalls[0]?.body)))
+    expect(applyBodies, 'exactly one second apply with the same body').toHaveLength(2)
+    expect(JSON.parse(applyBodies[1])).toEqual(JSON.parse(applyBodies[0]))
     expect(JSON.parse(recordAtApply[1] ?? '{}').phase).toBe('apply_sent')
   })
 })
@@ -308,8 +333,8 @@ describe('Record after a known refusal (US-5, D4-5…11c)', () => {
 
   for (const row of rows) {
     it(`${row.label}: the mapped text shows and the record is back to previewed`, async () => {
-      installFetch({ answer: row.answer })
-      openConfirm()
+      installFetch(row.answer)
+      renderConfirm()
       await act(async () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
       })
@@ -320,13 +345,13 @@ describe('Record after a known refusal (US-5, D4-5…11c)', () => {
   }
 
   it('404 workspace_not_found: text, list refreshed, record previewed; a new choice applies once with W2', async () => {
-    const { applyCalls } = installFetch({
-      answer: (() => {
+    const { applyBodies } = installFetch(
+      (() => {
         let n = 0
-        return () => (n++ === 0 ? jsonResponse(404, { code: 'workspace_not_found' }) : jsonResponse(200, okResult))
+        return () => (n++ === 0 ? jsonResponse(404, { code: 'workspace_not_found' }) : jsonResponse(200, okResult()))
       })(),
-    })
-    openConfirm()
+    )
+    renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
@@ -342,25 +367,31 @@ describe('Record after a known refusal (US-5, D4-5…11c)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Import' }))
     })
-    await screen.findByText('Writer (imported) was added to Marketing.')
-    expect(applyCalls, 'exactly one new apply').toHaveLength(2)
-    expect(JSON.parse(String(applyCalls[1]?.body)).workspace_id).toBe('ws-marketing')
+    await act(async () => {})
+    expect(onAppliedSpy).toHaveBeenCalledTimes(1)
+    expect(applyBodies, 'exactly one new apply').toHaveLength(2)
+    expect(JSON.parse(applyBodies[1]).workspace_id).toBe('ws-marketing')
   })
 
-  it('404 staging_not_found: record cleared; the File step opens with the expired-or-used text', async () => {
-    installFetch({ answer: () => jsonResponse(404, { code: 'staging_not_found' }) })
-    openConfirm()
+  it('404 staging_not_found: record cleared; the File step opens with the expired-or-used notice', async () => {
+    installFetch(() => jsonResponse(404, { code: 'staging_not_found' }))
+    renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
-    expect(await screen.findByText('This upload expired or was already used. Choose the file again.')).toBeInTheDocument()
+    await act(async () => {})
     expect(readRecord(), 'the record is cleared').toBeNull()
-    expect(screen.getByRole('button', { name: 'Choose a bundle file' })).toBeInTheDocument()
+    // The step hands control back to the File step (the notice is the File
+    // step's; the navigation is the observable boundary here).
+    expect(navigateSpy).toHaveBeenCalledTimes(1)
+    const arg = JSON.stringify(navigateSpy.mock.calls[0])
+    expect(arg).toContain('file')
+    expect(arg).toContain('import')
   })
 
-  it('500 import_rolled_back: nothing-added text; record cleared; Start over goes to File with no cancel', async () => {
-    const { applyCalls } = installFetch({ answer: () => jsonResponse(500, { code: 'import_rolled_back' }) })
-    openConfirm()
+  it('500 import_rolled_back: nothing-added text; record cleared; Start over goes to File with no second apply', async () => {
+    const { applyBodies } = installFetch(() => jsonResponse(500, { code: 'import_rolled_back' }))
+    renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
@@ -369,13 +400,14 @@ describe('Record after a known refusal (US-5, D4-5…11c)', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start over' }))
     })
-    expect(screen.getByRole('button', { name: 'Choose a bundle file' })).toBeInTheDocument()
-    expect(applyCalls, 'no second apply').toHaveLength(1)
+    expect(navigateSpy).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(navigateSpy.mock.calls[0])).toContain('file')
+    expect(applyBodies, 'no second apply').toHaveLength(1)
   })
 
   it('500 import_rollback_incomplete: the restart text and a cleared record', async () => {
-    installFetch({ answer: () => jsonResponse(500, { code: 'import_rollback_incomplete' }) })
-    openConfirm()
+    installFetch(() => jsonResponse(500, { code: 'import_rollback_incomplete' }))
+    renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
@@ -401,21 +433,15 @@ describe('Unknown apply outcome, never resent (US-5, D4-12…15)', () => {
 
   for (const row of rows) {
     it(`${row.label}: the Outcome-unknown screen, one apply, no Import, no cancel`, async () => {
-      const { applyCalls } = installFetch({ answer: row.answer })
-      openConfirm({
-        staging_id: 'S',
-        phase: 'previewed',
-        workspace_id: 'ws-general',
-        workspace_name: 'General',
-        written_at: new Date().toISOString(),
-      })
+      const { applyBodies } = installFetch(row.answer)
+      renderConfirm()
       await act(async () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
       })
       expect(await screen.findByText(UNKNOWN_TEXT)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Open Team' })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Import' })).toBeNull()
-      expect(applyCalls, 'never resent').toHaveLength(1)
+      expect(applyBodies, 'never resent').toHaveLength(1)
       expect(readRecord()?.phase, 'the record stays apply_sent').toBe('apply_sent')
     })
   }

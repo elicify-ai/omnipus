@@ -72,11 +72,14 @@ const leftOut = [
   },
 ]
 
+// Plan validity windows derive from the real clock (CHECK F07): a fresh plan
+// was created one minute ago and is valid for 30 minutes; the expired variant
+// was created two hours ago. No wall-clock-pinned fixtures.
 export function writerPlan(): PackageExportPlan {
   return {
     plan_id: 'P1',
-    created_at: '2026-11-21T09:00:00Z',
-    expires_at: '2026-11-21T09:30:00Z',
+    created_at: new Date(Date.now() - 60_000).toISOString(),
+    expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
     scope: 'agents',
     elements: [
       {
@@ -125,6 +128,16 @@ function renderPage() {
   return render(<Component />)
 }
 
+// The wizard is address-driven: arriving at an address (a link, a reload)
+// UNMOUNTS the previous view and mounts the route at the new search. goTo
+// models exactly that — one helper instead of stacked raw renderPage calls
+// (CHECK F07/W02).
+function goTo(search: Record<string, string | undefined>) {
+  mockSearch = search
+  const Component = (Route as unknown as { component: React.ComponentType }).component
+  return render(<Component />)
+}
+
 async function reviewWriter() {
   renderPage()
   fireEvent.click(await screen.findByRole('radio', { name: /Writer/ }))
@@ -139,9 +152,7 @@ describe('Export Review — the server review is shown (US-2.3, US-6.1)', () => 
     const nav = await reviewWriter()
     expect(nav.search?.step).toBe('review')
     expect(nav.search?.plan_id).toBe('P1')
-    // Re-render at the review address (the wizard is address-driven).
-    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
-    renderPage()
+    goTo({ wizard: 'export', step: 'review', plan_id: 'P1' })
     expect(await screen.findByText('Settings')).toBeInTheDocument()
     expect(screen.getByText('agent.json')).toBeInTheDocument()
     expect(screen.getByText('Prompt')).toBeInTheDocument()
@@ -227,15 +238,12 @@ describe('Export Review — reload and expiry (US-2.7, US-2.8)', () => {
 
   it('a plan whose expires_at has passed locally returns to Choose with the notice before Download', async () => {
     const plan = writerPlan()
-    plan.expires_at = '2026-11-21T09:29:00Z'
-    // Simulate a browser clock past expires_at: the plan is loaded (fresh
-    // created_at + expires_at 30 min ahead of a NOW the test pins via the
-    // plan itself) — instead pin the past directly on the loaded plan.
-    plan.created_at = '2026-11-21T08:00:00Z'
-    plan.expires_at = '2026-11-21T08:30:00Z'
+    // Expired relative to the REAL clock: created two hours ago, the 30-minute
+    // window closed 90 minutes ago (CHECK F07 — derived, not pinned).
+    plan.created_at = new Date(Date.now() - 2 * 60 * 60_000).toISOString()
+    plan.expires_at = new Date(Date.now() - 90 * 60_000).toISOString()
     mockPlanRead.mockResolvedValue(plan)
-    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
-    renderPage()
+    goTo({ wizard: 'export', step: 'review', plan_id: 'P1' })
     await screen.findByText('Settings')
     fireEvent.click(screen.getByRole('button', { name: 'Download' }))
     expect(await screen.findByText('The review expired. Check your choice and review again.')).toBeInTheDocument()

@@ -137,10 +137,10 @@ func TestStagingCancelHandler_ReadyBusyAndGone(t *testing.T) {
 		require.Equal(t, journal, after, "the journal file is byte-identical")
 	})
 
-	t.Run("needs-cleanup refuses 409 staging_busy", func(t *testing.T) {
+	t.Run("needs-cleanup refuses 409 staging_busy with the journal byte-identical", func(t *testing.T) {
 		api := packageAPI(t)
 		id := b1StageReady(t, api)
-		b1WriteJournal(t, api, id)
+		journal := b1WriteJournal(t, api, id)
 		reg := api.packageRegistry()
 		require.NoError(t, reg.BeginApply(id))
 		require.NoError(t, reg.NeedsCleanup(id))
@@ -150,6 +150,9 @@ func TestStagingCancelHandler_ReadyBusyAndGone(t *testing.T) {
 		st, err := reg.State(id)
 		require.NoError(t, err)
 		require.Equal(t, omnpkg.StagingNeedsCleanup, st)
+		after, err := os.ReadFile(filepath.Join(b1StagingDir(api, id), "journal.json"))
+		require.NoError(t, err)
+		require.Equal(t, journal, after, "the journal file is byte-identical at the handler checkpoint, like the unit table")
 	})
 
 	t.Run("done and unknown ids answer 404 staging_not_found", func(t *testing.T) {
@@ -208,6 +211,48 @@ func TestStagingCancelHandler_ReadyBusyAndGone(t *testing.T) {
 			prev := stageUpload(t, api, validMainPackage(t))
 			require.NotEmpty(t, prev.StagingId, "the cancelled staging holds no slot (upload %d)", i+1)
 		}
+	})
+
+	// CHECK W02 row 13: the removal must also be exercised CONTINUING to
+	// fail across successive uploads — each upload's sweep retries the
+	// removal while the fault lasts, and the first success ends it.
+	t.Run("a removal that keeps failing: every upload's sweep retries; the first success ends it", func(t *testing.T) {
+		api := packageAPI(t)
+		reg := api.packageRegistry()
+		calls := 0
+		reg.RemoveDir = func(dir string) error {
+			calls++
+			if calls <= 2 {
+				return os.ErrPermission // the cancel's removal and the first upload's sweep retry fail
+			}
+			return os.RemoveAll(dir)
+		}
+		id := b1StageReady(t, api)
+
+		got := callPackageCancel(t, api, id)
+		requirePackageStatus(t, got, http.StatusInternalServerError, "staging_cleanup_failed")
+		require.Equal(t, 1, calls)
+		dir := b1StagingDir(api, id)
+		_, statErr := os.Stat(dir)
+		require.NoError(t, statErr)
+
+		// The first upload: its sweep retries and FAILS — the folder stays,
+		// the entry stays cancelled and holds no slot.
+		prev := stageUpload(t, api, validMainPackage(t))
+		require.NotEmpty(t, prev.StagingId, "the cancelled staging holds no slot while its removal fails")
+		require.Equal(t, 2, calls, "the first upload's sweep retried the removal")
+		_, statErr = os.Stat(dir)
+		require.NoError(t, statErr, "the folder survives the failed sweep retry")
+		st, err := reg.State(id)
+		require.NoError(t, err)
+		require.Equal(t, omnpkg.StagingCancelled, st, "the entry stays cancelled while the removal fails")
+
+		// The second upload: its sweep retries once more and SUCCEEDS.
+		prev = stageUpload(t, api, validMainPackage(t))
+		require.NotEmpty(t, prev.StagingId)
+		require.Equal(t, 3, calls, "the second upload's sweep retried once more")
+		_, statErr = os.Stat(dir)
+		require.ErrorIs(t, statErr, os.ErrNotExist, "the first successful attempt ends the clean-up")
 	})
 
 	t.Run("a restart alone removes nothing; the next upload's sweep does", func(t *testing.T) {
@@ -280,7 +325,10 @@ func TestStagingCancelHandler_InterleavedWithApply(t *testing.T) {
 		dir := b1StagingDir(api, id)
 		reg := api.packageRegistry()
 
-		// The apply pauses right after BeginApply.
+		// The apply pauses right after BeginApply. Release and join are
+		// DEFERRED (CHECK W02 13a): every failure path — a fatal assertion, a
+		// red cancel, a killed busy-code mutant — unblocks the paused apply
+		// and waits for it, so no seam state outlives the subtest.
 		paused := make(chan struct{})
 		release := make(chan struct{})
 		reg.AfterBeginApply = func(string) {
@@ -289,6 +337,14 @@ func TestStagingCancelHandler_InterleavedWithApply(t *testing.T) {
 		}
 		applyDone := make(chan packageHTTP, 1)
 		go func() { applyDone <- callPackageApply(t, api, id, applyBody("new", ws)) }()
+		closeRelease := sync.OnceFunc(func() { close(release) })
+		joined := false
+		t.Cleanup(func() {
+			closeRelease()
+			if !joined {
+				<-applyDone
+			}
+		})
 		<-paused
 
 		// The cancel at that checkpoint: 409, nothing changed.
@@ -304,8 +360,9 @@ func TestStagingCancelHandler_InterleavedWithApply(t *testing.T) {
 		require.Equal(t, journal, after, "at the checkpoint the journal is byte-identical")
 
 		// Release: the apply ends in its normal way (200 + agent).
-		close(release)
+		closeRelease()
 		gotApply := <-applyDone
+		joined = true // consumed; the cleanup's join is a no-op now
 		require.Equal(t, http.StatusOK, gotApply.Code, "the refused cancel had no effect on the apply; body=%s", gotApply.Body)
 		res := decodeResult(t, gotApply.Body)
 		require.Len(t, res.Created, 1)
@@ -383,6 +440,16 @@ func TestPackageApply_TwoStagingsSerialised(t *testing.T) {
 	}
 	applyDone := make(chan packageHTTP, 1)
 	go func() { applyDone <- callPackageApply(t, api, s1, applyBody("new", ws)) }()
+	// Deferred release and join (CHECK W02 13b): a failure below must not
+	// strand the paused S1 apply holding the serialization lock.
+	closeRelease := sync.OnceFunc(func() { close(release) })
+	joined := false
+	t.Cleanup(func() {
+		closeRelease()
+		if !joined {
+			<-applyDone
+		}
+	})
 	<-paused
 
 	// S2 while S1 holds the apply lock: 409 import_in_progress, S2 still ready.
@@ -392,8 +459,9 @@ func TestPackageApply_TwoStagingsSerialised(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, omnpkg.StagingReady, st2, "S2 stays ready")
 
-	close(release)
+	closeRelease()
 	gotS1 := <-applyDone
+	joined = true // consumed; the cleanup's join is a no-op now
 	require.Equal(t, http.StatusOK, gotS1.Code, "S1 answers 200 after the release; body=%s", gotS1.Body)
 	res1 := decodeResult(t, gotS1.Body)
 	require.Len(t, res1.Created, 1)

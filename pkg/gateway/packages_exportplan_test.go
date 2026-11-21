@@ -24,8 +24,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
+	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -221,6 +224,95 @@ var b1D6Canaries = []string{
 	"--token=CANARY_ARG --verbose", "CANARY_ENV",
 }
 
+// b1SeedD6Sources plants the file-shaped D6-1…6 canaries at their REAL store
+// locations under the gateway home (D6-5/6 ride inside credentials.json as
+// the store's provider/channel entries) and asserts every seed exists with
+// its canary BEFORE the feature runs — an unseeded source proves nothing
+// (CHECK F08). Test-owned fixtures only; the handlers under test must never
+// read these files.
+func b1SeedD6Sources(t *testing.T, api *restAPI) {
+	t.Helper()
+	seeds := []struct {
+		name    string
+		canary  string
+		content []byte
+	}{
+		{"credentials.json", "CANARY_CRED_VAULT", []byte(`{"entries":{"inst":{"value":"CANARY_CRED_VAULT"}},` +
+			`"providers":{"p1":{"api_key":"CANARY_PROVIDER_KEY"}},` +
+			`"channels":{"c1":{"token":"CANARY_CHANNEL_TOKEN"}}}`)},
+		{"master.key", "CANARY_MASTER_KEY", []byte("CANARY_MASTER_KEY")},
+		{"cli.token", "CANARY_CLI_TOKEN", []byte("CANARY_CLI_TOKEN")},
+		{"auth.json", "CANARY_AUTH_JSON", []byte(`"CANARY_AUTH_JSON"`)},
+	}
+	for _, seed := range seeds {
+		require.NoError(t, os.WriteFile(filepath.Join(api.homePath, seed.name), seed.content, 0o600))
+	}
+	for _, seed := range seeds {
+		seeded, err := os.ReadFile(filepath.Join(api.homePath, seed.name))
+		require.NoError(t, err, "the D6 seed %s must exist before the feature runs", seed.name)
+		require.Contains(t, string(seeded), seed.canary,
+			"the seed %s must carry its canary before the feature runs", seed.name)
+	}
+}
+
+// b1CanariesIn returns every D6 canary found in one scanned surface (a body,
+// a whole header map rendered to text, or a captured log). Callers assert the
+// result is empty for real answers and NON-empty for the planted-leak
+// control — one scanner for both directions, so the control proves the same
+// instrument that polices the product (CHECK F08).
+func b1CanariesIn(text string) []string {
+	var found []string
+	for _, canary := range b1D6Canaries {
+		if strings.Contains(text, canary) {
+			found = append(found, canary)
+		}
+	}
+	return found
+}
+
+// b1HeaderText renders a whole response header map (every key, every value)
+// for scanning — not just two picked headers.
+func b1HeaderText(h http.Header) string {
+	var sb strings.Builder
+	for k, vs := range h {
+		sb.WriteString(k)
+		sb.WriteString(": ")
+		for _, v := range vs {
+			sb.WriteString(v)
+			sb.WriteString(" ")
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// b1FreshGatewayOnSameHome simulates a gateway restart over the SAME data
+// folder: a fresh restAPI with its own in-memory state (plan store, staging
+// registry) pointed at home. Plan handles must not survive it.
+func b1FreshGatewayOnSameHome(t *testing.T, home string) *restAPI {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", packageTestBearer)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:         home,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
+			},
+		},
+	}
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	return &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(home),
+		homePath:      home,
+		taskStore:     task.New(home + "/tasks"),
+		taskLock:      task.TaskFileLock,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Order 6 — TestExportPlanHandler_CreateAndRead.
 // ---------------------------------------------------------------------------
@@ -244,8 +336,9 @@ func TestExportPlanHandler_CreateAndRead(t *testing.T) {
 
 	planID, ok := m["plan_id"].(string)
 	require.True(t, ok, "plan_id is a string; body=%v", m)
-	_, err := uuid.Parse(planID)
+	parsed, err := uuid.Parse(planID)
 	require.NoError(t, err, "plan_id is a UUID handle")
+	require.Equal(t, uuid.Version(4), parsed.Version(), "plan_id is a UUID v4 (spec field table)")
 	require.Equal(t, "agents", m["scope"], "scope echoes the request")
 
 	createdAt, err := time.Parse(time.RFC3339, m["created_at"].(string))
@@ -299,10 +392,19 @@ func TestExportPlanHandler_CreateAndRead(t *testing.T) {
 	require.Equal(t, http.StatusOK, gotRead.Code, "body=%s", gotRead.Body)
 	require.Equal(t, m, planMap(t, gotRead.Body), "the read-back equals the created review")
 
-	// Fake-clock TTL boundary: still held at T+29:59, gone at T+30:00.
+	// A fresh gateway on the SAME data folder does not serve the old handle:
+	// the plan store is in-memory and a restart must not resurrect a review
+	// (CHECK F09's restart case).
+	fresh := b1FreshGatewayOnSameHome(t, api.homePath)
+	gotFresh := callPackagePlanRead(t, fresh, planID)
+	requirePackageStatus(t, gotFresh, http.StatusNotFound, "plan_not_found")
+
+	// Fake-clock TTL boundary: the held body is still EQUAL at T+29:59, and
+	// gone at T+30:00 (CHECK F09: not merely a 200 at the boundary).
 	clk.Set(clk.Now().Add(29*time.Minute + 59*time.Second))
 	gotHeld := callPackagePlanRead(t, api, planID)
 	require.Equal(t, http.StatusOK, gotHeld.Code, "held at T+29:59; body=%s", gotHeld.Body)
+	require.Equal(t, m, planMap(t, gotHeld.Body), "the T+29:59 body equals the created review")
 	clk.Set(clk.Now().Add(time.Second))
 	gotExpired := callPackagePlanRead(t, api, planID)
 	requirePackageStatus(t, gotExpired, http.StatusNotFound, "plan_not_found")
@@ -560,6 +662,15 @@ func TestExportPlanHandler_NoSecretFileOpens(t *testing.T) {
 	gotMia := callPackagePlanCreate(t, api, `{"scope":"agents","agent_ids":["mia"]}`)
 	requirePackageStatus(t, gotMia, http.StatusUnprocessableEntity, "core_agent_not_exportable")
 
+	// The external-worker review (D1-4) rides the same no-open row: its
+	// runtime settings are the likeliest wrong-read target (CHECK F08).
+	b1SeedExternalWorker(t, api, "ext-noopen")
+	gotExt := callPackagePlanCreate(t, api, `{"scope":"agents","agent_ids":["ext-noopen"]}`)
+	require.Equal(t, http.StatusCreated, gotExt.Code, "body=%s", gotExt.Body)
+	extID, _ := planMap(t, gotExt.Body)["plan_id"].(string)
+	gotExtRead := callPackagePlanRead(t, api, extID)
+	require.Equal(t, http.StatusOK, gotExtRead.Code, "body=%s", gotExtRead.Body)
+
 	w.requireNoOpens(t, "the review paths must not open any watched secret file")
 
 	// Planted-open control: a seam that opens credentials.json inside the
@@ -592,36 +703,48 @@ func TestExportPlanHandler_NoSecretFileOpens(t *testing.T) {
 // held".
 func TestExportPlanHandler_StoreCap(t *testing.T) {
 	const body = `{"scope":"agents","agent_ids":["` + specSourceID + `"]}`
-	create := func(t *testing.T, api *restAPI) string {
+	// create returns the plan handle AND its created_at, so the fixed-T
+	// arithmetic is asserted, not assumed (CHECK W02 row 10).
+	create := func(t *testing.T, api *restAPI) (string, time.Time) {
 		t.Helper()
 		got := callPackagePlanCreate(t, api, body)
 		require.Equal(t, http.StatusCreated, got.Code, "body=%s", got.Body)
 		m := planMap(t, got.Body)
 		id, _ := m["plan_id"].(string)
-		return id
+		createdAt, err := time.Parse(time.RFC3339, m["created_at"].(string))
+		require.NoError(t, err, "created_at parses; body=%v", m)
+		return id, createdAt
 	}
 	readCode := func(t *testing.T, api *restAPI, id string) int {
 		t.Helper()
 		return callPackagePlanRead(t, api, id).Code
 	}
-	seed := func(t *testing.T) (*b1Clock, *restAPI) {
+	seed := func(t *testing.T) (*b1Clock, *restAPI, time.Time) {
 		t.Helper()
 		clk := newB1Clock()
 		b1UseClock(t, clk)
 		api := packageAPI(t)
 		b1SeedMainWriter(t, api, specSourceID, "Writer")
-		return clk, api
+		return clk, api, clk.Now() // T0 — every advance is FROM T0, never chained
+	}
+	// wantCreatedAt pins one plan's created_at to the exact fake-clock instant.
+	wantCreatedAt := func(t *testing.T, label string, got, want time.Time) {
+		t.Helper()
+		require.True(t, got.Equal(want), "%s created_at = %v, want the fixed-clock instant %v", label, got, want)
 	}
 
 	t.Run("D5-6 distinct creation times: the 33rd evicts the uniquely oldest P1", func(t *testing.T) {
-		clk, api := seed(t)
+		clk, api, t0 := seed(t)
 		ids := make([]string, 0, 32)
 		for n := 1; n <= 32; n++ {
-			clk.Set(clk.Now().Add(time.Duration(n) * time.Second)) // P*n* at T + n s
-			ids = append(ids, create(t, api))
+			clk.Set(t0.Add(time.Duration(n) * time.Second)) // P*n* at exactly T0 + n s
+			id, createdAt := create(t, api)
+			wantCreatedAt(t, fmt.Sprintf("P%d", n), createdAt, t0.Add(time.Duration(n)*time.Second))
+			ids = append(ids, id)
 		}
-		clk.Set(clk.Now().Add(time.Minute - 32*time.Second)) // T + 1 min for P33
-		p33 := create(t, api)
+		clk.Set(t0.Add(time.Minute)) // P33 at exactly T0 + 1 min
+		p33, p33CreatedAt := create(t, api)
+		wantCreatedAt(t, "P33", p33CreatedAt, t0.Add(time.Minute))
 		require.Equal(t, http.StatusNotFound, readCode(t, api, ids[0]), "P1 (uniquely oldest, still unexpired) is evicted")
 		for i := 1; i < len(ids); i++ {
 			require.Equal(t, http.StatusOK, readCode(t, api, ids[i]), "P%d is kept", i+1)
@@ -630,15 +753,18 @@ func TestExportPlanHandler_StoreCap(t *testing.T) {
 	})
 
 	t.Run("D5-7 one expired plan: the expired one is dropped, no unexpired plan lost", func(t *testing.T) {
-		clk, api := seed(t)
-		p1 := create(t, api) // created at T
-		clk.Set(clk.Now().Add(10 * time.Minute))
+		clk, api, t0 := seed(t)
+		clk.Set(t0)
+		p1, _ := create(t, api) // created at exactly T0
+		clk.Set(t0.Add(10 * time.Minute))
 		ids := make([]string, 0, 31)
 		for n := 2; n <= 32; n++ {
-			ids = append(ids, create(t, api)) // P2…P32 at T + 10 min
+			id, createdAt := create(t, api) // P2…P32 at exactly T0 + 10 min
+			wantCreatedAt(t, fmt.Sprintf("P%d", n), createdAt, t0.Add(10*time.Minute))
+			ids = append(ids, id)
 		}
-		clk.Set(clk.Now().Add(20 * time.Minute)) // T + 30:00: only P1 expired
-		p33 := create(t, api)
+		clk.Set(t0.Add(30 * time.Minute)) // T0 + 30:00: only P1 expired
+		p33, _ := create(t, api)
 		require.Equal(t, http.StatusNotFound, readCode(t, api, p1), "the expired P1 is dropped")
 		for i, id := range ids {
 			require.Equal(t, http.StatusOK, readCode(t, api, id), "P%d (unexpired) is not lost", i+2)
@@ -647,17 +773,20 @@ func TestExportPlanHandler_StoreCap(t *testing.T) {
 	})
 
 	t.Run("D5-8 several expired plans: all three expired are dropped", func(t *testing.T) {
-		clk, api := seed(t)
-		p1 := create(t, api)
-		p2 := create(t, api)
-		p3 := create(t, api)
-		clk.Set(clk.Now().Add(10 * time.Minute))
+		clk, api, t0 := seed(t)
+		clk.Set(t0)
+		p1, _ := create(t, api)
+		p2, _ := create(t, api)
+		p3, _ := create(t, api)
+		clk.Set(t0.Add(10 * time.Minute))
 		ids := make([]string, 0, 29)
 		for n := 4; n <= 32; n++ {
-			ids = append(ids, create(t, api))
+			id, createdAt := create(t, api)
+			wantCreatedAt(t, fmt.Sprintf("P%d", n), createdAt, t0.Add(10*time.Minute))
+			ids = append(ids, id)
 		}
-		clk.Set(clk.Now().Add(20 * time.Minute)) // T + 30:00: P1…P3 expired
-		p33 := create(t, api)
+		clk.Set(t0.Add(30 * time.Minute)) // T0 + 30:00: P1…P3 expired
+		p33, _ := create(t, api)
 		for i, id := range []string{p1, p2, p3} {
 			require.Equal(t, http.StatusNotFound, readCode(t, api, id), "P%d (expired) is dropped", i+1)
 		}
@@ -679,6 +808,9 @@ func TestExportPlanHandler_StoreCap(t *testing.T) {
 func TestExportPlanHandler_Canaries(t *testing.T) {
 	api := packageAPI(t)
 	b1SeedExternalWorker(t, api, "ext-canary")
+	// All file-shaped D6 sources are seeded and verified BEFORE the feature
+	// runs (CHECK F08) — D6-7…9 ride in the external worker's executor.
+	b1SeedD6Sources(t, api)
 
 	var logBuf bytes.Buffer
 	prevLog := slog.Default()
@@ -700,24 +832,40 @@ func TestExportPlanHandler_Canaries(t *testing.T) {
 	gotMia := callPackagePlanCreate(t, api, `{"scope":"agents","agent_ids":["mia"]}`)
 	requirePackageStatus(t, gotMia, http.StatusUnprocessableEntity, "core_agent_not_exportable")
 
-	bodies := [][]byte{got.Body, gotRead.Body, gotMissing.Body, gotMia.Body}
-	hdrText := got.Hdr.Get("Content-Disposition") + gotRead.Hdr.Get("Content-Type")
-	for i, body := range bodies {
-		for _, canary := range b1D6Canaries {
-			require.NotContains(t, string(body), canary, "body %d carries the D6 canary %q", i, canary)
-		}
+	// Every scanned surface of every answer: the full body AND the FULL
+	// header map of each response (CHECK F08 — not two picked headers).
+	type scanned struct {
+		label string
+		text  string
 	}
-	for _, canary := range b1D6Canaries {
-		require.NotContains(t, hdrText, canary, "a response header carries the D6 canary %q", canary)
-		require.NotContains(t, logBuf.String(), canary, "a captured log line carries the D6 canary %q", canary)
+	surfaces := []scanned{
+		{"the create body", string(got.Body)},
+		{"the read body", string(gotRead.Body)},
+		{"the 404 body", string(gotMissing.Body)},
+		{"the 422 body", string(gotMia.Body)},
+		{"the create headers", b1HeaderText(got.Hdr)},
+		{"the read headers", b1HeaderText(gotRead.Hdr)},
+		{"the 404 headers", b1HeaderText(gotMissing.Hdr)},
+		{"the 422 headers", b1HeaderText(gotMia.Hdr)},
+		{"a captured log line", logBuf.String()},
+	}
+	for _, s := range surfaces {
+		require.Empty(t, b1CanariesIn(s.text), "%s carries the D6 canaries %v", s.label, b1CanariesIn(s.text))
 	}
 	// Names are not values: the removed environment names must be present.
 	require.Contains(t, string(got.Body), "API_TOKEN", "the environment-override names are present")
 	require.Contains(t, string(got.Body), "REGION")
 
-	// Planted-value control: a seam that plants D6-9's value into the built
-	// plan must reach the response body — proving the scanner would see a
-	// leak. RED: the stub ignores the seam, so this fails (missing feature).
+	// Planted-value control (spec row 4: the planted-value control fails the
+	// scanner): a seam that plants D6-9's value into the built plan must make
+	// THE SAME scanner trip on the response — proving the instrument could
+	// see a real leak. RED: the stub ignores the seam, so the control fails
+	// here (the missing feature).
+	//
+	// CHECK F11: the seam is a process-global, so its prior value is saved
+	// and restored even when the control fails midway.
+	prevCanarySeam := omnpkg.PlanCanarySeam
+	t.Cleanup(func() { omnpkg.PlanCanarySeam = prevCanarySeam })
 	usePackageSeams(t)
 	omnpkg.PlanCanarySeam = func(plan *omnpkg.ExportPlan) {
 		if len(plan.Elements) > 0 {
@@ -725,8 +873,9 @@ func TestExportPlanHandler_Canaries(t *testing.T) {
 		}
 	}
 	gotPlanted := callPackagePlanCreate(t, api, `{"scope":"agents","agent_ids":["ext-canary"]}`)
-	require.Contains(t, string(gotPlanted.Body), "CANARY_ENV",
-		"the planted-value control must reach the response body (the scanner's target)")
+	require.Equal(t, []string{"CANARY_ENV"},
+		b1CanariesIn(string(gotPlanted.Body)),
+		"the planted-value control must make the SAME scanner trip on the create body")
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +890,9 @@ func TestExportPlanHandler_Canaries(t *testing.T) {
 func TestExportPlanFlow_DecodedBundleCanaries(t *testing.T) {
 	api := packageAPI(t)
 	b1SeedExternalWorker(t, api, "ext-canary")
+	// The file-shaped D6 sources are seeded and verified too (CHECK F08): a
+	// bundle path that wrongly reads them must trip the same scan below.
+	b1SeedD6Sources(t, api)
 
 	// The Main positive-control agent: D6-10/11 in its free text.
 	seedListedAgent(t, api, config.AgentConfig{
@@ -813,13 +965,20 @@ func TestExportPlanFlow_DecodedBundleCanaries(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestExportPlanHandler_BenchmarkFixtureWithin5s — spec order 12 (SC-005): a
-// review of the benchmark fixture (1 MiB prompt, 1 MiB instructions) answers
+// review of the benchmark fixture (1 MiB prompt, 1 MiB instructions AND about
+// 1 MiB of settings — the full three-carrier fixture, CHECK F09) answers
 // within 5 seconds.
 func TestExportPlanHandler_BenchmarkFixtureWithin5s(t *testing.T) {
 	api := packageAPI(t)
+	// The settings carrier: a ~1 MiB description makes the agent's settings
+	// record about 1 MiB (the spec's benchmark fixture is three 1 MiB
+	// carriers, not two).
 	seedListedAgent(t, api, config.AgentConfig{
-		ID: specSourceID, Name: "Writer", Type: "custom", Description: "Big fixture",
-		Model: &config.AgentModelConfig{Primary: "m-1", Provider: "openrouter"},
+		ID:          specSourceID,
+		Name:        "Writer",
+		Type:        "custom",
+		Description: string(d1Body(1 << 20)),
+		Model:       &config.AgentModelConfig{Primary: "m-1", Provider: "openrouter"},
 	})
 	home := filepath.Join(api.homePath, "agents", specSourceID)
 	require.NoError(t, os.WriteFile(filepath.Join(home, "SOUL.md"), bytes.Repeat([]byte("a"), 1<<20), 0o600))
@@ -829,6 +988,23 @@ func TestExportPlanHandler_BenchmarkFixtureWithin5s(t *testing.T) {
 	got := callPackagePlanCreate(t, api, `{"scope":"agents","agent_ids":["`+specSourceID+`"]}`)
 	elapsed := time.Since(start)
 	require.Equal(t, http.StatusCreated, got.Code, "body=%s", got.Body)
+	// The fixture is what the spec says it is: the reviewed settings entry
+	// carries the ~1 MiB record — an undersized fixture benchmarks nothing
+	// (the exact trap CHECK F09 closed).
+	m := planMap(t, got.Body)
+	elements, _ := m["elements"].([]any)
+	require.Len(t, elements, 1)
+	files, _ := elements[0].(map[string]any)["files"].([]any)
+	settingsSeen := false
+	for _, f := range files {
+		entry := f.(map[string]any)
+		if strings.HasSuffix(entry["path"].(string), "agent.json") {
+			require.GreaterOrEqual(t, entry["size"].(float64), float64(1<<20),
+				"the reviewed settings record carries the ~1 MiB fixture")
+			settingsSeen = true
+		}
+	}
+	require.True(t, settingsSeen, "the review lists the agent's settings record")
 	require.LessOrEqual(t, elapsed, 5*time.Second, "the review answers within 5 s (SC-005)")
 }
 

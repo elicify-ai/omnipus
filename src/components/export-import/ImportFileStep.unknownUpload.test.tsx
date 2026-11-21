@@ -67,10 +67,14 @@ describe('Unknown upload answer is not resent (US-5, D2-14)', () => {
     })
     const Component = (Route as unknown as { component: React.ComponentType }).component
     render(<Component />)
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    // 26a right-reason RED (CHECK): the input's availability is asserted
+    // BEFORE dispatch, so this row can never fail as "Unable to fire a change
+    // event" — its only sanctioned failure is the missing behaviour itself.
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement | null
+    expect(input, 'the File step renders a bundle-file input before the change event fires').not.toBeNull()
     const file = new File([new Uint8Array(64)], 'bundle.omnpkg', { type: 'application/octet-stream' })
     await act(async () => {
-      fireEvent.change(input, { target: { files: [file] } })
+      fireEvent.change(input!, { target: { files: [file] } })
     })
     expect(await screen.findByText(DID_NOT_CONFIRM)).toBeInTheDocument()
     expect(uploadCalls, 'exactly one upload request, never resent').toHaveLength(1)

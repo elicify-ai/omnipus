@@ -5,26 +5,38 @@
 // counted separately), "Apply outcome classes" (the classifier table),
 // "Integration Boundaries → Gateway package routes" (raw upload bytes, blob +
 // Content-Disposition name on export, apply body {mode, workspace_id},
-// DELETE cancel), and "Local execution" (the real request()/requestOnce() run
-// over a mocked global fetch — the transport itself is never mocked).
+// DELETE cancel), the no-automatic-resend rule across ALL THREE replay
+// layers — transport switches AND the production QueryClient mutation
+// defaults (retry:false per call; CHECK F04) — and "Local execution" (the
+// real request()/requestOnce() run over a mocked global fetch — the
+// transport itself is never mocked).
+//
+// Successful fixtures are validated against the REAL generated schemas
+// (Schemas.PackageImportPreview / PackageImportResult, CHECK F02); wrong
+// 200-bodies stay in dedicated negative rows.
 //
 // RED: every packages.ts call is a throwing stub, so each behaviour row fails
 // with "not implemented"; the classifier rows fail on their throwing stubs
-// too. The two control rows pin today's generic-caller recovery (CSRF re-send
-// + planted-cookie toast) and are expected to pass in RED — they prove the
-// instrument can see a toast and a re-send, so "no toast / no resend" rows
-// later cannot pass vacuously.
+// too. The positive control rows (generic-caller CSRF re-send, planted-toast,
+// and the production mutation retryer) pin today's behaviour and are expected
+// to pass in RED — they prove the instruments can see a re-send, a toast and
+// a mutation retry, so the "never resend" rows cannot pass vacuously.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MutationObserver, QueryClient } from '@tanstack/react-query'
 import { ApiError } from '@/lib/api-error'
-import { ApiSchemaError } from './http'
-import { request } from './http'
+import { ApiSchemaError, request } from './http'
+import { shouldRetryMutation, mutationRetryDelay } from '@/lib/queryClient'
 import {
   applyPackageImport,
   cancelPackageImport,
   classifyApplyOutcome,
   classifyUploadOutcome,
   exportPackage,
+  PackageImportPreviewSchema,
+  PackageImportResultSchema,
   uploadPackageImport,
+  type PackageImportPreview,
+  type PackageImportResult,
 } from './packages'
 import { useUiStore } from '@/store/ui'
 
@@ -33,15 +45,33 @@ beforeEach(() => {
   // A fresh toast spy per test: http.ts reads the store through
   // getState().addToast, so replacing the action observes the raise.
   useUiStore.setState({ addToast: addToastSpy as unknown as () => void })
+  // The transport's planted-toast dedup is module state: advance the clock
+  // past the 5 s window between tests so no row depends on order (W02).
+  fakeNow += 60_000
+  dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow)
 })
 
 afterEach(() => {
+  dateNowSpy.mockRestore()
   vi.restoreAllMocks()
   document.cookie = 'csrf=; max-age=0; path=/'
   document.cookie = '__Host-csrf=; max-age=0; path=/'
 })
 
 const addToastSpy = vi.fn()
+let dateNowSpy = { mockRestore: () => {} } as ReturnType<typeof vi.spyOn>
+let fakeNow = 1_700_000_000_000
+
+// A production-defaults QueryClient: the REAL exported predicates, not a
+// hand-copied replica (CHECK F04). Package mutations under test are built
+// through this client's defaults, with retry:false on the package call rows.
+function makeProductionQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay },
+    },
+  })
+}
 
 function mockFetch(
   impl: (url: string, init?: RequestInit) => Response | Promise<Response>,
@@ -74,7 +104,9 @@ async function fileBytes(body: unknown): Promise<Uint8Array> {
 }
 
 // Package requests counted per URL and method (spec "Counting requests");
-// the recovery read GET /api/v1/state is counted separately.
+// the recovery read GET /api/v1/state is counted separately. The spy MUST be
+// installed before counting — a count of zero over an uninstalled spy is
+// meaningless (CHECK F05).
 function packageCalls(method: string): Array<Array<unknown>> {
   return (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([url, init]) => {
     const m = String((init as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
@@ -94,6 +126,63 @@ function stateReads(): Array<Array<unknown>> {
       String(url).endsWith('/api/v1/state') &&
       String((init as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'GET',
   )
+}
+
+// ── Fixtures, validated against the real generated schemas (CHECK F02) ──────
+
+function validPreview(): PackageImportPreview {
+  const preview: PackageImportPreview = {
+    staging_id: 'S1',
+    expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+    manifest: {
+      format: 'omnpkg',
+      format_version: 1,
+      scope: 'custom',
+      elements: [{ type: 'agent', schema: 1, source_id: 'a-writer', name: 'Writer', files: ['agent.json', 'SOUL.md'] }],
+      counts: {},
+      files: {},
+      source_build: 'v0.1.1',
+      created_at: new Date(Date.now() - 60_000).toISOString(),
+      includes_sessions: false,
+      needs_secrets: [],
+    },
+    will_add: [
+      {
+        type: 'agent',
+        source_id: 'a-writer',
+        source_name: 'Writer',
+        proposed_name: 'Writer',
+        renamed: false,
+      },
+    ],
+    skipped_elements: [],
+    warnings: [],
+    needs_secrets: [],
+  }
+  // A "valid" fixture that fails its own schema is a harness bug, not RED.
+  PackageImportPreviewSchema.parse(preview)
+  return preview
+}
+
+function validResult(activation: 'active' | 'pending', workspaceId = 'ws-1'): PackageImportResult {
+  const result: PackageImportResult = {
+    mode: 'new',
+    created: [
+      {
+        type: 'agent',
+        source_id: 'a-writer',
+        new_id: 'a-new',
+        name: 'Writer (imported)',
+        workspace_id: workspaceId,
+      },
+    ],
+    warnings: [],
+    needs_secrets: [],
+    activation,
+    ...(activation === 'pending' ? { activation_message: 'The agent starts on its next heartbeat.' } : {}),
+  }
+  PackageImportResultSchema.parse(result)
+  return result
 }
 
 // ── Per-call one-request rows (Counting requests) ────────────────────────────
@@ -233,6 +322,11 @@ describe('package calls never resend (real transport over a mocked fetch)', () =
   it('a missing CSRF cookie refuses every package call before any request', async () => {
     document.cookie = 'csrf=; max-age=0; path=/'
     document.cookie = '__Host-csrf=; max-age=0; path=/'
+    // The spy is installed BEFORE the calls: a zero-count is only evidence
+    // over an installed instrument (CHECK F05).
+    mockFetch(() => {
+      throw new Error('no request may reach fetch on client csrf_missing')
+    })
     await expect(applyPackageImport('S', { mode: 'new' })).rejects.toMatchObject({ code: 'csrf_missing' })
     await expect(uploadPackageImport(bundleFile())).rejects.toMatchObject({ code: 'csrf_missing' })
     await expect(cancelPackageImport('S')).rejects.toMatchObject({ code: 'csrf_missing' })
@@ -243,41 +337,95 @@ describe('package calls never resend (real transport over a mocked fetch)', () =
 
   it('after a csrf_missing refusal the next deliberate action sends the first request', async () => {
     document.cookie = 'csrf=; max-age=0; path=/'
+    // Installed first, so the zero-count assertion observes the real gate.
+    const fetchSpy = mockFetch(
+      () =>
+        jsonResponse(200, {
+          mode: 'new',
+          created: [{ type: 'agent', source_id: 'a-writer', new_id: 'a-new', name: 'Writer (imported)', workspace_id: 'ws-1' }],
+          warnings: [],
+          needs_secrets: [],
+          activation: 'active',
+        }),
+    )
     await expect(applyPackageImport('S', { mode: 'new' })).rejects.toMatchObject({ code: 'csrf_missing' })
     expect(totalPackageCalls()).toHaveLength(0)
     // Recovery: the cookie exists again; the person's next click sends the FIRST apply.
     document.cookie = 'csrf=packages-api-test; path=/'
-    mockFetch(() =>
-      jsonResponse(200, {
-        mode: 'new',
-        created: [{ type: 'agent', source_name: 'Writer', name: 'Writer (imported)', new_id: 'a-new', activation: 'active' }],
-      }),
-    )
     await expect(applyPackageImport('S', { mode: 'new' })).resolves.toMatchObject({
       created: [{ new_id: 'a-new' }],
+      activation: 'active',
     })
-    expect(packageCalls('POST')).toHaveLength(1)
+    const sent = fetchSpy.mock.calls.filter(([, init]: unknown[]) => String((init as RequestInit | undefined)?.method).toUpperCase() === 'POST')
+    expect(sent, 'this click sends the first apply, once').toHaveLength(1)
+  })
+})
+
+// ── The production mutation path never resends (CHECK F04: the third
+//    replay layer). Each package mutation is built through the production
+//    QueryClient defaults with retry:false per call; the control row proves
+//    the SAME client's retryer is live by omitting the override.
+
+describe('package mutations never retry through the production query defaults', () => {
+  function runMutation(
+    client: QueryClient,
+    mutationFn: () => Promise<unknown>,
+    opts?: { retry?: boolean },
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const observer = new MutationObserver(client, {
+        mutationFn,
+        ...(opts?.retry === false ? { retry: false } : {}),
+        onError: (err) => reject(err),
+        onSuccess: (data) => resolve(data),
+      })
+      observer.mutate()
+    })
+  }
+
+  const networkDown = () => {
+    throw new TypeError('network down')
+  }
+
+  it.each([
+    ['apply', () => applyPackageImport('S', { mode: 'new' })],
+    ['upload', () => uploadPackageImport(bundleFile())],
+    ['cancel', () => cancelPackageImport('S')],
+    ['export', () => exportPackage(['a-1'])],
+  ])('%s with retry:false dispatches exactly once through the production defaults', async (_name, fn) => {
+    mockFetch(networkDown)
+    await expect(runMutation(makeProductionQueryClient(), fn as () => Promise<unknown>, { retry: false })).rejects.toMatchObject({ status: 0 })
+    expect(totalPackageCalls(), 'the mutation layer adds no second dispatch').toHaveLength(1)
+  })
+
+  it('control: the production default retryer IS live for a caller without retry:false', async () => {
+    vi.useFakeTimers()
+    try {
+      mockFetch(networkDown)
+      const client = makeProductionQueryClient()
+      const pending = runMutation(client, () => applyPackageImport('S', { mode: 'new' }))
+      pending.catch(() => {})
+      // Drain the production backoff (1s + 2s + 4s) under controlled time.
+      await vi.advanceTimersByTimeAsync(9_000)
+      await expect(pending).rejects.toMatchObject({ status: 0 })
+      expect(totalPackageCalls(), 'initial + three production retries').toHaveLength(4)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
 // ── Wire shapes (Integration Boundaries → Gateway package routes) ────────────
 
 describe('package call wire shapes', () => {
-  it('upload sends the raw bundle bytes, not JSON, and parses the preview', async () => {
+  it('upload sends the raw bundle bytes, not JSON, and parses the preview against the generated schema', async () => {
     const file = bundleFile(8)
-    mockFetch(() =>
-      jsonResponse(200, {
-        staging_id: 'S1',
-        expires_at: '2026-11-21T09:30:00Z',
-        will_add: [{ source_id: 'a-1', source_name: 'Writer', final_name: 'Writer (imported)' }],
-        skipped: [],
-        warnings: [],
-        needs_secrets: [],
-      }),
-    )
-    const preview = await uploadPackageImport(file)
-    expect(preview.staging_id).toBe('S1')
-    expect(preview.will_add?.[0]?.final_name).toBe('Writer (imported)')
+    const preview = validPreview()
+    mockFetch(() => jsonResponse(200, preview))
+    const parsed = await uploadPackageImport(file)
+    expect(parsed.staging_id).toBe('S1')
+    expect(parsed.will_add?.[0]?.proposed_name).toBe('Writer')
+    expect(parsed.will_add?.[0]?.renamed).toBe(false)
 
     const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(String(url).endsWith('/api/v1/packages/import')).toBe(true)
@@ -312,28 +460,11 @@ describe('package call wire shapes', () => {
     expect(JSON.parse(String((init as RequestInit).body))).toEqual({ agent_ids: ['a-1'] })
   })
 
-  it('apply sends the exact {mode, workspace_id} body and parses the result', async () => {
-    mockFetch(() =>
-      jsonResponse(200, {
-        mode: 'new',
-        created: [
-          {
-            type: 'agent',
-            source_id: 'a-1',
-            source_name: 'Writer',
-            name: 'Writer (imported)',
-            new_id: 'a-new',
-            workspace_id: 'ws-1',
-            activation: 'active',
-          },
-        ],
-        warnings: [],
-        needs_secrets: [],
-      }),
-    )
+  it('apply sends the exact {mode, workspace_id} body and parses the result against the generated schema', async () => {
+    mockFetch(() => jsonResponse(200, validResult('active', 'ws-1')))
     const result = await applyPackageImport('S', { mode: 'new', workspace_id: 'ws-1' })
     expect(result.created?.[0]?.new_id).toBe('a-new')
-    expect(result.created?.[0]?.activation).toBe('active')
+    expect(result.activation).toBe('active')
 
     const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(String(url).endsWith('/api/v1/packages/import/S/apply')).toBe(true)
@@ -441,7 +572,6 @@ describe('classifyUploadOutcome — the same sort for an upload that never confi
 
 describe('controls — the generic recovery other callers keep (positive controls)', () => {
   it('a CSRF 403 on a plain request still recovers once and resends', async () => {
-    // A fresh Response per call — a Response body can only be consumed once.
     let nth = 0
     const fetchSpy = mockFetch(() => (nth++ === 0 ? errorBody(403, CSRF_BODY) : jsonResponse(200, { ok: true })))
     await expect(request('/control-path', { method: 'POST' })).resolves.toEqual({ ok: true })
