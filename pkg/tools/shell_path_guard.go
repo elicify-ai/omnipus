@@ -407,6 +407,13 @@ func (t *ExecTool) guardCommandClassified(ctx context.Context, command, cwd stri
 		if expansionDerived {
 			use.readOnly = false
 		}
+		// Re-check 3: the candidate is the program only if it is the WHOLE
+		// program word. The scan stops at quotes and at a Windows path's first
+		// backslash, so `"/x/credentials.js"on` or `C:\Users\…\tool.exe`
+		// would otherwise be judged by a path that is not the file that runs.
+		if use.programPath && !classifier.coversWord(start, end) {
+			use.programPath = false
+		}
 
 		if readPolicyOK && !expansionDerived && loadableSkillReadOrRun(raw, start, classifier, turnPolicy) {
 			continue // UAT-1 F-8 (shell_skill_operands.go)
@@ -761,7 +768,8 @@ func outsideWorkDirRefusal(p, cwdPath string, use pathUseVerdict, readWithheld b
 	case use.exec && use.programPath:
 		what = "Running a program by its full path is allowed from any folder except Omnipus's protected ones (other agents' and other workspaces' files), and this program is in one of them."
 	case use.exec:
-		what = "The path is glued into the command word but is not the program itself, so the guard cannot tell which program runs. Separate the program from its arguments with a space."
+		what = "The path covers only part of the command word, so it is not the program itself and the guard cannot tell which program runs " +
+			"(for example a path joined to other text, or a Windows path with more than one folder, which this scan reads only up to the first backslash)."
 	case readWithheld:
 		what = "This looks like a read, but the turn's filesystem policy could not be resolved, so the read exemption is withheld for this command (fail closed). Retry; if it persists, the gateway log names the cause."
 	default:
@@ -830,13 +838,20 @@ type pathUseClassifier struct {
 	// classifiable is false when rule 1 fails, which makes every candidate in
 	// the command a write.
 	classifiable bool
+	// lineContinuation is true when the command holds a backslash-newline
+	// outside single quotes. The shell removes it BEFORE splitting words, so
+	// `>\<newline>|` is `>|`; this scanner keeps both bytes. Program-word
+	// detection (#1960 rule 4) is then withheld for the whole command:
+	// conservative, the base behaviour (re-check 3).
+	lineContinuation bool
 }
 
 func newPathUseClassifier(cmd string) pathUseClassifier {
 	mask, balanced := shellQuoteMask(cmd)
 	return pathUseClassifier{
-		cmd:  cmd,
-		mask: mask,
+		cmd:              cmd,
+		mask:             mask,
+		lineContinuation: hasLineContinuation(cmd),
 		classifiable: balanced &&
 			!strings.Contains(cmd, "$(") &&
 			!strings.Contains(cmd, "`") &&
@@ -919,7 +934,7 @@ func (c pathUseClassifier) classify(start int) pathUseVerdict {
 	// (`--jq '{login:.login}'`) is not expansion at all. A word at or after an
 	// unquoted brace still gets rule 3's refusal, and so does a word the brace
 	// is glued to (`/usr/bin/tee{,}` expands to `tee /usr/bin/tee`).
-	if brace := c.firstUnquotedBrace(segStart, segEnd); brace == segEnd || c.wordEnd(word, segEnd) < brace {
+	if brace := c.firstUnquotedBrace(segStart, segEnd); !c.lineContinuation && (brace == segEnd || c.wordEnd(word, segEnd) < brace) {
 		programs, assignments := c.commandWordRoles(segStart, segEnd)
 		switch {
 		case programs[word]:
@@ -1043,6 +1058,38 @@ func (c pathUseClassifier) firstWordStart(segStart, segEnd int) int {
 		i++
 	}
 	return i
+}
+
+// coversWord reports whether the candidate [start, end) is its whole shell
+// word, apart from the word's own quote characters (re-check 3).
+func (c pathUseClassifier) coversWord(start, end int) bool {
+	segStart, segEnd := c.segmentBounds(start)
+	word := c.wordStart(start, segStart)
+	return strings.Trim(c.cmd[word:start], `"'`) == "" &&
+		strings.Trim(c.cmd[end:c.wordEnd(word, segEnd)], `"'`) == ""
+}
+
+// hasLineContinuation reports a backslash-newline outside single quotes —
+// a line continuation the shell removes before it splits words.
+func hasLineContinuation(s string) bool {
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '\\' && quote != '\'' {
+			if i+1 < len(s) && (s[i+1] == '\n' || s[i+1] == '\r') {
+				return true
+			}
+			i++
+			continue
+		}
+		switch {
+		case quote == 0 && (ch == '\'' || ch == '"'):
+			quote = ch
+		case quote != 0 && ch == quote:
+			quote = 0
+		}
+	}
+	return false
 }
 
 // wordEnd returns the offset just past the shell word that begins at word,
