@@ -81,7 +81,7 @@ properties:
             type: string
   needs_secrets:
     type: array
-    description: Secrets to enter again (S1a lists none).
+    description: Secrets to enter again for the new agent (names only).
     items:
       type: object
       required:

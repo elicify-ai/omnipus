@@ -1,6 +1,6 @@
 Status: Approved
 
-Status note: final after the review cap (revision 6), amended by revision 7 (founder decisions P-QR B and P-Q1 B, 2026-11-19), build S1a
+Status note: final after the review cap (revision 6), amended by revision 7 (founder decisions P-QR B and P-Q1 B, 2026-11-19), builds S1a and S1b
 
 `ADR: [ADR — Export / Import packages (.omnpkg), epic elicify-ai/omnipus#1094](ADR.md)` (status Proposed, 2026-11-19, with the 2026-11-19 amendments for S1; slice plan in [SLICES.md](SLICES.md), founder questions in [QUESTIONS.md](QUESTIONS.md))
 
@@ -125,7 +125,7 @@ Requirements and scenarios that belong to S1b are tagged **[S1b]**. Everything e
 | `pkg/gateway/rest_auth.go::restAPI.triggerReloadAndWaitOutcome`; `pkg/gateway/rest_agents.go::restAPI.deleteAgent` (uses the same reload after a delete); `pkg/gateway/agent_created_broadcast.go::restAPI.emitAgentCreated` | calls | The live agent list is rebuilt from the store by a full reload. Import uses that reload to publish after the commit point, and again after a rollback. `fastAgentUpsert` is not used: it expects the config write that import skips, and would fall back to the same reload anyway. |
 | `pkg/agentstore/store.go::Store.SetNotifier` | reads | The store's change notifier is optional and **not wired** in production at `7faff5291`, so writing or deleting a record does not change the live list by itself. |
 | `pkg/sysagent/tools/agent_apply_args.go::applySharedConfigArgs` (and `agentCreateArgNames`, `agentUpdateArgNames`) | **modifies (export only)** | The agent tools' rules for `memory_enabled`, `voice`, `context_window_override` and `model_params`. Import calls it (exported, unchanged) for the three fields REST create does not carry. |
-| `pkg/config/config_agents.go::AgentConfig.IsChatTarget`, `IsExternalCLIWorker` | calls | Only Main agents are chat targets; external workers are refused on upload in S1a. |
+| `pkg/config/config_agents.go::AgentConfig.IsChatTarget`, `IsExternalCLIWorker` | calls | Only Main agents are chat targets; external workers are refused on upload in S1a and accepted without their runtime settings from S1b. |
 | `pkg/gateway/rest_agent_executor.go::refuseForbiddenExecutorFields`; `contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`, `ExecutorConfigCreate.yaml` | calls / reads **[S1b]** | An external worker's program is set in Settings → Third-party agents, never per agent. Per agent it has only `cli`, `env_overrides` and `cli_args`. |
 | `pkg/agent/loop_wire.go` (ADR-037 comment); Remove the Global Per-Agent Delegation Policy (`docs/internal/architecture/ADR-037-remove-global-delegation-policy.md`) | reads | `subagents.allow_agents` is retired and has no effect; delegation is the per-workspace graph. |
 | `pkg/gateway/rest.go::restAPI.withAuth`, `withAuthAndBodyLimit`, `adminWrap`; `pkg/gateway/middleware/bypass_gate.go::RequireNotBypass` | calls | `withAuth` caps every body at 1 MiB. The upload route uses `withAuthAndBodyLimit` with 64 MiB plus `RequireNotBypass` (FR-045). |
@@ -216,15 +216,15 @@ Columns (all checked at `7faff5291`):
 | `AGENT.md` | packaged byte-identical | stored **byte-identical**, written right after the create | no | no | no | yes (`agent_md`) | Import-only at create time |
 | `model.primary`, `model.provider` | kept | kept (provider name only); not configured on target → listed `provider_not_configured` | yes | yes | yes | yes | |
 | `model.fallbacks` (legacy strings) | kept | **left out**, listed `field_not_carried` | no | no | no (refused as retired) | no | Legacy; `fallback_models` is current |
-| `fallback_models[].model`, `.provider` | kept | create rule (≤ 2 entries, paired); a violation is refused at upload | yes | yes | yes | yes | Rider #1440 |
-| `fallback_models[].reasoning_effort` | kept | kept (create rule) | yes | yes | yes | yes | |
-| `reasoning_effort` | kept | kept | yes (native) | yes | yes | yes | |
+| `fallback_models[].model`, `.provider` | kept | **Native agents:** create rule (≤ 2 entries, paired); a violation is refused at upload. **External workers [S1b]:** a non-empty list is refused before mapping (`element_not_creatable`, `field: fallback_models`) | yes | yes | yes | yes | Rider #1440 |
+| `fallback_models[].reasoning_effort` | kept | **Native agents:** kept (create rule). **External workers [S1b]:** a non-empty fallback list is refused as above | yes | yes | yes | yes | |
+| `reasoning_effort` | kept | **Native agents:** kept. **External workers [S1b]:** a non-empty value is refused before mapping (`element_not_creatable`, `field: reasoning_effort`), with the same external-CLI effort refusal as `create_agent` | yes (native) | yes | yes | yes | |
 | `max_tool_iterations` | kept | create rule (1–1000 and ≤ the target's global limit); refused at upload or apply with `element_not_creatable`, `field: max_tool_iterations` | yes | yes | yes | yes | |
-| `model_params.temperature`, `.max_tokens` | kept | kept (create rule; other keys refused) | yes (native) | yes | yes | yes | |
-| `skills` | kept | names installed on the target kept and bound (listed `skill_bound_local`); others dropped (listed `skill_dropped`) **before** the create rule runs, because that rule refuses unknown skills | yes | yes | yes | yes | **Import transformation** |
+| `model_params.temperature`, `.max_tokens` | kept | **Native agents:** kept (create rule; other keys refused). **External workers [S1b]:** non-null `model_params`, including `{}`, is refused before mapping (`element_not_creatable`, `field: model_params`) | yes (native) | yes | yes | yes | |
+| `skills` | kept | **Native agents:** names installed on the target kept and bound (listed `skill_bound_local`); others dropped (listed `skill_dropped`) **before** the create rule runs, because that rule refuses unknown skills. **External workers [S1b]:** a non-empty list is refused on the raw record before this mapping (`element_not_creatable`, `field: skills`), even when no listed skill is installed on the target | yes | yes | yes | yes | **Import transformation** |
 | `skill_grants` | **removed** | rebuilt by the store | no | no | no | no | |
-| `tools.builtin.policies` | kept | sparse changes over the type's seed: unknown tool names dropped (`tool_policy_dropped`); `allow` on an always-ask tool becomes `ask` (`tool_policy_tightened`); missing tools get the seed value | yes | yes | yes (`tool_policy_changes`) | perm | **Import transformation** |
-| `tools.mcp.servers` | kept (so the preview can list them) | **always dropped** (`mcp_binding_dropped`) | yes | yes | yes (`mcp_servers`) | perm | **Import transformation**; ADR D5 deviation until S3 |
+| `tools.builtin.policies` | kept | **Native agent:** sparse changes over the type's seed: unknown tool names dropped (`tool_policy_dropped`); `allow` on an always-ask tool becomes `ask` (`tool_policy_tightened`); missing tools get the seed value. **External worker [S1b]:** the package's policies are dropped before policy mapping; the target's standard worker policies apply, not the package's values, with no `tool_policy_dropped` or `tool_policy_tightened` warning | yes | yes | yes (`tool_policy_changes`) | perm | **Import transformation**; external-worker target-seed exception |
+| `tools.mcp.servers` | kept (so the preview can list them) | **Native agents:** always dropped (`mcp_binding_dropped`). **External workers [S1b]:** non-empty assignments are refused on the raw record before mapping (`element_not_creatable`, `field: mcp_servers`) | yes | yes | yes (`mcp_servers`) | perm | **Import transformation**; native ADR D5 deviation until S3 |
 | `figure`, `role`, `color` | kept | create rule: canonical values kept; any other non-empty value is **refused at upload** (`element_not_creatable`, `field`), as REST create refuses it. Export only writes values the source install accepted, so this only affects hand-made or damaged packages | yes | yes | yes | yes | No import-only normalisation |
 | `voice` | kept | **Main only**: applied with the `create_agent` tool's rule (`applySharedConfigArgs`) in the same create write. A worker with a non-empty voice is refused at upload (`element_not_creatable`, `field: voice`) | **accepted, not stored** (existing behaviour, unchanged; Known Limit L17) | yes | yes | yes | Import matches `create_agent`, not REST create |
 | `memory_enabled` | kept | **native agents**: applied with the `create_agent` tool's rule in the same create write. **External workers [S1b]**: refused at upload (`element_not_creatable`, `field: memory_enabled`), because `create_agent` runs `agentmutation.ValidateFields` first and its `externalUnsupported` list forbids this field for external runtimes | no | yes | yes (native) | yes (native) | Import matches `create_agent`, including its runtime check |
@@ -1043,13 +1043,34 @@ Examples: `replace`, `merge`.
 - **When** imported
 - **Then** the stored record has none of them, and `runtime_settings_removed` is listed
 
+#### Scenario: [S1b] External-worker policies use the target's standard worker permissions
+**Traces to**: User Story 3, Acceptance Scenario 6 — **Category**: Edge Case
+- **Given** an external-worker package with `tools.builtin.policies`, including values that differ from the target's standard worker policies
+- **When** it is imported
+- **Then** the package's policies are dropped before policy mapping, and the new worker gets the target's standard worker policies
+- **And** neither `tool_policy_dropped` nor `tool_policy_tightened` is listed for those policies in the preview or result
+
 #### Scenario Outline: [S1b] External-worker fields the runtime does not support
 **Traces to**: User Story 3, Acceptance Scenario 7 — **Category**: Error Path
-- **Given** a hand-made external-worker record with `<field>` set to `<value>`
+- **Given** a hand-made external-worker record with `<field>` set to `<value>` (`mcp_servers` is stored as `tools.mcp.servers`)
 - **When** it is uploaded to S1b
-- **Then** 422 `element_not_creatable`, `field: <field>`, exactly as `create_agent` refuses it (the runtime check `agentmutation.ValidateFields` runs before the shared field applier)
+- **Then** 422 `element_not_creatable`, `field: <field>`, exactly as `create_agent` refuses it (the runtime check `agentmutation.ValidateFields` reads the raw record before import mapping and before the shared field applier)
+- **And** a skill that is not installed on the target is still refused, not silently dropped before the runtime check
 
-Examples: `memory_enabled` false; `context_window_override` 64000 (Dataset D1 rows 33–34).
+Examples:
+
+| Dataset / rule | `<field>` | `<value>` / target condition |
+|---|---|---|
+| D1 row 33 | `memory_enabled` | `false` |
+| D1 row 34 | `context_window_override` | `64000` |
+| D1 row 35 | `skills` | `["writing"]`, installed on the target |
+| D1 row 35 | `skills` | `["missing-on-target"]`, not installed on the target |
+| D1 row 36 | `fallback_models` | `[{"model":"m-fb","provider":"openrouter"}]` |
+| D1 row 37 | `model_params` | `{"temperature":0.25,"max_tokens":2048}` |
+| D1 row 37 | `model_params` | `{}` (non-null, even though empty) |
+| D1 row 38 | `reasoning_effort` | `"high"`; the same external-CLI effort refusal as `create_agent` |
+| FR-047 | `mcp_servers` | `[{"id":"github"}]` |
+| FR-047 | `voice` | `"alloy"` |
 
 #### Scenario: [S1a only] External worker export and unknown element refused until S1b
 **Traces to**: User Story 1, Acceptance Scenario 5 — **Category**: Error Path
@@ -1276,6 +1297,10 @@ Test names are placeholders; qa-lead names the real tests in RED. **Revision 7 m
 | 32 | 64 MiB + 1 byte sent chunked, no declared length | Limit + 1, unknown length | 413 `package_too_large` | BDD: Upload size through the real route |
 | 33 | **[S1b]** External worker with `memory_enabled` false | Runtime rule (`agentmutation.ValidateFields`) | 422 `element_not_creatable`, `field: memory_enabled` | BDD: [S1b] External-worker fields the runtime does not support |
 | 34 | **[S1b]** External worker with `context_window_override` 64000 | Runtime rule | 422 `element_not_creatable`, `field: context_window_override` | same |
+| 35 | **[S1b]** External worker with non-empty `skills`, installed or absent on the target | Raw-record runtime rule before mapping | 422 `element_not_creatable`, `field: skills`; a missing skill is refused, not silently dropped | same |
+| 36 | **[S1b]** External worker with non-empty `fallback_models` | Raw-record runtime rule before mapping | 422 `element_not_creatable`, `field: fallback_models` | same |
+| 37 | **[S1b]** External worker with `model_params`, including an empty object | Raw-record runtime rule before mapping | 422 `element_not_creatable`, `field: model_params` | same |
+| 38 | **[S1b]** External worker with non-empty `reasoning_effort` | Raw-record runtime rule before mapping | 422 `element_not_creatable`, `field: reasoning_effort`; same external-CLI effort refusal as `create_agent` | same |
 
 #### Dataset D2: Entry paths and types (universal checks)
 
@@ -1564,7 +1589,7 @@ Revision-6 rows 5–12 (Delete-agent recovery, session paging, second-workspace 
 - **FR-042**: Apply MUST re-run the preview checks on the current state before its first write ("Preview freshness").
 - **FR-043** **[S1b]**: An imported external worker's result MUST carry the existing "cannot run" text when its tool has no program set, and `runtime_settings_removed` pointing to Edit → Runtime for environment overrides and additional arguments.
 - **FR-044**: An upload that finds an orphan staging with an unfinished journal MUST warn `unfinished_import_found`, naming the agent ID, the staging folder and the recovery section (moved from S1b to S1a in revision 3). Since revision 7 this only happens when start-up recovery could not finish that journal.
-- **FR-047**: Import MUST store `voice`, `memory_enabled` and `context_window_override` with the `create_agent` tool's rules: first its runtime check (`agentmutation.ValidateFields`, which refuses `memory_enabled` and `context_window_override` for external workers **[S1b]**), then the shared applier (`applySharedConfigArgs`). REST create's behaviour MUST stay unchanged.
+- **FR-047**: Import MUST use the `create_agent` tool's runtime rules on the **raw record, before import mapping**, then apply supported `voice`, `memory_enabled` and `context_window_override` with the shared applier (`applySharedConfigArgs`). For external workers **[S1b]**, the runtime check (`agentmutation.ValidateFields`) MUST refuse non-empty `skills`, `fallback_models`, `reasoning_effort`, `mcp_servers` (stored as `tools.mcp.servers`) and `voice`, non-null `model_params` (including an empty object), and supplied `memory_enabled` or `context_window_override`, with 422 `element_not_creatable` naming the field. The same runtime refusal as `create_agent` applies; missing skills MUST NOT be silently dropped before this check. Native-agent support and REST create's behaviour MUST stay unchanged.
 - **FR-048**: Every field name of the agent tools' create and update lists, the REST create schemas and `AgentUpdateRequest` MUST resolve, through the alias table, to Field mapping rows (nested leaves included), or be a listed control name with its decision (`TestImportFieldCoverage`). No unlisted ignore set.
 
 **Access**

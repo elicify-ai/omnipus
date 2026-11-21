@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -44,6 +45,15 @@ var exportRemovedFields = []string{"workspace", "created_at", "updated_at", "loc
 // exportRemovedSubagentFields are the retired/unused subagents fields (ADR A3).
 var exportRemovedSubagentFields = []string{"allow_agents", "model"}
 
+// executorRuntimeFields are the host-specific, possibly secret executor
+// values that never travel: removed at export, ignored at import (Field
+// mapping rows subagents.executor.*; spec D6 amended).
+var executorRuntimeFields = []string{"cli_path", "cli_args", "env_overrides"}
+
+// NeedsSecretKindExecutorEnv is the needs_secrets kind of an external
+// worker's removed environment override (FR-014).
+const NeedsSecretKindExecutorEnv = "executor_env"
+
 // Export packs the selected agent into w (manifest first, FR-001/FR-002,
 // Field mapping Export column, FR-018 bounded source reads). Nothing is
 // written to w unless the whole package was built.
@@ -58,11 +68,15 @@ func Export(ctx context.Context, src ExportSource, sel Selection, w io.Writer) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	files, name, err := collectAgentFiles(src, id)
+	agent, err := collectAgentFiles(src, id)
 	if err != nil {
 		return err
 	}
-	pkg, err := buildPackage(id, name, files, time.Now().UTC().Truncate(time.Second))
+	secrets := make([]NeedsSecret, 0, len(agent.envNames))
+	for _, n := range agent.envNames {
+		secrets = append(secrets, NeedsSecret{Name: n, UsedBy: id, Kind: NeedsSecretKindExecutorEnv})
+	}
+	pkg, err := buildPackage(id, agent.name, agent.files, secrets, time.Now().UTC().Truncate(time.Second))
 	if err != nil {
 		return err
 	}
@@ -81,53 +95,65 @@ type packagedFile struct {
 	body []byte
 }
 
+// exportedAgent is one agent's captured package content.
+type exportedAgent struct {
+	files    []packagedFile
+	name     string
+	envNames []string // removed executor environment-override names (FR-014)
+}
+
 // collectAgentFiles reads and cleans the record and captures SOUL.md and
 // AGENT.md, applying the export refusals (FR-010, FR-011, FR-018, FR-019).
-func collectAgentFiles(src ExportSource, id string) ([]packagedFile, string, error) {
+// An external worker has no native prompt: its SOUL.md is never packaged
+// (Field mapping row SOUL.md) and its runtime values are removed.
+func collectAgentFiles(src ExportSource, id string) (*exportedAgent, error) {
 	raw, err := src.AgentRecord(id)
 	if err != nil {
-		return nil, "", sourceErr("read agent record", err)
+		return nil, sourceErr("read agent record", err)
 	}
 	v, err := parseRecordView(raw)
 	if err != nil {
-		return nil, "", fmt.Errorf("omnpkg: agent %s: stored record is not valid JSON: %w", id, err)
+		return nil, fmt.Errorf("omnpkg: agent %s: stored record is not valid JSON: %w", id, err)
 	}
 	ac := v.asAgentConfig()
 	switch {
 	case v.isCoreType():
-		return nil, "", newErr(CodeCoreAgentNotExportable, "agent_id", id)
-	case ac.IsExternalCLIWorker():
-		return nil, "", newErr(CodeExternalWorkerNotSupported, "agent_id", id)
+		return nil, newErr(CodeCoreAgentNotExportable, "agent_id", id)
 	case ac.IsWorker() && blank(v.Description):
-		return nil, "", fieldErr(CodeElementNotCreatable, "description", "a worker needs a description")
+		return nil, fieldErr(CodeElementNotCreatable, "description", "a worker needs a description")
 	}
+	external := ac.IsExternalCLIWorker()
 	home, err := src.AgentHomeDir(id)
 	if err != nil {
-		return nil, "", sourceErr("resolve agent home", err)
+		return nil, sourceErr("resolve agent home", err)
 	}
-	soul, soulPresent, err := readSourceFile(home, AgentSoulName)
-	if err != nil {
-		return nil, "", err
-	}
-	if !soulPresent || blank(string(soul)) {
-		return nil, "", newErr(CodeAgentPromptMissing, "agent_id", id)
+	var soul []byte
+	if !external {
+		var soulPresent bool
+		soul, soulPresent, err = readSourceFile(home, AgentSoulName)
+		if err != nil {
+			return nil, err
+		}
+		if !soulPresent || blank(string(soul)) {
+			return nil, newErr(CodeAgentPromptMissing, "agent_id", id)
+		}
 	}
 	agentMD, mdPresent, err := readSourceFile(home, AgentInstructionsNm)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	record, err := cleanRecordForExport(raw)
+	record, envNames, err := cleanRecordForExport(raw)
 	if err != nil {
-		return nil, "", fmt.Errorf("omnpkg: agent %s: %w", id, err)
+		return nil, fmt.Errorf("omnpkg: agent %s: %w", id, err)
 	}
-	files := []packagedFile{
-		{path: agentRecordPath(id), body: record},
-		{path: agentSoulPath(id), body: soul},
+	files := []packagedFile{{path: agentRecordPath(id), body: record}}
+	if !external {
+		files = append(files, packagedFile{path: agentSoulPath(id), body: soul})
 	}
 	if mdPresent {
 		files = append(files, packagedFile{path: agentInstructionsPath(id), body: agentMD})
 	}
-	return files, v.Name, nil
+	return &exportedAgent{files: files, name: v.Name, envNames: envNames}, nil
 }
 
 // sourceErr passes a coded source error through and wraps any other.
@@ -193,36 +219,75 @@ func readSourceFile(home, name string) ([]byte, bool, error) {
 }
 
 // cleanRecordForExport removes the fields Field mapping's Export column
-// removes and keeps every other stored value as it is.
-func cleanRecordForExport(raw []byte) ([]byte, error) {
+// removes and keeps every other stored value as it is. It also returns the
+// names of the removed executor environment overrides, sorted (FR-014).
+func cleanRecordForExport(raw []byte) ([]byte, []string, error) {
 	var rec map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return nil, fmt.Errorf("stored record is not a JSON object: %w", err)
+		return nil, nil, fmt.Errorf("stored record is not a JSON object: %w", err)
 	}
 	for _, k := range exportRemovedFields {
 		delete(rec, k)
 	}
+	var envNames []string
 	if subRaw, ok := rec["subagents"]; ok && string(subRaw) != "null" {
 		var sub map[string]json.RawMessage
 		if err := json.Unmarshal(subRaw, &sub); err != nil {
-			return nil, fmt.Errorf("stored subagents is not a JSON object: %w", err)
+			return nil, nil, fmt.Errorf("stored subagents is not a JSON object: %w", err)
 		}
 		for _, k := range exportRemovedSubagentFields {
 			delete(sub, k)
 		}
+		if execRaw, ok := sub["executor"]; ok && string(execRaw) != "null" {
+			cleaned, names, err := cleanExecutorForExport(execRaw)
+			if err != nil {
+				return nil, nil, err
+			}
+			sub["executor"], envNames = cleaned, names
+		}
 		cleaned, err := json.Marshal(sub)
 		if err != nil {
-			return nil, fmt.Errorf("encode subagents: %w", err)
+			return nil, nil, fmt.Errorf("encode subagents: %w", err)
 		}
 		rec["subagents"] = cleaned
 	}
-	return json.Marshal(rec)
+	out, err := json.Marshal(rec)
+	return out, envNames, err
+}
+
+// cleanExecutorForExport removes the executor's runtime values (program path,
+// environment overrides, CLI arguments; Field mapping executor rows) and
+// returns the override names, sorted. Values never leave this function.
+func cleanExecutorForExport(raw json.RawMessage) (json.RawMessage, []string, error) {
+	var exec map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &exec); err != nil {
+		return nil, nil, fmt.Errorf("stored subagents.executor is not a JSON object: %w", err)
+	}
+	var names []string
+	if envRaw, ok := exec["env_overrides"]; ok && string(envRaw) != "null" {
+		var env map[string]json.RawMessage
+		if err := json.Unmarshal(envRaw, &env); err != nil {
+			return nil, nil, fmt.Errorf("stored subagents.executor.env_overrides is not a JSON object: %w", err)
+		}
+		for name := range env {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+	}
+	for _, k := range executorRuntimeFields {
+		delete(exec, k)
+	}
+	cleaned, err := json.Marshal(exec)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode subagents.executor: %w", err)
+	}
+	return cleaned, names, nil
 }
 
 // buildPackage writes manifest.json first, then the payload files in order,
 // as a tar compressed with a zstd window of at most MaxDecoderWindow (FR-008).
 // Hashes and sizes come from the same captured bytes that are packaged.
-func buildPackage(id, name string, files []packagedFile, createdAt time.Time) ([]byte, error) {
+func buildPackage(id, name string, files []packagedFile, secrets []NeedsSecret, createdAt time.Time) ([]byte, error) {
 	m := Manifest{
 		Format:        FormatName,
 		FormatVersion: FormatVersion,
@@ -237,7 +302,7 @@ func buildPackage(id, name string, files []packagedFile, createdAt time.Time) ([
 		Files:        make(map[string]FileInfo, len(files)),
 		SourceBuild:  config.GetVersion(),
 		CreatedAt:    createdAt,
-		NeedsSecrets: []NeedsSecret{},
+		NeedsSecrets: secrets,
 	}
 	for _, f := range files {
 		sum := sha256.Sum256(f.body)

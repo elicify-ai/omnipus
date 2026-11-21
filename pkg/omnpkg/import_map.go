@@ -42,7 +42,15 @@ const (
 	WarnToolPolicyTightened   = "tool_policy_tightened"
 	WarnProviderNotConfigured = "provider_not_configured"
 	WarnFieldNotCarried       = "field_not_carried"
+	// WarnRuntimeSettingsRemoved: an external worker's environment overrides
+	// and CLI arguments are not imported (S1b, FR-043).
+	WarnRuntimeSettingsRemoved = "runtime_settings_removed"
 )
+
+// runtimeSettingsRemovedMessage points to the per-agent destination, never to
+// host Settings (FR-043, L7). It never echoes a value.
+const runtimeSettingsRemovedMessage = "This worker's environment overrides and additional CLI arguments were not imported; " +
+	"re-enter them in Edit → Runtime."
 
 // AgentPlan is the engine's import-side mapping output: the record handed to
 // the shared create function plus the listed warnings (Field mapping Import
@@ -87,6 +95,29 @@ func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*Ag
 	if sub, ok := rec["subagents"].(map[string]any); ok {
 		delete(sub, "allow_agents")
 		delete(sub, "model")
+		if exec, isMap := sub["executor"].(map[string]any); isMap {
+			for _, k := range executorRuntimeFields {
+				delete(exec, k)
+			}
+		}
+	}
+	view, err := parseRecordView(record)
+	if err != nil {
+		return nil, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
+	}
+	if view.asAgentConfig().IsExternalCLIWorker() {
+		// Listed for every external worker: export always removes these
+		// values, so they must be entered again (FR-033, FR-043).
+		im.warn(WarnRuntimeSettingsRemoved, runtimeSettingsRemovedMessage, nil)
+		// The create path gives an external worker the target's worker seed,
+		// as REST create and create_agent do; the package's policies are not
+		// an input (architect ruling 4B). Not a drop: a genuine export only
+		// ever holds the source's seed.
+		if tools, isMap := rec["tools"].(map[string]any); isMap {
+			if builtin, isMap := tools["builtin"].(map[string]any); isMap {
+				delete(builtin, "policies")
+			}
+		}
 	}
 	im.mapSkills(rec)
 	im.mapModel(rec)
