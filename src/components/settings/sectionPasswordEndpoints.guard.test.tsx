@@ -23,15 +23,51 @@
  * fields)` → PlannedWrite[] ({ endpoint, method, password, body }) and
  * `assertOneProtectedEndpointPerSection(table)`.
  * Counts for the four password sections are ALSO taken at the network mock
- * while the real planner runs (D-8 note), through the SaveBar; sections with
- * no password values are counted at the planner level only (their screens
- * need full data mocks — see TEST-PLAN-PART2.md gaps).
+ * while the real planner runs (D-8 note), through the SaveBar with a
+ * HANDWRITTEN writer callback — that harness proves the planner and the
+ * bar, not the real section forms (CHECK F08: a form hook that dropped the
+ * token passed all of these). The real section form → API edge checks for
+ * every password-protected writer live in the F08 describe below: the real
+ * component, the real prompt chain and the real api client onto the wire
+ * stub, asserting the X-Reauth-Token wire fact.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+
+// Reads are mocked per section below; the WRITE functions stay real so each
+// real-form test can assert what actually leaves for the network. Local
+// mode is the default so the shell prompt is the real ReAuthDialog.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAppState: vi.fn(async () => ({
+      onboarding_complete: true,
+      identity: { mode: 'local', edition: 'core', signed_in: true },
+    })),
+    fetchPerformanceSettings: vi.fn(),
+    fetchMaxToolIterationsLoweringPreview: vi.fn(),
+    fetchSandboxStatus: vi.fn(),
+    fetchSandboxConfig: vi.fn(),
+    fetchPromptGuardLevel: vi.fn(),
+    fetchRateLimits: vi.fn(),
+    fetchConfig: vi.fn(),
+    fetchCredentials: vi.fn(),
+    fetchBuiltinTools: vi.fn(),
+    fetchGlobalToolPolicies: vi.fn(),
+    fetchIntegrationProviders: vi.fn(),
+  }
+})
+
+import * as api from '@/lib/api'
+import { PerformanceSection } from './PerformanceSection'
+import { SandboxSection } from './SandboxSection'
+import { SecuritySection } from './SecuritySection'
+import { IntegrationsSection } from './IntegrationsSection'
 
 async function loadSavePlanner(): Promise<any> {
   try {
@@ -141,9 +177,49 @@ async function loadHarnessModules(): Promise<any> {
   }
 }
 
+// Healthy read fixtures for the real-form tests (writes stay real; their
+// responses come from the wire stub below and must satisfy the generated
+// response schemas).
+const PERFORMANCE_OK = {
+  max_parallel_agents: 4,
+  effective_max_parallel_agents: 4,
+  max_parallel_agents_configured: true,
+  tools_on_demand: true,
+  goal_max_rounds: 20,
+  goal_reminder_quiet_seconds: 60,
+  goal_stalled_checkin_enabled: true,
+  goal_stalled_checkin_minutes: 30,
+  max_tool_iterations: 1000,
+}
+const SANDBOX_OK = { mode: 'enforce', allowed_paths: ['/a'], ssrf: { allow_internal: [] }, requires_restart: false }
+const INTEGRATIONS_OK = {
+  search: [
+    { id: 'brave', kind: 'search', display_name: 'Brave', configured: true, requires_key: true, usable: true, active: true },
+  ],
+  voice: [
+    { id: 'groq', kind: 'voice', display_name: 'Groq', configured: true, requires_key: true, usable: true, active: true },
+    { id: 'elevenlabs', kind: 'voice', display_name: 'ElevenLabs', configured: true, requires_key: true, usable: true, active: false },
+  ],
+  active_search: 'brave',
+  active_voice: 'groq',
+  default_search: 'brave',
+  fallback_search: null,
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.unstubAllGlobals()
+  vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(PERFORMANCE_OK as never)
+  vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 8, agents: [] } as never)
+  vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
+  vi.mocked(api.fetchSandboxConfig).mockResolvedValue({ ...SANDBOX_OK, auto_approve: false } as never)
+  vi.mocked(api.fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' } as never)
+  vi.mocked(api.fetchRateLimits).mockResolvedValue({ enabled: true, max_agent_llm_calls_per_hour: 0, max_agent_tool_calls_per_minute: 0 } as never)
+  vi.mocked(api.fetchConfig).mockResolvedValue({ gateway: {}, data: { session_retention_days: 90 } } as never)
+  vi.mocked(api.fetchCredentials).mockResolvedValue([] as never)
+  vi.mocked(api.fetchBuiltinTools).mockResolvedValue([] as never)
+  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue([] as never)
+  vi.mocked(api.fetchIntegrationProviders).mockResolvedValue(INTEGRATIONS_OK as never)
   // The reauth POST and the protected PUT are state-changing: the client-side
   // CSRF gate needs the session cookie planted (ProvidersSection.customModels
   // precedent), else request() throws before fetch and nothing is countable.
@@ -202,10 +278,16 @@ describe('FR-030 positive control — an injected second protected endpoint must
   })
 })
 
-describe('D-8 note — counts taken at the network mock while the real planner runs', () => {
+describe('D-8 note — the generic Save bar with a HANDWRITTEN writer (boundary: the planner and the bar, not the real section forms)', () => {
   // Renders the REAL Save bar with the REAL prompt machinery at the shell
   // boundary; the section write leaves as a real PUT to the section's D-8
   // endpoint with the consent token (FR-027), counted at the fetch stub.
+  // BOUNDARY (CHECK F08, stated honestly): the onSave callback below builds
+  // the X-Reauth-Token header ITSELF from the token the bar hands it, so
+  // these tests prove the planner's one-endpoint plan and the bar's
+  // one-prompt-per-Save cadence — they CANNOT see a real section form hook
+  // dropping the token (that fault passed all 17 of these as CHECK mutant
+  // M12). The real form → wire checks live in the F08 describe below.
   // The FE SaveBar has no 'paths' field kind (part 6/9 harness facts), so
   // the path-list fixtures use the text kind above; the D-8 oracle —
   // exactly ONE protected write per section — does not depend on the kind.
@@ -274,4 +356,149 @@ describe('D-8 note — counts taken at the network mock while the real planner r
         `BLOCKED RED (D-8 note): ${spec.section} must reach ${spec.endpoint} exactly once`).toHaveLength(1)
     },
   )
+})
+
+// ── F08 — the real section forms put the consent token on the wire ───────────
+//
+// CHECK F08 (mutant M12): every test above still passed when a real section
+// form hook dropped the consent token, because their onSave callbacks build
+// the header themselves. Each test below drives the REAL section component
+// in local mode through the REAL prompt chain (useSavePasswordPrompt →
+// ReAuthDialog → the real POST /auth/reauth answered by the wire stub) and
+// lets the section's write leave through the REAL api client onto the fetch
+// stub. The assertion is the wire fact FR-027 fixes: exactly one protected
+// write per Save, carrying X-Reauth-Token with the minted token. A form
+// hook that drops the token fails here.
+
+type Wire = { url: string; init: RequestInit }
+
+/** Wire stub for the real-form tests: the reauth POST mints 'rt'; bodies per fragment must satisfy the write's response schema. */
+function stubWire(reply: Record<string, unknown>) {
+  const calls: Wire[] = []
+  const respond = (status: number, body: unknown) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers({ 'Content-Type': 'application/json' }),
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  })
+  const fetchMock = vi.fn(async (input: any, init?: RequestInit) => {
+    const url = String(input)
+    calls.push({ url, init: init ?? {} })
+    if (url.includes('/auth/reauth')) {
+      return respond(200, { verified: true, token: 'rt', expires_in: 300 })
+    }
+    for (const [fragment, body] of Object.entries(reply)) {
+      if (url.includes(fragment)) return respond(200, body)
+    }
+    return respond(200, {})
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return calls
+}
+
+/** The shell around a real section: the real prompt chain owns the one password prompt (FR-026). */
+async function renderRealForm(ui: ReactNode) {
+  const { SettingsShellContext, useSavePasswordPrompt } = await loadHarnessModules()
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  function ShellHarness() {
+    const { requestPassword, dialog } = useSavePasswordPrompt()
+    return (
+      <SettingsShellContext.Provider
+        value={{
+          announce: () => {},
+          setDraftCount: () => {},
+          offerRestart: () => {},
+          refreshPendingRestart: () => {},
+          requestPassword,
+          saveBarVisible: false,
+          setSaveBarVisible: () => {},
+        }}
+      >
+        {ui}
+        {dialog}
+      </SettingsShellContext.Provider>
+    )
+  }
+  render(
+    <QueryClientProvider client={client}>
+      <ShellHarness />
+    </QueryClientProvider>,
+  )
+}
+
+/** Save through the real prompt: answer the real ReAuthDialog once. */
+async function answerRealPrompt() {
+  await userEvent.type(await screen.findByTestId('reauth-password-input'), 'correct horse')
+  await userEvent.click(screen.getByTestId('reauth-confirm'))
+}
+
+describe('F08 — the real section forms reach their one protected endpoint with the consent token (FR-027)', () => {
+  it('limits: the real Performance form saves a password-marked change as exactly one PUT /performance carrying X-Reauth-Token', async () => {
+    const calls = stubWire({ '/api/v1/performance': PERFORMANCE_OK })
+    await renderRealForm(<PerformanceSection />)
+    const input = await screen.findByLabelText('Max parallel agents')
+    await waitFor(() => expect(input).toHaveValue('4'))
+    await userEvent.clear(input)
+    await userEvent.type(input, '8')
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await answerRealPrompt()
+    await waitFor(() => expect(callsTo(calls, '/api/v1/performance')).toHaveLength(1))
+    expect(callsTo(calls, '/api/v1/performance')).toHaveLength(1) // exactly one protected write
+    expect(callsTo(calls, '/api/v1/performance')[0].init.headers).toHaveProperty('X-Reauth-Token', 'rt')
+    expect(callsTo(calls, '/auth/reauth')).toHaveLength(1) // one consent minted the token
+  })
+
+  it('sandbox & network: the real Sandbox form saves as exactly one PUT /security/sandbox-config carrying X-Reauth-Token', async () => {
+    const calls = stubWire({ '/api/v1/security/sandbox-config': SANDBOX_OK })
+    await renderRealForm(<SandboxSection />)
+    const path = await screen.findByRole('textbox', { name: /new allowed path/i })
+    await userEvent.type(path, '/valid')
+    await userEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await answerRealPrompt()
+    await waitFor(() => expect(callsTo(calls, '/api/v1/security/sandbox-config')).toHaveLength(1))
+    expect(callsTo(calls, '/api/v1/security/sandbox-config')).toHaveLength(1)
+    expect(callsTo(calls, '/api/v1/security/sandbox-config')[0].init.headers).toHaveProperty('X-Reauth-Token', 'rt')
+    expect(callsTo(calls, '/auth/reauth')).toHaveLength(1)
+  })
+
+  it('protection: the real Security section saves the Auto-approve switch as exactly one PUT /security/sandbox-config carrying X-Reauth-Token', async () => {
+    const calls = stubWire({ '/api/v1/security/sandbox-config': { ...SANDBOX_OK, auto_approve: true } })
+    await renderRealForm(<SecuritySection />)
+    // The shell's prompt hook decides the mode from the app-state read; wait
+    // for it so Save changes takes the mode this file pins (local).
+    await waitFor(() => expect(api.fetchAppState).toHaveBeenCalled())
+    // The draft is made at the primary-layer switch; the section's Save bar
+    // renders inside the collapsed Advanced disclosure, so reaching the
+    // oracle means expanding it (the committed SecuritySection pattern).
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    await userEvent.click(toggle)
+    await userEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await answerRealPrompt()
+    await waitFor(() => expect(callsTo(calls, '/api/v1/security/sandbox-config')).toHaveLength(1))
+    expect(callsTo(calls, '/api/v1/security/sandbox-config')).toHaveLength(1)
+    expect(callsTo(calls, '/api/v1/security/sandbox-config')[0].init.headers).toHaveProperty('X-Reauth-Token', 'rt')
+    expect(callsTo(calls, '/auth/reauth')).toHaveLength(1)
+  })
+
+  it('providers: the real Voice input group saves the Active transcriber as exactly one PUT /integrations/providers/{id} carrying X-Reauth-Token', async () => {
+    const calls = stubWire({ '/api/v1/integrations/providers/': INTEGRATIONS_OK })
+    await renderRealForm(<IntegrationsSection />)
+    const select = await screen.findByTestId('active-transcriber')
+    await waitFor(() => expect(select).toHaveValue('groq'))
+    await userEvent.selectOptions(select, 'elevenlabs')
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await answerRealPrompt()
+    await waitFor(() => expect(callsTo(calls, '/api/v1/integrations/providers/')).toHaveLength(1))
+    expect(callsTo(calls, '/api/v1/integrations/providers/')).toHaveLength(1)
+    expect(callsTo(calls, '/api/v1/integrations/providers/')[0].init.headers).toHaveProperty('X-Reauth-Token', 'rt')
+    expect(callsTo(calls, '/auth/reauth')).toHaveLength(1)
+  })
 })
