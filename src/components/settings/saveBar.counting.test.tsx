@@ -247,71 +247,15 @@ describe('FR-018 — the saved signal stays long enough to read', () => {
   })
 })
 
-// FR-017 (R2-07 note): exactly one gold action per screen. While the Save
-// bar shows, every OTHER primary action on the screen drops to the outline
-// variant; with the bar hidden they are the gold default again. The
-// mechanism the spec names is usePrimaryVariant (SaveBar.tsx): a section's
-// own primary action reads the shell's saveBarVisible and picks the variant
-// from it — the consumption IntegrationsSection's "Save key" button makes.
-// The probe renders the REAL Button with that variant under the same shell
-// context the harness supplies the real SaveBar with.
-describe('FR-017 — with the Save bar visible, every other primary action is outlined', () => {
-  const GOLD = 'bg-[var(--color-accent)]'
-  const OUTLINE = ['border', 'border-[var(--color-border)]', 'bg-transparent']
-
-  async function renderProbeWithBar(saveBarVisible: boolean) {
-    const SaveBarMod = await vi.importActual<any>('@/components/settings/SaveBar')
-    const { SettingsShellContext } = await vi.importActual<any>('@/components/settings/SettingsShellContext')
-    const { Button } = await vi.importActual<any>('@/components/ui/button')
-    function Probe() {
-      const variant = SaveBarMod.usePrimaryVariant()
-      return <Button variant={variant} data-testid="fr017-probe">Save key</Button>
-    }
-    const SaveBar = await loadSaveBar()
-    const view = render(
-      <SettingsShellContext.Provider
-        value={{
-          announce: () => {},
-          setDraftCount: () => {},
-          offerRestart: () => {},
-          refreshPendingRestart: () => {},
-          requestPassword: undefined,
-          saveBarVisible,
-          setSaveBarVisible: () => {},
-          standalone: false,
-        }}
-      >
-        <SaveBar
-          section="gateway"
-          fields={[LOG_FIELD]}
-          onSave={vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }))}
-          onDiscard={vi.fn()}
-        />
-        <Probe />
-      </SettingsShellContext.Provider>,
-    )
-    // The premise on screen: with saveBarVisible true the bar IS showing a
-    // change; with false it is hidden.
-    if (saveBarVisible) {
-      fireEvent.change(screen.getByLabelText('Log level'), { target: { value: 'debug' } })
-      expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
-    } else {
-      expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
-    }
-    return view
-  }
-
-  it('the bar shows: another primary action ("Save key") is outlined, not gold', async () => {
-    await renderProbeWithBar(true)
-    const probe = screen.getByTestId('fr017-probe')
-    expect(probe, 'RED (FR-017): a second gold action must drop to outline while the bar shows').toHaveClass(...OUTLINE)
-    expect(probe, 'RED (FR-017): the outline action must not carry the gold fill').not.toHaveClass(GOLD)
-  })
-
-  it('the bar is hidden: the primary action is the gold default again', async () => {
-    await renderProbeWithBar(false)
-    const probe = screen.getByTestId('fr017-probe')
-    expect(probe, 'FR-017: with the bar hidden the primary action returns to the gold default').toHaveClass(GOLD)
-    expect(probe).not.toHaveClass('bg-transparent')
-  })
-})
+// FR-017 (CHECK R3-01): exactly one gold action per screen. The synthetic
+// Probe that used to live here (a private consumer of usePrimaryVariant under
+// the harness shell) is REPLACED by the rendered proof on the real sections —
+// saveBar.goldActions.rendered.test.tsx renders the real SettingsSectionBody
+// for tab=providers and asserts the spec's oracle on the sections' real
+// primary actions (the bar's Save changes, Connect a provider, the voice
+// sheet's and the search panel's real Save keys), with the same gold/outline
+// branches this probe pinned. Replacement cited per FR-017, which names the
+// SCREEN, not a synthetic consumer — a probe cannot see a real action that
+// skips the demotion (check mutant N31 survived the probe). The hook's two
+// fault directions (always gold / always outline) are killed by the rendered
+// file's bar-visible and bar-hidden assertions.
