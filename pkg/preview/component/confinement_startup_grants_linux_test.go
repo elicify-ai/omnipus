@@ -280,10 +280,10 @@ func TestT122_SymlinkedSlotListsItsTarget(t *testing.T) {
 	r := t.TempDir()
 	root := filepath.Join(r, "usr")
 	exe := t122Exe(t, filepath.Join(root, "bin", "omnipus"))
-	real := t122Slot(t, filepath.Join(r, "real-office"))
+	target := t122Slot(t, filepath.Join(r, "real-office"))
 	link := filepath.Join(root, "share", "omnipus", "office")
 	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0755))
-	require.NoError(t, os.Symlink(real, link))
+	require.NoError(t, os.Symlink(target, link))
 	pdfium := t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
 
 	grants, _ := component.ConfinementStartupGrants(&component.Resolver{
@@ -291,7 +291,7 @@ func TestT122_SymlinkedSlotListsItsTarget(t *testing.T) {
 		Executable: filepath.Join(root, "bin", "omnipus"),
 		GOOS:       "linux",
 	})
-	t122AssertExact(t, grants, []string{real, pdfium, exe})
+	t122AssertExact(t, grants, []string{target, pdfium, exe})
 }
 
 func TestT122_NeverGrantsParentFoldersOrBin(t *testing.T) {

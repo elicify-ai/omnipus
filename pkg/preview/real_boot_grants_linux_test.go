@@ -124,11 +124,19 @@ func t126DoExecProbe(path string) int {
 
 // t126RunExecProbe mirrors functionalRunProbe for the exec probe: the child
 // goes through hooks (the agent shell spawn path) or runs plain (nil hooks,
-// the unconfined control). Returns "ok", "EACCES", "EPERM" or the failure.
-func t126RunExecProbe(t *testing.T, hooks *spawnHooks, path, work string) string {
+// the unconfined control). The optional self override re-points the probe at
+// a specific copy of the test binary (see functionalRunProbe). Returns "ok",
+// "EACCES", "EPERM" or the failure.
+func t126RunExecProbe(t *testing.T, hooks *spawnHooks, path, work string, selfOverride ...string) string {
 	t.Helper()
-	self, err := os.Executable()
-	require.NoError(t, err)
+	var self string
+	var err error
+	if len(selfOverride) > 0 {
+		self = selfOverride[0]
+	} else {
+		self, err = os.Executable()
+		require.NoError(t, err)
+	}
 	cmd := exec.Command(self, t126ExecProbeArg, path)
 	cmd.Dir = work
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
@@ -172,6 +180,7 @@ type t126Layout struct {
 	Prefix      string // P
 	Home        string // the gateway home (outside /tmp)
 	Bin         string // P/bin/omnipus (copy of the test binary = the program file)
+	ProbeBin    string // work-dir copy of the test binary: the per-turn rules cover the turn's WorkDir for exec and nothing else here, so probes must run from inside it
 	OfficeSlot  string // P/share/omnipus/office (present or absent per scenario)
 	PdfiumSlot  string // P/share/omnipus/pdfium
 	OfficeSrc   string // pristine real LibreOffice (staged outside P)
@@ -238,19 +247,32 @@ func t126StagePrefix(t *testing.T, withOffice, withRenderer bool) *t126Layout {
 		OfficeSrc:   officeSrc,
 		RendererSrc: rendererSrc,
 		Bin:         filepath.Join(base, "prefix", "bin", "omnipus"),
+		ProbeBin:    filepath.Join(base, "home", "scratch", "probe"),
 	}
 	layout.OfficeSlot = filepath.Join(layout.Prefix, "share", "omnipus", "office")
 	layout.PdfiumSlot = filepath.Join(layout.Prefix, "share", "omnipus", "pdfium")
-	t126RequirePrefixOutside(t, layout.Prefix, layout.Home)
+	// The prefix and home must EXIST before the outside-guard runs: it
+	// resolves them with EvalSymlinks, which fails ENOENT on a path that is
+	// not there yet (the failure mode the first real-fixture run hit).
 	require.NoError(t, os.MkdirAll(filepath.Join(layout.Prefix, "bin"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(layout.Prefix, "share", "omnipus"), 0o755))
 	require.NoError(t, os.MkdirAll(layout.Home, 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(layout.Home, "scratch"), 0o700))
+	t126RequirePrefixOutside(t, layout.Prefix, layout.Home)
 	self, err := os.Executable()
 	require.NoError(t, err)
 	q1bCopyFile(t, self, layout.Bin, 0o755)
+	// The probe copy lives under the home's scratch dir on purpose: the
+	// per-turn derivation grants the turn's WorkDir RWX (here: scratch) and
+	// nothing else exec-able in this world, so a probe exec'd from the
+	// binary's original location would die with EACCES before it ever
+	// probed — a denial for the wrong reason (false pass).
+	q1bCopyFile(t, self, layout.ProbeBin, 0o755)
+	// functionalCopyTree is `cp -a <src> <dst>`: the destination must NOT
+	// exist, or GNU cp nests the fixture inside it (office slot then lacks
+	// program/soffice at its root — the failure mode the first real-fixture
+	// run hit). cp -a creates the destination itself.
 	if withOffice {
-		require.NoError(t, os.MkdirAll(layout.OfficeSlot, 0o755))
 		functionalCopyTree(t, officeSrc, layout.OfficeSlot)
 		require.NoError(t, component.WritePackagedOfficeManifest(layout.OfficeSlot, component.PackagedOfficeOptions{
 			GOOS: "linux", GOARCH: runtime.GOARCH,
@@ -258,16 +280,13 @@ func t126StagePrefix(t *testing.T, withOffice, withRenderer bool) *t126Layout {
 	} else {
 		// The after-start scenarios need the pristine tree outside P.
 		pristine := filepath.Join(base, "install-office")
-		require.NoError(t, os.MkdirAll(pristine, 0o755))
 		functionalCopyTree(t, officeSrc, pristine)
 		layout.OfficeSrc = pristine
 	}
 	if withRenderer {
-		require.NoError(t, os.MkdirAll(layout.PdfiumSlot, 0o755))
 		functionalCopyTree(t, rendererSrc, layout.PdfiumSlot)
 	} else {
 		pristine := filepath.Join(base, "install-pdfium")
-		require.NoError(t, os.MkdirAll(pristine, 0o755))
 		functionalCopyTree(t, rendererSrc, pristine)
 		layout.RendererSrc = pristine
 		require.FileExists(t, filepath.Join(pristine, "manifest.json"),
@@ -277,6 +296,31 @@ func t126StagePrefix(t *testing.T, withOffice, withRenderer bool) *t126Layout {
 		require.FileExists(t, filepath.Join(layout.PdfiumSlot, "manifest.json"),
 			"BLOCKED: the real renderer release folder must carry its packaged manifest.json")
 	}
+	return layout
+}
+
+// t126LayoutFor is every real T12x test's entry point. An unconfined first
+// run stages a fresh world; a re-exec'd role RECONSTRUCTS the parent's world
+// from the carried base instead of re-staging — the child already runs under
+// the inherited startup rules and can create nothing outside them, and the
+// rules name the parent's exact slot paths, so the child must use the same
+// world, not a new one.
+func t126LayoutFor(t *testing.T, withOffice, withRenderer bool) *t126Layout {
+	t.Helper()
+	if os.Getenv(t126RoleEnv) == "" {
+		return t126StagePrefix(t, withOffice, withRenderer)
+	}
+	base := os.Getenv(t126BaseEnv)
+	require.NotEmpty(t, base, "instrument: the re-exec'd image must carry the staged base")
+	layout := &t126Layout{
+		Base:     base,
+		Prefix:   filepath.Join(base, "prefix"),
+		Home:     filepath.Join(base, "home"),
+		Bin:      filepath.Join(base, "prefix", "bin", "omnipus"),
+		ProbeBin: filepath.Join(base, "home", "scratch", "probe"),
+	}
+	layout.OfficeSlot = filepath.Join(layout.Prefix, "share", "omnipus", "office")
+	layout.PdfiumSlot = filepath.Join(layout.Prefix, "share", "omnipus", "pdfium")
 	return layout
 }
 
@@ -328,6 +372,15 @@ func t126InstallStartupRules(t *testing.T, layout *t126Layout) {
 	require.NoError(t, backend.ApplyWithMode(*policy, sandbox.ModeEnforce))
 	require.True(t, backend.EnforcingChildren(), "§3.8: the re-exec'd image must re-apply its own startup rules and enforce them (no unconfined acceptance)")
 	component.SetStartupGrants(rec)
+	// The gateway registers the per-turn base right after the enforcing
+	// apply (pkg/gateway/sandbox_apply.go); without it KernelPolicyForTurn
+	// yields no policy and T-125(b)'s spawn path would confine nothing.
+	// The allowance lists are nil: this boot carries no operator allowances,
+	// so the gateway's connectPortsFromRules would derive nothing either.
+	sandbox.RegisterTurnPolicyBase(&sandbox.TurnPolicyInput{
+		HomePath: layout.Home,
+		Model:    sandbox.FilesystemModelConfined,
+	})
 	t.Logf("§3.8: startup rules re-applied and the BR-2.5 record installed; record notes=%v", recordNotes)
 }
 
@@ -337,7 +390,7 @@ func t126SpawnHelper(t *testing.T, layout *t126Layout, ops []t126HelperOp) {
 	t.Helper()
 	raw, err := json.Marshal(ops)
 	require.NoError(t, err)
-	opsPath := filepath.Join(layout.Base, "helper-ops.json")
+	opsPath := filepath.Join(layout.Home, "helper-ops.json")
 	require.NoError(t, os.WriteFile(opsPath, raw, 0o600))
 	self, err := os.Executable()
 	require.NoError(t, err)
@@ -368,9 +421,10 @@ func t126HelperMain(opsPath string) {
 		os.Exit(64)
 	}
 	base := os.Getenv(t126BaseEnv)
+	home := filepath.Join(base, "home")
 	deadline := time.Now().Add(6 * time.Minute)
 	for _, op := range ops {
-		for !t126FileExists(filepath.Join(base, op.Trigger)) {
+		for !t126FileExists(filepath.Join(home, op.Trigger)) {
 			if time.Now().After(deadline) {
 				fmt.Fprintf(os.Stderr, "helper: trigger %s never appeared\n", op.Trigger)
 				os.Exit(65)
@@ -381,7 +435,7 @@ func t126HelperMain(opsPath string) {
 			fmt.Fprintf(os.Stderr, "helper: %s: %v\n", op.Op, err)
 			os.Exit(66)
 		}
-		if err := os.WriteFile(filepath.Join(base, op.Done), []byte("done\n"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(home, op.Done), []byte("done\n"), 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "helper: %v\n", err)
 			os.Exit(67)
 		}
@@ -396,7 +450,16 @@ func t126FileExists(p string) bool {
 func t126PerformOp(base, op string) error {
 	switch op {
 	case "install-office":
-		return os.Rename(filepath.Join(base, "install-office"), filepath.Join(base, "prefix", "share", "omnipus", "office"))
+		slot := filepath.Join(base, "prefix", "share", "omnipus", "office")
+		if err := os.Rename(filepath.Join(base, "install-office"), slot); err != nil {
+			return err
+		}
+		// A real install leaves a COMPLETE packaged component behind: the
+		// installer writes the manifest the resolver requires, so the
+		// after-start denial (BR-2.5) is reached — not "not installed".
+		return component.WritePackagedOfficeManifest(slot, component.PackagedOfficeOptions{
+			GOOS: "linux", GOARCH: runtime.GOARCH,
+		})
 	case "install-renderer":
 		return os.Rename(filepath.Join(base, "install-pdfium"), filepath.Join(base, "prefix", "share", "omnipus", "pdfium"))
 	case "replace-office":
@@ -407,7 +470,23 @@ func t126PerformOp(base, op string) error {
 		if err := os.MkdirAll(slot, 0o755); err != nil {
 			return err
 		}
-		return copyDir(filepath.Join(base, "install-office"), slot)
+		// A real in-place replacement copies a working install back over the
+		// granted path. The replace scenario starts WITH the component in P,
+		// so no pristine tree was staged at the base; the office fixture
+		// root (required by these tests regardless) is the working install.
+		source := os.Getenv("OMNIPUS_TEST_OFFICE_ROOT")
+		if source == "" {
+			return fmt.Errorf("replace-office: OMNIPUS_TEST_OFFICE_ROOT is not set; nothing to copy back")
+		}
+		if err := copyDir(source, slot); err != nil {
+			return err
+		}
+		// The replacement is a real, working install: complete with its
+		// manifest, so the resolver accepts it and BR-2.5's after-start
+		// check (new folder inode at the granted path) is what denies it.
+		return component.WritePackagedOfficeManifest(slot, component.PackagedOfficeOptions{
+			GOOS: "linux", GOARCH: runtime.GOARCH,
+		})
 	case "register-office":
 		_, err := component.RegisterOffice(component.RegisterOptions{
 			Home:     filepath.Join(base, "home"),
@@ -443,15 +522,19 @@ func copyDir(source, target string) error {
 	})
 }
 
+// Trigger and done files live under the HOME, not the scratch base: the
+// enforced image writes the trigger and polls the done file from inside the
+// startup rules, and the home is the only folder those rules grant for
+// writing. The unconfined helper uses the same paths.
 func t126Trigger(t *testing.T, layout *t126Layout, name string) {
 	t.Helper()
-	require.NoError(t, os.WriteFile(filepath.Join(layout.Base, name), []byte("go\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(layout.Home, name), []byte("go\n"), 0o600))
 }
 
 func t126AwaitDone(t *testing.T, layout *t126Layout, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
-	for !t126FileExists(filepath.Join(layout.Base, name)) {
+	for !t126FileExists(filepath.Join(layout.Home, name)) {
 		if time.Now().After(deadline) {
 			t.Fatalf("T-128: helper never finished %s", name)
 		}
@@ -466,21 +549,23 @@ func t126AwaitDone(t *testing.T, layout *t126Layout, name string) {
 // program (EACCES both); the same two actions by an unconfined control
 // process succeed.
 func TestT125B_RealAgentPolicyNeverReachesTheGrants(t *testing.T) {
-	layout := t126StagePrefix(t, true, true)
+	layout := t126LayoutFor(t, true, true)
 	if os.Getenv(t126RoleEnv) == "" {
 		// Unconfined controls, before any rule exists.
 		manifest := filepath.Join(layout.OfficeSlot, "manifest.json")
-		controlRead := functionalRunProbe(t, nil, "read", manifest, layout.Home)
+		controlRead := functionalRunProbe(t, nil, "read", manifest, layout.Home, layout.ProbeBin)
 		require.Equal(t, "ok", controlRead.Errno, "T-125(b) control: the manifest is readable before the rules")
 		rendererProgram := t126RendererProgram(t, layout)
-		controlExec := t126RunExecProbe(t, nil, rendererProgram, layout.Home)
+		controlExec := t126RunExecProbe(t, nil, rendererProgram, layout.Home, layout.ProbeBin)
 		require.Equal(t, "ok", controlExec, "T-125(b) control: the renderer program starts unconfined")
-		require.NoError(t, os.WriteFile(filepath.Join(layout.Base, "control-ok"), []byte(controlRead.Errno+","+controlExec+"\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(layout.Home, "control-ok"), []byte(controlRead.Errno+","+controlExec+"\n"), 0o600))
 		grants, policy := t126GrantsAndPolicy(t, layout)
 		t126ApplyAndReexec(t, layout, grants, policy, "child")
 	}
-	// Enforced image: prove the controls really ran, then deny.
-	raw, err := os.ReadFile(filepath.Join(layout.Base, "control-ok"))
+	// Enforced image: prove the controls really ran, then deny. The proof
+	// file lives under the home — the startup rules grant the home for
+	// reading and writing, and the enforced image must be able to read it.
+	raw, err := os.ReadFile(filepath.Join(layout.Home, "control-ok"))
 	require.NoError(t, err, "T-125(b): the unconfined controls must have run before the rules")
 	require.Equal(t, "ok,ok\n", string(raw), "T-125(b): unconfined controls must succeed")
 	t126InstallStartupRules(t, layout)
@@ -492,13 +577,13 @@ func TestT125B_RealAgentPolicyNeverReachesTheGrants(t *testing.T) {
 		return sandbox.StartLockedWithPolicyHeld(cmd, agentPolicy)
 	}}
 	manifest := filepath.Join(layout.OfficeSlot, "manifest.json")
-	deniedRead := functionalRunProbe(t, &hooks, "read", manifest, work)
+	deniedRead := functionalRunProbe(t, &hooks, "read", manifest, work, layout.ProbeBin)
 	t.Logf("T-125(b): agent-policy manifest read=%s", deniedRead.Errno)
 	require.Equal(t, "EACCES", deniedRead.Errno,
 		"T-125(b): the agent's derived per-turn policy must deny the startup-granted office slot (BR-2.4)")
 
 	rendererProgram := t126RendererProgram(t, layout)
-	deniedExec := t126RunExecProbe(t, &hooks, rendererProgram, work)
+	deniedExec := t126RunExecProbe(t, &hooks, rendererProgram, work, layout.ProbeBin)
 	t.Logf("T-125(b): agent-policy renderer exec=%s", deniedExec)
 	require.Equal(t, "EACCES", deniedExec,
 		"T-125(b): the agent's derived per-turn policy must deny executing the startup-granted renderer program (BR-2.4)")
@@ -523,7 +608,7 @@ func t126RendererProgram(t *testing.T, layout *t126Layout) string {
 // under the startup rules: A2 (FX-DOCX6) → 6 pages with its source strings,
 // A5 (FX-PDF30, page "3") → 1 page image.
 func TestT126_RealPackagedComponentsPreviewUnderStartupGrants(t *testing.T) {
-	layout := t126StagePrefix(t, true, true)
+	layout := t126LayoutFor(t, true, true)
 	if os.Getenv(t126RoleEnv) == "" {
 		grants, policy := t126GrantsAndPolicy(t, layout)
 		t126ApplyAndReexec(t, layout, grants, policy, "child")
@@ -552,7 +637,7 @@ func TestT126_RealPackagedComponentsPreviewUnderStartupGrants(t *testing.T) {
 // LibreOffice there, then the renderer. Both previews return the exact
 // BR-2.5 sentences, and the converter never starts.
 func TestT128A_InstalledAfterStartIsDeniedForBoth(t *testing.T) {
-	layout := t126StagePrefix(t, false, false)
+	layout := t126LayoutFor(t, false, false)
 	if os.Getenv(t126RoleEnv) == "" {
 		t126SpawnHelper(t, layout, []t126HelperOp{
 			{Op: "install-office", Trigger: "a-office.trg", Done: "a-office.done"},
@@ -597,7 +682,7 @@ func TestT128A_InstalledAfterStartIsDeniedForBoth(t *testing.T) {
 // RegisterOffice from a separate, unconfined process after the start; the
 // same Office sentence follows.
 func TestT128B_RegisteredAfterStartIsDenied(t *testing.T) {
-	layout := t126StagePrefix(t, false, true)
+	layout := t126LayoutFor(t, false, true)
 	if os.Getenv(t126RoleEnv) == "" {
 		t126SpawnHelper(t, layout, []t126HelperOp{
 			{Op: "register-office", Trigger: "b-register.trg", Done: "b-register.done"},
@@ -628,7 +713,7 @@ func TestT128B_RegisteredAfterStartIsDenied(t *testing.T) {
 // before the replacement must succeed — (a)–(c) are no pass when nothing
 // was confined.
 func TestT128C_ReplaceInPlaceIsDenied(t *testing.T) {
-	layout := t126StagePrefix(t, true, true)
+	layout := t126LayoutFor(t, true, true)
 	if os.Getenv(t126RoleEnv) == "" {
 		t126SpawnHelper(t, layout, []t126HelperOp{
 			{Op: "replace-office", Trigger: "c-replace.trg", Done: "c-replace.done"},
@@ -641,11 +726,14 @@ func TestT128C_ReplaceInPlaceIsDenied(t *testing.T) {
 	svc, err := New(Config{Home: layout.Home, Self: layout.Bin, Resolver: resolver})
 	require.NoError(t, err)
 
-	// Before the replacement the granted component must really work.
-	t126PreviewA2(t, svc, "T-128(c) pre-replacement control")
+	// The start hook is armed BEFORE the control preview: it is what proves
+	// the control really converted (nothing confined = nothing denied).
 	starts := 0
 	testHookConverterStart = func(converterStart) { starts++ }
 	t.Cleanup(func() { testHookConverterStart = nil })
+
+	// Before the replacement the granted component must really work.
+	t126PreviewA2(t, svc, "T-128(c) pre-replacement control")
 
 	t126Trigger(t, layout, "c-replace.trg")
 	t126AwaitDone(t, layout, "c-replace.done")
@@ -662,7 +750,7 @@ func TestT128C_ReplaceInPlaceIsDenied(t *testing.T) {
 // the production reExecProcess code path on that thread; the new image
 // applies its own startup rules; A2 → 6 pages, A5 → 1 page image.
 func TestT128D_RestartFromRestrictedThreadKeepsGrants(t *testing.T) {
-	layout := t126StagePrefix(t, true, true)
+	layout := t126LayoutFor(t, true, true)
 	switch role := os.Getenv(t126RoleEnv); role {
 	case "":
 		proof := filepath.Join(layout.Base, "thread-proof")
@@ -749,19 +837,28 @@ func t126PreviewDoc(t *testing.T, svc *Service, doc functionalDocument, label st
 
 func t126PreviewOffice(t *testing.T, svc *Service) (*Result, error) {
 	t.Helper()
+	doc := t126DocxFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), CallTimeout)
+	defer cancel()
+	adm, err := svc.Admit(ctx, true)
+	require.NoError(t, err, "T-128: admit")
+	defer adm.Release()
+	return svc.Preview(ctx, adm, Request{Name: "t128" + doc.Ext, Ext: doc.Ext, Data: doc.Data, Default: true})
+}
+
+// t126DocxFixture returns the FX-DOCX6 source fixture, failing the test with
+// the same instrument message as before if the source fixtures lost it. It
+// returns a struct (never nil), so the not-found failure stays a loud Fatalf
+// rather than a nil result the caller would have to interpret.
+func t126DocxFixture(t *testing.T) functionalDocument {
+	t.Helper()
 	for _, doc := range functionalDocuments(t) {
-		if doc.ID != "FX-DOCX6" {
-			continue
+		if doc.ID == "FX-DOCX6" {
+			return doc
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), CallTimeout)
-		defer cancel()
-		adm, err := svc.Admit(ctx, true)
-		require.NoError(t, err, "T-128: admit")
-		defer adm.Release()
-		return svc.Preview(ctx, adm, Request{Name: "t128" + doc.Ext, Ext: doc.Ext, Data: doc.Data, Default: true})
 	}
 	t.Fatalf("instrument: FX-DOCX6 missing from the source fixtures")
-	return nil, nil
+	return functionalDocument{}
 }
 
 func t126PreviewPDF(t *testing.T, svc *Service, first, last int) (*Result, error) {
@@ -792,7 +889,7 @@ func t126PDF(t *testing.T, pages int) []byte {
 		objects = append(objects, fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents %d 0 R >>", contentRef))
 	}
 	for i := 1; i <= pages; i++ {
-		objects = append(objects, fmt.Sprintf("<< /Length 0 >>\nstream\n\nendstream"))
+		objects = append(objects, "<< /Length 0 >>\nstream\n\nendstream")
 	}
 	var b strings.Builder
 	b.WriteString("%PDF-1.4\n")

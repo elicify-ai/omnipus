@@ -79,10 +79,20 @@ func functionalDoProbe(operation, path string) functionalProbeResult {
 	return result
 }
 
-func functionalRunProbe(t *testing.T, hooks *spawnHooks, operation, path, work string) functionalProbeResult {
+// The optional self override re-points the probe at a specific copy of the
+// test binary: the real T12x enforced image must exec a probe copy under the
+// home, because the per-turn rules cover the home but not the original
+// binary's location (the default stays os.Executable for every other user).
+func functionalRunProbe(t *testing.T, hooks *spawnHooks, operation, path, work string, selfOverride ...string) functionalProbeResult {
 	t.Helper()
-	self, err := os.Executable()
-	require.NoError(t, err)
+	var self string
+	var err error
+	if len(selfOverride) > 0 {
+		self = selfOverride[0]
+	} else {
+		self, err = os.Executable()
+		require.NoError(t, err)
+	}
 	cmd := exec.Command(self, functionalProbeArg, operation, path)
 	cmd.Dir = work
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
