@@ -57,6 +57,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -71,6 +72,32 @@ func putContextBody(api *restAPI, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	api.HandleContextSettings(w, r)
 	return w
+}
+
+// launchUnderHeldWriteLock is the FR-021 test barrier at the read/lock seam
+// (spec :1597). It takes the config write lock so neither writer can merge
+// yet, launches both, and gives them a bounded window to finish every
+// pre-lock step — an early-copy writer (the C-6 "verified" defect shape)
+// takes its whole-section snapshot HERE, parked on the held lock — then
+// releases and lets the merges serialise. After release both merges run
+// under the lock in some order; a writer that copied before them merges a
+// stale copy and loses the other's field, deterministically. GREEN's
+// inside-the-lock merge reads the stored state under its own lock
+// acquisition, so it passes under ANY window (including a scheduler that
+// only runs the writers after release); the window bounds arrival only and
+// is never the oracle — the oracle is the stored config.json.
+func launchUnderHeldWriteLock(api *restAPI, w1, w2 func()) {
+	api.configMu.Lock()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); w1() }()
+	go func() { defer wg.Done(); w2() }()
+	arrival := time.Now()
+	for time.Since(arrival) < 200*time.Millisecond {
+		time.Sleep(5 * time.Millisecond)
+	}
+	api.configMu.Unlock()
+	wg.Wait()
 }
 
 // seedContextValues sets both disjoint fields on the live config and on the
@@ -129,11 +156,14 @@ func TestContextSettings_ConcurrentDisjointEditsBothSurvive(t *testing.T) {
 			if order == "success_first" {
 				first, second = second, first
 			}
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() { defer wg.Done(); putContextBody(api, first) }()
-			go func() { defer wg.Done(); putContextBody(api, second) }()
-			wg.Wait()
+			// F10 (CHECK): the plain back-to-back launch let both writes run
+			// serially, so a stale pre-lock snapshot could pass. The barrier
+			// at the read/lock seam (spec :1597) forces the overlap: both
+			// writers finish every pre-lock step while the write lock is
+			// held by the test, before either merge.
+			launchUnderHeldWriteLock(api,
+				func() { putContextBody(api, first) },
+				func() { putContextBody(api, second) })
 
 			gotCap, gotSuccess := storedContextValues(t, api)
 			require.Equal(t, 50, gotCap,
@@ -150,14 +180,18 @@ func TestContextSettings_ConcurrentDisjointEditsBothSurvive(t *testing.T) {
 
 func TestContextSettings_RefusesZeroOverride(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	// F10 (CHECK): the "nothing was written" proof must snapshot the file
+	// BEFORE the refused request — reading "before" only after the request
+	// cannot detect a write that landed before the 400.
+	before, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
 	w := putContextBody(api, `{"model_overrides":[{"provider":"openai","model":"gpt-x","context_window":0}]}`)
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"the server must refuse a Model-override context length of 0 (R2-MAJ-005); body=%s", w.Body.String())
 	require.Contains(t, w.Body.String(), "model_overrides[0].context_window must be ≥ 1",
 		"the refusal names the field and its minimum")
-	// Nothing was written: config.json is byte-identical to before.
-	before, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
+	// Nothing was written: config.json is byte-identical to the pre-request
+	// snapshot (C-6 outcome table: refused before any write — "unchanged").
 	after, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)
 	require.Equal(t, string(before), string(after),

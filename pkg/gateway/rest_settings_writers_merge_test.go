@@ -39,6 +39,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -106,15 +107,26 @@ func putVia(handler func(http.ResponseWriter, *http.Request), path, body string)
 }
 
 func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
-	// runPair launches two writes back-to-back in goroutines (the order-11
-	// pattern: both take their pre-merge view before either merge completes
-	// under any interleaving; GREEN's inside-the-lock merge passes under ANY
-	// timing) and waits for both.
-	runPair := func(w1, w2 func()) {
+	// runPair forces the overlap at the read/lock seam with the FR-021 test
+	// barrier (spec :1597; F10, CHECK — the plain back-to-back launch let
+	// both writes run serially, so a stale pre-lock snapshot could pass): it
+	// holds the config write lock, launches both writes, and gives them a
+	// bounded window to finish every pre-lock step — an early-copy writer
+	// takes its whole-section snapshot HERE, parked on the held lock — then
+	// releases and lets the merges serialise. GREEN's inside-the-lock merge
+	// reads the stored state under its own lock acquisition and passes under
+	// ANY window; the window bounds arrival only and is never the oracle.
+	runPair := func(api *restAPI, w1, w2 func()) {
+		api.configMu.Lock()
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); w1() }()
 		go func() { defer wg.Done(); w2() }()
+		arrival := time.Now()
+		for time.Since(arrival) < 200*time.Millisecond {
+			time.Sleep(5 * time.Millisecond)
+		}
+		api.configMu.Unlock()
 		wg.Wait()
 	}
 
@@ -129,7 +141,7 @@ func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
 			"goal_max_rounds":             6,
 			"goal_reminder_quiet_seconds": 60,
 		})
-		runPair(
+		runPair(api,
 			func() {
 				r := httptest.NewRequest(http.MethodPut, "/api/v1/performance", strings.NewReader(`{"goal_max_rounds":8}`))
 				r.Header.Set("Content-Type", "application/json")
@@ -159,7 +171,7 @@ func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
 			"idle_timeout_minutes": 30,
 			"recap_model":          "",
 		})
-		runPair(
+		runPair(api,
 			func() { putVia(api.HandleMemorySettings, "/api/v1/settings/memory", `{"idle_timeout_minutes":45}`) },
 			func() { putVia(api.HandleMemorySettings, "/api/v1/settings/memory", `{"recap_model":"recap-a"}`) },
 		)
@@ -177,7 +189,7 @@ func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
 			"mode":             "enforce",
 			"filesystem_model": "confined",
 		})
-		runPair(
+		runPair(api,
 			func() {
 				r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config", strings.NewReader(`{"mode":"permissive"}`))
 				r.Header.Set("Content-Type", "application/json")
@@ -210,7 +222,7 @@ func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
 			"prompt_injection_level": "medium",
 			"rate_limits":            map[string]any{"max_agent_llm_calls_per_hour": 100, "max_agent_tool_calls_per_minute": 50},
 		})
-		runPair(
+		runPair(api,
 			func() { putVia(api.HandlePromptGuard, "/api/v1/security/prompt-guard", `{"level":"high"}`) },
 			func() {
 				r := httptest.NewRequest(http.MethodPut, "/api/v1/security/rate-limits", strings.NewReader(`{"max_agent_tool_calls_per_minute":75}`))
@@ -233,7 +245,7 @@ func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
 			"max_agent_llm_calls_per_hour":    100,
 			"max_agent_tool_calls_per_minute": 50,
 		})
-		runPair(
+		runPair(api,
 			func() {
 				r := httptest.NewRequest(http.MethodPut, "/api/v1/security/rate-limits", strings.NewReader(`{"max_agent_llm_calls_per_hour":120}`))
 				r.Header.Set("Content-Type", "application/json")
@@ -270,7 +282,7 @@ func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
 			"default_model": map[string]any{"provider": "mockgw", "model": "default"},
 			"recap_model":   "",
 		})
-		runPair(
+		runPair(api,
 			func() {
 				putVia(api.HandleDefaultModel, "/api/v1/providers/default-model", `{"provider":"mockgw","model":"mock/model-a"}`)
 			},
@@ -293,7 +305,7 @@ func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
 			"memory_retros_days": 180,
 		})
 		var code1, code2 int
-		runPair(
+		runPair(h.api,
 			func() { code1 = h.do(http.MethodPut, "/api/v1/settings/retention", `{"session_days":30}`).Code },
 			func() { code2 = h.do(http.MethodPut, "/api/v1/settings/retention", `{"memory_retros_days":400}`).Code },
 		)
