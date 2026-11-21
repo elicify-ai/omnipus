@@ -25,6 +25,7 @@
 import * as React from 'react'
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // cmdk (the shared picker and the ModelSelector) needs ResizeObserver and
@@ -1222,17 +1223,37 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
     expect(within(prompt).getByRole('button', { name: 'Keep editing' })).toBeInTheDocument()
   })
 
-  it('Keep editing dismisses the prompt and leaves the key value untouched', async () => {
-    const input = await openSheetWithKey('sk-test-123')
+  // FR-069 (spec :1995, clarified ruling 2026-11-21): stacked dialogs close
+  // one at a time, each returning focus to the control that opened it.
+  // CHECK R5-03: the closure/value watchers cannot see a dropped focus
+  // return, so these two cases witness the exact opener's focus first and
+  // assert the exact return. The keys are real user events (userEvent), not
+  // fireEvent — a real Escape happens on the focused control.
+  it('Keep editing dismisses the prompt, leaves the key value untouched, and returns focus to the key input that opened the prompt (FR-069)', async () => {
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-openrouter'))
+    await userEvent.click(screen.getByTestId('configure-btn-openrouter'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+    const input = screen.getByTestId('api-key-input-openrouter') as HTMLInputElement
+    // FR-069 premise: the prompt's opener is whatever control had focus when
+    // the close gesture asked. userEvent.type focuses the field it types
+    // into, and that focus is WITNESSED before Escape.
+    await userEvent.type(input, 'sk-test-123')
+    expect(input, 'FR-069 premise: the key input — the prompt\'s opener — has focus before Escape').toHaveFocus()
 
-    pressEsc()
-    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    await userEvent.keyboard('{Escape}')
+    const prompt = screen.getByTestId('discard-key-prompt')
+    expect(within(prompt).getByRole('button', { name: 'Keep editing' })).toBeInTheDocument()
 
+    await userEvent.click(within(prompt).getByRole('button', { name: 'Keep editing' }))
     await waitFor(() => {
       expect(screen.queryByTestId('discard-key-prompt')).not.toBeInTheDocument()
     })
     expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
     expect(input).toHaveValue('sk-test-123')
+    // FR-069: the inner dialog returns focus to the control that opened it —
+    // the exact key input, not merely any focusable in the sheet.
+    expect(input, 'RED (FR-069): Keep editing must return focus to the key input that opened the prompt').toHaveFocus()
   })
 
   it('the prompt does not move focus out of the sheet (WCAG 3.2.1)', async () => {
@@ -1244,14 +1265,34 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
     expect(sheet.contains(document.activeElement)).toBe(true)
   })
 
-  it('Discard closes the sheet and clears the draft — reopening shows an empty field', async () => {
-    await openSheetWithKey('sk-test-123')
+  it('Discard closes both stacked dialogs at once, clears the draft, and returns focus to the Configure opener (FR-069)', async () => {
+    renderSection()
+    const configure = await waitFor(() => screen.getByTestId('configure-btn-openrouter'))
+    // FR-069 premise: the outermost dialog's opener is focused before the
+    // sheet opens — witnessed here, never re-forced near the assertion.
+    configure.focus()
+    expect(configure, 'FR-069 premise: the Configure opener has focus before the sheet opens').toHaveFocus()
+    await userEvent.click(configure)
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+    const input = screen.getByTestId('api-key-input-openrouter') as HTMLInputElement
+    await userEvent.type(input, 'sk-test-123')
+    // The sheet demonstrably moved focus inside, so a later return to
+    // Configure is a real restoration, not a click side effect.
+    expect(input, 'FR-069 premise: focus sits in the sheet on the key input').toHaveFocus()
 
-    pressEsc()
-    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    await userEvent.keyboard('{Escape}')
+    const prompt = screen.getByTestId('discard-key-prompt')
+    expect(within(prompt).getByRole('button', { name: 'Discard' })).toBeInTheDocument()
+    await userEvent.click(within(prompt).getByRole('button', { name: 'Discard' }))
 
     await waitFor(() => {
       expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+    })
+    // FR-069 (clarified ruling): one action closes BOTH stacked dialogs at
+    // once, so focus goes to the control that opened the outermost — the
+    // exact Configure control, not the other Connect action, not a heading.
+    await waitFor(() => {
+      expect(configure, 'RED (FR-069): Discard must return focus to Configure, the outermost opener').toHaveFocus()
     })
 
     const reopened = await openSheet()
