@@ -37,7 +37,17 @@
  * (connect-provider-btn and the search panel's Save key carry no variant and
  * stay gold with the bar visible); the voice sheet's Save key already consumes
  * the hook and its assertions pass here. The failing runs are the production
- * findings, not harness errors.
+ * findings, not harness errors. Round 13 landed (d69905b533): the RED runs
+ * above are green, and a test-side toMatch defect was fixed (part 18).
+ *
+ * Part 18 adds the dialogs describe below — the team-lead ruling of
+ * 2026-11-21 scoping FR-017 to the page while an open modal dialog keeps its
+ * own single gold primary action. Its case has no pre-change red to show: the
+ * dialog side of the ruling already holds on every tree (ReAuthDialog never
+ * consumed the demotion hook), so it lands as a ruling-boundary regression
+ * guard whose two fault directions are named in the case (a dialog primary
+ * demoted with the bar; a second gold inside the dialog). Mutation probes on
+ * it are deferred to CHECK.
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
@@ -48,6 +58,8 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SettingsSectionBody } from './SettingsSectionBody'
 import { SettingsShellContext, type SettingsShellApi } from './SettingsShellContext'
+import { SaveBar } from './SaveBar'
+import { useSavePasswordPrompt } from './useSavePasswordPrompt'
 
 // cmdk (inside the ModelSelector's Command) needs the jsdom stubs the other
 // ProvidersSection harnesses use (formSavedStateCheck.test.tsx): ResizeObserver
@@ -172,8 +184,17 @@ const INTEGRATIONS_BEFORE = {
  * `setSaveBarVisible(owner, visible)` callback the Save bar's useShellDrafts
  * calls when a draft appears. The sections under test read THIS value — the
  * demotion path is the screen's own end-to-end, up to the shell boundary.
+ * `requestPassword` is the screen's own wiring too (the shell supplies the
+ * prompt from useSavePasswordPrompt): the dialog case passes the real hook's
+ * through so the real prompt opens during a real Save.
  */
-function ShellHarness({ children }: { children: React.ReactNode }) {
+function ShellHarness({
+  children,
+  requestPassword,
+}: {
+  children: React.ReactNode
+  requestPassword?: SettingsShellApi['requestPassword']
+}) {
   const [barsByOwner, setBarsByOwnerState] = useState<Record<string, boolean>>({})
   const saveBarVisible = Object.values(barsByOwner).some(Boolean)
   const setSaveBarVisible = useCallback((owner: string, visible: boolean) => {
@@ -191,12 +212,12 @@ function ShellHarness({ children }: { children: React.ReactNode }) {
       setDraftCount: () => {},
       offerRestart: () => {},
       refreshPendingRestart: () => {},
-      requestPassword: undefined,
+      requestPassword,
       saveBarVisible,
       setSaveBarVisible,
       standalone: false,
     }),
-    [saveBarVisible, setSaveBarVisible],
+    [saveBarVisible, setSaveBarVisible, requestPassword],
   )
   return <SettingsShellContext.Provider value={shell}>{children}</SettingsShellContext.Provider>
 }
@@ -322,5 +343,89 @@ describe('FR-017 — with the Save bar visible, Save changes is the only gold bu
     expect(screen.queryByRole('button', { name: /save changes/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     void api
+  })
+})
+
+// ── FR-017 and dialogs — team-lead ruling, 2026-11-21 ───────────────────────
+//
+// FR-017 covers the PAGE: while the Save bar shows, Save changes is the only
+// gold button ON THE PAGE. A modal dialog that is OPEN — the password prompt
+// opened by a Save (this case), the restart dialog, Rotate, Add credential,
+// the sign-in Done — keeps its own single gold primary action, and the page
+// behind it is not counted while the dialog is open. Checked for an existing
+// test that counts dialog buttons as page buttons (part 18): there is none —
+// this file's document-wide gold counts are taken with the voice key sheet
+// CLOSED (the second case cancels the sheet before its final count), which is
+// already the ruling's reading, so no existing assertion was aligned.
+//
+// The case drives the real chain: the real SaveBar under the shell's real
+// saveBarVisible wiring (a draft → useShellDrafts → setSaveBarVisible → the
+// shell value), the real useSavePasswordPrompt supplied through the shell
+// context the way SettingsScreen.tsx supplies it, and the real ReAuthDialog
+// it renders (local mode: the mocked fetchAppState carries no platform
+// identity). The Save never completes — the prompt is left open, which is
+// exactly the "during a Save" state the ruling names.
+
+// The Save bar's field contract (saveBar.counting precedent): one
+// password-marked value (FR-025 lists Shell workspace limit), so the Save
+// opens the one password prompt (FR-026) instead of writing.
+const PROMPT_FIELD = {
+  key: 'sandbox.workspace_path_guard',
+  label: 'Shell workspace limit',
+  value: false,
+  kind: 'switch',
+  password: true,
+  restart: true,
+}
+
+describe('FR-017 and dialogs (ruling 2026-11-21) — an open modal dialog keeps its own single gold primary', () => {
+  it('the password prompt opened by a Save shows its Confirm as the one gold action in the dialog while the Save bar shows behind it; the page behind is not counted while the dialog is open', async () => {
+    function PromptCase() {
+      const { requestPassword, dialog } = useSavePasswordPrompt()
+      return (
+        <ShellHarness requestPassword={requestPassword}>
+          <SaveBar
+            section="sandbox"
+            fields={[PROMPT_FIELD]}
+            onSave={vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }))}
+            onDiscard={vi.fn()}
+          />
+          {dialog}
+        </ShellHarness>
+      )
+    }
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+        <PromptCase />
+      </QueryClientProvider>,
+    )
+
+    // The premise through the screen's own wiring: the password-marked change
+    // shows the Save bar (FR-011), so the page is inside FR-017's scope.
+    await userEvent.click(screen.getByRole('switch', { name: 'Shell workspace limit' }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.getByTestId('settings-save-bar')).toBeInTheDocument()
+
+    // The Save is pressed: the one password prompt opens, listing the Save's
+    // password-marked value (FR-026), while the bar shows behind the dialog.
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    const dlg = await screen.findByRole('dialog')
+    expect(within(dlg).getByTestId('reauth-items')).toHaveTextContent('Shell workspace limit')
+
+    // The ruling, asserted: the dialog holds exactly ONE gold action and it
+    // is its Confirm — not demoted by the bar behind it; the page behind is
+    // not counted while the dialog is open (the count is scoped to the
+    // dialog; there is deliberately no page-wide gold count here).
+    const goldInDialog = Array.from(dlg.querySelectorAll('button')).filter((b) => b.className.includes(GOLD))
+    expect(
+      goldInDialog.map((b) => (b.textContent ?? '').trim()),
+      'ruling 2026-11-21: the open dialog holds exactly one gold action and it is its Confirm — demoting it with the bar (or a second gold in the dialog) fails here',
+    ).toEqual(['Confirm'])
+    expect(within(dlg).getByTestId('reauth-confirm'), 'the dialog Confirm keeps the gold fill while the Save bar shows behind it').toHaveClass(GOLD)
+    expect(within(dlg).getByTestId('reauth-cancel'), 'the dialog Cancel is outlined, not a second gold action').not.toHaveClass(GOLD)
+    // The premise stays true while the dialog is open — the Save is awaiting
+    // the password and the drafts are unsaved (FR-011). Asserted as a premise,
+    // not counted: the ruling excludes the page behind the dialog.
+    expect(screen.getByTestId('settings-save-bar')).toBeInTheDocument()
   })
 })
