@@ -552,7 +552,9 @@ export function IntegrationsSection() {
               <Microphone size={13} weight="bold" /> Voice input
             </div>
             {data.voice.length === 0 ? (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No voice providers available.</p>
+              // With no voice service there is no transcriber to choose: a
+              // jump to Active transcriber lands on this line (FR-075).
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" {...settingsRow('Active transcriber')}>No voice providers available.</p>
             ) : (
               <>
                 <FormRow

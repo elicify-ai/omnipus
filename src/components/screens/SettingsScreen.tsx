@@ -123,6 +123,10 @@ export function SettingsScreen({
 
   const { requestPassword, dialog: passwordDialog } = useSavePasswordPrompt()
 
+  // Counts row jumps (FR-075): a repeat click on the same search result
+  // jumps again.
+  const [rowJump, setRowJump] = useState(0)
+
   const shell = useMemo<SettingsShellApi>(
     () => ({
       announce,
@@ -136,10 +140,11 @@ export function SettingsScreen({
       saveBarVisible,
       setSaveBarVisible,
       targetRow,
+      targetRowJump: rowJump,
       focusHeading: () => headingRef.current?.focus(),
     }),
     // pending.refetch is stable per query; listing it keeps the lint honest.
-    [announce, pending.refetch, requestPassword, saveBarVisible, setDraftCount, setSaveBarVisible, targetRow],
+    [announce, pending.refetch, requestPassword, saveBarVisible, setDraftCount, setSaveBarVisible, targetRow, rowJump],
   )
 
   // ── Leave guard inside the app (FR-014) ────────────────────────────────
@@ -161,7 +166,6 @@ export function SettingsScreen({
   // (`data-settings-row-target`, `aria-current`); the stylesheet flashes it
   // once and leaves the flash out under reduced motion. Focus stays where
   // the section put it. A repeat click on the same result jumps again.
-  const [rowJump, setRowJump] = useState(0)
   useEffect(() => {
     const root = contentRef.current
     if (!root || !targetRow) return
