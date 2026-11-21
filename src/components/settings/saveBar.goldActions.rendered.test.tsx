@@ -89,6 +89,16 @@ beforeAll(() => {
   if (!Element.prototype.scrollIntoView) {
     Element.prototype.scrollIntoView = () => {}
   }
+  // jsdom reports every element as 0x0, and @tanstack/react-virtual measures
+  // the scroll element with offsetHeight — a zero-height viewport renders
+  // zero picker rows, which would fail the picker case below for a harness
+  // reason. Same stub the ProvidersSection.test.tsx harness carries.
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.getAttribute('data-testid') === 'picker-virtual-viewport' ? 480 : 0
+    },
+  })
 })
 
 vi.mock('@/components/ui/popover', () => ({
@@ -143,7 +153,9 @@ const ANTHROPIC_CONNECTED = {
 const DEFAULT_MODEL_BEFORE = { provider: 'openrouter', model: 'z-ai/glm-5.2', context_window: 1048576, window_source: 'catalog' }
 
 // Minimal catalog document: the one provider/model pair the draft picks
-// (ProvidersCatalog's required header fields included).
+// (ProvidersCatalog's required header fields included), plus the OpenAI
+// popular entry the picker case selects — shaped like the shared fixture's
+// row (src/test/fixtures/providers-catalog.json), single variant, api_key.
 const ANTHROPIC_CATALOG = {
   schema_version: '2.0.0',
   version: 'v2026.1.1',
@@ -163,6 +175,30 @@ const ANTHROPIC_CATALOG = {
           context_window: 200000,
           max_output_tokens: 64000,
           input_modalities: ['text'],
+          tool_call: true,
+          status: 'active',
+        },
+      ],
+    },
+    {
+      id: 'openai',
+      name: 'OpenAI',
+      company: 'OpenAI',
+      api: 'https://api.openai.com/v1',
+      protocol: 'openai-compatible',
+      env: ['OPENAI_API_KEY'],
+      tier: 'popular',
+      auth_methods: ['api_key'],
+      aliases: [],
+      locality: 'cloud',
+      models: [
+        {
+          id: 'gpt-5',
+          name: 'GPT-5',
+          release_date: '2026-01-20',
+          context_window: 400000,
+          max_output_tokens: 128000,
+          input_modalities: ['text', 'image'],
           tool_call: true,
           status: 'active',
         },
@@ -378,6 +414,40 @@ describe('FR-017 — with the Save bar visible, Save changes is the only gold bu
     // The premise stays true with the sheet open: the bar is showing behind
     // it (the default-model draft is unsaved, FR-011).
     expect(screen.getByTestId('settings-save-bar'), 'the Save bar is showing behind the modal sheet').toBeInTheDocument()
+  })
+
+  it('the provider picker sheet keeps its own single gold Continue over a showing bar, and its other actions stay secondary (ruling 2026-11-21, FR-017; CHECK R5-04)', async () => {
+    renderProvidersBody()
+    await changeDefaultModel()
+
+    // The picker sheet is a modal surface (a Sheet with its default modal,
+    // aria-modal): while it is open with the bar showing, it keeps its OWN
+    // single gold primary action — Continue on its second-level panel — and
+    // the page behind it is not counted. CHECK R5-04: the picker's gold
+    // watcher had no showing-bar premise (the transition case proved
+    // navigation only), so a demoted Continue passed it; this case drives
+    // the REAL picker over a REAL showing bar.
+    await userEvent.click(screen.getByTestId('connect-provider-btn'))
+    const pickerSheet = await screen.findByTestId('provider-picker-sheet')
+    await userEvent.click(within(pickerSheet).getByTestId('picker-popular-openai'))
+    const panel = await screen.findByTestId('provider-detail-panel')
+    expectGold(
+      await within(panel).findByTestId('provider-detail-panel-continue'),
+      'the picker panel\'s Continue — a modal surface keeps its own gold primary',
+    )
+    const goldInSheet = Array.from(pickerSheet.querySelectorAll('button')).filter((b) => b.className.includes(GOLD))
+    expect(
+      goldInSheet.map((b) => (b.textContent ?? '').trim()),
+      'FR-017 ruling: the open picker sheet holds exactly ONE gold action while the bar shows behind it',
+    ).toEqual(['Continue'])
+    // The panel's other actions are secondary: Cancel carries no gold fill.
+    expect(
+      within(panel).getByTestId('provider-detail-panel-cancel'),
+      'FR-017: the picker panel\'s Cancel stays secondary while Continue is gold',
+    ).not.toHaveClass(GOLD)
+    // The premise stays true with the picker open: the bar shows behind it
+    // (the default-model draft is unsaved, FR-011).
+    expect(screen.getByTestId('settings-save-bar'), 'the Save bar is showing behind the picker sheet').toBeInTheDocument()
   })
 
   it('the inverse: with the bar hidden the other primary actions are the gold default again', async () => {
