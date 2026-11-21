@@ -50,7 +50,11 @@ func gatefixInstallOffice(t *testing.T, exeName string) string {
 
 func gatefixInstallProgram(t *testing.T, exeName string) string {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "root")
+	// §3.9 fixture move (sanctioned): this root is operator-registered and
+	// resolved through the live Linux own-folder check, so it stages inside
+	// the default program path's own folder; exeName keeps the two roots
+	// distinct. Assertions are untouched.
+	root := filepath.Join(functionalOwnFolder(t), "gatefix-"+exeName)
 	require.NoError(t, os.MkdirAll(root, 0o700))
 	self, err := os.Executable()
 	require.NoError(t, err)

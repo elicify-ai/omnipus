@@ -100,10 +100,19 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 	homeReal, linkErr := filepath.EvalSymlinks(home)
 	require.NoError(t, linkErr, "instrument: the data folder resolves to its real prefix")
 
-	opts := component.RegisterOptions{Home: home, Operator: "office-preview-test", Folder: officeRoot}
+	// §3.9 fixture move (sanctioned): both registrations run the live Linux
+	// own-folder check, so both fixtures are copies of the provisioned roots
+	// inside the default program path's own folder. The symlinked-home games
+	// below and every assertion are untouched.
+	own := functionalOwnFolder(t)
+	officeFixture := filepath.Join(own, "turn-office")
+	functionalCopyTree(t, officeRoot, officeFixture)
+	rendererFixture := filepath.Join(own, "turn-renderer")
+	functionalCopyTree(t, rendererRoot, rendererFixture)
+	opts := component.RegisterOptions{Home: home, Operator: "office-preview-test", Folder: officeFixture}
 	_, err := component.RegisterOffice(opts)
 	require.NoError(t, err)
-	opts.Folder = rendererRoot
+	opts.Folder = rendererFixture
 	_, err = component.RegisterRenderer(opts)
 	require.NoError(t, err)
 	self, err := os.Executable()

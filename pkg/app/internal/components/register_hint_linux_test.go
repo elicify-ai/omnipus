@@ -73,6 +73,24 @@ func t129Home(t *testing.T, model string) string {
 	return home
 }
 
+// t129OwnFolder stages the default program path's own folder (§3.9 fixture
+// move, sanctioned; team-lead 2026-11-21 — this file is not on the spec's
+// candidate list but fails the same way): the register command runs the
+// live Linux own-folder check on the running program, so the fixtures it
+// must ACCEPT live inside dir(resolved test binary)/../share/omnipus.
+// Assertions are untouched; only the fixture roots relocate.
+func t129OwnFolder(t *testing.T) string {
+	t.Helper()
+	self, err := os.Executable()
+	require.NoError(t, err)
+	resolved, err := filepath.EvalSymlinks(self)
+	require.NoError(t, err)
+	own := filepath.Clean(filepath.Join(filepath.Dir(resolved), "..", "share", "omnipus"))
+	require.NoError(t, os.MkdirAll(own, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(own) })
+	return own
+}
+
 // t129RealPath returns the fixture path as the command records it
 // (register.go::realDir resolves symlinks before printing "from <root>").
 func t129RealPath(t *testing.T, p string) string {
@@ -88,7 +106,7 @@ func t129RealPath(t *testing.T, p string) string {
 // outside the data folder, and returns (folder, expectedVersion).
 func t129OfficeFixture(t *testing.T) (string, string) {
 	t.Helper()
-	root := t.TempDir()
+	root := filepath.Join(t129OwnFolder(t), "t129-office")
 	program := filepath.Join(root, "program")
 	require.NoError(t, os.MkdirAll(program, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(program, "soffice"), []byte("t129 fixture program"), 0o755))
@@ -104,7 +122,8 @@ func t129OfficeFixture(t *testing.T) (string, string) {
 // calls the code under test for its oracle.
 func t129RendererFixture(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	root := filepath.Join(t129OwnFolder(t), "t129-renderer")
+	require.NoError(t, os.MkdirAll(root, 0o755))
 	program := filepath.Join(root, "omnipus-pdfium")
 	require.NoError(t, os.WriteFile(program, []byte("t129 fixture renderer"), 0o755))
 	raw, err := os.ReadFile(program)

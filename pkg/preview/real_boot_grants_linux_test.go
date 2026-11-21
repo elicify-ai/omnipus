@@ -531,23 +531,24 @@ func t126PerformOp(base, op string) error {
 			GOOS: "linux", GOARCH: runtime.GOARCH,
 		})
 	case "register-office":
-		// §3.9 fixture-move handoff (sanctioned by the amendment, not a
-		// weakening): once OF-3 lands, this registration must name a folder
-		// inside OWN and the helper must set the new RegisterOptions program
-		// path to base/prefix/bin/omnipus (P/bin/omnipus, the simulated
-		// operator command's program file), so OWN = P/share/omnipus and the
-		// staged install-office folder moves to
-		// P/share/omnipus/install-office. Moving the folder WITHOUT the
-		// program path would leave the helper's default OWN (the test
-		// binary's) in charge: the registration would be refused outright,
-		// and if it instead registered under the default OWN the resolver's
-		// OF-4 check would deny the row with the wrong sentence — the
-		// after-start subject (BR-2.5) would never be reached. The move
-		// therefore lands together with the field stub (spec §13 staging).
+		// §3.9 fixture move (sanctioned; the handoff this comment's earlier
+		// form promised, landed now that the RegisterOptions program field
+		// exists): OF-3 is live, so the helper registration names a folder
+		// inside its own world's OWN and sets the RegisterOptions program
+		// path to P/bin/omnipus (the simulated operator command's program
+		// file), making OWN = P/share/omnipus. The staged pristine install
+		// moves inside it first; the row's subject (the BR-2.5 after-start
+		// denial) is unchanged.
+		own := filepath.Join(base, "prefix", "share", "omnipus")
+		moved := filepath.Join(own, "install-office")
+		if err := os.Rename(filepath.Join(base, "install-office"), moved); err != nil {
+			return err
+		}
 		_, err := component.RegisterOffice(component.RegisterOptions{
 			Home:     filepath.Join(base, "home"),
-			Folder:   filepath.Join(base, "install-office"),
+			Folder:   moved,
 			Operator: "t128-helper",
+			Program:  filepath.Join(base, "prefix", "bin", "omnipus"),
 		})
 		return err
 	default:

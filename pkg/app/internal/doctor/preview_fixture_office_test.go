@@ -26,8 +26,21 @@ func init() {
 
 func officeDoctorComponent(t *testing.T, home string, kind component.Kind) (string, string) {
 	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
+	// §3.9 fixture move (sanctioned): the doctor's resolver program path is
+	// the default (the running program), so a Linux doctor judges the
+	// recorded root against that own folder; the fixture root lives inside
+	// it. Assertions are untouched.
+	docSelf, docSelfErr := os.Executable()
+	require.NoError(t, docSelfErr)
+	docResolved, docResolveErr := filepath.EvalSymlinks(docSelf)
+	require.NoError(t, docResolveErr)
+	own := filepath.Clean(filepath.Join(filepath.Dir(docResolved), "..", "share", "omnipus"))
+	require.NoError(t, os.MkdirAll(own, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(own) })
+	root := filepath.Join(own, "doctor-"+string(kind))
+	require.NoError(t, os.MkdirAll(root, 0o700))
+	root, docEvalErr := filepath.EvalSymlinks(root)
+	require.NoError(t, docEvalErr)
 	self, err := os.Executable()
 	require.NoError(t, err)
 	// Copy rather than link: the product candidate is wholly test-owned.

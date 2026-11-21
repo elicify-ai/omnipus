@@ -45,6 +45,11 @@ func TestPreviewOffice_Q1B_ForcedConfinedBootMatchesOpen(t *testing.T) {
 		q1bConvertChild(t)
 		return
 	}
+	// §3.9 fixture move (sanctioned): the Office each child registers and
+	// uses is a copy of the provisioned install inside the RUNNING
+	// PROGRAM's own folder. The staging happens in q1bForceReexec, because
+	// the registering process is the RE-EXEC'D binary copy under the home,
+	// whose own folder the parent cannot know yet; see there.
 	_, _ = realprograms.Roots(t, true, false)
 	functionalPinDataOutsideTmp(t)
 	q1bRequireMeasurementFonts(t)
@@ -204,16 +209,30 @@ func q1bForceReexec(t *testing.T) {
 	scratch := filepath.Join(home, "scratch")
 	require.NoError(t, os.MkdirAll(scratch, 0700))
 	require.NoError(t, os.Setenv("TMPDIR", scratch))
-	// The real install under /opt, which the confined boot set already
-	// allows. The recorded wrapper returns exit 73 unless its receipt file
-	// is planted, and that wrapper is not the decision's oracle.
-	office := os.Getenv("OMNIPUS_TEST_OFFICE_ROOT")
-	require.NotEmpty(t, office, "BLOCKED: OMNIPUS_TEST_OFFICE_ROOT is required by founder Q1 B")
-	require.NoError(t, os.Setenv("OMNIPUS_TEST_Q1B_OFFICE", office))
+	// §3.9 fixture move (sanctioned): the GRANDCHILD registers and uses the
+	// Office through its own default program path — the re-exec'd binary
+	// copy under the home — so the office fixture is a copy of the
+	// provisioned install inside THAT binary's own folder, and the boot
+	// layer below grants exactly the path the grandchild registers and
+	// uses. The old raw-install hand-down (CI's RUNNER_TEMP vs /opt) is
+	// replaced by this staging: any provisioned source lands inside own
+	// before the grandchild runs. The recorded wrapper returns exit 73
+	// unless its receipt file is planted, and that wrapper is not the
+	// decision's oracle.
+	source := os.Getenv("OMNIPUS_TEST_OFFICE_ROOT")
+	require.NotEmpty(t, source, "BLOCKED: OMNIPUS_TEST_OFFICE_ROOT is required by founder Q1 B")
 	self, err := os.Executable()
 	require.NoError(t, err)
 	binary := filepath.Join(home, "q1b.test")
 	q1bCopyFile(t, self, binary, 0755)
+	ownGC := filepath.Clean(filepath.Join(filepath.Dir(binary), "..", "share", "omnipus"))
+	require.NoError(t, os.MkdirAll(ownGC, 0o755))
+	office := filepath.Join(ownGC, "q1b-office")
+	// RemoveAll first: the open and confined children share this own
+	// folder, and a cp -a over an existing destination nests the fixture.
+	require.NoError(t, os.RemoveAll(office))
+	functionalCopyTree(t, source, office)
+	require.NoError(t, os.Setenv("OMNIPUS_TEST_Q1B_OFFICE", office))
 	runtime.LockOSThread()
 	backend, ok := sandbox.NewLinuxBackend()
 	require.True(t, ok, "BLOCKED: enforcing Linux Landlock unavailable — required by founder Q1 B")

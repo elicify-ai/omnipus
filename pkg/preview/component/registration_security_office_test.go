@@ -23,12 +23,36 @@ import (
 func TestOfficeRegistration_WritableCandidateRefusedBeforeVersionProbe(t *testing.T) {
 	for _, layout := range []string{"linux", "windows"} {
 		t.Run(layout, func(t *testing.T) {
+			// §3.9 fixture move (sanctioned): the linux layout runs the
+			// own-folder check first, so the candidate lives inside the
+			// default program path's own folder — and the data home lives
+			// under the same own folder, so the REAL write-root enumeration
+			// (which follows the data home) still covers the work root;
+			// both halves of the writable refusal's subject stay intact.
+			own := ""
+			if layout == "linux" {
+				if self, selfErr := os.Executable(); selfErr == nil {
+					if resolved, resolveErr := filepath.EvalSymlinks(self); resolveErr == nil {
+						own = filepath.Clean(filepath.Join(filepath.Dir(resolved), "..", "share", "omnipus"))
+						require.NoError(t, os.MkdirAll(own, 0o755))
+						t.Cleanup(func() { _ = os.RemoveAll(own) })
+					}
+				}
+			}
 			for _, metadata := range []string{"missing", "malformed"} {
 				t.Run(metadata, func(t *testing.T) {
 					home := t.TempDir()
 					t.Setenv("OMNIPUS_HOME", home)
 					work := filepath.Join(home, "agents", "writer", "work")
 					root := filepath.Join(work, "fake-office")
+					if layout == "linux" {
+						home = filepath.Join(own, "data-home")
+						require.NoError(t, os.RemoveAll(home))
+						require.NoError(t, os.MkdirAll(home, 0o700))
+						t.Setenv("OMNIPUS_HOME", home)
+						work = filepath.Join(home, "agents", "writer", "work")
+						root = filepath.Join(work, "fake-office")
+					}
 					program := filepath.Join(root, "program")
 					require.NoError(t, os.MkdirAll(program, 0700))
 					exeName, versionName := "soffice", "versionrc"

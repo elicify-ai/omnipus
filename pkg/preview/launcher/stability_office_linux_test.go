@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -112,9 +113,22 @@ func officeStressOne(self, target string, args []string, render bool) (string, e
 }
 
 func TestRunLimitedLinuxThirteenHundredStartsHaveNoRuntimeFatals(t *testing.T) {
-	_, root := realprograms.Roots(t, false, true)
+	_, rendererSrc := realprograms.Roots(t, false, true)
 	self, err := os.Executable()
 	require.NoError(t, err)
+	// §3.9 fixture move (sanctioned): the registration below and the
+	// resolver that judges it both use the default program path, whose
+	// Linux own-folder check is live — so the registered renderer is a
+	// copy of the real provisioned renderer inside that own folder. The
+	// 1300 starts hit the copy; every assertion is untouched.
+	resolved, resolveErr := filepath.EvalSymlinks(self)
+	require.NoError(t, resolveErr)
+	own := filepath.Clean(filepath.Join(filepath.Dir(resolved), "..", "share", "omnipus"))
+	require.NoError(t, os.MkdirAll(own, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(own) })
+	root := filepath.Join(own, "renderer-stress")
+	copyOut, copyErr := exec.Command("cp", "-a", rendererSrc, root).CombinedOutput()
+	require.NoError(t, copyErr, "staging the renderer copy inside own: %s", copyOut)
 	officeProveFatalClassifier(t, self)
 	home := t.TempDir()
 	_, err = component.RegisterRenderer(component.RegisterOptions{Home: home, Folder: root, Operator: "test-operator"})

@@ -80,7 +80,7 @@ func TestComponentResolver_PackagedRegisteredAndPATHIsolation(t *testing.T) {
 	resolvedRoot, err := filepath.EvalSymlinks(packaged)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(resolvedRoot, "omnipus-pdfium"), got.Executable)
-	registered := filepath.Join(base, "operator-component")
+	registered := filepath.Join(base, "install", "share", "omnipus", "operator-component")
 	m = componentFixture(t, registered, KindPDFRenderer, TrustOperatorRegistered)
 	writeComponentManifest(t, RegisteredDir(resolver.Home, KindPDFRenderer), m)
 	got, problem = resolver.Resolve(KindPDFRenderer)

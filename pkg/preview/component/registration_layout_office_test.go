@@ -13,7 +13,18 @@ import (
 
 func officeMetadataLayout(t *testing.T) (root, exe string) {
 	t.Helper()
-	root = t.TempDir()
+	// §3.9 fixture move (sanctioned; the amendment, not a weakening): the
+	// registrations here are Linux-model, so the fixture lives inside the
+	// default program path's own folder — dir(E)/../share/omnipus for the
+	// running test binary, the same default RegisterOffice resolves.
+	self, selfErr := os.Executable()
+	require.NoError(t, selfErr)
+	resolved, resolveErr := filepath.EvalSymlinks(self)
+	require.NoError(t, resolveErr)
+	own := filepath.Clean(filepath.Join(filepath.Dir(resolved), "..", "share", "omnipus"))
+	require.NoError(t, os.MkdirAll(own, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(own) })
+	root = filepath.Join(own, "layout-office")
 	program := filepath.Join(root, "program")
 	require.NoError(t, os.MkdirAll(program, 0700))
 	exe = filepath.Join(program, "soffice")

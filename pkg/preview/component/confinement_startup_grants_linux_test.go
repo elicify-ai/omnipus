@@ -240,7 +240,7 @@ func TestT122_RegisteredRootLeadsPackagedSlots(t *testing.T) {
 	root := filepath.Join(r, "usr")
 	home := filepath.Join(r, "home")
 	exe := t122Exe(t, filepath.Join(root, "bin", "omnipus"))
-	registered := t122Slot(t, filepath.Join(r, "opt", "registered-office"))
+	registered := t122Slot(t, filepath.Join(root, "share", "omnipus", "registered-office"))
 	office := t122Slot(t, filepath.Join(root, "share", "omnipus", "office"))
 	pdfium := t122Slot(t, filepath.Join(root, "share", "omnipus", "pdfium"))
 	t122WriteRegisteredManifest(t, home, component.KindOffice, registered, true)

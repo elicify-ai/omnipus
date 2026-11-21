@@ -96,7 +96,11 @@ func functionalCopyTree(t *testing.T, source, target string) {
 
 func functionalRecordedOffice(t *testing.T, source string) string {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "office")
+	// §3.9 fixture move (sanctioned): the recorded Office is registered and
+	// used through the live Linux own-folder check, so it stages inside the
+	// default program path's own folder. Assertions are untouched; only the
+	// fixture root relocates (the source install is still never edited).
+	root := filepath.Join(functionalOwnFolder(t), "recorded-office")
 	functionalCopyTree(t, source, root)
 	// Preserve the ENTIRE unchanged real distribution's relative layout,
 	// including its original program/ folder name. Only the outer program

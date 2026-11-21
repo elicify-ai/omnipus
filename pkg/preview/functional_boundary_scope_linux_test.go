@@ -88,6 +88,15 @@ func TestPreviewOffice_T118_RendererAndExtractorDoNotGainConverterRights(t *test
 			self, err := os.Executable()
 			require.NoError(t, err)
 			root := t.TempDir()
+			if kind == "renderer" {
+				// §3.9 fixture move (sanctioned): the renderer registration
+				// runs the live Linux own-folder check, so its fixture root
+				// moves inside the default program path's own folder. The
+				// extractor peer needs no registration and keeps its
+				// staging. Assertions are untouched.
+				root = filepath.Join(functionalOwnFolder(t), "t118-renderer")
+				require.NoError(t, os.MkdirAll(root, 0o755))
+			}
 			peer := filepath.Join(root, "t118-"+kind)
 			functionalCopyTree(t, self, peer)
 			if kind == "extractor" {

@@ -155,7 +155,17 @@ func TestOfficePackagedManifest_WriterContractExists(t *testing.T) {
 // row. Green today; must stay green through the planned RegisterOffice
 // "build manifest"/"write" split — it is the split's regression guard.
 func TestOfficeRegistrationPin_RegisterOfficeStillWritesOperatorManifestIntoHome(t *testing.T) {
-	root := t.TempDir()
+	// §3.9 fixture move (sanctioned): the PIN registers through the Linux
+	// model, so the folder must sit inside the default program path's own
+	// folder. The assertions are untouched.
+	self, selfErr := os.Executable()
+	require.NoError(t, selfErr)
+	resolvedSelf, resolveErr := filepath.EvalSymlinks(self)
+	require.NoError(t, resolveErr)
+	own := filepath.Clean(filepath.Join(filepath.Dir(resolvedSelf), "..", "share", "omnipus"))
+	require.NoError(t, os.MkdirAll(own, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(own) })
+	root := filepath.Join(own, "office-pin")
 	program := filepath.Join(root, "program")
 	require.NoError(t, os.MkdirAll(program, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(program, "soffice"), []byte("fixture program, never executed"), 0o700))

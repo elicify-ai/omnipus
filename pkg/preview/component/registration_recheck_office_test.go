@@ -44,6 +44,23 @@ func registrationMarkerControl(t *testing.T, executable, marker string) {
 func TestRegisterOfficeNeverExecutesCandidate(t *testing.T) {
 	for _, layout := range []string{"linux", "windows"} {
 		t.Run(layout, func(t *testing.T) {
+			// §3.9 fixture move (sanctioned): for the linux layout the
+			// registration runs the own-folder check first, so the candidate
+			// lives inside the default program path's own folder — and the
+			// data home lives under the same own folder, so the REAL
+			// write-root enumeration (which follows the data home) still
+			// covers the writable mode's work root; that refusal's subject
+			// is intact. The windows layout has no own-folder check.
+			own := ""
+			if layout == "linux" {
+				if self, selfErr := os.Executable(); selfErr == nil {
+					if resolved, resolveErr := filepath.EvalSymlinks(self); resolveErr == nil {
+						own = filepath.Clean(filepath.Join(filepath.Dir(resolved), "..", "share", "omnipus"))
+						require.NoError(t, os.MkdirAll(own, 0o755))
+						t.Cleanup(func() { _ = os.RemoveAll(own) })
+					}
+				}
+			}
 			modes := []string{"missing", "malformed", "unsupported", "registry_fallback", "writable", "escaping_executable"}
 			if layout == "windows" {
 				modes = append(modes, "escaping_front")
@@ -53,7 +70,28 @@ func TestRegisterOfficeNeverExecutesCandidate(t *testing.T) {
 					home, root := t.TempDir(), t.TempDir()
 					t.Setenv("OMNIPUS_HOME", home)
 					work := filepath.Join(home, "agents", "writer", "work")
-					if mode == "writable" {
+					if layout == "linux" && mode == "writable" {
+						// The writable mode is the one row whose candidate
+						// must sit inside an agent-writable root: the data
+						// home moves under the own folder so the REAL
+						// write-root enumeration covers the work root, while
+						// the candidate stays inside the own folder the
+						// own-folder check demands.
+						home = filepath.Join(own, "data-home")
+						require.NoError(t, os.RemoveAll(home))
+						require.NoError(t, os.MkdirAll(home, 0o700))
+						t.Setenv("OMNIPUS_HOME", home)
+						work = filepath.Join(home, "agents", "writer", "work")
+						root = filepath.Join(work, "office")
+					} else if layout == "linux" {
+						// The other linux modes refuse for their own reason
+						// (metadata, registry fallback, executable escape) —
+						// their candidate must NOT sit in an agent-writable
+						// folder, or the writer exclusion would refuse for
+						// the wrong reason. Inside the own folder, outside
+						// every data home.
+						root = filepath.Join(own, mode+"-office")
+					} else if mode == "writable" {
 						root = filepath.Join(work, "office")
 					}
 					program := filepath.Join(root, "program")

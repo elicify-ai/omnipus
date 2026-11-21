@@ -39,6 +39,22 @@ func officeProtectedMount(t *testing.T, target, home string) {
 	assert.ErrorIs(t, err, workspace.ErrMountRefused, "T-89: granting this target must refuse overlap with a protected program folder")
 }
 
+// t89OwnFolder stages the default program path's own folder (§3.9 fixture
+// move, sanctioned): every registered component and registered manifest in
+// this file lives inside it, as the live Linux own-folder check requires.
+// Assertions are untouched; only the fixture roots relocate.
+func t89OwnFolder(t *testing.T) string {
+	t.Helper()
+	self, err := os.Executable()
+	require.NoError(t, err)
+	resolved, err := filepath.EvalSymlinks(self)
+	require.NoError(t, err)
+	own := filepath.Clean(filepath.Join(filepath.Dir(resolved), "..", "share", "omnipus"))
+	require.NoError(t, os.MkdirAll(own, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(own) })
+	return own
+}
+
 func TestOfficePreviewProtectsEveryProgramFolder(t *testing.T) {
 	if !officepreview.AtPackagedExecutable(t) {
 		return
@@ -93,9 +109,10 @@ func TestOfficePreviewProtectsEveryProgramFolder(t *testing.T) {
 		}
 	}
 	t.Run("registered_roots_and_links", func(t *testing.T) {
+		own := t89OwnFolder(t)
 		for _, kind := range []component.Kind{component.KindOffice, component.KindPDFRenderer} {
 			t.Run(string(kind), func(t *testing.T) {
-				home, root := t.TempDir(), t.TempDir()
+				home, root := t.TempDir(), filepath.Join(own, "protected-"+string(kind))
 				if kind == component.KindOffice {
 					officepreview.TrustedOffice(t, home, root)
 				} else {
@@ -109,7 +126,8 @@ func TestOfficePreviewProtectsEveryProgramFolder(t *testing.T) {
 		}
 	})
 	t.Run("fresh_second_process_registration", func(t *testing.T) {
-		home, root := t.TempDir(), t.TempDir()
+		own := t89OwnFolder(t)
+		home, root := t.TempDir(), filepath.Join(own, "registered-renderer-fresh")
 		officepreview.RegisteredRendererFixture(t, home, root, false)
 		_, _, err := workspace.CheckMountTarget(root, home)
 		require.NoError(t, err, "instrument: not protected before operator registration")
@@ -126,7 +144,8 @@ func TestOfficePreviewProtectsEveryProgramFolder(t *testing.T) {
 		officeProtectedMount(t, root, home)
 	})
 	t.Run("unreadable_registration_names_no_folder", func(t *testing.T) {
-		home, root := t.TempDir(), t.TempDir()
+		own := t89OwnFolder(t)
+		home, root := t.TempDir(), filepath.Join(own, "registered-renderer-unreadable")
 		officepreview.RegisteredRendererFixture(t, home, root, true)
 		path := filepath.Join(component.RegisteredDir(home, component.KindPDFRenderer), "manifest.json")
 		require.NoError(t, os.Remove(path))
@@ -141,7 +160,8 @@ func TestOfficePreviewProtectsEveryProgramFolder(t *testing.T) {
 		require.NoError(t, err, "unreadable manifest names no protected root; never use a stale cached root")
 	})
 	t.Run("undecidable_registered_root_refuses", func(t *testing.T) {
-		home, root := t.TempDir(), t.TempDir()
+		own := t89OwnFolder(t)
+		home, root := t.TempDir(), filepath.Join(own, "registered-renderer-undecidable")
 		officepreview.RegisteredRendererFixture(t, home, root, true)
 		path := filepath.Join(component.RegisteredDir(home, component.KindPDFRenderer), "manifest.json")
 		raw, err := os.ReadFile(path)
