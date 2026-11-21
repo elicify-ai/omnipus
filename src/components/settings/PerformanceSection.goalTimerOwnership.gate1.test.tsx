@@ -12,8 +12,11 @@
  * the FR that replaces the retired mechanism:
  *   - CG-CR-1: a cancelled timer draft is discarded before an unrelated
  *     switch-only save, which carries ONLY the switch (FR-012, FR-015);
- *   - CG-CR-2: a newer edit drafted after an older save settles is not lost
- *     — it is saved by its own Save as its own partial PUT (FR-010, FR-015);
+ *   - CG-CR-2: a newer edit is not lost — both when it is drafted after an
+ *     older save settles and (the held-save interleaving, restored after
+ *     CHECK W1) when it is typed into the SAME field while an older Save is
+ *     still in flight; each is saved by its own Save as its own partial PUT
+ *     (FR-010, FR-015);
  *   - TM5 (success): consent is per Save — no prompt fires between saves,
  *     and the second Save asks again before its write (FR-026); the retired
  *     automatic re-consent queue has no successor (FR-010 removed the queue
@@ -32,7 +35,7 @@
  * through SettingsShellContext as a recorder (FR-026/FR-027).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PerformanceSection } from './PerformanceSection'
 
@@ -76,6 +79,13 @@ let puts: Array<Record<string, unknown>>
 let reads: number
 let clients: QueryClient[]
 let failNextPut: boolean
+// Held-PUT seam (restored CG-CR-2): the next PUT parks at the HTTP edge
+// until the test releases it, so a newer edit can be typed while an older
+// Save is genuinely in flight.
+let holdNextPut: boolean
+let releaseHeldPut: (() => void) | null
+let putStarted: Promise<void>
+let signalPutStarted: () => void
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -87,6 +97,11 @@ beforeEach(() => {
   reads = 0
   clients = []
   failNextPut = false
+  holdNextPut = false
+  releaseHeldPut = null
+  putStarted = new Promise<void>((resolve) => {
+    signalPutStarted = resolve
+  })
   recorder = promptRecorder()
   vi.spyOn(document, 'cookie', 'get').mockReturnValue('csrf=c1-ui-synthetic-cookie')
   vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL, options?: RequestInit) => {
@@ -101,6 +116,13 @@ beforeEach(() => {
     }
     const patch = JSON.parse(String(options.body)) as Record<string, unknown>
     puts.push(patch)
+    if (holdNextPut) {
+      holdNextPut = false
+      await new Promise<void>((resolve) => {
+        releaseHeldPut = resolve
+        signalPutStarted()
+      })
+    }
     if (failNextPut) {
       failNextPut = false
       // FR-020 outcome 3: the server refuses; nothing is written.
@@ -161,16 +183,16 @@ function timerControls() {
 
 /** A typed change is a draft on the bar: counted, password-marked, never sent (FR-010, FR-011). */
 async function typeDraft(input: HTMLInputElement, value: string) {
-  const count = puts.length
+  // Both counts are taken BEFORE the edit, independently of what the edit
+  // itself does — comparing a post-edit length against itself (the old
+  // putCountBeforeDraft helper) proves nothing.
+  const putsBefore = puts.length
+  const promptsBefore = recorder.prompts.length
   fireEvent.change(input, { target: { value } })
   expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
   expect(screen.getByText(/1 needs your password/)).toBeInTheDocument()
-  expect(puts).toHaveLength(count)
-  expect(recorder.prompts).toHaveLength(putCountBeforeDraft(count))
-}
-function putCountBeforeDraft(count: number) {
-  void count
-  return recorder.prompts.length
+  expect(puts).toHaveLength(putsBefore) // a draft sends nothing (FR-010)
+  expect(recorder.prompts).toHaveLength(promptsBefore) // drafting asks for no password (FR-010)
 }
 
 /** One Save changes: one prompt naming one row, one partial PUT with the token (FR-015, FR-026, FR-027). */
@@ -237,6 +259,57 @@ describe('C1 combined-gate timer edit ownership under the one save rule', () => 
     expect(timerControls().minutes).toHaveValue(45)
     expect(server.goal_reminder_quiet_seconds).toBe(120)
     expect(server.goal_stalled_checkin_minutes).toBe(45)
+  })
+
+  it('CG-CR-2 (held save, restored) a newer edit of the same field typed while an older Save is still in flight survives the older response, then saves by its own Save (FR-010, FR-011, FR-015)', async () => {
+    const view = await mount()
+    // The older Save: quiet 60 → 120, with its PUT held at the HTTP edge so
+    // the newer input is genuinely typed while a Save is outstanding (the
+    // timing case the reconciled replacement lost — CHECK W1).
+    holdNextPut = true
+    let before = { ...server }
+    await typeDraft(timerControls().quiet, '120')
+    await saveDraft({ goal_reminder_quiet_seconds: 120 }, /quiet/i, before)
+    // putStarted proves the older PUT reached the HTTP edge and is parked
+    // there: the fetch handler is suspended until releaseHeldPut, so the
+    // Save is genuinely still in flight (the form save bar does not ride a
+    // React Query mutation, so isMutating is not its instrument).
+    await putStarted
+    expect(puts).toHaveLength(1)
+
+    // The newer edit of the SAME field lands while the older response is
+    // still outstanding. Drafting asks for no password: the prompt count is
+    // taken BEFORE the edit, independently of it.
+    const promptsBeforeEdit = recorder.prompts.length
+    fireEvent.change(timerControls().quiet, { target: { value: '90' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(puts).toHaveLength(1)
+    expect(recorder.prompts).toHaveLength(promptsBeforeEdit)
+
+    // The older response now lands. FR-010/FR-011/FR-015: an unsaved draft
+    // stays a draft until its own Save or a Discard — completing the OLDER
+    // save must not erase the NEWER edit of the same field.
+    await act(async () => {
+      releaseHeldPut?.()
+    })
+    // The older response landed and its outcome ran; the newer draft of the
+    // same field must still own the field.
+    await waitFor(() => expect(screen.getByLabelText('Idle reminder quiet window')).toHaveValue(90))
+    expect(timerControls().quiet).toHaveValue(90)
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(puts).toHaveLength(1)
+    // The older save's own value did persist.
+    expect(server.goal_reminder_quiet_seconds).toBe(120)
+
+    // Explicit Save cadence (FR-010): the surviving draft is stored by its
+    // own Save — one fresh prompt, one partial PUT of only that value.
+    before = { ...server }
+    await saveDraft({ goal_reminder_quiet_seconds: 90 }, /quiet/i, before)
+    await waitFor(() => expect(view.client.isFetching()).toBe(0))
+    expect(puts).toHaveLength(2)
+    expect(puts[1]).toEqual({ goal_reminder_quiet_seconds: 90 })
+    expect(timerControls().quiet).toHaveValue(90)
+    expect(server.goal_reminder_quiet_seconds).toBe(90)
   })
 })
 
