@@ -43,6 +43,7 @@ import type {
   ProviderDependent,
   ProvidersCatalog,
 } from '@/lib/api/generated/openapi-types'
+import { useReturnFocus } from './useReturnFocus'
 
 /**
  * The copy shown when this provider backs the default model and there is no
@@ -220,6 +221,8 @@ export function RemoveProviderDialog({
   onConfirm,
   isRemoving = false,
 }: RemoveProviderDialogProps) {
+  // FR-069: focus returns to the control that opened the dialog.
+  const returnFocus = useReturnFocus()
   const cancelRef = React.useRef<HTMLButtonElement | null>(null)
 
   // Candidates for the inline new default: every other CONFIGURED row,
@@ -310,9 +313,11 @@ export function RemoveProviderDialog({
         data-testid="remove-provider-dialog"
         // Focus the non-destructive choice, not the one that deletes a key.
         onOpenAutoFocus={(event) => {
+          returnFocus.onOpenAutoFocus()
           event.preventDefault()
           cancelRef.current?.focus()
         }}
+        onCloseAutoFocus={returnFocus.onCloseAutoFocus}
       >
         <AlertDialogHeader>
           <AlertDialogTitle data-testid="remove-provider-title">

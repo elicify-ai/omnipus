@@ -79,6 +79,7 @@ import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
 import { AutoApproveAskList } from './AutoApproveAskList'
 import { settingsRow } from './settingsSections'
+import { useReturnFocus } from './useReturnFocus'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -317,6 +318,9 @@ export interface SecuritySectionProps { // not-wire-format: React props
 }
 
 export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
+  // FR-069: focus returns to the control that opened the dialog.
+  const rotateFocus = useReturnFocus()
+  const credFocus = useReturnFocus()
   const showProtection = view !== 'keys'
   const showKeys = view !== 'protection'
   const legacy = view === undefined
@@ -856,7 +860,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
       {/* Rotate master key modal (G5) */}
       <Dialog open={rotateModalOpen} onOpenChange={setRotateModalOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" onOpenAutoFocus={rotateFocus.onOpenAutoFocus} onCloseAutoFocus={rotateFocus.onCloseAutoFocus}>
           <DialogHeader>
             <DialogTitle className="font-headline text-base">Rotate master key</DialogTitle>
           </DialogHeader>
@@ -895,7 +899,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
       {/* Add credential modal */}
       <Dialog open={credModalOpen} onOpenChange={setCredModalOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" onOpenAutoFocus={credFocus.onOpenAutoFocus} onCloseAutoFocus={credFocus.onCloseAutoFocus}>
           <DialogHeader>
             <DialogTitle className="font-headline text-base">Add Credential</DialogTitle>
           </DialogHeader>

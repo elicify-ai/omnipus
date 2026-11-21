@@ -13,6 +13,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { reAuth, getErrorMessage } from '@/lib/api'
+import { useReturnFocus } from './useReturnFocus'
 
 // ReAuthDialog implements the Spec-6 FR-12.2 consent primitive at the UI layer.
 // It prompts the single user to re-type their one password, calls POST
@@ -42,6 +43,8 @@ export function ReAuthDialog({
   description?: string
   onConfirmed: (token: string) => void
 }) {
+  // FR-069: focus returns to the control that opened the dialog.
+  const returnFocus = useReturnFocus()
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -98,7 +101,7 @@ export function ReAuthDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="max-w-sm" onOpenAutoFocus={returnFocus.onOpenAutoFocus} onCloseAutoFocus={returnFocus.onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-[var(--space-2)]">
             <ShieldCheck size={18} weight="duotone" className="text-[var(--color-accent)]" />
