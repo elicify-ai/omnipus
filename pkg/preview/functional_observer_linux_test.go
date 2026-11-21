@@ -294,17 +294,18 @@ func functionalProcessExited(pid int) bool {
 // functionalAssertProcessGone proves the launched office process is gone
 // after the call. The start-time observation normally comes from the /proc
 // poller; a pid can end up unpolled without any defect (D10: the process
-// lived and died entirely inside one 1 ms poll gap). Such a pid is verified
-// from its LAUNCH-SIDE identity — the receipt pid the child reported itself
-// through the held-open descriptor — with the same strength, decided at
-// assert time: gone (ENOENT) or recycled to a non-office process passes; a
-// pid that is STILL ALIVE fails, whatever the observer recorded. Nothing
-// that is alive can pass, and no name-only claim is accepted.
-func functionalAssertProcessGone(t *testing.T, pid int, starts map[int]string, root string) {
+// lived and died entirely inside one 1 ms poll gap). Such a pid is settled
+// from its LAUNCH-SIDE START IDENTITY — the kernel start time the child
+// fixture recorded into the receipt, stable across execve: gone passes; a
+// pid that is STILL ALIVE fails, whether it is the same task (identical
+// start) or unverifiable (no recorded identity, unreadable start). A
+// changed executable or command line proves nothing and never passes a
+// live task (CHECK F1).
+func functionalAssertProcessGone(t *testing.T, pid int, launchStart string, starts map[int]string) {
 	t.Helper()
 	start, observed := starts[pid]
 	if !observed {
-		functionalAssertLaunchPIDGone(t, pid, root)
+		functionalAssertLaunchPIDGone(t, pid, launchStart)
 		return
 	}
 	current, err := processStart(pid)
@@ -317,25 +318,25 @@ func functionalAssertProcessGone(t *testing.T, pid int, starts map[int]string, r
 
 // functionalAssertLaunchPIDGone settles an unpolled launch-side pid. The
 // pid is real: the child wrote it into the receipt through the descriptor
-// the test held open before the start. The task must be gone or recycled;
-// an office process still running under it fails.
-func functionalAssertLaunchPIDGone(t *testing.T, pid int, root string) {
+// the test held open before the start. The task must be gone; a live task
+// fails unless the recorded launch identity proves the original one exited
+// and the pid was recycled to a different task.
+func functionalAssertLaunchPIDGone(t *testing.T, pid int, launchStart string) {
 	t.Helper()
 	if functionalProcessExited(pid) {
 		t.Logf("T-115: pid %d was never polled; its task is gone (lived inside one poll gap) — launch-side identity verified against the live /proc table", pid)
 		return
 	}
-	procDir := fmt.Sprintf("/proc/%d", pid)
-	raw, err := os.ReadFile(filepath.Join(procDir, "stat"))
-	require.NoError(t, err, "T-115: launch-side pid %d is still alive and unreadable; refusing to pass an unverifiable task", pid)
-	end := bytes.LastIndexByte(raw, ')')
-	require.True(t, end >= 0, "T-115: cannot parse stat for the live launch-side pid %d", pid)
-	fields := strings.Fields(string(raw[end+1:]))
-	require.True(t, len(fields) > 0 && fields[0] != "Z" && fields[0] != "X",
-		"T-115: launch-side pid %d is a %s task at assert time", pid, fields[0])
-	require.False(t, functionalOfficeProcess(procDir, root),
-		"T-115: the office process launched as pid %d is STILL ALIVE after the call (observer missed it; /proc identifies it now)", pid)
-	t.Logf("T-115: pid %d was never polled; its task was recycled to a non-office process before the assert", pid)
+	current, err := processStart(pid)
+	if err != nil {
+		t.Fatalf("T-115: launch-side pid %d is still alive and its start identity is unreadable (%v); refusing to pass an unverifiable task", pid, err)
+	}
+	if launchStart == "" {
+		t.Fatalf("T-115: launch-side pid %d is still alive and carries no recorded start identity (start %s); a live task is not proven recycled — failing as unverifiable", pid, current)
+	}
+	require.NotEqual(t, launchStart, current,
+		"T-115: the launch-side pid %d with start %s is STILL ALIVE after the call — same task, identity unchanged", pid, launchStart)
+	t.Logf("T-115: pid %d was never polled; the original task (start %s) exited and the pid now belongs to a different task (start %s)", pid, launchStart, current)
 }
 
 func functionalSocketInstrumentControl(t *testing.T) {

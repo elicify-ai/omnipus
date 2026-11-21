@@ -149,6 +149,18 @@ func TestT123_DuplicateGrantYieldsOneRule(t *testing.T) {
 	require.Equal(t, 1, count, "T-123(f): a path listed twice is granted exactly once")
 }
 
+// t124NotUnder asserts the setup precondition that path lies neither inside
+// base nor covers it — T-124(h)'s declared link must be decoupled from every
+// writable folder by DECLARED paths alone, so only the resolved target can
+// trigger the refusal.
+func t124NotUnder(t *testing.T, path, base, what string) {
+	t.Helper()
+	under := path == base || strings.HasPrefix(path, base+string(filepath.Separator))
+	covers := base == path || strings.HasPrefix(base, path+string(filepath.Separator))
+	require.False(t, under, "T-124(h) precondition: the declared link must not lie inside %s", what)
+	require.False(t, covers, "T-124(h) precondition: the declared link must not contain %s", what)
+}
+
 // TestT124_RefusedEntriesGetNoRuleAndOneWarn — BR-2.3's refusal classes,
 // each with the control /usr/share/omnipus/office still granted. The refused
 // entry gets no rule, warn fires exactly once for it, and the control keeps
@@ -163,13 +175,52 @@ func TestT124_RefusedEntriesGetNoRuleAndOneWarn(t *testing.T) {
 	insideHome := filepath.Join(home, "system", "components", "office", "x")
 	require.NoError(t, os.MkdirAll(insideHome, 0700))
 
-	// (h) a symlink OUTSIDE every writable folder whose TARGET lies under /tmp.
-	linkDir := filepath.Join(home, "links")
+	// (h) a symlink whose DECLARED path lies outside every writable folder —
+	// the data folder, /tmp, the custom temp folder and every configured
+	// writable root — with only its RESOLVED TARGET under /tmp. The refusal
+	// must follow the link: a comparison that only matches declared paths
+	// would grant this entry (CHECK F2's mutant), so the fixture asserts
+	// the preconditions before the production code sees the entry. The
+	// link root cannot be t.TempDir(), which itself lives under /tmp; the
+	// package work directory is the scratch root outside every writable
+	// folder instead.
+	work, workErr := os.Getwd()
+	require.NoError(t, workErr)
+	linkRoot, mkErr := os.MkdirTemp(work, "t124-links-")
+	require.NoError(t, mkErr)
+	t.Cleanup(func() {
+		if err := os.RemoveAll(linkRoot); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	})
+	linkDir := filepath.Join(linkRoot, "links")
 	require.NoError(t, os.MkdirAll(linkDir, 0700))
-	underTmp := filepath.Join(home, "planted-under-writable") // stand-in writable root for the target
-	require.NoError(t, os.MkdirAll(underTmp, 0700))
+	linkTarget := filepath.Join("/tmp", "t124-office-link-target")
+	require.NoError(t, os.RemoveAll(linkTarget))
+	require.NoError(t, os.MkdirAll(linkTarget, 0700))
+	t.Cleanup(func() {
+		if err := os.RemoveAll(linkTarget); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	})
 	link := filepath.Join(linkDir, "office-link")
-	require.NoError(t, os.Symlink(underTmp, link))
+	require.NoError(t, os.Symlink(linkTarget, link))
+	cleanLink := filepath.Clean(link)
+	homeReal, homeErr := filepath.EvalSymlinks(home)
+	require.NoError(t, homeErr)
+	tmpReal, tmpErr := filepath.EvalSymlinks("/tmp")
+	require.NoError(t, tmpErr)
+	t124NotUnder(t, cleanLink, filepath.Clean(home), "the data folder")
+	t124NotUnder(t, cleanLink, homeReal, "the resolved data folder")
+	t124NotUnder(t, cleanLink, "/tmp", "/tmp (declared)")
+	t124NotUnder(t, cleanLink, tmpReal, "/tmp (resolved)")
+	t124NotUnder(t, cleanLink, filepath.Clean(tmpdir), "the custom temp folder")
+	t124NotUnder(t, filepath.Clean(home), cleanLink, "contain the data folder")
+	t124NotUnder(t, "/tmp", cleanLink, "contain /tmp")
+	resolvedLink, resolveErr := filepath.EvalSymlinks(link)
+	require.NoError(t, resolveErr, "T-124(h) precondition: the target must exist so the refusal can resolve the link")
+	require.True(t, resolvedLink == tmpReal || strings.HasPrefix(resolvedLink, tmpReal+string(filepath.Separator)),
+		"T-124(h) precondition: only the RESOLVED target may lie under /tmp; got %s", resolvedLink)
 
 	// "contains a writable allowed path": the entry is a PARENT of an
 	// allowed path, in a second root with no rule of its own — home itself

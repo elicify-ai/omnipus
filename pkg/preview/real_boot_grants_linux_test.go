@@ -240,6 +240,7 @@ func t126StagePrefix(t *testing.T, withOffice, withRenderer bool) *t126Layout {
 	officeSrc, rendererSrc := realprograms.Roots(t, true, true)
 	base, err := os.MkdirTemp(t126PinBase(t), "bootgrant-")
 	require.NoError(t, err)
+	t126RemoveBaseAtExit(t, base)
 	layout := &t126Layout{
 		Base:        base,
 		Prefix:      filepath.Join(base, "prefix"),
@@ -299,6 +300,35 @@ func t126StagePrefix(t *testing.T, withOffice, withRenderer bool) *t126Layout {
 	return layout
 }
 
+// t126RemoveBaseAtExit arranges the staged bootgrant world's removal (D11:
+// the worlds are 0.8–1.5 GB each and were never removed). Neither side of
+// the re-exec can remove it directly: the staging parent's cleanups never
+// run (unix.Exec replaces the process image), and the re-exec'd child ends
+// its life CONFINED by the very startup rules under test, so the world is
+// outside its reach. The staging parent therefore spawns an UNCONFINED
+// detached cleaner before any rule exists, and this test's cleanup (both
+// sides register it) only writes the trigger file under the home — the one
+// folder the startup rules grant for writing. The cleaner removes the world
+// and exits; a hard crash without a trigger leaves the world after the
+// deadline rather than blocking forever.
+func t126RemoveBaseAtExit(t *testing.T, base string) {
+	t.Helper()
+	// The cleaner polls the trigger once a second and, even without one
+	// (a hard kill never reaches t.Cleanup), removes the world after
+	// 15 minutes. Both call sites run before any rule is applied, so the
+	// cleaner itself is never confined; it outlives this process.
+	trigger := filepath.Join(base, "home", "remove-me")
+	cleaner := exec.Command("sh", "-c", fmt.Sprintf(
+		`deadline=$(($(date +%%s) + 900)); while [ ! -f %q ] && [ $(date +%%s) -lt $deadline ]; do sleep 1; done; rm -rf %q`,
+		trigger, base))
+	require.NoError(t, cleaner.Start(), "D11: the unconfined world cleaner must start")
+	t.Cleanup(func() {
+		if err := os.WriteFile(trigger, []byte("remove\n"), 0o600); err != nil {
+			t.Logf("cleanup: could not write the removal trigger %s: %v", trigger, err)
+		}
+	})
+}
+
 // t126LayoutFor is every real T12x test's entry point. An unconfined first
 // run stages a fresh world; a re-exec'd role RECONSTRUCTS the parent's world
 // from the carried base instead of re-staging — the child already runs under
@@ -312,6 +342,7 @@ func t126LayoutFor(t *testing.T, withOffice, withRenderer bool) *t126Layout {
 	}
 	base := os.Getenv(t126BaseEnv)
 	require.NotEmpty(t, base, "instrument: the re-exec'd image must carry the staged base")
+	t126RemoveBaseAtExit(t, base)
 	layout := &t126Layout{
 		Base:     base,
 		Prefix:   filepath.Join(base, "prefix"),

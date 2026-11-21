@@ -22,10 +22,12 @@ const functionalReceiptName = "functional-office-starts.jsonl"
 // parent-held receipt FD open lets us read its actual exit codes after the
 // product has removed work. No production observation hook is added.
 type functionalOfficeExit struct {
-	PID        int    `json:"pid"`
-	Recorder   int    `json:"recorder_pid"`
-	Executable string `json:"executable"`
-	Exit       int    `json:"exit"`
+	PID           int    `json:"pid"`
+	PIDStart      string `json:"pid_start,omitempty"`
+	Recorder      int    `json:"recorder_pid"`
+	RecorderStart string `json:"recorder_start,omitempty"`
+	Executable    string `json:"executable"`
+	Exit          int    `json:"exit"`
 }
 
 func init() {
@@ -52,6 +54,12 @@ func functionalRecordRealOffice() int {
 	if err = cmd.Start(); err != nil {
 		return 71
 	}
+	// The kernel start identity, read as early as possible and stable
+	// across execve: the launch-side proof that a pid seen alive later is
+	// (or is not) the same task. The executable and the command line prove
+	// neither — a leaked task can exec away (CHECK F1).
+	pidStart, _ := processStart(cmd.Process.Pid)
+	recorderStart, _ := processStart(os.Getpid())
 	waitErr := cmd.Wait()
 	code := cmd.ProcessState.ExitCode()
 	if waitErr != nil && code < 0 {
@@ -61,7 +69,14 @@ func functionalRecordRealOffice() int {
 	if err != nil {
 		return 73
 	}
-	receipt := functionalOfficeExit{PID: cmd.Process.Pid, Recorder: os.Getpid(), Executable: realProgram, Exit: code}
+	receipt := functionalOfficeExit{
+		PID:           cmd.Process.Pid,
+		PIDStart:      pidStart,
+		Recorder:      os.Getpid(),
+		RecorderStart: recorderStart,
+		Executable:    realProgram,
+		Exit:          code,
+	}
 	encodeErr := json.NewEncoder(f).Encode(receipt)
 	closeErr := f.Close()
 	if encodeErr != nil || closeErr != nil {
