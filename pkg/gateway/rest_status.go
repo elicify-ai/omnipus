@@ -181,9 +181,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "high",
 			"title":          "God-mode is armed",
 			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox's filesystem confinement and network port controls, and opens outbound network access, for every agent's shell tool.",
-			"recommendation": "Go to Settings → Security → Danger zone and turn god-mode off, unless this is intentional.",
-			"action_link":    "/settings?tab=security",
-			"action_label":   "Open security settings",
+			"recommendation": "Turn off God Mode in Settings → Protection, unless you mean to keep it on.",
+			"action_link":    "/settings?tab=protection&focus=god-mode",
+			"action_label":   "Open Protection",
 		})
 	}
 
