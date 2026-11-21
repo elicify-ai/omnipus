@@ -92,7 +92,7 @@ describe('FR-020 — each write ends in one of four outcomes', () => {
     expect(screen.getByLabelText('Log level')).toHaveValue('debug')
   })
 
-  it('an unknown result is checked by reading the saved value back (saved, not listed → in use)', async () => {
+  it('an unknown result is checked by reading the saved value back — draft equals the saved value, key not listed → saved and in use (FR-020, C-6)', async () => {
     const fetchMock = vi.fn(async (input: any) => {
       const url = String(input)
       if (url.includes('/config/pending-restart')) {
@@ -101,11 +101,36 @@ describe('FR-020 — each write ends in one of four outcomes', () => {
       return { ok: false, status: 502, json: async () => ({}) }
     })
     vi.stubGlobal('fetch', fetchMock)
-    await renderSaveBarWith(async () => ({ ok: false, status: 502, json: async () => ({}) }))
-    // The saved-state check ran: pending-restart does not list the key and
-    // the section read shows the draft value → saved and in use.
+    // The saved-value read is SUPPLIED: pending-restart does not list the
+    // key, so the saved value equals the running value, which the read back
+    // reports as the draft's own value ('debug') — the C-6 rule for an
+    // unlisted key. Without this read the check stays unknown, and a bare
+    // /saved/i match cannot tell the two apart (CHECK F07: the old oracle
+    // matched "may not have been saved").
+    const SaveBar = await loadSaveBar()
+    render(
+      <SaveBar
+        section="gateway"
+        fields={[{ key: 'gateway.log_level', label: 'Log level', value: 'info', kind: 'select', options: ['info', 'debug'] }]}
+        onSave={async () => ({ ok: false, status: 502, json: async () => ({}) })}
+        onDiscard={vi.fn()}
+        readBack={async () => 'debug'}
+      />,
+    )
+    await userEvent.selectOptions(screen.getByLabelText('Log level'), 'debug')
+    await userEvent.click(screen.getByRole('button', { name: /save/i }))
+    // The saved-state check ran (C-6's file read was consulted).
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/config/pending-restart'))).toBe(true))
-    expect(screen.getByText(/saved/i)).toBeInTheDocument()
+    // FR-020 outcome 2 (saved and in use, reached through the check): the
+    // bar shows its exact saved presentation, "Saved at HH:MM" (FR-018).
+    await waitFor(() => expect(screen.getByText(/Saved at/)).toBeInTheDocument())
+    // The draft is resolved — nothing is offered as an unsaved change (FR-012) —
+    // and none of the other three outcomes' presentations may appear.
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/may not have been saved/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/could not be saved/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/changed somewhere else/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Log level')).toHaveValue('debug')
     vi.unstubAllGlobals()
   })
 
