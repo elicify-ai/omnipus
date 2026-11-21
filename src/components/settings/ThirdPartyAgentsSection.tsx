@@ -38,7 +38,7 @@ import type {
 } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { SaveBarPanel, SaveOutcomeLine } from './SaveBar'
-import { toWriteResponse } from './saveOutcome'
+import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 
 type CliKey = keyof ThirdPartyAgentSettingsView['clis']
@@ -129,6 +129,8 @@ export function ThirdPartyAgentsSection() {
   // Rows a Save stored but the gateway did not take into use (FR-022).
   const [knownSaved, setKnownSaved] = useState<ThirdPartyAgentSettings | null>(null)
   const sentRef = useRef<ThirdPartyAgentSettings | null>(null)
+  // The saved rows when the last Save was sent (the C-6 "before" values).
+  const sentBeforeRef = useRef<ThirdPartyAgentSettings | null>(null)
   const [checkingCli, setCheckingCli] = useState<CliKey | null>(null)
   const inputRefs = useRef(new Map<string, HTMLInputElement>())
 
@@ -195,6 +197,16 @@ export function ThirdPartyAgentsSection() {
     write: async () => {
       const body = fullBody()
       sentRef.current = body
+      sentBeforeRef.current = data
+        ? {
+            clis: Object.fromEntries(
+              CLI_ROWS.map(({ cli }) => {
+                const saved = knownSaved?.clis[cli] ?? data.clis[cli]
+                return [cli, { path: saved.path, preset_args: saved.preset_args }]
+              }),
+            ) as ThirdPartyAgentSettings['clis'],
+          }
+        : null
       setRefusal(null)
       if (!body) return { ok: false, status: 400, json: async () => ({ error: 'The third-party agent settings are not loaded.' }) }
       return toWriteResponse(() => updateThirdPartyAgentSettings(body))
@@ -205,8 +217,15 @@ export function ThirdPartyAgentsSection() {
       if (outcome.kind === 'saved') {
         // After a 200 the section shows the response body (FR-022).
         const resp = outcome.body as ThirdPartyAgentSettingsView | undefined
-        if (resp && resp.clis) queryClient.setQueryData(THIRD_PARTY_AGENTS_QUERY_KEY, resp)
-        setKnownSaved(null)
+        if (resp && resp.clis) {
+          queryClient.setQueryData(THIRD_PARTY_AGENTS_QUERY_KEY, resp)
+          setKnownSaved(null)
+        } else {
+          // Saved per the saved-state check, with no body: the sent rows are
+          // the saved rows known to the screen (FR-012).
+          setKnownSaved(sent)
+          void queryClient.invalidateQueries({ queryKey: THIRD_PARTY_AGENTS_QUERY_KEY })
+        }
         setDrafts((prev) => draftsNotIn(prev, sent))
         void queryClient.invalidateQueries({ queryKey: ['agent'] })
         void queryClient.invalidateQueries({ queryKey: ['agents'] })
@@ -219,13 +238,43 @@ export function ThirdPartyAgentsSection() {
         if (match) setRefusal({ cli: match[1] as CliKey, field: match[2] as PresetField, message: outcome.message })
       }
     },
-    check: async () => {
+    // C-6 saved-state check (FR-020 outcome 4, FR-022): GET
+    // /config/pending-restart names each saved-but-not-applied value as
+    // sandbox.third_party_agents.clis.<cli>.<field>; any other value is read
+    // from GET /settings/third-party-agents.
+    check: async (): Promise<PartCheck> => {
       const sent = sentRef.current
-      const fresh = await getThirdPartyAgentSettings()
-      if (!sent) return 'not-saved'
-      const ok = CLI_ROWS.every(({ cli }) => fresh.clis[cli]?.path === sent.clis[cli]?.path && fresh.clis[cli]?.preset_args === sent.clis[cli]?.preset_args)
-      if (ok) queryClient.setQueryData(THIRD_PARTY_AGENTS_QUERY_KEY, fresh)
-      return ok ? 'saved' : 'not-saved'
+      const before = sentBeforeRef.current
+      if (!sent || !before) return { kind: 'unknown' }
+      const configKey = (cli: CliKey, field: PresetField) => `sandbox.third_party_agents.clis.${cli}.${field}`
+      const items = CLI_ROWS.flatMap(({ cli, label }) =>
+        (['path', 'preset_args'] as const).map((field) => ({
+          key: configKey(cli, field),
+          label: `${label} ${field === 'path' ? 'program path' : 'standard parameters'}`,
+          draft: sent.clis[cli]?.[field] ?? '',
+          before: before.clis[cli]?.[field] ?? '',
+          cli,
+          field,
+        })),
+      )
+      let fresh: ThirdPartyAgentSettingsView | null = null
+      const result = await checkFormPart(items, async (key) => {
+        fresh ??= await getThirdPartyAgentSettings()
+        const item = items.find((i) => i.key === key)!
+        return fresh.clis[item.cli]?.[item.field] ?? ''
+      })
+      if (result.kind === 'changed-elsewhere') {
+        // The read values become the saved rows; this tab's drafts stay.
+        const next: ThirdPartyAgentSettings = {
+          clis: Object.fromEntries(CLI_ROWS.map(({ cli }) => [cli, { ...before.clis[cli] }])) as ThirdPartyAgentSettings['clis'],
+        }
+        for (const item of items) {
+          const row = next.clis[item.cli]
+          if (row && item.key in result.saved) row[item.field] = String(result.saved[item.key] ?? '')
+        }
+        setKnownSaved(next)
+      }
+      return result
     },
     discard: () => {
       setDrafts({})

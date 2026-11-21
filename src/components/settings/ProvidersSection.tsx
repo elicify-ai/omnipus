@@ -84,7 +84,7 @@ import { SignInDialog } from '@/components/providers/SignInDialog'
 import { ManageSignInDialog } from '@/components/providers/ManageSignInDialog'
 import { DefaultModelCard } from './DefaultModelCard'
 import { useSectionSavePart } from './SectionSaveScope'
-import { toWriteResponse } from './saveOutcome'
+import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
 import type { FormSavePart } from './useFormSaveBar'
 import { RemoveProviderDialog } from './RemoveProviderDialog'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
@@ -1062,10 +1062,18 @@ export function ProvidersSection() {
       sentDefault.current = pair
       return toWriteResponse(() => putDefaultModel(pair))
     },
-    check: async () => {
+    // C-6: this writer does not record failed applies, so the read can
+    // only prove "saved"; any other answer stays unknown.
+    check: async (): Promise<PartCheck> => {
       const sent = sentDefault.current
-      const fresh = await getDefaultModel()
-      return sent && fresh.provider === sent.provider && fresh.model === sent.model ? 'saved' : 'not-saved'
+      if (!sent) return { kind: 'unknown' }
+      return checkFormPart(
+        [{ key: 'providers.default_model', label: 'Default model', draft: `${sent.provider}/${sent.model}`, before: null, recorded: false }],
+        async () => {
+          const fresh = await getDefaultModel()
+          return `${fresh.provider}/${fresh.model}`
+        },
+      )
     },
     onOutcome: (outcome) => {
       if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return

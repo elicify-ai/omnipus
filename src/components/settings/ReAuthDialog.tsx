@@ -74,9 +74,11 @@ export function ReAuthDialog({
     setSubmitting(true)
     setError('')
     try {
-      const resp = await reAuth(password)
-      // Wipe the password from state before handing control back.
-      setPassword('')
+      const resp = await reAuth(password).finally(() => {
+        // FR-028: the typed password is cleared as soon as the one reauth
+        // request returns, whatever its result.
+        setPassword('')
+      })
       setSubmitting(false)
       onConfirmed(resp.token)
       onOpenChange(false)

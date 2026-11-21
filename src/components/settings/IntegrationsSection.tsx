@@ -34,7 +34,7 @@ import { useSearchConnectionChecks } from './useSearchConnectionChecks'
 import { WebSearchGroup, orderSearchProviders, KEY_NOT_REACHING_SEARCH_LABEL } from './WebSearchGroup'
 import { FormRow, usePrimaryVariant } from './SaveBar'
 import { useSectionSavePart } from './SectionSaveScope'
-import { toWriteResponse } from './saveOutcome'
+import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
 import type { FormSavePart } from './useFormSaveBar'
 
 export function IntegrationsSection() {
@@ -86,11 +86,20 @@ export function IntegrationsSection() {
       sentTranscriber.current = id
       return toWriteResponse(() => configureIntegrationProvider(id, { kind: 'voice', active: true }, reauthToken))
     },
-    check: async () => {
-      const fresh = await fetchIntegrationProviders()
-      const ok = fresh.voice.find((p) => p.active)?.id === sentTranscriber.current
-      if (ok) queryClient.setQueryData(['integrations'], fresh)
-      return ok ? 'saved' : 'not-saved'
+    // C-6: this writer does not record failed applies, so the read can
+    // only prove "saved"; any other answer stays unknown.
+    check: async (): Promise<PartCheck> => {
+      if (sentTranscriber.current === null) return { kind: 'unknown' }
+      let fresh: Awaited<ReturnType<typeof fetchIntegrationProviders>> | null = null
+      const result = await checkFormPart(
+        [{ key: 'integrations.active_transcriber', label: 'Active transcriber', draft: sentTranscriber.current, before: null, recorded: false }],
+        async () => {
+          fresh = await fetchIntegrationProviders()
+          return fresh.voice.find((p) => p.active)?.id ?? ''
+        },
+      )
+      if (result.kind === 'saved' && fresh) queryClient.setQueryData(['integrations'], fresh)
+      return result
     },
     onOutcome: (outcome) => {
       if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return

@@ -33,7 +33,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { getContextSettings, putContextSettings } from '@/lib/api'
 import type { ContextSettings, ContextSettingsUpdate, ContextModelOverride, ContextWindowSource } from '@/lib/api'
 import { FormRow, SaveBarPanel, SaveOutcomeLine } from './SaveBar'
-import { toWriteResponse, type WriteResponse } from './saveOutcome'
+import { checkFormPart, toWriteResponse, type PartCheck, type WriteResponse } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 
 // ── Limits (ADR-066 §5 / FR-036; mirrored by the gateway's 400s) ──────────────
@@ -286,7 +286,7 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
   const baseline = useMemo(() => (base ? toForm(base) : null), [base])
   const [form, setForm] = useState<FormState | null>(null)
   const [serverErrors, setServerErrors] = useState<FieldErrors>({})
-  const sentRef = useRef<{ form: FormState; body: ContextSettingsUpdate } | null>(null)
+  const sentRef = useRef<{ form: FormState; body: ContextSettingsUpdate; base: ContextSettings } | null>(null)
 
   // Hydrate from GET; apply the X-08 pre-fill once on top of the fetched rows:
   // one new unsaved row (FR-004).
@@ -341,7 +341,7 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
   const write = async (): Promise<WriteResponse> => {
     if (!form || !base) return { ok: false, status: 400, json: async () => ({ error: 'The context settings are not loaded.' }) }
     const body = buildPartial(validate(form).parsed, base)
-    sentRef.current = { form, body }
+    sentRef.current = { form, body, base }
     return toWriteResponse(() => putContextSettings(body))
   }
 
@@ -359,6 +359,10 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
           setSavedSettings(nextBase)
           queryClient.setQueryData(CONTEXT_QUERY_KEY, nextBase)
         } else {
+          // No settings in the answer (saved, not in use; or the saved-state
+          // check): the sent values are the saved values known to the screen,
+          // never a running read that may still show the old ones (FR-012).
+          if (sent) setSavedSettings({ ...sent.base, ...sent.body } as ContextSettings)
           void queryClient.invalidateQueries({ queryKey: CONTEXT_QUERY_KEY })
         }
         if (sent && nextBase) {
@@ -371,17 +375,33 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
         if (field) setServerErrors({ [field]: outcome.message })
       }
     },
-    check: async () => {
+    // C-6 saved-state check (FR-020 outcome 4): GET /config/pending-restart
+    // names a saved-but-not-applied value as context.<field>; any other
+    // value is read from GET /settings/context.
+    check: async (): Promise<PartCheck> => {
       const sent = sentRef.current
-      const fresh = await getContextSettings()
-      if (!sent) return 'not-saved'
-      const stored = fresh as unknown as Record<string, unknown>
-      const ok = Object.entries(sent.body).every(([k, v]) => JSON.stringify(stored[k] ?? null) === JSON.stringify(v ?? null))
-      if (ok) {
-        setSavedSettings(fresh)
-        queryClient.setQueryData(CONTEXT_QUERY_KEY, fresh)
+      if (!sent) return { kind: 'unknown' }
+      const before = sent.base as unknown as Record<string, unknown>
+      let fresh: Record<string, unknown> | null = null
+      const result = await checkFormPart(
+        Object.entries(sent.body).map(([name, v]) => ({
+          key: `context.${name}`,
+          label: name === 'model_overrides' ? 'Model overrides' : (NUMERIC_FIELDS.find((f) => f.key === name)?.label ?? 'Default context window'),
+          draft: v ?? null,
+          before: before[name] ?? null,
+        })),
+        async (configKey) => {
+          fresh ??= (await getContextSettings()) as unknown as Record<string, unknown>
+          return fresh[configKey.slice('context.'.length)] ?? null
+        },
+      )
+      if (result.kind === 'changed-elsewhere') {
+        // The read values become the saved values; the drafts stay.
+        const next: Record<string, unknown> = { ...before }
+        for (const [configKey, stored] of Object.entries(result.saved)) next[configKey.slice('context.'.length)] = stored
+        setSavedSettings(next as unknown as ContextSettings)
       }
-      return ok ? 'saved' : 'not-saved'
+      return result
     },
     focusInvalid: () => {
       const first = Object.keys(localErrors)[0]
