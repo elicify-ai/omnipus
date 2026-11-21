@@ -26,13 +26,19 @@
  * What jsdom cannot do, stated plainly: jsdom loads no stylesheet, so the
  * flash itself (a CSS animation on `[data-settings-row-target]`) cannot be
  * computed here. The stylesheet-side oracle is asserted against the REAL
- * stylesheet source (src/styles/globals.css, read from disk — vitest's
- * `?raw` returns '' for a .css import): the mark must be mapped to an
- * animation that runs once (FR-075 "flashes once"), and the
- * `prefers-reduced-motion: reduce` block must disable that animation
- * (FR-075 "without animation"). The DOM side (the mark on exactly that row)
- * is asserted rendered. The browser-run witness for the same legs is the
- * e2e suite's FR-075 tests (typecheck-only here; the authorized
+ * stylesheet's effective cascade (src/styles/globals.css, read from disk —
+ * vitest's `?raw` returns '' for a .css import): the flash must be a
+ * NON-ZERO-duration, ONE-iteration animation whose keyframes change a
+ * paintable property between frames (FR-075 "flashes once"), and the LAST
+ * equal-specificity rule for the row target in document order — the one the
+ * cascade applies to a reduced-motion user — must sit in the
+ * `prefers-reduced-motion: reduce` block and set no animation (FR-075
+ * "without animation"). What this still cannot see: custom-property values
+ * (`--motion-duration-slow: 0s` would hide from a static read),
+ * cross-specificity overrides, and rendered pixels — the authorized
+ * exact-commit browser lane owns those. The DOM side (the mark on exactly
+ * that row) is asserted rendered. The browser-run witness for the same legs
+ * is the e2e suite's FR-075 tests (typecheck-only here; the authorized
  * exact-commit lane executes them).
  *
  * RED note: the production build landed (a94f859e3a merged e717a2e3e7)
@@ -357,37 +363,160 @@ async function expectExactlyThisRowMarked(row: HTMLElement): Promise<void> {
 }
 
 // ── Stylesheet-side oracle (jsdom loads no stylesheet; see the header) ────────
+//
+// Effective-cascade oracle (CHECK R5-02): the required behaviour is visual —
+// a short visible flash once, and NO animation under reduced motion — so the
+// oracle reads the cascade the browser would apply, not a source declaration.
+// jsdom computes no animation, so "effective" here means: the rules for the
+// row target, in document order, each tagged with whether it sits inside the
+// reduce media block. At equal specificity the LAST matching rule decides,
+// which is exactly the cascade outcome for both arms.
 
-/** Rule bodies of `selector` at the stylesheet's top level (media blocks stripped). */
-function topLevelRuleBodies(css: string, selector: string): string[] {
-  const stripped = css.replace(/@media[^{]+\{(?:[^{}]|\{[^{}]*\})*\}/g, ' ')
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return [...stripped.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'g'))].map((m) => m[1])
+interface RowTargetRule {
+  inReduceMedia: boolean
+  body: string
 }
 
-/** The balanced bodies of every `@media` block whose condition names `query`. */
-function mediaBlockBodies(css: string, query: string): string[] {
-  const bodies: string[] = []
-  let at = css.indexOf('@media')
-  while (at !== -1) {
-    const open = css.indexOf('{', at)
-    const header = css.slice(at, open)
-    let depth = 0
-    let close = -1
-    for (let i = open; i < css.length; i++) {
-      if (css[i] === '{') depth++
-      else if (css[i] === '}') {
-        depth--
-        if (depth === 0) {
-          close = i
-          break
-        }
+/** Index of the brace that closes the block opened at `open` (-1 if unbalanced). */
+function balancedClose(css: string, open: number): number {
+  let depth = 0
+  for (let i = open; i < css.length; i++) {
+    if (css[i] === '{') depth++
+    else if (css[i] === '}') {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+/**
+ * Every rule for `selector` anywhere in the sheet, in document order, each
+ * tagged with whether the rule sits inside a `prefers-reduced-motion: reduce`
+ * block. Strings and comments carrying braces would confuse the scanner;
+ * the shipped globals.css carries none (the same simplification the
+ * source-presence helpers this replaces already made).
+ */
+function rowTargetRules(css: string, selector: string): RowTargetRule[] {
+  const hits: RowTargetRule[] = []
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`${escaped}\\s*\\{`, 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(css))) {
+    const open = m.index + m[0].length - 1
+    const close = balancedClose(css, open)
+    if (close === -1) break
+    hits.push({ inReduceMedia: insideReduceMedia(css, m.index), body: css.slice(open + 1, close) })
+    re.lastIndex = close + 1
+  }
+  return hits
+}
+
+/** Whether position `at` sits inside a prefers-reduced-motion: reduce block. */
+function insideReduceMedia(css: string, at: number): boolean {
+  const headers: string[] = []
+  let header = ''
+  for (let i = 0; i < at; i++) {
+    const c = css[i]
+    if (c === '{') {
+      headers.push(header)
+      header = ''
+    } else if (c === '}') {
+      headers.pop()
+      header = ''
+    } else {
+      header += c
+    }
+  }
+  return headers.some((h) => h.includes('prefers-reduced-motion') && h.includes('reduce'))
+}
+
+/** Split a value into its top-level tokens (whitespace outside parentheses). */
+function shorthandTokens(value: string): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let depth = 0
+  for (const ch of value) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (ch === ' ' && depth === 0) {
+      if (current) tokens.push(current)
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  if (current) tokens.push(current)
+  return tokens
+}
+
+/**
+ * Whether a duration token means zero time. A literal `0s`/`0ms`, a calc
+ * whose numeric factors are all zero, or NO duration token at all (the CSS
+ * default is 0s) all animate nothing. What this cannot see: a custom
+ * property that itself resolves to zero (`--motion-duration-slow: 0s`) —
+ * jsdom resolves no variables; the browser lane owns computed values.
+ */
+function isZeroDuration(token: string): boolean {
+  if (/^(?:0+(?:\.0+)?|\.0+)(?:s|ms)$/.test(token)) return true
+  if (token.startsWith('calc(')) {
+    const numbers = token.match(/\d+(?:\.\d+)?/g) ?? []
+    return numbers.length === 0 || numbers.every((n) => Number(n) === 0)
+  }
+  return !/(?:s|ms)$/.test(token) || /^(?:0+(?:\.0+)?)$/.test(token)
+}
+
+/** The `@keyframes <name>` block's body (balanced), or null. */
+function keyframesBody(css: string, name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const m = new RegExp(`@keyframes\\s+${escaped}\\s*\\{`).exec(css)
+  if (!m) return null
+  const open = css.indexOf('{', m.index)
+  const close = balancedClose(css, open)
+  return close === -1 ? null : css.slice(open + 1, close)
+}
+
+/** Properties whose change between frames a person can see. */
+const PAINTABLE_PROPERTIES = new Set([
+  'background-color',
+  'background',
+  'color',
+  'opacity',
+  'box-shadow',
+  'border-color',
+  'outline-color',
+  'outline',
+  'fill',
+])
+const INVISIBLE_VALUES = new Set(['transparent', 'none', '0', '0px', 'rgba(0,0,0,0)'])
+
+/**
+ * Whether the keyframes' frames actually change a paintable property to a
+ * different value (at least one end visible). Identical frames — the
+ * transparent-to-transparent flash — animate nothing.
+ */
+function framesChangeVisibleProperty(body: string): boolean {
+  const frames = [...body.matchAll(/(?:from|to|\d+(?:\.\d+)?%)\s*\{([^}]*)\}/g)].map((m) => m[1])
+  if (frames.length < 2) return false
+  const decls = frames.map((frame) => {
+    const map = new Map<string, string>()
+    for (const decl of frame.split(';')) {
+      const at = decl.indexOf(':')
+      if (at > 0) map.set(decl.slice(0, at).trim().toLowerCase(), decl.slice(at + 1).trim())
+    }
+    return map
+  })
+  for (let a = 0; a < decls.length; a++) {
+    for (let b = a + 1; b < decls.length; b++) {
+      for (const [prop, valueA] of decls[a]) {
+        const valueB = decls[b].get(prop)
+        if (valueB === undefined || valueA === valueB) continue
+        if (!PAINTABLE_PROPERTIES.has(prop)) continue
+        if (!INVISIBLE_VALUES.has(valueA) || !INVISIBLE_VALUES.has(valueB)) return true
       }
     }
-    if (header.includes(query) && close !== -1) bodies.push(css.slice(open + 1, close))
-    at = css.indexOf('@media', at + 1)
   }
-  return bodies
+  return false
 }
 
 beforeEach(() => {
@@ -413,15 +542,43 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       scrolled.some((el) => el === row),
       'RED (FR-075): the jump must scroll the reached row into view — the scroll ran on another element',
     ).toBe(true)
-    // "flashes once": the stylesheet maps the mark to an animation whose
-    // iteration count is 1. (jsdom computes no animation; the mapping is
-    // asserted on the real stylesheet source — see the header comment.)
-    const flashBodies = topLevelRuleBodies(globalsCss, '[data-settings-row-target]').filter((b) => b.includes('animation:'))
-    expect(flashBodies.length, 'RED (FR-075): the mark must be mapped to an animation — the flash has no referent').toBeGreaterThan(0)
-    const once = flashBodies.map((b) => b.match(/animation:\s*([^;]+);/)?.[1]?.trim() ?? '')
+    // "flashes once": the cascade's rule for the marked row must name an
+    // animation with a NON-ZERO duration and exactly one iteration, and the
+    // named keyframes must change a paintable property between frames —
+    // a zero-duration animation (N65) or identical transparent frames (N66)
+    // satisfy a declaration but flash nothing. Replaces the old oracle that
+    // accepted any body merely ENDING in the count 1 (FR-075 "flashes
+    // once" — CHECK R5-02); jsdom computes no animation, so this reads the
+    // effective top-level rule and its keyframes (see the section comment).
+    const normalRules = rowTargetRules(globalsCss, '[data-settings-row-target]').filter((r) => !r.inReduceMedia)
+    const animationValue = [...normalRules].reverse().map((r) => r.body.match(/animation:\s*([^;]+);/)?.[1]?.trim() ?? '').find(Boolean)
     expect(
-      once.some((v) => /(?:^|\s)1$/.test(v)),
-      `FR-075: the flash must run exactly once (animation iteration count 1), got: ${once.join(' | ')}`,
+      animationValue,
+      'RED (FR-075): the mark must be mapped to an animation — the flash has no referent',
+    ).toBeTruthy()
+    const tokens = shorthandTokens(animationValue as string)
+    const keyframesName = tokens[0] ?? ''
+    expect(
+      /^[a-z][a-z0-9-]*$/i.test(keyframesName),
+      `FR-075: the animation shorthand must name its keyframes first, got: ${animationValue}`,
+    ).toBe(true)
+    // The duration is the first time/calc token; no token means the CSS
+    // default 0s — no flash.
+    const duration = tokens.find((t) => /^(?:\d+(?:\.\d+)?(?:s|ms)|calc\()/.test(t)) ?? '0s'
+    expect(
+      isZeroDuration(duration),
+      `FR-075 (CHECK R5-02): the flash must have a non-zero duration — got duration token: ${duration}`,
+    ).toBe(false)
+    const iteration = [...tokens].reverse().find((t) => /^\d+(?:\.\d+)?$/.test(t))
+    expect(
+      iteration,
+      `FR-075: the flash must run exactly once (animation iteration count 1), got: ${animationValue}`,
+    ).toBe('1')
+    const keyframes = keyframesBody(globalsCss, keyframesName)
+    expect(keyframes, `FR-075: the named keyframes (${keyframesName}) must exist in the stylesheet`).toBeTruthy()
+    expect(
+      framesChangeVisibleProperty(keyframes as string),
+      `FR-075 (CHECK R5-02): the flash keyframes must change a visible property between frames — identical frames flash nothing`,
     ).toBe(true)
   })
 
@@ -439,16 +596,26 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       scrolled.some((el) => el === row),
       'RED (FR-075): under reduced motion the row must still be scrolled into view',
     ).toBe(true)
-    // "without animation": the reduce block disables the animation on the
-    // marked row. If the override is missing, the flash runs for reduced-
-    // motion users — the exact defect FR-075's reduced-motion arm exists for.
-    const reduceBodies = mediaBlockBodies(globalsCss, 'prefers-reduced-motion: reduce')
-    expect(reduceBodies.length, 'the stylesheet must carry a prefers-reduced-motion: reduce block').toBeGreaterThan(0)
-    const disables = reduceBodies.some((body) =>
-      topLevelRuleBodies(body, '[data-settings-row-target]').some((rule) => /animation:\s*none/.test(rule)),
-    )
+    // "without animation": the cascade's LAST word for the row target must
+    // be the reduce rule setting no animation. At equal specificity the
+    // last matching rule decides — a later normal rule that re-declares the
+    // flash (N74) would undo a reduce rule the sheet merely CONTAINS, which
+    // is what the replaced oracle accepted (any reduce-block rule saying
+    // `none`, a source declaration). FR-075's "without animation" is the
+    // effective outcome for a reduced-motion user (CHECK R5-02).
+    const allRules = rowTargetRules(globalsCss, '[data-settings-row-target]')
+    expect(allRules.length, 'premise: the stylesheet styles the marked row').toBeGreaterThan(0)
     expect(
-      disables,
+      allRules.some((r) => r.inReduceMedia),
+      'the stylesheet must carry a prefers-reduced-motion: reduce rule for the marked row',
+    ).toBe(true)
+    const effective = allRules[allRules.length - 1]
+    expect(
+      effective.inReduceMedia,
+      'RED (FR-075, CHECK R5-02): under prefers-reduced-motion: reduce the LAST cascade rule for the row must be the reduce rule — a later equal-specificity rule would undo it',
+    ).toBe(true)
+    expect(
+      /animation:\s*none/.test(effective.body),
       'RED (FR-075): under prefers-reduced-motion: reduce the row animation must be disabled — the flash would run for reduced-motion users',
     ).toBe(true)
   })
