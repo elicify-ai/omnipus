@@ -1408,6 +1408,183 @@ describe('Sandbox — a newer draft typed while the saved-state check reads keep
     // The check really consulted the C-6 file read, not the running read alone.
     expect(wireCalls.some((u) => u.includes('/config/pending-restart'))).toBe(true)
   })
+
+  it('a newer draft on a field the held Save already sent, with a different value, survives the refill too (F03/C-6; FR-010, FR-011, FR-020, FR-012)', async () => {
+    // The first held-read case drives direction one (a field the Save did
+    // not send). This case drives direction two (CHECK R4-04, survivors
+    // N39/N40): while the saved-state check read is held, the person edits
+    // the SENT field itself to a NEWER, different value — Allowed folders
+    // was sent as ['/a', '/draft-a'], and '/draft-b' is typed on top. A
+    // watcher that preserves only previously unsent fields, or that covers
+    // only the mode family, loses this draft.
+    vi.mocked(fetchSandboxConfig).mockResolvedValueOnce({ ...baseConfig, allowed_paths: ['/a'] })
+
+    const wireCalls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        wireCalls.push(url)
+        if (url.includes('/config/pending-restart')) return { ok: true, status: 200, json: async () => [] }
+        throw new Error(`unexpected wire fetch ${url}`)
+      }),
+    )
+
+    let releaseCheck!: (config: SandboxConfigResponse) => void
+    const heldRead = new Promise<SandboxConfigResponse>((resolve) => {
+      releaseCheck = resolve
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new TypeError('connection lost'))
+    vi.mocked(fetchSandboxConfig).mockImplementationOnce(() => heldRead)
+
+    renderSection()
+
+    // The person stages the Allowed folders add the older Save will send.
+    await waitFor(() => expect(screen.getByText('/a')).toBeInTheDocument())
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/draft-a' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    // Save: the write rejects (unknown) and the check starts; its read hangs.
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateSandboxConfig).toHaveBeenCalledTimes(1))
+
+    // While the read is pending, a NEWER, different value on the SENT field.
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/draft-b' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(screen.getByText('/draft-b')).toBeInTheDocument()
+
+    // The read lands, changed elsewhere: Allowed folders ['/elsewhere'] — a
+    // third value, neither the sent pair nor the newer draft's list.
+    await act(async () => {
+      releaseCheck({ ...baseConfig, mode: 'enforce', allowed_paths: ['/elsewhere'] })
+    })
+
+    // The sent field names its third saved value in the exact FR-020 line.
+    expect(
+      await screen.findByText(
+        'This setting was changed somewhere else while you were saving. Saved value: ["/elsewhere"].',
+      ),
+    ).toBeInTheDocument()
+    // F03, second direction: BOTH drafts survive the refill — the staged
+    // value the Save sent and the newer one typed during the read; the
+    // elsewhere list never reaches the field.
+    expect(screen.getByText('/draft-a')).toBeInTheDocument()
+    expect(
+      screen.getByText('/draft-b'),
+      'F03: the newer, different draft typed on the sent field must survive the pending read',
+    ).toBeInTheDocument()
+    expect(screen.queryByText('/elsewhere')).not.toBeInTheDocument()
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
+
+    // FR-012: Discard resets the field to the check's read.
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => {
+      expect(screen.getByText('/elsewhere')).toBeInTheDocument()
+      expect(screen.queryByText('/draft-a')).not.toBeInTheDocument()
+      expect(screen.queryByText('/draft-b')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    expect(wireCalls.some((u) => u.includes('/config/pending-restart'))).toBe(true)
+  })
+
+  it('the other field families keep their newer drafts across the held read too: filesystem model, shell workspace limit and internal network (F03/C-6; FR-010, FR-011, FR-020, FR-012)', async () => {
+    // CHECK R4-04, survivors N41/N42/N43: the held-read watcher must not be
+    // generalizable from the one field its first case drives. The saved
+    // configuration reports the workspace limit, so its radios render; the
+    // older Save sends Sandbox mode (off) — and while the check read is
+    // held, the person drafts newer values in the THREE families the Save
+    // did not send. Each must survive the refill; Discard must reset every
+    // family to the read.
+    vi.mocked(fetchSandboxConfig).mockResolvedValueOnce({
+      ...baseConfig,
+      restrict_to_workspace: true,
+    } as SandboxConfigResponse)
+
+    const wireCalls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        wireCalls.push(url)
+        if (url.includes('/config/pending-restart')) return { ok: true, status: 200, json: async () => [] }
+        throw new Error(`unexpected wire fetch ${url}`)
+      }),
+    )
+
+    let releaseCheck!: (config: SandboxConfigResponse) => void
+    const heldRead = new Promise<SandboxConfigResponse>((resolve) => {
+      releaseCheck = resolve
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new TypeError('connection lost'))
+    vi.mocked(fetchSandboxConfig).mockImplementationOnce(() => heldRead)
+
+    renderSection()
+
+    await waitFor(() => expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeInTheDocument())
+    // The value the older Save sends: Sandbox mode → off.
+    fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateSandboxConfig).toHaveBeenCalledTimes(1))
+
+    // While the read is pending: newer drafts in the three unsent families.
+    fireEvent.click(screen.getByTestId('sandbox-fs-model-open'))
+    fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+    fireEvent.click(screen.getByRole('button', { name: /advanced \(custom list\)/i }))
+    fireEvent.change(screen.getByRole('textbox', { name: /new ssrf allow entry/i }), { target: { value: '10.0.0.0/8' } })
+    fireEvent.click(screen.getByRole('button', { name: /add ssrf entry/i }))
+    expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
+    expect(screen.getByText(/4 unsaved changes/)).toBeInTheDocument()
+
+    // The read lands, changed elsewhere: every family holds a DIFFERENT
+    // saved value than the draft typed over it.
+    await act(async () => {
+      releaseCheck({
+        ...baseConfig,
+        mode: 'enforce',
+        restrict_to_workspace: true,
+        filesystem_model: 'confined',
+        ssrf: { allow_internal: ['192.168.0.0/16'] },
+      } as SandboxConfigResponse)
+    })
+
+    // The SENT field keeps what was sent as its draft on top of the saved
+    // read (FR-012/FR-020: sent drafts stay drafts), and names the saved
+    // value in the exact FR-020 line (a string is shown raw).
+    expect(
+      await screen.findByText('This setting was changed somewhere else while you were saving. Saved value: enforce.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).not.toBeChecked()
+    // Every family's newer draft survives its refill.
+    expect(
+      screen.getByTestId('sandbox-fs-model-open'),
+      'F03: the filesystem-model draft must survive the pending read',
+    ).toBeChecked()
+    expect(
+      screen.getByTestId('sandbox-workspace-limit-off'),
+      'F03: the workspace-limit draft must survive the pending read',
+    ).toBeChecked()
+    expect(
+      screen.getByText('10.0.0.0/8'),
+      'F03: the internal-network draft must survive the pending read',
+    ).toBeInTheDocument()
+    expect(screen.queryByText('192.168.0.0/16')).not.toBeInTheDocument()
+    expect(screen.getByText(/4 unsaved changes/)).toBeInTheDocument()
+
+    // FR-012: Discard resets EVERY family — the sent draft included — to
+    // the check's read.
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).toBeChecked()
+      expect(screen.getByTestId('sandbox-fs-model-confined')).toBeChecked()
+      expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+      expect(screen.getByText('192.168.0.0/16')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    expect(wireCalls.some((u) => u.includes('/config/pending-restart'))).toBe(true)
+  })
 })
 
 // ── Retired help text: the section names the rules that still apply (ADR-092) ─
