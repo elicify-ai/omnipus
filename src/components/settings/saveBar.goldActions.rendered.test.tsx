@@ -275,7 +275,10 @@ describe('FR-017 — with the Save bar visible, Save changes is the only gold bu
       goldNames(),
       'FR-017: exactly one gold action must remain while the bar shows',
     ).toEqual(['Save changes'])
-    expect(gold[0], 'FR-017: the one gold action is the bar’s Save changes').toMatch(/save changes/i)
+    // Test-side fix (part 18): the line passed the BUTTON element to toMatch
+    // (TypeError masking a production-green state since round 13); it asserts
+    // the gold element's TEXT (FR-017's oracle is the button's identity).
+    expect(gold[0].textContent, 'FR-017: the one gold action is the bar’s Save changes').toMatch(/save changes/i)
     expectOutlined(screen.getByTestId('connect-provider-btn'), 'Connect a provider')
   })
 
