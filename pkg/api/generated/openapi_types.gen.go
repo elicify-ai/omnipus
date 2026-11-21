@@ -22930,7 +22930,7 @@ type PackageImportPreview struct {
 	// Manifest The manifest of an .omnpkg package: the first entry (manifest.json) of the zstd-compressed tar, and the `manifest` field of PackageImportPreview. Readers refuse a higher format_version (package_too_new) and a higher agent element schema (element_schema_too_new), and ignore unknown properties (export-import S1 spec, FR-001 to FR-005).
 	Manifest PackageImportPreview_Manifest `json:"manifest"`
 
-	// NeedsSecrets Secrets to enter again after the import (S1a lists none).
+	// NeedsSecrets Secrets an external worker needs entered again after the import (environment variable names, never values).
 	NeedsSecrets []struct {
 		// Kind Kind of secret.
 		Kind string `json:"kind"`
@@ -23094,7 +23094,7 @@ type PackageImportResult struct {
 	// Mode The mode that was applied (new in S1).
 	Mode PackageImportResultMode `json:"mode"`
 
-	// NeedsSecrets Secrets to enter again (S1a lists none).
+	// NeedsSecrets Secrets to enter again for the new agent (names only).
 	NeedsSecrets []struct {
 		// Kind Kind of secret.
 		Kind string `json:"kind"`

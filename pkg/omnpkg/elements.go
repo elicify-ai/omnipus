@@ -2,6 +2,7 @@ package omnpkg
 
 import (
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 
@@ -52,23 +53,47 @@ func parseRecordView(raw []byte) (recordView, error) {
 // decoder refuses other keys).
 var allowedModelParams = map[string]bool{"temperature": true, "max_tokens": true}
 
-// ValidateElements checks every element's record for the upload-time element
-// rules: record JSON well-formedness, forbidden types (core/system), the S1a
-// unknown-element refusal, the S1a external-worker refusal and the strict
-// model_params keys (FR-006, FR-011, FR-020; D1 rows 20, 22, 30, 31). The
-// create-rule dry run itself is the shared create function's (T-3).
+// ValidateElements checks every agent element's record for the upload-time
+// element rules: record JSON well-formedness, forbidden types (core/system),
+// no SOUL.md on an external worker and the strict model_params keys (FR-011,
+// FR-020; D1 rows 20, 22). Elements of an unknown type are skipped: their
+// files already passed the universal and checksum checks in ReadPackage, and
+// they are never interpreted (FR-006, S1b). The create-rule dry run itself is
+// the shared create function's (T-3).
 func ValidateElements(m *Manifest, payload map[string][]byte) error {
 	for _, el := range m.Elements {
 		if el.Type != ElementTypeAgent {
-			return newErr(CodeElementTypeNotSupported, "element", el.SourceID, "type", el.Type)
+			continue
 		}
-	}
-	for _, el := range m.Elements {
 		if err := validateAgentElement(el, payload); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// AgentElement returns the package's agent element, selected by type, not by
+// manifest position (FR-006: unknown elements may come first). ReadPackage
+// guarantees exactly one.
+func AgentElement(m *Manifest) (ManifestElement, bool) {
+	for _, el := range m.Elements {
+		if el.Type == ElementTypeAgent {
+			return el, true
+		}
+	}
+	return ManifestElement{}, false
+}
+
+// SkippedElements lists the elements of a type this install does not import,
+// in manifest order (FR-006, FR-021).
+func SkippedElements(m *Manifest) []ManifestElement {
+	var out []ManifestElement
+	for _, el := range m.Elements {
+		if el.Type != ElementTypeAgent {
+			out = append(out, el)
+		}
+	}
+	return out
 }
 
 func validateAgentElement(el ManifestElement, payload map[string][]byte) error {
@@ -84,8 +109,8 @@ func validateAgentElement(el ManifestElement, payload map[string][]byte) error {
 	if v.isCoreType() {
 		return newErr(CodeInvalidElement, "element", el.SourceID, "reason", "built-in agent types cannot be imported")
 	}
-	if v.asAgentConfig().IsExternalCLIWorker() {
-		return newErr(CodeExternalWorkerNotSupported, "element", el.SourceID)
+	if v.asAgentConfig().IsExternalCLIWorker() && slices.Contains(el.Files, agentSoulPath(el.SourceID)) {
+		return newErr(CodeInvalidElement, "element", el.SourceID, "reason", "an external worker has no SOUL.md")
 	}
 	keys := make([]string, 0, len(v.ModelParams))
 	for k := range v.ModelParams {

@@ -14570,7 +14570,7 @@ export interface components {
                 /** @description The items concerned (skill names, tool names, connector IDs). */
                 items?: string[];
             }[];
-            /** @description Secrets to enter again after the import (S1a lists none). */
+            /** @description Secrets an external worker needs entered again after the import (environment variable names, never values). */
             needs_secrets: {
                 /** @description Secret name. */
                 name: string;
@@ -14641,7 +14641,7 @@ export interface components {
                 /** @description The items concerned. */
                 items?: string[];
             }[];
-            /** @description Secrets to enter again (S1a lists none). */
+            /** @description Secrets to enter again for the new agent (names only). */
             needs_secrets: {
                 /** @description Secret name. */
                 name: string;
