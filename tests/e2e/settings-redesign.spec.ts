@@ -407,7 +407,11 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     await expect(keyInput, 'RED (FR-069): Cancel must keep the typed key').toHaveValue('sk-discard-check')
 
     // Stacked again: Escape over the kept panel asks once more, and the next
-    // Escape closes only the confirm, leaving the panel with focus inside it.
+    // Escape closes only the confirm — returning focus to the EXACT opener
+    // (R3-06): the key input is the control that was focused when the confirm
+    // opened (the close gesture came from it), so FR-069's "returning focus
+    // to the control that opened each" names THAT control, not any tabbable
+    // element inside the panel (the old oracle accepted any of them).
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('discard-key-keep'),
       'RED (FR-069): Escape over the kept panel must ask again').toBeVisible()
@@ -415,13 +419,24 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     await expect(page.getByTestId('discard-key-keep'),
       'RED (FR-069): the first Escape must close only the confirm').not.toBeVisible()
     await expect(sheet, 'RED (FR-069): the panel must stay open when only the confirm closes').toBeVisible()
-    const focusInside = await page.evaluate(() => {
-      const active = document.activeElement as HTMLElement | null
-      const panel = document.querySelector('[data-testid="provider-config-sheet"]')
-      return !!active && !!panel && (active === panel || panel.contains(active)) && active.tabIndex >= 0
-    })
-    expect(focusInside,
-      'RED (FR-069): focus must return to a control inside the panel that stacked the confirm').toBeTruthy()
+    await expect(keyInput,
+      'RED (FR-069/R3-06): focus must return to the exact control that opened the confirm — the key input').toBeFocused()
+
+    // R3-06: the absent-opener fallback. Discard tears the confirm and the
+    // panel down together, so the confirm's opener (the key input) no longer
+    // exists when its close resolves focus — FR-069's fallback sends focus to
+    // the section heading. (Reading note for team-lead: this asserts the
+    // per-dialog fallback for the confirm whose opener is provably gone; the
+    // panel's own opener (Configure) still exists, so an implementation that
+    // restores THAT fails this row and the interpretation goes back to the
+    // spec owner.)
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('discard-key-keep'),
+      'the third Escape must ask once more before the Discard leg').toBeVisible()
+    await page.getByTestId('discard-key-discard').click()
+    await expect(sheet, 'the Discard choice closes the panel').not.toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Providers', level: 2 }),
+      'RED (FR-069/R3-06): with the opener gone, focus must go to the section heading').toBeFocused()
   })
 
   test('FR-065: every section shows Loading with a spinner and skeleton cards while its reads answer (R2-05: all eleven sections)', async ({ page }) => {
@@ -494,21 +509,47 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     release?.()
     await expect(page.getByRole('heading', { name: 'Data & retention', level: 2 })).toBeVisible({ timeout: 10_000 })
 
-    // FR-075 (R2-05): the row highlight must stop too — hover a section row
-    // in the list; under reduced motion neither the row nor its
+    // FR-075 (R3-06): the row highlight the spec names is the SEARCHED or
+    // deep-linked setting row's flash — the trigger is the search jump onto a
+    // setting row, not a static nav hover (the old action hovered a
+    // non-animated Providers nav link, so the real highlight could keep
+    // animating and this check would still pass). Drive the real search jump
+    // to the Port row; under reduced motion neither the row nor its
     // pseudo-element highlight layers may run an animation.
-    await page.getByRole('link', { name: 'Providers' }).hover()
-    const highlightAnimated = await page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('a')).find((a) => a.textContent?.trim() === 'Providers')
-      if (!row) return ['list row not found']
-      return [
-        getComputedStyle(row).animationName,
-        getComputedStyle(row, '::before').animationName,
-        getComputedStyle(row, '::after').animationName,
-      ].filter((name) => name && name !== 'none')
-    })
+    await page.getByTestId('settings-search').fill('port')
+    await page.getByTestId('settings-search-results').getByRole('link').first().click()
+    await expect(page.getByRole('heading', { name: 'Gateway', level: 2 })).toBeVisible({ timeout: 10_000 })
+    const row = page.getByLabel('Port').locator('xpath=ancestor::*[@data-settings-field][1]')
+    await expect(row).toBeVisible()
+    const highlightAnimated = await row.evaluate((el) => [
+      getComputedStyle(el).animationName,
+      getComputedStyle(el, '::before').animationName,
+      getComputedStyle(el, '::after').animationName,
+    ].filter((name) => name && name !== 'none'))
     expect(highlightAnimated,
-      'RED (FR-075): the list row highlight must not animate under reduced motion').toEqual([])
+      'RED (FR-075/R3-06): the searched setting row\'s highlight must not animate under reduced motion').toEqual([])
+  })
+
+  test('FR-075 (R3-06): the searched setting-row highlight animates under normal motion — the positive witness the reduced-motion check needs', async ({ page }) => {
+    // Without this witness a MISSING row highlight would pass the
+    // reduced-motion check vacuously (nothing there cannot animate). FR-075
+    // names a row highlight, so under normal motion the landed row must
+    // actually run one; its absence is a production finding, not a pass.
+    // Same real trigger as the reduced-motion leg: the search jump onto the
+    // Port row.
+    await openSettings(page)
+    await page.getByTestId('settings-search').fill('port')
+    await page.getByTestId('settings-search-results').getByRole('link').first().click()
+    await expect(page.getByRole('heading', { name: 'Gateway', level: 2 })).toBeVisible({ timeout: 10_000 })
+    const row = page.getByLabel('Port').locator('xpath=ancestor::*[@data-settings-field][1]')
+    await expect(row).toBeVisible()
+    const highlight = await row.evaluate((el) => [
+      getComputedStyle(el).animationName,
+      getComputedStyle(el, '::before').animationName,
+      getComputedStyle(el, '::after').animationName,
+    ].filter((name) => name && name !== 'none'))
+    expect(highlight,
+      'RED (FR-075/R3-06): the searched setting row must carry a highlight animation under normal motion — the SPA implements none today, so the row-highlight clause of FR-075 has no referent yet').not.toEqual([])
   })
 
   test('FR-063 (G-10 new-address leg): restarted=1 says the gateway restarted on an empty list, shows the banner when a key is still listed', async ({ page }) => {
