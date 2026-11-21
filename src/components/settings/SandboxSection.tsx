@@ -24,7 +24,7 @@ import {
 import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
 import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { PasswordBadge, RestartBadge, SaveBarPanel, SaveOutcomeLine } from './SaveBar'
-import { toWriteResponse, type PartCheck } from './saveOutcome'
+import { checkFormPart, toWriteResponse, type PartCheck } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 import { AllowedPathsEditor } from './AllowedPathsEditor'
 import { SsrfEditor, SSRF_PRESETS } from './SsrfEditor'
@@ -404,9 +404,13 @@ export function SandboxSection(): React.ReactElement {
     setCurrentWorkspaceLimit(readWorkspaceLimit(data)?.value)
   }, [])
 
+  // After a "changed somewhere else" check the read becomes the saved
+  // configuration, but the sent drafts stay drafts (FR-012, FR-020).
+  const syncOverrideRef = useRef<SandboxConfigResponse | null>(null)
   useEffect(() => {
     if (!configData) return
-    syncFromServer(configData)
+    syncFromServer(syncOverrideRef.current ?? configData)
+    syncOverrideRef.current = null
     setPathRestartedRows(new Set())
   }, [configData, syncFromServer])
 
@@ -440,6 +444,9 @@ export function SandboxSection(): React.ReactElement {
     return body
   }
   const sentRef = useRef<SandboxUpdateBody | null>(null)
+  // The saved configuration when the Save started: the C-6 check tells
+  // "before" from a third value with it.
+  const sentBeforeRef = useRef<SandboxConfigResponse | null>(null)
 
   const part: FormSavePart = {
     id: 'sandbox-config',
@@ -451,25 +458,52 @@ export function SandboxSection(): React.ReactElement {
     write: ({ reauthToken }) => {
       const body = buildBody()
       sentRef.current = body
+      sentBeforeRef.current = configData ?? null
       setSaveError(null)
       setPathRowErrors({})
       setSsrfAdvancedErrors({})
       return toWriteResponse(() => updateSandboxConfig(body, reauthToken))
     },
-    // C-6: PUT /security/sandbox-config does not record failed applies, so
-    // the read can only prove "saved"; any other answer stays unknown.
+    // C-6: PUT /security/sandbox-config does not record failed applies, so a
+    // read equal to the value before the Save never proves "not saved"; it
+    // stays unknown. A third value is "changed somewhere else" (FR-020).
     check: async (): Promise<PartCheck> => {
       const sent = sentRef.current
-      if (!sent) return { kind: 'unknown' }
-      const fresh = await fetchSandboxConfig()
-      const ok =
-        (sent.mode === undefined || fresh.mode === sent.mode) &&
-        (sent.filesystem_model === undefined || fresh.filesystem_model === sent.filesystem_model) &&
-        (sent.allowed_paths === undefined || sameList(fresh.allowed_paths ?? [], sent.allowed_paths)) &&
-        (sent.ssrf?.allow_internal === undefined || sameList(fresh.ssrf?.allow_internal ?? [], sent.ssrf.allow_internal)) &&
-        WORKSPACE_LIMIT_KEYS.every((k) => sent[k] === undefined || readWorkspaceLimit(fresh)?.value === sent[k])
-      if (ok) queryClient.setQueryData(['sandbox-config'], fresh)
-      return ok ? { kind: 'saved', inUse: true } : { kind: 'unknown' }
+      const before = sentBeforeRef.current
+      if (!sent || !before) return { kind: 'unknown' }
+      const items: { key: string; label: string; draft: unknown; before: unknown; recorded: false; pick: (d: SandboxConfigResponse) => unknown }[] = []
+      const add = (key: string, label: string, draft: unknown, pick: (d: SandboxConfigResponse) => unknown) =>
+        items.push({ key, label, draft, before: pick(before), recorded: false, pick })
+      if (sent.mode !== undefined) add('sandbox.mode', 'Sandbox mode', sent.mode, (d) => d.mode)
+      if (sent.filesystem_model !== undefined) add('sandbox.filesystem_model', 'Filesystem model', sent.filesystem_model, (d) => d.filesystem_model)
+      for (const k of WORKSPACE_LIMIT_KEYS) {
+        if (sent[k] !== undefined) add(`sandbox.${k}`, 'Shell workspace limit', sent[k], (d) => readWorkspaceLimit(d)?.value)
+      }
+      if (sent.allowed_paths !== undefined) add('sandbox.allowed_paths', 'Allowed folders', sent.allowed_paths, (d) => d.allowed_paths ?? [])
+      if (sent.ssrf?.allow_internal !== undefined) {
+        add('sandbox.ssrf.allow_internal', 'Internal network addresses', sent.ssrf.allow_internal, (d) => d.ssrf?.allow_internal ?? [])
+      }
+      const fresh: { read: SandboxConfigResponse | null } = { read: null }
+      const result = await checkFormPart(items, async (key) => {
+        const read = fresh.read ?? (fresh.read = await fetchSandboxConfig())
+        const item = items.find((i) => i.key === key)
+        if (!item) throw new Error(`no saved-state read for ${key}`)
+        return item.pick(read)
+      })
+      // The read becomes the saved configuration. On "changed somewhere
+      // else" the sent values stay drafts on top of it.
+      const read = fresh.read
+      if (read && result.kind === 'saved') queryClient.setQueryData(['sandbox-config'], read)
+      if (read && result.kind === 'changed-elsewhere') {
+        const { ssrf: sentSsrf, ...sentTop } = sent
+        syncOverrideRef.current = {
+          ...read,
+          ...sentTop,
+          ...(sentSsrf ? { ssrf: { ...read.ssrf, ...sentSsrf } } : {}),
+        } as SandboxConfigResponse
+        queryClient.setQueryData(['sandbox-config'], read)
+      }
+      return result
     },
     onOutcome: (outcome) => {
       if (outcome.kind === 'saved' || outcome.kind === 'saved-not-in-use') {

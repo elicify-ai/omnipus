@@ -177,7 +177,7 @@ Concrete combinations:
 
 A tool blocked globally is greyed out in each agent's tool list, so you can see where the ceiling sits while you work.
 
-**God-mode** (Settings → Gateway → Danger zone) overrides every tool's global policy to Allow at once, for every agent, except `set_channel_outbound`, which always asks — see [security](security.md#god-mode) for what that does and does not change.
+**God Mode** (Settings → Protection, after Approvals) overrides every tool's global policy to Allow at once, for every agent, except `set_channel_outbound`, which always asks — see [security](security.md#god-mode) for what that does and does not change.
 
 ## Starting a message on a connector
 
