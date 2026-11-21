@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -210,6 +210,60 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
 })
 
 // ── US-B2: bind_address risky control ────────────────────────────────────────
+
+// ── F03: a newer edit of the same field survives an older in-flight Save ─────
+//
+// Settings redesign #1519 (CHECK F03; FR-010/FR-011/FR-015, spec:1914–1919):
+// unsaved changes stay drafts until explicitly saved or discarded, so
+// completing an OLDER Save must not erase a NEWER edit of the same field.
+// The section rows stay editable while a write is pending, so the case is
+// reachable by a real user.
+
+describe('GatewaySection — a newer edit of the same field survives an older in-flight Save (F03)', () => {
+  it('Save held, Log level edited again, older response released: the newer draft, the count and the next Save body all keep the newer value (FR-010, FR-011, FR-015)', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({}) as never) // log_level: 'info'
+    renderSection()
+    const select = await screen.findByLabelText(/log level/i)
+    await waitFor(() => expect(select).toHaveValue('info'))
+
+    // The older save: info → debug, with its write held in flight.
+    let releaseOld: ((value?: unknown) => void) | null = null
+    vi.mocked(updateConfig).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOld = resolve
+        }) as never,
+    )
+    fireEvent.change(select, { target: { value: 'debug' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateConfig).mock.calls[0][0]).toEqual({ gateway: { log_level: 'debug' } })
+
+    // The newer edit of the SAME field, typed while the older write is
+    // still pending.
+    fireEvent.change(screen.getByLabelText(/log level/i), { target: { value: 'warning' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    // The older response lands now.
+    await act(async () => {
+      releaseOld?.(makeConfig({}))
+    })
+    // The newer draft must survive the older completion: the field keeps
+    // it, the bar still counts it, and no second write went out.
+    await waitFor(() => expect(screen.getByLabelText(/log level/i)).toHaveValue('warning'))
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateConfig).toHaveBeenCalledTimes(1)
+
+    // The next Save sends the NEWER value — the older save must not have
+    // consumed it.
+    vi.mocked(updateConfig).mockResolvedValueOnce(makeConfig({}) as never)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(updateConfig).mock.calls[1][0]).toEqual({ gateway: { log_level: 'warning' } })
+    await screen.findByText(/Saved at/)
+  })
+})
 
 // ── US-4 / FR-008: Preview toggle (ADR-044, preview-on-main-listener) ────────
 //
