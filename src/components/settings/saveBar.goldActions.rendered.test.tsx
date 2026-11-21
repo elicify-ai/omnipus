@@ -60,6 +60,7 @@ import { SettingsSectionBody } from './SettingsSectionBody'
 import { SettingsShellContext, type SettingsShellApi } from './SettingsShellContext'
 import { SaveBar } from './SaveBar'
 import { useSavePasswordPrompt } from './useSavePasswordPrompt'
+import type { SaveBarField } from './useSaveBar'
 
 // cmdk (inside the ModelSelector's Command) needs the jsdom stubs the other
 // ProvidersSection harnesses use (formSavedStateCheck.test.tsx): ResizeObserver
@@ -369,7 +370,7 @@ describe('FR-017 — with the Save bar visible, Save changes is the only gold bu
 // The Save bar's field contract (saveBar.counting precedent): one
 // password-marked value (FR-025 lists Shell workspace limit), so the Save
 // opens the one password prompt (FR-026) instead of writing.
-const PROMPT_FIELD = {
+const PROMPT_FIELD: SaveBarField = {
   key: 'sandbox.workspace_path_guard',
   label: 'Shell workspace limit',
   value: false,
