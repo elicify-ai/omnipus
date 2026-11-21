@@ -33,8 +33,9 @@ properties:
     maxLength: 4096
     description: >
       Free-form additional CLI arguments to preview, same shape and same
-      tokenizer as ExecutorConfig.cli_args. Any token the safety filter would
-      strip at real dispatch time is NOT included in the previewed command —
+      tokenizer as ExecutorConfig.cli_args. Any token the run filter would
+      strip at real dispatch time (the safety filter's, and any model option,
+      because the model field sets the model) is NOT included in the previewed command —
       it is reported instead in the response's dropped_args, so the operator
       sees before saving that an argument they typed will be silently ignored
       and why.
