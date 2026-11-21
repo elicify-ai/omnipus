@@ -1053,6 +1053,7 @@ export function ProvidersSection() {
     ? { ...defaultModel, provider: defaultDraft.provider, model: defaultDraft.model, reasoning_effort: defaultDraft.reasoning_effort ?? defaultModel?.reasoning_effort, context_window: undefined, window_source: undefined, window_unknown: undefined } as DefaultModel
     : defaultModel
   const sentDefault = useRef<DefaultModelUpdateRequest | null>(null)
+  const sentDefaultBefore = useRef<string | null>(null)
   const defaultPart: FormSavePart = {
     id: 'default-model',
     count: defaultChanged ? 1 : 0,
@@ -1060,20 +1061,26 @@ export function ProvidersSection() {
     write: () => {
       const pair = defaultDraft as DefaultModelUpdateRequest
       sentDefault.current = pair
+      sentDefaultBefore.current = defaultModel ? `${defaultModel.provider}/${defaultModel.model}` : null
       return toWriteResponse(() => putDefaultModel(pair))
     },
-    // C-6: this writer does not record failed applies, so the read can
-    // only prove "saved"; any other answer stays unknown.
+    // C-6: this writer does not record failed applies, so a read equal to
+    // the old pair never proves "not saved"; it stays unknown.
     check: async (): Promise<PartCheck> => {
       const sent = sentDefault.current
       if (!sent) return { kind: 'unknown' }
-      return checkFormPart(
-        [{ key: 'providers.default_model', label: 'Default model', draft: `${sent.provider}/${sent.model}`, before: null, recorded: false }],
+      let fresh: DefaultModel | null = null
+      const result = await checkFormPart(
+        [{ key: 'providers.default_model', label: 'Default model', draft: `${sent.provider}/${sent.model}`, before: sentDefaultBefore.current, recorded: false }],
         async () => {
-          const fresh = await getDefaultModel()
-          return `${fresh.provider}/${fresh.model}`
+          const read = await getDefaultModel()
+          fresh = read
+          return `${read.provider}/${read.model}`
         },
       )
+      // Changed elsewhere: the read pair becomes the saved pair; the draft stays.
+      if (result.kind === 'changed-elsewhere' && fresh) queryClient.setQueryData(['default-model'], fresh)
+      return result
     },
     onOutcome: (outcome) => {
       if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return

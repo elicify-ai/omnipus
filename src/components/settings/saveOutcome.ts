@@ -166,8 +166,8 @@ export interface SavedStateItem { // not-wire-format: screen-side input of the C
   before: unknown
   /**
    * False when the endpoint is not one of the C-6 writers that record a
-   * failed apply in GET /config/pending-restart. Its running read then can
-   * only prove "saved"; it never proves "not saved" (C-6).
+   * failed apply in GET /config/pending-restart. Its running read then never
+   * proves "not saved" (C-6); a read equal to the old value stays unknown.
    */
   recorded?: boolean
 }
@@ -195,8 +195,10 @@ export async function savedStateCheck(
       saved = await readBack(item.key)
     }
     if (sameValue(saved, item.draft)) result[item.key] = { kind: 'saved', inUse: !entry }
-    else if (!entry && item.recorded === false) result[item.key] = { kind: 'unknown' }
-    else if (sameValue(saved, item.before)) result[item.key] = { kind: 'not-saved' }
+    else if (sameValue(saved, item.before)) {
+      // C-6: only a recording writer's read can prove "not saved".
+      result[item.key] = !entry && item.recorded === false ? { kind: 'unknown' } : { kind: 'not-saved' }
+    }
     else result[item.key] = { kind: 'changed-elsewhere', savedValue: saved }
   }
   return result

@@ -76,6 +76,7 @@ export function IntegrationsSection() {
   const transcriberChanged = transcriberDraft !== null && transcriberDraft !== savedTranscriber
   const shownTranscriber = transcriberChanged ? (transcriberDraft as string) : savedTranscriber
   const sentTranscriber = useRef<string | null>(null)
+  const sentTranscriberBefore = useRef<string>('')
   const transcriberPart: FormSavePart = {
     id: 'active-transcriber',
     count: transcriberChanged ? 1 : 0,
@@ -84,21 +85,23 @@ export function IntegrationsSection() {
     write: ({ reauthToken }) => {
       const id = transcriberDraft as string
       sentTranscriber.current = id
+      sentTranscriberBefore.current = savedTranscriber
       return toWriteResponse(() => configureIntegrationProvider(id, { kind: 'voice', active: true }, reauthToken))
     },
-    // C-6: this writer does not record failed applies, so the read can
-    // only prove "saved"; any other answer stays unknown.
+    // C-6: this writer does not record failed applies, so a read equal to
+    // the old value never proves "not saved"; it stays unknown.
     check: async (): Promise<PartCheck> => {
       if (sentTranscriber.current === null) return { kind: 'unknown' }
       let fresh: Awaited<ReturnType<typeof fetchIntegrationProviders>> | null = null
       const result = await checkFormPart(
-        [{ key: 'integrations.active_transcriber', label: 'Active transcriber', draft: sentTranscriber.current, before: null, recorded: false }],
+        [{ key: 'integrations.active_transcriber', label: 'Active transcriber', draft: sentTranscriber.current, before: sentTranscriberBefore.current, recorded: false }],
         async () => {
           fresh = await fetchIntegrationProviders()
           return fresh.voice.find((p) => p.active)?.id ?? ''
         },
       )
-      if (result.kind === 'saved' && fresh) queryClient.setQueryData(['integrations'], fresh)
+      // Saved or changed elsewhere: the read value becomes the saved value.
+      if ((result.kind === 'saved' || result.kind === 'changed-elsewhere') && fresh) queryClient.setQueryData(['integrations'], fresh)
       return result
     },
     onOutcome: (outcome) => {
