@@ -4,22 +4,25 @@
 
 package agent
 
-// G12 (office-gatefix fixlist, team-lead adjudication 2026-11-20): a
-// PDF-capable but image-incapable model whose per-request native-PDF COUNT
-// is exhausted (AD-6) falls into the image-incapable case of the reason
-// switch in document_preview_media.go::attachDocumentPreview and tells the
-// model "; this model reads text only" — wrong on both counts: the model
-// reads PDFs, and the reason is the count limit.
+// G12 (office-gatefix fixlist, team-lead adjudication 2026-11-20; T-133,
+// office-preview spec §3.9 G5.6, 2026-11-21): a PDF-capable but
+// image-incapable model whose per-request native-PDF COUNT is exhausted
+// (AD-6) receives the exact count note, never "; this model reads text
+// only".
 //
-// Oracle: the spec (37e8342bf, AD-6) names the concept but no exact note
-// text — "the provider's per-request PDF count still counts every PDF in
-// the request". The assertions therefore require the note to name the count
-// limit in AD-6's own terms ("per-request" … "count"/"limit") and forbid
-// the wrong "reads text only" sentence; they do not pin a full sentence
-// the spec never wrote.
+// Oracle (T-133 tightens these two tests to the spec's exact sentence): the
+// note is exactly "[model received: extracted text; the provider's
+// per-request PDF count limit (1) is used up by other PDFs in this
+// request]" (with stored text: followed by that text; without stored text:
+// followed by the fallback extraction of the preview's own bytes). Plus
+// T-133 (c): a ModelOnly preview (the read_file path) under the same
+// used-up count adds no count note.
 //
-// RED on the pre-fix code: the note is the wrong sentence, so the
-// NotContains assertion fails first.
+// RED history: the original loose assertions failed on the pre-fix code
+// (the note was the wrong sentence). The behaviour already exists
+// (ef706c8b2, 56e5313d3), so the tightened assertions have no RED on the
+// pre-change code; the mutation proof of attachDocumentPreview is CHECK's
+// and lives in the scratch clone, never committed here.
 
 import (
 	"context"
@@ -32,6 +35,9 @@ import (
 	"github.com/elicify-ai/omnipus/tests/officepreview"
 	"github.com/stretchr/testify/require"
 )
+
+// g12CountNote is the spec's exact note for maxPDFs = 1 (T-133).
+const g12CountNote = "[model received: extracted text; the provider's per-request PDF count limit (1) is used up by other PDFs in this request]"
 
 func TestOfficePreview_CountLimitNoteNamesTheCountNotTextOnly(t *testing.T) {
 	const toolID = "g12-newest-preview"
@@ -66,16 +72,13 @@ func TestOfficePreview_CountLimitNoteNamesTheCountNotTextOnly(t *testing.T) {
 	require.LessOrEqual(t, count, 1, "AD-6: the per-request count of 1 still holds; the preview's PDF was dropped for the count, not for size")
 
 	tool := got[len(got)-1]
-	noteStart := strings.Index(tool.Content, "[model received:")
-	require.GreaterOrEqual(t, noteStart, 0, "G12 instrument: the model-facing note must be present")
-	note := tool.Content[noteStart:]
-	require.NotContains(t, note, "reads text only",
-		"G12: the model reads PDFs; the count-exhausted note must never say this model reads text only")
-	lower := strings.ToLower(note)
-	require.True(t, strings.Contains(lower, "per-request") || strings.Contains(lower, "per request"),
-		"G12: the note must name the per-request scope of the count limit (AD-6 wording); got %q", note)
-	require.True(t, strings.Contains(lower, "count") || strings.Contains(lower, "limit"),
-		"G12: the note must name the count limit as the reason (AD-6 wording); got %q", note)
+	noteStart := strings.Index(tool.Content, g12CountNote)
+	require.GreaterOrEqual(t, noteStart, 0,
+		"T-133: the count-exhausted preview's note must be the spec's exact sentence; got %q", tool.Content)
+	require.Contains(t, tool.Content, "G12 extracted text",
+		"T-133: with stored text, the note is followed by that text")
+	require.Greater(t, strings.Index(tool.Content, "G12 extracted text"), noteStart,
+		"T-133: the stored text follows the exact note")
 }
 
 // G12 companion (AD-6 and the fallback rules): the count-exhausted preview
@@ -113,11 +116,44 @@ func TestOfficePreview_CountLimitWithoutStoredTextSendsFallbackText(t *testing.T
 	require.NoError(t, err)
 
 	tool := got[len(got)-1]
-	noteStart := strings.Index(tool.Content, "[model received:")
-	require.GreaterOrEqual(t, noteStart, 0, "G12 companion instrument: the model-facing note must be present")
-	note := tool.Content[noteStart:]
-	require.Contains(t, note, "per-request PDF count limit",
-		"AD-6: the no-media preview receives its extracted text WITH the reason — the count limit")
+	noteStart := strings.Index(tool.Content, g12CountNote)
+	require.GreaterOrEqual(t, noteStart, 0,
+		"T-133: the no-stored-text preview's note must be the spec's exact sentence; got %q", tool.Content)
 	require.Contains(t, tool.Content, "[Attached file",
 		"AD-6: the count-exhausted preview with no stored text must send the fallback extraction of its own bytes, not an empty result")
+	require.Greater(t, strings.Index(tool.Content, "[Attached file"), noteStart,
+		"T-133: the fallback extraction of the preview's own bytes follows the exact note")
+}
+
+// T-133 (c): a ModelOnly preview (today's read_file path) under the same
+// used-up count adds NO count note — the retained result text already is
+// the text form, and the note is only for previews whose media was dropped
+// from the request.
+func TestOfficePreview_CountLimitModelOnlyAddsNoCountNote(t *testing.T) {
+	const toolID = "g12-modelonly-preview"
+	toolPDF := officepreview.PDF(1)
+	previews := &turnDocumentPreviews{}
+	previews.add(toolID, &tools.DocumentPreview{
+		PDF:         toolPDF,
+		Text:        "G12 modelonly text",
+		ModelOnly:   true,
+		Reauthorize: func(context.Context) error { return nil },
+	})
+	t.Cleanup(previews.release)
+
+	messages := []providers.Message{
+		{Role: "user", Content: "the carried PDF", Media: []string{"data:application/pdf;base64," + base64.StdEncoding.EncodeToString(officepreview.PDF(1))}},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: toolID, Name: "preview_document", Function: &providers.FunctionCall{Name: "preview_document"}}}},
+		{Role: "tool", ToolCallID: toolID, Content: "preview recorded"},
+	}
+	got, err := attachTurnDocumentPreviews(context.Background(), messages, previews, previewModelForms{
+		pdf: true, images: false, maxPDF: 50 << 20, maxPDFs: 1,
+	})
+	require.NoError(t, err)
+
+	tool := got[len(got)-1]
+	require.NotContains(t, tool.Content, g12CountNote,
+		"T-133(c): the read_file path adds no count note under the same used-up count")
+	require.NotContains(t, tool.Content, "[model received:",
+		"T-133(c): the ModelOnly branch adds no model-facing note at all when images are not expected")
 }
