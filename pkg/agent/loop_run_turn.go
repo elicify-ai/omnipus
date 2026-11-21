@@ -432,6 +432,8 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.start"),
 		TurnStartPayload{
 			ChatNotice:  rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.goalReminderFrame,
+			SessionID:   rp.rc.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
+			StartedAt:   rp.rc.rx.rr.rq.ri.rf.rt.ts.startedAt,
 			Channel:     rp.rc.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:      rp.rc.rx.rr.rq.ri.rf.rt.ts.chatID,
 			UserMessage: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
@@ -965,7 +967,9 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		//
 		// Synthetic context is not a user-facing outcome. Deliver the same
 		// classified notice live and durably, even after earlier narration.
-		llm := LLMError{Code: CodeUnknown, Message: UserMessageForCode(CodeUnknown)}
+		// #1857 B10: the typed tool_assembly_duplicate code (no longer the
+		// generic unknown result); the structured MCP fact is logged.
+		llm := toolDedupLLMError(dedupErr)
 		rq.ri.rf.rt.al.emitEvent(
 			EventKindError,
 			rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
@@ -1327,8 +1331,12 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 			// preserved by runTurn's deferred preserveTruncatedAccumulator
 			// choke point, which covers this return like every other.
 			ri.ret0 = turnResult{}
-			ri.ret1 = fmt.Errorf("rate limit: %s (retry after %.0fs)",
-				result.PolicyRule, result.RetryAfterSeconds)
+			// #1857 B3: typed (same text) so every surface reads
+			// agent_request_limit, never the provider-overloaded copy.
+			ri.ret1 = &agentRequestLimitError{
+				policyRule:        result.PolicyRule,
+				retryAfterSeconds: result.RetryAfterSeconds,
+			}
 			return agentLoopRunTurnIterationReturn
 		}
 	}

@@ -11,10 +11,17 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { enterNewChat } from '@/store/session/newChatKey'
+
 import { makeSnapshotHistory } from '@/test/factories'
 import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
 import { expectValidFrame } from '../../tests/chat-history-paging/fixtures'
 
+// Spec 4.4.1 / 4.6.1: a first message is reached by enterNewChat and carries {new_chat, K}.
+let openedKey = ''
+function withNewChatOrigin<T extends object>(frame: T): T & { origin: { kind: 'new_chat'; new_chat_key: string } } {
+  return { ...frame, origin: { kind: 'new_chat', new_chat_key: openedKey } }
+}
 // Oracles: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/receipts/combo-silent.md,
 // COMBO-SF-1; /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7; and /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/receipts/final-qa-sf1-scope-ruling.log.
@@ -37,7 +44,7 @@ const WORKSPACE = 'combo-sf1-workspace'
 const MODEL = 'combo-sf1-model'
 const MEDIA = ['media://combo-sf1-image', 'media://combo-sf1-file']
 const NOW = '2026-10-01T12:00:00.000Z'
-const ORIGINAL_FRAME: MessageFrame = {
+const BASE_ORIGINAL_FRAME: MessageFrame = {
   type: 'message', client_message_id: ORIGINAL_ID, content: ORIGINAL_TEXT,
   agent_id: 'mia', media: [...MEDIA],
   metadata: { model_name: MODEL, workspace_id: WORKSPACE }, auto_approve: false,
@@ -123,13 +130,14 @@ function beginKnownChatCheck() {
     useConnectionStore.getState().setConnected(true)
     useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE })
     useChatStore.setState({ pendingAutoApproveChoice: false })
+    openedKey = enterNewChat(WORKSPACE, 'mia')
     useChatStore.getState().sendMessage(ORIGINAL_TEXT, {
       clientMessageId: ORIGINAL_ID, mediaRefs: [...MEDIA], model_name: MODEL,
     })
     useChatStore.getState().sendMessage(QUEUED_TEXT, { clientMessageId: QUEUED_ID, queuedAt: NOW })
   })
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: first send plus a queued follow-up, not two appends')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   expect(useChatStore.getState().outboundQueue, 'fixture: the unacknowledged first send owns the follow-up')
     .toStrictEqual([QUEUED_OWNED])
 
@@ -139,7 +147,7 @@ function beginKnownChatCheck() {
   expect(useChatStore.getState().pendingFirstSend?.status, 'fixture: a lost acknowledgement leaves delivery uncertain')
     .toBe('unconfirmed')
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: reconnect never retransmits the original')
-    .toStrictEqual([ORIGINAL_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME)])
   act(() => {
     useChatStore.getState().retryFirstSend()
     useChatStore.getState().handleFrame({
@@ -150,13 +158,13 @@ function beginKnownChatCheck() {
     })
   })
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: recovery checks the known saved chat without a cursor')
-    .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME])
 
   // Now the browser really reconnects with a known ID. Another tab's deletion
   // is represented by the incoming gateway refusal, not by seeding store state.
   reconnect(sender)
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: known-chat reconnect attaches only')
-    .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_FRAME, ATTACH_FRAME])
+    .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME, ATTACH_FRAME])
   expect(useChatStore.getState().pendingFirstSend?.status, 'fixture: early refusal arrives during checking_chat')
     .toBe('checking_chat')
   expect(useChatStore.getState().messagesById[ORIGINAL_ID].deliveryStatus, 'fixture: the genuine saved receipt is retained')
@@ -213,7 +221,7 @@ describe('#1090 COMBO-SF-1 — early attach refusal ownership controls', () => {
     expect(failed.pendingFirstSend, 'COMBO-SF-1: only the check status changes; retain the original ID, request, workspace and known chat')
       .toStrictEqual({ ...originalRequest, status: 'check_failed' })
     expect(failed.pendingFirstSend?.payload, 'COMBO-SF-1: original whitespace, ordered media, routing, model and false Auto survive')
-      .toStrictEqual(ORIGINAL_FRAME)
+      .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
     expect(failed.messagesById[ORIGINAL_ID].firstSendStatus, 'COMBO-SF-1: the owned bubble leaves checking_chat')
       .toBe('check_failed')
     expect(failed.messagesById[ORIGINAL_ID].deliveryStatus, 'COMBO-SF-1: a failed chat check cannot revoke the saved receipt')
@@ -231,18 +239,18 @@ describe('#1090 COMBO-SF-1 — early attach refusal ownership controls', () => {
     act(() => useChatStore.getState().drainOutboundQueue())
     expect(useChatStore.getState().pendingDrainQueue, 'D7: a failed check still owns queued messages').toStrictEqual([QUEUED_BOUND])
     expect(sender.send.mock.calls.map(([frame]) => frame), 'COMBO-SF-1: refusal neither resends nor drains into the deleted chat')
-      .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_FRAME, ATTACH_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME, ATTACH_FRAME])
 
     const retry = screen.getByRole('button', { name: /^Retry$/ })
     expect(retry, 'COMBO-SF-1: the real Retry action is available again').toBeEnabled()
     fireEvent.click(retry)
     act(() => useChatStore.getState().retryFirstSend())
     expect(sender.send.mock.calls.map(([frame]) => frame), 'COMBO-SF-1: one explicit Retry attaches only; no repeat append or concurrent retry')
-      .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_FRAME, ATTACH_FRAME, ATTACH_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME, ATTACH_FRAME, ATTACH_FRAME])
     expect(useChatStore.getState().pendingFirstSend?.status, 'COMBO-SF-1: usable Retry starts checking the same known chat')
       .toBe('checking_chat')
     expect(useChatStore.getState().pendingFirstSend?.payload, 'COMBO-SF-1: attach Retry still retains the original request')
-      .toStrictEqual(ORIGINAL_FRAME)
+      .toStrictEqual(withNewChatOrigin(BASE_ORIGINAL_FRAME))
     expect(useChatStore.getState().pendingDrainQueue, 'D7: queued messages cannot overtake the check').toStrictEqual([QUEUED_BOUND])
 
     completeAuthoritativeCheck()
@@ -252,7 +260,7 @@ describe('#1090 COMBO-SF-1 — early attach refusal ownership controls', () => {
     expect(checked.outboundQueue, 'D7: no visible queue remains stranded').toStrictEqual([])
     expect(checked.pendingDrainQueue, 'D7: the waiting follow-up is actually drained').toStrictEqual([])
     expect(sender.send.mock.calls.map(([frame]) => frame), 'D7: only the queued follow-up sends after catch-up; original Retry stayed attach-only')
-      .toStrictEqual([ORIGINAL_FRAME, ORIGINAL_FRAME, ATTACH_FRAME, ATTACH_FRAME, ATTACH_FRAME, QUEUED_FRAME])
+      .toStrictEqual([withNewChatOrigin(BASE_ORIGINAL_FRAME), withNewChatOrigin(BASE_ORIGINAL_FRAME), ATTACH_FRAME, ATTACH_FRAME, ATTACH_FRAME, withNewChatOrigin(QUEUED_FRAME)])
     // ChatMessage::clientMessageId is optional. The saved first send has a
     // replay-rekeyed id plus its original wire identity; a just-sent follow-up
     // is still keyed by its client ID (buildQueuedUserMessage's documented

@@ -45,8 +45,17 @@ func TestNewRootCommand_KeptCommandsPresent(t *testing.T) {
 		"browser",
 		"credentials",
 		"doctor",
+		// "export", "import" and "package" (package inspect|verify) are the
+		// #1094 S1a owner commands (spec export-import-s1-spec.md r7,
+		// Reachability: registered from pkg/app/internal/pkgcmd/command.go;
+		// FR-050/FR-051/FR-052). ADR-024's dated amendment (ADR A1/DA-3) adds
+		// them to the allowed owner commands. The regression table names this
+		// list update as the ONLY intended expectation change of S1a.
+		"export",
+		"import",
 		"office", // FR-042: operator-only component registration.
 		"onboard",
+		"package",
 		"pdf-renderer",
 		// "records" (omnipus records import-obsidian) was added deliberately in
 		// 9b0280dd4 ("feat(records): add the Obsidian-vault importer (FR-100)")

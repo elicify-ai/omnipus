@@ -6865,6 +6865,22 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/composer/SessionDraftChip.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/UnsentNotice.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/useSessionDraftBinding.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/openUnsentChat.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/historical-markdown.tsx",
       "lane": 3
     },

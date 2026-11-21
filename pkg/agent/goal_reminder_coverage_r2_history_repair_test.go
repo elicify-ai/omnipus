@@ -43,11 +43,23 @@ func TestGoalReminderMalformedHistoryRetainsOutcomeUntilRepair(t *testing.T) {
 	evidence := r6GateRecordEvidence(t, h, tk.ID, "r2-history-repair-owned", 1)
 	r6GateRequireOpenWindow(t, store, owned, evidence, ownedSession)
 	h.age(t)
-	var faults atomic.Int32
+	// #1857 B26 (sec2 A): the held history fault shows the user only the
+	// goal_state_unavailable sentence; the operation and the raw error are on
+	// the goal_read_error server log line.
+	const rawHistoryError = "read owned task outcomes"
+	const assessOperation = "assess completed goal reminder (no new reminder dispatched)"
+	logFile := b26EnableServerLog(t)
+	sentence := b26Sentence(t)
+	var faults, leaked atomic.Int32
 	h.al.SetEventSyncTap(func(event Event) {
 		payload, ok := event.Payload.(ErrorPayload)
-		if event.Kind == EventKindError && ok && payload.SessionID == h.id && payload.Stage == "goal_record_read" &&
-			strings.Contains(payload.Message, "read owned task outcomes") {
+		if event.Kind != EventKindError || !ok || payload.SessionID != h.id || payload.Stage != "goal_record_read" {
+			return
+		}
+		if strings.Contains(payload.Message, rawHistoryError) {
+			leaked.Add(1)
+		}
+		if payload.Code == "goal_state_unavailable" && payload.Message == sentence {
 			faults.Add(1)
 		}
 	})
@@ -71,7 +83,10 @@ func TestGoalReminderMalformedHistoryRetainsOutcomeUntilRepair(t *testing.T) {
 		assert.Equal(t, beforeCalls, h.root.count())
 		assert.Equal(t, 0, grHasSystemLine(h.visibleHistory(t), grPauseLine))
 	}
-	assert.Greater(t, faults.Load(), int32(0), "the actual earlier owned-history guard must visibly hold this persistent fault")
+	assert.Greater(t, faults.Load(), int32(0), "the actual earlier owned-history guard must visibly hold this persistent fault, as the goal_state_unavailable frame")
+	assert.Zero(t, leaked.Load(), "#1857 B26: no frame may carry the raw history error")
+	b26RequireLogLine(t, logFile, assessOperation, rawHistoryError)
+	b26RequireSavedLines(t, h.visibleHistory(t), rawHistoryError)
 
 	repair()
 	runs, err := reminderTaskRuns(store, tk.ID)

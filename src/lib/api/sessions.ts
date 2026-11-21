@@ -3,6 +3,7 @@
 import { maybeDevToast } from '../dev-toast'
 import { clearRedirectedTurnMarkers, normalizeTruncationReason, type TruncationReason } from '../truncation'
 import type { ZodType } from 'zod'
+import type { components } from '@/lib/api/generated/openapi-types'
 import { z } from 'zod'
 import {
   ClearAllSessionsResponse as ClearAllSessionsResponseSchema,
@@ -1339,8 +1340,20 @@ function normalizeSessionDetail(raw: unknown, sessionId: string, endpoint: strin
  * created without one leaves that read empty, and an agent on more than one
  * workspace's team is then refused as ambiguous. Sending it here means a chat
  * carries its workspace from birth instead of from its first message.
+ *
+ * #1428 step 2 (spec 4.4.2): a creation for a new-chat key passes the request
+ * body itself, with `new_chat_key`, so the server binds the key to the new
+ * session in the creation write. The positional form stays for creations
+ * that belong to no new-chat key.
  */
-export async function createSession(agentId: string, workspaceId?: string): Promise<Session> {
+export async function createSession(
+  agentOrBody: string | components['schemas']['SessionCreateRequest'],
+  workspaceArg?: string,
+): Promise<Session> {
+  const body = typeof agentOrBody === 'string' ? { agent_id: agentOrBody, workspace_id: workspaceArg } : agentOrBody
+  const agentId = body.agent_id
+  const workspaceId = body.workspace_id
+  const newChatKey = typeof body.new_chat_key === 'string' && body.new_chat_key.length > 0 ? body.new_chat_key : undefined
   // agent_id is REQUIRED and nonblank on the wire (omnipus-system-agent K16):
   // there is no default agent, and the server refuses a missing or blank one
   // with 400 "an agent must be named". Fail fast with the same honesty instead
@@ -1360,6 +1373,7 @@ export async function createSession(agentId: string, workspaceId?: string): Prom
       ...(trimmedWorkspaceId.length > 0 && trimmedWorkspaceId.length <= 128
         ? { workspace_id: trimmedWorkspaceId }
         : {}),
+      ...(newChatKey ? { new_chat_key: newChatKey } : {}),
     }),
   }, WireSessionSchema as ZodType<RawSession>)
   return rawToSession(raw)

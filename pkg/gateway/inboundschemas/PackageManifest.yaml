@@ -1,0 +1,141 @@
+title: PackageManifest
+description: >
+  The manifest of an .omnpkg package: the first entry (manifest.json) of the
+  zstd-compressed tar, and the `manifest` field of PackageImportPreview.
+  Readers refuse a higher format_version (package_too_new) and a higher agent
+  element schema (element_schema_too_new), and ignore unknown properties
+  (export-import S1 spec, FR-001 to FR-005).
+type: object
+required:
+  - format
+  - format_version
+  - scope
+  - elements
+  - counts
+  - files
+  - source_build
+  - created_at
+  - includes_sessions
+  - needs_secrets
+additionalProperties: true
+properties:
+  format:
+    type: string
+    enum:
+      - omnpkg
+    description: Always "omnpkg".
+    example: omnpkg
+  format_version:
+    type: integer
+    minimum: 1
+    description: Package format version; S1 writes 1.
+    example: 1
+  scope:
+    type: string
+    enum:
+      - workspace
+      - system
+      - custom
+    description: What the package was made from; S1 writes custom.
+    example: custom
+  elements:
+    type: array
+    description: The elements in the package (S1 exports exactly one agent).
+    items:
+      type: object
+      required:
+        - type
+        - schema
+        - source_id
+        - name
+        - files
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+          description: >
+            Element type. Open string: S1 knows "agent"; later Omnipus
+            versions add more types.
+          example: agent
+        schema:
+          type: integer
+          minimum: 1
+          description: Version of the element's record format; agent records are 1.
+          example: 1
+        source_id:
+          type: string
+          description: The element's ID on the install it was exported from.
+          example: 5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c
+        name:
+          type: string
+          description: The element's display name (equals the agent record's name).
+          example: Writer
+        files:
+          type: array
+          description: Package paths this element owns; every path is listed in `files`.
+          items:
+            type: string
+          example:
+            - omnipus/agents/5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c/agent.json
+  counts:
+    type: object
+    description: Number of elements per element type.
+    additionalProperties:
+      type: integer
+      minimum: 0
+    example:
+      agent: 1
+  files:
+    type: object
+    description: Every payload entry (all entries except manifest.json) with its SHA-256 and size.
+    additionalProperties:
+      type: object
+      required:
+        - sha256
+        - size
+      additionalProperties: false
+      properties:
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Lowercase hex SHA-256 of the entry's bytes.
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Entry size in bytes.
+  source_build:
+    type: string
+    description: Version of the Omnipus build that made the package.
+    example: v0.1.1
+  created_at:
+    type: string
+    format: date-time
+    description: When the package was made (UTC).
+    example: '2026-11-19T12:00:00Z'
+  includes_sessions:
+    type: boolean
+    description: Whether the package carries chat sessions; S1 writes false.
+    example: false
+  needs_secrets:
+    type: array
+    description: Secrets the importer must enter again (S1a writes none).
+    items:
+      type: object
+      required:
+        - name
+        - used_by
+        - kind
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Secret name, for example an environment variable name.
+          example: OPENAI_API_KEY
+        used_by:
+          type: string
+          description: Source ID of the element that uses the secret.
+        kind:
+          type: string
+          description: Kind of secret (S1b writes executor_env).
+          example: executor_env

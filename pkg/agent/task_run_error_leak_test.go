@@ -104,7 +104,7 @@ func temporaryLeakErrors() []struct {
 			fmt.Errorf("stream from acme-llm went silent after %s: %w", leakBody, common.NewStallError(5*time.Minute))),
 			CodeProviderStalled},
 		{"unknown_404_with_body", fmt.Errorf("LLM call failed after retries: %w",
-			&common.ProviderError{Status: 404, Body: leakBody, BodyPreview: leakBody}), CodeUnknown},
+			&common.ProviderError{Status: 404, Body: leakBody, BodyPreview: leakBody}), CodeProviderError}, // #1857 R-4: residual status >= 400 is provider_error
 	}
 }
 

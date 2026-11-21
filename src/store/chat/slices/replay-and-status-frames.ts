@@ -47,7 +47,8 @@ import { noteServerAttentionFrame } from '@/store/session/foregroundAck'
 import { mergeRecordedSessionTokens } from '../session-usage'
 import { buildBrowserHandoverInsertion, buildGoalAckInsertion, evictGoalPillsOverCap, mergeGoalPillFrame } from '../goals'
 import { MAX_MESSAGES_PER_SESSION, busyFlagIsUnbacked, evictMessageFromBucket, findAssistantMessageIdByTurnId, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
+import { schedulePlanStatusInvalidate } from '../routing'
+import { applyAnnouncedTurn } from './turn-started-frames'
 import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import { insertHistoryMessageId } from '../cursor'
@@ -214,17 +215,12 @@ function handleSessionStateFrame(
     // activeTurnId again with no second done ever coming to close
     // it a second time — a permanent Stop button and locked
     // composer.
-    if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
-      // #823 catch-up redesign pass 2 (§6.3, Q3): no "bubble opened" flag
-      // to maintain any more — bubble existence is now derived directly
-      // from message_id-keyed lookups (resolveTokenBubbleByMessageId,
-      // slices/frames.ts), not tracked as separate bucket state.
-      withBucket(targetSid, () => ({
-        isStreaming: true,
-        activeTurnId: activeTurn.turn_id,
-        activeTurnAgentId: activeTurn.agent_id,
-      }))
-    }
+    // #823 catch-up redesign pass 2 (§6.3, Q3): no "bubble opened" flag
+    // to maintain any more — bubble existence is now derived directly
+    // from message_id-keyed lookups (resolveTokenBubbleByMessageId,
+    // slices/frames.ts), not tracked as separate bucket state. Shared with
+    // the live turn_started frame (turn-started-frames.ts).
+    applyAnnouncedTurn(targetSid, activeTurn, withBucket)
   } else {
     // CR3: this snapshot says NO turn is in flight for this
     // session. If a PRIOR snapshot (or the token case) had

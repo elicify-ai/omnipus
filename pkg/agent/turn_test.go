@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -517,24 +519,41 @@ func TestRecordRateLimitDenial_PersistsFriendlyRateLimitTranscript(t *testing.T)
 	entries, err := store.ReadTranscript(sessionID)
 	require.NoError(t, err)
 
-	var found bool
+	// #1857 D-A / B3: the saved record is the agent_request_limit catalogue
+	// sentence with every slot filled, or the generic unknown sentence when a
+	// fact is missing. It is never the internal "rate limit: <rule> (retry
+	// after Ns)" text, and the denial is saved once and translated once.
+	var systemEntries []session.TranscriptEntry
 	for _, e := range entries {
-		if e.Type != session.EntryTypeSystem {
-			continue
-		}
-		// The friendly copy must be present verbatim — a regression
-		// here would re-translate the rate-limit message into a generic
-		// CodeRateLimited shape and lose the policy-rule hint.
-		if e.Content == "rate limit: agent_max_llm_per_hour (retry after 60s)" {
-			found = true
-			break
+		if e.Type == session.EntryTypeSystem {
+			systemEntries = append(systemEntries, e)
 		}
 	}
-	assert.True(
-		t,
-		found,
-		"transcript must contain the friendly 'rate limit: ... (retry after Ns)' system entry verbatim (no double-translate)",
-	)
+	require.Len(t, systemEntries, 1,
+		"one denial must save exactly one system entry (translated once, not twice); got %+v", systemEntries)
+	content := systemEntries[0].Content
+	assert.Equal(t, string(CodeAgentRequestLimit), systemEntries[0].ErrorCode,
+		"B3: the saved entry must carry the configured request-limit code")
+
+	variants := generated.LLMErrorMessageVariants[string(CodeAgentRequestLimit)]
+	templates := make([]string, 0, 1+len(variants))
+	templates = append(templates, generated.LLMErrorUserMessages[string(CodeAgentRequestLimit)])
+	for _, v := range variants {
+		templates = append(templates, v)
+	}
+	isCatalogue := content == generated.LLMErrorUserMessages[string(CodeUnknown)]
+	for _, tmpl := range templates {
+		if tmpl != "" && renderedFromTemplate(content, tmpl) {
+			isCatalogue = true
+		}
+	}
+	assert.True(t, isCatalogue,
+		"saved content must be the filled agent_request_limit sentence or the generic sentence; got %q", content)
+	lowered := strings.ToLower(content)
+	assert.NotContains(t, lowered, "rate limit:", "saved content must not carry the internal rate-limit text")
+	assert.NotContains(t, lowered, "retry after", "saved content must not carry the internal retry-after text")
+	assert.NotContains(t, content, "agent_max_llm_per_hour", "saved content must not carry the policy rule name")
+	assert.False(t, messageHasSlots(content), "saved content must never carry a raw {slot}: %q", content)
 }
 
 // newTestAgentLoopForRateLimit builds a minimal AgentLoop + turnState

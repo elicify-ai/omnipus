@@ -117,6 +117,7 @@ type restAPI struct {
 	mailSessions     *email.MailSessions
 	mailSessionsOnce sync.Once
 	configMu         sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	packages         packageState        // agent package staging registry and audit fallback (rest_packages.go)
 	taskStore        *task.Store         // unified task persistence
 	taskExecutor     *agent.TaskExecutor // task execution engine
 
@@ -933,11 +934,9 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// Chain: withAuth (verifies token) → handler.
 	rae.cm.RegisterHTTPHandler("/api/v1/credentials", rae.a.withAuth(rae.a.HandleCredentials))
 	rae.cm.RegisterHTTPHandler("/api/v1/credentials/", rae.a.withAuth(rae.a.HandleCredentials))
-	// WP4: local backup — off in platform mode
+	// Agent packages (epic #1094 S1a, FR-045): local mode only.
 	if config.EditionAuthMode() == config.AuthModeLocal {
-		rae.cm.RegisterHTTPHandler("/api/v1/backup", rae.a.withAuth(rae.a.HandleCreateBackup))
-		rae.cm.RegisterHTTPHandler("/api/v1/backups", rae.a.withAuth(rae.a.HandleListBackups))
-		rae.cm.RegisterHTTPHandler("/api/v1/restore", rae.a.withAuth(rae.a.HandleRestore))
+		rae.a.registerPackageRoutes(rae.cm)
 	}
 	// Option A keeps workspace and media IDs as separately validated path segments;
 	// the legacy global media route remains below for backward compatibility.

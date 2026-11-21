@@ -51,6 +51,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/app/internal/doctor"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/gateway"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/onboard"
+	"github.com/elicify-ai/omnipus/pkg/app/internal/pkgcmd"
 	recordscmd "github.com/elicify-ai/omnipus/pkg/app/internal/records"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/run"
 	stopcmd "github.com/elicify-ai/omnipus/pkg/app/internal/stop"
@@ -368,11 +369,32 @@ func autoStartAndRetryWith(
 	spawn spawnFunc,
 	poller readyPollerFunc,
 ) autoStartResult {
+	if err := autoStartGatewayWith(ctx, home, addr, token, keyCheck, status, spawn, poller); err != nil {
+		return autoStartResult{orchErr: err}
+	}
+	// 5. Retry. Return the run error (if any) via runErr so the caller's
+	// sentinel switch can print the appropriate message.
+	return autoStartResult{runErr: run.Run(ctx, opts)}
+}
+
+// autoStartGatewayWith is the shared auto-start step: steps 1-4 of
+// autoStartAndRetry's decision tree (key mode, status, spawn, ready poll)
+// without the retry. Every failure is printed to stderr and returned. The
+// `export` and `import` commands reuse it through pkgcmd.Options.AutoStart
+// and run their own single retry (FR-054).
+func autoStartGatewayWith(
+	ctx context.Context,
+	home, addr, token string,
+	keyCheck func(string) bool,
+	status statusFunc,
+	spawn spawnFunc,
+	poller readyPollerFunc,
+) error {
 	// 1. Non-interactive key mode required to auto-start.
 	if !keyCheck(home) {
 		fmt.Fprintln(os.Stderr,
 			"no gateway running and no non-interactive key configured; run `omnipus start`")
-		return autoStartResult{orchErr: fmt.Errorf("no non-interactive key mode available")}
+		return fmt.Errorf("no non-interactive key mode available")
 	}
 
 	// 2. Check whether the gateway is actually running before spawning. If
@@ -386,14 +408,14 @@ func autoStartAndRetryWith(
 				"The gateway may be running but unreachable. Run `omnipus start` manually.\n",
 			statusErr,
 		)
-		return autoStartResult{orchErr: statusErr}
+		return statusErr
 	}
 	if running {
 		// Gateway is up but the WS dial failed transiently — don't spawn.
 		fmt.Fprintln(os.Stderr,
 			"Omnipus is running but the connection failed — "+
 				"the gateway may still be starting up. Try again shortly.")
-		return autoStartResult{orchErr: run.ErrGatewayDown}
+		return run.ErrGatewayDown
 	}
 
 	// 3. Spawn.
@@ -401,24 +423,37 @@ func autoStartAndRetryWith(
 	spawnedPID, spawnErr := spawn(home, nil)
 	if spawnErr != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to start gateway: %v\n", spawnErr)
-		return autoStartResult{orchErr: spawnErr}
+		return spawnErr
 	}
 
 	// 4. Poll until the gateway accepts authenticated WS connections.
-	pollErr := poller(ctx, home, addr, token, spawnedPID)
-	if pollErr != nil {
+	if pollErr := poller(ctx, home, addr, token, spawnedPID); pollErr != nil {
 		fmt.Fprintf(os.Stderr, "error: gateway did not become ready: %v\n", pollErr)
-		return autoStartResult{orchErr: pollErr}
+		return pollErr
 	}
+	return nil
+}
 
-	// 5. Retry. Return the run error (if any) via runErr so the caller's
-	// sentinel switch can print the appropriate message.
-	return autoStartResult{runErr: run.Run(ctx, opts)}
+// packageAutoStart is the production pkgcmd.Options.AutoStart: the shared
+// auto-start step against the local gateway with the cli.token bearer.
+// pollGatewayReady bounds the wait (autoStartPollTimeout).
+func packageAutoStart() error {
+	home := internal.GetOmnipusHome()
+	addr, err := pkgcmd.LocalGatewayAddr()
+	if err != nil {
+		return err
+	}
+	token, err := clitoken.LoadCLIToken(home)
+	if err != nil {
+		return err
+	}
+	return autoStartGatewayWith(context.Background(), home, addr, token,
+		hasNonInteractiveKeyMode, daemon.Status, daemon.Spawn, pollGatewayReady)
 }
 
 // NewRootCommand builds the root cobra command with the minimized CLI tree.
 //
-// Subcommands (resolved first by cobra): onboard, start, credentials, audit, doctor, browser, version, records.
+// Subcommands (resolved first by cobra): onboard, start, credentials, audit, doctor, browser, version, records, export, import, package.
 // Root RunE handles the positional <agent> [<prompt>] execute path (FR-001/002/008).
 // Removed verbs (agent, auth, status, cron, migrate, model, skills) are no longer registered;
 // typing one prints a helpful message (US-11/AC-1) rather than "unknown agent".
@@ -452,6 +487,9 @@ Commands:
   doctor       Diagnose configuration issues.
   office       Register or unregister LibreOffice for Office document previews.
   pdf-renderer Register or unregister the PDF renderer for document previews.
+  export       Export one custom agent to a .omnpkg package file.
+  import       Import a .omnpkg package as a new agent.
+  package      Inspect or verify a .omnpkg package file (no gateway needed).
   version      Print build version.
 
 Examples:
@@ -462,7 +500,7 @@ Examples:
   omnipus start
   omnipus stop
 
-Reserved names (shadowed by subcommands): onboard, start, stop, credentials, audit, doctor, office, pdf-renderer, version.
+Reserved names (shadowed by subcommands): onboard, start, stop, credentials, audit, doctor, office, pdf-renderer, export, import, package, version.
 If an agent shares a name with a subcommand, use the agent's ID directly via the API or rename it.
 `, internal.Logo, config.GetVersion(), onboardHelpLine()),
 		Example: `  omnipus jim "summarize the last 10 commits"
@@ -503,6 +541,8 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 	cmd.Flags().DurationVar(&flagTimeout, "timeout", 300*time.Second, "Maximum time to wait for the agent to finish")
 	cmd.Flags().StringVar(&flagURL, "url", "", "Remote gateway URL (not supported yet; reserved for P1)")
 
+	pkgOpts := pkgcmd.Options{AutoStart: packageAutoStart}
+
 	// Subcommands — all kept verbs. Subcommands resolve before RunE, so these
 	// names shadow same-named agents (documented in Long + US-11/OBS-2).
 	cmd.AddCommand(
@@ -517,6 +557,11 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 		componentscmd.NewPDFRendererCommand(),
 		stopcmd.NewStopCommand(),
 		version.NewVersionCommand(),
+		// #1094 S1a owner commands (FR-050 to FR-052): gateway clients for
+		// export/import, offline package inspect|verify.
+		pkgcmd.NewExportCommand(pkgOpts),
+		pkgcmd.NewImportCommand(pkgOpts),
+		pkgcmd.NewPackageCommand(pkgOpts),
 	)
 
 	return cmd
@@ -694,6 +739,12 @@ func runMain(ctx context.Context, cmd *cobra.Command) int {
 	err := cmd.ExecuteContext(ctx)
 	if err == nil {
 		return 0
+	}
+	// The package commands (pkgcmd) print their own message and carry the
+	// FR-053 exit code (1 refused or failed, 2 usage error).
+	var coded pkgcmd.ExitCoder
+	if errors.As(err, &coded) {
+		return coded.ExitCode()
 	}
 	fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
 	return 1

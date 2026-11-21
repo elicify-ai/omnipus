@@ -176,13 +176,16 @@ describe('unavailable workspace chat', () => {
     act(() => useSessionStore.getState().startNewSession('mia'))
     expect(screen.queryByTestId('unavailable-chat-notice')).toBeNull()
     expect(screen.getByTestId('composer-input')).not.toBeDisabled()
-    expect(screen.getByTestId('chat-send')).not.toBeDisabled()
+    // Spec 4.5 rule 4: an empty draft does not enable Send. The box being
+    // enabled is what shows the failed restore no longer blocks typing.
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
   })
 
   it('says nothing and leaves send enabled when a chat is available', () => {
     render(<OmnipusComposer />)
     expect(screen.queryByText('This chat is unavailable right now')).toBeNull()
     expect(screen.getByTestId('composer-input')).not.toBeDisabled()
-    expect(screen.getByTestId('chat-send')).not.toBeDisabled()
+    // Spec 4.5 rule 4: an empty draft does not enable Send.
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
   })
 })

@@ -16,7 +16,7 @@ Personal things are not tabs here. Profile is its own screen, holding your name,
 - You want to switch providers, use a subscription you already pay for, or check which models your account can actually reach.
 - You want to see what your agents consumed this week.
 - You want agents to know your role and preferences without repeating yourself in every chat.
-- You want to change how long transcripts are kept, back up your data, or cap how hard agents can call a model.
+- You want to change how long transcripts are kept, check storage use, or cap how hard agents can call a model.
 
 Two jobs that look like settings live on their own pages: what agents may do is [tool permissions](tools.md), and how they are confined is the [sandbox](security.md).
 
@@ -113,7 +113,7 @@ Each tab and neighbor screen has one job.
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
 | Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
-| Settings, Data | Session retention, storage numbers, backups, clearing sessions |
+| Settings, Data | Session retention, storage numbers, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
 | Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, the goal completion budget, and idle-reminder and stalled-work check-in timers |
@@ -134,7 +134,7 @@ There is no longer a computed default for `performance.max_parallel_agents`. Lea
 
 If the host cannot measure available memory, Omnipus holds agent concurrency at a floor of **two** turns. It refuses to grow, never to run: the first two turns can start, while a third concurrent turn is refused. Set `performance.max_parallel_agents` explicitly if the host can safely support more.
 
-The rate limits live in Settings, Security, under its advanced section. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank for no limit.
+The rate limits live in Settings, Security, under its advanced section. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank, or enter 0, for no limit. A change is saved on its own and applies to running agents without a restart; if the save fails, the section shows the error instead of **Saved**. Both number fields name that save status as their description, so a screen reader reads **Saved** or the error when you move to either field. For scripts, the same two numbers are `max_agent_llm_calls_per_hour` and `max_agent_tool_calls_per_minute` on `GET` / `PUT /api/v1/security/rate-limits`. A time limit for a single command and a time limit for background processes are not offered in Settings for now, because Omnipus does not apply them yet.
 
 Profile holds one setting your agents read every turn: **Workspace Context**. It is a free-text page about you — your role, your preferences, how you like answers — saved automatically and shared with all agents. Your display name, timezone, and font size are personal display choices stored in this browser, so they do not follow you to another machine.
 
@@ -357,8 +357,8 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 - Usage is measured in tokens. If a provider bill surprises you, the Usage screen tells you which agent and which model drove it, not what it cost.
 - Session retention is 90 days by default, adjustable from 1 to 365 days on the Data tab. Older transcripts are deleted automatically, and that deletion is permanent.
-- **Clear all sessions** on the Data tab deletes every ordinary chat at once. There is no undo; make a backup first if the history matters. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
-- Restoring a backup overwrites current data and needs a gateway restart to take effect.
+- **Clear all sessions** on the Data tab deletes every ordinary chat at once. There is no undo; if you need to keep the history, copy the data folder outside the app before clearing it. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
+- **Backup and Restore has been removed** from Settings → Data and the API. Existing backup files on disk are not deleted. Use agent packages (export/import) to move agents between installations; packages are not a full backup of the data folder.
 - A sign-in can expire. The provider row shows the state, and signing in again the same way restores it.
 - Model changes on the Models tab apply on the next turn, with no restart; gateway port changes do need a restart.
 - Your Profile display settings stay in this browser. The workspace context, by contrast, lives on the server, so every browser and agent sees the same text.

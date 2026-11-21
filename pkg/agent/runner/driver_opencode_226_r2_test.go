@@ -104,7 +104,8 @@ func TestOpencode226R2_LiveRunTerminalOutcome(t *testing.T) {
 				opencode226R2AssertAnswer(t, events, "CAPTURE-OK")
 			} else {
 				opencode226R2AssertKinds(t, events, []EventKind{EventKindStart, EventKindError})
-				opencode226R2AssertError(t, events[1], "Model unavailable: openrouter/no-such-vendor/no-such-model")
+				opencode226R2AssertError(t, events[1], "Model unavailable: openrouter/no-such-vendor/no-such-model",
+					"provider.no-route") // #1857 spec 13.8.2 row C2: nested error.type is carried
 			}
 		})
 	}
@@ -177,9 +178,13 @@ func opencode226R2AssertAnswer(t *testing.T, events []RunEvent, want string) {
 	}
 }
 
-func opencode226R2AssertError(t *testing.T, event RunEvent, message string) {
+func opencode226R2AssertError(t *testing.T, event RunEvent, message string, errType ...string) {
 	t.Helper()
+	// errType is the structured error.type the stream carried, when it carried one.
 	want := ErrorEvent{Message: message, Fatal: true}
+	if len(errType) > 0 {
+		want.Type = errType[0]
+	}
 	if event.Err == nil || *event.Err != want {
 		t.Errorf("terminal error = %+v, want exactly %+v", event.Err, want)
 	}

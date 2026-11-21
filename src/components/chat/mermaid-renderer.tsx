@@ -7,6 +7,7 @@ import { ArrowClockwise, Code, Image, ArrowsOutSimple, DownloadSimple, Copy } fr
 import { MediaActionToolbar, type MediaAction } from './MediaActionToolbar'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
+import { captureOwningChatSend } from '@/lib/owning-chat-capture'
 import { copyText, copyImageBlob, svgToPngBlob, downloadBlob, canCopyImage } from './media-actions'
 
 // normalizeMermaidSource deterministically fixes the single most common MECHANICAL
@@ -75,11 +76,17 @@ function MermaidErrorCard({ error, code }: { error: string; code: string }) {
   // handleFix lazily imports the store so mermaid-renderer (and every markdown
   // consumer) does NOT eagerly pull the full chat store + QueryClient into their
   // module graph. The import check also guards against clicking during an active turn.
+  // #1428 step 2 (spec 4.6.1): the owning chat is captured at the click, before
+  // the lazy import await, so navigation during the import never retargets it.
+  // Only when the send pipeline has not loaded yet is it captured after it.
   const handleFix = async () => {
-    const { useChatStore } = await import('@/store/chat')
-    const store = useChatStore.getState()
-    if (store.isStreaming) return // a turn is already active — sendMessage would no-op
-    store.sendMessage(buildFixPrompt(error, code))
+    const prompt = buildFixPrompt(error, code)
+    let send = captureOwningChatSend('Mermaid fix', prompt)
+    if (!send) {
+      await import('@/lib/bound-send')
+      send = captureOwningChatSend('Mermaid fix', prompt)
+    }
+    if (!send?.()) return // no chat open, or its turn is running
     fixRequestedCache.add(code)
     setSent(true)
   }

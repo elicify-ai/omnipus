@@ -28,6 +28,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { fetchSessions, fetchWorkspace, fetchAgents } from '@/lib/api'
 import { MIA } from '../../tests/omnipus-l1-ui-red/fixtures'
 import { useSessionStore, registerChatResetForReplay, registerChatClearPendingAutoApprove } from './session'
+// Spec 4.4.1: startNewSession and prune go through enterNewChat, which
+// registers the draft. Loading the chat store binds that host; without it
+// those calls throw before the pointer assertions can run.
+import { useChatStore } from './chat'
+import { initialDraftState } from './chat/draft-state'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -48,7 +53,9 @@ function resetAll() {
     sessionByWorkspace: {},
     resolvingSessionForWorkspace: {},
     workspaceEntry: null,
+    newChatKey: null,
   })
+  useChatStore.setState({ draftState: initialDraftState() })
   useWorkspacesStore.setState({
     activeWorkspaceId: null,
     activePlanId: null,

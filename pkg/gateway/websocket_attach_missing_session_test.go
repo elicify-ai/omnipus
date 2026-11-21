@@ -38,6 +38,8 @@ func attachSF1Socket(t *testing.T, handler *WSHandler) *websocket.Conn {
 		Type: string(generated.WsFrameTypeAuth), Token: token,
 	}))
 
+	// #1428 §4.10 / S-11: capabilities precedes the connection-open state.
+	requireServerCapabilitiesFirst(t, readAttachSF1Frame(t, conn), "saved-session attach admission")
 	// The connection-open session_state is a positive authentication barrier:
 	// no attach is sent until the real server has accepted this token.
 	var opened generated.SessionStateFrame

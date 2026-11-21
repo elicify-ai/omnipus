@@ -116,6 +116,7 @@ func testIterationLimitSystemNotice(t *testing.T, streaming bool) {
 		Channel: "webchat", ChatID: "ceiling-notice-chat", SessionID: meta.ID, Content: answer,
 	}))
 	live, _ := wu22GatewayFinalFrames(t, &wu22GatewayFinalizeHarness{handler: handler, store: store, sid: meta.ID, conn: conn})
+	wu22AssertOneTurnNamed(t, live, meta.ID)
 	var liveNotices []generated.ReplayMessageFrame
 	for _, raw := range framesOfType(t, live, "replay_message") {
 		var frame generated.ReplayMessageFrame

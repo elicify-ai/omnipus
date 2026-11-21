@@ -2,7 +2,9 @@ title: CancelFrame
 description: >
   Client → server. Request the server to cancel the in-progress turn for the
   given session. The server acknowledges with one or more cancel_stage frames
-  (graceful → hard → detached) and eventually a done frame.
+  (graceful → hard → detached) and eventually a done frame. A cancel that
+  finds nothing to stop is answered with cancel_idle (#1841) to the sending
+  connection only.
 type: object
 required:
   - type
@@ -16,7 +18,32 @@ properties:
     type: string
     minLength: 1
     maxLength: 255
-    description: Session whose in-progress turn should be cancelled.
+    description: >
+      Session whose in-progress turn should be cancelled. This is the frame's
+      target; compare `origin`.
+  origin:
+    $ref: ./SendOrigin.yaml
+    description: >
+      #1428 step 2. The chat the Stop or typed /cancel came from (see
+      SendOrigin). The gateway checks it against the target before any side
+      effect and refuses a mismatch with send_refused; nothing is cancelled.
+      A consistency control, not authorization. Optional on the wire: on a
+      browser connection (WebSocket upgrade with an Origin header, not the CLI
+      token) a cancel without the origin key is refused with an out-of-date
+      reply; on other connections it is accepted as before. `origin: null` is
+      malformed, not absent.
+  client_frame_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      #1428 step 2. Client-generated correlation id for this command. When it
+      is present and valid, the server answers with exactly one
+      command_received (accepted and handed to the cancel handler, before any
+      cancel_stage or cancel_idle frame for it) or one send_refused carrying
+      it. Optional for compatibility with older clients; a current client
+      sets it on every cancel it sends (Stop button, Esc, Stop all, typed
+      /cancel and /stop).
   scope:
     type: string
     enum:

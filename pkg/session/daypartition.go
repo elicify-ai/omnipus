@@ -162,6 +162,14 @@ type SessionMeta struct {
 	// use only — not serialized to any REST response or wire format.
 	Owner string `json:"owner,omitempty"`
 
+	// NewChatKey is the browser's new-chat key (contract SendOrigin.new_chat_key)
+	// of the "no chat yet" screen this chat was created for (#1428 step 2,
+	// spec 4.3.3). Written only in the creation write (NewSessionKeyed) and
+	// never changed afterwards; the gateway's send-origin check reads it to
+	// accept `origin {kind: new_chat}` follow-ups. Internal use only — never
+	// mapped to the generated Session or any other response.
+	NewChatKey string `json:"new_chat_key,omitempty"`
+
 	// v2 multi-agent fields (joined session model)
 	AgentIDs            []string          `json:"agent_ids,omitempty"`
 	CompactionSummaries map[string]string `json:"compaction_summaries,omitempty"` // per-agent compaction

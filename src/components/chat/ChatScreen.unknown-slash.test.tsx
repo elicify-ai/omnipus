@@ -259,8 +259,10 @@ describe('Unknown slash send-path — dispatched as normal message (B10/B11/D4)'
 
     act(() => { fireEvent.change(input, { target: { value: '/skill web-research go' } }) })
 
-    // Reset spy so call counts only reflect the submit event.
+    // Reset spies so call counts only reflect the submit event.
     mockGetState.mockClear()
+    mockSetText.mockClear()
+    act(() => { useChatStore.setState({ outboundQueue: [] }) })
 
     // Submit the form — interceptClientCommand checks the text; /skill is not
     // in the commands list (it's been removed), so it returns false.
@@ -273,9 +275,14 @@ describe('Unknown slash send-path — dispatched as normal message (B10/B11/D4)'
     const dispatchedText: string = mockGetState.mock.results[0].value.text
     expect(dispatchedText).toBe('/skill web-research go')
 
-    // 3. setText('') MUST NOT have been called — that would mean interception fired.
+    // 3. Spec 4.5 rule 6: one setText('') is the submit-clear mirror, not interception.
+    //    The queued draft is the literal text. An intercept would queue nothing.
     const clearCalls = mockSetText.mock.calls.filter((args: unknown[]) => args[0] === '')
-    expect(clearCalls).toHaveLength(0)
+    expect(clearCalls).toHaveLength(1)
+    const queued = useChatStore.getState().outboundQueue
+    expect(queued, '/skill is dispatched, not intercepted').toHaveLength(1)
+    const queuedItem = queued[0]
+    expect(typeof queuedItem === 'string' ? queuedItem : queuedItem.content).toBe('/skill web-research go')
   })
 
   it('"/zzz hi" is not intercepted; literal text is dispatched (B10/D4)', async () => {
@@ -298,6 +305,8 @@ describe('Unknown slash send-path — dispatched as normal message (B10/B11/D4)'
     act(() => { fireEvent.change(input, { target: { value: '/zzz hi' } }) })
 
     mockGetState.mockClear()
+    mockSetText.mockClear()
+    act(() => { useChatStore.setState({ outboundQueue: [] }) })
 
     act(() => { fireEvent.submit(form) })
 
@@ -310,8 +319,12 @@ describe('Unknown slash send-path — dispatched as normal message (B10/B11/D4)'
     const dispatchedText: string = mockGetState.mock.results[0].value.text
     expect(dispatchedText).toBe('/zzz hi')
 
-    // 3. No interception — setText('') not called.
+    // 3. Spec 4.5 rule 6: one setText('') is the submit-clear mirror. The queued text is literal.
     const clearCalls = mockSetText.mock.calls.filter((args: unknown[]) => args[0] === '')
-    expect(clearCalls).toHaveLength(0)
+    expect(clearCalls).toHaveLength(1)
+    const queued = useChatStore.getState().outboundQueue
+    expect(queued, '/zzz is dispatched, not intercepted').toHaveLength(1)
+    const queuedItem = queued[0]
+    expect(typeof queuedItem === 'string' ? queuedItem : queuedItem.content).toBe('/zzz hi')
   })
 })

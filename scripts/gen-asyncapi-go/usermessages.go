@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -41,6 +42,16 @@ type userMessageEntry struct {
 	message         string
 	attribution     string
 	providerMessage string
+	// variants maps a variant key to its sentence (#1857): a code whose
+	// instance classes need different sentences carries them here. Sorted by
+	// key at emit time so the artifact is deterministic.
+	variants map[string]string
+	// neutral is the optional neutral-voice twin of message (#1857 D-B B1);
+	// "" when the chat sentence has no first person and serves both voices.
+	neutral string
+	// neutralVariants is the optional neutral twin of each variant, with
+	// exactly the variants' keys when present (#1857 D-B B1).
+	neutralVariants map[string]string
 }
 
 // userMessageCatalogue is the validated catalogue extracted from the contract.
@@ -60,7 +71,35 @@ const (
 	// providerMessageKey is the optional per-entry key carrying the templated
 	// provider variant of the sentence (provider-messages spec §6, OBS-002).
 	providerMessageKey = "provider_message"
+
+	// variantsKey is the optional per-entry mapping of variant key → sentence
+	// (#1857, notifications spec §13.8).
+	variantsKey = "variants"
+
+	// neutralKey / neutralVariantsKey carry the optional neutral-voice twins
+	// of the chat sentence and of its variants (#1857 frontend round, design
+	// note D-B B1, notifications spec §13.8.4 rule 4).
+	neutralKey         = "neutral"
+	neutralVariantsKey = "neutral_variants"
 )
+
+// firstPersonPattern matches the first-person tokens of a chat-voice
+// sentence (design note D-B B1): "I" as a word (which also covers I' and I’
+// contractions) and "me" / "my" in any case. A sentence carrying one needs a
+// neutral twin; a neutral twin must carry none. Mirrored in
+// scripts/_gen-asyncapi-types.mjs (FIRST_PERSON) — keep the two identical.
+var firstPersonPattern = regexp.MustCompile(`\bI\b|(?i:\bme\b|\bmy\b)`)
+
+// messageSlots is the CLOSED slot vocabulary for `message` and `variants`
+// sentences (#1857, notifications spec §13.8): facts the server fills at the
+// emit site. Mirrored in scripts/_gen-asyncapi-types.mjs (MESSAGE_SLOTS) —
+// keep the two sets identical.
+var messageSlots = map[string]bool{
+	"{cli}":     true,
+	"{model}":   true,
+	"{n}":       true,
+	"{minutes}": true,
+}
 
 // providerMessageSlots is the CLOSED slot vocabulary for provider_message
 // templates (provider-messages spec §6). Both generators hard-fail on any
@@ -155,7 +194,22 @@ func extractUserMessageCatalogue(doc map[string]any, schemaName string) (*userMe
 		if err := validateTemplateSlots(providerMessage); err != nil {
 			return nil, fmt.Errorf("%s.%s.%s: %w", schemaName, userMessagesKey, code, err)
 		}
-		entries = append(entries, userMessageEntry{code: code, message: message, attribution: attribution, providerMessage: providerMessage})
+		if err := validateSlots("message", message, messageSlots); err != nil {
+			return nil, fmt.Errorf("%s.%s.%s: %w", schemaName, userMessagesKey, code, err)
+		}
+		variants, err := extractVariants(rawEntry[variantsKey])
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s.%s.%s: %w", schemaName, userMessagesKey, code, variantsKey, err)
+		}
+		neutral, neutralVariants, err := extractNeutralForms(rawEntry, message, variants)
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s.%s: %w", schemaName, userMessagesKey, code, err)
+		}
+		entries = append(entries, userMessageEntry{
+			code: code, message: message, attribution: attribution,
+			providerMessage: providerMessage, variants: variants,
+			neutral: neutral, neutralVariants: neutralVariants,
+		})
 		seen[code] = true
 	}
 
@@ -196,6 +250,137 @@ func validateTemplateSlots(t string) error {
 		}
 	}
 	return nil
+}
+
+// validateSlots enforces balanced braces and the given closed vocabulary on
+// one catalogue sentence; field names the sentence in the error.
+func validateSlots(field, t string, vocabulary map[string]bool) error {
+	if strings.Count(t, "{") != strings.Count(t, "}") {
+		return fmt.Errorf("%s has unbalanced braces (%d open, %d close)",
+			field, strings.Count(t, "{"), strings.Count(t, "}"))
+	}
+	for _, slot := range templateSlots(t) {
+		if !vocabulary[slot] {
+			keys := make([]string, 0, len(vocabulary))
+			for k := range vocabulary {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			return fmt.Errorf("%s uses slot %q — not in the closed slot vocabulary (%s)",
+				field, slot, strings.Join(keys, " "))
+		}
+	}
+	return nil
+}
+
+// extractVariants reads an entry's optional variants mapping: every key and
+// sentence must be a non-empty string, and every sentence obeys the message
+// slot vocabulary. Absent → an empty map (the code has no variants).
+func extractVariants(raw any) (map[string]string, error) {
+	if raw == nil {
+		return map[string]string{}, nil
+	}
+	rawMap, ok := raw.(map[string]any)
+	if !ok || len(rawMap) == 0 {
+		return nil, fmt.Errorf("must be a non-empty mapping of variant key → sentence, got %T", raw)
+	}
+	out := make(map[string]string, len(rawMap))
+	for key, rawSentence := range rawMap {
+		sentence, _ := rawSentence.(string)
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(sentence) == "" {
+			return nil, fmt.Errorf("variant %q must be a non-empty string", key)
+		}
+		if err := validateSlots("variant "+key, sentence, messageSlots); err != nil {
+			return nil, err
+		}
+		out[key] = sentence
+	}
+	return out, nil
+}
+
+// extractNeutralForms reads and validates an entry's optional neutral twins
+// (#1857 D-B B1). All fatal:
+//   - a first-person chat message without a `neutral` twin;
+//   - a first-person chat variant without its `neutral_variants` twin;
+//   - `neutral_variants` whose keys differ from the `variants` keys;
+//   - a twin that is empty, itself first person, or uses a slot outside the
+//     message vocabulary.
+//
+// Absent twins of a chat form with no first person are fine: one sentence
+// serves both voices.
+func extractNeutralForms(rawEntry map[string]any, message string, variants map[string]string) (string, map[string]string, error) {
+	neutral := ""
+	if raw, present := rawEntry[neutralKey]; present && raw != nil {
+		s, _ := raw.(string)
+		if err := validateNeutralSentence(neutralKey, s); err != nil {
+			return "", nil, err
+		}
+		neutral = s
+	}
+	if neutral == "" && firstPersonPattern.MatchString(message) {
+		return "", nil, fmt.Errorf("message is first person but has no %q twin", neutralKey)
+	}
+
+	neutralVariants := map[string]string{}
+	if raw, present := rawEntry[neutralVariantsKey]; present && raw != nil {
+		rawMap, ok := raw.(map[string]any)
+		if !ok {
+			return "", nil, fmt.Errorf("%s must be a mapping of variant key → sentence, got %T", neutralVariantsKey, raw)
+		}
+		if !sameKeys(rawMap, variants) || len(rawMap) == 0 {
+			return "", nil, fmt.Errorf("%s keys %v must equal the %s keys %v",
+				neutralVariantsKey, sortedKeys(rawMap), variantsKey, sortedKeys(variants))
+		}
+		for key, rawSentence := range rawMap {
+			s, _ := rawSentence.(string)
+			if err := validateNeutralSentence(neutralVariantsKey+" "+key, s); err != nil {
+				return "", nil, err
+			}
+			neutralVariants[key] = s
+		}
+	}
+	for key, sentence := range variants {
+		if _, ok := neutralVariants[key]; !ok && firstPersonPattern.MatchString(sentence) {
+			return "", nil, fmt.Errorf("variant %q is first person but has no %s twin (%s.%s)",
+				key, neutralVariantsKey, neutralVariantsKey, key)
+		}
+	}
+	return neutral, neutralVariants, nil
+}
+
+// validateNeutralSentence checks one neutral twin: non-empty, no first-person
+// token, message slot vocabulary only.
+func validateNeutralSentence(field, s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("%s must be a non-empty string when present", field)
+	}
+	if firstPersonPattern.MatchString(s) {
+		return fmt.Errorf("%s is itself first person: a neutral twin must not use I, me or my", field)
+	}
+	return validateSlots(field, s, messageSlots)
+}
+
+// sameKeys reports whether a and b have exactly the same key set.
+func sameKeys(a map[string]any, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// sortedKeys returns m's keys in order, for error messages.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // templateSlots returns every {slot} token in a template, in order.
@@ -337,6 +522,59 @@ func generateUserMessages(cat *userMessageCatalogue) ([]byte, error) {
 		if e.providerMessage != "" {
 			fmt.Fprintf(&buf, "\t%q: %q,\n", e.code, e.providerMessage)
 		}
+	}
+	buf.WriteString("}\n\n")
+
+	buf.WriteString("// LLMErrorMessageVariants maps the codes that carry catalogue variants to\n")
+	buf.WriteString("// their variant key → sentence map (#1857, notifications spec §13.8). A code\n")
+	buf.WriteString("// absent from this map has only its catalogue message. Sentences may carry\n")
+	buf.WriteString("// the closed message slots ({cli} {model} {n} {minutes}); the TypeScript\n")
+	buf.WriteString("// half is llmErrorMessageVariants in src/lib/api/generated/llm-error-messages.ts.\n")
+	buf.WriteString("var LLMErrorMessageVariants = map[string]map[string]string{\n")
+	for _, e := range cat.entries {
+		if len(e.variants) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(e.variants))
+		for k := range e.variants {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		fmt.Fprintf(&buf, "\t%q: {\n", e.code)
+		for _, k := range keys {
+			fmt.Fprintf(&buf, "\t\t%q: %q,\n", k, e.variants[k])
+		}
+		buf.WriteString("\t},\n")
+	}
+	buf.WriteString("}\n\n")
+
+	buf.WriteString("// LLMErrorNeutralMessages maps the codes whose chat sentence has a neutral-voice\n")
+	buf.WriteString("// twin to that twin (#1857, design note D-B B1, notifications spec §13.8.4\n")
+	buf.WriteString("// rule 4): the form used outside a chat (task centre, parent tool result,\n")
+	buf.WriteString("// completion message, Settings test). A code absent from this map has a chat\n")
+	buf.WriteString("// sentence with no first person, which serves both voices. Go-only: no SPA\n")
+	buf.WriteString("// surface renders the neutral form.\n")
+	buf.WriteString("var LLMErrorNeutralMessages = map[string]string{\n")
+	for _, e := range cat.entries {
+		if e.neutral != "" {
+			fmt.Fprintf(&buf, "\t%q: %q,\n", e.code, e.neutral)
+		}
+	}
+	buf.WriteString("}\n\n")
+
+	buf.WriteString("// LLMErrorNeutralVariants maps the codes whose variants carry neutral-voice\n")
+	buf.WriteString("// twins to their variant key → neutral sentence map, with exactly the keys of\n")
+	buf.WriteString("// LLMErrorMessageVariants for that code (#1857, design note D-B B1).\n")
+	buf.WriteString("var LLMErrorNeutralVariants = map[string]map[string]string{\n")
+	for _, e := range cat.entries {
+		if len(e.neutralVariants) == 0 {
+			continue
+		}
+		fmt.Fprintf(&buf, "\t%q: {\n", e.code)
+		for _, k := range sortedKeys(e.neutralVariants) {
+			fmt.Fprintf(&buf, "\t\t%q: %q,\n", k, e.neutralVariants[k])
+		}
+		buf.WriteString("\t},\n")
 	}
 	buf.WriteString("}\n")
 

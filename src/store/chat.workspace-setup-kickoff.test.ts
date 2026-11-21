@@ -10,6 +10,7 @@ import { useChatStore, getMessages } from './chat'
 import { useConnectionStore } from './connection'
 import type { WsConnection } from '@/lib/ws'
 import { useSessionStore } from './session'
+import { enterNewChat } from '@/store/session/newChatKey'
 import { useWorkspacesStore } from './workspacesStore'
 import { useUiStore } from './ui'
 
@@ -29,6 +30,16 @@ beforeEach(resetStore)
 function outboundQueueContents(): string[] {
   return useChatStore.getState().outboundQueue.map((item) => typeof item === 'string' ? item : item.content)
 }
+/** Spec 4.4.1: a first send is reached by entering a new chat, not by '__pending'. */
+function openFreshChat(workspaceId = WORKSPACE_ID): string {
+  let key = ''
+  act(() => {
+    useWorkspacesStore.setState({ activeWorkspaceId: workspaceId })
+    key = enterNewChat(workspaceId, AGENT_ID, AGENT_TYPE)
+  })
+  return key
+}
+
 function connectMock(sendReturn = true) {
   const mockSend = vi.fn().mockReturnValue(sendReturn)
   act(() => {
@@ -41,39 +52,44 @@ function connectMock(sendReturn = true) {
 }
 
 describe('ordinary message regressions preserved from the retired client-kickoff suite', () => {
-  it('does NOT write a sessionByWorkspace descriptor for the optimistic "__pending" no-session turn', () => {
-    connectMock(true)
-    act(() => {
-      useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE_ID })
-    })
-
+  it('does NOT write a sessionByWorkspace descriptor for a first send from K', () => {
+    // Spec 4.4.1 / 4.6.1: K is not a saved session, so the workspace map stays
+    // empty and the frame carries {new_chat, K} with no session_id.
+    const mockSend = connectMock(true)
+    const key = openFreshChat()
     act(() => {
       useChatStore.getState().sendMessage('hello')
     })
-
-    expect(useSessionStore.getState().activeSessionId).toBe('__pending')
+    expect(mockSend.mock.calls[0][0]).toMatchObject({
+      type: 'message',
+      content: 'hello',
+      origin: { kind: 'new_chat', new_chat_key: key },
+    })
+    expect(mockSend.mock.calls[0][0]).not.toHaveProperty('session_id')
     expect(WORKSPACE_ID in useSessionStore.getState().sessionByWorkspace).toBe(false)
   })
 
-  it('treats a stuck "__pending" + not-streaming session as no-active-session: fresh turn, no session_id on the wire', () => {
+  it('a fresh turn from K omits session_id and carries {new_chat, K}', () => {
+    // Spec 4.6.1: there is no saved session yet. The old '__pending' fixture
+    // had no key, so the send was refused.
     const mockSend = connectMock(true)
-    act(() => {
-      useSessionStore.setState({ activeSessionId: '__pending' })
-      useChatStore.setState({ isStreaming: false })
-    })
-
+    const key = openFreshChat()
     act(() => {
       useChatStore.getState().sendMessage('hello there')
     })
-
     expect(mockSend).toHaveBeenCalledTimes(1)
     const payload = mockSend.mock.calls[0][0]
     expect(payload).not.toHaveProperty('session_id')
-    expect(payload).toMatchObject({ type: 'message', content: 'hello there' })
+    expect(payload).toMatchObject({
+      type: 'message',
+      content: 'hello there',
+      origin: { kind: 'new_chat', new_chat_key: key },
+    })
   })
 
   it('does NOT apply the guard while the "__pending" session is still streaming (mid-turn steering unaffected)', () => {
     const mockSend = connectMock(true)
+    openFreshChat()
     act(() => {
       useSessionStore.setState({ activeSessionId: '__pending' })
       useChatStore.setState({ isStreaming: true })
@@ -108,14 +124,13 @@ describe('ordinary message regressions preserved from the retired client-kickoff
 
   it('plain sendMessage session_started ack is unaffected (no pendingKickoff involved)', () => {
     const mockSend = connectMock(true)
-    act(() => {
-      useWorkspacesStore.setState({ activeWorkspaceId: WORKSPACE_ID })
-    })
+    const key = openFreshChat()
 
     act(() => {
       useChatStore.getState().sendMessage('plain first message')
     })
     expect(mockSend).toHaveBeenCalledTimes(1)
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ origin: { kind: 'new_chat', new_chat_key: key } })
 
     // The gateway echoes the initiating message's client_message_id on this
     // ack (pkg/gateway/websocket_first_message.go::acknowledgeNewSession);
@@ -151,6 +166,7 @@ describe('ordinary message regressions preserved from the retired client-kickoff
 describe('ordinary send, error and queue guarantees after client-kickoff retirement', () => {
   it('mixed-19: an ordinary fresh send after reset omits the pending sentinel', () => {
     const mockSend = connectMock(true)
+    const key = openFreshChat()
     mockSend.mockClear()
     act(() => {
       useChatStore.getState().sendMessage('hello')
@@ -158,7 +174,12 @@ describe('ordinary send, error and queue guarantees after client-kickoff retirem
     expect(mockSend).toHaveBeenCalledTimes(1)
     const payload = mockSend.mock.calls[0][0]
     expect(payload).not.toHaveProperty('session_id')
-    expect(payload).toMatchObject({ type: 'message', content: 'hello', agent_id: AGENT_ID })
+    expect(payload).toMatchObject({
+      type: 'message',
+      content: 'hello',
+      agent_id: AGENT_ID,
+      origin: { kind: 'new_chat', new_chat_key: key },
+    })
   })
   it('mixed-29: a tagged ordinary error stays in its named chat without workspace-setup side effects', () => {
     const SID = 'ordinary-session-tagged'
@@ -175,11 +196,12 @@ describe('ordinary send, error and queue guarantees after client-kickoff retirem
   })
   it('mixed-31: a queued ordinary message survives disconnection and drains as one fresh turn without a sentinel session id', () => {
     const mockSend = connectMock(true)
+    const key = openFreshChat('ws-other')
     act(() => {
-      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-other' })
       useConnectionStore.setState({ isConnected: false })
     })
     expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().newChatKey).toBe(key)
     mockSend.mockClear()
     act(() => {
       useChatStore.getState().sendMessage('hello from ws-other')
@@ -193,9 +215,13 @@ describe('ordinary send, error and queue guarantees after client-kickoff retirem
     expect(useChatStore.getState().outboundQueue).toEqual([])
     expect(mockSend).toHaveBeenCalledTimes(1)
     const payload = mockSend.mock.calls[0][0]
-    expect(payload).toMatchObject({ type: 'message', content: 'hello from ws-other' })
+    expect(payload).toMatchObject({
+      type: 'message',
+      content: 'hello from ws-other',
+      origin: { kind: 'new_chat', new_chat_key: key },
+    })
     expect(payload).not.toHaveProperty('session_id')
-    expect(useSessionStore.getState().activeSessionId).toBe('__pending')
+    expect(useSessionStore.getState().newChatKey).toBe(key)
     expect(useChatStore.getState().messages.some((m) => m.role === 'user' && m.content === 'hello from ws-other')).toBe(true)
   })
 })

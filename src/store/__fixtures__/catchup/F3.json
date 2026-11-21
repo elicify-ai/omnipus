@@ -72,6 +72,18 @@
         {
           "dir": "server→client",
           "frame": {
+            "active_turn": {
+              "agent_id": "mia",
+              "started_at": "2026-01-01T00:00:03Z",
+              "turn_id": "turn-1"
+            },
+            "session_id": "sess-1",
+            "type": "turn_started"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
             "client_message_id": "client-1",
             "seq": 4,
             "session_id": "sess-1",
@@ -152,8 +164,8 @@
           "dir": "server→client",
           "frame": {
             "boot_id": "boot-1",
-            "emitted_at": "2026-01-01T00:00:03Z",
-            "emitted_at_ms": 1767225603250,
+            "emitted_at": "2026-01-01T00:00:04Z",
+            "emitted_at_ms": 1767225604250,
             "pending_approvals": [],
             "type": "session_state",
             "user_id": ""
@@ -202,12 +214,12 @@
           "frame": {
             "active_turn": {
               "agent_id": "mia",
-              "started_at": "2026-01-01T00:00:04Z",
+              "started_at": "2026-01-01T00:00:05Z",
               "turn_id": "turn-1"
             },
             "boot_id": "boot-1",
-            "emitted_at": "2026-01-01T00:00:05Z",
-            "emitted_at_ms": 1767225605250,
+            "emitted_at": "2026-01-01T00:00:06Z",
+            "emitted_at_ms": 1767225606250,
             "history_state": {
               "status": "available"
             },
@@ -231,7 +243,7 @@
             "id": "id-1",
             "role": "user",
             "session_id": "sess-1",
-            "timestamp": "2026-01-01T00:00:06Z",
+            "timestamp": "2026-01-01T00:00:07Z",
             "type": "replay_message"
           }
         },

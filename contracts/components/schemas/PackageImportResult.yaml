@@ -1,0 +1,111 @@
+title: PackageImportResult
+description: >
+  Response of POST /api/v1/packages/import/{staging_id}/apply (200): the
+  import is committed. activation "active" means the live agent list confirmed
+  the new agent; "pending" means it is stored and complete but the live list
+  has not confirmed it yet (restart the gateway, or wait and check the agent
+  list). A pending activation is never a partial import (FR-036, FR-041).
+type: object
+required:
+  - mode
+  - created
+  - warnings
+  - needs_secrets
+  - activation
+additionalProperties: false
+properties:
+  mode:
+    type: string
+    enum:
+      - replace
+      - merge
+      - new
+    description: The mode that was applied (new in S1).
+    example: new
+  created:
+    type: array
+    description: The elements the import created.
+    items:
+      type: object
+      required:
+        - type
+        - source_id
+        - new_id
+        - name
+        - workspace_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          description: Element type (agent in S1).
+          example: agent
+        source_id:
+          type: string
+          description: The element's ID in the package.
+        new_id:
+          type: string
+          description: The new ID on this install (never the source ID).
+        name:
+          type: string
+          description: The final name, including any clash suffix.
+          example: Writer (imported)
+        workspace_id:
+          type: string
+          description: The workspace the agent joined.
+  warnings:
+    type: array
+    description: >
+      Items the import changed or left out, including changed_since_preview,
+      main_chat_pending and audit_failed.
+    items:
+      type: object
+      required:
+        - code
+        - message
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          description: Machine-readable warning code.
+          example: changed_since_preview
+        element_source_id:
+          type: string
+          description: Source ID of the element the warning is about, when it is about one.
+        message:
+          type: string
+          description: Plain-language explanation.
+        items:
+          type: array
+          description: The items concerned.
+          items:
+            type: string
+  needs_secrets:
+    type: array
+    description: Secrets to enter again for the new agent (names only).
+    items:
+      type: object
+      required:
+        - name
+        - used_by
+        - kind
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Secret name.
+        used_by:
+          type: string
+          description: ID of the created element that uses it.
+        kind:
+          type: string
+          description: Kind of secret.
+  activation:
+    type: string
+    enum:
+      - active
+      - pending
+    description: Whether the live agent list confirmed the new agent (see the schema description).
+    example: active
+  activation_message:
+    type: string
+    description: Plain-language guidance when activation is pending.

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+// Spec 4.4.2: keyed creation reads the chat draft store, which binds only once the chat store has loaded.
+import '@/store/chat'
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
@@ -137,31 +139,25 @@ describe('omnipusAttachmentAdapter', () => {
     )
   })
 
-  it('send() auto-creates a session when none is active, then uploads against it (#252)', async () => {
-    useSessionStore.setState({ activeSessionId: null, activeAgentId: 'jim', activeAgentType: null })
-    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_new', agent_id: 'jim' } as never)
-    vi.mocked(api.uploadFiles).mockResolvedValue({
-      files: [{ name: 'x.docx', path: 'uploads/sess_new/x.docx', size: 1, content_type: DOCX, ref: 'media://n' }],
-    } as never)
+  // Spec 4.4.2 / parked gap C5 (#1896): with no new-chat key, nothing is created.
+  it('send() does not create a session when no chat and no new-chat key are open', async () => {
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: 'jim', activeAgentType: null, newChatKey: null })
 
     const pending = await omnipusAttachmentAdapter.add({ file: mkFile('x.docx', DOCX) })
     await omnipusAttachmentAdapter.send(pending)
 
-    expect(api.createSession).toHaveBeenCalledWith('jim', undefined)
-    expect(api.uploadFiles).toHaveBeenCalledWith('sess_new', [pending.file], undefined)
-    expect(useSessionStore.getState().activeSessionId).toBe('sess_new')
+    expect(api.createSession, '4.4.2: no key means no creation').not.toHaveBeenCalled()
+    expect(api.uploadFiles, '4.4.2: nothing is uploaded against a chat that was not created').not.toHaveBeenCalled()
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error', message: expect.stringContaining('Open a chat before sending files') }),
+    )
   })
 
-  // U2, second entry point. This adapter is the OTHER place in the SPA that
-  // mints a session from a workspace chat, and the session it mints becomes
-  // the active one — so a user who attaches a file and then opens the live
-  // browser panel before sending anything hands that panel a session naming no
-  // workspace, and a multi-workspace agent is refused as ambiguous. Same root
-  // cause as the "Open browser" launcher's own create, same fix: the workspace
-  // travels with the create rather than waiting for the first message to stamp
-  // it (ADR-075 FR-017 reads it off the session's meta, server-side).
-  it('send() creates that session inside the workspace the chat belongs to', async () => {
-    useSessionStore.setState({ activeSessionId: null, activeAgentId: 'jim', activeAgentType: null })
+  // Spec 4.4.2: a new chat K is created through K's keyed creation, and the
+  // workspace travels with that create (4.4.1 activates S only while K is still open).
+  it('send() creates the new chat through its key inside the workspace the chat belongs to', async () => {
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: 'jim', activeAgentType: null, newChatKey: 'K-ws' })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-alpha' })
     vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_ws', agent_id: 'jim' } as never)
     vi.mocked(api.uploadFiles).mockResolvedValue({
@@ -171,7 +167,13 @@ describe('omnipusAttachmentAdapter', () => {
     const pending = await omnipusAttachmentAdapter.add({ file: mkFile('x.docx', DOCX) })
     await omnipusAttachmentAdapter.send(pending)
 
-    expect(api.createSession).toHaveBeenCalledWith('jim', 'ws-alpha')
+    expect(api.createSession).toHaveBeenCalledWith({
+      agent_id: 'jim',
+      workspace_id: 'ws-alpha',
+      new_chat_key: 'K-ws',
+    })
+    expect(api.uploadFiles).toHaveBeenCalledWith('sess_ws', [pending.file], 'ws-alpha')
+    expect(useSessionStore.getState().activeSessionId, '4.4.1: S activates because K is still the open chat').toBe('sess_ws')
   })
 
   it('remove() drops a stashed ref', async () => {

@@ -303,11 +303,17 @@ describe('Omnipus one-conversation guarantee at its reachable UI', () => {
   it('OC-C-clear real composer sends /clear on the existing main and renders its confirmed context boundary in place', async () => {
     const { composer, router } = await mountScreen()
     const user = userEvent.setup()
+    // Spec 4.10: an unconfirmed socket sends no message. This saved chat has confirmed send-origin.
+    Object.defineProperty(socket, 'sendCapability', { configurable: true, get: () => 'supported' })
     await user.type(composer, '/clear')
     await user.click(screen.getByTestId('chat-send'))
     await waitFor(() => expect(frames.filter((frame) => frame.type === 'message')).toHaveLength(1))
     const sent = frames.find((frame): frame is MessageFrame => frame.type === 'message')!
-    expect(sent).toMatchObject({ type: 'message', session_id: OMNIPUS_MAIN, content: '/clear' })
+    // Spec 4.6.1: a saved chat's message carries origin {kind: chat, session_id}.
+    expect(sent).toMatchObject({
+      type: 'message', session_id: OMNIPUS_MAIN, content: '/clear',
+      origin: { kind: 'chat', session_id: OMNIPUS_MAIN },
+    })
     expect(sent.client_message_id).toEqual(expect.any(String))
     expectSameSessionNoCreation()
     // Raw server response + public inbound frame boundary. The real reducer
