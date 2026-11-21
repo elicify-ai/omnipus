@@ -393,6 +393,13 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     const keyInput = sheet.locator('[data-testid^="api-key-input-"]')
     await keyInput.fill('sk-discard-check')
 
+    // R4-06 premise, witnessed (not assumed): the key input actually holds
+    // focus before the Escape that opens the inner confirm — FR-069's
+    // "returning focus to the control that opened each" is only meaningful
+    // if the opener really was the focused control the gesture came from.
+    await expect(keyInput,
+      'FR-069 premise: the key input holds focus before the Escape that opens the confirm').toBeFocused()
+
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('discard-key-keep'),
       'RED (FR-033/FR-069): the Discard-key confirm must open over the panel').toBeVisible()
@@ -412,6 +419,11 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     // opened (the close gesture came from it), so FR-069's "returning focus
     // to the control that opened each" names THAT control, not any tabbable
     // element inside the panel (the old oracle accepted any of them).
+    // R4-06: that premise is WITNESSED before the gesture — focus is on the
+    // key input again after the first Keep, so the next Escape provably
+    // comes from the opener.
+    await expect(keyInput,
+      'FR-069 premise: after the first Keep, focus is back on the key input before the next Escape').toBeFocused()
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('discard-key-keep'),
       'RED (FR-069): Escape over the kept panel must ask again').toBeVisible()
@@ -422,21 +434,27 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
     await expect(keyInput,
       'RED (FR-069/R3-06): focus must return to the exact control that opened the confirm — the key input').toBeFocused()
 
-    // R3-06: the absent-opener fallback. Discard tears the confirm and the
-    // panel down together, so the confirm's opener (the key input) no longer
-    // exists when its close resolves focus — FR-069's fallback sends focus to
-    // the section heading. (Reading note for team-lead: this asserts the
-    // per-dialog fallback for the confirm whose opener is provably gone; the
-    // panel's own opener (Configure) still exists, so an implementation that
-    // restores THAT fails this row and the interpretation goes back to the
-    // spec owner.)
+    // The absent-opener fallback, under the amended FR-069 (team-lead
+    // ruling 2026-11-21, spec :1995, CHECK R4-06): the fallback order is —
+    // the opener, when it exists; the dialog it sat in (its first focusable
+    // control), when the inner opener is gone but that dialog is still
+    // open; the section heading only when NO dialog is left open. This
+    // panel's discard tears the confirm and the sheet down together, so the
+    // confirm's opener (the key input) is gone AND no dialog is left open:
+    // the leg exercises the ruling's LAST arm, and the heading — not the
+    // panel's own still-existing Configure opener — is the ruled target.
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('discard-key-keep'),
       'the third Escape must ask once more before the Discard leg').toBeVisible()
     await page.getByTestId('discard-key-discard').click()
-    await expect(sheet, 'the Discard choice closes the panel').not.toBeVisible()
+    // The premise, asserted before the focus oracle: no dialog is left open
+    // (the confirm is gone and the panel is gone), so the heading arm —
+    // and only that arm — applies.
+    await expect(page.getByTestId('discard-key-keep'),
+      'FR-069 ruling premise: the confirm is closed').not.toBeVisible()
+    await expect(sheet, 'FR-069 ruling premise: the panel is closed — no dialog is left open').not.toBeVisible()
     await expect(page.getByRole('heading', { name: 'Providers', level: 2 }),
-      'RED (FR-069/R3-06): with the opener gone, focus must go to the section heading').toBeFocused()
+      'RED (FR-069/R4-06): with the opener gone and no dialog left open, focus must go to the section heading').toBeFocused()
   })
 
   test('FR-065: every section shows Loading with a spinner and skeleton cards while its reads answer (R2-05: all eleven sections)', async ({ page }) => {
