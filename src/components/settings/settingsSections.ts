@@ -70,6 +70,8 @@ export interface ResolvedSettingsLink { // not-wire-format: screen-side resoluti
   backupRemoved: boolean
   focusGodMode: boolean
   prefillOverride?: { provider: string; model: string }
+  /** `?row=`: the setting row to scroll to and highlight (FR-075). */
+  row?: string
 }
 
 /**
@@ -82,13 +84,18 @@ export function resolveSettingsLink(search: {
   provider?: string
   model?: string
   focus?: string
+  row?: string
 }): ResolvedSettingsLink {
   const tab = search.tab
+  // FR-075: `?row=` names one setting row of the search index; the row also
+  // names its section. An unknown row is ignored.
+  const rowEntry = search.row ? SETTINGS_SEARCH_INDEX.find((e) => e.row === search.row && e.section) : undefined
   const prefillOverride = search.provider && search.model ? { provider: search.provider, model: search.model } : undefined
   const focusGodMode = search.focus === 'god-mode'
   let section: SettingsSectionId = 'providers'
   if (tab && SECTION_IDS.has(tab)) section = tab as SettingsSectionId
   else if (tab && tab in LEGACY_TABS) section = LEGACY_TABS[tab]
+  if (rowEntry?.section) section = rowEntry.section
   if (prefillOverride) section = 'limits'
   if (focusGodMode) section = 'protection'
   return {
@@ -97,6 +104,7 @@ export function resolveSettingsLink(search: {
     backupRemoved: !!tab && BACKUP_TABS.has(tab),
     focusGodMode,
     prefillOverride,
+    row: rowEntry && rowEntry.section === section ? rowEntry.row : undefined,
   }
 }
 
@@ -111,12 +119,33 @@ export interface SettingsSearchEntry { // not-wire-format: static search index r
   note?: string
   /** In-app destination of a moved item. */
   href?: string
+  /**
+   * The setting row this entry jumps to (FR-075): the value of `?row=` and of
+   * the row's `data-settings-row` attribute. Absent for a whole section.
+   */
+  row?: string
 }
 
-const S = (section: SettingsSectionId, label: string, description = ''): SettingsSearchEntry => ({ section, label, description })
+/** A row identity from its visible name: "Max tool calls per turn" → "max-tool-calls-per-turn". */
+export function settingsRowId(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+/** Spread on the element that holds one setting row, so search and deep links can find it (FR-075). */
+export function settingsRow(label: string): { 'data-settings-row': string } {
+  return { 'data-settings-row': settingsRowId(label) }
+}
+
+/** A setting row entry; `row` overrides the identity when the row's name differs from the entry's. */
+const S = (section: SettingsSectionId, label: string, description = '', row = settingsRowId(label)): SettingsSearchEntry => ({
+  section,
+  label,
+  description,
+  row,
+})
 
 export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
-  ...SETTINGS_SECTIONS.map((s) => S(s.id, s.label, s.description)),
+  ...SETTINGS_SECTIONS.map((s): SettingsSearchEntry => ({ section: s.id, label: s.label, description: s.description })),
   S('providers', 'Default model', 'Used by every agent that has no model of its own.'),
   S('providers', 'Model providers', 'Connect a provider, API keys, sign-in.'),
   S('providers', 'Active transcriber', 'Voice input: turns your voice messages into text.'),
@@ -137,7 +166,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   S('limits', 'Idle reminder quiet window', 'Seconds before an idle reminder.'),
   S('limits', 'Stalled-work check-ins', 'Ask a stuck agent how it is doing.'),
   S('limits', 'Max tool calls per turn', 'Lowering it first shows which agents are affected.'),
-  S('limits', 'Tool result caps', 'MCP, built-in and failed tool result caps.'),
+  S('limits', 'Tool result caps', 'MCP, built-in and failed tool result caps.', settingsRowId('MCP tool result cap')),
   S('limits', 'Default context window', 'Context length used when a model reports none.'),
   S('limits', 'Model overrides', 'Context length per provider and model.'),
   S('protection', 'Security health', 'Score and issues to fix.'),

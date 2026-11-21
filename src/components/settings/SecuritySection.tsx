@@ -78,6 +78,7 @@ import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/Tool
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
 import { AutoApproveAskList } from './AutoApproveAskList'
+import { settingsRow } from './settingsSections'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -249,7 +250,7 @@ export function AutoApproveControl({ draft }: { draft: AutoApproveDraft }) {
   // long paragraph carrying the summary, the full 28-tool list, the
   // workspace path rule, an example, and the Windows caveat all at once.
   return (
-    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]" {...settingsRow('Auto-approve')}>
       <div className="flex items-center justify-between gap-[var(--space-3)]">
         <div>
           <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
@@ -588,7 +589,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   )
 
   const auditBlock = (
-  <section>
+  <section {...settingsRow('Audit log')}>
     <div className="flex items-center justify-between mb-[var(--space-2-5)]">
       <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
         Audit Log
@@ -627,6 +628,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       <section
         className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]"
         aria-label="Security health"
+        {...settingsRow('Security health')}
         data-testid="security-health-header"
       >
         <DiagnosticsSection />
@@ -734,11 +736,11 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
       {view === 'protection' && (
         <>
-          <section aria-label="Prompt injection defense" className="space-y-[var(--space-2)]">
+          <section aria-label="Prompt injection defense" className="space-y-[var(--space-2)]" {...settingsRow('Prompt injection defense')}>
             <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Prompt injection defense</h3>
             <PromptGuardSection draft={promptGuardDraft} />
           </section>
-          <section aria-label="Rate limits per agent" className="space-y-[var(--space-2)]">
+          <section aria-label="Rate limits per agent" className="space-y-[var(--space-2)]" {...settingsRow('Rate limits')}>
             <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Rate limits per agent</h3>
             {rateLimitsCard}
           </section>
@@ -763,7 +765,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       {showKeys && (
       <>
       {/* ── Credential Vault (US-B4) — always visible with reassurance line ─── */}
-      <section>
+      <section {...settingsRow('Stored keys')}>
         <div className="flex items-center justify-between mb-[var(--space-2-5)]">
           <div>
             <div className="flex items-center gap-[var(--space-2)]">
@@ -781,6 +783,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
               className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
               onClick={() => setRotateModalOpen(true)}
               data-testid="rotate-master-key"
+              {...settingsRow('Master key')}
             >
               <Key size={11} weight="bold" />
               Rotate master key

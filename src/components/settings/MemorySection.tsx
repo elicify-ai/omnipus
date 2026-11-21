@@ -26,6 +26,7 @@ import {
   type RecapLimitDrafts,
 } from './recapLimits'
 import { usePrimaryVariant } from './SaveBar'
+import { settingsRow } from './settingsSections'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
@@ -52,7 +53,7 @@ interface ToggleRowProps {
 
 function ToggleRow({ id, label, description, checked, onChange }: ToggleRowProps) {
   return (
-    <div className="flex items-start justify-between gap-[var(--space-3)]">
+    <div className="flex items-start justify-between gap-[var(--space-3)]" {...settingsRow(label)}>
       <div className="flex-1 min-w-0">
         <Label htmlFor={id} className="cursor-pointer">
           {label}
@@ -86,7 +87,7 @@ interface NumberRowProps {
 
 function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onChange }: NumberRowProps) {
   return (
-    <div className="space-y-[var(--space-2)]">
+    <div className="space-y-[var(--space-2)]" {...settingsRow(label)}>
       <Label htmlFor={id}>
         {label}
       </Label>
@@ -631,7 +632,7 @@ export function MemorySection(): React.ReactElement {
         </div>
 
         {/* Summarization model */}
-        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]">
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]" {...settingsRow('Summarization model')}>
           <div className="space-y-[var(--space-1)]">
             <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Summarization model</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
@@ -846,7 +847,7 @@ export function MemorySection(): React.ReactElement {
         </div>
 
         {/* Retention moved to Data & retention, its one write path (Settings redesign #1519, FR-044). */}
-        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+        <div {...settingsRow('How long memory is kept')} className="border-t border-[var(--color-border)] pt-[var(--space-3)] flex flex-wrap items-center justify-between gap-[var(--space-2)]">
           <div className="min-w-0">
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">How long memory is kept</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Set with chat history in Data &amp; retention.</p>

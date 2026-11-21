@@ -34,6 +34,7 @@ import {
   type SaveBarState,
   type UseSaveBarOptions,
 } from './useSaveBar'
+import { settingsRow } from './settingsSections'
 
 export function RestartBadge() {
   return (
@@ -211,7 +212,7 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
   const setValue = (v: SaveBarField['value']) => state.setDraft(field.key, v)
   const disabled = state.isDisabled(field.key)
   return (
-    <div className="py-[var(--space-2)]" data-setting-key={field.key}>
+    <div className="py-[var(--space-2)]" data-setting-key={field.key} {...settingsRow(field.label)}>
       <SettingField
         label={field.label}
         restart={field.restart}
@@ -356,7 +357,7 @@ export interface FormRowProps { // not-wire-format: React props
 /** One labelled setting of a form section (Limits, Third-party agents), with its badges and error. */
 export function FormRow({ label, description, error, restart, password, fieldId, children }: FormRowProps) {
   return (
-    <div className="py-[var(--space-2)]">
+    <div className="py-[var(--space-2)]" {...settingsRow(label)}>
       <SettingField label={label} restart={restart} password={password} description={description} error={error || undefined}>
         {(cp) => children({ id: cp.id, describedBy: cp['aria-describedby'], invalid: !!cp['aria-invalid'], fieldId })}
       </SettingField>

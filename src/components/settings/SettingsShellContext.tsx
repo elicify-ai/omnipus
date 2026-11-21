@@ -29,6 +29,16 @@ export interface SettingsShellApi { // not-wire-format: React context contract i
   setSaveBarVisible: (owner: string, visible: boolean) => void
   /** True only for the default value: no Settings shell around this Save bar. */
   standalone?: boolean
+  /**
+   * The setting row a search result or a `?row=` link jumps to (FR-075). A
+   * section that keeps the row inside a closed group opens that group.
+   */
+  targetRow?: string
+  /**
+   * Moves focus to the open section's heading: FR-069's fallback when the
+   * control that opened a closing dialog is gone and no dialog is left open.
+   */
+  focusHeading?: () => void
 }
 
 const noop = () => {}

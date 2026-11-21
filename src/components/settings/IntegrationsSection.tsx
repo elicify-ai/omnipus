@@ -36,6 +36,7 @@ import { FormRow, usePrimaryVariant } from './SaveBar'
 import { useSectionSavePart } from './SectionSaveScope'
 import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
 import type { FormSavePart } from './useFormSaveBar'
+import { settingsRow } from './settingsSections'
 
 export function IntegrationsSection() {
   const { addToast } = useUiStore()
@@ -546,7 +547,7 @@ export function IntegrationsSection() {
             )}
           </section>
 
-          <section className="space-y-[var(--space-2)]">
+          <section className="space-y-[var(--space-2)]" {...settingsRow('Voice input')}>
             <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               <Microphone size={13} weight="bold" /> Voice input
             </div>

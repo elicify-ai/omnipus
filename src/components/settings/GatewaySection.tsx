@@ -37,6 +37,7 @@ import { SaveBarPanel, SettingRow } from './SaveBar'
 import { toWriteResponse } from './saveOutcome'
 import { useSaveBar, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { GatewayRestartModal } from './GatewayRestartModal'
+import { settingsRow } from './settingsSections'
 
 // ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
 
@@ -292,7 +293,7 @@ export function GatewaySection() {
       <section aria-label="Access" className="space-y-[var(--space-2)]">
         <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Access</h3>
         <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
-          <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+          <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]" {...settingsRow('Gateway token')}>
             <div className="min-w-0">
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Gateway token</p>
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Apps and programs use it to sign in. Rotating it signs them out.</p>
@@ -328,7 +329,7 @@ export function GatewaySection() {
 
       <section aria-label="Restart" className="space-y-[var(--space-2)]">
         <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Restart</h3>
-        <Card className="p-[var(--space-3)] flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+        <Card className="p-[var(--space-3)] flex flex-wrap items-center justify-between gap-[var(--space-2)]" {...settingsRow('Restart gateway')}>
           <div className="min-w-0">
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Restart gateway</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
@@ -342,7 +343,7 @@ export function GatewaySection() {
       </section>
 
       {/* Remote Access */}
-      <section>
+      <section {...settingsRow('Remote access')}>
         <Button
           variant="ghost"
           className="h-auto w-full justify-start gap-[var(--space-2)] rounded-none p-0 py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-transparent"

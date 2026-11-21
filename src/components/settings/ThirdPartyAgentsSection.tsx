@@ -40,6 +40,7 @@ import { useUiStore } from '@/store/ui'
 import { SaveBarPanel, SaveOutcomeLine } from './SaveBar'
 import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
+import { settingsRow } from './settingsSections'
 
 type CliKey = keyof ThirdPartyAgentSettingsView['clis']
 type PresetField = keyof CliPreset
@@ -339,7 +340,7 @@ export function ThirdPartyAgentsSection() {
         return (
           <Card key={cli} data-testid={`third-party-agent-row-${cli}`} className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
             <p className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{label}</p>
-            <div className="space-y-[var(--space-1)]">
+            <div className="space-y-[var(--space-1)]" {...settingsRow(`${label} program path`)}>
               <Field label={`${label} program path`} error={pathError}>
                 <Input
                   ref={(node) => {

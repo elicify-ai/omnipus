@@ -14,8 +14,26 @@ import { useContextForm } from './ContextSection'
 import { usePerformanceForm } from './PerformanceSection'
 import { SaveBarPanel, SaveOutcomeLine } from './SaveBar'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
+import { settingsRow, settingsRowId } from './settingsSections'
+import { useSettingsShell } from './SettingsShellContext'
 
 type GroupId = 'context' | 'overrides' | 'agents'
+
+// FR-075: a row jump into a closed group opens that group first, so the row
+// can be scrolled to and highlighted.
+const ROWS_IN_GROUP: Record<GroupId, string[]> = {
+  context: ['MCP tool result cap', 'Built-in tool result cap', 'Failed tool result cap', 'Tool-result share limit', 'Default context window'].map(settingsRowId),
+  overrides: [],
+  agents: [
+    'Max parallel agents',
+    'Tries per goal',
+    'Idle reminder quiet window',
+    'Stalled-work check-ins',
+    'Check-in interval',
+    'Max tool calls per turn',
+    'Tool loading',
+  ].map(settingsRowId),
+}
 
 export interface LimitsSectionProps { // not-wire-format: React props
   prefillOverride?: { provider: string; model: string }
@@ -27,6 +45,12 @@ export function LimitsSection({ prefillOverride }: LimitsSectionProps) {
     overrides: !!prefillOverride,
     agents: false,
   })
+  const { targetRow } = useSettingsShell()
+  useEffect(() => {
+    if (!targetRow) return
+    const group = (Object.keys(ROWS_IN_GROUP) as GroupId[]).find((g) => ROWS_IN_GROUP[g].includes(targetRow))
+    if (group) setOpen((o) => (o[group] ? o : { ...o, [group]: true }))
+  }, [targetRow])
   const pendingFocus = useRef<(() => void) | null>(null)
   const saveRef = useRef<() => Promise<void>>(async () => {})
 
@@ -82,6 +106,7 @@ export function LimitsSection({ prefillOverride }: LimitsSectionProps) {
       </ListGroup>
       <ListGroup
         label="Model overrides"
+        {...settingsRow('Model overrides')}
         count={context.overrideCount}
         expanded={open.overrides}
         onExpandedChange={toggle('overrides')}

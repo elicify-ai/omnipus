@@ -7,6 +7,7 @@ import { Wordmark } from '@/components/shared/Wordmark'
 import { fetchAboutInfo, fetchVersion, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { OMNIPUS_MARK_URL as omnipusLogo } from '@/lib/brandAssets'
+import { settingsRow } from './settingsSections'
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
@@ -160,7 +161,7 @@ export function AboutSection() {
 
 function InfoRow({ label, value, mono, testId }: { label: string; value: string; mono?: boolean; testId?: string }) {
   return (
-    <div className="flex items-center justify-between px-[var(--space-3)] py-[var(--space-2)]">
+    <div className="flex items-center justify-between px-[var(--space-3)] py-[var(--space-2)]" {...settingsRow(label)}>
       <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{label}</span>
       <span data-testid={testId} className={`text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] ${mono ? 'font-mono' : ''}`}>{value}</span>
     </div>

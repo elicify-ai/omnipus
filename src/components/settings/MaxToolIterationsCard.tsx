@@ -19,6 +19,7 @@ import { Card } from '@/components/ui/card'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import type { MaxToolIterationsSavedState } from '@/lib/api/generated/openapi-types'
+import { settingsRow } from './settingsSections'
 
 export const MAX_TOOL_ITERATIONS_MIN = 1
 export const MAX_TOOL_ITERATIONS_MAX = 1000
@@ -74,7 +75,7 @@ export function MaxToolIterationsCard({
   const warning = savedStateWarning(savedState, savedRaw, inForce)
 
   return (
-    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]" {...settingsRow('Max tool calls per turn')}>
       <div className="flex items-center gap-[var(--space-2)]">
         <Wrench size={16} className="text-[var(--color-secondary)]" />
         <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tool calls per turn</h3>

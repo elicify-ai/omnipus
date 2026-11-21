@@ -307,3 +307,26 @@ body {
     animation: none;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Settings row jump (FR-075)                                          */
+/* A Settings search result or a `?row=` link opens the section and    */
+/* marks the setting row it names. The mark (a left accent bar) stays  */
+/* while the row is the target; the surface flash runs once. Under     */
+/* reduced motion the row is still scrolled to and marked, without     */
+/* the flash.                                                          */
+@keyframes ds-settings-row-flash {
+  from { background-color: var(--color-surface-3); }
+  to   { background-color: transparent; }
+}
+[data-settings-row-target] {
+  border-radius: var(--radius-medium);
+  box-shadow: inset var(--space-0-5) 0 0 var(--color-accent);
+  scroll-margin-block: var(--space-8);
+  animation: ds-settings-row-flash calc(var(--motion-duration-slow) * 4) ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-settings-row-target] {
+    animation: none;
+  }
+}

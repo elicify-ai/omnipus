@@ -57,6 +57,7 @@ import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
 import { PasswordBadge } from './SaveBar'
+import { settingsRow } from './settingsSections'
 
 export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolean } = {}) {
   const { addToast } = useUiStore()
@@ -228,7 +229,7 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
   }, [focusOnMount, isLoading, navigate])
 
   return (
-    <div className="space-y-[var(--space-2-5)]">
+    <div className="space-y-[var(--space-2-5)]" {...settingsRow('God Mode')}>
       <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
         God Mode
       </h3>

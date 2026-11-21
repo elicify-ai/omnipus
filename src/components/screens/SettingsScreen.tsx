@@ -48,6 +48,8 @@ export interface SettingsScreenProps { // not-wire-format: React props from the 
   backupRemoved?: boolean
   /** Landed here after a port change restart (FR-063). */
   restarted?: boolean
+  /** `?row=` — the setting row to scroll to and highlight (FR-075). */
+  targetRow?: string
 }
 
 export function SettingsScreen({
@@ -57,6 +59,7 @@ export function SettingsScreen({
   focusGodMode,
   backupRemoved,
   restarted,
+  targetRow,
 }: SettingsScreenProps = {}) {
   const info = sectionInfo(section)
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -132,9 +135,11 @@ export function SettingsScreen({
       requestPassword,
       saveBarVisible,
       setSaveBarVisible,
+      targetRow,
+      focusHeading: () => headingRef.current?.focus(),
     }),
     // pending.refetch is stable per query; listing it keeps the lint honest.
-    [announce, pending.refetch, requestPassword, saveBarVisible, setDraftCount, setSaveBarVisible],
+    [announce, pending.refetch, requestPassword, saveBarVisible, setDraftCount, setSaveBarVisible, targetRow],
   )
 
   // ── Leave guard inside the app (FR-014) ────────────────────────────────
@@ -146,7 +151,49 @@ export function SettingsScreen({
   })
 
   // ── Phone: list first (FR-008) ─────────────────────────────────────────
-  const [phoneShowsSection, setPhoneShowsSection] = useState(requestedTab !== undefined || !!prefillOverride || !!focusGodMode)
+  const [phoneShowsSection, setPhoneShowsSection] = useState(
+    requestedTab !== undefined || !!prefillOverride || !!focusGodMode || !!targetRow,
+  )
+
+  // ── Row jump (FR-075) ──────────────────────────────────────────────────
+  // A search result or a `?row=` link names one setting row. Once the
+  // section has drawn it, the row scrolls into view and is marked
+  // (`data-settings-row-target`, `aria-current`); the stylesheet flashes it
+  // once and leaves the flash out under reduced motion. Focus stays where
+  // the section put it. A repeat click on the same result jumps again.
+  const [rowJump, setRowJump] = useState(0)
+  useEffect(() => {
+    const root = contentRef.current
+    if (!root || !targetRow) return
+    let marked: HTMLElement | null = null
+    const mark = (): boolean => {
+      const row = root.querySelector<HTMLElement>(`[data-settings-row="${targetRow}"]`)
+      if (!row) return false
+      marked = row
+      row.removeAttribute('data-settings-row-target')
+      // Reading layout restarts the one-shot flash on a repeat jump.
+      void row.offsetWidth
+      row.setAttribute('data-settings-row-target', '')
+      row.setAttribute('aria-current', 'true')
+      const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      row.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' })
+      return true
+    }
+    let observer: MutationObserver | null = null
+    // The section's reads may still be loading: wait for the row to appear.
+    if (!mark()) {
+      observer = new MutationObserver(() => {
+        if (mark()) observer?.disconnect()
+      })
+      observer.observe(root, { childList: true, subtree: true })
+    }
+    return () => {
+      observer?.disconnect()
+      const row = marked as HTMLElement | null
+      row?.removeAttribute('data-settings-row-target')
+      row?.removeAttribute('aria-current')
+    }
+  }, [section, targetRow, rowJump, phoneShowsSection])
   useEffect(() => {
     if (requestedTab !== undefined) setPhoneShowsSection(true)
   }, [requestedTab, section])
@@ -245,9 +292,10 @@ export function SettingsScreen({
                 {r.section ? (
                   <Link tabIndex={0}
                     to="/settings"
-                    search={{ tab: r.section }}
+                    search={r.row ? { tab: r.section, row: r.row } : { tab: r.section }}
                     onClick={() => {
                       navIntent.current = 'search'
+                      setRowJump((n) => n + 1)
                       stayFocus.current = searchInput()
                       // FR-014: Stay from a search result returns to the
                       // search field. The leave prompt gives focus back to
