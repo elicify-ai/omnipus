@@ -193,6 +193,12 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 	if err = json.Unmarshal(mapped.Record, &rec); err != nil {
 		return nil, packageErr(omnpkg.CodeInvalidElement, "element", el.SourceID, "reason", "agent.json has a field of the wrong type")
 	}
+	// The same rule on the record create will store (#1952): the mapping
+	// works on the typed interpretation, so this repeats the verdict above;
+	// it stays so that no mapping change can hand create an unchecked record.
+	if err = refuseExternalUnsupported(rec); err != nil {
+		return nil, err
+	}
 	name, err := omnpkg.ResolveImportName(rec.Name, existing)
 	if preview && omnpkg.CodeOf(err) == omnpkg.CodeNameSuffixExhausted {
 		name, err = strings.TrimSpace(rec.Name), nil
@@ -256,6 +262,11 @@ func refuseExternalUnsupportedFields(raw []byte, sourceID string) error {
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return packageErr(omnpkg.CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
 	}
+	return refuseExternalUnsupported(rec)
+}
+
+// refuseExternalUnsupported applies the FR-047 rule to one decoded record.
+func refuseExternalUnsupported(rec config.AgentConfig) error {
 	if !rec.IsExternalCLIWorker() {
 		return nil
 	}

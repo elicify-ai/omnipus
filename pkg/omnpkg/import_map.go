@@ -81,12 +81,12 @@ func (im *importMapper) warn(code, msg string, items []string) {
 // filtered/tightened, legacy fields dropped with warnings, provider and
 // max_tool_iterations checks against the target).
 func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*AgentPlan, error) {
-	var rec map[string]any
-	if err := json.Unmarshal(record, &rec); err != nil || rec == nil {
-		return nil, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json is not a JSON object")
+	typed, rec, err := decodeAgentRecord(record, sourceID)
+	if err != nil {
+		return nil, err
 	}
 	im := &importMapper{sourceID: sourceID, target: target}
-	if err := im.checkMaxToolIterations(rec); err != nil {
+	if err = im.checkMaxToolIterations(record, sourceID); err != nil {
 		return nil, err
 	}
 	for _, k := range importNotCarriedFields {
@@ -101,11 +101,7 @@ func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*Ag
 			}
 		}
 	}
-	view, err := parseRecordView(record)
-	if err != nil {
-		return nil, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
-	}
-	if view.asAgentConfig().IsExternalCLIWorker() {
+	if typed.IsExternalCLIWorker() {
 		// Listed for every external worker: export always removes these
 		// values, so they must be entered again (FR-033, FR-043).
 		im.warn(WarnRuntimeSettingsRemoved, runtimeSettingsRemovedMessage, nil)
@@ -121,7 +117,7 @@ func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*Ag
 	}
 	im.mapSkills(rec)
 	im.mapModel(rec)
-	im.mapTools(rec)
+	im.mapTools(rec, string(typed.Type))
 	out, err := json.Marshal(rec)
 	if err != nil {
 		return nil, fmt.Errorf("omnpkg: encode mapped record: %w", err)
@@ -129,18 +125,57 @@ func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*Ag
 	return &AgentPlan{Record: out, Warnings: im.warnings}, nil
 }
 
+// decodeAgentRecord gives the one interpretation of a package record that
+// validation, mapping and create all read (#1952). The record is decoded with
+// config.AgentConfig, the type the created agent is stored as, and the
+// mapping works on that value's own encoding. Decoding into a struct accepts
+// any letter case of a field name and lets a later member override an earlier
+// one; a generic map keeps such spellings as separate keys and its encoding
+// sorts them, so mapping the raw members could hand create a different type,
+// runtime or effort than the checks saw. After this step only the stored
+// spelling of each field exists.
+func decodeAgentRecord(record []byte, sourceID string) (config.AgentConfig, map[string]any, error) {
+	var typed config.AgentConfig
+	var probe map[string]any
+	if err := json.Unmarshal(record, &probe); err != nil || probe == nil {
+		return typed, nil, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json is not a JSON object")
+	}
+	if err := json.Unmarshal(record, &typed); err != nil {
+		return typed, nil, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
+	}
+	canonical, err := json.Marshal(typed)
+	if err != nil {
+		return typed, nil, fmt.Errorf("omnpkg: encode agent record: %w", err)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(canonical, &rec); err != nil {
+		return typed, nil, fmt.Errorf("omnpkg: decode agent record: %w", err)
+	}
+	return typed, rec, nil
+}
+
+// iterationsView reads max_tool_iterations with the same decoding as
+// config.AgentConfig, but keeps a present zero apart from an omitted field.
+type iterationsView struct {
+	MaxToolIterations *int `json:"max_tool_iterations"`
+}
+
 // checkMaxToolIterations refuses a present value outside the create rule's
 // 1–1000 range, then one above the target's global limit (Field mapping;
 // Dataset D5 row 11). An omitted field is no own limit and passes.
-func (im *importMapper) checkMaxToolIterations(rec map[string]any) error {
-	v, ok := rec["max_tool_iterations"].(float64)
-	if !ok {
+func (im *importMapper) checkMaxToolIterations(record []byte, sourceID string) error {
+	var view iterationsView
+	if err := json.Unmarshal(record, &view); err != nil {
+		return newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
+	}
+	if view.MaxToolIterations == nil {
 		return nil
 	}
-	if v != float64(int(v)) || config.ValidateMaxToolIterationsBound(int(v)) != nil {
+	v := *view.MaxToolIterations
+	if config.ValidateMaxToolIterationsBound(v) != nil {
 		return fieldErr(CodeElementNotCreatable, "max_tool_iterations", config.MaxToolIterationsBoundMessage)
 	}
-	if limit := im.target.GlobalMaxToolIterations(); limit > 0 && v > float64(limit) {
+	if limit := im.target.GlobalMaxToolIterations(); limit > 0 && v > limit {
 		return fieldErr(CodeElementNotCreatable, "max_tool_iterations",
 			"above this install's limit of "+strconv.Itoa(limit))
 	}
@@ -195,8 +230,9 @@ func (im *importMapper) mapModel(rec map[string]any) {
 }
 
 // mapTools drops every connector assignment and filters and tightens the
-// built-in tool policies, filling tools the map lacks with the type's seed.
-func (im *importMapper) mapTools(rec map[string]any) {
+// built-in tool policies, filling tools the map lacks with the seed of the
+// decoded agent type (any letter case of the "type" name, #1953).
+func (im *importMapper) mapTools(rec map[string]any, agentType string) {
 	tools, ok := rec["tools"].(map[string]any)
 	if !ok {
 		return
@@ -218,7 +254,7 @@ func (im *importMapper) mapTools(rec map[string]any) {
 	if !isMap {
 		return
 	}
-	im.mapPolicies(policies, recordType(rec))
+	im.mapPolicies(policies, agentType)
 }
 
 func (im *importMapper) mapPolicies(policies map[string]any, agentType string) {
@@ -250,11 +286,6 @@ func (im *importMapper) mapPolicies(policies map[string]any, agentType string) {
 	if len(tightened) > 0 {
 		im.warn(WarnToolPolicyTightened, "Allow on an always-ask tool became ask.", tightened)
 	}
-}
-
-func recordType(rec map[string]any) string {
-	t, _ := rec["type"].(string)
-	return t
 }
 
 // mcpServerIDs lists the server IDs (or a positional label) of an MCP
