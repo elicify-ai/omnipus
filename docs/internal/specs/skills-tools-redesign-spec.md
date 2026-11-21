@@ -6,7 +6,7 @@ ADR: none — no open design decision was routed to an ADR. The founder settled 
 
 **Created**: 2026-11-21
 **Input**: founder-approved wireframe and notes (`/workspace/omnipus-coordination/handoffs/ui-redesign/skills-tools-wireframe/`: `design-notes.md`, `questions.md`, `re-ask-2026-11-20.md`, `review-response.md`, `index.html`, `app.js`); inventory of today's page (`/workspace/logs/ui-1519/skills-tools/inventory.md`, read at `7faff52915`); UX review (`/workspace/logs/ui-1519/skills-tools/ux-review.md`); requirements R30–R39 (`/workspace/omnipus-coordination/handoffs/ui-redesign/navigation-menu-wireframe/requirements.md`); Settings S-Q8 and `docs/internal/specs/settings-redesign-spec.md` FR-060 on branch `landing/settings-1519` (`30e1050627`). Founder answers, final: T-Q1 A (with the note that Allow / Ask / Deny look and work identically for tools and skills, on this page and in each agent's own settings), T-Q2 A, T-Q3 B, T-Q4b B, T-Q5 (Omnipus chat), T-Q6 A, T-Q7 (this page sets the global default; the agent level is stricter only, reusing today's tool-policy model; no per-agent "what the model sees"). No interview-me output file exists; the wireframe answers take its place.
-**Round 1**: fixed after grill round 1 (BLOCK, 4 CRIT, 15 MAJ, 1 MIN); see "Round-1 fix log" at the end. The founder answered ST-Q1 to ST-Q7 on 2026-11-21 ("ST-Q1 A, ST-Q2 A, ST-Q3 B, ST-Q4 B, ST-Q5 A, ST-Q6 A, ST-Q7 A", Discord #team-b, 05:56Z, relayed by team-lead); every answer is written into the spec below. One question is still open: **[pending ST-Q8]** (project-folder skills), with the recommended option in place.
+**Round 1**: fixed after grill round 1 (BLOCK, 4 CRIT, 15 MAJ, 1 MIN); see "Round-1 fix log" at the end. The founder answered ST-Q1 to ST-Q7 on 2026-11-21 ("ST-Q1 A, ST-Q2 A, ST-Q3 B, ST-Q4 B, ST-Q5 A, ST-Q6 A, ST-Q7 A", Discord #team-b, 05:56Z, relayed by team-lead); every answer is written into the spec below. The founder answered ST-Q8 to ST-Q10 the same day ("ST-Q8 A, ST-Q9 A, ST-Q10 A", Discord #team-b, 13:19Z, relayed by team-lead); they are written in too. No founder question is open.
 **Code baseline**: release `4e34afa416`. Every `file::symbol` and line below was read at that commit. GitNexus MCP tools were not available in this session; discovery used `grep`/`Read` (impact rows are therefore Inferred).
 **Epic**: #1519 as named in the brief. Round 1 found that #1519's body describes the *second* UI round and lists first-round Skills & Tools separately ("Stage: Requirements. Horizon: Later."); the owning epic, Stage and Horizon are **Unknown** until the chief reconciles them.
 **Riders** (proposed by the architect; the chief confirms before the design is final): IN — #1920, #1297, #1298, #1411, #99, #1570, #1576. FOR THE CHIEF TO DECIDE — #817 item 1, #1063, #708, #1031, #1380. Details: "Riders" near the end.
@@ -148,7 +148,7 @@ Round 0 added merge members to `GlobalToolPolicies`, whose PUT still required an
 
 Storage (architect decision): `sandbox.skill_policies`, `sandbox.tool_visibility`, `sandbox.skill_visibility` in `config.json`, beside `sandbox.tool_policies`; trust stays `sandbox.skill_trust`, now `allow`/`ask`/`deny`. Reason: the whole `sandbox` subtree is already operator-only and refused to `set_config` (`pkg/sysagent/tools/config.go::blockedConfigKeys`).
 
-Self-heal (same pattern as `ReconcileToolPolicyCeiling`, additive, never overwriting, runs after the one-time migrations of C-19): a skill key with no stored global permission gets **Ask** (ST-Q3 B) — except a built-in skill shipped by a newer Omnipus release, which gets **Allow**, its shipped default, the way `ReconcileToolPolicyCeiling` adds a new built-in tool's shipped default — and one with no stored level gets `name_and_description`; a tool with no stored level and no matching server key gets its starting level (C-6). Removing a skill removes its two keys. Retired keys are not re-added.
+Self-heal (same pattern as `ReconcileToolPolicyCeiling`, additive, never overwriting, runs after the one-time migrations of C-19): a skill key with no stored global permission gets **Ask** (ST-Q3 B) — except a built-in skill shipped by a newer Omnipus release, which gets **Allow**, its shipped default (ST-Q10 A), the way `ReconcileToolPolicyCeiling` adds a new built-in tool's shipped default — and one with no stored level gets `name_and_description`; a tool with no stored level and no matching server key gets its starting level (C-6). Removing a skill removes its two keys. Retired keys are not re-added.
 
 ### C-3 Skill trust becomes Allow / Ask / Deny
 
@@ -251,7 +251,7 @@ The per-skill decision is computed once per agent and turn by one function besid
 
 | Situation | Ordinary skill Ask (verified skill, or trust Allow) | Trust check (unverified skill, trust Ask) — ST-Q2 A |
 |---|---|---|
-| Interactive chat, Auto-approve off | approval card: Approve Once, Deny, Always Allow | trust card: "Approve this version", Deny. No Always Allow |
+| Interactive chat, Auto-approve off | approval card: Approve Once, Deny, Always Allow (plus "Allow everywhere" when the global permission is Ask, ST-Q9 A) | trust card: "Approve this version", Deny. No Always Allow |
 | Interactive chat, Auto-approve on | follows the existing Auto rule for the `Skill` tool (`pkg/tools/auto_approve.go`: `Skill` is `AutoRuns`) — loads with no card | trust card still shown |
 | God Mode | global side floored to Allow (as for tools); a per-agent Ask still asks | trust card still shown |
 | Remembered "Always Allow" (`pkg/security/approvalgrants.go::ApprovalGrantStore.IsAllowed`, keyed by session, agent, tool, arguments) | the remembered grant's arguments are `{name, revision}` (revision = `pkg/skills/capture.go::ContentRevision` of the folder); a changed skill asks again | never consulted |
@@ -270,14 +270,21 @@ The per-skill decision is computed once per agent and turn by one function besid
 |---|---|---|
 | Install through the review (screen) | trust for this version | the review itself is the trust answer (C-13); no card |
 | Install by an agent (`install_skill`), interactive | trust for the staged version | one trust card ("Approve this version", Deny) |
-| First load in a chat, after either install above | ordinary Ask only | one ordinary card (Approve Once, Deny, Always Allow) |
-| A load where both are open (installed without review under trust Allow and trust later set to Ask; a changed version; a new project skill under ST-Q8 A) | trust and ordinary Ask | **one combined card** naming the skill as unverified: "Approve this version" (approves the version installation-wide and this load), "Approve this version, always in this chat" (also the chat-wide grant for this version), Deny |
-| Same, Auto-approve on or God Mode on | trust only (the ordinary part runs under Auto, or God Mode lifts the global Ask; an agent's own Ask still counts, and then the full combined card shows) | the same card with "Approve this version" and Deny |
+| First load in a chat, after either install above | ordinary Ask only | one ordinary card (Approve Once, Deny, Always Allow, Allow everywhere) |
+| A load where both are open (installed without review under trust Allow and trust later set to Ask; a changed version; a new project skill, ST-Q8 A) | trust and ordinary Ask | **one combined card** naming the skill as unverified: "Approve this version" (approves the version installation-wide and this load), "Approve this version, always in this chat" (also the chat-wide grant for this version), "Approve this version and allow everywhere" (ST-Q9 A, below), Deny |
+| Same, Auto-approve on or God Mode on | trust only (the ordinary part runs under Auto, or God Mode lifts the global Ask; an agent's own Ask still counts, and then the full combined card shows) | the same card with "Approve this version" and Deny (plus "Approve this version and allow everywhere" when the global permission is Ask) |
 | Any of the above in an unattended run | — | refused with "Not run: needs approval, and task and plan runs never ask."; no card |
 
 Why: the two checks answer different questions — "may this version of the files be on this system at all" and "may an agent use it without asking each time" — so they stay two stored decisions. But they are both about the same skill, so asking twice in one moment adds friction without adding information. The install review is where the person already looks at the files, so it answers the first question there; the second question is asked at use, as ST-Q3 B wants. A single combined card covers the cases where both are still open at the same load.
 
-Unattended runs: ST-Q3 B's question text said such runs "stop and wait". The engine has no waiting step for task and plan runs (they never ask, by the existing rule); the load is refused with the unattended text and the run carries on or ends as its plan decides. This spec keeps that rule; adding a waiting step would be a separate feature.
+**Unattended runs and "approve once, works everywhere" (ST-Q9 A).** Task, plan and scheduled runs never ask and never pause (existing rule, kept): a load whose outcome is `ask_pending` is skipped with "Not run: needs approval, and task and plan runs never ask." and the run carries on or ends as its plan decides. There is no waiting step and none is added. A person makes the skill work in such runs by approving it once in a chat:
+
+| Rule | Detail |
+|---|---|
+| Extra card action | Every card raised by a **load** (E1, E4, E5) of a skill whose stored **global** permission is Ask offers one more action: "Allow everywhere" on the ordinary card; "Approve this version and allow everywhere" on the combined card and on a trust-only card. The `install_skill` trust card does not offer it. |
+| What it does | It is a person's action. It loads the skill now, sets that skill's global permission to Allow through the same write path, validation and per-key audit as `PATCH /security/permissions` (C-2), and, on a trust or combined card, records the installation-wide approval of the current version. From then on the skill loads with no card in every chat and in task, plan and scheduled runs. |
+| Limits | It never lifts an agent's own stricter setting (stricter-only overrides, C-2): when that agent's own value for the skill is Ask, the action is not offered (it would not make the skill work for that agent) and the card says "This agent is set to ask for this skill. Change it on the agent's Tools tab." For an unverified skill under trust Ask, a changed version needs a new approval: unattended runs skip it until a person approves the new version in a chat. |
+| Not offered | In unattended runs (no card there); on a trust card for a skill whose global permission is already Allow (its version approval already works everywhere). |
 
 ### C-13 Install review before publishing (round-1 fix, MAJ-002)
 
@@ -366,7 +373,7 @@ New service (after upgrade, screen or `add_mcp_server`): `mcp_<S>_*` = ask is wr
 
 - A project skill and an installed skill with the same slug have different keys; `ResolveSkillName`'s existing precedence decides which skill runs, and that skill's key applies.
 - Project skills have no grant list; authority is the workspace mount, as today. Their starting permission is Ask, like every newly added skill (ST-Q3 B); a project skill already present at the upgrade gets the migrated value (step 2 below). Their starting level is Name and short description.
-- Project skills are not listed on the Skills tab (#1380 not a rider), so their keys are edited only through `PATCH /security/permissions` and `set_agent_permissions` (C-10). They count as unverified (anyone with write access to the workspace can change them), so trust applies and each new version asks once [pending ST-Q8; option A in place]; this is a named behaviour change in DOC-004.
+- Project skills are not listed on the Skills tab (#1380 not a rider), so their keys are edited only through `PATCH /security/permissions` and `set_agent_permissions` (C-10). They count as unverified (anyone with write access to the workspace can change them), so trust applies and each new version asks once, even in God Mode (ST-Q8 A); this is a named behaviour change in DOC-004.
 - **Upgrade order** (one-time, marked done in `sandbox.migrations`, idempotent): (1) trust value (C-3); (2) every installed skill's global value = old global `Skill` value; every project skill found at that moment the same; (3) each agent's old per-agent `Skill` value copied to each skill granted to that agent and to each project skill of each workspace the agent is mounted on; (4) the old `Skill` entries (global and per-agent) are removed and `Skill` becomes fixed `allow`; (5) levels (C-6, D7); (6) external tools (C-18); (7) self-heal. If Omnipus stops midway, the marker is not written and the whole migration re-runs from the stored old values, which are removed only in step 4 after steps 2–3 are written in the same atomic config write.
 - Explicit per-agent tool values written earlier by role presets are ordinary overrides and are left unchanged.
 - **Named change.** A skill granted to an agent after the upgrade follows the global value; it does not inherit the agent's old blanket `Skill` restriction. DOC-004 says so.
@@ -474,7 +481,7 @@ A person wants one skill to run freely, another to ask first, and a third never 
 **Acceptance Scenarios**:
 
 1. **Given** the Skills tab, **When** the person clicks Deny on a skill row, **Then** it is saved, and an agent granted that skill can no longer load it and no longer sees it in its skill list.
-2. **Given** a verified skill set to Ask and Auto-approve off, **When** an agent in a chat tries to load it, **Then** the normal approval card appears naming the skill, with Approve Once, Deny and Always Allow; an Always Allow is remembered for that skill's current revision only (C-12).
+2. **Given** a verified skill set to Ask and Auto-approve off, **When** an agent in a chat tries to load it, **Then** the normal approval card appears naming the skill, with Approve Once, Deny and Always Allow, and "Allow everywhere" when the skill's global permission is Ask; an Always Allow is remembered for that chat and the skill's current revision only (C-12).
 3. **Given** a skill set to Ask, **When** a task, plan or scheduled run tries to load it, **Then** the load is refused with "Not run: needs approval, and task and plan runs never ask." and no card appears.
 4. **Given** a skill set to Allow and granted to the agent, **When** the agent loads it, **Then** it loads with no card.
 5. **Given** a skill not granted to the agent, **When** the agent tries to load it, **Then** it is refused as today, whatever its permission (the grant stays the gate, ADR-072 D4).
@@ -482,6 +489,7 @@ A person wants one skill to run freely, another to ask first, and a third never 
 7. **Given** an install upgraded from a version without per-skill permissions, **When** it first starts, **Then** every skill's global permission equals the old global `Skill` value, and each agent's old per-agent `Skill` value is copied to each skill granted to that agent at that moment, so no agent's behaviour changes.
 8. **Given** a new skill is installed, copied, written with Omnipus or first found in a project folder, **When** it appears, **Then** its global permission is Ask (ST-Q3 B) and its level is "Name and short description"; a granted agent's first load in a chat asks, and an unattended run's load is refused with the unattended text (C-12).
 9. **Given** a granted skill whose effective value for an agent is Deny (or Ask not yet approved), **When** that agent reads the skill's folder with a file tool or runs its helper script, **Then** the read or run is refused as for an ungranted skill (C-11 E6, E7).
+10. **Given** a skill at global Ask that a scheduled task skipped with "Not run: needs approval", **When** the person chooses "Allow everywhere" on its card in a chat, **Then** the skill's global permission is Allow and the next scheduled run loads it with no card; no run ever waits for an answer (C-12, ST-Q9 A).
 
 ### User Story 3 — An agent's Tools tab is the same editor, stricter only, without presets (Priority: P0)
 
@@ -944,7 +952,7 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 
 - **Given** `deep-research` at Ask globally and Auto-approve off
 - **When** Mia loads `deep-research` in a web chat
-- **Then** an approval card appears with tool `Skill`, the skill named "Deep Research", and the buttons Approve Once, Deny and Always Allow
+- **Then** an approval card appears with tool `Skill`, the skill named "Deep Research", and the buttons Approve Once, Deny, Always Allow and Allow everywhere
 
 #### Scenario: S-11 Always Allow remembers the skill load for the chat
 
@@ -1900,9 +1908,9 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **When** the person chooses "Choose category" → Lifestyle, and later calls `PUT /skills/trip-notes/category` with `research`
 - **Then** the first saves Lifestyle and the second is refused with 409 "The category is set at install and cannot be changed."
 
-### Feature: Founder answers ST-Q1 to ST-Q8
+### Feature: Founder answers ST-Q1 to ST-Q10
 
-#### Scenario: S-105 A project skill asks once per version [pending ST-Q8]
+#### Scenario: S-105 A project skill asks once per version (ST-Q8 A)
 
 **Traces to**: User Story 4, Acceptance Scenario 4
 **Category**: Edge Case
@@ -1918,9 +1926,9 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 
 - **Given** trust Ask, unverified skill `notes-helper` at Ask (new skill), granted to Mia, its current version not approved, Auto-approve off
 - **When** Mia loads `notes-helper` in a chat
-- **Then** exactly one card appears, naming the skill as unverified, with "Approve this version", "Approve this version, always in this chat" and Deny
+- **Then** exactly one card appears, naming the skill as unverified, with "Approve this version", "Approve this version, always in this chat", "Approve this version and allow everywhere" and Deny
 - **And** after "Approve this version" the skill loads and no second card appears
-- **And** with Auto-approve on, the card offers only "Approve this version" and Deny
+- **And** with Auto-approve on, the card offers only "Approve this version", "Approve this version and allow everywhere" and Deny
 
 #### Scenario: S-107 A new skill installed through the review asks once at first use, and unattended runs skip it
 
@@ -1929,10 +1937,10 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 
 - **Given** trust Ask and unverified `weather` installed through the install review, granted to Mia, at Ask (new skill)
 - **When** Mia loads `weather` in a chat
-- **Then** one ordinary approval card appears (Approve Once, Deny, Always Allow) and no trust card
+- **Then** one ordinary approval card appears (Approve Once, Deny, Always Allow, Allow everywhere) and no trust card
 - **And** when a scheduled task of Mia loads `weather`, the load is refused with "Not run: needs approval, and task and plan runs never ask." and no card appears
 
-#### Scenario: S-108 A built-in skill added by an Omnipus update starts at Allow
+#### Scenario: S-108 A built-in skill added by an Omnipus update starts at Allow (ST-Q10 A)
 
 **Traces to**: User Story 2, Acceptance Scenario 8
 **Category**: Edge Case
@@ -1941,6 +1949,17 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **When** Omnipus starts
 - **Then** `capability-plan` is stored at Allow, its shipped default
 - **But** a skill the person installs afterwards is stored at Ask
+
+#### Scenario: S-109 Approving once in a chat makes the skill work in scheduled runs (ST-Q9 A)
+
+**Traces to**: User Story 2, Acceptance Scenario 10
+**Category**: Happy Path
+
+- **Given** trust Allow, verified skill `weather` at global Ask, granted to Mia with no agent value of its own, and a scheduled task of Mia that loads `weather`
+- **When** the task runs, then the person, in a chat with Mia, answers the `weather` card with "Allow everywhere", then the task runs again
+- **Then** the first run skips the skill with "Not run: needs approval, and task and plan runs never ask." and does not wait
+- **And** after "Allow everywhere" the global permission of `weather` is Allow, one audit entry records the change, and the second run loads `weather` with no card
+- **But** if Mia's own value for `weather` is Ask, the card does not offer "Allow everywhere" and says "This agent is set to ask for this skill. Change it on the agent's Tools tab."
 
 ---
 
@@ -2037,7 +2056,7 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | 44 | SkillsToolsPage.saveStates.test | Unit TS | S-83 | Dataset D12 |
 | 45 | SkillsToolsPage.focus.test | Unit TS | S-100 | |
 | 46 | LegacySkillTrust.compat.test | Integration Go | S-101 | C-22 |
-| 47 | TestSkillConsent_Table (rows 12–17) | Unit Go | S-105 to S-108 | combined card, new-skill default, ST-Q8 |
+| 47 | TestSkillConsent_Table (rows 12–18); ApprovalCard.allowEverywhere.test | Unit Go; Unit TS | S-105 to S-109 | combined card, new-skill default, ST-Q8 A, ST-Q9 A, ST-Q10 A |
 | 48 | PerformanceSection.noToolsOnDemand.test; TestPerformancePut_RejectsToolsOnDemand | Unit TS; Integration Go | S-44 | ST-Q4 B removal |
 
 **Positive controls (MAJ-014).** Each of tests 33, 34, 36, 37, 38 and the migration tests ships with a recorded mutation probe run by CHECK: remove the outcome filter from `LoadableFolders`, skip the trust floor, inject Full unconditionally, keep the old tier lists, write the full map instead of the named keys, drop one audit call, reset one migrated value. Each probe must turn its test red. Expected values come from this spec and from literal pre-upgrade fixtures, never from calling the new resolver or builder.
@@ -2219,8 +2238,9 @@ Old behaviour comes from `pkg/tools/manifest.go::ToolManifestTier`, `::ToolManif
 | 13 | row 12, Auto-approve on | ordinary part auto-runs | the same card, trust part only | BDD Scenario: S-106 | |
 | 14 | new skill installed through the review, first chat load | trust answered at install | one ordinary card (permission Ask) | BDD Scenario: S-107 | |
 | 15 | new skill, unattended run | unattended | refused, unattended text, no card | BDD Scenario: S-107 | ST-Q3 B |
-| 16 | built-in skill added by an Omnipus update | shipped default | Allow, no card | BDD Scenario: S-108 | |
-| 17 | project skill, new version, trust Ask | ST-Q8 A | trust card once per version | BDD Scenario: S-105 | [pending ST-Q8] |
+| 16 | built-in skill added by an Omnipus update | shipped default | Allow, no card | BDD Scenario: S-108 | ST-Q10 A |
+| 17 | project skill, new version, trust Ask | ST-Q8 A | trust card once per version | BDD Scenario: S-105 | ST-Q8 A |
+| 18 | global Ask, unattended skip, then "Allow everywhere" in a chat | person action | global Allow, audited; next unattended run loads; agent-own Ask: action not offered | BDD Scenario: S-109 | ST-Q9 A |
 
 #### Dataset D11: Visibility transitions (C-15)
 
@@ -2376,7 +2396,8 @@ Old behaviour comes from `pkg/tools/manifest.go::ToolManifestTier`, `::ToolManif
 - **FR-078**: At this landing, today's Settings trust control and tool grid MUST keep working and links MUST resolve (C-22).
 - **FR-079**: Each Full skill row MUST show its approximate size, and the Skills tab MUST warn when an agent's Full total exceeds half of its model's context (ST-Q1 A).
 - **FR-081**: When the ordinary Ask and the trust check fall on the same load, the person MUST see one combined card; the install review MUST count as the trust answer for the reviewed version (C-12).
-- **FR-082**: A project-folder skill MUST count as unverified, so trust applies to each new version [pending ST-Q8].
+- **FR-082**: A project-folder skill MUST count as unverified, so trust applies to each new version, also under God Mode (ST-Q8 A).
+- **FR-083**: Unattended runs MUST skip an `ask_pending` skill with the unattended text and MUST NOT wait; every card for a skill at global Ask MUST offer "Allow everywhere" (or "Approve this version and allow everywhere"), which sets the global permission to Allow through the C-2 write path with its audit, and MUST NOT be offered when the agent's own value for the skill is Ask (C-12, ST-Q9 A).
 - **FR-080**: `GET /skills` and agent turns MUST create missing project-skill keys at first sight and remove them with their workspace or folder (C-19).
 
 ### Dependency
@@ -2384,9 +2405,9 @@ Old behaviour comes from `pkg/tools/manifest.go::ToolManifestTier`, `::ToolManif
 
 ## Success Criteria
 
-- **SC-001**: All 108 BDD scenarios pass in RED → GREEN, with the RED logs saved (S-105 follows the ST-Q8 answer).
+- **SC-001**: All 109 BDD scenarios pass in RED → GREEN, with the RED logs saved.
 - **SC-002**: Hands-on rows ST-01 to ST-25 PASS on the cut commit, validated independently.
-- **SC-003**: After upgrading a saved pre-release data folder, the request each of 3 sample agents sends on its first turn, captured with a scripted model, is identical tool by tool and skill by skill to the request captured before the upgrade (ST-06), except these named changes: trust Warn becomes Ask (unverified skills now ask; C-3); external tools with no global coverage go from Deny or agent-only Allow to Ask (C-18) (ST-Q5 A); project skills now count as unverified (C-19) [pending ST-Q8]; skills added after the upgrade start at Ask (ST-Q3 B).
+- **SC-003**: After upgrading a saved pre-release data folder, the request each of 3 sample agents sends on its first turn, captured with a scripted model, is identical tool by tool and skill by skill to the request captured before the upgrade (ST-06), except these named changes: trust Warn becomes Ask (unverified skills now ask; C-3); external tools with no global coverage go from Deny or agent-only Allow to Ask (C-18) (ST-Q5 A); project skills now count as unverified (C-19, ST-Q8 A); skills added after the upgrade start at Ask (ST-Q3 B).
 - **SC-004**: `grep -r "Cautious\|toolPolicyPresets" src/` returns 0 matches in production code.
 - **SC-005**: Every install path refuses an unverified skill under trust Deny: screen, agent tool and direct REST, each driven and asserted separately (3 of 3, ST-09 a–c); a direct REST install under trust Ask without a review is refused (ST-09 d).
 - **SC-006**: With a skill Denied (or Ask not approved) for an agent, 0 of 5 paths give that agent its instructions or files: `Skill`, menu/search, Full, file read, helper run (ST-19, ST-13).
@@ -2408,7 +2429,7 @@ Old behaviour comes from `pkg/tools/manifest.go::ToolManifestTier`, `::ToolManif
 | DOC-002 | Per-skill Allow / Ask / Deny; Skill tool no longer one switch; grants stay | `docs/skills.md` | New section "Allow, ask or deny a skill"; table row for `Skill` in `docs/tools.md` defaults updated |
 | DOC-003 | What the model sees: four levels | `docs/tools.md`, `docs/skills.md` | New section on the levels, what each means for a tool and a skill, locked tools, and that the levels replace "Load tools on demand" (ST-Q4 B) |
 | DOC-004 | Skill trust words and enforcement; Warn becomes Ask; upgrade changes | `docs/skills.md` (line with Block/Warn/Allow all), `docs/security.md` | New words; where it applies (install and load, every path of C-11); approving a version; unattended runs refuse; the named upgrade changes of SC-003; project skills count as unverified; a later grant no longer inherits the old blanket `Skill` value; audit-write failures are logged, not blocking (unchanged) |
-| DOC-013 | New skills start at Ask; one card when two checks meet | `docs/skills.md` | A new skill asks before each use until set to Allow; unattended runs skip it; the install review answers the unverified check |
+| DOC-013 | New skills start at Ask; one card when two checks meet | `docs/skills.md` | A new skill asks before each use until set to Allow; "Allow everywhere" on its card sets Allow; unattended runs skip it and never wait; the install review answers the unverified check |
 | DOC-014 | "Load tools on demand" is gone | `docs/settings.md`, `docs/tools.md` | The switch was replaced by levels; old installs were converted |
 | DOC-010 | Editor exception; Full size limit; level changes in running chats | `docs/skills.md`, `docs/tools.md` | Agents allowed to edit skills can read denied skills' files; Full skills must fit the model; a level change applies from the next turn and does not unload loaded tools |
 | DOC-011 | Install review and categories for written skills | `docs/skills.md` | Review step, expiry, "Choose category" once, write-skill asks for a category |
@@ -2507,8 +2528,9 @@ Old behaviour comes from `pkg/tools/manifest.go::ToolManifestTier`, `::ToolManif
 | FR-080 | US-2 | S-102 | TestProjectSkillKeys | DOC-004 |
 | FR-081 | US-2, US-4 | S-106, S-107 | TestSkillConsent_Table | DOC-013 |
 | FR-082 | US-4 | S-105 | TestSkillConsent_Table | DOC-004 |
+| FR-083 | US-2 | S-109 | TestSkillConsent_Table; ApprovalCard.allowEverywhere.test | DOC-013 |
 
-**Completeness check** (round 1 and the founder-answer pass: re-run over S-01 to S-108 and FR-001 to FR-082): every FR appears with at least one scenario and one test; scenarios S-01 to S-108 each appear at least once (S-03 in FR-001's page test set via skills-tools.spec.ts row 31; S-20, S-57, S-58, S-60 to S-65, S-68, S-69 through FR-024 and FR-043 to FR-052).
+**Completeness check** (round 1 and the founder-answer passes: re-run over S-01 to S-109 and FR-001 to FR-083): every FR appears with at least one scenario and one test; scenarios S-01 to S-109 each appear at least once (S-03 in FR-001's page test set via skills-tools.spec.ts row 31; S-20, S-57, S-58, S-60 to S-65, S-68, S-69 through FR-024 and FR-043 to FR-052).
 
 ---
 
@@ -2558,30 +2580,19 @@ Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:ti
 - Founder answers to the round-1 questions, 2026-11-21, source: founder on Discord #team-b at 05:56Z, verbatim "ST-Q1 A, ST-Q2 A, ST-Q3 B, ST-Q4 B, ST-Q5 A, ST-Q6 A, ST-Q7 A", relayed by team-lead (questions: `/workspace/logs/skills-tools-1519f/founder-questions-r1.md`):
   - Q: What does "Full" mean for a skill (ST-Q1)? → A: whole instructions in each new chat, only after the permission allows it; a visible cannot-fit outcome (C-14).
   - Q: Does the trust check still ask under God Mode, Auto-approve and Always Allow (ST-Q2)? → A: yes, a separate check per version; a reviewed install counts (C-12).
-  - Q: What does a newly installed skill start at (ST-Q3)? → **B: Ask** (not the recommended A). Built-in skills shipped by Omnipus keep Allow as their shipped default (architect reading: ST-Q3 is about skills a person or agent adds). How it combines with ST-Q2: C-12 "When the two checks meet".
+  - Q: What does a newly installed skill start at (ST-Q3)? → **B: Ask** (not the recommended A). Built-in skills shipped by Omnipus keep Allow as their shipped default (confirmed by ST-Q10 A). How it combines with ST-Q2: C-12 "When the two checks meet".
   - Q: Which control decides what the model sees about tools (ST-Q4)? → B: the four levels only; "Load tools on demand" leaves Settings in the same release; existing installs are converted, not reset (C-6, C-22).
   - Q: External tools that never had a permission (ST-Q5)? → A: Ask for genuinely uncovered tools; covered tools unchanged (C-18).
   - Q: One search for tools and skills (ST-Q6)? → A: included in this package (C-17).
   - Q: Does "no confirmation" remove the plan-run warning (ST-Q7)? → A: keep this one warning only (FR-010).
-- Q: Do project-folder skills count as unverified (ST-Q8, opened by team-lead 2026-11-21)? → pending; option A (ask once per version, like any unverified skill) is in place.
+- Founder answers to the second questions, 2026-11-21, source: founder, Discord #team-b, 13:19Z, verbatim "ST-Q8 A, ST-Q9 A, ST-Q10 A", relayed by team-lead (questions: `/workspace/logs/skills-tools-1519f/st-questions-2/index.html`):
+  - Q: Do project-folder skills count as unverified (ST-Q8)? → A: yes; they ask once for each new or changed version, even in God Mode (C-19, FR-082, S-105).
+  - Q: What happens when a task or plan run needs a skill that asks (ST-Q9)? → A: today's behaviour: the skill is skipped with "Not run: needs approval"; approving once in a chat makes it work everywhere, also in tasks and plans; no new wait mechanism (C-12, FR-083, S-109). The earlier ST-Q3 option text was wrong on this point; the founder saw the correction before answering.
+  - Q: What do built-in skills added by a later Omnipus release start at (ST-Q10)? → A: Allow, their shipped default (C-2, FR-020, S-108).
 
 ## Questions for the founder
 
-ST-Q1 to ST-Q7 are answered (Clarifications, 2026-11-21). One question is open.
-
-**ST-Q8 — Do skills in a project folder count as unverified?** Context: a project folder's skills are files anyone with write access to that workspace can change. Under trust Ask they would ask once for each new version, where today they load silently. **A (recommended, in place)**: yes, they are unverified; trust asks once per version. **B**: treat them as verified; trust never applies to them.
-
-| If the answer is B, change | What changes |
-|---|---|
-| C-19 bullet "They count as unverified…" | project skills count as verified; trust does not apply |
-| C-12 table, row "A load where both are open" | drop "a new project skill under ST-Q8 A" from the examples |
-| FR-082 | becomes "MUST count as verified" |
-| S-105 | Then: no trust card at any of the three loads |
-| D10 row 17 | expected: no trust card |
-| ST-25 (project-skill part) | expected: only the permission card (new skill at Ask) |
-| SC-003 | drop the named change "project skills now count as unverified" |
-| Edge Cases (project-folder skill line) | "it follows trust (unverified)" → "trust does not apply" |
-| DOC-004 | drop the project-skill sentence |
+None open. ST-Q1 to ST-Q10 are answered (Clarifications, 2026-11-21).
 
 ### Notes for team-lead
 
@@ -2607,7 +2618,7 @@ ST-Q1 to ST-Q7 are answered (Clarifications, 2026-11-21). One question is open.
 
 **Other notes.**
 - The owning epic (#1519's body describes the second UI round) and the rider set are still unconfirmed (header, Riders).
-- ST-Q3's question text promised that unattended runs "stop and wait"; the engine refuses Ask in task and plan runs instead (C-12). If the founder expects a real wait, that is new work.
+- ST-Q9 A "approve once in a chat and it works everywhere" is specified as one new card action, "Allow everywhere", that sets the skill's global permission to Allow (C-12, FR-083). This is the architect's reading: a session grant ("Always Allow") stays per chat, and the action does not lift an agent's own stricter Ask. Grill round 2 should check it.
 
 ---
 
@@ -2639,7 +2650,8 @@ Grill round 1 report: `docs/internal/specs/skills-tools-redesign-spec-review.md`
 | MIN-001 view-switch is a radio group | Tabs use the catalogued `tabs` component | Design-System Components, Accessibility and Keyboard, FR-052 |
 | Coordination warning (epic, riders) | Header states the epic mismatch as Unknown for the chief; riders still unconfirmed | Header, Riders, Notes for team-lead |
 | FQ-5, FQ-7 | Recorded as decisions (founder default) | Clarifications, Ambiguity Warning 1, C-1 |
-| Founder answers ST-Q1–ST-Q7 (2026-11-21) | Every [pending] marker resolved to the chosen option; the unchosen options and switch-point lists removed | whole spec; Clarifications |
+| Founder answers ST-Q1–ST-Q7 (2026-11-21) | Every pending marker resolved to the chosen option; the unchosen options and switch-point lists removed | whole spec; Clarifications |
 | ST-Q3 B (new skills start at Ask) | Self-heal default Ask (built-ins keep their shipped Allow); new skills, copies, written and project skills start at Ask; combined-card rule with the trust check; toast text; unattended refusal kept | C-2, C-12, C-19, FR-020, FR-081, US-2 AS8, User Journey, UI states, S-17, S-98, S-106–S-108, D6 row 17, D10 rows 12–16, ST-15, ST-16, ST-25, DOC-013 |
 | ST-Q4 B (switch leaves Settings) | Named "tool-loading conversion"; this package removes the switch from today's Performance screen and `tools_on_demand` from the Performance contract, refuses the retired keys; Settings hand-off list | C-6, C-21, C-22, FR-039, US-5 AS9, S-44, D2, D7, DOC-014, Notes for team-lead |
 | ST-Q8 opened | Option A in place with its switch points | C-19, FR-082, S-105, D10 row 17, ST-25, SC-003, Questions for the founder |
+| Founder answers ST-Q8–ST-Q10 (2026-11-21, 13:19Z) | ST-Q8 A: markers resolved, switch-point list removed. ST-Q9 A: no waiting step anywhere; "Allow everywhere" card action added. ST-Q10 A: built-ins added by a later release start at Allow, confirmed | header, C-2, C-12, C-19, US-2 AS10, S-105, S-108, S-109, FR-082, FR-083, D10 rows 16–18, test row 47, SC-001, SC-003, DOC-013, Traceability, Clarifications, Questions for the founder, Notes for team-lead |
