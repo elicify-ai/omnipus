@@ -490,6 +490,11 @@ func (s *Service) rendererComponent(caller []component.WriteRoot) (*component.Co
 			return nil, ReasonRendererDamaged, rendererAfterStartText
 		case component.StatusUnsafe:
 			return nil, ReasonRendererDamaged, fmt.Sprintf("PDF renderer is in a folder an agent can write (%s); disabled until that access is removed", problem.Reason)
+		case component.StatusOutsideOwn:
+			return nil, ReasonRendererDamaged, fmt.Sprintf(rendererOutsideOwnText, problem.Root, problem.Own, problem.Own)
+		}
+		if refusedUnderStartupRecord(problem) {
+			return nil, ReasonRendererDamaged, fmt.Sprintf(rendererAccessRefusedText, problem.Reason)
 		}
 		return nil, ReasonRendererDamaged, "PDF renderer damaged (" + problem.Reason + ")"
 	}
@@ -512,6 +517,12 @@ func (s *Service) officeComponent(caller []component.WriteRoot) (*component.Comp
 		s.office = nil
 	}
 	if s.office != nil {
+		// A registered root that now leads outside Omnipus's own folder is
+		// refused at every use (§3.9 OF-4), as Resolve refuses it.
+		if problem := s.cfg.Resolver.CheckRegisteredRoot(s.office); problem != nil {
+			s.office = nil
+			return nil, officeProblem(problem)
+		}
 		// A folder replaced in place after the start is no longer the one
 		// the startup rules granted (BR-2.5): check before reading it.
 		if problem := component.CheckStartupGrant(s.office.Root); problem != nil {
@@ -558,6 +569,29 @@ const (
 	rendererAfterStartText = "PDF renderer was installed or registered after Omnipus started; stop and start Omnipus (for example with your service manager) to use it; the in-app restart is not enough in the confined sandbox"
 )
 
+// The OF-4 texts (office-preview spec §3.9): on Linux a registration
+// outside Omnipus's own folder is not used. Verbs: the recorded root, then
+// the own folder twice.
+const (
+	officeOutsideOwnText   = `Office preview is disabled: the registered LibreOffice folder %s is outside Omnipus's own folder (%s); on Linux, Omnipus uses only preview programs inside it. Remove the registration with "omnipus office unregister", or put LibreOffice in a folder inside %s and register that folder.`
+	rendererOutsideOwnText = `PDF renderer is disabled: the registered folder %s is outside Omnipus's own folder (%s); on Linux, Omnipus uses only preview programs inside it. Remove the registration with "omnipus pdf-renderer unregister", or put the renderer in a folder inside %s and register that folder`
+)
+
+// The RS-1 texts (office-preview spec §3.9): under an active startup record
+// a refused read may be the restriction an in-app restart inherited. The
+// verb is today's damaged reason.
+const (
+	officeAccessRefusedText   = "Office preview cannot read its program files (%s). If Omnipus was restarted from inside the app after this component was installed or registered, stop and start Omnipus (for example with your service manager); otherwise reinstall or re-register the Office preview component."
+	rendererAccessRefusedText = "PDF renderer cannot read its program files (%s); if Omnipus was restarted from inside the app after it was installed or registered, stop and start Omnipus (for example with your service manager); otherwise reinstall or re-register it"
+)
+
+// refusedUnderStartupRecord reports whether p is a refused access while the
+// gateway's startup record is active (RS-1). Without a record a refused
+// read is an ordinary file-permission problem and keeps the damaged text.
+func refusedUnderStartupRecord(p *component.ComponentError) bool {
+	return p.Status == component.StatusDamaged && p.AccessRefused && component.StartupGrantsActive()
+}
+
 func officeProblem(p *component.ComponentError) *failure {
 	switch p.Status {
 	case component.StatusMissing:
@@ -566,6 +600,11 @@ func officeProblem(p *component.ComponentError) *failure {
 		return docFailure(officeAfterStartText)
 	case component.StatusUnsafe:
 		return docFailure(fmt.Sprintf("Office preview is in a folder an agent can write (%s); disabled until that access is removed.", p.Reason))
+	case component.StatusOutsideOwn:
+		return docFailure(fmt.Sprintf(officeOutsideOwnText, p.Root, p.Own, p.Own))
+	}
+	if refusedUnderStartupRecord(p) {
+		return docFailure(fmt.Sprintf(officeAccessRefusedText, p.Reason))
 	}
 	return docFailure("Office preview is damaged (" + p.Reason + "). Reinstall or re-register the Office preview component.")
 }

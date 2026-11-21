@@ -14,7 +14,8 @@ import (
 
 // ConfinementStartupGrants lists the paths the confined Linux startup rules
 // grant read+execute on (office-preview spec §3.8 BR-2.1, founder Q100 A), in
-// BR-2.1's order: for LibreOffice the registered root (if any) then the
+// BR-2.1's order: for LibreOffice the registered root (if any; on Linux only
+// one inside Omnipus's own folder, §3.9 OF-4) then the
 // packaged slots in PackagedCandidates order, the same for the PDF renderer,
 // then the omnipus program file itself — never its folder. Every path is real
 // (symlinks resolved) and listed once.
@@ -38,7 +39,7 @@ func ConfinementStartupGrants(r *Resolver) (grants []string, notes []string) {
 		}
 	}
 	for _, kind := range []Kind{KindOffice, KindPDFRenderer} {
-		root, note := registeredStartupRoot(r.Home, kind)
+		root, note := registeredStartupRoot(r, kind)
 		if note != "" {
 			notes = append(notes, note)
 		}
@@ -73,8 +74,10 @@ func ConfinementStartupGrants(r *Resolver) (grants []string, notes []string) {
 
 // registeredStartupRoot returns the real path of the root named in kind's
 // registered manifest, or a note saying why there is none to grant. No
-// registration at all is neither a grant nor a note.
-func registeredStartupRoot(home string, kind Kind) (string, string) {
+// registration at all is neither a grant nor a note. On Linux a root outside
+// Omnipus's own folder is never granted (office-preview spec §3.9 OF-4).
+func registeredStartupRoot(r *Resolver, kind Kind) (string, string) {
+	home := r.Home
 	if home == "" {
 		return "", ""
 	}
@@ -89,6 +92,9 @@ func registeredStartupRoot(home string, kind Kind) (string, string) {
 	m, err := ParseManifest(data, kind)
 	if err != nil {
 		return "", fmt.Sprintf("%s registered manifest %s skipped: invalid: %v", kind, manifest, err)
+	}
+	if p := r.registeredOutsideOwn(m.Root); p != nil {
+		return "", fmt.Sprintf("%s registered root %s skipped: outside Omnipus's own folder %s", kind, p.Root, p.Own)
 	}
 	root, err := filepath.EvalSymlinks(m.Root)
 	if err != nil {
@@ -165,6 +171,13 @@ func SetStartupGrants(rec *StartupGrantRecord) {
 	activeStartupGrants.Store(rec)
 }
 
+// StartupGrantsActive reports whether a startup record is active in this
+// process (SetStartupGrants set one): the confined Linux gateway with an
+// enforcing kernel sandbox (office-preview spec §3.9 RS-1).
+func StartupGrantsActive() bool {
+	return activeStartupGrants.Load() != nil
+}
+
 // CheckStartupGrant reports whether dir, a component folder about to be used
 // (a registered root or a packaged slot), may be used under this process's
 // startup rules (BR-2.5). It reads no file in dir, only its metadata. It
@@ -189,7 +202,7 @@ func CheckStartupGrant(dir string) *ComponentError {
 		return nil
 	}
 	if err != nil {
-		return damaged("component folder unreadable: %v", err)
+		return damagedBy(err, "component folder unreadable: %v", err)
 	}
 	for _, f := range rec.refused {
 		if f.path != resolved {

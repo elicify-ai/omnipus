@@ -37,7 +37,11 @@ type RegisterOptions struct {
 	WriteRoots []WriteRoot
 	// GOOS overrides the platform layout (tests); empty means runtime.GOOS.
 	GOOS string
-	Now  func() time.Time
+	// Program is the omnipus program file whose own folder (OwnFolder)
+	// bounds Linux registration (office-preview spec §3.9 OF-3); empty
+	// means the running program, resolved as NewResolver resolves it.
+	Program string
+	Now     func() time.Time
 }
 
 func (o RegisterOptions) goos() string {
@@ -58,9 +62,21 @@ func (o RegisterOptions) now() time.Time {
 // its packaged manifest.json). Every fingerprint is re-computed; the
 // registered manifest is written into the protected data directory.
 func RegisterRenderer(opts RegisterOptions) (*Manifest, error) {
+	program, err := registrationProgram(opts)
+	if err != nil {
+		return nil, err
+	}
+	// On Linux only a folder inside Omnipus's own folder is accepted,
+	// checked before anything in it is looked at (§3.9 OF-3).
+	if outsideErr := registrationOutsideOwn(KindPDFRenderer, opts.Folder, program, opts.goos()); outsideErr != nil {
+		return nil, outsideErr
+	}
 	root, err := realDir(opts.Folder)
 	if err != nil {
 		return nil, err
+	}
+	if outsideErr := registeredRootOutsideOwn(KindPDFRenderer, opts.Folder, root, program, opts.goos()); outsideErr != nil {
+		return nil, outsideErr
 	}
 	if overlap := FirstOverlap(root, opts.WriteRoots); overlap != nil {
 		return nil, fmt.Errorf("pdf renderer folder is writable by an agent (%s); choose a folder no agent can write", overlap.Grant)
@@ -243,12 +259,24 @@ func registryVersion(p string) (string, error) {
 // RegisterOffice registers an official LibreOffice 26.8.x install. On macOS
 // it also writes the filtered services registry (AD-3) next to the manifest.
 func RegisterOffice(opts RegisterOptions) (*Manifest, error) {
-	// Order matters (W2-S01): locate by file names, refuse an
-	// agent-writable folder, check the layout stays inside it, and only
-	// then read anything from it. Nothing in the candidate is executed.
+	// Order matters (W2-S01): on Linux refuse a folder outside Omnipus's
+	// own folder (§3.9 OF-3), locate by file names, check the root it
+	// settled on again, refuse an agent-writable folder, check the layout
+	// stays inside it, and only then read anything from it. Nothing in the
+	// candidate is executed.
+	program, err := registrationProgram(opts)
+	if err != nil {
+		return nil, err
+	}
+	if outsideErr := registrationOutsideOwn(KindOffice, opts.Folder, program, opts.goos()); outsideErr != nil {
+		return nil, outsideErr
+	}
 	layout, err := locateOffice(opts.Folder, opts.goos())
 	if err != nil {
 		return nil, err
+	}
+	if outsideErr := registeredRootOutsideOwn(KindOffice, opts.Folder, layout.root, program, opts.goos()); outsideErr != nil {
+		return nil, outsideErr
 	}
 	if overlap := FirstOverlap(layout.root, opts.WriteRoots); overlap != nil {
 		return nil, fmt.Errorf("LibreOffice folder is writable by an agent (%s); choose a folder no agent can write", overlap.Grant)

@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -231,6 +232,10 @@ const (
 	// moved or replaced after the confined Linux startup rules were made, so
 	// those rules do not cover it (office-preview spec §3.8 BR-2.5).
 	StatusAfterStart
+	// StatusOutsideOwn: on Linux, the operator-registered root lies outside
+	// Omnipus's own folder (OwnFolder), so it is not used and nothing in it
+	// is read (office-preview spec §3.9 OF-4).
+	StatusOutsideOwn
 )
 
 // Component is a resolved, verified component.
@@ -260,6 +265,15 @@ type fileStamp struct {
 type ComponentError struct {
 	Status Status
 	Reason string
+	// AccessRefused is true when the cause was a refused access to a
+	// component file or folder (fs.ErrPermission). Under an active startup
+	// record that may be the restriction an in-app restart inherited
+	// (office-preview spec §3.9 RS-1).
+	AccessRefused bool
+	// Root and Own are set for StatusOutsideOwn: the recorded root and
+	// Omnipus's own folder as written (OF-4 texts).
+	Root string
+	Own  string
 }
 
 func (p *ComponentError) Error() string { return p.Reason }
@@ -268,18 +282,26 @@ func damaged(format string, args ...any) *ComponentError {
 	return &ComponentError{Status: StatusDamaged, Reason: fmt.Sprintf(format, args...)}
 }
 
+// damagedBy is damaged for a failure caused by err; it records whether err
+// was a refused access (RS-1). format must contain err's verb.
+func damagedBy(err error, format string, args ...any) *ComponentError {
+	p := damaged(format, args...)
+	p.AccessRefused = errors.Is(err, fs.ErrPermission)
+	return p
+}
+
 // load builds a Component from a manifest and root, verifying every
 // fingerprint.
 func load(kind Kind, m *Manifest, root, registryDir, source string) (*Component, *ComponentError) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return nil, damaged("component folder unreadable: %v", err)
+		return nil, damagedBy(err, "component folder unreadable: %v", err)
 	}
 	c := &Component{Kind: kind, Manifest: m, Root: realRoot, Source: source}
 	exe := filepath.Join(realRoot, filepath.FromSlash(m.Executable))
 	realExe, err := filepath.EvalSymlinks(exe)
 	if err != nil {
-		return nil, damaged("executable missing: %v", err)
+		return nil, damagedBy(err, "executable missing: %v", err)
 	}
 	if !within(realExe, realRoot) {
 		return nil, damaged("executable resolves outside the component folder")
@@ -293,7 +315,7 @@ func load(kind Kind, m *Manifest, root, registryDir, source string) (*Component,
 		reg := filepath.Join(base, filepath.FromSlash(m.Registry))
 		realReg, regErr := filepath.EvalSymlinks(reg)
 		if regErr != nil {
-			return nil, damaged("filtered registry missing: %v", regErr)
+			return nil, damagedBy(regErr, "filtered registry missing: %v", regErr)
 		}
 		c.Registry = realReg
 	}
@@ -311,7 +333,7 @@ func (c *Component) Verify() *ComponentError {
 		p := filepath.Join(c.Root, filepath.FromSlash(name))
 		got, info, err := HashFile(p)
 		if err != nil {
-			return damaged("%s unreadable: %v", name, err)
+			return damagedBy(err, "%s unreadable: %v", name, err)
 		}
 		if got != want {
 			return damaged("%s fingerprint mismatch", name)
@@ -321,7 +343,7 @@ func (c *Component) Verify() *ComponentError {
 	if c.Registry != "" {
 		files, err := HashDir(c.Registry)
 		if err != nil {
-			return damaged("filtered registry unreadable: %v", err)
+			return damagedBy(err, "filtered registry unreadable: %v", err)
 		}
 		if FileListDigest(files) != c.Manifest.RegistrySHA256 {
 			return damaged("filtered registry fingerprint mismatch")
@@ -380,6 +402,13 @@ func NewResolver(home string) (*Resolver, error) {
 	return &Resolver{Home: home, Executable: exe, GOOS: runtime.GOOS}, nil
 }
 
+func (r *Resolver) goos() string {
+	if r.GOOS != "" {
+		return r.GOOS
+	}
+	return runtime.GOOS
+}
+
 // slotName is the packaged folder name of a kind (§10).
 func slotName(kind Kind) string {
 	if kind == KindOffice {
@@ -393,11 +422,7 @@ func slotName(kind Kind) string {
 func (r *Resolver) PackagedCandidates(kind Kind) []string {
 	exeDir := filepath.Dir(r.Executable)
 	slot := slotName(kind)
-	goos := r.GOOS
-	if goos == "" {
-		goos = runtime.GOOS
-	}
-	if goos == "darwin" {
+	if r.goos() == "darwin" {
 		return []string{
 			filepath.Join(exeDir, "..", slot),
 			filepath.Join(exeDir, "..", "..", "..", slot),
@@ -417,7 +442,9 @@ func RegisteredDir(home string, kind Kind) string {
 // Resolve returns the usable component of kind, or a Problem. An
 // operator-registered component wins over a packaged one (it is the
 // operator's explicit choice); a registration that fails verification is
-// reported as damaged and never falls back to another program (AD-4). When
+// reported as damaged and never falls back to another program (AD-4). On
+// Linux a registration outside Omnipus's own folder is refused
+// (StatusOutsideOwn, office-preview spec §3.9 OF-4). When
 // the gateway's confined Linux startup rules are recorded (SetStartupGrants),
 // a folder they do not cover is refused before anything in it is read
 // (CheckStartupGrant, office-preview spec §3.8 BR-2.5).
@@ -432,12 +459,18 @@ func (r *Resolver) Resolve(kind Kind) (*Component, *ComponentError) {
 		if m.Trust != TrustOperatorRegistered {
 			return nil, damaged("registered manifest is not marked operator-registered")
 		}
+		// On Linux a registration outside Omnipus's own folder is refused
+		// before the startup-grant check and before anything in the root
+		// is opened; no packaged copy stands in for it (§3.9 OF-4, AD-4).
+		if p := r.registeredOutsideOwn(m.Root); p != nil {
+			return nil, p
+		}
 		if p := CheckStartupGrant(m.Root); p != nil {
 			return nil, p
 		}
 		return load(kind, m, m.Root, regDir, "registered: "+m.Root)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, damaged("registered manifest unreadable: %v", err)
+		return nil, damagedBy(err, "registered manifest unreadable: %v", err)
 	}
 	for _, cand := range r.PackagedCandidates(kind) {
 		manifest := filepath.Join(cand, ManifestFile)
@@ -454,7 +487,7 @@ func (r *Resolver) Resolve(kind Kind) (*Component, *ComponentError) {
 			continue
 		}
 		if err != nil {
-			return nil, damaged("packaged manifest unreadable: %v", err)
+			return nil, damagedBy(err, "packaged manifest unreadable: %v", err)
 		}
 		m, parseErr := ParseManifest(data, kind)
 		if parseErr != nil {

@@ -35,15 +35,18 @@ func checkDocumentPreview(cfg *config.Config) []warning {
 			name      string
 			effect    string
 			reinstall string
+			insideOwn string
 		}{
 			{component.KindPDFRenderer, "WARN-PREVIEW-001", "PDF renderer",
 				"PDF previews send the PDF or its text, without page images",
-				"register an unpacked renderer release with `omnipus pdf-renderer register <folder>`"},
+				"register an unpacked renderer release with `omnipus pdf-renderer register <folder>`",
+				"register an unpacked renderer release"},
 			{component.KindOffice, "WARN-PREVIEW-002", "LibreOffice",
 				"Office previews are refused; PDF previews still work",
-				"register LibreOffice 26.8 with `omnipus office register <folder>`"},
+				"register LibreOffice 26.8 with `omnipus office register <folder>`",
+				"register LibreOffice 26.8"},
 		} {
-			if msg := componentProblem(resolver, roots, c.kind, c.name, c.effect, c.reinstall); msg != "" {
+			if msg := componentProblem(resolver, roots, c.kind, c.name, c.effect, c.reinstall, c.insideOwn); msg != "" {
 				warnings = append(warnings, warning{code: c.code, message: msg})
 			}
 		}
@@ -57,14 +60,21 @@ func checkDocumentPreview(cfg *config.Config) []warning {
 	return warnings
 }
 
-func componentProblem(r *component.Resolver, roots []component.WriteRoot, kind component.Kind, name, effect, reinstall string) string {
+// componentProblem returns kind's doctor warning, or "". insideOwn is the
+// register step named when a Linux registration lies outside Omnipus's own
+// folder (office-preview spec §3.9 OF-4).
+func componentProblem(r *component.Resolver, roots []component.WriteRoot, kind component.Kind, name, effect, reinstall, insideOwn string) string {
 	comp, problem := r.Resolve(kind)
 	if problem != nil {
-		if problem.Status == component.StatusMissing {
+		switch problem.Status {
+		case component.StatusMissing:
 			// Not installed is a supported install choice, not a doctor
 			// finding (AD-4, architect ruling 2026-11-01): previews report
 			// it when they are used.
 			return ""
+		case component.StatusOutsideOwn:
+			return fmt.Sprintf("%s is registered outside Omnipus's own folder (%s; on Linux only folders inside %s are used): %s. Remove the registration with `omnipus %s unregister`, or %s from a folder inside %s.",
+				name, problem.Root, problem.Own, effect, kind, insideOwn, problem.Own)
 		}
 		return fmt.Sprintf("%s damaged (%s): %s. Reinstall it or %s.", name, problem.Reason, effect, reinstall)
 	}
