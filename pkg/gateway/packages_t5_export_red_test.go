@@ -10,14 +10,15 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
 	"github.com/stretchr/testify/require"
@@ -421,8 +422,9 @@ func TestPackagesExport_AuditFailure(t *testing.T) {
 	require.NotContains(t, string(got.Body), "omnpkg")
 }
 
-// TestPackages_S1aRefusals is TDD row 33 [S1a only]: external workers and unknown
-// element types are refused on export and on upload (FR-006, FR-010, FR-020).
+// TestPackages_S1aRefusals keeps its historical selection name. TDD row 33
+// replaces external-worker and mixed-unknown refusals with S1b acceptance
+// (FR-006/010/020); the only-unknown no_supported_element refusal stays valid.
 func TestPackages_S1aRefusals(t *testing.T) {
 	t.Run("export external worker with runtime values", func(t *testing.T) {
 		api := packageAPI(t)
@@ -435,7 +437,9 @@ func TestPackages_S1aRefusals(t *testing.T) {
 		}
 		seedListedAgent(t, api, agent)
 		got := callPackageExport(t, api, `{"agent_ids":["ext-1"]}`)
-		requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeExternalWorkerNotSupported)
+		requireS1bExternalExport(t, got, "ext-1", []any{
+			map[string]any{"name": "OPENAI_API_KEY", "used_by": "ext-1", "kind": "executor_env"},
+		})
 	})
 	t.Run("export external worker without runtime values", func(t *testing.T) {
 		api := packageAPI(t)
@@ -447,17 +451,35 @@ func TestPackages_S1aRefusals(t *testing.T) {
 		}
 		seedListedAgent(t, api, agent)
 		got := callPackageExport(t, api, `{"agent_ids":["ext-2"]}`)
-		requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeExternalWorkerNotSupported)
+		requireS1bExternalExport(t, got, "ext-2", []any{})
 	})
 	t.Run("upload external worker with and without runtime values", func(t *testing.T) {
-		api := packageAPI(t)
-		with := externalPackage(t, true)
-		without := externalPackage(t, false)
-		for _, pkg := range [][]byte{with, without} {
-			got := callPackageImport(t, api, pkg)
-			requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeExternalWorkerNotSupported)
-			_, statErr := os.Stat(api.homePath + "/backups/.staging")
-			require.True(t, errors.Is(statErr, os.ErrNotExist), "a refused upload must not keep a staging folder")
+		for _, withRuntime := range []bool{false, true} {
+			api := packageAPI(t)
+			before := snapshotHome(t, api.homePath)
+			prev := stageUpload(t, api, externalPackage(t, withRuntime))
+			requireHomeUnchangedExcept(t, before, snapshotHome(t, api.homePath))
+			require.Len(t, prev.WillAdd, 1, "S1b supports the external worker")
+			require.Equal(t, "agent", prev.WillAdd[0].Type)
+			require.Equal(t, specSourceID, prev.WillAdd[0].SourceId)
+			require.Equal(t, "Coder", prev.WillAdd[0].SourceName)
+			require.Equal(t, "Coder", prev.WillAdd[0].ProposedName)
+			require.False(t, prev.WillAdd[0].Renamed)
+			require.Empty(t, prev.SkippedElements, "supported worker is not skipped")
+			require.Equal(t, []string{prev.StagingId}, packageStagingIDs(t, api.homePath), "accepted upload keeps exactly its ready staging")
+			info, err := os.Stat(filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
+			require.NoError(t, err)
+			require.True(t, info.IsDir(), "ready staging is a real directory")
+			count := 0
+			for _, warning := range prev.Warnings {
+				if warning.Code == s1bRuntimeCode {
+					count++
+					require.NotNil(t, warning.ElementSourceId)
+					require.Equal(t, specSourceID, *warning.ElementSourceId)
+					s1bRequireRuntimeGuidance(t, warning.Message)
+				}
+			}
+			require.Equal(t, 1, count, "FR-043: exactly one runtime-removal warning")
 		}
 	})
 	t.Run("D12-2 only unknown elements is no_supported_element", func(t *testing.T) {
@@ -465,11 +487,65 @@ func TestPackages_S1aRefusals(t *testing.T) {
 		got := callPackageImport(t, api, unknownElementPackage(t))
 		requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeNoSupportedElement)
 	})
-	t.Run("FR-006 agent plus unknown element is element_type_not_supported", func(t *testing.T) {
+	t.Run("FR-006 agent plus unknown element skips unknown", func(t *testing.T) {
 		api := packageAPI(t)
-		got := callPackageImport(t, api, mixedUnknownElementPackage(t))
-		requirePackageStatus(t, got, http.StatusUnprocessableEntity, omnpkg.CodeElementTypeNotSupported)
+		usePackageSeams(t)
+		installRosterReload(t, api, nil)
+		ws := createWorkspaceViaAPI(t, api, "Research", "notes")
+		before := snapshotHome(t, api.homePath)
+		cfgBefore := configBytes(t, api.homePath)
+		prev := stageUpload(t, api, mixedUnknownElementPackage(t))
+		requireHomeUnchangedExcept(t, before, snapshotHome(t, api.homePath))
+		require.Len(t, prev.WillAdd, 1)
+		require.Equal(t, "agent", prev.WillAdd[0].Type)
+		require.Equal(t, specSourceID, prev.WillAdd[0].SourceId)
+		require.Equal(t, "Writer", prev.WillAdd[0].ProposedName)
+		require.Len(t, prev.SkippedElements, 1)
+		require.Equal(t, "skill", prev.SkippedElements[0].Type)
+		require.Equal(t, "writing", prev.SkippedElements[0].SourceId)
+		require.NotNil(t, prev.SkippedElements[0].Name)
+		require.Equal(t, "writing", *prev.SkippedElements[0].Name)
+		got := callPackageApply(t, api, prev.StagingId, applyBody("new", ws))
+		require.Equal(t, http.StatusOK, got.Code, "FR-006 only the supported agent is applied; body=%s", got.Body)
+		res := decodeResult(t, got.Body)
+		require.Len(t, res.Created, 1)
+		require.Equal(t, "agent", res.Created[0].Type)
+		require.Equal(t, specSourceID, res.Created[0].SourceId)
+		require.Equal(t, "Writer", res.Created[0].Name)
+		agents, skipped, err := agentstore.New(api.homePath).List()
+		require.NoError(t, err)
+		require.Empty(t, skipped)
+		require.Len(t, agents, 1, "only the supported agent reaches the store")
+		require.Equal(t, res.Created[0].NewId, agents[0].ID)
+		_, err = os.Stat(filepath.Join(api.homePath, "skills", "writing", "SKILL.md"))
+		require.ErrorIs(t, err, os.ErrNotExist, "unknown skill is not installed")
+		_, err = os.Stat(filepath.Join(api.homePath, "backups", ".staging", prev.StagingId))
+		require.ErrorIs(t, err, os.ErrNotExist, "skipped files disappear with their staging")
+		require.Equal(t, cfgBefore, configBytes(t, api.homePath), "unknown type cannot alter host configuration")
 	})
+}
+
+func requireS1bExternalExport(t *testing.T, got packageHTTP, sourceID string, wantSecrets []any) {
+	t.Helper()
+	require.Equal(t, http.StatusOK, got.Code, "FR-010 S1b external export; body=%s", got.Body)
+	manifest, files := decodePackageBytes(t, got.Body)
+	require.Equal(t, wantSecrets, manifest["needs_secrets"], "FR-014 exact secret-name inventory")
+	require.Equal(t, map[string]any{"agent": float64(1)}, manifest["counts"])
+	require.Len(t, files, 1, "external package contains only agent.json, never SOUL.md")
+	recordPath := agentRecordPath(sourceID)
+	require.Contains(t, files, recordPath)
+	var record map[string]any
+	require.NoError(t, json.Unmarshal(files[recordPath], &record))
+	require.Equal(t, sourceID, record["id"])
+	require.Equal(t, "Coder", record["name"])
+	require.Equal(t, "worker", record["type"])
+	require.Equal(t, map[string]any{"executor": map[string]any{"kind": "external-cli", "cli": "codex"}}, record["subagents"],
+		"FR-012 kind/CLI retained, runtime keys absent")
+	plain := string(decompressZstd(t, got.Body))
+	for _, value := range []string{"sk-TEST-123", "sk-TEST-456"} {
+		require.NotContains(t, string(got.Body), value, "runtime value in compressed package")
+		require.NotContains(t, plain, value, "runtime value in decompressed package")
+	}
 }
 
 // errAuditFailed is the test hook's audit failure. It is not a spec message.

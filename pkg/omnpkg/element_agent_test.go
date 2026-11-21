@@ -1,12 +1,9 @@
 package omnpkg_test
 
-// RED T-2 — element validation for the upload path.
-// Spec: FR-020 (upload runs every format check plus the element rules before
-// answering; an external-worker record is refused before `ready`, with or
-// without runtime values); error table rows invalid_element (bad JSON, type
-// core/system) and external_worker_not_supported_yet; D1 rows 20, 22, 30, 31;
-// BDD "Package declares a core agent", "[S1a only] External-worker package
-// refused at upload".
+// T-2 — element validation for the upload path.
+// Spec: FR-020; invalid_element for bad JSON, core/system and an external
+// worker with SOUL.md (Field mapping). Test-plan row 33 replaces the former
+// S1a-only external-runtime refusal; the other refusal cases remain unchanged.
 
 import (
 	"bytes"
@@ -18,7 +15,7 @@ import (
 )
 
 func TestAgentElement_S1aRefusals(t *testing.T) {
-	t.Run("D1-30/31 external worker refused at upload, with and without runtime values", func(t *testing.T) {
+	t.Run("D1-30/31 external worker with SOUL.md is invalid, with and without runtime values", func(t *testing.T) {
 		for _, withRuntime := range []bool{false, true} {
 			m, files := validManifest(testSourceID, false)
 			rec := baseRecord(testSourceID)
@@ -40,7 +37,7 @@ func TestAgentElement_S1aRefusals(t *testing.T) {
 			manifest, payload, err := omnpkg.ReadPackage(bytes.NewReader(pkg))
 			require.NoError(t, err, "the package format itself is valid")
 			err = omnpkg.ValidateElements(manifest, payload)
-			wantCode(t, err, omnpkg.CodeExternalWorkerNotSupported)
+			wantCode(t, err, omnpkg.CodeInvalidElement)
 		}
 	})
 

@@ -38,7 +38,7 @@ const agentCreateTypeRefusal = "type is required and must be one of Main, Subage
 // REST request type; the generated leaf component types (gen.FallbackModel,
 // gen.AgentColor/Figure/Role) are shared schema parts.
 type agentCreateInput struct {
-	WireType          string // "Main" | "Subagent" | "subagent_3p" (S1a import never sends subagent_3p)
+	WireType          string // "Main" | "Subagent" | "subagent_3p" (package import sends subagent_3p from S1b)
 	Name              string // untrimmed; build trims it
 	Description       *string
 	Soul              string

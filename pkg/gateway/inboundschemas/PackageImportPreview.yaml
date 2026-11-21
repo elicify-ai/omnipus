@@ -108,7 +108,7 @@ properties:
             type: string
   needs_secrets:
     type: array
-    description: Secrets to enter again after the import (S1a lists none).
+    description: Secrets an external worker needs entered again after the import (environment variable names, never values).
     items:
       type: object
       required:
