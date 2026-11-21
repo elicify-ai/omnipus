@@ -155,9 +155,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "medium",
 			"title":          "Sandbox is disabled",
 			"description":    "Filesystem and process sandboxing is not enabled. Agent tool executions run without confinement.",
-			"recommendation": "Go to Settings → Security → Advanced to enable sandbox mode.",
-			"action_link":    "/settings?tab=security",
-			"action_label":   "Open security settings",
+			"recommendation": "Turn on Sandbox mode in Settings → Sandbox & network.",
+			"action_link":    "/settings?tab=sandbox",
+			"action_label":   "Open Sandbox & network",
 		})
 	}
 
@@ -181,9 +181,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "high",
 			"title":          "God-mode is armed",
 			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox's filesystem confinement and network port controls, and opens outbound network access, for every agent's shell tool.",
-			"recommendation": "Go to Settings → Security → Danger zone and turn god-mode off, unless this is intentional.",
-			"action_link":    "/settings?tab=security",
-			"action_label":   "Open security settings",
+			"recommendation": "Turn off God Mode in Settings → Protection, unless you mean to keep it on.",
+			"action_link":    "/settings?tab=protection&focus=god-mode",
+			"action_label":   "Open Protection",
 		})
 	}
 
