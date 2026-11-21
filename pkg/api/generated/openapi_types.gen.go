@@ -17361,7 +17361,7 @@ type DelegateRespondAction struct {
 // DelegateRespondActionAction defines model for DelegateRespondAction.Action.
 type DelegateRespondActionAction string
 
-// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No session is created or replaced by a respond.
+// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn. An external-CLI answer is delivered to the same CLI conversation: applied by interrupt and resume when the run is underway, or queued until the helper finishes starting and then delivered to that conversation; otherwise it is refused. The acknowledgement does not say which of the two happened. No session is created or replaced by a respond.
 type DelegateRespondResponse struct {
 	// Acknowledged True when the response was accepted and routed by `correlation_id`.
 	Acknowledged bool `json:"acknowledged"`
