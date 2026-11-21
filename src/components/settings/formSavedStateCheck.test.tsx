@@ -35,9 +35,16 @@
  *      kept — Performance. GREEN today (the binary path gets this one
  *      right); the test pins it so the four-way fix cannot regress it.
  *   C  running read holds a THIRD value → changed elsewhere, draft kept —
- *      Performance, Providers default model. RED today: the binary check
+ *      Performance, Providers default model, Providers Active transcriber,
+ *      Sandbox allowed folders (R2-02). RED today: the binary check
  *      collapses this onto "not saved", which tells the person their draft
  *      was never stored when in fact someone else changed the value.
+ *      R2-02 additions: every changed-elsewhere case asserts the line's
+ *      EXACT saved value (check mutant N13's "Saved value: 0" fails), the
+ *      Performance case asserts Discard lands on the new saved base, and
+ *      the Sandbox restart-list case pins that a listed key's persisted
+ *      value — not the running read — decides, with the draft kept on top
+ *      and Discard showing the restart-list value.
  *   D  both reads fail → unknown: "1 change may not have been saved" with
  *      Retry — Performance, Providers default model. GREEN today; pinned so
  *      the fix cannot regress it.
@@ -85,6 +92,8 @@ import { PerformanceSection } from './PerformanceSection'
 import { ContextSection } from './ContextSection'
 import { ThirdPartyAgentsSection } from './ThirdPartyAgentsSection'
 import { ProvidersSection } from './ProvidersSection'
+import { IntegrationsSection } from './IntegrationsSection'
+import { SandboxSection } from './SandboxSection'
 import * as api from '@/lib/api'
 
 // cmdk (inside ModelSelector's Command) needs the jsdom stubs the
@@ -152,6 +161,40 @@ const TPA_BEFORE = {
 }
 
 const DEFAULT_MODEL_BEFORE = { provider: 'openrouter', model: 'z-ai/glm-5.2', context_window: 1048576, window_source: 'catalog' }
+
+// The Active-transcriber read (FR-025): three configured voice services, the
+// first active. The changed-elsewhere answer flips the active service to a
+// THIRD id — neither the draft pick nor the pre-save value.
+const INTEGRATIONS_BEFORE = {
+  search: [
+    { id: 'brave', kind: 'search', display_name: 'Brave', configured: true, requires_key: true, usable: true, active: true },
+  ],
+  voice: [
+    { id: 'elevenlabs', kind: 'voice', display_name: 'ElevenLabs', configured: true, requires_key: true, usable: true, active: true },
+    { id: 'speechmatics', kind: 'voice', display_name: 'Speechmatics', configured: true, requires_key: true, usable: true, active: false },
+    { id: 'deepgram', kind: 'voice', display_name: 'Deepgram', configured: true, requires_key: true, usable: true, active: false },
+  ],
+  active_search: 'brave',
+  active_voice: 'elevenlabs',
+  default_search: 'brave',
+  fallback_search: null,
+}
+const INTEGRATIONS_ELSEWHERE = {
+  ...INTEGRATIONS_BEFORE,
+  voice: INTEGRATIONS_BEFORE.voice.map((p) => ({ ...p, active: p.id === 'deepgram' })),
+  active_voice: 'deepgram',
+}
+
+// The Sandbox configuration read (FR-010's editor + C-6's check): one allowed
+// folder. The changed-elsewhere answer holds a THIRD list.
+const SANDBOX_BEFORE = {
+  mode: 'permissive',
+  allowed_paths: ['/a'],
+  ssrf: { allow_internal: [] },
+  requires_restart: false,
+}
+const SANDBOX_ELSEWHERE = { ...SANDBOX_BEFORE, allowed_paths: ['/c'] }
+
 const ANTHROPIC_CONNECTED = {
   status: 'connected',
   auth_method: 'api_key',
@@ -201,6 +244,8 @@ const reads = {
   context: { value: CONTEXT_BEFORE as unknown, fail: false },
   thirdParty: { value: TPA_BEFORE as unknown, fail: false },
   defaultModel: { value: DEFAULT_MODEL_BEFORE as unknown, fail: false },
+  integration: { value: INTEGRATIONS_BEFORE as unknown, fail: false },
+  sandbox: { value: SANDBOX_BEFORE as unknown, fail: false },
 }
 
 // One fixture drives BOTH pending-restart seams. `entries: null` makes both
@@ -253,6 +298,24 @@ vi.mock('@/lib/api', async (importOriginal) => {
       if (reads.defaultModel.fail) throw new Error('default model unreadable')
       return reads.defaultModel.value
     }),
+    fetchIntegrationProviders: vi.fn(async () => {
+      if (reads.integration.fail) throw new Error('integration providers unreadable')
+      return reads.integration.value
+    }),
+    fetchSandboxConfig: vi.fn(async () => {
+      if (reads.sandbox.fail) throw new Error('sandbox config unreadable')
+      return reads.sandbox.value
+    }),
+    // The sandbox editor's status read: a healthy kernel sandbox so the
+    // configuration card renders (the editor is what the check runs on).
+    fetchSandboxStatus: vi.fn(async () => ({
+      backend: 'landlock',
+      available: true,
+      kernel_level: true,
+      policy_applied: true,
+      seccomp_enabled: true,
+      bind_ports_count: 0,
+    })),
     fetchPendingRestart: vi.fn(async () => {
       if (pendingRestart.entries === null) throw new Error('pending-restart unreadable')
       return pendingRestart.entries
@@ -276,6 +339,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     putContextSettings: vi.fn(),
     updateThirdPartyAgentSettings: vi.fn(),
     putDefaultModel: vi.fn(),
+    configureIntegrationProvider: vi.fn(),
+    updateSandboxConfig: vi.fn(),
   }
 })
 
@@ -297,11 +362,15 @@ beforeEach(() => {
   reads.context = { value: CONTEXT_BEFORE, fail: false }
   reads.thirdParty = { value: TPA_BEFORE, fail: false }
   reads.defaultModel = { value: DEFAULT_MODEL_BEFORE, fail: false }
+  reads.integration = { value: INTEGRATIONS_BEFORE, fail: false }
+  reads.sandbox = { value: SANDBOX_BEFORE, fail: false }
   pendingRestart.entries = []
   vi.mocked(api.updatePerformanceSettings).mockRejectedValue(LOST)
   vi.mocked(api.putContextSettings).mockRejectedValue(LOST)
   vi.mocked(api.updateThirdPartyAgentSettings).mockRejectedValue(LOST)
   vi.mocked(api.putDefaultModel).mockRejectedValue(LOST)
+  vi.mocked(api.configureIntegrationProvider).mockRejectedValue(LOST)
+  vi.mocked(api.updateSandboxConfig).mockRejectedValue(LOST)
 })
 
 afterEach(() => {
@@ -389,16 +458,24 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     await waitForWrite(api.updatePerformanceSettings)
     // C-6: saved value 6 is neither the draft 8 nor the pre-save 4 →
     // CHANGED ELSEWHERE (FR-020 outcome 4's third branch): the screen says
-    // so and names the stored value. (The exact rendering of the value is
-    // the fix's choice; the sentence's stable parts are the oracle.)
-    expect(await screen.findByText(/changed somewhere else/i)).toBeInTheDocument()
-    expect(screen.getByText(/Saved value/i)).toBeInTheDocument()
+    // so and names the stored value. R2-02: the value itself is the oracle
+    // (displaySavedValue(6) → "6") — a wrong value shown in the line (check
+    // mutant N13's "Saved value: 0") must fail, not just the line's presence.
+    const elsewhere = await screen.findByText(/changed somewhere else/i)
+    expect(elsewhere.textContent).toContain('Saved value: 6.')
     // The draft stays — the person decides what to do with it (FR-012).
     expect(screen.getByLabelText('Max parallel agents')).toHaveValue('8')
     expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
     expect(screen.queryByText(/Saved, but not in use yet/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/These changes were not saved/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+    // R2-02: discarding the draft shows the NEW saved base — the check's read
+    // became the saved base, so Discard lands on 6. Leaving the stale pre-save
+    // 4 in the field would invite a next Save that silently reverts the other
+    // change (C-6; FR-012's draft semantics).
+    await userEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => expect(screen.getByLabelText('Max parallel agents')).toHaveValue('6'))
+    expect(screen.queryByText(/1 unsaved change/)).not.toBeInTheDocument()
   })
 
   it('Performance, case D — both reads fail: the bar says 1 change may not have been saved, with Retry, and keeps the draft', async () => {
@@ -493,7 +570,9 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     // (round 11, c884413e0c) and lands with its next merge. The oracle
     // stays the spec, not the FE.
     expect(await screen.findByText(/changed somewhere else/i)).toBeInTheDocument()
-    expect(screen.getByText(/Saved value/i)).toBeInTheDocument()
+    // R2-02: the line names the saved pair — the third value's identity is
+    // the oracle, not the line's presence.
+    expect(screen.getByText(/changed somewhere else/i).textContent).toMatch(/Saved value: .*gemini-3-pro/)
     // The draft pick stays on the card and on the bar (FR-012).
     // The draft pick is kept; the provider label's exact rendering follows
     // the catalog (catalogLabel appends the region), so the pair's identity
@@ -529,5 +608,90 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
     expect(screen.queryByText(/These changes were not saved/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/changed somewhere else/i)).not.toBeInTheDocument()
+  })
+
+  it('Providers active transcriber, case C — the read holds a third active service: the section names the change with the exact service and keeps the draft pick (R2-02)', async () => {
+    stubPendingRestartWire()
+    renderWith(<IntegrationsSection />)
+    const select = await screen.findByTestId('active-transcriber')
+    await waitFor(() => expect(select).toHaveValue('elevenlabs'))
+    await userEvent.selectOptions(select, 'speechmatics')
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    // The read the C-6 check will re-issue answers a THIRD active service —
+    // someone else activated Deepgram while the answer was in flight.
+    reads.integration = { value: INTEGRATIONS_ELSEWHERE, fail: false }
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitForWrite(api.configureIntegrationProvider)
+    expect(await screen.findByText(/changed somewhere else/i)).toBeInTheDocument()
+    // The saved value is named exactly: displaySavedValue shows strings raw,
+    // so the line carries the service id itself (R2-02's exact-value oracle).
+    expect(screen.getByText(/changed somewhere else/i).textContent).toContain('Saved value: deepgram.')
+    // The draft pick stays (FR-012) and the bar still counts it.
+    expect(screen.getByTestId('active-transcriber')).toHaveValue('speechmatics')
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.queryByText(/These changes were not saved/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Saved, but not in use yet/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+  })
+
+  it('Sandbox allowed folders, case C — before [/a], draft [/b], the read holds the third list [/c]: the section names the change with the exact list and keeps the draft (R2-02)', async () => {
+    stubPendingRestartWire()
+    renderWith(<SandboxSection />)
+    await screen.findByText('/a')
+    // before [/a] → draft [/b]: Add/Delete stage drafts (FR-010) — delete the
+    // staged /a, add /b. Nothing is sent until Save changes.
+    await userEvent.click(screen.getByRole('button', { name: /delete path \/a/i }))
+    const input = screen.getByRole('textbox', { name: /new allowed path/i })
+    await userEvent.type(input, '/b')
+    await userEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText('/b')).toBeInTheDocument()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    // The read the C-6 check will re-issue answers the third list [/c].
+    reads.sandbox = { value: SANDBOX_ELSEWHERE, fail: false }
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitForWrite(api.updateSandboxConfig)
+    expect(await screen.findByText(/changed somewhere else/i)).toBeInTheDocument()
+    // The saved list is named exactly: displaySavedValue stringifies
+    // non-strings, so the line carries ["/c"] (R2-02's exact-value oracle).
+    expect(screen.getByText(/changed somewhere else/i).textContent).toContain('Saved value: ["/c"].')
+    // The draft list stays in the editor (FR-012) — /b kept, the saved /c
+    // does not displace it.
+    expect(screen.getByText('/b')).toBeInTheDocument()
+    expect(screen.queryByText('/c')).not.toBeInTheDocument()
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.queryByText(/These changes were not saved/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Saved, but not in use yet/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+  })
+
+  it('Sandbox allowed folders on the restart list — the entry\'s persisted value decides, the draft is kept, and Discard shows the restart-list value (R2-02)', async () => {
+    stubPendingRestartWire()
+    // The key IS listed, its persisted_value the third list [/c]; the running
+    // read still holds the pre-save [/a]. C-6: a listed key's saved value is
+    // the entry's persisted_value — if the running read decided, this would
+    // never be changed-elsewhere with [/c], so the exact value proves the
+    // list decided.
+    pendingRestart.entries = [pendingEntry('sandbox.allowed_paths', ['/c'], ['/a'])]
+    renderWith(<SandboxSection />)
+    await screen.findByText('/a')
+    await userEvent.click(screen.getByRole('button', { name: /delete path \/a/i }))
+    const input = screen.getByRole('textbox', { name: /new allowed path/i })
+    await userEvent.type(input, '/b')
+    await userEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText('/b')).toBeInTheDocument()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitForWrite(api.updateSandboxConfig)
+    expect(await screen.findByText(/changed somewhere else/i)).toBeInTheDocument()
+    expect(screen.getByText(/changed somewhere else/i).textContent).toContain('Saved value: ["/c"].')
+    // The sent list stays a draft on top of the saved configuration (FR-012).
+    expect(screen.getByText('/b')).toBeInTheDocument()
+    expect(screen.queryByText('/c')).not.toBeInTheDocument()
+    // Discard abandons the draft: the editor shows the saved configuration —
+    // the restart list's persisted value — not the stale pre-save [/a].
+    await userEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => expect(screen.getByText('/c')).toBeInTheDocument())
+    expect(screen.queryByText('/b')).not.toBeInTheDocument()
+    expect(screen.queryByText(/1 unsaved change/)).not.toBeInTheDocument()
   })
 })
