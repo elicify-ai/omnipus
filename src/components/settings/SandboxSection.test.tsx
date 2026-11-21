@@ -21,8 +21,8 @@
  * cites the FR that replaces it.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -1305,5 +1305,107 @@ describe('sandbox vs workspace-limit copy', () => {
     expect(
       screen.getByText(/does not switch off the shell workspace limit/i),
     ).toBeInTheDocument()
+  })
+})
+
+// ── F03 on the Sandbox section: a newer draft survives a held saved-state read ─
+//
+// Settings redesign #1519 (C-6 / F03; FR-010, FR-011, FR-020, FR-012). The
+// F03 rule this train pinned on Gateway (a newer edit of the same field
+// survives an older in-flight Save) holds on the Sandbox section too, with
+// one more place a refill can erase a draft: the saved configuration itself
+// changes under the typed draft. FR-020's changed-elsewhere branch (the
+// saved-state check reads a THIRD value) makes the check's section read the
+// new saved base, and FR-010/FR-011 keep every unsaved change a draft until
+// it is explicitly saved or discarded — a draft typed while the Save or its
+// saved-state read is pending is a NEWER draft: not sent, so no answer may
+// reset it. FR-012 still sends Discard to the last saved value known to the
+// screen — the check's read, not the pre-save one.
+describe('Sandbox — a newer draft typed while the saved-state check reads keeps (F03/C-6)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('write unknown and the check read held: the mode drafted meanwhile survives the refill, the untouched values take the read, Discard resets every field (FR-010, FR-011, FR-020, FR-012)', async () => {
+    // The saved configuration the section opens on; the field the older Save
+    // sends is Allowed folders (holds ['/a']).
+    vi.mocked(fetchSandboxConfig).mockResolvedValueOnce({ ...baseConfig, allowed_paths: ['/a'] })
+
+    // C-6's one wire read is GET /config/pending-restart (the file read): the
+    // sent key is NOT listed there, so the saved value comes from the section
+    // read (C-6, spec :246). Any other wire fetch is a harness bug.
+    const wireCalls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        wireCalls.push(url)
+        if (url.includes('/config/pending-restart')) return { ok: true, status: 200, json: async () => [] }
+        throw new Error(`unexpected wire fetch ${url}`)
+      }),
+    )
+
+    // The Save's answer is lost (FR-020 outcome 4: a connection failure is an
+    // unknown result), so the section runs the saved-state check — and the
+    // check's section read is the HELD seam: it answers only when released.
+    let releaseCheck!: (config: SandboxConfigResponse) => void
+    const heldRead = new Promise<SandboxConfigResponse>((resolve) => {
+      releaseCheck = resolve
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new TypeError('connection lost'))
+    vi.mocked(fetchSandboxConfig).mockImplementationOnce(() => heldRead)
+
+    renderSection()
+
+    // The person stages an Allowed folders add — the value the older Save sends.
+    await waitFor(() => expect(screen.getByText('/a')).toBeInTheDocument())
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/draft-a' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    // Save: the write rejects (unknown) and the check starts; its read hangs.
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateSandboxConfig).toHaveBeenCalledTimes(1))
+
+    // While the check read is pending, the person types a NEWER draft into a
+    // field the older Save did not send: Sandbox mode → off.
+    fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
+    expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeChecked()
+
+    // The read lands now, changed elsewhere: mode enforce (a value the person
+    // never typed) and Allowed folders ['/elsewhere'] — a third value for the
+    // sent field, neither its draft pair nor the pre-save ['/a'] (FR-020).
+    await act(async () => {
+      releaseCheck({ ...baseConfig, mode: 'enforce', allowed_paths: ['/elsewhere'] })
+    })
+
+    // F03: the newer mode draft SURVIVES the refill — the field keeps it and
+    // the bar still counts it alongside the kept sent draft (2 unsaved
+    // changes). The sent field keeps its draft and names the third saved
+    // value in the exact FR-020 line (a list is shown as its JSON).
+    expect(
+      await screen.findByText(
+        'This setting was changed somewhere else while you were saving. Saved value: ["/elsewhere"].',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('radio', { name: /sandbox mode: off/i }),
+      'F03: the draft typed during the pending read must survive it',
+    ).toBeChecked()
+    expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).not.toBeChecked()
+    expect(screen.getByText('/draft-a')).toBeInTheDocument()
+    expect(screen.getByText(/2 unsaved changes/)).toBeInTheDocument()
+
+    // FR-012: Discard still resets EVERY field — to the check's read (the
+    // last saved value known to the screen), not to the pre-save values.
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).toBeChecked()
+      expect(screen.getByText('/elsewhere')).toBeInTheDocument()
+      expect(screen.queryByText('/draft-a')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    // The check really consulted the C-6 file read, not the running read alone.
+    expect(wireCalls.some((u) => u.includes('/config/pending-restart'))).toBe(true)
   })
 })
