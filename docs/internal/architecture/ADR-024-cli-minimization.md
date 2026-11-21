@@ -1,5 +1,18 @@
 # ADR-024 — CLI Minimization: a thin one-shot task-runner over the engine
 
+## Corrected 2026-11-21 — the 2026-11-19 owner-command list is not complete (architect; office-preview spec §3.9, architect gate A6)
+
+The 2026-11-19 amendment below reads as a complete list ("Besides chat and `records`, the CLI may run the owner commands `export`, `import` and `package inspect` / `package verify`"). The tree contradicts that reading: `pkg/app/app.go::NewRootCommand` also registers operator commands that this ADR never names, and `pkg/app/app_test.go::TestNewRootCommand_KeptCommandsPresent` pins them. None of them moves engine logic into the CLI, so D1 holds; the list was incomplete, not the commands unsanctioned. Correct reading: besides chat, the CLI runs D5's bootstrap commands (`onboard`, `start`, `credentials`), `stop`, D6's kept `gateway` alias, `version`, the 2026-11-19 owner commands, and these operator commands:
+
+| Command | What it does | Where |
+|---|---|---|
+| `office register` / `office unregister`, `pdf-renderer register` / `pdf-renderer unregister` | Operator-only registration of the document preview programs (office-preview spec FR-042): checks and fingerprints the named folder without running anything in it, and writes only into `$OMNIPUS_HOME/system/components/<kind>/` (the registered manifest and, on macOS, the filtered LibreOffice services registry); on Linux it accepts only a folder inside Omnipus's own folder (office-preview spec §3.9 OF-3) | `pkg/app/internal/components/command.go` |
+| `browser` | Manages the browser install the gateway uses (provision, inspect) | `pkg/app/internal/browser` |
+| `doctor` | Checks the configuration and the installed components for common security and safety issues | `pkg/app/internal/doctor` |
+| `audit` | Inspects the security audit log and verifies its chain | `pkg/app/internal/audit` |
+
+A later command is added to this list by a dated amendment of this ADR, not by implication.
+
 ## Amended 2026-11-19 — agent packages (ADR-export-import-packages A1)
 
 Besides chat and `records`, the CLI may run the owner commands `export`, `import` and `package inspect` / `package verify`. `export` and `import` are thin gateway clients: they call the REST endpoints with the CLI token and never read or write the data folder themselves, except `cli.token` and the gateway address (read from `config.json`'s `gateway.port` when it is needed). `package inspect` and `package verify` read only the package file the owner names, need no gateway and write nothing. No other engine logic moves into the CLI. Precedent: the `records` owner command.

@@ -58,7 +58,7 @@ func (t *ExecTool) ChildPATH(ctx context.Context) string {
 	var doc documentEnvLayer
 	if t.documentRuntime != nil {
 		layout := t.turnDocumentLayout(baseDir)
-		if _, err := documentruntime.ConverterServiceOverride(layout); err == nil {
+		if err := documentruntime.Ready(layout); err == nil {
 			doc = documentEnvLayer{layout: layout, ok: true}
 		}
 	}

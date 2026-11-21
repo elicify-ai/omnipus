@@ -2,20 +2,10 @@ package documentruntime
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
-
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // macOS LibreOffice registers a native spell checker,
@@ -36,11 +26,6 @@ import (
 const converterRegistryNamespace = "http://openoffice.org/2010/uno-components"
 
 const macSpellCheckerImplementation = "org.openoffice.lingu.MacOSXSpellChecker"
-
-const (
-	converterServiceDirName = "libreoffice-services"
-	converterServiceRdbName = "services.rdb"
-)
 
 // registryNode records one element's source span during the single parse
 // pass behind filterMacSpellChecker; the spans feed the byte-exact excision.
@@ -238,313 +223,6 @@ func verifyFilteredRegistry(data []byte, wantImpls, wantComps int) error {
 	return nil
 }
 
-// ConverterServiceRegistryDir is the stable registry root. The active file
-// selects an immutable generation; older generations remain available to
-// converter processes that already received their URL.
-func ConverterServiceRegistryDir(layout Layout) string {
-	return filepath.Join(layout.Lib, converterServiceDirName)
-}
-
-// ConverterServiceOverride returns only a validated, immutable registry URL.
-// A missing root means services were never configured. Once initialized,
-// missing pointers or generations are errors, never a stock-registry fallback.
-func ConverterServiceOverride(layout Layout) (string, error) {
-	root := ConverterServiceRegistryDir(layout)
-	info, err := os.Lstat(root)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("inspect converter registry root: %w", err)
-	}
-	if !info.IsDir() {
-		return "", errors.New("converter registry root is not a directory")
-	}
-	active := filepath.Join(root, "active")
-	info, err = os.Lstat(active)
-	if err != nil {
-		return "", fmt.Errorf("read active converter registry: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Size() != sha256.Size*2 {
-		return "", errors.New("invalid active converter registry pointer")
-	}
-	data, err := os.ReadFile(active)
-	if err != nil {
-		return "", fmt.Errorf("read active converter registry: %w", err)
-	}
-	name := string(data)
-	decoded, err := hex.DecodeString(name)
-	if err != nil || len(decoded) != sha256.Size || strings.ToLower(name) != name {
-		return "", errors.New("invalid active converter registry pointer")
-	}
-	dir := filepath.Join(root, name)
-	if err := verifyConverterGeneration(dir, name); err != nil {
-		return "", err
-	}
-	return "<" + (&url.URL{Scheme: "file", Path: dir}).String() + ">*", nil
-}
-
-// PrepareConverterServiceRegistry validates and stores a new immutable
-// generation without changing the active selection. Call the returned commit
-// only after other runtime validation and manifest writes succeed. Abandoned
-// generations are harmless and are retained for in-flight readers.
-func PrepareConverterServiceRegistry(layout Layout, converter string) (func() error, error) {
-	return prepareConverterServiceRegistry(layout, converter, runtime.GOOS)
-}
-
-// MaterializeConverterServiceRegistry prepares and commits a filtered registry.
-func MaterializeConverterServiceRegistry(layout Layout, converter string) error {
-	return materializeConverterServiceRegistry(layout, converter, runtime.GOOS)
-}
-
-func materializeConverterServiceRegistry(layout Layout, converter, goos string) error {
-	commit, err := prepareConverterServiceRegistry(layout, converter, goos)
-	if err != nil {
-		return err
-	}
-	return commit()
-}
-
-func prepareConverterServiceRegistry(layout Layout, converter, goos string) (func() error, error) {
-	if goos != "darwin" {
-		return func() error { return nil }, nil
-	}
-	services, ok, err := converterBundleServicesDir(converter)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return func() error { return nil }, nil
-	}
-	entries, err := os.ReadDir(services)
-	if err != nil {
-		return nil, fmt.Errorf("read converter services registry: %w", err)
-	}
-	dst := ConverterServiceRegistryDir(layout)
-	if err = os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return nil, fmt.Errorf("create document lib directory: %w", err)
-	}
-	stage, err := os.MkdirTemp(filepath.Dir(dst), "."+converterServiceDirName+".stage-")
-	if err != nil {
-		return nil, fmt.Errorf("stage converter services registry: %w", err)
-	}
-	defer os.RemoveAll(stage)
-	sawRdb := false
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".rdb" {
-			continue
-		}
-		if entry.IsDir() {
-			return nil, fmt.Errorf("converter registry %s is not a regular file", entry.Name())
-		}
-		sawRdb = true
-		var data []byte
-		if data, err = os.ReadFile(filepath.Join(services, entry.Name())); err != nil {
-			return nil, fmt.Errorf("read converter registry %s: %w", entry.Name(), err)
-		}
-		if entry.Name() == converterServiceRdbName {
-			if data, _, err = filterMacSpellChecker(data); err != nil {
-				return nil, err
-			}
-		}
-		if writeErr := fileutil.WriteFileAtomic(filepath.Join(stage, entry.Name()), data, 0o644); writeErr != nil {
-			return nil, fmt.Errorf("write converter registry %s: %w", entry.Name(), writeErr)
-		}
-	}
-	if !sawRdb {
-		return nil, fmt.Errorf("converter services registry %s carries no .rdb files", services)
-	}
-	if err = os.Chmod(stage, 0o755); err != nil {
-		return nil, fmt.Errorf("open staged converter services registry: %w", err)
-	}
-	usable, err := converterServiceRegistryUsable(stage)
-	if err != nil {
-		return nil, fmt.Errorf("staged converter services registry unusable: %w", err)
-	}
-	if !usable {
-		return nil, errors.New("staged converter services registry is absent")
-	}
-
-	name, err := converterGenerationDigest(stage)
-	if err != nil {
-		return nil, err
-	}
-	if err = os.MkdirAll(dst, 0755); err != nil {
-		return nil, fmt.Errorf("create converter registry root: %w", err)
-	}
-	info, err := os.Lstat(dst)
-	if err != nil || !info.IsDir() {
-		return nil, errors.New("converter registry root is not a directory")
-	}
-	generation := filepath.Join(dst, name)
-	if err := os.Rename(stage, generation); err != nil {
-		// Another writer or previous preparation may already have stored the exact
-		// same immutable content. Verify it rather than replacing its directory.
-		if verifyErr := verifyConverterGeneration(generation, name); verifyErr != nil {
-			return nil, fmt.Errorf("publish converter registry generation: %w (%w)", err, verifyErr)
-		}
-	}
-	if err := verifyConverterGeneration(generation, name); err != nil {
-		return nil, err
-	}
-	return func() error {
-		if err := verifyConverterGeneration(generation, name); err != nil {
-			return err
-		}
-		if err := fileutil.WriteFileAtomic(filepath.Join(dst, "active"), []byte(name), 0644); err != nil {
-			return fmt.Errorf("publish active converter registry: %w", err)
-		}
-		return nil
-	}, nil
-}
-
-func verifyConverterGeneration(dir, name string) error {
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return fmt.Errorf("inspect converter registry generation: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("converter registry generation is not a directory")
-	}
-	usable, err := converterServiceRegistryUsable(dir)
-	if err != nil {
-		return err
-	}
-	if !usable {
-		return errors.New("converter registry generation is absent")
-	}
-	digest, err := converterGenerationDigest(dir)
-	if err != nil {
-		return err
-	}
-	if digest != name {
-		return errors.New("converter registry generation checksum mismatch")
-	}
-	return nil
-}
-
-func converterGenerationDigest(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", fmt.Errorf("read converter registry generation: %w", err)
-	}
-	h := sha256.New()
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".rdb" {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return "", err
-		}
-		if !info.Mode().IsRegular() {
-			return "", fmt.Errorf("converter registry %s is not a regular file", entry.Name())
-		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(h, "%d:%s:%d:", len(entry.Name()), entry.Name(), len(data))
-		h.Write(data)
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// converterBundleServicesDir maps a converter executable inside a macOS app
-// bundle (Contents/MacOS/soffice, following the bin/ symlink the installer
-// publishes) to its Contents/Resources/services directory. A converter
-// outside that shape is a supported flat layout and reports ok=false, so
-// fixture and non-bundle installs keep stock behavior. A converter under
-// Contents/MacOS declares a bundle, so an unreadable services registry is a
-// broken install that errors instead of masquerading as a flat no-op.
-func converterBundleServicesDir(converter string) (string, bool, error) {
-	resolved, err := filepath.EvalSymlinks(converter)
-	if err != nil {
-		return "", false, fmt.Errorf("resolve converter executable: %w", err)
-	}
-	macOS := filepath.Dir(resolved)
-	if filepath.Base(macOS) != "MacOS" || filepath.Base(filepath.Dir(macOS)) != "Contents" {
-		return "", false, nil
-	}
-	services := filepath.Join(filepath.Dir(macOS), "Resources", "services")
-	info, err := os.Stat(services)
-	if err != nil {
-		return "", false, fmt.Errorf("read converter app bundle services registry: %w", err)
-	}
-	if !info.IsDir() {
-		return "", false, errors.New("converter app bundle services registry is not a directory")
-	}
-	return services, true, nil
-}
-
-// converterServiceRegistryUsable reports whether dir holds a complete
-// managed registry: at least one .rdb file and a non-empty regular
-// services.rdb. Absence (fs.ErrNotExist) is the one clean "not managed"
-// answer; every other failure is returned so callers refuse to advertise or
-// publish an incomplete registry.
-func converterServiceRegistryUsable(dir string) (bool, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("inspect converter services registry: %w", err)
-	}
-	if !info.IsDir() {
-		return false, errors.New("converter services registry is not a directory")
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false, fmt.Errorf("read converter services registry: %w", err)
-	}
-	hasRdb := false
-	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".rdb" {
-			hasRdb = true
-		}
-	}
-	if !hasRdb {
-		return false, errors.New("converter services registry carries no .rdb files")
-	}
-	rdbPath := filepath.Join(dir, converterServiceRdbName)
-	rdb, err := os.Stat(rdbPath)
-	if err != nil {
-		return false, fmt.Errorf("inspect converter %s: %w", converterServiceRdbName, err)
-	}
-	if !rdb.Mode().IsRegular() || rdb.Size() == 0 {
-		return false, fmt.Errorf("converter %s is not a non-empty regular file", converterServiceRdbName)
-	}
-	data, err := os.ReadFile(rdbPath)
-	if err != nil {
-		return false, fmt.Errorf("read converter %s: %w", converterServiceRdbName, err)
-	}
-	if err := validateManagedRegistry(data); err != nil {
-		return false, fmt.Errorf("validate converter %s: %w", converterServiceRdbName, err)
-	}
-	// The directory wildcard advertises every companion registry to UNO.
-	// Validate each one before either publishing or returning the override.
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".rdb" || entry.Name() == converterServiceRdbName {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return false, fmt.Errorf("inspect converter %s: %w", entry.Name(), err)
-		}
-		if !info.Mode().IsRegular() || info.Size() == 0 {
-			return false, fmt.Errorf("converter %s is not a non-empty regular file", entry.Name())
-		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			return false, fmt.Errorf("read converter %s: %w", entry.Name(), err)
-		}
-		if err := validateManagedRegistry(data); err != nil {
-			return false, fmt.Errorf("validate converter %s: %w", entry.Name(), err)
-		}
-	}
-	return true, nil
-}
-
 // validateManagedRegistry verifies the properties that make services.rdb safe
 // to advertise to LibreOffice. It intentionally has no expected-count input:
 // readiness cares that the published XML is structurally usable and that the
@@ -608,4 +286,20 @@ func validateManagedRegistry(data []byte) error {
 		return errors.New("managed converter registry has no implementations")
 	}
 	return nil
+}
+
+// FilterConverterRegistry produces the filtered services.rdb that ships in
+// the Office preview component manifest (office-preview spec AD-3): the
+// macOS spell-checker registration is excised and the result must still be a
+// structurally usable registry without that identity. Packaging runs it once
+// on the pinned bundle; no runtime registry store exists any more.
+func FilterConverterRegistry(data []byte) ([]byte, error) {
+	out, _, err := filterMacSpellChecker(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateManagedRegistry(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

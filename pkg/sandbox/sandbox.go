@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -23,6 +24,18 @@ const (
 	AccessRead    uint64 = 1 << 0
 	AccessWrite   uint64 = 1 << 1
 	AccessExecute uint64 = 1 << 2
+
+	// AccessMakeSocketRemoveFile lets the program create Unix sockets, and
+	// remove or rename entries that are not folders, beneath the rule's
+	// path — nothing else: no reading, listing or writing, and no creating
+	// regular files, folders, links, pipes or devices (office-preview spec
+	// §3.6 D3, Linux converter variant C). Linux maps it to exactly the
+	// Landlock MAKE_SOCK and REMOVE_FILE rights (both ABI v1). The macOS
+	// profile renderer refuses a rule carrying it — there is no Seatbelt
+	// rendering, so the start fails closed instead of losing the rule
+	// silently — and Windows has no file rules. It is never a subset of
+	// AccessWrite, which grants every write-class right.
+	AccessMakeSocketRemoveFile uint64 = 1 << 3
 )
 
 // PathRule describes filesystem access for a single path.
@@ -195,6 +208,26 @@ type SandboxPolicy struct {
 	// network allows instead of (deny network*) plus a port list. Set only by
 	// the God Mode floor derivation.
 	NetworkUnhandled bool
+
+	// LookupOnlyPaths are absolute, cleaned DIRECTORY paths a sandboxed child
+	// may look up but not open: it may learn that the folder exists and read
+	// its attributes (kind, permissions, owner, size, times), and nothing
+	// else — no listing, no reading, nothing below it. Set only by the
+	// document-preview converter for the folders above its own listed folders
+	// (office-preview spec §3.4 D8d): LibreOffice resolves the real path of
+	// its program, registry and profile folders and fails to start when it
+	// cannot look up each folder on the way.
+	//
+	// macOS renders each entry as exactly one
+	// (allow file-read-metadata (literal "<folder>")) line among the allows;
+	// literal matches that one path only. An entry that is not absolute and
+	// cleaned aborts the render, so the spawn does not happen. Entries are not
+	// an allow for the "zero allows" refusal.
+	//
+	// Linux and Windows ignore the field and never turn it into a grant:
+	// Landlock cannot restrict stat(2) or chdir(2), so a confined program can
+	// already look up any path it can name, and Windows has no file isolation.
+	LookupOnlyPaths []string
 }
 
 // FilesystemModel selects how the sandbox treats reads and program execution.
@@ -516,7 +549,95 @@ func DefaultPolicy(
 // Everything else is unchanged: $OMNIPUS_HOME, /tmp, $TMPDIR, allowed_paths,
 // /dev/null and /dev/shm keep exactly the access they had. Writes are confined
 // under both models.
+//
+// This is the BOOT set. On Linux under the confined model it also carries
+// confinedBootExtraReads (founder Q1 B), so there confined is the pre-ADR-062
+// policy plus those three reads; DefaultPolicy still delegates here, so it and
+// the confined model stay identical by construction. The per-turn policy
+// built by DeriveKernelPolicy starts from basePolicyForModel and does not
+// carry them.
 func DefaultPolicyForModel(
+	model FilesystemModel,
+	homePath string,
+	allowedPaths []string,
+	allowedExecPaths []string,
+	warnFn func(msg string, path string),
+	bindPorts []uint16,
+) SandboxPolicy {
+	return DefaultBootPolicyForModel(model, homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts, nil)
+}
+
+// DefaultBootPolicyForModel is DefaultPolicyForModel plus the Office preview
+// startup grants (office-preview spec §3.8 BR-2.2, founder Q100 A). Only the
+// gateway startup calls it with grants; DefaultPolicyForModel delegates here
+// with startupGrants = nil, so no other caller can receive them, and
+// basePolicyForModel (and with it DeriveKernelPolicy and every per-turn or
+// tool policy) never sees them (BR-2.4).
+//
+// On Linux under the confined model each accepted grant becomes one
+// read+execute rule, appended after every other rule in the order given; a
+// path listed twice is granted once. Refusals reuse buildExecPathRules's
+// rules (BR-2.3, see ClassifyStartupGrant): a refused entry gets no rule and
+// one warning. The open model, macOS and Windows ignore startupGrants, so
+// their result is identical to the result without it.
+func DefaultBootPolicyForModel(
+	model FilesystemModel,
+	homePath string,
+	allowedPaths []string,
+	allowedExecPaths []string,
+	warnFn func(msg string, path string),
+	bindPorts []uint16,
+	startupGrants []string,
+) SandboxPolicy {
+	policy := basePolicyForModel(model, homePath, allowedPaths, allowedExecPaths, warnFn, bindPorts)
+	if model != FilesystemModelOpen && runtime.GOOS == "linux" {
+		policy.FilesystemRules = append(policy.FilesystemRules, confinedBootExtraReads...)
+		policy.FilesystemRules = append(policy.FilesystemRules,
+			buildStartupGrantRules(startupGrants, WritableRoots(policy), warnFn)...)
+	}
+	return policy
+}
+
+// confinedBootExtraReads are the reads the Linux confined BOOT set adds for
+// the Office preview converter (issue #1713, founder decision "Q1 B",
+// 2026-11-18). Landlock domains stack, so a converter started from a thread
+// that carries the gateway's boot layer is refused anything the boot set
+// lacks, whatever its own rules grant. A measured trace (600 real LibreOffice
+// conversions, kernel 6.12, Landlock ABI 6) showed the converter child, not
+// the gateway, needs exactly these three:
+//
+//   - /etc/passwd (read-file): LibreOffice looks the user up to name its
+//     per-user control socket. Refused, the socket name loses the uid and the
+//     socket is created mode 0777, open to every local account during a
+//     conversion.
+//   - /usr/share/fonts (read-file + read-dir; a folder rule covers the tree):
+//     refused, system fonts vanish: CJK lines render blank, named fonts are
+//     substituted and the extracted text is garbled.
+//   - /usr/local/share/fonts (the same, only where it exists): fonts installed
+//     there are lost. A missing path is skipped at Apply like any other
+//     missing system path (ENOENT).
+//
+// AccessRead only, never AccessExecute: these are data, and nothing here is
+// loaded as code. The Linux backend drops the folder-only rights on the
+// /etc/passwd file rule, so its effective grant is read-file.
+//
+// Measured as NOT needed, and deliberately left out: /etc/fonts (fontconfig's
+// built-in defaults still find both font folders) and /etc/ld.so.cache (the
+// loader falls back to its default library folders).
+//
+// One slice, consumed only by DefaultPolicyForModel: sec3 (per-thread boot
+// coverage) treats the Q1 B reads as this single parameter. macOS and Windows
+// do not use it, and the open model already reads everything.
+var confinedBootExtraReads = []PathRule{
+	{Path: "/etc/passwd", Access: AccessRead},
+	{Path: "/usr/share/fonts", Access: AccessRead},
+	{Path: "/usr/local/share/fonts", Access: AccessRead},
+}
+
+// basePolicyForModel builds the rules DefaultPolicyForModel and
+// DeriveKernelPolicy share: everything described on DefaultPolicyForModel
+// except confinedBootExtraReads, which belong to the boot set only.
+func basePolicyForModel(
 	model FilesystemModel,
 	homePath string,
 	allowedPaths []string,
@@ -568,6 +689,11 @@ func DefaultPolicyForModel(
 	// Read-only system dependencies required by the gateway at runtime.
 	// Missing paths (e.g. /lib64 on ARM64) are silently skipped by
 	// Apply() with a warning log; the remaining rules still succeed.
+	//
+	// Every entry here is granted read AND execute and reaches the per-turn
+	// policy too. The Office converter's Q1 B reads (/etc/passwd and the font
+	// folders) are deliberately NOT here: they are read-only, Linux-only and
+	// boot-only — see confinedBootExtraReads.
 	readOnlySystem := []string{
 		"/proc", // Chromium needs /proc/sys/fs/inotify/* and /proc/<pid>/* across processes.
 		"/proc/self",

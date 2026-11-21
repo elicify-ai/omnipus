@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
@@ -296,7 +295,7 @@ func TestBashForegroundChildEnvScrubbedWhenGenericLayerComposesWithoutDocLayer(t
 }
 
 // TestBashForegroundChildEnvScrubbedWhenDocRuntimeBroken proves R1 with a
-// WIRED but BROKEN document runtime (corrupt converter registry): the
+// WIRED but BROKEN document runtime (corrupt manifest, AD-3/T-42): the
 // truthful notice must accompany the result and the child env must stay
 // scrubbed while the generic layer composes.
 func TestBashForegroundChildEnvScrubbedWhenDocRuntimeBroken(t *testing.T) {
@@ -309,11 +308,7 @@ func TestBashForegroundChildEnvScrubbedWhenDocRuntimeBroken(t *testing.T) {
 	ws, wsBin := workspaceEnvFixture(t)
 
 	layout := provisionLayout(t, home, "mia")
-	registry := documentruntime.ConverterServiceRegistryDir(layout)
-	if err := os.MkdirAll(registry, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(registry, "services.rdb"), []byte(`<components>`), 0o644); err != nil {
+	if err := os.WriteFile(layout.Manifest, []byte(`{"revision":`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	tool, err := NewExecToolWithDeps(ws, true, nil, ExecToolDeps{GodMode: false})

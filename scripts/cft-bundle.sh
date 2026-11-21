@@ -5,7 +5,13 @@
 # adds windows.
 #
 # Per-arch invocation:
-#   cft-bundle.sh <ARCH> [GOOS]    (GOOS defaults to linux)
+#   cft-bundle.sh <ARCH> [GOOS] [STAGE]
+#     GOOS defaults to linux; STAGE (the chromium/ folder to fill) defaults
+#     to dist/chromium. .goreleaser.yaml passes a per-platform STAGE,
+#     build/chromium/<os>_<arch>/chromium (#1913): GoReleaser runs every
+#     build hook before it packs any archive, so one shared dist/chromium
+#     held only the last platform's Chrome, and the old archive pattern
+#     `chromium/**/*` (relative to the repository root) matched nothing.
 #   1. Fetch the live CfT "last-known-good-versions-with-downloads.json"
 #      manifest (same URL pkg/tools/browser/installer.go's cftManifestURL
 #      uses at runtime).
@@ -136,11 +142,9 @@ case "$CFT_PLATFORM" in
   mac-x64)      EXTRACT_SUBDIR="chrome-mac-x64" ;;
 esac
 
-# Stage under dist/chromium/ so goreleaser's `archives.files: chromium/**/*`
-# picks it up. Wipe any previous-arch payload first so a build matrix that
-# includes both amd64 (bundled) and arm64 (no CfT) doesn't leak amd64
-# chrome into the arm64 archive.
-STAGE="dist/chromium"
+# Stage under the per-platform folder .goreleaser.yaml packs (see the
+# header). Wipe any previous payload in it first.
+STAGE="${3:-dist/chromium}"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 

@@ -82,7 +82,7 @@ func TestNewAgentInstanceWiresDocumentRuntimeForAllNativeAgents(t *testing.T) {
 func TestNewAgentLoopDocumentSkillPublishesProvisionedRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
-	registryFolder := filepath.Join(home, "skills", "elicify-docx")
+	registryFolder := filepath.Join(home, "skills", "elicify-office")
 	if err := os.MkdirAll(registryFolder, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -107,9 +107,9 @@ func TestNewAgentLoopDocumentSkillPublishesProvisionedRuntime(t *testing.T) {
 			t.Fatalf("agent %q Skill has type %T", id, skill)
 		}
 		registered.SetResolver(func(context.Context, string) tools.SkillLoadOutcome {
-			return tools.SkillLoadOutcome{Status: tools.SkillLoadLoaded, Content: "document instructions", CanonicalSlug: "elicify-docx", Folder: registryFolder}
+			return tools.SkillLoadOutcome{Status: tools.SkillLoadLoaded, Content: "document instructions", CanonicalSlug: "elicify-office", Folder: registryFolder}
 		}, func(context.Context, string) bool { return true }, nil)
-		result := skill.Execute(tools.WithAgentID(context.Background(), id), map[string]any{"name": "elicify-docx"})
+		result := skill.Execute(tools.WithAgentID(context.Background(), id), map[string]any{"name": "elicify-office"})
 		if result.IsError {
 			t.Fatalf("agent %q document skill load failed: %s", id, result.ForLLM)
 		}
@@ -155,7 +155,7 @@ func TestProvisionFirstPartyPreservesFinalizedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest.Python, manifest.Node, manifest.Converter = "/ready/python", "/ready/node", "/ready/soffice"
+	manifest.Python, manifest.Node = "/ready/python", "/ready/node" // AD-3: no converter contract.
 	data, _ := json.Marshal(manifest)
 	if err = os.WriteFile(layout.Manifest, data, 0o644); err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestProvisionFirstPartyPreservesFinalizedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Python != manifest.Python || got.Node != manifest.Node || got.Converter != manifest.Converter {
+	if got.Python != manifest.Python || got.Node != manifest.Node {
 		t.Fatalf("ready paths erased: %+v", got)
 	}
 }

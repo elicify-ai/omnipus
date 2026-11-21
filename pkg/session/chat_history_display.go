@@ -27,6 +27,11 @@ type HistoryResultDisplay struct {
 	// Media is the full value's "media" member, present when HasMedia.
 	Media    any
 	HasMedia bool
+	// Presentation and PreviewGroup are the full value's "presentation" and
+	// "preview" members: a preview_document result that a page shortens must
+	// still replay as its thumbnail group (office-preview spec §5.2).
+	Presentation string
+	PreviewGroup any
 	// ChildSessionID is the full value's top-level "session_id" string,
 	// verbatim (possibly blank); empty when absent or not a string.
 	ChildSessionID string
@@ -233,6 +238,8 @@ func historyResultDisplay(result map[string]any) (HistoryResultDisplay, bool, er
 	// encoding and the preview would keep that copy alive (SEC-1).
 	d := HistoryResultDisplay{Preview: string(encoded[:historyUTF8Cut(encoded, ChatHistoryResultPreviewBytes)]), OriginalSizeBytes: len(encoded), SavedReservedKey: historySavedReservedKey(result)}
 	d.Media, d.HasMedia = result["media"]
+	d.Presentation, _ = result["presentation"].(string)
+	d.PreviewGroup = result["preview"]
 	if sid, ok := result["session_id"].(string); ok {
 		d.ChildSessionID = sid
 	}
@@ -387,6 +394,18 @@ func historyResultDisplayStandIns(result map[string]any, ins *historyStandIns) (
 			return d, errHistoryStandInUnresolved // media is shown whole
 		}
 		d.Media, d.HasMedia = media, true
+	}
+	if presentation, ok := result["presentation"].(string); ok {
+		if ins.inValue(presentation) {
+			return d, errHistoryStandInUnresolved
+		}
+		d.Presentation = presentation
+	}
+	if group, ok := result["preview"]; ok {
+		if ins.inValue(group) {
+			return d, errHistoryStandInUnresolved // the group record is shown whole
+		}
+		d.PreviewGroup = group
 	}
 	if sid, ok := result["session_id"].(string); ok {
 		if ins.inValue(sid) {

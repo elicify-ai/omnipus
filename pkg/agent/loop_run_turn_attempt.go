@@ -57,6 +57,10 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 		if imageErr != nil {
 			return nil, imageErr
 		}
+		messagesForCall, imageErr = attachTurnDocumentPreviews(ctx, messagesForCall, rt.documentPreviews, rt.previewForms(cat, providerName, model, budget))
+		if imageErr != nil {
+			return nil, imageErr
+		}
 		// Issue #1435 R1: ordinary inline image media (fresh tool results
 		// and history replays alike) must fit THIS candidate's budget at
 		// the actual send boundary — admission fitting used the tool
@@ -64,10 +68,18 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 		// being attempted. Request-local copy; canonical history bytes are
 		// untouched (the R1 send matrix pins that).
 		messagesForCall = fitOrdinaryImageMediaToBudget(messagesForCall, budget)
+		// B-10: after a provider rejected a native PDF this turn, no request
+		// of the turn carries one — an uploaded PDF still in the history goes
+		// as its extracted text (request-local copy; history is untouched).
+		if rt.ts.pdfRejected.Load() && requestCarriesPDF(messagesForCall) {
+			messagesForCall = append([]providers.Message(nil), messagesForCall...)
+			downgradePDFMediaToText(messagesForCall)
+		}
 		if rt.providerCallAttachCache != nil {
 			rt.providerCallAttachCache[attachKey] = messagesForCall
 		}
 	}
+	rt.ts.lastRequestCarriedPDF.Store(requestCarriesPDF(messagesForCall))
 	rt.ts.setLastProducedModel(model)
 	rt.ts.setLastProducedProvider(providerName)
 	// Use streaming if the provider supports it and we have a streamer for this channel.

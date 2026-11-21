@@ -467,6 +467,22 @@ func (s *ApprovalGrantStore) PathGrantsFor(sessionID, agentID string) []fspolicy
 	return out
 }
 
+// AllPathGrants returns a copy of every ADR-092 D7 filesystem widening
+// recorded in any session, for checks that must know every place an agent
+// can currently write (office-preview AD-4 writer exclusion). Nil-safe.
+func (s *ApprovalGrantStore) AllPathGrants() []fspolicy.PathGrant {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []fspolicy.PathGrant
+	for _, grants := range s.pathGrants {
+		out = append(out, grants...)
+	}
+	return out
+}
+
 // RecordNetworkGrant grants the ADR-092 D8 network-widening scope (FR-044)
 // for (sessionID, agentID) — the whole session's bash child, port-level
 // (DefaultConnectPorts), not domain-level. Idempotent: recording it twice

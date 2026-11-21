@@ -188,6 +188,9 @@ func (a *restAPI) setGodMode(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: update god_mode config", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return
 	}

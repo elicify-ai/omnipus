@@ -103,7 +103,9 @@ type searchKeyRemovalState struct {
 func (a *restAPI) persistSearchKeyRemoval(def config.SearchProviderDef, state *searchKeyRemovalState) ([]byte, error) {
 	var out []byte
 	err := a.agentLoop.MutateConfig(func(cfg *config.Config) error {
-		written, err := a.writeConfigJSONLocked(func(raw map[string]any) error {
+		// cfg's write-access fields are the published ones: this mutation only
+		// changes tools.web, and the check reads no web field.
+		written, err := a.writeConfigJSONInMutationLocked(cfg, func(raw map[string]any) error {
 			if err := a.preflightSearchKeyRemoval(raw, cfg, def); err != nil {
 				return err
 			}

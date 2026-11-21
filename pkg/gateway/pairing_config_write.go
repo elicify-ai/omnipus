@@ -52,8 +52,11 @@ func (a *restAPI) prepareConfigJSONLocked(mutate func(map[string]any) error) ([]
 		return nil, nil, nil, fmt.Errorf("serialize config: %w", err)
 	}
 	var candidate config.Config
-	if err := json.Unmarshal(out, &candidate); err != nil {
+	if err = json.Unmarshal(out, &candidate); err != nil {
 		return nil, nil, nil, fmt.Errorf("parse candidate config: %w", err)
+	}
+	if err = a.refuseNewProgramAccess(&candidate); err != nil {
+		return nil, nil, nil, err
 	}
 	candidate.CopyChannelOrderFrom(a.agentLoop.GetConfig())
 	if store := a.pairingOrderStore(); store != nil {

@@ -1,0 +1,318 @@
+name: Office packaging dry run
+
+# Release dry run for the Office preview installer packaging (office-preview
+# spec §10 and §11 "Install", plan items P1-P7). Started by hand only; it
+# publishes nothing:
+#
+#   1. components   office-components.yml builds every platform's components
+#   2. snapshot     GoReleaser in snapshot mode (archives, deb/rpm, images)
+#                   plus the release contents check, which lists what every
+#                   produced file really contains and fails on anything
+#                   missing, and a conversion inside each Docker image
+#   3. install      install.sh against the snapshot files on Linux and macOS
+#                   runners of both architectures, then the installed folders
+#                   are checked (manifests, fingerprints, renderer smoke,
+#                   LibreOffice start, macOS signature) and the opt-outs
+#   4. real-programs the real-program Office preview tests on Linux, run
+#                   against the folders install.sh installed
+#   5. windows-zip  the Windows renderer release zip, unpacked as a user
+#                   would, answers a real request
+
+on:
+  workflow_dispatch:
+  # GitHub starts a workflow_dispatch run only for a workflow file that is on
+  # the default branch, and this one is not there before it lands. A push to
+  # the dedicated dry-run branch starts it instead; no other workflow runs on
+  # that branch.
+  push:
+    branches:
+      - packaging/office-dryrun
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  components:
+    name: Components
+    uses: ./.github/workflows/office-components.yml
+    with:
+      ref: ${{ github.sha }}
+
+  snapshot:
+    name: GoReleaser snapshot and contents check
+    needs: components
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go from go.mod
+        id: setup-go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Download the Office preview components
+        uses: actions/download-artifact@v7
+        with:
+          pattern: office-components-*
+          path: build/components/release
+          merge-multiple: true
+
+      - name: Lay out the Linux components for packages and images
+        run: bash scripts/office-pack/unpack-linux.sh build/components
+
+      - name: Install rpm (lists the .rpm packages' contents)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Run GoReleaser (snapshot, nothing published)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: ~> v2
+          args: release --snapshot --clean
+        env:
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GOVERSION: ${{ steps.setup-go.outputs.go-version }}
+
+      - name: Gather the release files
+        # Exactly what a release publishes: GoReleaser's archives, packages
+        # and checksums.txt, plus the component downloads.
+        run: |
+          rel="$RUNNER_TEMP/release"
+          mkdir -p "$rel"
+          cp dist/*.tar.gz dist/*.deb dist/*.rpm dist/checksums.txt "$rel"/
+          cp build/components/release/* "$rel"/
+          {
+            echo '## Release files'
+            echo
+            echo '```'
+            for f in "$rel"/*; do printf '%12s  %s\n' "$(wc -c < "$f" | tr -d ' ')" "$(basename "$f")"; done
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: List every release file's contents
+        # The proof the packaging plan asks for: what is actually inside
+        # each archive and package (#1913: chromium/ must be there).
+        run: |
+          rel="$RUNNER_TEMP/release"
+          out="$RUNNER_TEMP/listings"
+          mkdir -p "$out"
+          for f in "$rel"/*; do
+            name="$(basename "$f")"
+            case "$name" in
+              *.tar.gz) tar -tzvf "$f" ;;
+              *.zip) python3 -m zipfile -l "$f" ;;
+              *.deb) dpkg-deb -c "$f" ;;
+              *.rpm) rpm -qlvp "$f" ;;
+              *) continue ;;
+            esac > "$out/$name.txt"
+            printf '%7s entries  %s (chromium entries: %s)\n' "$(wc -l < "$out/$name.txt" | tr -d ' ')" "$name" "$(grep -c 'chromium/' "$out/$name.txt" || true)"
+          done | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the content listings
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-listings
+          path: ${{ runner.temp }}/listings
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check the release contents
+        run: |
+          images="$(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '/omnipus:' | grep -E -- '-(amd64|arm64)$' | sort -u)"
+          echo "images built: $images"
+          [ -n "$images" ] || { echo "no per-platform omnipus images were built" >&2; exit 1; }
+          # shellcheck disable=SC2086 # one argument per image
+          bash scripts/release/check-release-contents.sh --contents "$RUNNER_TEMP/release" $images
+
+      - name: Convert a document inside each Docker image
+        # T-33 smoke: the image's own LibreOffice converts a Word document
+        # to PDF, and its renderer answers from its packaged folder.
+        run: |
+          for image in $(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '/omnipus:' | grep -E -- '-(amd64|arm64)$' | sort -u); do
+            bash scripts/office-pack/docker-smoke.sh "$image"
+          done
+
+      - name: Upload the install files per platform
+        run: |
+          for plat in Linux_x86_64 Linux_arm64 Darwin_arm64 Darwin_x86_64; do
+            dir="$RUNNER_TEMP/install-$plat"
+            mkdir -p "$dir"
+            case "$plat" in
+              Linux_x86_64) comp=linux_amd64 ;;
+              Linux_arm64) comp=linux_arm64 ;;
+              Darwin_arm64) comp=darwin_arm64 ;;
+              Darwin_x86_64) comp=darwin_amd64 ;;
+            esac
+            cp "$RUNNER_TEMP/release/omnipus_${plat}.tar.gz" \
+               "$RUNNER_TEMP/release/office_${comp}.tar.gz" \
+               "$RUNNER_TEMP/release/pdfium_${comp}.tar.gz" \
+               "$RUNNER_TEMP/release/checksums.txt" "$dir"/
+          done
+
+      - name: Upload Linux_x86_64 install files
+        uses: actions/upload-artifact@v7
+        with:
+          name: install-Linux_x86_64
+          path: ${{ runner.temp }}/install-Linux_x86_64
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload Linux_arm64 install files
+        uses: actions/upload-artifact@v7
+        with:
+          name: install-Linux_arm64
+          path: ${{ runner.temp }}/install-Linux_arm64
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload Darwin_arm64 install files
+        uses: actions/upload-artifact@v7
+        with:
+          name: install-Darwin_arm64
+          path: ${{ runner.temp }}/install-Darwin_arm64
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload Darwin_x86_64 install files
+        uses: actions/upload-artifact@v7
+        with:
+          name: install-Darwin_x86_64
+          path: ${{ runner.temp }}/install-Darwin_x86_64
+          if-no-files-found: error
+          retention-days: 3
+
+  install:
+    name: Install (${{ matrix.platform }})
+    needs: snapshot
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux_x86_64
+            runner: ubuntu-24.04
+          - platform: Linux_arm64
+            runner: ubuntu-24.04-arm
+          - platform: Darwin_arm64
+            runner: macos-15
+          - platform: Darwin_x86_64
+            runner: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go from go.mod
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Download the install files
+        uses: actions/download-artifact@v7
+        with:
+          name: install-${{ matrix.platform }}
+          path: ${{ runner.temp }}/release
+
+      - name: Install and check the installed folders
+        run: bash scripts/office-pack/install-check.sh "$RUNNER_TEMP/release" "$RUNNER_TEMP/prefix"
+
+  real-programs:
+    name: Real-program Office preview tests on the installed folders
+    needs: snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Prepare SPA embed stub
+        run: |
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+
+      - name: Prove the pass checks can fail
+        run: bash scripts/office-preview-real/run-real-tests.test.sh
+
+      - name: Install the fonts the real-program tests require
+        # Same test fonts as pr.yml's "Office preview real programs" job; the
+        # LibreOffice libraries themselves come from install.sh below.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-liberation fontconfig fonts-lato fonts-wqy-zenhei
+
+      - name: Download the install files
+        uses: actions/download-artifact@v7
+        with:
+          name: install-Linux_x86_64
+          path: ${{ runner.temp }}/release
+
+      - name: Install with install.sh
+        run: |
+          OMNIPUS_INSTALL_BASE_URL="file://$RUNNER_TEMP/release" \
+          OMNIPUS_INSTALL_DIR="$RUNNER_TEMP/prefix/bin" \
+            sh scripts/install.sh
+          {
+            echo "OMNIPUS_TEST_OFFICE_ROOT=$RUNNER_TEMP/prefix/share/omnipus/office"
+            echo "OMNIPUS_TEST_RENDERER_ROOT=$RUNNER_TEMP/prefix/share/omnipus/pdfium"
+          } >> "$GITHUB_ENV"
+
+      - name: Run the real-program tests
+        run: bash scripts/office-preview-real/run-real-tests.sh "$RUNNER_TEMP/office-real-logs"
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dryrun-office-real-logs
+          path: ${{ runner.temp }}/office-real-logs
+          if-no-files-found: warn
+
+  windows-zip:
+    name: Windows renderer zip
+    needs: components
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download the Windows components
+        uses: actions/download-artifact@v7
+        with:
+          name: office-components-windows-amd64
+          path: ${{ runner.temp }}/win
+
+      - name: Unpack the zip as a user would
+        shell: pwsh
+        run: Expand-Archive -Path "$env:RUNNER_TEMP\win\pdfium_windows_amd64.zip" -DestinationPath "$env:RUNNER_TEMP\unpacked"
+
+      - name: Renderer answers a real request
+        run: python scripts/office-pack/renderer-smoke.py "$RUNNER_TEMP/unpacked/pdfium"

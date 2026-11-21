@@ -10,8 +10,9 @@ CI is the authority for full-suite results.
 ## Fresh installs carry embedded skills
 
 `embed.go` compiles a default skill set into the binary
-(`//go:embed all:embedded`), including the ADR-090 role workflows and four
-Elicify document packages, so a fresh install has their instructions offline.
+(`//go:embed all:embedded`), including the ADR-090 role workflows and the
+merged Elicify office package (`elicify-office`), so a fresh install has their
+instructions offline.
 Document execution still requires the separately probed runtime dependencies. Adding a default
 skill means adding it under `embedded/` — shipping it only to a marketplace
 leaves fresh installs without it.
@@ -29,8 +30,16 @@ example, `metadata: { display_name: Define Goal }`) for the label shown to
 operators. If it is absent, the loader falls back to the Markdown H1, then to
 the stable slug. Do not put spaces or capitals in frontmatter `name:` merely
 to make a display label; that breaks portability with the Agent Skills
-standard. The four pinned Elicify document packages intentionally remain
-byte-identical to their imported source and use their H1 labels.
+standard. The `elicify-office` package (office-preview spec AD-14) merges the
+four former Elicify document packages; it is an adaptation of the pinned
+upstream source, recorded with its checksums in
+`docs/internal/specs/adr-090-document-package-inventory.json`, and carries
+`metadata.display_name: Office documents`.
+The merge deliberately did not bump
+`pkg/documentruntime/runtime.go::ManifestRevision`: a document prefix
+provisioned before the merge keeps its old four package copies and is not
+migrated (greenfield, no upgrade path); fresh provisioning installs
+`elicify-office` through `DocumentSkillIDs` / `InstallEmbeddedSkills`.
 
 ## The per-turn menu cap is removed — do not reintroduce it
 

@@ -1,0 +1,132 @@
+name: Office preview components
+
+# Builds the Office preview components that ship as separate release downloads
+# (office-preview spec §10, founder decisions 2026-11-19) and uploads them as
+# one artifact per platform, "office-components-<platform>", holding only the
+# release files:
+#
+#   pdfium_<os>_<arch>.tar.gz  (linux/darwin amd64/arm64)
+#   office_<os>_<arch>.tar.gz  (same four)
+#   pdfium_windows_amd64.zip
+#
+# Called by release.yml, nightly.yml and office-packaging-dryrun.yml before
+# GoReleaser runs; GoReleaser adds the files to the release and to
+# checksums.txt and puts the Linux folders into the deb/rpm packages and the
+# Docker image. Every platform builds on its own runner, because the renderer
+# is compiled natively and both components are started once before packing
+# (scripts/office-pack/build-components.sh).
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit, branch or tag to build the components from"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  components:
+    name: Components (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin-arm64
+            runner: macos-15
+          - platform: darwin-amd64
+            runner: macos-15-intel
+          - platform: windows-amd64
+            runner: windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Go (packaged LibreOffice manifest tool)
+        if: matrix.platform != 'windows-amd64'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install the system libraries LibreOffice links against
+        # Same set as pr.yml's "Office preview real programs" job, without the
+        # test-only fonts: build-components.sh starts LibreOffice once.
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-6 libxext6 libxinerama1 libcairo2 libcups2t64 libdbus-1-3 \
+            libfontconfig1 libfreetype6 libglib2.0-0t64 libnss3 libnspr4
+
+      - name: Set up the MSVC compiler
+        if: matrix.platform == 'windows-amd64'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "no Visual Studio installation with the C++ x64 tools" }
+          $vars = cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set"
+          if ($LASTEXITCODE -ne 0) { throw "vcvars64.bat failed" }
+          foreach ($line in $vars) {
+            if ($line -match '^(PATH|INCLUDE|LIB|LIBPATH)=(.*)$') {
+              "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          }
+
+      - name: Restore downloaded archives
+        # Saves re-downloading only: every archive is SHA-256 checked again.
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/office-pack-downloads
+          key: office-pack-${{ matrix.platform }}-${{ hashFiles('scripts/office-pack/pins.env', 'native/omnipus-pdfium/pins.env') }}
+
+      - name: Build and pack the components
+        run: |
+          if [ "${{ matrix.platform }}" = windows-amd64 ]; then
+            # Git Bash puts its own link.exe first; cl must find MSVC's.
+            cl_path="$(command -v cl)" || { echo "cl not on PATH after the MSVC setup" >&2; exit 1; }
+            PATH="$(dirname "$cl_path"):$PATH"
+            export PATH
+          fi
+          bash scripts/office-pack/build-components.sh "${{ matrix.platform }}" \
+            "$RUNNER_TEMP/office-pack" "$RUNNER_TEMP/office-pack-downloads"
+
+      - name: List what the release files contain
+        run: |
+          {
+            echo "## Office preview components: ${{ matrix.platform }}"
+            echo
+            for f in "$RUNNER_TEMP"/office-pack/release/*; do
+              case "$f" in
+                # sed reads its whole input: `| head` would close the pipe
+                # early, and under pipefail tar's write error fails the step.
+                *.zip) entries="$(python -m zipfile -l "$f" | tail -n +2 | wc -l | tr -d ' ')"; list="$(python -m zipfile -l "$f" | sed -n 1,20p)" ;;
+                *) entries="$(tar -tzf "$f" | wc -l | tr -d ' ')"; list="$(tar -tzf "$f" | sed -n 1,20p)" ;;
+              esac
+              echo "### $(basename "$f") ($(wc -c < "$f" | tr -d ' ') bytes, $entries entries)"
+              echo
+              echo '```'
+              echo "$list"
+              echo '```'
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: office-components-${{ matrix.platform }}
+          path: ${{ runner.temp }}/office-pack/release/*
+          if-no-files-found: error
+          retention-days: 7

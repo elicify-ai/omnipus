@@ -8,6 +8,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -68,6 +69,14 @@ func resolveMediaRefsWithOffload(
 
 	result := make([]providers.Message, len(messages))
 	copy(result, messages)
+	var nativePDFs []nativePDFPart
+	// Per message: the resolved media and content injections, finished
+	// after the upload page images are rendered (newest uploads first).
+	turnIdx := turnUserMessageIndex(result)
+	outMedia := make([][]string, len(result))
+	outInj := make([][]string, len(result))
+	touched := make([]bool, len(result))
+	var uploadJobs []uploadPageJob
 
 	for i, m := range result {
 		if len(m.Media) == 0 {
@@ -183,35 +192,51 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
-			// PDF: route to native document blocks for capable models, else
-			// extract text. When the capability catalog says the model lacks
-			// the pdf modality (step-1 gate), skip native send and route to
-			// step-5 offload with document-class guidance, falling back to
-			// step-6 text extraction (FR-022) and step-7 honest marker.
+			// PDF: the model catalog alone decides (office-preview spec AD-11,
+			// FR-018). A model whose catalog entry lists the pdf modality gets
+			// the native document; otherwise (step-1 gate) skip native send and
+			// route to step-5 offload with document-class guidance, falling
+			// back to step-6 text extraction (FR-022) and step-7 honest marker.
 			if isPDF(mime, meta.Filename) {
-				if modelSupportsPDF(cat, provider, model) && pdfCapableModel(model) {
-					dataURL := encodePDFToDataURL(localPath, info, maxSize)
+				if modelSupportsPDF(cat, provider, model) {
+					// The provider's documented PDF size limit tightens the
+					// agent media limit (catalog pdf_limits, D2 A).
+					pdfLimit, _ := nativePDFLimits(cat, provider, model, maxSize)
+					dataURL := encodePDFToDataURL(localPath, info, pdfLimit)
 					if dataURL != "" {
 						resolved = append(resolved, dataURL)
+						nativePDFs = append(nativePDFs, nativePDFPart{
+							msg: i, part: len(resolved) - 1, path: localPath,
+							mime: mime, name: meta.Filename, size: info.Size(),
+							turn: i == turnIdx,
+						})
 					} else {
 						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
 						contentInjections = append(contentInjections, inj)
 					}
-				} else if !modelSupportsPDF(cat, provider, model) {
-					// Step-1 gate: text-only model + PDF → offload with
-					// document-class guidance + text extraction (step 5 + 6).
-					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
-						contentInjections = append(contentInjections, offInj+textInj)
-					} else {
-						contentInjections = append(contentInjections, textInj)
-					}
 				} else {
-					// Model not in the PDF-capable allow-list but capability
-					// gate passed (or catalog is nil/text-only model wasn't
-					// recognized) — extract text (step 6).
-					inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					contentInjections = append(contentInjections, inj)
+					// Step-1 gate: model without the pdf modality + PDF →
+					// offload with document-class guidance + text extraction
+					// (step 5 + 6); a model that sees images also gets pages
+					// 1–10 as images and a note naming the workspace copy
+					// for later pages (office-preview spec §4.1, FR-044).
+					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+					dest, offErr := sink.offloadPath(localPath, meta.Filename)
+					offInj := ""
+					if offErr == nil {
+						offInj = buildOffloadInjection(dest, detectFileClass(mime, meta.Filename), model)
+					}
+					if modelSupportsImage(cat, provider, model) {
+						// Pages are rendered after this pass, newest
+						// uploads first, within one request allowance.
+						uploadJobs = append(uploadJobs, uploadPageJob{
+							msg: i, mediaAt: len(resolved), injAt: len(contentInjections), noteAt: len(offInj),
+							localPath: localPath, name: meta.Filename, dest: dest, offErr: offErr,
+							limits: resizeBudgetForModel(cat, provider, model, maxSize),
+							turn:   i == turnIdx,
+						})
+					}
+					contentInjections = append(contentInjections, offInj+textInj)
 				}
 				continue
 			}
@@ -221,12 +246,25 @@ func resolveMediaRefsWithOffload(
 			contentInjections = append(contentInjections, inj)
 		}
 
-		result[i].Media = resolved
-		if len(contentInjections) > 0 {
-			result[i].Content = injectDocumentContent(result[i].Content, contentInjections)
+		outMedia[i], outInj[i], touched[i] = resolved, contentInjections, true
+	}
+
+	turnPages := renderUploadPageJobs(sink.turnContext(), uploadJobs, outMedia, outInj)
+	for i := range result {
+		if !touched[i] {
+			continue
+		}
+		result[i].Media = outMedia[i]
+		if len(outInj[i]) > 0 {
+			result[i].Content = injectDocumentContent(result[i].Content, outInj[i])
 		}
 	}
 
+	_, maxDocs := nativePDFLimits(cat, provider, model, maxSize)
+	turnPDFs := limitNativePDFParts(result, nativePDFs, maxDocs)
+	if sink != nil {
+		sink.turnMedia = turnUploadMedia{nativePDFBytes: turnPDFs, pageImageBytes: turnPages}
+	}
 	return result
 }
 
@@ -331,68 +369,16 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 	return "\n\n[user uploaded: " + workPath + "]"
 }
 
-// pdfCapableModel returns true for models known to support native PDF document
-// blocks (base64 application/pdf content). Any model that returns false gets the
-// text-extraction fallback, which works for every model.
-//
-// The allow-list is deliberately CONSERVATIVE. The failure modes are asymmetric:
-// a false negative merely sends extracted text (slightly less rich, but always
-// works), whereas a false positive sends a native PDF block to a model whose
-// upstream provider rejects it with a hard HTTP 400 — which aborts the whole
-// turn with an empty reply. When in doubt, prefer text.
-//
-// Known exclusions (matched first, before the allow-list):
-//
-//   - Claude *Haiku* — OpenRouter routes Haiku via Amazon Bedrock, which returns
-//     "'claude-3-5-haiku-...' does not support PDF input." (verified 2026-06-01).
-//     Only Claude Sonnet/Opus (3.5+) and Claude 4 reliably accept PDF.
-//
-// Allow-list substrings (case-insensitive, matched against the full model id):
-//
-//	Anthropic: claude-3.5-sonnet / claude-3-7-sonnet / sonnet-4 / opus-4 / claude-4
-//	OpenAI:    gpt-4o, gpt-4.1, o1-, o3-
-//	Google:    gemini-1.5, gemini-2
-func pdfCapableModel(model string) bool {
-	lower := strings.ToLower(model)
-
-	// Exclusions take precedence: these match an allow-list substring but their
-	// upstream provider rejects PDF input, so they MUST fall back to text.
-	for _, deny := range []string{"haiku"} {
-		if strings.Contains(lower, deny) {
-			return false
-		}
+// pdfFallbackText is a PDF's text-fallback injection: its extracted text,
+// or why none could be extracted.
+func pdfFallbackText(data []byte) string {
+	const fallbackName = "attachment.pdf"
+	text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
+	if ok {
+		return fmt.Sprintf("\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text)
 	}
-
-	capableSubstrings := []string{
-		// Anthropic — only Sonnet/Opus 3.5+ and Claude 4 accept PDF. Bare
-		// "claude-3" is intentionally NOT listed (it matched Haiku and the
-		// original Claude 3 models that lack PDF support).
-		"claude-3.5-sonnet", "claude-3-5-sonnet",
-		"claude-3.7-sonnet", "claude-3-7-sonnet",
-		"claude-sonnet-4", "claude-opus-4", "claude-4",
-		"sonnet-4", "opus-4",
-		// OpenAI GPT-4o and 4.1 family
-		"gpt-4o",
-		"gpt-4.1",
-		"openai/gpt-4o",
-		"openai/gpt-4.1",
-		// OpenAI o1/o3 reasoning models
-		"o1-",
-		"o3-",
-		"openai/o1",
-		"openai/o3",
-		// Google Gemini 1.5+
-		"gemini-1.5",
-		"gemini-2",
-		"google/gemini-1.5",
-		"google/gemini-2",
-	}
-	for _, sub := range capableSubstrings {
-		if strings.Contains(lower, sub) {
-			return true
-		}
-	}
-	return false
+	return fmt.Sprintf("\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
+		fallbackName, len(data), reason)
 }
 
 // downgradePDFMediaToText converts any native PDF data URL in each message's
@@ -403,7 +389,6 @@ func pdfCapableModel(model string) bool {
 // block was downgraded.
 func downgradePDFMediaToText(messages []providers.Message) bool {
 	const pdfPrefix = "data:application/pdf;base64,"
-	const fallbackName = "attachment.pdf"
 	anyChanged := false
 
 	for i := range messages {
@@ -426,15 +411,7 @@ func downgradePDFMediaToText(messages []providers.Message) bool {
 					"\n\n[Attached PDF could not be decoded for text fallback]")
 				continue
 			}
-			text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
-			if ok {
-				injections = append(injections, fmt.Sprintf(
-					"\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text))
-			} else {
-				injections = append(injections, fmt.Sprintf(
-					"\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
-					fallbackName, len(data), reason))
-			}
+			injections = append(injections, pdfFallbackText(data))
 		}
 
 		if msgChanged {
@@ -1345,6 +1322,48 @@ func fallbackName(filename, alt string) string {
 // failing the turn.
 type offloadSink struct {
 	workDir string
+	// ctx is the turn's context: work the resolver starts for an upload
+	// (PDF page rendering) ends on Stop. Nil means no turn (background).
+	ctx context.Context
+	// turnMedia is filled by the resolver: the decoded document media of
+	// this turn's uploads in the request it returned.
+	turnMedia turnUploadMedia
+}
+
+// turnOffloadSink is the resolver sink of this turn: its work folder and
+// its Stop.
+func (rt *agentLoopRunTurn) turnOffloadSink(workDir string) *offloadSink {
+	return &offloadSink{workDir: workDir, ctx: rt.turnCtx}
+}
+
+// turnUserMessageIndex is the index of the turn's own user message: the
+// last user message that is neither a tool result nor the request-only
+// volatile note; -1 when there is none. "This turn" starts there
+// (architect rule G5). Messages the loop adds later in the turn with the
+// user role (sub-turn results, repairs) can sit after it, so callers that
+// keep a figure across the turn record it when the request is resolved.
+func turnUserMessageIndex(messages []providers.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if m := messages[i]; m.Role == "user" && m.ToolCallID == "" && !m.Volatile {
+			return i
+		}
+	}
+	return -1
+}
+
+// turnUploadMedia is the decoded document media of a turn's own uploads in
+// one resolved request (AD-6, architect rule G5): native PDFs, and page
+// images rendered from uploaded PDFs.
+type turnUploadMedia struct {
+	nativePDFBytes, pageImageBytes int
+}
+
+// turnContext is the sink's turn context, or Background without one.
+func (s *offloadSink) turnContext() context.Context {
+	if s == nil || s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
 }
 
 // offload performs step-5 offload (ADR-051 Rev 4): it copies the file into the
@@ -1358,8 +1377,18 @@ type offloadSink struct {
 // the caller then produces the step-7 honest marker (edge case: "step-5 offload
 // cannot copy the file → step 7 honest marker with reason offload-failed").
 func (s *offloadSink) offload(localPath, mime, filename, model string) (string, bool) {
-	if s == nil {
+	dest, err := s.offloadPath(localPath, filename)
+	if err != nil {
 		return "", false
+	}
+	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+}
+
+// offloadPath copies localPath into the turn's work/ dir (step-5 offload)
+// and returns the copy's path; a failure is logged and returned.
+func (s *offloadSink) offloadPath(localPath, filename string) (string, error) {
+	if s == nil {
+		return "", errNoOffloadSink
 	}
 	safeName, err := deriveSafeOffloadName(localPath, filename)
 	if err != nil {
@@ -1367,7 +1396,7 @@ func (s *offloadSink) offload(localPath, mime, filename, model string) (string, 
 			"path":  localPath,
 			"error": err.Error(),
 		})
-		return "", false
+		return "", err
 	}
 	dest, err := copyToWorkDir(localPath, s.workDir, safeName)
 	if err != nil {
@@ -1376,9 +1405,9 @@ func (s *offloadSink) offload(localPath, mime, filename, model string) (string, 
 			"work_dir": s.workDir,
 			"error":    err.Error(),
 		})
-		return "", false
+		return "", err
 	}
-	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+	return dest, nil
 }
 
 // sha256PrefixBytes is the number of sha256 digest bytes (16 hex chars) used

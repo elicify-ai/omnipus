@@ -1,0 +1,173 @@
+name: Office preview Linux limits
+
+# Manual only. Measures the document preview memory limits once, on a real
+# Linux kernel, on the exact candidate commit (office preview spec, T-91,
+# founder O8 = A). team-lead runs it; a red or "not a measurement" result goes
+# to the founder.
+#
+# PASS means all of: HEAD equals the input SHA; both test runs exit 0; each of
+# the four named tests has a "--- PASS" line; no "--- FAIL", "--- SKIP" or
+# "BLOCKED" line in either log; and the host enforces the data limit (kernel
+# 4.7 or later and ignore_rlimit_data not Y). Otherwise the run proves only the
+# disclosure path and is reported "not a measurement", never PASS.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character SHA of the candidate commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    env:
+      CANDIDATE_SHA: ${{ inputs.sha }}
+      LOG_DIR: t91-logs
+    steps:
+      - name: Require a full commit SHA
+        run: |
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be the full 40-character commit SHA"
+            exit 1
+          fi
+
+      - name: Checkout the candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      - name: Fail unless HEAD is the candidate
+        run: |
+          actual="$(git rev-parse HEAD)"
+          if [ "$actual" != "$CANDIDATE_SHA" ]; then
+            echo "::error::HEAD is $actual, not the input SHA $CANDIDATE_SHA"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Stub the embedded web app
+        run: |
+          mkdir -p pkg/gateway/spa/assets
+          echo '<!doctype html>' > pkg/gateway/spa/index.html
+          touch pkg/gateway/spa/assets/.keep
+
+      - name: Record the host
+        run: |
+          mkdir -p "$LOG_DIR"
+          parameter=/sys/module/kernel/parameters/ignore_rlimit_data
+          {
+            echo "uname -r: $(uname -r)"
+            if [ -r "$parameter" ]; then
+              echo "ignore_rlimit_data: $(cat "$parameter")"
+            else
+              echo "ignore_rlimit_data: unreadable"
+            fi
+            go version
+            cc --version
+            prlimit --version
+          } | tee "$LOG_DIR/host.txt"
+
+      - name: Run T-76 (launcher limits)
+        run: |
+          set +e
+          CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -v -run '^(TestRunLimitedLinuxDataStackAndAddressSpace|TestRunLimitedLinuxAllocationAndStackBombs|TestRunLimitedRejectsMemoryKind)$' ./pkg/preview/launcher/ > "$LOG_DIR/t76.log" 2>&1
+          echo "$?" > "$LOG_DIR/t76.exit"
+          exit 0
+
+      - name: Run T-80 (memory limit disclosure)
+        run: |
+          set +e
+          CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -v -run '^TestPreviewMemoryEnforcementDisclosure$' ./pkg/preview/ > "$LOG_DIR/t80.log" 2>&1
+          echo "$?" > "$LOG_DIR/t80.exit"
+          exit 0
+
+      - name: Verdict
+        if: always()
+        run: |
+          mkdir -p "$LOG_DIR"
+          red=()
+
+          head="$(git rev-parse HEAD 2>/dev/null || true)"
+          if [ "$head" != "$CANDIDATE_SHA" ]; then
+            red+=("HEAD is '$head', not the input SHA")
+          fi
+
+          for run in t76 t80; do
+            log="$LOG_DIR/$run.log"
+            code="$(cat "$LOG_DIR/$run.exit" 2>/dev/null || true)"
+            if [ "$code" != "0" ]; then
+              red+=("$run exit code is '$code'")
+            fi
+            if [ ! -s "$log" ]; then
+              red+=("$run log is missing or empty")
+            elif grep -Eq -- '--- (FAIL|SKIP)|BLOCKED' "$log"; then
+              red+=("$run log has a FAIL, SKIP or BLOCKED line")
+            fi
+          done
+
+          for pair in \
+            t76:TestRunLimitedLinuxDataStackAndAddressSpace \
+            t76:TestRunLimitedLinuxAllocationAndStackBombs \
+            t76:TestRunLimitedRejectsMemoryKind \
+            t80:TestPreviewMemoryEnforcementDisclosure; do
+            run="${pair%%:*}"
+            name="${pair#*:}"
+            if ! grep -Eq -- "^--- PASS: $name " "$LOG_DIR/$run.log" 2>/dev/null; then
+              red+=("$name has no --- PASS line")
+            fi
+          done
+
+          kernel="$(sed -n 's/^uname -r: //p' "$LOG_DIR/host.txt" 2>/dev/null || true)"
+          ignored="$(sed -n 's/^ignore_rlimit_data: //p' "$LOG_DIR/host.txt" 2>/dev/null || true)"
+          major="${kernel%%.*}"
+          rest="${kernel#*.}"
+          minor="${rest%%[!0-9]*}"
+          enforced=no
+          if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
+            if { [ "$major" -gt 4 ] || { [ "$major" -eq 4 ] && [ "$minor" -ge 7 ]; }; } && [ "$ignored" != "Y" ]; then
+              enforced=yes
+            fi
+          fi
+
+          if [ "${#red[@]}" -gt 0 ]; then
+            verdict=RED
+          elif [ "$enforced" != "yes" ]; then
+            verdict="NOT A MEASUREMENT"
+          else
+            verdict=PASS
+          fi
+
+          {
+            echo "T-91 verdict: $verdict"
+            echo "candidate: $CANDIDATE_SHA"
+            echo "kernel: $kernel, ignore_rlimit_data: $ignored, enforced: $enforced"
+            for reason in "${red[@]}"; do
+              echo "- $reason"
+            done
+          } | tee "$LOG_DIR/verdict.txt" >> "$GITHUB_STEP_SUMMARY"
+          cat "$LOG_DIR/verdict.txt"
+
+          if [ "$verdict" != "PASS" ]; then
+            exit 1
+          fi
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: t91-logs-${{ inputs.sha }}
+          path: t91-logs/
+          if-no-files-found: error

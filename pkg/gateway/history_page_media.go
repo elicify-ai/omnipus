@@ -20,7 +20,12 @@ type historyPreparedMedia struct {
 
 func newHistoryPreparedMedia(frame generated.MediaFrame, raw []byte, store *historyReadOnlyMedia) *historyPreparedMedia {
 	prepared := &historyPreparedMedia{frame: frame, original: raw, paths: make([]string, len(frame.Parts))}
-	if store != nil {
+	// A preview thumbnail group is keyed by its tool call, never by file
+	// path, and does not claim its paths (as replay.go::buildMediaFrame):
+	// two groups, or a group and a screenshot, over one stored file all stay
+	// (office-preview spec §5.2, T-62).
+	isPreviewGroup := frame.ToolCallId != nil && frame.Presentation != nil && *frame.Presentation == previewPresentationPageThumbnails
+	if store != nil && !isPreviewGroup {
 		for i, part := range frame.Parts {
 			prepared.paths[i] = store.urls[part.Url]
 		}

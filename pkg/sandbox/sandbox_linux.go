@@ -510,6 +510,11 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 // non-write bits (READ_FILE, READ_DIR, EXECUTE) that allRights also
 // contains; the same source means REFER is ORed only on ABI v2+ and
 // TRUNCATE only on ABI v3+.
+//
+// AccessMakeSocketRemoveFile maps to exactly MAKE_SOCK | REMOVE_FILE and
+// nothing else (office-preview spec §3.6 D3). Both rights exist from ABI v1,
+// so, like read and execute, the pair is constant and needs no ABI gate; it
+// composes with the other flags by plain OR.
 func (lb *LinuxBackend) accessToLandlockRights(access uint64) uint64 {
 	const writeMask = landlockFSWriteClassV1 | landlockAccessFSRefer | landlockAccessFSTruncate
 	var rights uint64
@@ -521,6 +526,9 @@ func (lb *LinuxBackend) accessToLandlockRights(access uint64) uint64 {
 	}
 	if access&AccessExecute != 0 {
 		rights |= landlockAccessFSExecute
+	}
+	if access&AccessMakeSocketRemoveFile != 0 {
+		rights |= landlockAccessFSMakeSock | landlockAccessFSRemoveFile
 	}
 	return rights
 }

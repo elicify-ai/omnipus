@@ -80,7 +80,8 @@ import {
 import { useChatAgents } from './useChatAgents'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
-import { AssistantMediaItem } from './AssistantMediaItem'
+import { AssistantMediaList } from './AssistantMediaList'
+import { PreviewAnnouncer } from './PreviewAnnouncer'
 import {
   AssistantMessageConnectionStatus,
   UnansweredUserMessageStatus,
@@ -708,11 +709,10 @@ function InlineMedia() {
 
   if (!storeMsg?.media?.length) return null
 
+  // Inline media plus office-preview thumbnail groups (AssistantMediaList).
   return (
-    <div className="flex flex-col gap-[var(--space-2)] mt-[var(--space-2)]">
-      {storeMsg.media.map((m, i) => (
-        <AssistantMediaItem key={`${m.url}-${i}`} kind={m.type === 'image' ? 'image' : 'file'} url={m.url} filename={m.filename} caption={m.caption} contentType={m.contentType} libraryRef={m.libraryRef} />
-      ))}
+    <div className="mt-[var(--space-2)]">
+      <AssistantMediaList media={storeMsg.media} />
     </div>
   )
 }
@@ -1215,10 +1215,8 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
-            <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
-              {mediaItems.map((m, i) => (
-                <AssistantMediaItem key={`${m.url}-${i}`} kind={m.type === 'image' ? 'image' : 'file'} url={m.url} filename={m.filename} caption={m.caption} contentType={m.contentType} libraryRef={m.libraryRef} />
-              ))}
+            <div className="mb-[var(--space-2)]">
+              <AssistantMediaList media={mediaItems} />
             </div>
           )}
 
@@ -1778,6 +1776,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               <span>New response from {activeAgentName}</span>
             )}
           </div>
+          {/* Office-preview spec §5.4: one polite announcement per thumbnail group. */}
+          <PreviewAnnouncer />
 
           <HistoryOpenState read={historyRead} />
           {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}

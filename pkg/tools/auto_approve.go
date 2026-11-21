@@ -150,6 +150,9 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"library_read":   AutoRuns,
 	"list_mounts":    AutoRuns,
 	"request_mount":  AutoAsks,
+	// preview_document only reads the file it is given (office-preview spec
+	// AD-1); it writes nothing into the workspace, so it runs like read_file.
+	"preview_document": AutoRuns,
 
 	// Web
 	"search_web":        AutoRuns,

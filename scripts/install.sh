@@ -7,18 +7,40 @@
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
+#   curl -sSL .../install.sh | sh -s -- --without-office
+#
+# Options:
+#   --without-office         do not install LibreOffice for Office previews
+#   --without-pdf-renderer   do not install the PDF page renderer
+#   A re-run follows the choice: an opted-out component that an earlier run
+#   installed is removed.
 #
 # Environment overrides:
-#   OMNIPUS_VERSION       tag to install (default: latest GitHub Release)
-#   OMNIPUS_INSTALL_DIR   target directory (default: /usr/local/bin)
-#   OMNIPUS_INSTALL_URL   override full archive URL (for local testing,
-#                         e.g. file:///path/to/omnipus_Linux_x86_64.tar.gz —
-#                         when set, checksum verification is skipped)
-#   OMNIPUS_REPO          GitHub repo path (default: elicify-ai/omnipus)
+#   OMNIPUS_VERSION           tag to install (default: latest GitHub Release)
+#   OMNIPUS_INSTALL_DIR       target directory (default: /usr/local/bin)
+#   OMNIPUS_INSTALL_BASE_URL  release base for EVERY download (archive,
+#                             checksums.txt, components), e.g.
+#                             file:///path/to/release-dir — checksums are
+#                             still verified (testing a release before it
+#                             is published)
+#   OMNIPUS_INSTALL_URL       override the binary archive URL only (local
+#                             testing, e.g. file:///path/to/omnipus_Linux_x86_64.tar.gz
+#                             — checksum verification is skipped and the
+#                             Office preview components are not installed)
+#   OMNIPUS_REPO              GitHub repo path (default: elicify-ai/omnipus)
 #
-# Supported platforms (v0.1):
-#   Linux  x86_64, Linux  aarch64,  macOS arm64 (Apple Silicon)
-# Other platforms are planned but not yet shipped — see README "Platform support".
+# Supported platforms:
+#   Linux x86_64, Linux aarch64, macOS arm64 (Apple Silicon), macOS x86_64
+#   (Intel) — see docs/operations/platform-support.md.
+#
+# Office preview components (office-preview spec §10): by default the
+# installer also fetches the release's separate downloads
+# office_<os>_<arch>.tar.gz (official LibreOffice 26.8 with its packaged
+# manifest) and pdfium_<os>_<arch>.tar.gz (the PDF page renderer), checks
+# each against checksums.txt (a mismatch refuses the whole install), and
+# unpacks them where the binary looks for them:
+#   Linux: <install dir>/../share/omnipus/{office,pdfium}
+#   macOS: <install dir>/../{office,pdfium}
 #
 # ADR-052 Phase 1 (Bundles + installer):
 #   - On Linux, after extracting the archive we verify the bundled Chrome's
@@ -59,6 +81,9 @@ REPO="${OMNIPUS_REPO:-elicify-ai/omnipus}"
 INSTALL_DIR="${OMNIPUS_INSTALL_DIR:-/usr/local/bin}"
 VERSION="${OMNIPUS_VERSION:-}"
 EXPLICIT_URL="${OMNIPUS_INSTALL_URL:-}"
+BASE_OVERRIDE="${OMNIPUS_INSTALL_BASE_URL:-}"
+WITH_OFFICE=1
+WITH_RENDERER=1
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -74,6 +99,14 @@ info() {
 require() {
   command -v "$1" >/dev/null 2>&1 || err "required command '$1' not found"
 }
+
+for arg in "$@"; do
+  case "$arg" in
+    --without-office) WITH_OFFICE=0 ;;
+    --without-pdf-renderer) WITH_RENDERER=0 ;;
+    *) err "unknown option '$arg' (supported: --without-office, --without-pdf-renderer)" ;;
+  esac
+done
 
 require uname
 require tar
@@ -105,43 +138,55 @@ OS_RAW="$(uname -s)"
 ARCH_RAW="$(uname -m)"
 
 case "$OS_RAW" in
-  Linux)  OS="Linux"  ;;
-  Darwin) OS="Darwin" ;;
+  Linux)  OS="Linux";  GOOS="linux"  ;;
+  Darwin) OS="Darwin"; GOOS="darwin" ;;
   *)
-    err "unsupported OS '$OS_RAW'. v0.1 supports Linux and macOS only. See https://github.com/${REPO}#platform-support"
+    err "unsupported OS '$OS_RAW'. The installer supports Linux and macOS; Windows uses Docker. See https://github.com/${REPO}#platform-support"
     ;;
 esac
 
 case "$ARCH_RAW" in
   x86_64|amd64)
-    ARCH="x86_64"
-    [ "$OS" = "Darwin" ] && err "Intel Mac (darwin/amd64) is planned but not in v0.1. See https://github.com/${REPO}#platform-support"
+    ARCH="x86_64"; GOARCH="amd64"
     ;;
   aarch64|arm64)
-    ARCH="arm64"
+    ARCH="arm64"; GOARCH="arm64"
     ;;
   *)
-    err "unsupported architecture '$ARCH_RAW'. v0.1 supports x86_64 (Linux) and arm64 (Linux/macOS). See https://github.com/${REPO}#platform-support"
+    err "unsupported architecture '$ARCH_RAW'. The installer supports x86_64 and arm64. See https://github.com/${REPO}#platform-support"
     ;;
 esac
 
 PLATFORM="${OS}_${ARCH}"
 ARCHIVE_NAME="omnipus_${PLATFORM}.tar.gz"
+OFFICE_NAME="office_${GOOS}_${GOARCH}.tar.gz"
+RENDERER_NAME="pdfium_${GOOS}_${GOARCH}.tar.gz"
 
 # ── Resolve URL ──────────────────────────────────────────────────────────────
 
+BASE_URL=""
 if [ -n "$EXPLICIT_URL" ]; then
   ARCHIVE_URL="$EXPLICIT_URL"
   CHECKSUMS_URL=""
   info "using explicit OMNIPUS_INSTALL_URL — checksum verification skipped"
+  if [ "$WITH_OFFICE" -eq 1 ] || [ "$WITH_RENDERER" -eq 1 ]; then
+    info "(note: OMNIPUS_INSTALL_URL installs the binary archive only — the Office preview components are not installed)"
+  fi
+  WITH_OFFICE=0
+  WITH_RENDERER=0
+  KEEP_COMPONENTS=1
 else
-  if [ -z "$VERSION" ]; then
+  if [ -n "$BASE_OVERRIDE" ]; then
+    BASE_URL="${BASE_OVERRIDE%/}"
+    info "using OMNIPUS_INSTALL_BASE_URL ${BASE_URL} — checksums are verified"
+  elif [ -z "$VERSION" ]; then
     BASE_URL="https://github.com/${REPO}/releases/latest/download"
   else
     BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
   fi
   ARCHIVE_URL="${BASE_URL}/${ARCHIVE_NAME}"
   CHECKSUMS_URL="${BASE_URL}/checksums.txt"
+  KEEP_COMPONENTS=0
 fi
 
 # ── Download + verify + extract ──────────────────────────────────────────────
@@ -149,39 +194,65 @@ fi
 WORK_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t omnipus-install)"
 trap 'rm -rf "$WORK_DIR"' EXIT INT TERM
 
+# fetch <url> <dest>: file:// URLs aren't supported by curl in all
+# environments — strip and cp.
+fetch() {
+  case "$1" in
+    file://*)
+      cp "$(printf '%s' "$1" | sed 's|^file://||')" "$2" \
+        || err "failed to copy $1"
+      ;;
+    *)
+      download "$1" "$2" || err "failed to download $1"
+      ;;
+  esac
+}
+
+# verify_checksum <name> <path>: refuse anything checksums.txt does not
+# vouch for.
+verify_checksum() {
+  EXPECTED="$(awk -v name="$1" '$2 == name || $2 == "*" name {print $1}' "$CHECKSUMS_PATH")"
+  if [ -z "$EXPECTED" ]; then
+    err "no checksum entry for $1 in checksums.txt"
+  fi
+  ACTUAL="$(sha256_of "$2")"
+  if [ -z "$ACTUAL" ]; then
+    err "no SHA256 tool available (need sha256sum or shasum); refusing to install unverified files. Set OMNIPUS_INSTALL_URL to override."
+  fi
+  if [ "$EXPECTED" != "$ACTUAL" ]; then
+    err "checksum mismatch for $1 (expected $EXPECTED, got $ACTUAL) — refusing to install"
+  fi
+  info "checksum OK: $1"
+}
+
 info "downloading ${ARCHIVE_URL}"
 ARCHIVE_PATH="${WORK_DIR}/${ARCHIVE_NAME}"
-case "$ARCHIVE_URL" in
-  file://*)
-    # file:// URLs aren't supported by curl in all environments — strip and cp.
-    SRC_PATH="$(printf '%s' "$ARCHIVE_URL" | sed 's|^file://||')"
-    cp "$SRC_PATH" "$ARCHIVE_PATH"
-    ;;
-  *)
-    download "$ARCHIVE_URL" "$ARCHIVE_PATH" \
-      || err "failed to download $ARCHIVE_URL"
-    ;;
-esac
+fetch "$ARCHIVE_URL" "$ARCHIVE_PATH"
 
 if [ -n "$CHECKSUMS_URL" ]; then
   info "verifying checksum"
   CHECKSUMS_PATH="${WORK_DIR}/checksums.txt"
-  download "$CHECKSUMS_URL" "$CHECKSUMS_PATH" \
-    || err "failed to download $CHECKSUMS_URL"
+  fetch "$CHECKSUMS_URL" "$CHECKSUMS_PATH"
+  verify_checksum "$ARCHIVE_NAME" "$ARCHIVE_PATH"
+fi
 
-  EXPECTED="$(awk -v name="$ARCHIVE_NAME" '$2 == name {print $1}' "$CHECKSUMS_PATH")"
-  if [ -z "$EXPECTED" ]; then
-    err "no checksum entry for $ARCHIVE_NAME in checksums.txt"
-  fi
-
-  ACTUAL="$(sha256_of "$ARCHIVE_PATH")"
-  if [ -z "$ACTUAL" ]; then
-    err "no SHA256 tool available (need sha256sum or shasum); refusing to install unverified binary. Set OMNIPUS_INSTALL_URL to override."
-  fi
-  if [ "$EXPECTED" != "$ACTUAL" ]; then
-    err "checksum mismatch for $ARCHIVE_NAME (expected $EXPECTED, got $ACTUAL)"
-  fi
-  info "checksum OK"
+# ── Office preview components: download + verify all before installing ──────
+# Every wanted component is downloaded and checked before anything is
+# installed, so a bad component leaves the machine as it was.
+fetch_component() { # <name> <label>
+  info "downloading ${BASE_URL}/$1 ($2)"
+  fetch "${BASE_URL}/$1" "${WORK_DIR}/$1"
+  verify_checksum "$1" "${WORK_DIR}/$1"
+  STAGED="${WORK_DIR}/component-$1"
+  mkdir -p "$STAGED"
+  tar -xzf "${WORK_DIR}/$1" -C "$STAGED" || err "cannot unpack $1"
+  [ -f "$STAGED/manifest.json" ] || err "$1 is not an Omnipus component (no manifest.json) — refusing to install it"
+}
+if [ "$WITH_OFFICE" -eq 1 ]; then
+  fetch_component "$OFFICE_NAME" "LibreOffice for Office previews; skip with --without-office"
+fi
+if [ "$WITH_RENDERER" -eq 1 ]; then
+  fetch_component "$RENDERER_NAME" "PDF page renderer; skip with --without-pdf-renderer"
 fi
 
 info "extracting archive"
@@ -347,6 +418,33 @@ if [ -d "$CHROMIUM_DIR" ]; then
   info "bundled chrome installed at $TARGET_CHROMIUM"
 fi
 
+# ── Office preview components (office-preview spec §10) ──────────────────────
+# Linux: <install dir>/../share/omnipus/<slot>; macOS: <install dir>/../<slot>
+# — the binary's packaged slots (pkg/preview/component::PackagedCandidates).
+# A re-run follows the choice: an opted-out component is removed.
+if [ "$OS" = "Darwin" ]; then
+  COMPONENT_ROOT="$(dirname "$INSTALL_DIR")"
+else
+  COMPONENT_ROOT="$(dirname "$INSTALL_DIR")/share/omnipus"
+fi
+place_component() { # <want 1|0> <release file> <slot> <label>
+  target="${COMPONENT_ROOT}/$3"
+  if [ "$1" -eq 1 ]; then
+    mkdir -p "$COMPONENT_ROOT" || err "cannot create $COMPONENT_ROOT (you may need sudo)"
+    rm -rf "${target}.new"
+    mv "${WORK_DIR}/component-$2" "${target}.new" \
+      || err "cannot write $4 to ${target} (you may need sudo)"
+    rm -rf "$target" || err "cannot replace the previous $4 at ${target} (you may need sudo)"
+    mv "${target}.new" "$target" || err "cannot move $4 into ${target}"
+    info "$4 installed at $target"
+  elif [ "$KEEP_COMPONENTS" -eq 0 ] && [ -e "$target" ]; then
+    rm -rf "$target" || err "cannot remove the previously installed $4 at $target (you may need sudo)"
+    info "removed the previously installed $4 at $target"
+  fi
+}
+place_component "$WITH_OFFICE" "$OFFICE_NAME" office "LibreOffice (Office previews)"
+place_component "$WITH_RENDERER" "$RENDERER_NAME" pdfium "PDF page renderer"
+
 # ── Linux host shared libraries (ADR-052 C2) ─────────────────────────────────
 # The bundled full Chrome dynamically links against a documented set of
 # host libraries. They are present on a stock desktop; on a minimal server
@@ -429,6 +527,66 @@ if [ "$OS" = "Linux" ] && { [ -d "$CHROMIUM_DIR" ] || [ -d "$SHARE_CHROMIUM" ]; 
     install_host_libs_dnf
   else
     info "(note: neither apt-get nor dnf detected — Chrome's host shared libraries must be installed manually)"
+  fi
+fi
+
+# ── LibreOffice's Linux host shared libraries (office-preview spec §10) ─────
+# The system packages the official LibreOffice build needs to start (the
+# deb/rpm packages depend on the same list). The block below is a verbatim
+# copy of scripts/office-pack/libreoffice-host-libs.env — this script is
+# fetched on its own, so it cannot read that file; CI's
+# scripts/check-office-host-libs-sync.sh fails when the two differ. Entries
+# with "|" are package-name alternatives across distribution releases (e.g.
+# Ubuntu 24.04's t64 names): the first one apt knows is installed.
+# BEGIN libreoffice-host-libs
+OFFICE_DEB_LIBS="libx11-6 libx11-xcb1 libxext6 libxinerama1 libcairo2 libcups2t64|libcups2 libdbus-1-3 libfontconfig1 libfreetype6 libglib2.0-0t64|libglib2.0-0 libnss3 libnspr4"
+OFFICE_DEB_RECOMMENDS="fonts-liberation"
+OFFICE_RPM_LIBS="libX11 libX11-xcb libXext libXinerama cairo cups-libs dbus-libs fontconfig freetype glib2 nss nspr"
+OFFICE_RPM_RECOMMENDS="liberation-fonts"
+# END libreoffice-host-libs
+if [ "$OS" = "Linux" ] && [ "$WITH_OFFICE" -eq 1 ]; then
+  run_root() {
+    if [ "$(id -u)" -ne 0 ]; then sudo "$@"; else "$@"; fi
+  }
+  if command -v apt-get >/dev/null 2>&1; then
+    # Entries none of whose alternatives is installed yet.
+    MISSING=""
+    for entry in $OFFICE_DEB_LIBS $OFFICE_DEB_RECOMMENDS; do
+      have=0
+      for alt in $(printf '%s' "$entry" | tr '|' ' '); do
+        if dpkg -s "$alt" >/dev/null 2>&1; then have=1; break; fi
+      done
+      [ "$have" -eq 1 ] || MISSING="$MISSING $entry"
+    done
+    if [ -n "$MISSING" ]; then
+      # Package lists first: apt-cache cannot name an alternative without them.
+      run_root apt-get update >/dev/null 2>&1 \
+        || info "(note: apt-get update failed — trying the existing package lists)"
+      set --
+      for entry in $MISSING; do
+        pick=""
+        for alt in $(printf '%s' "$entry" | tr '|' ' '); do
+          if apt-cache show "$alt" >/dev/null 2>&1; then pick="$alt"; break; fi
+        done
+        [ -n "$pick" ] || err "none of $entry is available from apt — LibreOffice needs it (or re-run with --without-office)"
+        set -- "$@" "$pick"
+      done
+      info "installing LibreOffice host libraries: $*"
+      run_root apt-get install -y --no-install-recommends "$@" \
+        || err "failed to install LibreOffice host libraries (try: sudo apt-get install $*, or re-run with --without-office)"
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    set --
+    for lib in $OFFICE_RPM_LIBS $OFFICE_RPM_RECOMMENDS; do
+      rpm -q "$lib" >/dev/null 2>&1 || set -- "$@" "$lib"
+    done
+    if [ "$#" -gt 0 ]; then
+      info "installing LibreOffice host libraries: $*"
+      run_root dnf install -y "$@" \
+        || err "failed to install LibreOffice host libraries (try: sudo dnf install $*, or re-run with --without-office)"
+    fi
+  else
+    info "(note: neither apt-get nor dnf detected — LibreOffice's host libraries must be installed manually for Office previews)"
   fi
 fi
 

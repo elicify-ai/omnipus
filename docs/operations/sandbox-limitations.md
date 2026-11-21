@@ -36,6 +36,122 @@ With the workspace-path guard enabled, `../` text is still refused rather than r
 
 A worker that runs on Claude Code, Codex or opencode, and **Check CLI** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`), start their program directly, not through the sandboxed execution path, on every platform. Omnipus scrubs the program's environment and forces a worker's HTTP and HTTPS traffic through the runner egress proxy, but it applies no Landlock, seccomp or other filesystem confinement of its own: the tool relies on its own sandbox, and a working folder is not a boundary. Restrictions the program inherits from the gateway still apply: on Linux, the gateway's installed system-call filter applies to it too. Claude Code runs with its own permission prompts turned off, and a Codex standard parameter such as `--dangerously-bypass-approvals-and-sandbox`, set under **Settings → Third-party agents**, removes Codex's own sandbox, so Codex can then read and write anything the operating-system account running Omnipus can. The standard parameters are person-only, unfiltered, and each run that uses them is audited; see [security](../security.md#third-party-agent-programs-and-parameters). The program checks decide who may set or check a program and which file may start (see [security](../security.md#checking-an-external-command-line-program)); they do not confine the program once it runs. Their list of folders agents can write to also includes the operating system's temporary folder when it is absolute and is not the shared `/tmp` or `/private/tmp`, together with its resolved spelling. On macOS this is normally the folder named by `TMPDIR`; Windows uses its own temporary-folder selection. Shared temporary folders are not added automatically by this rule, but locations there are still checked when another configured root covers them. This reflects the normal enforcing per-turn sandbox policy, which removes the blanket shared-temp write grant. It is not a promise of protection in God Mode or without an enforcing sandbox.
 
+## Document preview programs
+
+The programs behind document previews (LibreOffice, the PDF renderer and the
+PDF text extractor; see [Documents in chat](../documents.md)) run as separate,
+resource-limited processes. Their memory limit differs by platform:
+
+| Platform | Memory limit |
+|---|---|
+| Linux 4.7 and later | Kernel-enforced data limit (`RLIMIT_DATA`): counts the private writable memory a program uses, not address space it only reserves; plus a stack limit of 8 MiB (never above the inherited one). Shared writable memory is not counted. |
+| Linux older than 4.7, or booted with `ignore_rlimit_data` | The limit is set but the kernel does not enforce it on `mmap`. Every preview result says `memory limit not enforced: <reason>`, and the gateway logs it at start. |
+| macOS | Best effort: a watchdog samples memory use and stops a program above its budget; use may briefly exceed it. |
+| Windows | Job Object memory limit; there is no file isolation. |
+
+When the kernel sandbox cannot be set up for these programs, they run with
+the limits only and the result says `converted without sandbox: <reason>`.
+
+When the kernel sandbox is active, LibreOffice can read only its own program
+files, the folder that holds the Omnipus program, the system libraries and
+fonts, and the temporary folder of the current preview. On Linux it can also
+read the random-number source (`/dev/urandom`) and the local list of user
+accounts (`/etc/passwd` and `/etc/nsswitch.conf`). On macOS it can also
+read, but not change, the checked list of LibreOffice parts it may load, and
+it can check that the folders above these exist, without seeing what is in
+them. It cannot read your files, the agents' files, other previews or anything
+else Omnipus stores. Checking a folder shows when something in it was last
+added or removed, but not what. On Linux the kernel sandbox cannot stop any
+program from checking whether a file or folder exists; LibreOffice still
+cannot list folders or read files outside the folders and files named here.
+
+**LibreOffice on Linux.** LibreOffice keeps its control connection point in the
+shared `/tmp` folder. While it converts a document, it may create connection
+points there, and it may delete files and connection points (not folders) in
+`/tmp` and its sub-folders that the account Omnipus runs as is allowed to
+delete. A document crafted to take over LibreOffice could use this during the
+preview to delete such files, including other programs' connection points, and
+to put its own connection point in their place. It cannot read, list or change
+what is inside files there, and it cannot create files, folders or links there.
+If the Omnipus data folder lies under `/tmp`, it is inside this delete right
+too, so keep the data folder outside `/tmp`.
+
+LibreOffice also reads the list of user accounts (account names, home folders
+and login shells; no passwords, and every account on the computer can already
+read it), so that its connection point belongs to the account Omnipus runs as
+instead of being open to every account on the computer.
+
+With `sandbox.filesystem_model` set to `confined`, Omnipus's own sandbox on
+Linux is set up at startup with these extra permissions for document previews,
+and nothing more:
+
+| Extra permission | What it covers | Why |
+|---|---|---|
+| Read | The list of user accounts (`/etc/passwd`) and the system font folders (`/usr/share/fonts` and, when it exists, `/usr/local/share/fonts`) | Previews keep the installed fonts, and LibreOffice's connection point stays private to the account Omnipus runs as |
+| Read and run | The Office preview and PDF preview program folders installed with Omnipus: `/usr/share/omnipus/office` and `/usr/share/omnipus/pdfium` for the `.deb` and `.rpm` packages, `/usr/local/share/omnipus/office` and `/usr/local/share/omnipus/pdfium` for the one-line installer's default and the Docker image, `<install folder>/../share/omnipus/office` and `…/pdfium` for another installer folder | Without it, the preview programs cannot read their own files in this mode and every preview fails |
+| Read and run | Each folder registered with `omnipus office register` or `omnipus pdf-renderer register` | The same, for a copy you installed yourself |
+| Read and run | The Omnipus program file itself (only the file, not its folder) | Omnipus starts each preview program through itself |
+
+Only folders that are installed when Omnipus starts get these permissions, and
+never for writing. The folders around them are not included (for example not
+the whole `/usr/local/bin` or `/usr/share/omnipus`). The whole file system
+(`/`), a protected system folder such as `/etc`, and any folder that lies
+inside or contains a folder Omnipus or an agent can write (the Omnipus data
+folder, `/tmp` and folders allowed for writing) are refused, and a preview
+that needs such a folder says so. These permissions belong to Omnipus's own
+startup sandbox only: the separate sandbox Omnipus builds for each agent shell
+command includes none of them, so agents can neither read nor run these
+programs. The default `open` mode needs none of this, because it already
+allows reading and running programs everywhere.
+
+A preview program installed, registered, moved or reinstalled while Omnipus
+runs is used only after Omnipus is stopped and started (for example with your
+service manager). The in-app restart is not enough in the confined sandbox,
+because the restarted Omnipus can keep the permissions of the first start.
+Until then a preview says so, and `omnipus office register` and
+`omnipus pdf-renderer register` print a reminder.
+
+A stricter setup, with a separate private folder for each preview and a block
+on LibreOffice opening network connections itself, is not switched on yet; it
+is tracked in issue #1856.
+
+Agents can never get write access to these programs' folders: shell approvals
+(**Allow** and **Allow once**), mounts (including one that contains a program
+folder, such as `/`) and new or changed write allowances that would give it, or
+that Omnipus cannot reduce to a folder, are refused where they would be created
+(the texts are in [Documents in chat](../documents.md#what-previews-need)).
+Access already in force is not refused: before every preview Omnipus checks for
+it and turns the component off for everyone.
+
+Limits of this protection:
+
+- On Windows, and when these programs run without the sandbox, the kernel does
+  not stop an agent's `bash` from writing an install folder. The refusal covers
+  only the writes Omnipus can see in the command text.
+- The shell refusal is part of the Auto-approve check. In God Mode that check
+  does not run.
+- A command that is still running and was given write access to a folder before
+  that folder became a program folder keeps that access. So does a command
+  still running after its mount was removed.
+- A folder agents can already write that is redirected by a link into a program
+  folder while a preview runs is seen by the next preview, which refuses; the
+  running preview is not stopped.
+
+If Omnipus stops during a preview, its next start ends the preview programs
+that were left running and removes their temporary folders. It acts only on a
+record Omnipus wrote outside the programs' own folder, and it stops a program
+only when its process ID, start time and program file all match that record.
+Limits of this cleanup:
+
+- On Windows, and when the programs run without the sandbox, nothing keeps the
+  programs from changing that record. This gives them nothing they could not
+  already do: they then run with Omnipus's own account and could stop those
+  processes and delete those folders themselves.
+- A program that left its process group, or a group whose first process has
+  already ended, is not stopped. A process that no longer matches its record
+  (for example a reused process ID) is not stopped either: its folder is kept
+  and the gateway log reports it at start.
+
 ## Landlock rights are gated by kernel version
 
 Omnipus asks the kernel for a set of Landlock rights when it applies the sandbox. Each right arrived with a specific kernel version, so an older kernel may not know all of them. The ABI (application binary interface — here, the version of Landlock's interface your kernel exposes) is reported by the kernel; Omnipus asks only for the rights that version supports.

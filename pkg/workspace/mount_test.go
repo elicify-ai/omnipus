@@ -10,6 +10,7 @@ package workspace
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -240,12 +241,98 @@ func TestCheckMountTarget_WarnsAndAllowsBroadTargets(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("#14 (mount target '/') is POSIX-specific; Windows has no single filesystem root")
 	}
-	t.Run("#14 target is / (contains omnipus home, and is canonically broad)", func(t *testing.T) {
-		resolved, warning, err := CheckMountTarget("/", omnipusHome)
-		require.NoError(t, err, "/ must NOT be refused")
-		require.NotEmpty(t, warning, "/ must warn")
-		require.Equal(t, "/", resolved)
+	// §3.2 (founder 2026-11-05) supersedes the 2026-08-12 warn-and-allow
+	// ruling for targets that contain a program folder: / contains every
+	// packaged slot LOCATION — protected whether or not anything is
+	// installed there — so it is refused even on a bare host, while #13's
+	// fake $HOME (a temp tree holding no slot location) stays warn-and-allow.
+	t.Run("#14 target is / (refused: it contains a §3.2 program folder location)", func(t *testing.T) {
+		_, warning, err := CheckMountTarget("/", omnipusHome)
+		assertProgramFolderRefusal(t, err, officeSlotCandidates(t))
+		require.Empty(t, warning, "a refused mount must not also warn-and-allow")
 	})
+}
+
+// officeSlotCandidates derives the packaged slot LOCATIONS from the spec §10
+// layout applied to this test binary's own location — never from the
+// production enumeration — so the §3.2 expectations stay independent of the
+// code under test. Slots are protected whether or not anything is installed
+// in them (§3.2), so the paths need not exist.
+func officeSlotCandidates(t *testing.T) []string {
+	t.Helper()
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	if resolved, evalErr := filepath.EvalSymlinks(exe); evalErr == nil {
+		exe = resolved
+	}
+	exeDir := filepath.Dir(exe)
+	if runtime.GOOS == "windows" {
+		return []string{filepath.Join(exeDir, "..", "office")}
+	}
+	candidates := []string{
+		filepath.Join(exeDir, "..", "office"),
+		filepath.Join(exeDir, "..", "pdfium"),
+	}
+	if runtime.GOOS == "darwin" {
+		candidates = append(candidates,
+			filepath.Join(exeDir, "..", "..", "..", "office"),
+			filepath.Join(exeDir, "..", "..", "..", "pdfium"))
+	} else {
+		candidates = append(candidates,
+			filepath.Join(exeDir, "..", "share", "omnipus", "office"),
+			filepath.Join(exeDir, "..", "share", "omnipus", "pdfium"))
+	}
+	return candidates
+}
+
+// officeSlotOverlapsTarget reports whether the §3.2 refusal must fire for a
+// mount target whose RESOLVED path is resolvedTarget: the target is, lies
+// inside, or contains one of the spec-derived slot locations.
+func officeSlotOverlapsTarget(t *testing.T, resolvedTarget string) bool {
+	t.Helper()
+	for _, slot := range officeSlotCandidates(t) {
+		resolvedSlot := filepath.Clean(slot)
+		if resolved, err := filepath.EvalSymlinks(resolvedSlot); err == nil {
+			resolvedSlot = resolved
+		}
+		if isWithinOrEqualPath(resolvedTarget, resolvedSlot) || isWithinOrEqualPath(resolvedSlot, resolvedTarget) {
+			return true
+		}
+	}
+	return false
+}
+
+// officeProgramMountRefusal is §3.2's fixed mount-refusal sentence, spelled
+// out here rather than imported so this internal test file carries its own
+// independent copy of the oracle text.
+func officeProgramMountRefusal(name, folder string) string {
+	return fmt.Sprintf("that folder cannot be mounted: it is, contains or lies inside the %s program folder (%s), "+
+		"and agents can never get write access there. Mount a folder that does not include it.", name, folder)
+}
+
+// assertProgramFolderRefusal pins the §3.2 mount refusal: ErrMountRefused
+// carrying the program-folder error — never the older data-directory or
+// operating-system guard — with the exact fixed sentence whose folder is one
+// of the spec-derived slot locations and whose component name pairs with it.
+func assertProgramFolderRefusal(t *testing.T, err error, candidates []string) {
+	t.Helper()
+	require.Error(t, err, "§3.2: a target overlapping a program folder location must be refused")
+	require.ErrorIs(t, err, ErrMountRefused)
+	assert.NotContains(t, err.Error(), "operating-system directory", "the refusal must be the §3.2 one, not the D-117 system guard")
+	assert.NotContains(t, err.Error(), "data directory", "the refusal must be the §3.2 one, not the FR-7.5 data-directory guard")
+	var program *ProgramFolderError
+	require.ErrorAs(t, err, &program)
+	require.Equal(t, officeProgramMountRefusal(program.Component, program.Folder), program.Reason(),
+		"the fixed §3.2 sentence must be the reason word-for-word")
+	require.Contains(t, candidates, program.Folder, "the named folder must be a spec-derived slot location")
+	switch filepath.Base(program.Folder) {
+	case "office":
+		require.Equal(t, "LibreOffice", program.Component, "§3.2 names the office component in the sentence")
+	case "pdfium":
+		require.Equal(t, "PDF renderer", program.Component, "§3.2 names the renderer component in the sentence")
+	default:
+		require.Fail(t, "the named folder must be a §10 slot leaf (office|pdfium)", program.Folder)
+	}
 }
 
 // TestCreateMount_HomeGrantsWriteButOmnipusHomeStaysProtected is the
@@ -628,7 +715,12 @@ func TestMountBoundary_HardlinkEscape_DocumentedGap(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // UAT 2026-09-13 D-117 — system directories are refused; /tmp and per-user
-// homes are broad (warned), on real paths as well as typed ones.
+// homes are broad (warned), on real paths as well as typed ones. Office
+// preview §3.2 (founder 2026-11-05) supersedes the broad warn-and-allow for
+// exactly one case: a broad tree that contains a packaged slot LOCATION
+// (protected whether or not anything is installed) is refused — whichever
+// broad folder holds this test binary's own build tree, on macOS and Linux
+// CI alike, is derived from the spec §10 layout, not from the environment.
 // ---------------------------------------------------------------------------
 
 func TestCheckMountTarget_D117_SystemDirsRefusedBroadDirsWarned(t *testing.T) {
@@ -652,7 +744,18 @@ func TestCheckMountTarget_D117_SystemDirsRefusedBroadDirsWarned(t *testing.T) {
 		if _, err := os.Stat(broad); err != nil {
 			continue
 		}
+		broadResolved, evalErr := filepath.EvalSymlinks(broad)
+		require.NoError(t, evalErr, "%s", broad)
 		resolved, warning, err := CheckMountTarget(broad, omnipusHome)
+		if officeSlotOverlapsTarget(t, broadResolved) {
+			// This broad tree contains one of the test binary's own packaged
+			// slot locations, so §3.2 refuses the mount where the old
+			// warn-and-allow ruling would have allowed it.
+			t.Logf("%s: contains a spec-derived slot location (binary %s) — expecting the §3.2 refusal", broad, func() string { exe, _ := os.Executable(); return exe }())
+			assertProgramFolderRefusal(t, err, officeSlotCandidates(t))
+			assert.Empty(t, warning, "%s: a refused mount must not also warn-and-allow", broad)
+			continue
+		}
 		require.NoError(t, err, "%s is broad, not refused (warn-and-allow)", broad)
 		assert.NotEmpty(t, warning, "%s (resolved %s) must carry a breadth warning", broad, resolved)
 		assert.True(t, IsBroadMountTarget(resolved), "IsBroadMountTarget must agree on the real path %s", resolved)

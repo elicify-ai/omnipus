@@ -9,7 +9,8 @@ import (
 )
 
 // TestSeedConfig_SeedsSkillAllowlistMatrix verifies the complete fresh-install
-// ADR-090 role-to-skill assignments in the expected matrix below.
+// ADR-090 role-to-skill assignments, amended by office-preview AD-14's merged
+// elicify-office identity, in the independent expected matrix below.
 func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = nil // fresh install — no agents yet
@@ -17,11 +18,11 @@ func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 
 	want := map[string][]string{
-		"mia":            {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"mia":            {"interview", "define-goal", "inbox-triage", "elicify-office"},
 		"jim":            {"interview", "orchestrate", "plan", "define-goal"},
 		"planner":        {"plan", "define-goal"},
 		"researcher":     {"deep-research"},
-		"worker":         {"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"worker":         {"elicify-office"},
 		"judge":          {"verify"},
 		"plansupervisor": {"plan", "define-goal"},
 	}

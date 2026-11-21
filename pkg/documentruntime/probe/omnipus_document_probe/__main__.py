@@ -53,10 +53,6 @@ def main():
         try: importlib.import_module(req["import"]); actual=importlib.metadata.version(req.get("distribution",req["import"]))
         except Exception as e: return fail(req.get("import","python"),str(e))
         if not check_version(actual,req.get("version","")): return fail(req["import"],f"version {actual} does not satisfy {req['version']}")
-    converter=pathlib.Path(manifest.get("converter",""))
-    if not converter.is_file(): return fail("converter",f"missing {converter}")
-    try: subprocess.run([str(converter),"--version"],check=True,capture_output=True,timeout=60)
-    except Exception as e: return fail("converter",str(e))
     node=pathlib.Path(manifest.get("node",""))
     if not node.is_file(): return fail("node",f"missing {node}")
     try:
