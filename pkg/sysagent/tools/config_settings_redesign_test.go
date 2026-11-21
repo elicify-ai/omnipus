@@ -44,6 +44,7 @@ package systools_test
 // Expected values come from the spec, never from the tool's current output.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,6 +55,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
@@ -533,6 +535,16 @@ type guardRow struct {
 	wantInRefusal string
 }
 
+// storedAsOverrides names the rows whose contract-stored shape differs from
+// the accepted request shorthand; the R3-02 readback asserts THIS shape for
+// them. The only entry is recap_fallback_models: the accepted request carries
+// plain slugs, while the stored contract type — MemorySettings.yaml items →
+// FallbackModel.yaml — is the object form {model, provider?, reasoning_effort?}.
+// The expectation comes from those schemas, never from the tool's behaviour.
+var storedAsOverrides = map[string]any{
+	"agents.defaults.recap_fallback_models": []any{map[string]any{"model": "fallback-x"}},
+}
+
 // allGuardRows drives the real set_config tool once per inventory value.
 // The ten spec-listed rows keep their spec-cited refusals verbatim (D-16,
 // the agent-tool field table, #936/#904); every other row's outcome is a
@@ -633,12 +645,47 @@ func guardRowKeys(rows []guardRow) []string {
 	return keys
 }
 
+// storedValueAt reads a dotted key back out of the STORED config, through a
+// plain JSON round trip in the test — deliberately not the tool's own dotGet,
+// so a mutant that breaks the write and the tool's read helper together still
+// cannot hide (CHECK R3-02: the parity guard must certify the real effect,
+// not a receipt). The inventory's keys have no channel-namespace segments, so
+// a plain split resolves every path the guard drives.
+func storedValueAt(t *testing.T, cfg *config.Config, key string) any {
+	t.Helper()
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("stored config did not marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("stored config did not unmarshal to a map: %v", err)
+	}
+	cur := any(m)
+	for _, seg := range strings.Split(key, ".") {
+		asMap, ok := cur.(map[string]any)
+		if !ok {
+			t.Fatalf("stored config has no object at a segment of %q", key)
+		}
+		v, ok := asMap[seg]
+		if !ok {
+			t.Fatalf("stored config has no key %q", key)
+		}
+		cur = v
+	}
+	return cur
+}
+
 // TestSettingsAgentWriteParity — FR-101, order 16. The inventory is built
 // from the two independent sources (specFieldTableKeys over the whole spec +
 // the retention trio, and the wireframe control map's value rows) and the
 // driven rows must match it EXACTLY, both ways, before anything runs. Every
 // inventory value is then proven through the REAL set_config tool: refusal
-// rows with their pinned family, setter rows with the documented receipt.
+// rows with their pinned family, setter rows with the documented receipt —
+// and, since CHECK R3-02 (mutant N36: a receipt that answers while the port
+// write is undone), the receipt alone is never the proof. A setter row reads
+// the stored config back and asserts the new value; a refusal asserts the
+// stored config is byte-identical to before.
 func TestSettingsAgentWriteParity(t *testing.T) {
 	inventory := fr101Inventory(t)
 	rows := allGuardRows()
@@ -656,8 +703,13 @@ func TestSettingsAgentWriteParity(t *testing.T) {
 	for _, tc := range rows {
 		t.Run(tc.key, func(t *testing.T) {
 			deps, cfg := newTestDeps(t)
-			compressedBefore := cfg.Tools.Manifest.Compressed
-			iterationsBefore := cfg.Agents.Defaults.MaxToolIterations
+			// The stored config before the write, marshaled once — the
+			// refusal-unchanged oracle (any JSON-visible field that moves is a
+			// changed state, whatever the receipt claims).
+			before, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatalf("fixture config did not marshal: %v", err)
+			}
 
 			res := systools.NewConfigSetTool(deps).Execute(context.Background(),
 				map[string]any{"key": tc.key, "value": tc.value})
@@ -669,6 +721,17 @@ func TestSettingsAgentWriteParity(t *testing.T) {
 				}
 				if !strings.Contains(res.ForLLM, tc.wantInRefusal) {
 					t.Errorf("refusal for %q must contain %q: %s", tc.key, tc.wantInRefusal, res.ForLLM)
+				}
+				// R3-02: after a refusal, the state is unchanged. Replaces the
+				// old two-field spot check (tools.manifest.compressed and
+				// agents.defaults.max_tool_iterations) with the whole config —
+				// strictly stronger; both replaced checks are subsumed.
+				after, err := json.Marshal(cfg)
+				if err != nil {
+					t.Fatalf("stored config did not marshal after the refusal: %v", err)
+				}
+				if !bytes.Equal(before, after) {
+					t.Errorf("refused write for %q changed the stored config (FR-101: a refusal stores nothing)", tc.key)
 				}
 			} else {
 				// Setter row: the receipt must be the documented JSON with the
@@ -694,14 +757,19 @@ func TestSettingsAgentWriteParity(t *testing.T) {
 					t.Errorf("receipt previous_value equals the sent value for %q — the pin's value must differ "+
 						"from the stored one, or the write proves nothing", tc.key)
 				}
-			}
-			// Refusals happen before dotSet, so nothing can land; assert the
-			// two representable fields anyway (belt and braces).
-			if cfg.Tools.Manifest.Compressed != compressedBefore {
-				t.Errorf("write changed tools.manifest.compressed")
-			}
-			if cfg.Agents.Defaults.MaxToolIterations != iterationsBefore {
-				t.Errorf("write changed agents.defaults.max_tool_iterations")
+				// R3-02: the receipt is not the effect — read the stored
+				// config back and assert the sent value landed. (Mutant N36
+				// answered a correct receipt while restoring the old port.)
+				// storedAsOverrides carries the rows whose contract-stored
+				// shape differs from the accepted request shorthand.
+				wantStored := tc.value
+				if override, ok := storedAsOverrides[tc.key]; ok {
+					wantStored = override
+				}
+				if got := storedValueAt(t, cfg, tc.key); !reflect.DeepEqual(got, wantStored) {
+					t.Errorf("stored config holds %#v at %q after an accepted write, want %#v",
+						got, tc.key, wantStored)
+				}
 			}
 		})
 	}
