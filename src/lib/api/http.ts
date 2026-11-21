@@ -215,6 +215,16 @@ export interface RequestOptions { // not-wire-format: in-browser transport switc
    * other state-changing call keeps the one-time recovery.
    */
   csrfRetry?: boolean
+  /**
+   * false: a planted-cookie 403 raises no toast and stores no retry closure;
+   * the error is returned to the caller (B1: the four package calls own their
+   * recovery — epic #1094 spec "No automatic resend"). Default true, so every
+   * other caller keeps today's one-retry toast.
+   *
+   * RED STUB (issue #1967 slice B1): declared only — no code reads it yet.
+   * GREEN wires it in request() beside raisePlantedCookieToast.
+   */
+  plantedCookieToast?: boolean
 }
 
 // ── Planted-cookie recovery (ADR-094 FR-015(4) / S-4.2, order 27) ────────────

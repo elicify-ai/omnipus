@@ -101,6 +101,12 @@ type packageT5Seams struct {
 
 	// Now is the staging clock (Dataset D9). nil means time.Now.
 	Now func() time.Time
+
+	// PlanOpenSecretFile is nil in production. The B1 no-open test's planted
+	// control sets it: the plan create handler calls it once (a deliberate
+	// open of a watched secret file, output unchanged) so the open watcher
+	// proves it would see a leak (spec "Review never opens secret files").
+	PlanOpenSecretFile func()
 }
 
 // packageT5 is the process-wide seam set. Tests must not run in parallel.
@@ -113,7 +119,8 @@ func packageSeamsBlocked() bool {
 	return s.AuditWrite != nil || s.CrashAt != "" || s.Reload != nil || s.ReloadTimeout ||
 		s.EnsureMain != nil || s.WriteWorkspace != nil || s.SaveDelegation != nil ||
 		s.AfterMembershipWrite != nil || s.PublishRename != nil || s.DiscardPending != nil ||
-		s.CreatePendingFault != "" || s.RecoveryLeave != nil || s.SyncDir != nil || s.Now != nil
+		s.CreatePendingFault != "" || s.RecoveryLeave != nil || s.SyncDir != nil || s.Now != nil ||
+		s.PlanOpenSecretFile != nil
 }
 
 func packageNow() time.Time {
@@ -195,6 +202,11 @@ func (a *restAPI) forgetPreview(stagingID string) {
 // export and apply with the 1 MiB JSON limit.
 func (a *restAPI) registerPackageRoutes(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/packages/export", a.adminWrap(a.handlePackageExport))
+	// B1 review routes (spec Reachability): exact create path plus the
+	// /{plan_id} subtree. RED STUB handlers answer 501; GREEN replaces them
+	// with the real create/read over the plan store and the 1 MiB JSON limit.
+	cm.RegisterHTTPHandler("/api/v1/packages/export/plan", a.adminWrap(a.handlePackageExportPlanCreate))
+	cm.RegisterHTTPHandler("/api/v1/packages/export/plan/", a.adminWrap(a.handlePackageExportPlanRead))
 	cm.RegisterHTTPHandler("/api/v1/packages/import",
 		a.withAuthAndBodyLimit(middleware.RequireNotBypass(a.handlePackageImport), packageUploadBodyLimit))
 	cm.RegisterHTTPHandler("/api/v1/packages/import/", a.adminWrap(a.handlePackageImportApply))

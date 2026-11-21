@@ -1,0 +1,81 @@
+// Import File step — unknown upload answer, spec order 26a (issue #1967 B1).
+// Oracle: spec scenario "Unknown upload answer is not resent": the upload's
+// connection is cut after the server accepted it → exactly ONE upload request
+// and the did-not-confirm text; the step stays. Real transport over a mocked
+// fetch (the packages module stays real; this is a lost-answer row, not a
+// replay row, but the real pipeline costs nothing and pins the counting).
+import React from 'react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+
+let mockSearch: Record<string, string | undefined> = {}
+
+const { navigateSpy, mockAgents, mockWorkspaces } = vi.hoisted(() => ({
+  navigateSpy: vi.fn(),
+  mockAgents: vi.fn(),
+  mockWorkspaces: vi.fn(),
+}))
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts, useSearch: () => mockSearch }),
+    useNavigate: () => navigateSpy,
+  }
+})
+
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  fetchAgents: mockAgents,
+  fetchWorkspaces: mockWorkspaces,
+}))
+
+import { Route } from '@/routes/_app/export-import'
+import { rememberIdentityMode } from '@/lib/api/identityMode'
+import { useUiStore } from '@/store/ui'
+
+const DID_NOT_CONFIRM =
+  'Omnipus did not confirm the upload. Choose the file again. If the upload did arrive, it can no longer be used after 30 minutes, and Omnipus will try to remove its temporary files at a later upload.'
+
+beforeEach(() => {
+  mockSearch = { wizard: 'import' }
+  navigateSpy.mockReset()
+  mockAgents.mockResolvedValue([])
+  mockWorkspaces.mockResolvedValue([])
+  rememberIdentityMode('local')
+  useUiStore.setState({ addToast: vi.fn() as unknown as () => void })
+  document.cookie = 'csrf=import-unknown-test; path=/'
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  document.cookie = 'csrf=; max-age=0; path=/'
+  sessionStorage.clear()
+})
+
+describe('Unknown upload answer is not resent (US-5, D2-14)', () => {
+  it('a cut upload connection: exactly one upload request and the did-not-confirm text', async () => {
+    const uploadCalls: Array<unknown> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url)
+      if (u.endsWith('/api/v1/packages/import')) {
+        uploadCalls.push(u)
+        throw new TypeError('connection cut')
+      }
+      throw new Error(`unexpected fetch in test: ${u}`)
+    })
+    const Component = (Route as unknown as { component: React.ComponentType }).component
+    render(<Component />)
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File([new Uint8Array(64)], 'bundle.omnpkg', { type: 'application/octet-stream' })
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } })
+    })
+    expect(await screen.findByText(DID_NOT_CONFIRM)).toBeInTheDocument()
+    expect(uploadCalls, 'exactly one upload request, never resent').toHaveLength(1)
+    // Still on the File step.
+    expect(screen.getByRole('button', { name: 'Choose a bundle file' })).toBeInTheDocument()
+    expect(screen.queryByText('Will be added')).toBeNull()
+  })
+})

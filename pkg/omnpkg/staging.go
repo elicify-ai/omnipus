@@ -24,6 +24,12 @@ const (
 	StagingApplying     StagingState = "applying"
 	StagingDone         StagingState = "done"
 	StagingNeedsCleanup StagingState = "needs-cleanup"
+
+	// StagingCancelled (B1 cancel lifecycle; spec "Cancel lifecycle"): a ready
+	// staging whose folder could not be removed. It can never be applied, does
+	// not count as a slot, and its folder removal is attempted again by the
+	// next upload's Sweep or a repeated cancel — never on a timer or at boot.
+	StagingCancelled StagingState = "cancelled"
 )
 
 // UnfinishedImport names a kept orphan staging for the unfinished_import_found
@@ -47,6 +53,18 @@ type StagingRegistry struct {
 	now     func() time.Time
 	entries map[string]*stagingEntry
 	orphans map[string]UnfinishedImport // kept orphan folders with an unfinished journal
+
+	// RemoveDir is nil in production. A test sets it to make folder removal
+	// fail once (the B1 cancel spec's "test seam makes the removal fail"):
+	// when set, it replaces os.RemoveAll for Cancel's folder removal only.
+	RemoveDir func(dir string) error
+
+	// AfterBeginApply is nil in production. A test sets it to pause an apply
+	// right after BeginApply moved the staging to applying (the B1
+	// cancel/apply interleaving checkpoint). Called with the registry lock
+	// RELEASED, so the test's concurrent cancel can take the lock; the apply
+	// resumes when the function returns (a channel handshake, never a sleep).
+	AfterBeginApply func(id string)
 }
 
 // NewStagingRegistry builds a registry over base with the given clock.
@@ -175,18 +193,46 @@ func (r *StagingRegistry) State(id string) (StagingState, error) {
 // already running anywhere, FR-038).
 func (r *StagingRegistry) BeginApply(id string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	e, ok := r.entries[id]
 	if !ok || e.state != StagingReady || r.expiredLocked(e) {
+		r.mu.Unlock()
 		return newErr(CodeStagingNotFound)
 	}
 	for _, other := range r.entries {
 		if other.state == StagingApplying {
+			r.mu.Unlock()
 			return newErr(CodeImportInProgress)
 		}
 	}
 	e.state = StagingApplying
+	hook := r.AfterBeginApply
+	r.mu.Unlock()
+	// Test seam (nil in production): pauses the apply at the B1 interleaving
+	// checkpoint — the state change is visible, the lock is released, so a
+	// concurrent cancel observes "applying" (spec "Cancel and apply at the
+	// same moment"). Behaviour with the hook nil is unchanged.
+	if hook != nil {
+		hook(id)
+	}
 	return nil
+}
+
+// errCancelNotStubbed is what the RED cancel stub returns; GREEN removes it
+// with the stub body.
+var errCancelNotStubbed = errors.New("omnpkg: staging cancel not implemented (RED stub, issue #1967 slice B1)")
+
+// Cancel is the B1 ready-only cancel (spec "Cancel lifecycle"): one registry
+// operation under the single lock; a ready staging's folder is removed and the
+// entry dropped (204); on removal failure the entry moves to cancelled and the
+// caller reports staging_cleanup_failed; receiving, applying and
+// needs-cleanup answer staging_busy; done and unknown IDs answer
+// staging_not_found. It is not Release: a cancelled staging keeps its entry
+// (never applicable, not a slot) until a removal succeeds.
+//
+// RED STUB: returns errCancelNotStubbed for every input.
+func (r *StagingRegistry) Cancel(id string) error {
+	_ = id
+	return errCancelNotStubbed
 }
 
 // AbortApply returns an applying staging to ready after a refusal that wrote

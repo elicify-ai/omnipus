@@ -132,3 +132,25 @@ func (s *packageExportSource) IsCoreAgent(id string) bool {
 	}
 	return false
 }
+
+// handlePackageExportPlanCreate is POST /api/v1/packages/export/plan (B1
+// review create, FR-001/FR-002).
+//
+// RED STUB (issue #1967 B1, test author scaffold): answers 501 for every
+// request. GREEN replaces this body with request validation and the real
+// BuildExportPlan over the plan store.
+func (a *restAPI) handlePackageExportPlanCreate(w http.ResponseWriter, r *http.Request) {
+	_ = a
+	_ = r
+	jsonErr(w, http.StatusNotImplemented, "not implemented")
+}
+
+// handlePackageExportPlanRead is GET /api/v1/packages/export/plan/{plan_id}
+// (B1 review read, FR-007).
+//
+// RED STUB: answers 501 for every request.
+func (a *restAPI) handlePackageExportPlanRead(w http.ResponseWriter, r *http.Request) {
+	_ = a
+	_ = r
+	jsonErr(w, http.StatusNotImplemented, "not implemented")
+}
