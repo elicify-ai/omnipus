@@ -29,15 +29,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+// Type-only: the save callback's real contract is the Save bar's
+// WriteResponse (saveOutcome.ts), the shape classifyWrite reads.
+import type { WriteResponse } from './saveOutcome'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   return { ...actual }
 })
 
-async function loadSaveBar(): Promise<any> {
+async function loadSaveBar(): Promise<typeof import('@/components/settings/SaveBar')['SaveBar']> {
   try {
-    const mod: any = await vi.importActual('@/components/settings/SaveBar')
+    const mod = await vi.importActual<typeof import('@/components/settings/SaveBar')>('@/components/settings/SaveBar')
     return mod.SaveBar ?? mod.default
   } catch {
     throw new Error(
@@ -49,7 +52,7 @@ async function loadSaveBar(): Promise<any> {
 
 // One editable Gateway field (log level) rendered through the Save bar; the
 // save callback resolves to the given fetch-like response.
-async function renderSaveBarWith(saveImpl: (body: unknown) => Promise<any>) {
+async function renderSaveBarWith(saveImpl: (body: unknown) => Promise<WriteResponse>) {
   const SaveBar = await loadSaveBar()
   render(<SaveBar section="gateway" fields={[{ key: 'gateway.log_level', label: 'Log level', value: 'info', kind: 'select', options: ['info', 'debug'] }]} onSave={saveImpl} onDiscard={vi.fn()} />)
   await userEvent.selectOptions(screen.getByLabelText('Log level'), 'debug')
@@ -93,7 +96,7 @@ describe('FR-020 — each write ends in one of four outcomes', () => {
   })
 
   it('an unknown result is checked by reading the saved value back — draft equals the saved value, key not listed → saved and in use (FR-020, C-6)', async () => {
-    const fetchMock = vi.fn(async (input: any) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/config/pending-restart')) {
         return { ok: true, status: 200, json: async () => [] }
@@ -135,7 +138,7 @@ describe('FR-020 — each write ends in one of four outcomes', () => {
   })
 
   it('a changed-elsewhere value is reported as neither saved nor unsaved', async () => {
-    const fetchMock = vi.fn(async (input: any) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes('/config/pending-restart')) {
         return { ok: true, status: 200, json: async () => [] }
       }

@@ -66,10 +66,10 @@ vi.mock('@/store/ui', () => ({ useUiStore: () => ({ addToast: vi.fn() }) }))
 import * as api from '@/lib/api'
 
 /** The LimitsSection is new in this package; missing it is a loud BLOCKED. */
-async function loadLimits(): Promise<(p: { prefillOverride?: unknown }) => React.ReactElement> {
+async function loadLimits(): Promise<typeof import('./LimitsSection')['LimitsSection']> {
   try {
-    const mod: any = await vi.importActual('./LimitsSection')
-    return mod.LimitsSection ?? mod.default
+    const mod = await vi.importActual<typeof import('./LimitsSection')>('./LimitsSection')
+    return mod.LimitsSection
   } catch {
     throw new Error(
       'BLOCKED RED (FR-058/FR-066/FR-072): the Limits section (LimitsSection) does not exist yet — ' +

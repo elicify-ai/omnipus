@@ -26,6 +26,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+// Type-only: the runtime module loads through loadSaveBar's BLOCKED RED
+// importActual; the erased type gives the field fixture the real contract.
+import type { SaveBarField } from './useSaveBar'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   createRouter,
@@ -61,9 +64,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-async function loadSaveBar(): Promise<any> {
+async function loadSaveBar(): Promise<typeof import('@/components/settings/SaveBar')['SaveBar']> {
   try {
-    const mod: any = await vi.importActual('@/components/settings/SaveBar')
+    const mod = await vi.importActual<typeof import('@/components/settings/SaveBar')>('@/components/settings/SaveBar')
     return mod.SaveBar ?? mod.default
   } catch {
     throw new Error(
@@ -73,7 +76,7 @@ async function loadSaveBar(): Promise<any> {
   }
 }
 
-const gatewayLogLevelField = {
+const gatewayLogLevelField: SaveBarField = {
   key: 'gateway.log_level',
   label: 'Log level',
   value: 'info',

@@ -37,6 +37,10 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+// Type-only: the runtime modules load through the BLOCKED RED importActual
+// helpers; the erased types give the fixtures and planner calls the real
+// contracts (SaveBarField, PlannedWrite) without touching the wire.
+import type { SaveBarField } from './useSaveBar'
 
 // Reads are mocked per section below; the WRITE functions stay real so each
 // real-form test can assert what actually leaves for the network. Local
@@ -69,9 +73,9 @@ import { SandboxSection } from './SandboxSection'
 import { SecuritySection } from './SecuritySection'
 import { IntegrationsSection } from './IntegrationsSection'
 
-async function loadSavePlanner(): Promise<any> {
+async function loadSavePlanner(): Promise<typeof import('@/components/settings/savePlanner')> {
   try {
-    return await vi.importActual('@/components/settings/savePlanner')
+    return await vi.importActual<typeof import('@/components/settings/savePlanner')>('@/components/settings/savePlanner')
   } catch {
     throw new Error(
       'BLOCKED RED (FR-030, D-8, order 23): the Settings save planner does not exist yet — ' +
@@ -81,7 +85,7 @@ async function loadSavePlanner(): Promise<any> {
 }
 
 // D-8 sections and their password-marked rows (FR-025 badge list; C-4 table).
-const D8_PASSWORD_SECTIONS: Array<{ section: string; endpoint: string; fields: any[] }> = [
+const D8_PASSWORD_SECTIONS: Array<{ section: string; endpoint: string; fields: SaveBarField[] }> = [
   {
     section: 'providers',
     endpoint: '/api/v1/integrations/providers/',
@@ -138,7 +142,7 @@ const D8_NO_PASSWORD_SECTIONS = [
 type Call = { url: string; init: RequestInit }
 function stubFetch() {
   const calls: Call[] = []
-  const fetchMock = vi.fn(async (input: any, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     calls.push({ url, init: init ?? {} })
     const respond = (status: number, body: unknown) => ({
@@ -161,12 +165,16 @@ function stubFetch() {
 
 const callsTo = (calls: Call[], fragment: string) => calls.filter((c) => c.url.includes(fragment))
 
-async function loadHarnessModules(): Promise<any> {
+async function loadHarnessModules(): Promise<{
+    SaveBar: typeof import('@/components/settings/SaveBar')['SaveBar']
+    SettingsShellContext: typeof import('@/components/settings/SettingsShellContext')['SettingsShellContext']
+    useSavePasswordPrompt: typeof import('@/components/settings/useSavePasswordPrompt')['useSavePasswordPrompt']
+  }> {
   try {
     const [saveBar, shell, prompt] = await Promise.all([
-      vi.importActual<any>('@/components/settings/SaveBar'),
-      vi.importActual<any>('@/components/settings/SettingsShellContext'),
-      vi.importActual<any>('@/components/settings/useSavePasswordPrompt'),
+      vi.importActual<typeof import('@/components/settings/SaveBar')>('@/components/settings/SaveBar'),
+      vi.importActual<typeof import('@/components/settings/SettingsShellContext')>('@/components/settings/SettingsShellContext'),
+      vi.importActual<typeof import('@/components/settings/useSavePasswordPrompt')>('@/components/settings/useSavePasswordPrompt'),
     ])
     return { SaveBar: saveBar.SaveBar ?? saveBar.default, SettingsShellContext: shell.SettingsShellContext, useSavePasswordPrompt: prompt.useSavePasswordPrompt }
   } catch {
@@ -235,8 +243,8 @@ describe('D-8 — the real save planner: at most one protected endpoint per sect
   it.each(D8_PASSWORD_SECTIONS.map((s) => [s.section, s] as const))(
     '%s: exactly one protected write to its one endpoint',
     async (_name, spec) => {
-      const planner: any = await loadSavePlanner()
-      const writes: any[] = planner.planSectionSave(spec.section, spec.fields)
+      const planner = await loadSavePlanner()
+      const writes = planner.planSectionSave(spec.section, spec.fields)
       const protectedWrites = writes.filter((w) => w.password)
       expect(protectedWrites.length, `BLOCKED RED (D-8): ${spec.section} must send exactly one protected write`).toBe(1)
       expect(protectedWrites[0].endpoint).toContain(spec.endpoint)
@@ -246,17 +254,20 @@ describe('D-8 — the real save planner: at most one protected endpoint per sect
   it.each(D8_NO_PASSWORD_SECTIONS.map((s) => [s] as const))(
     '%s: no protected write at all (D-8 row 5)',
     async (section) => {
-      const planner: any = await loadSavePlanner()
-      const writes: any[] = planner.planSectionSave(section, [
-        { key: `${section}.example`, label: 'Example', value: 'changed', kind: 'text' },
-      ])
+      const planner = await loadSavePlanner()
+      // Typed as the Save-bar field contract; PlannedField (the planner's
+      // parameter) accepts the SaveBarField superset, and a named constant
+      // keeps the extra screen-side properties off the planner's fresh
+      // literal check.
+      const exampleField: SaveBarField = { key: `${section}.example`, label: 'Example', value: 'changed', kind: 'text' }
+      const writes = planner.planSectionSave(section, [exampleField])
       expect(writes.filter((w) => w.password).length,
         `BLOCKED RED (D-8 row 5): ${section} carries no password values`).toBe(0)
     },
   )
 
   it('the whole planner table passes the guard (every section has at most one protected endpoint)', async () => {
-    const planner: any = await loadSavePlanner()
+    const planner = await loadSavePlanner()
     expect(() => {
       for (const spec of D8_PASSWORD_SECTIONS) {
         planner.assertOneProtectedEndpointPerSection({ [spec.section]: [spec.endpoint] })
@@ -270,7 +281,7 @@ describe('D-8 — the real save planner: at most one protected endpoint per sect
 
 describe('FR-030 positive control — an injected second protected endpoint must fail the guard', () => {
   it('a section with two protected endpoints makes the guard fail', async () => {
-    const planner: any = await loadSavePlanner()
+    const planner = await loadSavePlanner()
     const injected = { gateway: ['/api/v1/config', '/api/v1/security/sandbox-config'] }
     expect(() => planner.assertOneProtectedEndpointPerSection(injected)).toThrow(
       /more than one protected endpoint|at most one protected endpoint/i,
@@ -331,7 +342,7 @@ describe('D-8 note — the generic Save bar with a HANDWRITTEN writer (boundary:
         // for providers the fixture's saved value IS options[1], and
         // selecting it again is a no-op that drafts nothing (FR-010: the bar
         // counts changes, not selections).
-        const next = f.options.find((o: unknown) => String(o) !== String(f.value)) ?? f.options[1]
+        const next = f.options?.find((o: unknown) => String(o) !== String(f.value)) ?? f.options?.[1]
         await userEvent.selectOptions(screen.getByLabelText(f.label), String(next))
       } else if (f.kind === 'switch') {
         await userEvent.click(screen.getByRole('switch', { name: f.label }))
@@ -382,7 +393,7 @@ function stubWire(reply: Record<string, unknown>) {
     json: async () => body,
     text: async () => JSON.stringify(body),
   })
-  const fetchMock = vi.fn(async (input: any, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     calls.push({ url, init: init ?? {} })
     if (url.includes('/auth/reauth')) {

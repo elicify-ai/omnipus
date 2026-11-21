@@ -39,6 +39,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { PendingRestartEntry } from '@/lib/api'
+
+/**
+ * The fetch-like reply stubResponse builds: the shape request()
+ * (http.ts::performRequest) actually reads — ok, status, headers, json —
+ * structurally Response-compatible where it is consumed.
+ */
+type FetchLikeReply = { ok: boolean; status: number; headers: Headers; json: () => Promise<unknown> }
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -49,7 +57,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // answer (PendingRestartEntry shape). Mutable per test. The mock mirrors the
 // real hook's return shape (`{ entries }`, src/hooks/restart.ts::usePendingRestart)
 // — the earlier `{ data }` shape was never the hook's contract.
-const restartState: { entries: any[] } = { entries: [] }
+const restartState: { entries: PendingRestartEntry[] } = { entries: [] }
 const mockRefetchPending = vi.fn().mockResolvedValue(undefined)
 vi.mock('@/hooks/restart', () => ({
   usePendingRestart: () => ({ entries: restartState.entries, refetch: mockRefetchPending }),
@@ -73,14 +81,14 @@ const calls: Array<{ url: string }> = []
 function stubResponse(json: unknown, status = 200) {
   return { ok: status >= 200 && status < 300, status, headers: new Headers(), json: async () => json }
 }
-const fetchBehavior: { health: () => Promise<any>; about: () => Promise<any>; pending: () => Promise<any> } = {
+const fetchBehavior: { health: () => Promise<FetchLikeReply>; about: () => Promise<FetchLikeReply>; pending: () => Promise<FetchLikeReply> } = {
   health: async () => stubResponse({ status: 'ok' }),
   about: async () => stubResponse({ version: '1.2.3', go_version: 'go1.24', os: 'linux', arch: 'amd64', uptime_seconds: 999_999 }),
   pending: async () => stubResponse(restartState.entries),
 }
 vi.stubGlobal(
   'fetch',
-  vi.fn(async (input: any) => {
+  vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     calls.push({ url })
     if (url.includes('/health')) return fetchBehavior.health()
@@ -90,13 +98,13 @@ vi.stubGlobal(
   }),
 )
 
-const PORT_ENTRY = { key: 'gateway.port', applied_value: 8080, persisted_value: 8081, reason: 'restart_required' }
+const PORT_ENTRY: PendingRestartEntry = { key: 'gateway.port', applied_value: 8080, persisted_value: 8081, reason: 'restart_required' }
 // The direct case needs the page port to EQUAL the running port (FR-063's
 // precondition: "page port equals the running port"). jsdom serves this page
 // on localhost:3000, so the fixture's applied value is 3000 — a harness
 // accommodation to the test browser's own address, not a spec value; the
 // saved port 8081 is the spec's example new address.
-const DIRECT_PORT_ENTRY = { key: 'gateway.port', applied_value: 3000, persisted_value: 8081, reason: 'restart_required' }
+const DIRECT_PORT_ENTRY: PendingRestartEntry = { key: 'gateway.port', applied_value: 3000, persisted_value: 8081, reason: 'restart_required' }
 
 function renderModal() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })

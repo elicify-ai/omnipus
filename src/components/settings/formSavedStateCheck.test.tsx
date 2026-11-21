@@ -262,7 +262,7 @@ const LOST = new Error('the answer was lost')
 
 function stubPendingRestartWire() {
   const calls: string[] = []
-  const fetchMock = vi.fn(async (input: any) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     calls.push(url)
     if (url.includes('/config/pending-restart')) {

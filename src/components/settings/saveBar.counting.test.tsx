@@ -30,10 +30,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+// Type-only: the runtime module loads through loadSaveBar's BLOCKED RED
+// importActual; the erased types give the fixtures and the harness's props
+// the real Save-bar contracts (SaveBarField / SaveHandler).
+import type { SaveBarField, SaveHandler } from './useSaveBar'
 
-async function loadSaveBar(): Promise<any> {
+async function loadSaveBar(): Promise<typeof import('@/components/settings/SaveBar')['SaveBar']> {
   try {
-    const mod: any = await vi.importActual('@/components/settings/SaveBar')
+    const mod = await vi.importActual<typeof import('@/components/settings/SaveBar')>('@/components/settings/SaveBar')
     return mod.SaveBar ?? mod.default
   } catch {
     throw new Error(
@@ -46,7 +50,7 @@ async function loadSaveBar(): Promise<any> {
 // D-10 rows 1/2/13: Gateway → Port. Range and message are the spec's; the
 // field is a text input because D-10 row 13 types "80a" (a number input
 // would filter it before the screen's own validation could see it).
-const PORT_FIELD = {
+const PORT_FIELD: SaveBarField = {
   key: 'gateway.port',
   label: 'Port',
   value: '8080',
@@ -57,7 +61,7 @@ const PORT_FIELD = {
   restart: true,
 }
 // Plain field (no restart, no password): Gateway → Log level.
-const LOG_FIELD = {
+const LOG_FIELD: SaveBarField = {
   key: 'gateway.log_level',
   label: 'Log level',
   value: 'info',
@@ -65,7 +69,7 @@ const LOG_FIELD = {
   options: ['info', 'warning', 'debug'],
 }
 // Password-marked (FR-011 counts "needs your password"); FR-025/FR-037 badge rows.
-const SHELL_LIMIT_FIELD = {
+const SHELL_LIMIT_FIELD: SaveBarField = {
   key: 'sandbox.workspace_path_guard',
   label: 'Shell workspace limit',
   value: false,
@@ -74,7 +78,7 @@ const SHELL_LIMIT_FIELD = {
   restart: true,
 }
 
-async function renderSaveBar(fields: any[], props: Record<string, unknown> = {}) {
+async function renderSaveBar(fields: SaveBarField[], props: { onSave?: SaveHandler; onDiscard?: () => void } = {}) {
   const SaveBar = await loadSaveBar()
   // FR-018's "Changes saved." goes to the shell's one page-level live region
   // (FR-071). A Save bar rendered alone has no shell — its announce is a
@@ -82,7 +86,7 @@ async function renderSaveBar(fields: any[], props: Record<string, unknown> = {})
   // same contract the real shell implements (SettingsShellContext.tsx). The
   // announcement is asserted at that boundary; the live-region DOM itself is
   // the shell's, covered by the shell tests.
-  const { SettingsShellContext } = await vi.importActual<any>('@/components/settings/SettingsShellContext')
+  const { SettingsShellContext } = await vi.importActual<typeof import('@/components/settings/SettingsShellContext')>('@/components/settings/SettingsShellContext')
   const announceCalls: string[] = []
   const view = render(
     <SettingsShellContext.Provider
@@ -198,7 +202,7 @@ describe('FR-018 — the saved signal stays long enough to read', () => {
     vi.setSystemTime(new Date('2026-11-20T14:07:00'))
   }
 
-  async function saveOnce(fields: any[]) {
+  async function saveOnce(fields: SaveBarField[]) {
     const view = await renderSaveBar(fields)
     fireEvent.change(screen.getByLabelText('Log level'), { target: { value: 'debug' } })
     await act(async () => {

@@ -87,7 +87,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       memory_retros_forever: false,
       keep_everything_forever: false,
     })),
-    updateRetentionSettings: vi.fn(async (_body: unknown) => ({
+    updateRetentionSettings: vi.fn(async () => ({
       session_days: 90,
       memory_retros_days: 180,
       memory_retros_forever: false,

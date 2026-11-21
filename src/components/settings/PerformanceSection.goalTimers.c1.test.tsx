@@ -384,7 +384,7 @@ describe('C1 saved interval while an off draft is pending', () => {
     // the implementation.
     const retainedMinutes = 75
     const view = await mount()
-    let controls = timerControls()
+    const controls = timerControls()
     let before = { ...server }
     await typeDraft(controls.minutes, String(retainedMinutes))
     await saveDraft({ goal_stalled_checkin_minutes: retainedMinutes }, /interval/i, before)

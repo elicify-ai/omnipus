@@ -135,7 +135,7 @@ function renderProtection(ui: ReactElement) {
 /** The way the Protection screen renders the section: draft mode on the section's Save bar. */
 async function renderProtectionView() {
   const { SettingsShellContext } = await loadShellContext()
-  const requestPassword = vi.fn(async (_labels: string[]) => 'tok-unused')
+  const requestPassword = vi.fn(async () => 'tok-unused')
   const offerRestart = vi.fn()
   renderProtection(
     <SettingsShellContext.Provider

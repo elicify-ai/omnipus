@@ -45,13 +45,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+// Type-only: the runtime modules load through loadHarnessModules's BLOCKED
+// RED importActual; the erased types give the fixtures and the Harness's
+// onSave the real Save-bar contracts (SaveBarField / SaveHandler).
+import type { SaveBarField, SaveHandler } from './useSaveBar'
 
 async function loadHarnessModules() {
   try {
     const [saveBar, shell, prompt] = await Promise.all([
-      vi.importActual<any>('@/components/settings/SaveBar'),
-      vi.importActual<any>('@/components/settings/SettingsShellContext'),
-      vi.importActual<any>('@/components/settings/useSavePasswordPrompt'),
+      vi.importActual<typeof import('@/components/settings/SaveBar')>('@/components/settings/SaveBar'),
+      vi.importActual<typeof import('@/components/settings/SettingsShellContext')>('@/components/settings/SettingsShellContext'),
+      vi.importActual<typeof import('@/components/settings/useSavePasswordPrompt')>('@/components/settings/useSavePasswordPrompt'),
     ])
     return { SaveBar: saveBar.SaveBar ?? saveBar.default, SettingsShellContext: shell.SettingsShellContext, useSavePasswordPrompt: prompt.useSavePasswordPrompt }
   } catch {
@@ -66,7 +70,7 @@ async function loadHarnessModules() {
 const PROTECTED_ENDPOINT = '/api/v1/security/sandbox-config'
 // Two password-marked changes in Sandbox & network (BDD: Filesystem model and
 // Shell workspace limit; FR-025 lists both as Password rows).
-const FS_MODEL_FIELD = {
+const FS_MODEL_FIELD: SaveBarField = {
   key: 'sandbox.filesystem_model',
   label: 'Filesystem model',
   value: 'confined',
@@ -75,7 +79,7 @@ const FS_MODEL_FIELD = {
   password: true,
   restart: true,
 }
-const SHELL_LIMIT_FIELD = {
+const SHELL_LIMIT_FIELD: SaveBarField = {
   key: 'sandbox.workspace_path_guard',
   label: 'Shell workspace limit',
   value: false,
@@ -84,7 +88,7 @@ const SHELL_LIMIT_FIELD = {
   restart: true,
 }
 // A NON-password change in the same section (prompt-guard is unprotected per C-4).
-const PLAIN_FIELD = {
+const PLAIN_FIELD: SaveBarField = {
   key: 'sandbox.allow_network_outbound',
   label: 'Allow outbound network',
   value: false,
@@ -101,7 +105,7 @@ type StubOptions = {
 function stubFetch({ mode = 'local', reauth, write }: StubOptions = {}) {
   const calls: Call[] = []
   let protectedWrites = 0
-  const fetchMock = vi.fn(async (input: any, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     calls.push({ url, init: init ?? {} })
     // Content-Type matters: ApiError.fromResponse reads the body only for a
@@ -143,9 +147,9 @@ const callsTo = (calls: Call[], fragment: string) => calls.filter((c) => c.url.i
  * boundary; the section write leaves as a real PUT with the consent token
  * in X-Reauth-Token (FR-027) — counted at the fetch stub.
  */
-async function renderAndSave(fields: any[]) {
+async function renderAndSave(fields: SaveBarField[]) {
   const { SaveBar, SettingsShellContext, useSavePasswordPrompt } = await loadHarnessModules()
-  const Harness = ({ onSave }: { onSave: any }) => {
+  const Harness = ({ onSave }: { onSave: SaveHandler }) => {
     const { requestPassword, dialog } = useSavePasswordPrompt()
     return (
       <SettingsShellContext.Provider
@@ -183,7 +187,7 @@ async function renderAndSave(fields: any[]) {
   )
   for (const f of fields) {
     if (f.kind === 'select') {
-      await userEvent.selectOptions(screen.getByLabelText(f.label), String(f.options[1]))
+      await userEvent.selectOptions(screen.getByLabelText(f.label), String(f.options?.[1]))
     } else {
       await userEvent.click(screen.getByRole('switch', { name: f.label }))
     }

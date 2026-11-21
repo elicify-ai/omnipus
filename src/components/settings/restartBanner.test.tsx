@@ -30,11 +30,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+// Type-only: the runtime module loads through loadRestartBanner's BLOCKED
+// RED importActual; the erased types give the fixtures and renderBanner's
+// props the real RestartBanner contracts.
+import type { RestartBannerEntry, RestartBannerProps } from '@/components/settings/RestartBanner'
 
-async function loadRestartBanner(): Promise<any> {
+async function loadRestartBanner(): Promise<typeof import('@/components/settings/RestartBanner')['RestartBanner']> {
   try {
-    const mod: any = await vi.importActual('@/components/settings/RestartBanner')
-    return mod.RestartBanner ?? mod.default
+    const mod = await vi.importActual<typeof import('@/components/settings/RestartBanner')>('@/components/settings/RestartBanner')
+    return mod.RestartBanner
   } catch {
     throw new Error(
       'BLOCKED RED (FR-035/FR-038/FR-039, order 24): the Settings RestartBanner component does not exist yet — ' +
@@ -43,14 +47,14 @@ async function loadRestartBanner(): Promise<any> {
   }
 }
 
-const PORT_ENTRY = {
+const PORT_ENTRY: RestartBannerEntry = {
   key: 'gateway.port',
   label: 'Port',
   appliedValue: 8080,
   persistedValue: 8081,
   reason: 'restart_required',
 }
-const DEFENSE_ENTRY = {
+const DEFENSE_ENTRY: RestartBannerEntry = {
   key: 'sandbox.prompt_injection_level',
   label: 'Defense level',
   appliedValue: null, // unknown: the value still in force is not known
@@ -58,14 +62,15 @@ const DEFENSE_ENTRY = {
   reason: 'apply_failed',
 }
 
-async function renderBanner(props: Record<string, unknown> = {}) {
+async function renderBanner(props: { entries: RestartBannerEntry[] } & Partial<Omit<RestartBannerProps, 'entries'>> = { entries: [] }) {
   const RestartBanner = await loadRestartBanner()
   return render(
     <RestartBanner
-      entries={[]}
-      onRetry={vi.fn()}
-      onRestartNow={vi.fn()}
-      {...props}
+      entries={props.entries}
+      error={props.error}
+      onRetry={props.onRetry ?? vi.fn()}
+      onRestartNow={props.onRestartNow ?? vi.fn()}
+      autofocusRestartNow={props.autofocusRestartNow}
     />,
   )
 }
