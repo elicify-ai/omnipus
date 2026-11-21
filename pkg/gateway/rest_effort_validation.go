@@ -93,6 +93,75 @@ func effortValueRefusal(name string, v any) string {
 	return ""
 }
 
+// effortRecordRefusal is the effort rule for a package agent record
+// (#1952). The record is decoded into config.AgentConfig, which accepts any
+// letter case of a member name (bytes.EqualFold) and keeps the last of
+// several spellings, so every member whose name folds to an effort name is
+// checked, at any depth and in every position: no value the typed decode
+// could store escapes the check, and an invalid member is refused even when a
+// later valid spelling would override it. Member names are read unescaped
+// from the token stream. A record that is not valid JSON is left to the
+// typed decode, which refuses it. The REST body rule above is unchanged.
+func effortRecordRefusal(raw []byte) (msg, field string) {
+	// json.Valid enforces the decoder's nesting limit before the recursive walk.
+	if !json.Valid(raw) {
+		return "", ""
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	msg, field, err := walkEffortTokens(dec, "")
+	if err != nil {
+		// Unreachable for valid JSON; refuse rather than pass unchecked.
+		return "agent.json could not be read: " + err.Error(), "reasoning_effort"
+	}
+	return msg, field
+}
+
+func isRecordEffortMember(name string) bool {
+	return strings.EqualFold(name, "reasoning_effort") || strings.EqualFold(name, "recap_reasoning_effort")
+}
+
+// walkEffortTokens reads one JSON value from dec and returns the first
+// effort refusal inside it.
+func walkEffortTokens(dec *json.Decoder, path string) (string, string, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return "", "", err
+	}
+	delim, isDelim := tok.(json.Delim)
+	if !isDelim {
+		return "", "", nil
+	}
+	for i := 0; dec.More(); i++ {
+		child := fmt.Sprintf("%s[%d]", path, i)
+		if delim == '{' {
+			if tok, err = dec.Token(); err != nil {
+				return "", "", err
+			}
+			name, _ := tok.(string)
+			if child = name; path != "" {
+				child = path + "." + name
+			}
+			if isRecordEffortMember(name) {
+				var v any
+				if err = dec.Decode(&v); err != nil {
+					return "", "", err
+				}
+				if msg := effortValueRefusal(name, v); msg != "" {
+					return msg, child, nil
+				}
+				continue
+			}
+		}
+		msg, field, walkErr := walkEffortTokens(dec, child)
+		if walkErr != nil || msg != "" {
+			return msg, field, walkErr
+		}
+	}
+	_, err = dec.Token()
+	return "", "", err
+}
+
 func jsonKindName(v any) string {
 	switch v.(type) {
 	case json.Number:

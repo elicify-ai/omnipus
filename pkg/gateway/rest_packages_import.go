@@ -178,8 +178,9 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 	payload = elementPayload(el, payload)
 	raw := payload[packageAgentPath(el.SourceID, omnpkg.AgentRecordName)]
 	// Sign-off C-2: the REST raw-body effort rule on the record bytes, so a
-	// JSON null or an over-long value is refused, not silently dropped.
-	if msg, field := effortBodyRefusal(raw); msg != "" {
+	// JSON null or an over-long value is refused, not silently dropped. Every
+	// letter-case spelling is checked, as the typed decode reads any (#1952).
+	if msg, field := effortRecordRefusal(raw); msg != "" {
 		return nil, notCreatable(field, msg)
 	}
 	if err := refuseExternalUnsupportedFields(raw, el.SourceID); err != nil {

@@ -1,6 +1,7 @@
 package omnpkg
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -81,12 +82,20 @@ func (im *importMapper) warn(code, msg string, items []string) {
 // filtered/tightened, legacy fields dropped with warnings, provider and
 // max_tool_iterations checks against the target).
 func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*AgentPlan, error) {
+	var probe map[string]any
+	if err := json.Unmarshal(record, &probe); err != nil || probe == nil {
+		return nil, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json is not a JSON object")
+	}
+	im := &importMapper{sourceID: sourceID, target: target}
+	if err := im.checkMaxToolIterations(record, sourceID); err != nil {
+		return nil, err
+	}
 	typed, rec, err := decodeAgentRecord(record, sourceID)
 	if err != nil {
 		return nil, err
 	}
-	im := &importMapper{sourceID: sourceID, target: target}
-	if err = im.checkMaxToolIterations(record, sourceID); err != nil {
+	legacyFallbacks, err := hasLegacyModelFallbacks(record, sourceID)
+	if err != nil {
 		return nil, err
 	}
 	for _, k := range importNotCarriedFields {
@@ -116,7 +125,7 @@ func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*Ag
 		}
 	}
 	im.mapSkills(rec)
-	im.mapModel(rec)
+	im.mapModel(rec, legacyFallbacks)
 	im.mapTools(rec, string(typed.Type))
 	out, err := json.Marshal(rec)
 	if err != nil {
@@ -136,10 +145,6 @@ func MapAgentForImport(record []byte, sourceID string, target ImportTarget) (*Ag
 // spelling of each field exists.
 func decodeAgentRecord(record []byte, sourceID string) (config.AgentConfig, map[string]any, error) {
 	var typed config.AgentConfig
-	var probe map[string]any
-	if err := json.Unmarshal(record, &probe); err != nil || probe == nil {
-		return typed, nil, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json is not a JSON object")
-	}
 	if err := json.Unmarshal(record, &typed); err != nil {
 		return typed, nil, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
 	}
@@ -154,17 +159,44 @@ func decodeAgentRecord(record []byte, sourceID string) (config.AgentConfig, map[
 	return typed, rec, nil
 }
 
-// iterationsView reads max_tool_iterations with the same decoding as
-// config.AgentConfig, but keeps a present zero apart from an omitted field.
-type iterationsView struct {
-	MaxToolIterations *int `json:"max_tool_iterations"`
+// recordFieldsView reads, with the same name matching and member order as
+// config.AgentConfig, the facts its typed value loses: a present
+// max_tool_iterations of zero or with a fraction, and the raw model value.
+type recordFieldsView struct {
+	MaxToolIterations *float64        `json:"max_tool_iterations"`
+	Model             json.RawMessage `json:"model"`
+}
+
+// modelFallbacksView reads whether a model object carries the legacy
+// fallbacks list (any value, even empty or null).
+type modelFallbacksView struct {
+	Fallbacks json.RawMessage `json:"fallbacks"`
+}
+
+// hasLegacyModelFallbacks reports a legacy model.fallbacks member, which the
+// typed value drops when the list is empty, so the field_not_carried warning
+// still lists it (Field mapping row D3-6).
+func hasLegacyModelFallbacks(record []byte, sourceID string) (bool, error) {
+	var view recordFieldsView
+	if err := json.Unmarshal(record, &view); err != nil {
+		return false, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
+	}
+	trimmed := bytes.TrimSpace(view.Model)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false, nil // absent, null or the bare-string form: no list
+	}
+	var model modelFallbacksView
+	if err := json.Unmarshal(trimmed, &model); err != nil {
+		return false, newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
+	}
+	return model.Fallbacks != nil, nil
 }
 
 // checkMaxToolIterations refuses a present value outside the create rule's
 // 1–1000 range, then one above the target's global limit (Field mapping;
 // Dataset D5 row 11). An omitted field is no own limit and passes.
 func (im *importMapper) checkMaxToolIterations(record []byte, sourceID string) error {
-	var view iterationsView
+	var view recordFieldsView
 	if err := json.Unmarshal(record, &view); err != nil {
 		return newErr(CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
 	}
@@ -172,10 +204,10 @@ func (im *importMapper) checkMaxToolIterations(record []byte, sourceID string) e
 		return nil
 	}
 	v := *view.MaxToolIterations
-	if config.ValidateMaxToolIterationsBound(v) != nil {
+	if v != float64(int(v)) || config.ValidateMaxToolIterationsBound(int(v)) != nil {
 		return fieldErr(CodeElementNotCreatable, "max_tool_iterations", config.MaxToolIterationsBoundMessage)
 	}
-	if limit := im.target.GlobalMaxToolIterations(); limit > 0 && v > limit {
+	if limit := im.target.GlobalMaxToolIterations(); limit > 0 && v > float64(limit) {
 		return fieldErr(CodeElementNotCreatable, "max_tool_iterations",
 			"above this install's limit of "+strconv.Itoa(limit))
 	}
@@ -214,16 +246,16 @@ func (im *importMapper) mapSkills(rec map[string]any) {
 
 // mapModel drops the legacy fallback strings and lists a provider the target
 // has not configured (the name is kept).
-func (im *importMapper) mapModel(rec map[string]any) {
+func (im *importMapper) mapModel(rec map[string]any, legacyFallbacks bool) {
+	if legacyFallbacks {
+		im.warn(WarnFieldNotCarried, "Legacy fallback list left out; fallback_models is used instead.",
+			[]string{"model.fallbacks"})
+	}
 	model, ok := rec["model"].(map[string]any)
 	if !ok {
 		return
 	}
-	if _, has := model["fallbacks"]; has {
-		delete(model, "fallbacks")
-		im.warn(WarnFieldNotCarried, "Legacy fallback list left out; fallback_models is used instead.",
-			[]string{"model.fallbacks"})
-	}
+	delete(model, "fallbacks")
 	if p, isString := model["provider"].(string); isString && p != "" && !im.target.ProviderConfigured(p) {
 		im.warn(WarnProviderNotConfigured, "The model provider is not configured on this install.", []string{p})
 	}
