@@ -1992,13 +1992,13 @@ Numbers are grouped by area; gaps are left on purpose. Numbers never move: requi
 - **FR-066**: When a section's reads fail, only the groups that need the failed read (the "Read dependencies" table) MUST show an error Callout naming what failed, quoting the server's cause, giving one thing to do and offering Retry, and only those groups MUST be blocked from saving; other groups keep their drafts and still save, and Retry re-reads only the failed read and never replaces a draft. A section is blocked as a whole only when every one of its reads failed (a section with one read, or Limits with both reads failing).
 - **FR-067**: When the gateway does not answer, one error Callout MUST show between the page title and the sections (above the open section on a phone) saying values may be out of date, with Retry.
 - **FR-068**: "Skip to settings content" MUST be the first Tab stop and move focus to the section content without changing the address.
-- **FR-069**: Stacked dialogs MUST close one at a time on Escape or Cancel, returning focus to the control that opened each; when that control no longer exists, focus goes to the section heading.
+- **FR-069**: Stacked dialogs MUST close one at a time on Escape or Cancel, returning focus to the control that opened each; when that control no longer exists, focus goes to the section heading. When the inner opener is gone but the dialog it sat in is still open, focus goes to that dialog (its first focusable control); the section heading applies only when no dialog is left open (team-lead ruling 2026-11-21, CHECK R4-06).
 - **FR-070**: At 390 px every visible control MUST measure at least 44 × 44 px and the page MUST NOT scroll sideways.
 - **FR-071**: The Save bar and saved signal MUST be live regions; errors MUST use `role="alert"`.
 - **FR-072**: Every grouped list MUST start collapsed (`aria-expanded="false"`), including Model overrides (S-Q12 A).
 - **FR-073**: No on-screen text MUST contain an issue number, a requirement tag (R30, S-Q8 and similar) or "contact support".
 - **FR-074**: *Moved to `signed-in-browsers-spec.md`.*
-- **FR-075**: Under reduced motion, Skeleton pulse, spinner rotation and row highlight MUST stop.
+- **FR-075**: Under reduced motion, Skeleton pulse, spinner rotation and row highlight MUST stop. The row highlight is the short flash on the setting row a person reaches from a Settings search result or a deep link: the section opens, the row scrolls into view and flashes once (normal motion); under reduced motion the row is still scrolled into view and marked, without animation (team-lead clarification 2026-11-21, CHECK R4-05).
 
 ### Moved to `signed-in-browsers-spec.md`
 
