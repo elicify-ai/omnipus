@@ -44,6 +44,9 @@ func opencodeFix1895Process() int {
 			resumeAddr = strings.TrimPrefix(arg, "--fixture-resume-address=")
 		}
 	}
+	if mode == "queued_save_failure" {
+		return opencodeGateNarrationProcess(addr, resumeAddr, nativeID)
+	}
 	if mode == "queued_followup_pending" || mode == "queued_followup_text_pending" {
 		return opencode1895QueuedFollowupProcess(addr, resumeAddr, nativeID)
 	}
@@ -85,6 +88,8 @@ func opencodeFix1895Process() int {
 		fmt.Println(`{"type":"text","sessionID":"native-frame-conversation-1895","part":{"type":"text","text":"external helper answer 1895"}}`)
 	case "runner_error":
 		fmt.Println(`{"type":"error","message":"authentication failed in CLI fixture 1895","code":"auth"}`)
+	case "captured_unknown_1x":
+		fmt.Println(opencodeGateCapturedUnknown)
 	case "resume_refusal":
 		// A legitimate run can finish without announcing a native id. A later
 		// Resume must then visibly refuse rather than invent a conversation.
