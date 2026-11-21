@@ -1409,3 +1409,63 @@ describe('Sandbox — a newer draft typed while the saved-state check reads keep
     expect(wireCalls.some((u) => u.includes('/config/pending-restart'))).toBe(true)
   })
 })
+
+// ── Retired help text: the section names the rules that still apply (ADR-092) ─
+//
+// The shell command-text block list is a RETIRED surface — ADR-092 deleted it
+// outright (root CLAUDE.md, "Retired surfaces"; the guard
+// scripts/check-no-shell-deny-patterns.sh exists because it must stay gone).
+// docs/security.md "Shell command rules" is where the surviving control is
+// specified: shell command rules are allow/ask/deny decisions for one program
+// that live in the `sandbox.command_rules` array inside the configuration
+// file, written there by hand — "There is no screen for this". So where the
+// Sandbox section tells the reader which protections survive a choice, it
+// must name the shell command rules in the configuration file, and must never
+// name the deleted "blocked command patterns" (help text that names a deleted
+// control sends the reader looking for a setting that does not exist).
+describe('retired help text — the section names the shell command rules, never the retired block list (ADR-092)', () => {
+  it('the Off mode names the shell command rules in the configuration file and never the retired blocked command patterns', async () => {
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeInTheDocument()
+    })
+
+    // The Off option's own block (its label and its description).
+    const offOption = screen.getByRole('radio', { name: /sandbox mode: off/i }).closest('label')
+    expect(offOption, 'ADR-092: the Off description must name the shell command rules').toHaveTextContent(
+      /shell command rules/i,
+    )
+    expect(offOption, 'docs/security.md: the rules live in the configuration file').toHaveTextContent(
+      /configuration file/i,
+    )
+    expect(
+      offOption?.textContent,
+      'ADR-092: the block list is deleted — no help text may name it',
+    ).not.toMatch(/blocked command patterns/i)
+  })
+
+  it('the Any path option names the shell command rules in the configuration file and never the retired blocked command patterns', async () => {
+    // restrict_to_workspace present, so the workspace-limit radios render
+    // (the Any path option is one of them).
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeInTheDocument()
+    })
+
+    const anyPathOption = screen.getByTestId('sandbox-workspace-limit-off').closest('label')
+    expect(anyPathOption, 'ADR-092: the Any path description must name the shell command rules').toHaveTextContent(
+      /shell command rules/i,
+    )
+    expect(anyPathOption, 'docs/security.md: the rules live in the configuration file').toHaveTextContent(
+      /configuration file/i,
+    )
+    expect(
+      anyPathOption?.textContent,
+      'ADR-092: the block list is deleted — no help text may name it',
+    ).not.toMatch(/blocked command patterns/i)
+  })
+})
