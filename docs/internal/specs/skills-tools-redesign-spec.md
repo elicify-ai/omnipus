@@ -77,7 +77,7 @@ GitNexus was not available; every row below is from `grep`/`Read` at `4e34afa416
 
 | Symbol Modified | Risk Level | d=1 Dependents | d=2 Dependents |
 |---|---|---|---|
-| Skill policy resolution added beside `resolveEffectivePolicyWith` | **HIGH** — every skill load of every agent | `SkillTool.execLoad`, `/skill` command path (`pkg/agent/loop.go::applyExplicitSkillCommand`), `delegate` `requested_skill` (ADR-072 D9) | every chat, task, plan and heartbeat turn that loads a skill |
+| Skill policy resolution added beside `resolveEffectivePolicyWith` | **HIGH** — every skill load of every agent | `SkillTool.execLoad`, `/skill` command path (`pkg/agent/loop_slash.go::applyExplicitSkillCommand`), `delegate` `requested_skill` (`pkg/agent/subturn_identity.go::resolveRequestedSkillForChild`), file tools and helpers (C-11 E6, E7) | every chat, task, plan and heartbeat turn that loads a skill |
 | `BuildSkillsSummaryFuncWithProject` | **HIGH** — the cached system prompt of every agent | `pkg/agent/context.go:~797` "# Skills" section (3 call sites, 2 files) | prompt-cache prefix of every turn (ADR-072 D1, D8) |
 | `manifest.go` tier lists → stored levels | **HIGH** — what every agent is sent each turn | `ToolManifestTier` (13 call sites, 9 files), `buildCompressedToolDefs`, `buildToolManifestNote` | every turn's tool list; prompt cache (#750) |
 | `GlobalToolPolicies` PUT | MEDIUM | `putToolPolicies`, SPA editor | running-agent reload (`503` path) |
