@@ -55,7 +55,6 @@ import { inferRegionFromLocale, regionLabel } from './region-inference'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
-import { usePrimaryVariant } from '@/components/settings/SaveBar'
 
 /**
  * A company's sign-in variants, in priority order — defensive against two
@@ -207,8 +206,6 @@ export function ProviderDetailPanel({
   apiKeyField,
   'data-testid': testId = 'provider-detail-panel',
 }: ProviderDetailPanelProps) {
-  // FR-017: outlined while a Settings Save bar shows; gold elsewhere.
-  const primaryVariant = usePrimaryVariant()
   const effectiveLocale =
     locale !== undefined
       ? locale
@@ -458,7 +455,7 @@ export function ProviderDetailPanel({
       <div className="flex items-center gap-[var(--space-2)]">
         <Button
           type="button"
-          variant={primaryVariant}
+          variant="default"
           data-testid={`${testId}-continue`}
           onClick={() => onConfirm?.(selection)}
           className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"

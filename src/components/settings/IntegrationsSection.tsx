@@ -664,7 +664,6 @@ export function IntegrationsSection() {
                   </Button>
                   <Button
                     size="sm"
-                    variant={primaryVariant}
                     onClick={() =>
                       requestChange(voiceKeyProvider.id, {
                         kind: voiceKeyProvider.kind,

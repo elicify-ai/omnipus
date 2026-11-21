@@ -250,7 +250,6 @@ function ProviderConfigSheet({
   onRemove,
   obscuredByDialog,
 }: ProviderConfigSheetProps) {
-  const primaryVariant = usePrimaryVariant()
   // FR-033: an accidental close (Esc / overlay) with a dirty key does not
   // close — it asks. This flag is the inline "Discard key?" prompt's state.
   // Declared before the `!target` guard so the hook order never changes.
@@ -668,7 +667,6 @@ function ProviderConfigSheet({
                 Cancel
               </Button>
               <Button
-                variant={primaryVariant}
                 size="sm"
                 onClick={() => {
                   const key = (apiKeys[draftKey] ?? '').trim()
