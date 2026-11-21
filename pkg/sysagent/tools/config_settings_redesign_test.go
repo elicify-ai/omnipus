@@ -42,7 +42,10 @@ package systools_test
 //     ruling table's user-only values with `sandbox.rate_limits.*` and the
 //     CLI-runner placeholders expanded); FR-101's closing sentence is
 //     enforced both ways (an observed refusal no table lists is a parity
-//     failure, and a listed value with no refusal row fails).
+//     failure, and a listed value with no refusal row fails); and the two
+//     unconditional accepted-setter invariants are restored beside the
+//     stored-target readback (CHECK R4-01: an accepted write for one key
+//     must not move either protected Performance value).
 //
 // Oracle: the spec's C-7 table, the agent-tool field table, D-16 and the BDD
 // scenario "Performance values cannot be changed around Settings" (refused
@@ -1023,7 +1026,11 @@ func TestSettingsAgentWriteParity(t *testing.T) {
 			deps, cfg := newTestDeps(t)
 			// The stored config before the write, marshaled once — the
 			// refusal-unchanged oracle (any JSON-visible field that moves is a
-			// changed state, whatever the receipt claims).
+			// changed state, whatever the receipt claims) — plus the two
+			// C-7-protected Performance values the accepted-setter branch
+			// asserts below (restored, CHECK R4-01).
+			compressedBefore := cfg.Tools.Manifest.Compressed
+			iterationsBefore := cfg.Agents.Defaults.MaxToolIterations
 			before, err := json.Marshal(cfg)
 			if err != nil {
 				t.Fatalf("fixture config did not marshal: %v", err)
@@ -1087,6 +1094,22 @@ func TestSettingsAgentWriteParity(t *testing.T) {
 				if got := storedValueAt(t, cfg, tc.key); !reflect.DeepEqual(got, wantStored) {
 					t.Errorf("stored config holds %#v at %q after an accepted write, want %#v",
 						got, tc.key, wantStored)
+				}
+				// R4-01 (restored — part 17 dropped these two when it moved
+				// the whole-config comparison into the refusal branch): an
+				// accepted write for ONE key must not move either protected
+				// Performance value. The stored-target readback above cannot
+				// see a side effect on a different key, and C-7 gives these
+				// values exactly one write path (Settings → Limits, with the
+				// password) — set_config is not it, for the target or as a
+				// side effect of another accepted write.
+				if cfg.Tools.Manifest.Compressed != compressedBefore {
+					t.Errorf("accepted write for %q changed tools.manifest.compressed "+
+						"(C-7 #936: a Performance value has one write path and set_config is not it)", tc.key)
+				}
+				if cfg.Agents.Defaults.MaxToolIterations != iterationsBefore {
+					t.Errorf("accepted write for %q changed agents.defaults.max_tool_iterations "+
+						"(C-7 #936/#904: the protected default must not move)", tc.key)
 				}
 			}
 		})
