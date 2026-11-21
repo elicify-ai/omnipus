@@ -570,9 +570,13 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     // (round 11, c884413e0c) and lands with its next merge. The oracle
     // stays the spec, not the FE.
     expect(await screen.findByText(/changed somewhere else/i)).toBeInTheDocument()
-    // R2-02: the line names the saved pair — the third value's identity is
-    // the oracle, not the line's presence.
-    expect(screen.getByText(/changed somewhere else/i).textContent).toMatch(/Saved value: .*gemini-3-pro/)
+    // R2-02 + R3-03 (N32): the FULL saved pair is the oracle — a wrong
+    // provider with the right model (check mutant N32's wrong-provider line)
+    // must fail, not just the model slug. The pair is spelled provider/model,
+    // the spec's own pair spelling (FR-004's provider=<p>&model=<m>).
+    expect(screen.getByText(/changed somewhere else/i).textContent).toContain(
+      'Saved value: google/gemini-3-pro.',
+    )
     // The draft pick stays on the card and on the bar (FR-012).
     // The draft pick is kept; the provider label's exact rendering follows
     // the catalog (catalogLabel appends the region), so the pair's identity
@@ -583,6 +587,16 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Saved, but not in use yet/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/These changes were not saved/i)).not.toBeInTheDocument()
+    // R3-03: Discard lands on the NEW saved base — the check's fresh read
+    // became the saved pair, so the card shows google/gemini-3-pro, never the
+    // stale pre-save openrouter pair (FR-012: drafts return to the last
+    // SAVED value; the Performance case C leg pins the same rule for numbers).
+    // (Whether the outcome line itself lingers after the Discard is
+    // spec-silent — not asserted either way.)
+    await userEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => expect(screen.getByTestId('default-model-provider')).toHaveTextContent(/google/i))
+    expect(screen.getByTestId('default-model-model')).toHaveTextContent('gemini-3-pro')
+    expect(screen.queryByText(/1 unsaved change/)).not.toBeInTheDocument()
   })
 
   it('Providers default model, case D — the reads fail: the bar says 1 change may not have been saved, with Retry, and keeps the draft pick', async () => {
@@ -632,6 +646,12 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     expect(screen.queryByText(/These changes were not saved/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/Saved, but not in use yet/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+    // R3-03: Discard lands on the NEW saved base — the fresh read (deepgram)
+    // is the saved active service now, so the select shows deepgram, never
+    // the stale pre-save elevenlabs (FR-012, the Performance case C rule).
+    await userEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => expect(screen.getByTestId('active-transcriber')).toHaveValue('deepgram'))
+    expect(screen.queryByText(/1 unsaved change/)).not.toBeInTheDocument()
   })
 
   it('Sandbox allowed folders, case C — before [/a], draft [/b], the read holds the third list [/c]: the section names the change with the exact list and keeps the draft (R2-02)', async () => {
@@ -693,5 +713,65 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     await waitFor(() => expect(screen.getByText('/c')).toBeInTheDocument())
     expect(screen.queryByText('/b')).not.toBeInTheDocument()
     expect(screen.queryByText(/1 unsaved change/)).not.toBeInTheDocument()
+  })
+
+  it('Sandbox, old running read on an unlisted key — the result stays unknown: a non-recording writer\'s read never proves "not saved" (C-6, R3-03/N25)', async () => {
+    stubPendingRestartWire()
+    renderWith(<SandboxSection />)
+    await screen.findByText('/a')
+    // before [/a] → draft [/b], the answer lost (the scenario).
+    await userEvent.click(screen.getByRole('button', { name: /delete path \/a/i }))
+    const input = screen.getByRole('textbox', { name: /new allowed path/i })
+    await userEvent.type(input, '/b')
+    await userEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    // The key is UNLISTED and the check's fresh read still answers the
+    // pre-save list [/a] (the reads stay at SANDBOX_BEFORE). PUT /security/
+    // sandbox-config records no failed applies, so per C-6 a read equal to
+    // the value before the Save proves nothing — the result stays UNKNOWN
+    // (FR-020 outcome 4's last rule). This premise is the one that catches
+    // check mutant N25, which flips the section's items to recorded and would
+    // falsely conclude "not saved" here.
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitForWrite(api.updateSandboxConfig)
+    expect(await screen.findByText(/1 change may not have been saved/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    // Never a confident "not saved", never a saved signal, never
+    // changed-elsewhere — nothing was provable.
+    expect(screen.queryByText(/These changes were not saved/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/changed somewhere else/i)).not.toBeInTheDocument()
+    // The draft stays (FR-020 outcome 4's last branch).
+    expect(screen.getByText('/b')).toBeInTheDocument()
+  })
+
+  it('Sandbox, changed elsewhere via the restart list — the required saved-config refresh runs, and when it fails the result stays unknown with Retry (C-6, R3-03/N26)', async () => {
+    stubPendingRestartWire()
+    // The key IS listed with a third persisted value [/c], so the
+    // changed-elsewhere conclusion alone needs no server read — and the saved
+    // configuration must STILL be refreshed from the server afterwards (C-6;
+    // the changed-elsewhere branch's required read). That required refresh
+    // fails here: nothing is known, whatever the list already proved.
+    pendingRestart.entries = [pendingEntry('sandbox.allowed_paths', ['/c'], ['/a'])]
+    renderWith(<SandboxSection />)
+    await screen.findByText('/a')
+    await userEvent.click(screen.getByRole('button', { name: /delete path \/a/i }))
+    const input = screen.getByRole('textbox', { name: /new allowed path/i })
+    await userEvent.type(input, '/b')
+    await userEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    reads.sandbox = { value: SANDBOX_BEFORE, fail: true }
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitForWrite(api.updateSandboxConfig)
+    // The failed required refresh must resolve to UNKNOWN with Retry (C-6's
+    // "if either read fails" rule) — never to a falsely saved outcome (check
+    // mutant N26 returns saved here; the bar would show its saved signal).
+    expect(await screen.findByText(/1 change may not have been saved/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    expect(screen.queryByText(/changed somewhere else/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Saved, but not in use yet/i)).not.toBeInTheDocument()
+    // The draft stays.
+    expect(screen.getByText('/b')).toBeInTheDocument()
   })
 })
