@@ -136,7 +136,8 @@ ones that no longer fit say `pages not re-sent; call preview_document again`.
 Screenshots and files from earlier messages do not count toward these
 32 MiB. The model's limit on PDF documents per request counts every PDF in
 the request, earlier messages included; past it, a document the agent opened
-goes as page images and an attached PDF as its text.
+goes as page images or, when no page images go, as its text with a note naming
+the count limit, and an attached PDF goes as its text.
 
 If the provider rejects a request because it carries a PDF (for example
 `PDF input for model 'm' is not available.`), Omnipus retries once with the
@@ -169,6 +170,26 @@ a copy yourself.
   `omnipus office register <folder>` (on macOS the folder is `LibreOffice.app`);
   `omnipus office unregister` removes it. Without it, Office previews are
   refused with a message that says so; PDF previews still work.
+- **On Linux, only a folder inside Omnipus's own folder can be registered**,
+  for LibreOffice and for the PDF renderer. Omnipus's own folder is
+  `/usr/share/omnipus` for the `.deb` and `.rpm` packages,
+  `/usr/local/share/omnipus` for the one-line installer's default and the
+  Docker image, `$HOME/.local/share/omnipus` when the installer put Omnipus in
+  `$HOME/.local/bin`, and `<install dir>/../share/omnipus` for another
+  installer folder. Put the program in a new folder inside it (for example
+  `/usr/local/share/omnipus/libreoffice`) and register that folder. A folder
+  elsewhere, such as `/opt/libreoffice26.8` where the official LibreOffice
+  packages install, is refused, for example:
+  `office not registered: LibreOffice folder /opt/libreoffice26.8 is outside Omnipus's own folder (/usr/local/share/omnipus); on Linux, Omnipus accepts only a LibreOffice inside that folder. Re-run the Omnipus installer, which puts LibreOffice in /usr/local/share/omnipus/office, or put LibreOffice in a new folder inside /usr/local/share/omnipus and register that folder`.
+  A link that leads out of that folder, or into it from elsewhere, is refused
+  too. On macOS and Windows registration is unchanged.
+- A LibreOffice or PDF renderer registered on Linux outside Omnipus's own
+  folder before this version is no longer used, even when the installer's copy
+  is also installed. An Office preview then says
+  `Office preview is disabled: the registered LibreOffice folder <folder> is outside Omnipus's own folder (<own folder>); on Linux, Omnipus uses only preview programs inside it. Remove the registration with "omnipus office unregister", or put LibreOffice in a folder inside <own folder> and register that folder.`
+  and `omnipus doctor` warns about it. Run `omnipus office unregister` (or
+  `omnipus pdf-renderer unregister`) to use the installed copy again, or move
+  the program into a folder inside Omnipus's own folder and register it there.
 - Register an unpacked PDF renderer release with
   `omnipus pdf-renderer register <folder>`. Registration refuses a folder an
   agent can write, and Omnipus checks the fingerprints of both components
@@ -184,7 +205,9 @@ a copy yourself.
   [Sandbox limitations](operations/sandbox-limitations.md#document-preview-programs)).
   Until then an Office preview says
   `Office preview was installed or registered after Omnipus started. Stop and start Omnipus (for example with your service manager) to use it; the in-app restart is not enough in the confined sandbox.`
-  and the registration commands print a reminder.
+  and the registration commands print a reminder. If Omnipus was restarted
+  from inside the app after the program was added, an Office preview says
+  `Office preview cannot read its program files (<reason>). If Omnipus was restarted from inside the app after this component was installed or registered, stop and start Omnipus (for example with your service manager); otherwise reinstall or re-register the Office preview component.`
 - On macOS and Linux, previews use the fonts installed for all users and the
   fonts that come with LibreOffice. A font installed only for your user
   account is not used, and text in that font is shown in a similar font. To
@@ -282,10 +305,7 @@ Linux: while it converts a document, LibreOffice may also create its control
 connection point in the shared `/tmp` folder and delete files there. LibreOffice
 can read only the folders and files listed in
 [Sandbox limitations](operations/sandbox-limitations.md#document-preview-programs),
-never your files or other previews; on macOS they have no network. On Linux a
-stricter setup for LibreOffice, with a private folder for each preview and a
-block on LibreOffice opening network connections itself, is not switched on
-yet (issue #1856). Keep the Omnipus data folder outside `/tmp` on Linux:
+never your files or other previews; on macOS they have no network. A stricter setup is not switched on yet (issue #1856): a separate private folder for each preview, and a filter that stops LibreOffice from creating network connections of its own. Keep the Omnipus data folder outside `/tmp` on Linux:
 LibreOffice could delete files in it there. When
 that sandbox cannot be set up, they still run with the limits above and the
 result says `converted without sandbox: <reason>`. On Windows there is no file

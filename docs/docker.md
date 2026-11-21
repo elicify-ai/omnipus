@@ -76,7 +76,7 @@ The published image carries both document-preview components, packaged and ready
 | LibreOffice 26.8 (Office files to PDF) | `/usr/local/share/omnipus/office` |
 | PDF renderer (pages to images) | `/usr/local/share/omnipus/pdfium` |
 
-They sit next to the binary in the place Omnipus looks for packaged components, so you do not run `omnipus office register` or `omnipus pdf-renderer register` in the container. The image also ships `fontconfig` and the Liberation fonts, so documents that use common fonts render with metric-compatible ones. The LibreOffice files make the image considerably larger than the old Alpine one.
+They sit next to the binary in the place Omnipus looks for packaged components, so you do not run `omnipus office register` or `omnipus pdf-renderer register` in the container. A LibreOffice mounted into the container anywhere other than inside `/usr/local/share/omnipus` cannot be registered. The image also ships `fontconfig` and the Liberation fonts, so documents that use common fonts render with metric-compatible ones. The LibreOffice files make the image considerably larger than the old Alpine one.
 
 There is no image without the components. If you want a container without LibreOffice, build your own from the release binary. What previews need and how they behave are in [documents.md](documents.md).
 

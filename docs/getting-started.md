@@ -47,7 +47,7 @@ curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/inst
 curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh -s -- --without-pdf-renderer
 ```
 
-Without LibreOffice, Office previews are refused with a message that says so; PDF previews still work. Without the PDF renderer, agents still get a PDF's text but no page images. Running the installer again follows your latest choice: a component you leave out is removed if an earlier run installed it. Details are in [documents.md](documents.md).
+Without LibreOffice, Office previews are refused with a message that says so; PDF previews still work. Without the PDF renderer, agents still get a PDF's text but no page images. Running the installer again follows your latest choice: a component you leave out is removed if an earlier run installed it. On Linux, a LibreOffice you install yourself can be registered only from a folder inside Omnipus's own folder (for the default install folder, `/usr/local/share/omnipus`). Details are in [documents.md](documents.md).
 
 Docker:
 

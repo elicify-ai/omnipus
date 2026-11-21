@@ -89,7 +89,7 @@ and nothing more:
 |---|---|---|
 | Read | The list of user accounts (`/etc/passwd`) and the system font folders (`/usr/share/fonts` and, when it exists, `/usr/local/share/fonts`) | Previews keep the installed fonts, and LibreOffice's connection point stays private to the account Omnipus runs as |
 | Read and run | The Office preview and PDF preview program folders installed with Omnipus: `/usr/share/omnipus/office` and `/usr/share/omnipus/pdfium` for the `.deb` and `.rpm` packages, `/usr/local/share/omnipus/office` and `/usr/local/share/omnipus/pdfium` for the one-line installer's default and the Docker image, `<install folder>/../share/omnipus/office` and `…/pdfium` for another installer folder | Without it, the preview programs cannot read their own files in this mode and every preview fails |
-| Read and run | Each folder registered with `omnipus office register` or `omnipus pdf-renderer register` | The same, for a copy you installed yourself |
+| Read and run | Each folder registered with `omnipus office register` or `omnipus pdf-renderer register`; on Linux only a folder inside Omnipus's own folder can be registered (`/usr/share/omnipus` for the `.deb` and `.rpm` packages, `/usr/local/share/omnipus` for the one-line installer's default and the Docker image, `$HOME/.local/share/omnipus` for the per-user installer folder `$HOME/.local/bin`, `<install folder>/../share/omnipus` for another installer folder) | The same, for a copy you installed yourself |
 | Read and run | The Omnipus program file itself (only the file, not its folder) | Omnipus starts each preview program through itself |
 
 Only folders that are installed when Omnipus starts get these permissions, and
@@ -100,20 +100,39 @@ inside or contains a folder Omnipus or an agent can write (the Omnipus data
 folder, `/tmp` and folders allowed for writing) are refused, and a preview
 that needs such a folder says so. These permissions belong to Omnipus's own
 startup sandbox only: the separate sandbox Omnipus builds for each agent shell
-command includes none of them, so agents can neither read nor run these
-programs. The default `open` mode needs none of this, because it already
-allows reading and running programs everywhere.
+command never includes them, and agents cannot read or run the preview
+programs, with two exceptions:
+
+- Omnipus itself was installed into a folder that agents can already read and
+  run (`/opt`, `/usr/lib`, `/usr/lib64`, `/lib`, `/lib64` or `/usr/bin`), for
+  example with the installer run as `OMNIPUS_INSTALL_DIR=/opt/omnipus/bin`.
+  Agents can then read and run the preview programs through that folder. None
+  of the standard installs (the `.deb` and `.rpm` packages, the installer's
+  default and per-user folders, the Docker image) is this case.
+- You give agents that access yourself: a `sandbox.allowed_exec_paths` entry,
+  or an approval that lets a command read or run there, gives it to the
+  commands it applies to.
+
+The default `open` mode needs none of this, because it already allows reading
+and running programs everywhere.
+
+At start, the gateway logs one `sandbox.component_grants` line naming each
+folder it granted and each refused or skipped entry with its reason.
 
 A preview program installed, registered, moved or reinstalled while Omnipus
 runs is used only after Omnipus is stopped and started (for example with your
 service manager). The in-app restart is not enough in the confined sandbox,
 because the restarted Omnipus can keep the permissions of the first start.
 Until then a preview says so, and `omnipus office register` and
-`omnipus pdf-renderer register` print a reminder.
+`omnipus pdf-renderer register` print a reminder. If a program was added after
+the first start and Omnipus was then restarted from inside the app, a preview
+says: `Office preview cannot read its program files (<reason>). If Omnipus was
+restarted from inside the app after this component was installed or registered,
+stop and start Omnipus (for example with your service manager); otherwise
+reinstall or re-register the Office preview component.` The PDF renderer says
+the same in its own words.
 
-A stricter setup, with a separate private folder for each preview and a block
-on LibreOffice opening network connections itself, is not switched on yet; it
-is tracked in issue #1856.
+A stricter setup is not switched on yet (issue #1856): a separate private folder for each preview, and a filter that stops LibreOffice from creating network connections of its own.
 
 Agents can never get write access to these programs' folders: shell approvals
 (**Allow** and **Allow once**), mounts (including one that contains a program
