@@ -48,6 +48,18 @@
  * guard whose two fault directions are named in the case (a dialog primary
  * demoted with the bar; a second gold inside the dialog). Mutation probes on
  * it are deferred to CHECK.
+ *
+ * Part 19 reconciles this file with the AMENDED FR-017 (team-lead spec edit
+ * 2edc763e13, ruling 2026-11-21; CHECK R4-03): the modal surfaces — the
+ * aria-modal Dialog, the default-modal voice key Sheet, the provider
+ * configure Sheet — keep their OWN single gold primary while the bar shows,
+ * and the page behind them is not counted. The replaced oracle is the
+ * outlined save-deepgram assertion (the old N31 "survivor" was the ruling's
+ * compliant behaviour, not a fault); the replaced assertion cites FR-017 in
+ * the case. The non-modal inline search-key panel stays page and outlined.
+ * Frontend round 14 (a657363279) returned the modal sheets' Save keys and
+ * the picker's Continue to the gold default, so the reconciled oracles pass
+ * here.
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
@@ -304,26 +316,68 @@ describe('FR-017 — with the Save bar visible, Save changes is the only gold bu
     expectOutlined(screen.getByTestId('connect-provider-btn'), 'Connect a provider')
   })
 
-  it('the section’s real primary actions are outlined too: the row’s Edit, the voice key sheet’s and the search key panel’s Save keys — a real action staying gold (N31) fails here', async () => {
+  it('a modal sheet keeps its own single gold primary while the bar shows (ruling 2026-11-21, FR-017); the page actions and the inline search panel are outlined', async () => {
     renderProvidersBody()
     await changeDefaultModel()
 
-    // The voice key sheet's real "Save key" first (the N31 target — the hook
-    // consumer whose real wiring a synthetic probe cannot see), then the
-    // search key panel's, then the row's own action.
+    // The voice key sheet is a modal surface (a Sheet with its default
+    // modal, aria-modal): while it is open with the bar showing, it keeps
+    // its OWN single gold primary action — its Save key — and the page
+    // behind it is not counted. Replaces this case's outlined oracle for
+    // save-deepgram: the amended FR-017 (team-lead ruling 2026-11-21, spec
+    // :1931) names the voice key side panel a modal surface that keeps its
+    // own gold primary, so an outlined Save key here is the wrong oracle
+    // (CHECK R4-03; the old N31 "survivor" is the ruling's compliant
+    // behaviour, not a fault). The count while the sheet is open is scoped
+    // to the sheet — the page behind a modal is not counted.
     await userEvent.click(screen.getByTestId('addkey-deepgram'))
     const sheet = await screen.findByTestId('voice-key-sheet')
-    expectOutlined(await within(sheet).getByTestId('save-deepgram'), 'the voice sheet’s Save key')
+    expectGold(await within(sheet).getByTestId('save-deepgram'), 'the voice sheet’s Save key — a modal surface keeps its own gold primary')
+    const goldInSheet = Array.from(sheet.querySelectorAll('button')).filter((b) => b.className.includes(GOLD))
+    expect(
+      goldInSheet.map((b) => (b.textContent ?? '').trim()),
+      'FR-017 ruling: the open modal sheet holds exactly ONE gold action while the bar shows behind it',
+    ).toEqual(['Save key'])
     await userEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByTestId('voice-key-sheet')).not.toBeInTheDocument())
+
+    // The search key panel opens INSIDE the page without blocking it: it is
+    // page, and is demoted with the bar showing (FR-017).
     await userEvent.click(screen.getByTestId('addkey-brave'))
     expectOutlined(await screen.findByTestId('save-brave'), 'the search panel’s Save key')
     // The provider row's own primary action (Edit on a connected row,
-    // Configure on an unconfigured one) is demoted with the bar showing.
+    // Configure on an unconfigured one) is a page action, demoted with the
+    // bar showing.
     expectOutlined(screen.getByTestId('configure-btn-anthropic'), 'the provider row’s Edit')
 
-    // And the screen total: Save changes alone keeps the gold fill.
-    expect(goldNames(), 'FR-017: exactly one gold action must remain while the bar shows').toEqual(['Save changes'])
+    // With no modal open, the page total: Save changes alone keeps gold.
+    expect(goldNames(), 'FR-017: exactly one gold action must remain on the page while the bar shows').toEqual(['Save changes'])
+  })
+
+  it('the provider configure sheet — another modal surface — keeps its own gold Save key while the bar shows behind it (ruling 2026-11-21, FR-017)', async () => {
+    renderProvidersBody()
+    await changeDefaultModel()
+
+    // Frontend round 14 returned the configure sheet's Save key
+    // (save-provider-*) and the picker's Continue to the gold default; the
+    // ruling says a modal sheet keeps that gold while the bar shows. This
+    // case drives the REAL configure sheet over a showing bar and counts
+    // the sheet's gold actions, scoped to the sheet (the page behind is not
+    // counted while a modal is open).
+    await userEvent.click(screen.getByTestId('configure-btn-anthropic'))
+    const sheet = await screen.findByTestId('provider-config-sheet')
+    expectGold(
+      await within(sheet).getByTestId('save-provider-anthropic'),
+      'the configure sheet’s Save & Connect — a modal surface keeps its own gold primary',
+    )
+    const goldInSheet = Array.from(sheet.querySelectorAll('button')).filter((b) => b.className.includes(GOLD))
+    expect(
+      goldInSheet.map((b) => (b.textContent ?? '').trim()),
+      'FR-017 ruling: the open configure sheet holds exactly ONE gold action while the bar shows behind it',
+    ).toEqual(['Save & Connect'])
+    // The premise stays true with the sheet open: the bar is showing behind
+    // it (the default-model draft is unsaved, FR-011).
+    expect(screen.getByTestId('settings-save-bar'), 'the Save bar is showing behind the modal sheet').toBeInTheDocument()
   })
 
   it('the inverse: with the bar hidden the other primary actions are the gold default again', async () => {
