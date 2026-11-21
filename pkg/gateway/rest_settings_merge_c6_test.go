@@ -54,6 +54,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -76,28 +77,85 @@ func putContextBody(api *restAPI, body string) *httptest.ResponseRecorder {
 
 // launchUnderHeldWriteLock is the FR-021 test barrier at the read/lock seam
 // (spec :1597). It takes the config write lock so neither writer can merge
-// yet, launches both, and gives them a bounded window to finish every
+// yet, launches both, and waits for an ARRIVAL HANDSHAKE (F10, CHECK round
+// 2): each writer must be observed parked acquiring the config write lock
+// before the lock is released. A writer parked there has finished every
 // pre-lock step — an early-copy writer (the C-6 "verified" defect shape)
-// takes its whole-section snapshot HERE, parked on the held lock — then
-// releases and lets the merges serialise. After release both merges run
-// under the lock in some order; a writer that copied before them merges a
-// stale copy and loses the other's field, deterministically. GREEN's
-// inside-the-lock merge reads the stored state under its own lock
-// acquisition, so it passes under ANY window (including a scheduler that
-// only runs the writers after release); the window bounds arrival only and
-// is never the oracle — the oracle is the stored config.json.
-func launchUnderHeldWriteLock(api *restAPI, w1, w2 func()) {
+// has taken its whole-section snapshot HERE, before parking — so releasing
+// after both arrivals makes the two merges overlap under ANY scheduler. A
+// fixed window cannot do that: a writer whose snapshot lands after the
+// window (check mutant N15) used to reach the merge with a fresh copy and
+// survive. GREEN's inside-the-lock merge reads the stored state under its
+// own lock acquisition, so it passes under ANY interleaving; the handshake
+// bounds arrival only and is never the oracle — the oracle is the stored
+// config.json.
+func launchUnderHeldWriteLock(t *testing.T, api *restAPI, w1, w2 func()) {
 	api.configMu.Lock()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); w1() }()
 	go func() { defer wg.Done(); w2() }()
-	arrival := time.Now()
-	for time.Since(arrival) < 200*time.Millisecond {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitBothWritersAtConfigLock(t)
 	api.configMu.Unlock()
 	wg.Wait()
+}
+
+// waitBothWritersAtConfigLock is the arrival acknowledgement of the FR-021
+// barrier. It returns only when TWO goroutines are parked acquiring the
+// config write lock through one of the three gateway functions every
+// Save-bar writer reaches the lock through (safeUpdateConfigJSON,
+// safeUpdateConfigJSONRecorded, writePerformanceLocked). While the test
+// holds configMu no writer can get past it, so a goroutine parked inside
+// those helpers is exactly a writer waiting at the read/lock seam: its
+// pre-lock work (the early whole-section read of the defect shape included)
+// is done. The wait is bounded and fails loudly naming the finding — a
+// writer that never arrives must fail the test, not hang it; the bound is a
+// safety net, the handshake itself is what forces the overlap.
+func waitBothWritersAtConfigLock(t *testing.T) {
+	t.Helper()
+	configLockHelpers := []string{
+		"pkg/gateway.(*restAPI).safeUpdateConfigJSON(",
+		"pkg/gateway.(*restAPI).safeUpdateConfigJSONRecorded(",
+		"pkg/gateway.(*restAPI).writePerformanceLocked(",
+	}
+	parkedWriters := func() int {
+		buf := make([]byte, 1<<20)
+		n := runtime.Stack(buf, true)
+		if n == len(buf) { // truncated: grow once and re-dump
+			buf = make([]byte, 8<<20)
+			n = runtime.Stack(buf, true)
+		}
+		parked := 0
+		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+			header := g[:strings.IndexByte(g, '\n')]
+			// Go 1.27 names a mutex-blocked wait reason "[sync.Mutex.Lock]"
+			// (older runtimes: "[sync.Mutex]" or "[semacquire]").
+			parkedState := strings.Contains(header, "[semacquire]") ||
+				strings.Contains(header, "[sync.Mutex")
+			if !parkedState {
+				continue
+			}
+			for _, helper := range configLockHelpers {
+				if strings.Contains(g, helper) {
+					parked++
+					break
+				}
+			}
+		}
+		return parked
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if n := parkedWriters(); n >= 2 {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	buf := make([]byte, 8<<20)
+	n := runtime.Stack(buf, true)
+	t.Fatalf("FR-021 barrier (F10, CHECK round 2): the two writers never both reached the config-lock "+
+		"seam — the overlap is not forced, so the test would not be deterministic. Goroutine dump:\n%s",
+		buf[:n])
 }
 
 // seedContextValues sets both disjoint fields on the live config and on the
@@ -161,7 +219,7 @@ func TestContextSettings_ConcurrentDisjointEditsBothSurvive(t *testing.T) {
 			// at the read/lock seam (spec :1597) forces the overlap: both
 			// writers finish every pre-lock step while the write lock is
 			// held by the test, before either merge.
-			launchUnderHeldWriteLock(api,
+			launchUnderHeldWriteLock(t, api,
 				func() { putContextBody(api, first) },
 				func() { putContextBody(api, second) })
 

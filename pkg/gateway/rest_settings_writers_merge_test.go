@@ -39,7 +39,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -110,22 +109,22 @@ func TestSaveBarWriters_MergeUnderLock(t *testing.T) {
 	// runPair forces the overlap at the read/lock seam with the FR-021 test
 	// barrier (spec :1597; F10, CHECK — the plain back-to-back launch let
 	// both writes run serially, so a stale pre-lock snapshot could pass): it
-	// holds the config write lock, launches both writes, and gives them a
-	// bounded window to finish every pre-lock step — an early-copy writer
-	// takes its whole-section snapshot HERE, parked on the held lock — then
-	// releases and lets the merges serialise. GREEN's inside-the-lock merge
-	// reads the stored state under its own lock acquisition and passes under
-	// ANY window; the window bounds arrival only and is never the oracle.
+	// holds the config write lock, launches both writes, and waits for the
+	// ARRIVAL HANDSHAKE (CHECK round 2) — both writers must be observed
+	// parked acquiring the config write lock (every pre-lock step done,
+	// their early snapshots taken) before the lock is released, so the two
+	// merges overlap under ANY scheduler. A fixed window cannot do that:
+	// check mutant N15 (an early copy whose snapshot lands 350 ms late)
+	// used to survive it. GREEN's inside-the-lock merge reads the stored
+	// state under its own lock acquisition and passes under ANY interleaving;
+	// the handshake bounds arrival only and is never the oracle.
 	runPair := func(api *restAPI, w1, w2 func()) {
 		api.configMu.Lock()
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); w1() }()
 		go func() { defer wg.Done(); w2() }()
-		arrival := time.Now()
-		for time.Since(arrival) < 200*time.Millisecond {
-			time.Sleep(5 * time.Millisecond)
-		}
+		waitBothWritersAtConfigLock(t)
 		api.configMu.Unlock()
 		wg.Wait()
 	}
