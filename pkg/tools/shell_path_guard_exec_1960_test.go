@@ -36,6 +36,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
+// marker1960 is the outside write target of CHECK F1's probe rows. The guard
+// only reads command text; no test here runs these commands.
+const marker1960 = "/tmp/omnipus-probe-marker-1960"
+
 func skipOnWindows1960(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -73,6 +77,13 @@ func TestGuard1960_ProgramByAbsolutePathRuns(t *testing.T) {
 		{"with stderr redirect to /dev/null", prog + " --version 2>/dev/null"},
 		{"stdout redirect into the workspace", prog + " --version > " + filepath.Join(cwd, "out.txt")},
 		{"after a shell keyword", "if " + prog + " --version; then echo ok; fi"},
+		// CHECK F2 (check-brace-probe.log): quoted braces are not shell brace
+		// expansion, so they must not stop the program word from running.
+		{"quoted braces in a jq argument (CHECK F2)", "/usr/local/bin/gh api user --jq '{login:.login}'"},
+		{"quoted empty braces (CHECK F2)", "/bin/echo '{}'"},
+		{"plain echo control (CHECK F2)", "/bin/echo hi"},
+		{"same jq argument by name (CHECK F2 control)", "gh api user --jq '{login:.login}'"},
+		{"brace expansion after the program word", "/usr/local/bin/gh api {user,orgs}"},
 		{"absolute shell mid-pipeline (was pinned refused before #1960)", "echo hi|/bin/sh"},
 		{"absolute program after semicolon (was pinned refused before #1960)", "echo hi;/etc/shadow"},
 	}
@@ -124,6 +135,21 @@ func TestGuard1960_OtherOperandsStillJudged(t *testing.T) {
 		{"env assignment value", "env GH_CONFIG_DIR=" + other + " " + prog + " --version", other, "variable assignment"},
 		{"argument after a wrapper's program", "timeout 5 " + prog + " " + other, other, ""},
 		{"script argument of an interpreter", "bash " + filepath.Join(outside, "x.sh"), filepath.Join(outside, "x.sh"), ""},
+		// CHECK F1 (check-envS-probe.log, exact probe rows): a wrapper option
+		// whose value is itself a command (env -S) or a combined short-option
+		// cluster (time -ao FILE) must not turn the next word into "the
+		// program"; the outside operand stays refused.
+		{"env -S split string, unquoted (CHECK F1)", "env -S touch " + marker1960, marker1960, ""},
+		{"env -S split string, quoted (CHECK F1 control)", "env -S 'touch " + marker1960 + "'", marker1960, ""},
+		{"env --split-string (CHECK F1)", "env --split-string touch " + marker1960, marker1960, ""},
+		{"env -S inside an option cluster (CHECK F1)", "env -iS touch " + marker1960, marker1960, ""},
+		{"plain touch control (CHECK F1)", "touch " + marker1960, marker1960, ""},
+		{"time -ao combined cluster (CHECK F1)", "/usr/bin/time -ao " + marker1960 + " true", marker1960, ""},
+		{"time -a -o separate (CHECK F1 control)", "/usr/bin/time -a -o " + marker1960 + " true", marker1960, ""},
+		{"time -o (CHECK F1 control)", "/usr/bin/time -o " + marker1960 + " true", marker1960, ""},
+		{"env -u then touch (CHECK F1 control)", "env -u FOO touch " + marker1960, marker1960, ""},
+		{"unquoted brace expansion in the program word", "{" + prog + "," + other + "}", prog, "brace expansion"},
+		{"brace glued onto the program word", "/usr/bin/tee{,}", "/usr/bin/tee", "brace expansion"},
 		{"path glued into the command word", "cat[" + other + "]", other, "not the program itself"},
 		{"second path glued onto the program word", prog + "," + other, other, "not the program itself"},
 	}
@@ -232,8 +258,10 @@ func TestExecTool1960_ProgramOwnErrorPassesThrough(t *testing.T) {
 	result := tool.Execute(context.Background(), map[string]any{"action": "run", "command": prog + " auth status"})
 	require.NotNil(t, result)
 	require.NotContains(t, result.ForLLM, "blocked by safety guard", "FR-1: the guard must not refuse the program")
-	if strings.Contains(result.ForLLM, "permission denied") || strings.Contains(result.ForLLM, "operation not permitted") {
-		t.Skipf("this host's sandbox does not allow executing from the test temp folder: %s", result.ForLLM)
+	// CHECK F3: a launch refusal by the sandbox or the spawn path is a
+	// failure of this acceptance row, never a reason to skip it.
+	for _, denial := range []string{"permission denied", "operation not permitted"} {
+		require.NotContains(t, strings.ToLower(result.ForLLM), denial, "the program must actually launch")
 	}
 	assert.Contains(t, result.ForLLM, "fake-gh: You are not logged into any GitHub hosts. To log in, run: gh auth login",
 		"FR-6: the program's own error passes through unchanged")
