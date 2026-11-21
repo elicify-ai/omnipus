@@ -471,17 +471,35 @@ export function SandboxSection(): React.ReactElement {
       const sent = sentRef.current
       const before = sentBeforeRef.current
       if (!sent || !before) return { kind: 'unknown' }
-      const items: { key: string; label: string; draft: unknown; before: unknown; recorded: false; pick: (d: SandboxConfigResponse) => unknown }[] = []
-      const add = (key: string, label: string, draft: unknown, pick: (d: SandboxConfigResponse) => unknown) =>
-        items.push({ key, label, draft, before: pick(before), recorded: false, pick })
-      if (sent.mode !== undefined) add('sandbox.mode', 'Sandbox mode', sent.mode, (d) => d.mode)
-      if (sent.filesystem_model !== undefined) add('sandbox.filesystem_model', 'Filesystem model', sent.filesystem_model, (d) => d.filesystem_model)
-      for (const k of WORKSPACE_LIMIT_KEYS) {
-        if (sent[k] !== undefined) add(`sandbox.${k}`, 'Shell workspace limit', sent[k], (d) => readWorkspaceLimit(d)?.value)
+      type Item = {
+        key: string; label: string; draft: unknown; before: unknown; recorded: false
+        pick: (d: SandboxConfigResponse) => unknown
+        /** Writes a saved value into a configuration copy. */
+        put: (d: SandboxConfigResponse, v: unknown) => SandboxConfigResponse
       }
-      if (sent.allowed_paths !== undefined) add('sandbox.allowed_paths', 'Allowed folders', sent.allowed_paths, (d) => d.allowed_paths ?? [])
+      const items: Item[] = []
+      const add = (key: string, label: string, draft: unknown, pick: Item['pick'], put: Item['put']) =>
+        items.push({ key, label, draft, before: pick(before), recorded: false, pick, put })
+      if (sent.mode !== undefined) {
+        add('sandbox.mode', 'Sandbox mode', sent.mode, (d) => d.mode, (d, v) => ({ ...d, mode: v } as SandboxConfigResponse))
+      }
+      if (sent.filesystem_model !== undefined) {
+        add('sandbox.filesystem_model', 'Filesystem model', sent.filesystem_model, (d) => d.filesystem_model,
+          (d, v) => ({ ...d, filesystem_model: v } as SandboxConfigResponse))
+      }
+      for (const k of WORKSPACE_LIMIT_KEYS) {
+        if (sent[k] !== undefined) {
+          add(`sandbox.${k}`, 'Shell workspace limit', sent[k], (d) => readWorkspaceLimit(d)?.value,
+            (d, v) => ({ ...d, [k]: v } as SandboxConfigResponse))
+        }
+      }
+      if (sent.allowed_paths !== undefined) {
+        add('sandbox.allowed_paths', 'Allowed folders', sent.allowed_paths, (d) => d.allowed_paths ?? [],
+          (d, v) => ({ ...d, allowed_paths: v } as SandboxConfigResponse))
+      }
       if (sent.ssrf?.allow_internal !== undefined) {
-        add('sandbox.ssrf.allow_internal', 'Internal network addresses', sent.ssrf.allow_internal, (d) => d.ssrf?.allow_internal ?? [])
+        add('sandbox.ssrf.allow_internal', 'Internal network addresses', sent.ssrf.allow_internal, (d) => d.ssrf?.allow_internal ?? [],
+          (d, v) => ({ ...d, ssrf: { ...d.ssrf, allow_internal: v } } as SandboxConfigResponse))
       }
       const fresh: { read: SandboxConfigResponse | null } = { read: null }
       const result = await checkFormPart(items, async (key) => {
@@ -490,19 +508,32 @@ export function SandboxSection(): React.ReactElement {
         if (!item) throw new Error(`no saved-state read for ${key}`)
         return item.pick(read)
       })
-      // The read becomes the saved configuration. On "changed somewhere
-      // else" the sent values stay drafts on top of it.
-      const read = fresh.read
-      if (read && result.kind === 'saved') queryClient.setQueryData(['sandbox-config'], read)
-      if (read && result.kind === 'changed-elsewhere') {
-        const { ssrf: sentSsrf, ...sentTop } = sent
-        syncOverrideRef.current = {
-          ...read,
-          ...sentTop,
-          ...(sentSsrf ? { ssrf: { ...read.ssrf, ...sentSsrf } } : {}),
-        } as SandboxConfigResponse
-        queryClient.setQueryData(['sandbox-config'], read)
+      if (result.kind === 'saved' && fresh.read) queryClient.setQueryData(['sandbox-config'], fresh.read)
+      if (result.kind !== 'changed-elsewhere') return result
+      // "Changed somewhere else": the saved configuration must be refreshed
+      // even when every changed value came from the restart list and no
+      // server read ran. One read, as on the normal path; if it fails,
+      // nothing is known and the result stays unknown with Retry (C-6).
+      let read: SandboxConfigResponse
+      try {
+        read = fresh.read ?? (await fetchSandboxConfig())
+      } catch {
+        return { kind: 'unknown' }
       }
+      // A listed key's saved value is its persisted_value, not the running
+      // read (C-6), so the check's saved values are laid onto the read.
+      let saved = read
+      for (const item of items) {
+        if (item.key in result.saved) saved = item.put(saved, result.saved[item.key])
+      }
+      // The sent values stay drafts on top of the saved configuration.
+      const { ssrf: sentSsrf, ...sentTop } = sent
+      syncOverrideRef.current = {
+        ...saved,
+        ...sentTop,
+        ...(sentSsrf ? { ssrf: { ...saved.ssrf, ...sentSsrf } } : {}),
+      } as SandboxConfigResponse
+      queryClient.setQueryData(['sandbox-config'], saved)
       return result
     },
     onOutcome: (outcome) => {
