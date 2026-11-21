@@ -50,6 +50,7 @@ import userEvent from '@testing-library/user-event'
 import { routeTree } from '@/routeTree.gen'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { SETTINGS_SEARCH_INDEX, sectionInfo, type SettingsSectionId } from '@/components/settings/settingsSections'
 
 // The REAL stylesheet the SPA ships, read from disk: vitest's `?raw` returns
 // '' for a .css import, and jsdom computes no CSS — the stylesheet-side
@@ -79,10 +80,31 @@ vi.mock('@/lib/api', async (importOriginal) => {
       is_knowledge_base: false,
       marker: 'none',
     })),
-    // The jumped-to section's own reads (Gateway), resolved so the Port row
-    // renders and the shell's MutationObserver can mark it. Config shape is
-    // the GatewaySection.test.tsx fixture's (the section renders its rows
-    // from it); no write is made, so no write seam is needed.
+    // The jumped-to section's own reads resolve so its rows render and the
+    // shell's MutationObserver can mark them. Gateway's config shape is the
+    // GatewaySection.test.tsx fixture's; the other sections' shapes are the
+    // settingsMap harness's (see the reach sweep's mock comment below).
+    fetchGatewayStatus: vi.fn(async () => ({ daily_cost: 0, uptime_seconds: 0 })),
+    fetchPendingRestart: vi.fn(async () => []),
+    fetchGodMode: vi.fn(async () => ({
+      enabled: false,
+      available: true,
+      supported: true,
+      persisted: false,
+    })),
+    // The reach sweep (FR-075: "every setting the search index names must be
+    // reachable this way") jumps into EVERY indexed section, so every
+    // section's own reads must resolve — the settingsMap harness's set,
+    // whose shapes the FR-073 sweep already renders real section content
+    // from. No write is made anywhere, so no write seam is needed.
+    fetchAboutInfo: vi.fn(async () => ({
+      version: '1.2.3',
+      go_version: 'go1.24',
+      os: 'linux',
+      arch: 'amd64',
+      uptime_seconds: 42,
+      device_pairing_enabled: true,
+    })),
     fetchConfig: vi.fn(async () => ({
       gateway: {
         bind_address: '127.0.0.1',
@@ -103,14 +125,115 @@ vi.mock('@/lib/api', async (importOriginal) => {
           max_agent_tool_calls_per_minute: null,
         },
       },
+      data: { session_retention_days: 90 },
     })),
-    fetchGatewayStatus: vi.fn(async () => ({ daily_cost: 0, uptime_seconds: 0 })),
-    fetchPendingRestart: vi.fn(async () => []),
-    fetchGodMode: vi.fn(async () => ({
-      enabled: false,
+    getContextSettings: vi.fn(async () => ({
+      mcp_result_cap: 20,
+      builtin_success_cap: 5,
+      model_overrides: [],
+    })),
+    fetchPerformanceSettings: vi.fn(async () => ({
+      max_parallel_agents: 4,
+      effective_max_parallel_agents: 4,
+      max_parallel_agents_configured: true,
+      tools_on_demand: false,
+      goal_max_rounds: 20,
+      goal_reminder_quiet_seconds: 60,
+      goal_stalled_checkin_enabled: true,
+      goal_stalled_checkin_minutes: 10,
+      max_tool_iterations: 50,
+    })),
+    fetchMemorySettings: vi.fn(async () => ({})), // formFromSettings applies defaults
+    fetchProviders: vi.fn(async () => [
+      {
+        status: 'connected',
+        auth_method: 'api_key',
+        dependents: [],
+        backs_default: false,
+        id: 'anthropic',
+        name: 'anthropic',
+        display_name: 'Anthropic',
+        has_models_endpoint: true,
+        models: ['claude-sonnet-4-5'],
+      },
+    ]),
+    fetchProvidersCatalog: vi.fn(async () => ({
+      schema_version: '2.0.0',
+      version: 'v2026.1.1',
+      updated_at: '2026-01-01T00:00:00Z',
+      providers: [
+        {
+          id: 'anthropic',
+          name: 'anthropic',
+          company: 'Anthropic',
+          api: 'https://api.anthropic.com',
+          region: 'us-east-1',
+          auth_methods: ['api_key'],
+          models: [
+            {
+              id: 'claude-sonnet-4-5',
+              name: 'claude-sonnet-4-5',
+              context_window: 200000,
+              max_output_tokens: 64000,
+              input_modalities: ['text'],
+              tool_call: true,
+              status: 'active',
+            },
+          ],
+        },
+      ],
+    })),
+    getDefaultModel: vi.fn(async () => ({
+      provider: 'openrouter',
+      model: 'z-ai/glm-5.2',
+      context_window: 1048576,
+      window_source: 'catalog',
+    })),
+    fetchIntegrationProviders: vi.fn(async () => ({
+      search: [
+        { id: 'brave', kind: 'search', display_name: 'Brave', configured: true, requires_key: true, usable: true, active: true },
+      ],
+      voice: [
+        { id: 'elevenlabs', kind: 'voice', display_name: 'ElevenLabs', configured: true, requires_key: true, usable: true, active: true },
+      ],
+      active_search: 'brave',
+      active_voice: 'elevenlabs',
+      default_search: 'brave',
+      fallback_search: null,
+    })),
+    getThirdPartyAgentSettings: vi.fn(async () => ({
+      clis: {
+        codex: { path: '', preset_args: '', detected: { installed: false } },
+        'claude-code': { path: '', preset_args: '', detected: { installed: false } },
+        opencode: { path: '', preset_args: '', detected: { installed: false } },
+      },
+    })),
+    fetchSandboxStatus: vi.fn(async () => ({
+      backend: 'landlock',
       available: true,
-      supported: true,
-      persisted: false,
+      kernel_level: true,
+      policy_applied: true,
+      seccomp_enabled: true,
+      bind_ports_count: 0,
+    })),
+    fetchSandboxConfig: vi.fn(async () => ({
+      mode: 'permissive',
+      allowed_paths: [],
+      ssrf: { allow_internal: [] },
+      requires_restart: false,
+    })),
+    fetchCredentials: vi.fn(async () => []),
+    fetchRetentionSettings: vi.fn(async () => ({
+      session_days: 90,
+      memory_retros_days: 180,
+      memory_retros_forever: false,
+      keep_everything_forever: false,
+    })),
+    fetchStorageStats: vi.fn(async () => ({
+      workspace_size_bytes: 10,
+      session_count: 3,
+      memory_entry_count: 5,
+      warnings: [],
     })),
   }
 })
@@ -160,18 +283,62 @@ async function jumpViaSearchResult(): Promise<void> {
 }
 
 /**
- * The Port row element, resolved the way the spec names it: that one setting
- * row. Waited for, because the section's reads resolve after the shell
- * paints — the same wait the shell's own MutationObserver performs before it
- * marks the row (FR-075: the mark lands when the row exists).
+ * The row element the spec names, resolved by its row identity. Waited for,
+ * because the section's reads resolve after the shell paints — the same wait
+ * the shell's own MutationObserver performs before it marks the row
+ * (FR-075: the mark lands when the row exists).
  */
-async function portRow(): Promise<HTMLElement> {
+async function rowFor(rowId: string, premise: string): Promise<HTMLElement> {
   let found: HTMLElement | null = null
   await waitFor(() => {
-    found = document.querySelector<HTMLElement>('[data-settings-row="port"]')
-    expect(found, 'FR-075 premise: the Port setting row must render in the opened section').not.toBeNull()
+    found = document.querySelector<HTMLElement>(`[data-settings-row="${rowId}"]`)
+    expect(found, premise).not.toBeNull()
   })
   return found as unknown as HTMLElement
+}
+
+async function portRow(): Promise<HTMLElement> {
+  return rowFor('port', 'FR-075 premise: the Port setting row must render in the opened section')
+}
+
+/**
+ * Regex-escape a label for an accessible-name match. The result link's
+ * accessible name is its label and section label read together ("Model
+ * overridesLimits" — jsdom's accname concatenates without separators), so
+ * the match stays an unescaped-label substring, exactly the shape the
+ * working Port case uses ({ name: /Port/ }); within the results panel the
+ * typed label names one entry.
+ */
+function labelPattern(label: string): RegExp {
+  return new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+}
+
+/**
+ * The search jump of FR-075's first arm for any indexed entry: type the
+ * entry's name, click THAT entry's result link (the panel is the scope —
+ * the sidebar always lists the same section names).
+ */
+async function jumpViaEntry(label: string): Promise<void> {
+  const box = await screen.findByRole('searchbox', { name: /search/i })
+  await userEvent.type(box, label)
+  const panel = await screen.findByTestId('settings-search-results')
+  await userEvent.click(within(panel).getByRole('link', { name: labelPattern(label) }))
+}
+
+/**
+ * FR-075: "a row inside a group that is closed opens that group first" —
+ * the named group's own toggle must be expanded by the jump.
+ */
+async function expectGroupOpen(testId: string): Promise<void> {
+  const toggle = within(screen.getByTestId(testId)).getByRole('button')
+  await waitFor(
+    () =>
+      expect(
+        toggle,
+        'RED (FR-075): a row inside a group that is closed — the jump must open that group first',
+      ).toHaveAttribute('aria-expanded', 'true'),
+    { timeout: 5_000 },
+  )
 }
 
 /**
@@ -304,6 +471,34 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     await expectExactlyThisRowMarked(await portRow())
   })
 
+  // R5-01 (CHECK round 5): the indexed Model-overrides row lives in a group
+  // that starts CLOSED (FR-072), and the search index names it — FR-075:
+  // "a row inside a group that is closed opens that group first; every
+  // setting the search index names must be reachable this way." RED on
+  // landing until the frontend wires the row target through the group
+  // (round 16); both legs below name their FR when they fail.
+  it('a search result for a row inside a closed group opens that group and marks exactly that row', async () => {
+    await openSettings()
+    await jumpViaEntry('Model overrides')
+    // "the section opens": the row's own section.
+    expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
+    // "a row inside a group that is closed opens that group first."
+    await expectGroupOpen('limits-group-overrides')
+    // And the marked row is that one row, with its aria-current identity.
+    await expectExactlyThisRowMarked(
+      await rowFor('model-overrides', 'RED (FR-075): the indexed Model-overrides row must render — its group opened and its identity reached the DOM'),
+    )
+  })
+
+  it('a deep link to a row inside a closed group opens that group and marks exactly that row', async () => {
+    await openSettings('?tab=limits&row=model-overrides')
+    expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
+    await expectGroupOpen('limits-group-overrides')
+    await expectExactlyThisRowMarked(
+      await rowFor('model-overrides', 'RED (FR-075): the indexed Model-overrides row must render — its group opened and its identity reached the DOM'),
+    )
+  })
+
   it('the jump does not move focus to the row — focus stays on the section', async () => {
     await openSettings()
     await jumpViaSearchResult()
@@ -318,4 +513,39 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       'RED (FR-075): the jump must not move focus into the marked row',
     ).toBe(true)
   })
+})
+
+// ── FR-075 reach sweep (CHECK R5-01) ─────────────────────────────────────────
+
+/**
+ * "Every setting the search index names must be reachable this way"
+ * (FR-075, team-lead clarification 2026-11-21, CHECK R5-01). One data-driven
+ * case per SETTING-ROW entry of the index — the entries that carry a `row`.
+ * The index's section-level entries name a section, and its moved/removed
+ * entries (a note or an outward href) answer where a setting went or why it
+ * is gone; neither carries a row, so neither is a setting row FR-075 can
+ * reach — they are FR-006/FR-007's answers, already watched by
+ * settingsSearch.test.tsx. Expected RED on landing for every entry whose
+ * row wiring is missing (round 16); each failing case names its entry.
+ */
+const ROW_ENTRIES: Array<{ label: string; row: string; section: SettingsSectionId }> =
+  SETTINGS_SEARCH_INDEX.flatMap((e) => (e.section && e.row ? [{ label: e.label, row: e.row, section: e.section }] : []))
+
+describe('FR-075 reach — every setting the search index names is reachable and marks exactly its row', () => {
+  it.each(ROW_ENTRIES)('search reaches "$label" and marks exactly that row', async (entry) => {
+    await openSettings()
+    await jumpViaEntry(entry.label)
+    // "the section opens": the entry's own section is the one shown.
+    expect(
+      await screen.findByRole('heading', { name: sectionInfo(entry.section).label, level: 2 }),
+      `FR-075: the search result for "${entry.label}" must open its own section (${sectionInfo(entry.section).label})`,
+    ).toBeInTheDocument()
+    // "marks exactly that row" — the whole mark shape, scoped to this entry.
+    await expectExactlyThisRowMarked(
+      await rowFor(
+        entry.row,
+        `RED (FR-075): the setting row the index names for "${entry.label}" (${entry.row}) must be reachable — the row must render in its opened section`,
+      ),
+    )
+  }, 20_000)
 })
