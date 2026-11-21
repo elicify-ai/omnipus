@@ -87,6 +87,18 @@ const (
 const (
 	t128OfficeAfterStart = "Office preview was installed or registered after Omnipus started. Stop and start Omnipus (for example with your service manager) to use it; the in-app restart is not enough in the confined sandbox."
 	t128RendererText     = "PDF renderer was installed or registered after Omnipus started; stop and start Omnipus (for example with your service manager) to use it; the in-app restart is not enough in the confined sandbox"
+
+	// t128OfficeRSReason is RS-1's <reason> for the real row: "today's
+	// damaged reason" (§3.9 RS-1), which names the refused file — the
+	// refused manifest open's exact error, as today's damaged text carries
+	// it. The path part is composed per layout at assertion time.
+	t128OfficeRSReason = "packaged manifest unreadable: open %s: permission denied"
+
+	// t128OfficeRSSkeleton is RS-1's LibreOffice sentence (§3.9, 2026-11-21,
+	// founder decision OF) around the reason: the second image's startup
+	// record grants the slot, CheckStartupGrant passes, and the inherited
+	// first-start restriction refuses the manifest read.
+	t128OfficeRSSkeleton = "Office preview cannot read its program files (%s). If Omnipus was restarted from inside the app after this component was installed or registered, stop and start Omnipus (for example with your service manager); otherwise reinstall or re-register the Office preview component."
 )
 
 func init() {
@@ -519,6 +531,19 @@ func t126PerformOp(base, op string) error {
 			GOOS: "linux", GOARCH: runtime.GOARCH,
 		})
 	case "register-office":
+		// §3.9 fixture-move handoff (sanctioned by the amendment, not a
+		// weakening): once OF-3 lands, this registration must name a folder
+		// inside OWN and the helper must set the new RegisterOptions program
+		// path to base/prefix/bin/omnipus (P/bin/omnipus, the simulated
+		// operator command's program file), so OWN = P/share/omnipus and the
+		// staged install-office folder moves to
+		// P/share/omnipus/install-office. Moving the folder WITHOUT the
+		// program path would leave the helper's default OWN (the test
+		// binary's) in charge: the registration would be refused outright,
+		// and if it instead registered under the default OWN the resolver's
+		// OF-4 check would deny the row with the wrong sentence — the
+		// after-start subject (BR-2.5) would never be reached. The move
+		// therefore lands together with the field stub (spec §13 staging).
 		_, err := component.RegisterOffice(component.RegisterOptions{
 			Home:     filepath.Join(base, "home"),
 			Folder:   filepath.Join(base, "install-office"),
@@ -817,7 +842,74 @@ func TestT128D_RestartFromRestrictedThreadKeepsGrants(t *testing.T) {
 	}
 }
 
-// t126PreviewOffice previews FX-DOCX6 (A2) and asserts the spec's 6 pages
+// TestT128F_ComponentAddedAfterStartThenInAppRestartNamesTheRestriction
+// (§3.9 RS-1 row f): start with no P/share/omnipus/office; after the startup
+// rules are applied the unconfined helper puts the packaged LibreOffice
+// there; the image re-executes through the production reExecProcess code
+// path on a thread proven restricted (the (d) machinery); the new image
+// applies its own startup rules. A2 → the tool result is exactly the RS-1
+// sentence, and the converter start hook was called 0 times. The A5 control
+// still renders: the renderer was present at the FIRST start, so its grant
+// is inherited across the restart — only the office slot's read is refused.
+func TestT128F_ComponentAddedAfterStartThenInAppRestartNamesTheRestriction(t *testing.T) {
+	layout := t126LayoutFor(t, false, true)
+	switch role := os.Getenv(t126RoleEnv); role {
+	case "":
+		// The restriction proof the second image reads: written now, by the
+		// unconfined first image, outside every startup rule.
+		proof := filepath.Join(layout.Base, "thread-proof-f")
+		require.NoError(t, os.WriteFile(proof, []byte("readable before the rules\n"), 0o600))
+		t126SpawnHelper(t, layout, []t126HelperOp{
+			{Op: "install-office", Trigger: "f-install.trg", Done: "f-install.done"},
+		})
+		grants, policy := t126GrantsAndPolicy(t, layout)
+		t126ApplyAndReexec(t, layout, grants, policy, "f-second")
+	case "f-second":
+		t126InstallStartupRules(t, layout)
+		// The component is added AFTER the first start's rules exist.
+		t126Trigger(t, layout, "f-install.trg")
+		t126AwaitDone(t, layout, "f-install.done")
+		// The restarting thread must be PROVEN restricted — (d)'s guard, not
+		// a pass if the thread is not proven restricted: a file that was
+		// readable before the rules must fail with EACCES on THIS thread.
+		proof := filepath.Join(layout.Base, "thread-proof-f")
+		_, readErr := os.ReadFile(proof)
+		require.Error(t, readErr, "T-128(f) instrument: the thread must be restricted before the restart")
+		require.ErrorIs(t, readErr, unix.EACCES,
+			"T-128(f) instrument: the restriction proof must be a permission failure, not a missing file")
+		require.NoError(t, os.Setenv("TMPDIR", filepath.Join(layout.Home, "scratch")))
+		require.NoError(t, os.Setenv(t126RoleEnv, "f-third"))
+		require.NoError(t, os.Setenv(t126BaseEnv, layout.Base))
+		// reExecProcess's code path, on the proven-restricted thread.
+		if err := unix.Exec(layout.Bin, os.Args, os.Environ()); err != nil {
+			t.Fatalf("T-128(f) restart re-exec: %v", err)
+		}
+	case "f-third":
+		t126InstallStartupRules(t, layout)
+		resolver := &component.Resolver{Home: layout.Home, Executable: layout.Bin}
+		svc, err := New(Config{Home: layout.Home, Self: layout.Bin, Resolver: resolver})
+		require.NoError(t, err)
+		starts := 0
+		testHookConverterStart = func(converterStart) { starts++ }
+		t.Cleanup(func() { testHookConverterStart = nil })
+		// A5 control: the renderer was present at the first start; the
+		// restart must not have broken its inherited grant.
+		t126PreviewA5(t, svc, "T-128(f) after restart")
+		// A2: the RS-1 sentence, word for word (<reason> = today's damaged
+		// reason for the refused manifest open, whose path is this layout's);
+		// the converter never starts.
+		_, previewErr := t126PreviewOffice(t, svc)
+		require.Error(t, previewErr, "T-128(f): the office component added before the restart must not be used")
+		want := fmt.Sprintf(t128OfficeRSSkeleton, fmt.Sprintf(t128OfficeRSReason, filepath.Join(layout.OfficeSlot, "manifest.json")))
+		require.EqualError(t, previewErr, want,
+			"T-128(f): the office denial must be the RS-1 sentence word for word; got %q", previewErr)
+		require.Zero(t, starts, "T-128(f): the converter must never start for a refused-read component")
+	default:
+		t.Fatalf("unknown role %q", role)
+	}
+}
+
+// t126PreviewA2 previews FX-DOCX6 (A2) and asserts the spec's 6 pages
 // and source strings.
 func t126PreviewA2(t *testing.T, svc *Service, label string) {
 	t.Helper()
