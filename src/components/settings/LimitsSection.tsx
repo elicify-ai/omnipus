@@ -23,7 +23,7 @@ type GroupId = 'context' | 'overrides' | 'agents'
 // can be scrolled to and highlighted.
 const ROWS_IN_GROUP: Record<GroupId, string[]> = {
   context: ['MCP tool result cap', 'Built-in tool result cap', 'Failed tool result cap', 'Tool-result share limit', 'Default context window'].map(settingsRowId),
-  overrides: [],
+  overrides: ['Model overrides'].map(settingsRowId),
   agents: [
     'Max parallel agents',
     'Tries per goal',
@@ -45,12 +45,13 @@ export function LimitsSection({ prefillOverride }: LimitsSectionProps) {
     overrides: !!prefillOverride,
     agents: false,
   })
-  const { targetRow } = useSettingsShell()
+  const { targetRow, targetRowJump } = useSettingsShell()
   useEffect(() => {
     if (!targetRow) return
     const group = (Object.keys(ROWS_IN_GROUP) as GroupId[]).find((g) => ROWS_IN_GROUP[g].includes(targetRow))
     if (group) setOpen((o) => (o[group] ? o : { ...o, [group]: true }))
-  }, [targetRow])
+    // targetRowJump: a repeat jump re-opens a group the person closed since.
+  }, [targetRow, targetRowJump])
   const pendingFocus = useRef<(() => void) | null>(null)
   const saveRef = useRef<() => Promise<void>>(async () => {})
 
@@ -104,16 +105,19 @@ export function LimitsSection({ prefillOverride }: LimitsSectionProps) {
       <ListGroup label="Context and tool results" expanded={open.context} onExpandedChange={toggle('context')} data-testid="limits-group-context">
         <div className="pt-[var(--space-2)]">{context.fieldsView}</div>
       </ListGroup>
-      <ListGroup
-        label="Model overrides"
-        {...settingsRow('Model overrides')}
-        count={context.overrideCount}
-        expanded={open.overrides}
-        onExpandedChange={toggle('overrides')}
-        data-testid="limits-group-overrides"
-      >
-        <div className="pt-[var(--space-2)]">{context.ready ? context.overridesView : context.fieldsView}</div>
-      </ListGroup>
+      {/* ListGroup passes no extra attributes to the page, so the row
+          marker sits on a wrapper around the whole group (FR-075). */}
+      <div {...settingsRow('Model overrides')}>
+        <ListGroup
+          label="Model overrides"
+          count={context.overrideCount}
+          expanded={open.overrides}
+          onExpandedChange={toggle('overrides')}
+          data-testid="limits-group-overrides"
+        >
+          <div className="pt-[var(--space-2)]">{context.ready ? context.overridesView : context.fieldsView}</div>
+        </ListGroup>
+      </div>
       <SaveOutcomeLine message={message('context')} />
       <ListGroup label="Agents and goals" expanded={open.agents} onExpandedChange={toggle('agents')} data-testid="limits-group-agents">
         <div className="pt-[var(--space-2)]">{performance.view}</div>

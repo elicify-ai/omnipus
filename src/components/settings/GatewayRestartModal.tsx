@@ -40,6 +40,7 @@ import { useUiStore } from '@/store/ui'
 import { usePendingRestart } from '@/hooks/restart'
 import { fetchAboutInfo, fetchPendingRestart, getErrorMessage, gatewayRestart } from '@/lib/api'
 import type { PendingRestartEntry } from '@/lib/api'
+import { useReturnFocus } from './useReturnFocus'
 
 const RESTART_TIMEOUT_MS = 60_000
 const POLL_INTERVAL_MS = 1_000
@@ -126,6 +127,8 @@ export interface GatewayRestartModalProps {
 type RestartPhase = 'idle' | 'restarting' | 'waiting' | 'moved' | 'success' | 'error'
 
 export function GatewayRestartModal({ open, onClose, labels, onRestarted }: GatewayRestartModalProps) {
+  // FR-069: focus returns to the control that opened the dialog.
+  const returnFocus = useReturnFocus()
   const { addToast } = useUiStore()
   // `entries` may be absent from a partial hook stand-in; treat that as no waiting changes.
   const { entries = [], refetch: refetchPending } = usePendingRestart()
@@ -212,7 +215,7 @@ export function GatewayRestartModal({ open, onClose, labels, onRestarted }: Gate
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v && !isRestarting) handleLater() }}>
-      <DialogContent>
+      <DialogContent onOpenAutoFocus={returnFocus.onOpenAutoFocus} onCloseAutoFocus={returnFocus.onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Restart now?</DialogTitle>
           <DialogDescription>

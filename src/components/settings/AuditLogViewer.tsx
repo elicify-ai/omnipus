@@ -20,6 +20,7 @@ import {
 import { fetchAuditLog, getErrorMessage } from '@/lib/api'
 import type { AuditEntry } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useReturnFocus } from './useReturnFocus'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -255,6 +256,8 @@ const DECISION_OPTIONS = [
 ]
 
 export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
+  // FR-069: focus returns to the control that opened the dialog.
+  const returnFocus = useReturnFocus()
   const { addToast } = useUiStore()
   const [eventFilter, setEventFilter] = useState('all')
   const [decisionFilter, setDecisionFilter] = useState('all')
@@ -301,7 +304,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden">
+      <DialogContent onOpenAutoFocus={returnFocus.onOpenAutoFocus} onCloseAutoFocus={returnFocus.onCloseAutoFocus} className="max-w-5xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden">
         {/* Header */}
         <DialogHeader className="flex-none px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-3)] border-b border-[var(--color-border)]">
           <div className="flex items-center gap-[var(--space-2)]">

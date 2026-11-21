@@ -19,6 +19,7 @@ import {
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { settingsRow } from './settingsSections'
+import { useReturnFocus } from './useReturnFocus'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -28,6 +29,8 @@ function formatBytes(bytes: number): string {
 }
 
 export function DataSection() {
+  // FR-069: focus returns to the control that opened the dialog.
+  const clearFocus = useReturnFocus()
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
@@ -154,7 +157,7 @@ export function DataSection() {
 
       {/* Clear sessions confirmation */}
       <Dialog open={clearConfirmOpen} onOpenChange={setClearConfirmOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" onOpenAutoFocus={clearFocus.onOpenAutoFocus} onCloseAutoFocus={clearFocus.onCloseAutoFocus}>
           <DialogHeader>
             <DialogTitle className="font-headline text-base">Clear all chat history?</DialogTitle>
           </DialogHeader>

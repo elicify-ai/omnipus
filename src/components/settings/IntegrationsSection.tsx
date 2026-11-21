@@ -37,8 +37,11 @@ import { useSectionSavePart } from './SectionSaveScope'
 import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
 import type { FormSavePart } from './useFormSaveBar'
 import { settingsRow } from './settingsSections'
+import { useReturnFocus } from './useReturnFocus'
 
 export function IntegrationsSection() {
+  // FR-069: focus returns to the control that opened the dialog.
+  const voiceSheetFocus = useReturnFocus()
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const stepUp = useStepUp()
@@ -552,7 +555,9 @@ export function IntegrationsSection() {
               <Microphone size={13} weight="bold" /> Voice input
             </div>
             {data.voice.length === 0 ? (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No voice providers available.</p>
+              // With no voice service there is no transcriber to choose: a
+              // jump to Active transcriber lands on this line (FR-075).
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" {...settingsRow('Active transcriber')}>No voice providers available.</p>
             ) : (
               <>
                 <FormRow
@@ -620,6 +625,7 @@ export function IntegrationsSection() {
           widthClass="w-[90vw] sm:max-w-lg"
           className="p-0"
           data-testid="voice-key-sheet"
+          onOpenAutoFocus={voiceSheetFocus.onOpenAutoFocus} onCloseAutoFocus={voiceSheetFocus.onCloseAutoFocus}
           aria-hidden={stepUp.open ? true : undefined}
           inert={stepUp.open ? true : undefined}
           onPointerDownOutside={(e) => {

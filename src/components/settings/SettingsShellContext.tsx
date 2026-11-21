@@ -34,6 +34,8 @@ export interface SettingsShellApi { // not-wire-format: React context contract i
    * section that keeps the row inside a closed group opens that group.
    */
   targetRow?: string
+  /** Counts jumps, so a repeat jump to the same row can act again. */
+  targetRowJump?: number
   /**
    * Moves focus to the open section's heading: FR-069's fallback when the
    * control that opened a closing dialog is gone and no dialog is left open.
