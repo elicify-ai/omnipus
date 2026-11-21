@@ -197,7 +197,15 @@ func TestGuard1960_OtherOperandsStillJudged(t *testing.T) {
 		{"unquoted brace expansion in the program word", "{" + prog + "," + other + "}", prog, "brace expansion"},
 		{"brace glued onto the program word", "/usr/bin/tee{,}", "/usr/bin/tee", "brace expansion"},
 		{"path glued into the command word", "cat[" + other + "]", other, "not the program itself"},
-		{"second path glued onto the program word", prog + "," + other, other, "not the program itself"},
+		// Re-check 3: a candidate that covers only part of its program word
+		// is not the program; the first refusal now names that candidate.
+		{"second path glued onto the program word", prog + "," + other, prog, "not the program itself"},
+		{"quote-joined program word", `"` + prog + `"x --version`, prog, "not the program itself"},
+		// Re-check 3, R2 residual: backslash-newline is removed before the
+		// shell splits words, so `>\<newline>|` is still `>|`.
+		{"line-continued >| attached (re-check 3)", "printf x >\\\n|" + marker1960, marker1960, ""},
+		{"line-continued >| spaced (re-check 3)", "printf x >\\\n| " + marker1960, marker1960, ""},
+		{"line-continued program word stays judged (re-check 3)", prog + " \\\n--version", prog, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -250,6 +258,11 @@ func TestGuard1960_ProtectedAndScopedPrograms(t *testing.T) {
 
 	protected := tool.guardCommand(ctx, credential+" --version", work)
 	require.Contains(t, protected, "protected internal files", "a protected internal file stays refused as a program")
+	// Re-check 3: the scan stops at the closing quote, so `".../credentials.js"on`
+	// names credentials.json to the shell but only credentials.js to the
+	// scan. A candidate that is not the whole program word is not a program.
+	joined := `"` + strings.TrimSuffix(credential, "on") + `"on --version`
+	require.NotEmpty(t, tool.guardCommand(ctx, joined, work), "a quote-joined spelling of a protected file stays refused as a program")
 	foreign := tool.guardCommand(ctx, filepath.Join(home, "agents", "victim", "bin", "tool")+" --version", work)
 	require.NotEmpty(t, foreign, "another agent's private folder stays refused as a program")
 

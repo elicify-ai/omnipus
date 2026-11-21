@@ -353,9 +353,13 @@ func TestGuard_RealOutsideWritesStillRefused(t *testing.T) {
 		// #1960 S0 (FR-1) replaces the earlier T11 expectation: an absolute
 		// program path in command position is no longer refused only because
 		// it lies outside the working folder.
+		// Re-check 3: on Windows the scan reads a drive path only up to its
+		// first backslash, so only a one-level program path is a complete
+		// program word there; deeper paths stay refused
+		// (TestGuard1960_WindowsTruncatedProgramPathRefused).
 		cmd := "/bin/ls"
 		if runtime.GOOS == "windows" {
-			cmd = `C:\Windows\System32\cmd.exe`
+			cmd = `C:\tool.exe`
 		}
 		require.Empty(t, tool.guardCommand(context.Background(), cmd, cwd), "FR-1: %s must run", cmd)
 	})
