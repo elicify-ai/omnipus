@@ -100,7 +100,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import * as api from '@/lib/api'
-import type { AppState } from '@/lib/api'
 
 // ── Fixtures (the reads the real sections start from) ────────────────────────
 
