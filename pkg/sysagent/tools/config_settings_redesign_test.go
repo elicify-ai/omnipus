@@ -37,6 +37,12 @@ package systools_test
 //     a labeled characterization pin (refusal family or a verified setter
 //     receipt). The companion positive control runs the REAL comparison —
 //     an unclassified key must fail the complete instrument, not a helper.
+//     CHECK R4 repairs (same author, part 19): the C-7 rider section's TWO
+//     tables are parsed separately (the seven Performance values; the
+//     ruling table's user-only values with `sandbox.rate_limits.*` and the
+//     CLI-runner placeholders expanded); FR-101's closing sentence is
+//     enforced both ways (an observed refusal no table lists is a parity
+//     failure, and a listed value with no refusal row fails).
 //
 // Oracle: the spec's C-7 table, the agent-tool field table, D-16 and the BDD
 // scenario "Performance values cannot be changed around Settings" (refused
@@ -57,6 +63,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"gopkg.in/yaml.v3"
 )
 
 func TestSetConfig_RefusesPerformanceValues(t *testing.T) {
@@ -233,12 +240,68 @@ func markdownTables(doc string) [][]string {
 	return tables
 }
 
-// c7Keys parses the C-7 rider section's own field table and requires it to
-// yield exactly its seven Performance values — the spec oracle the guard's
-// ten listed rows are cited against. A different count means the table moved
-// or the parser misread it, and the guard must stop rather than compare
-// against a wrong inventory.
-func c7Keys(t *testing.T) []string {
+// c7Tables holds the C-7 rider section's two tables, parsed separately
+// (CHECK R4-02: the section grew a second table — team-lead spec edits
+// 1dd97e82bd/2edc763e13 — and the old whole-section scan broke the guard's
+// premise). performance is the FIRST table's #936 rider list; userOnly is
+// the SECOND table's "Other values a person edits that agents cannot write"
+// (team-lead ruling 2026-11-21, closing CHECK R3-02), with the table's
+// wildcard and placeholder tokens expanded to the concrete keys the guard
+// drives.
+type c7Tables struct {
+	performance []string
+	userOnly    []string
+}
+
+// The seven Performance values of the FIRST C-7 table, transcribed from the
+// approved spec (C-7 #936 rider rows 1–7). The parser must yield exactly
+// this set from the live document; any other count or name means the table
+// moved and the guard stops instead of comparing against a wrong inventory.
+var c7PerformanceKeys = []string{
+	"performance.max_parallel_agents",
+	"planning.goal_max_rounds",
+	"planning.goal_reminder_quiet_seconds",
+	"planning.goal_stalled_checkin_enabled",
+	"planning.goal_stalled_checkin_minutes",
+	"tools.manifest.compressed",
+	"agents.defaults.max_tool_iterations",
+}
+
+// placeholderShape matches the second table's placeholder tokens — the
+// CLI-runner row names `sandbox.third_party_agents.clis.<codex,
+// claude-code, opencode>.path` — capturing head, placeholder names and tail.
+var placeholderShape = regexp.MustCompile("`([a-z][a-z0-9_.]*)<([a-z0-9-, ]+)>([a-z0-9_.]*)`")
+
+// bareSuffixShape matches the row's second token — the bare `.<suffix>` the
+// CLI-runner row uses for the preset arguments ("…<codex, claude-code,
+// opencode>.path` and `.preset_args`") — which carries the SAME placeholder
+// names as the token before it.
+var bareSuffixShape = regexp.MustCompile("`((?:\\.[a-z0-9_.]+))`")
+
+// wildcardShape matches a backticked `prefix.*` token — the second table
+// names the sandbox rate limits as `sandbox.rate_limits.*`.
+var wildcardShape = regexp.MustCompile("`([a-z][a-z0-9_.]*)\\.\\*`")
+
+// c7Keys parses the C-7 rider section's two tables separately. The FIRST
+// table must yield exactly the seven Performance values above; the SECOND
+// table yields its concrete backticked keys PLUS the expansions of its
+// wildcard and placeholder tokens:
+//
+//   - `sandbox.rate_limits.*` expands against the contract schema the spec
+//     names for these values (contracts/components/schemas/RateLimitConfig.yaml,
+//     reached through the spec's C-4 writer list and the Settings section the
+//     table's row names): every writable leaf property becomes
+//     sandbox.rate_limits.<property>. The GET-only derived `enabled` is
+//     excluded by its own schema description ("Only present in GET
+//     responses") — it is not a stored value a person edits.
+//   - `sandbox.third_party_agents.clis.<codex, claude-code, opencode>.path`
+//     expands over the three named CLIs; the row's bare `.<suffix>` token
+//     (`.preset_args`) expands over the same three names.
+//
+// The parsed set must equal the spec's transcription in c7UserOnlyKeys — a
+// spec edit or a parser misread fails loudly instead of comparing against a
+// wrong inventory.
+func c7Keys(t *testing.T) c7Tables {
 	t.Helper()
 	raw, err := os.ReadFile(specPath)
 	if err != nil {
@@ -247,25 +310,196 @@ func c7Keys(t *testing.T) []string {
 	doc := string(raw)
 	c7Start := strings.Index(doc, "### C-7")
 	if c7Start < 0 {
-		t.Fatalf("BLOCKED (FR-101): the spec's C-7 field table is gone from %s — the guard cannot enumerate", specPath)
+		t.Fatalf("BLOCKED (FR-101): the spec's C-7 section is gone from %s — the guard cannot enumerate", specPath)
 	}
 	c7 := doc[c7Start:]
 	if next := strings.Index(c7, "\n### "); next >= 0 {
 		c7 = c7[:next]
 	}
-	seen := map[string]bool{}
-	var keys []string
-	for _, m := range keyShape.FindAllStringSubmatch(c7, -1) {
-		if !seen[m[1]] {
-			seen[m[1]] = true
-			keys = append(keys, m[1])
+	var perfTable, userTable []string
+	for _, table := range markdownTables(c7) {
+		header := strings.ToLower(table[0])
+		switch {
+		case strings.Contains(header, "config key") && strings.Contains(header, "put /config"):
+			perfTable = table
+		case strings.Contains(header, "user-only reason"):
+			userTable = table
 		}
 	}
-	if len(keys) != 7 {
-		t.Fatalf("BLOCKED (FR-101): the C-7 table yielded %d config keys (%v); want the seven Performance "+
-			"values — the field table changed, so reconcile this guard with the spec", len(keys), keys)
+	if perfTable == nil || userTable == nil {
+		t.Fatalf("BLOCKED (FR-101): the C-7 section must hold two tables — the Performance rider (its header "+
+			"names a config key and PUT /config) and the user-only ruling table (its header names a "+
+			"User-only reason column); found %d of them in %s", len(perfTable)+len(userTable), specPath)
 	}
-	return keys
+
+	// First table: exactly the seven Performance values.
+	seen := map[string]bool{}
+	var perf []string
+	for _, line := range perfTable[1:] {
+		for _, m := range keyShape.FindAllStringSubmatch(line, -1) {
+			if !seen[m[1]] {
+				seen[m[1]] = true
+				perf = append(perf, m[1])
+			}
+		}
+	}
+	if len(perf) != len(c7PerformanceKeys) {
+		t.Fatalf("BLOCKED (FR-101): the C-7 FIRST table yielded %d config keys (%v); want exactly the seven "+
+			"Performance values — the rider table changed, so reconcile this guard with the spec",
+			len(perf), perf)
+	}
+	for _, want := range c7PerformanceKeys {
+		if !contains(perf, want) {
+			t.Fatalf("BLOCKED (FR-101): the C-7 FIRST table no longer names %s — reconcile this guard with the spec", want)
+		}
+	}
+
+	// Second table: concrete keys, then the wildcard and placeholder tokens
+	// in row order (the bare-suffix token binds to the placeholder before it).
+	seen = map[string]bool{}
+	var userOnly []string
+	add := func(k string) {
+		if !seen[k] {
+			seen[k] = true
+			userOnly = append(userOnly, k)
+		}
+	}
+	var lastNames []string
+	var lastHead string
+	for _, line := range userTable[1:] {
+		// A bare-suffix token binds to a placeholder token on the SAME row
+		// only — names never leak across rows.
+		lastNames, lastHead = nil, ""
+		for _, m := range keyShape.FindAllStringSubmatch(line, -1) {
+			add(m[1])
+		}
+		for _, m := range placeholderShape.FindAllStringSubmatch(line, -1) {
+			lastNames, lastHead = nil, m[1]
+			for _, name := range strings.Split(m[2], ",") {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					t.Fatalf("BLOCKED (FR-101): an empty name inside the C-7 placeholder token %s", m[0])
+				}
+				lastNames = append(lastNames, name)
+				add(m[1] + name + m[3])
+			}
+		}
+		for _, m := range wildcardShape.FindAllStringSubmatch(line, -1) {
+			for _, leaf := range rateLimitLeafKeys(t) {
+				add(m[1] + "." + leaf)
+			}
+		}
+		for _, m := range bareSuffixShape.FindAllStringSubmatch(line, -1) {
+			if lastNames == nil {
+				t.Fatalf("BLOCKED (FR-101): the bare suffix token %s has no placeholder token before it — "+
+					"the expansion has no names to fan out over", m[0])
+			}
+			for _, name := range lastNames {
+				add(lastHead + name + m[1])
+			}
+		}
+	}
+	if !equalSets(userOnly, c7UserOnlyKeys) {
+		t.Fatalf("BLOCKED (FR-101): the C-7 SECOND table (with the wildcard and placeholder expansions) "+
+			"yielded %v; want the ruling's listed values %v — the ruling table or the expansion changed, "+
+			"so reconcile this guard with the spec", userOnly, c7UserOnlyKeys)
+	}
+	return c7Tables{performance: perf, userOnly: userOnly}
+}
+
+// c7UserOnlyKeys is the SECOND C-7 table's listed values, transcribed from
+// the approved spec (team-lead ruling 2026-11-21): the seven Context values
+// of its first row, the Active transcriber, the Sandbox row's concrete keys
+// plus `sandbox.rate_limits.*` expanded over RateLimitConfig.yaml's two
+// writable leaves (max_agent_llm_calls_per_hour, max_agent_tool_calls_per_minute),
+// the egress proxy switch, and the CLI-runner row's three CLIs × {path,
+// preset_args}.
+var c7UserOnlyKeys = []string{
+	"context.mcp_result_cap",
+	"context.builtin_success_cap",
+	"context.builtin_failure_cap",
+	"context.tool_result_share_fraction",
+	"context.ingest_bound_bytes",
+	"context.default_context_window",
+	"context.model_overrides",
+	"integrations.active_transcriber",
+	"sandbox.auto_approve",
+	"sandbox.prompt_injection_level",
+	"sandbox.mode",
+	"sandbox.filesystem_model",
+	"sandbox.workspace_path_guard",
+	"sandbox.allowed_paths",
+	"sandbox.ssrf.allow_internal",
+	"sandbox.rate_limits.max_agent_llm_calls_per_hour",
+	"sandbox.rate_limits.max_agent_tool_calls_per_minute",
+	"sandbox.god_mode",
+	"sandbox.tool_policies",
+	"tools.exec.enable_proxy",
+	"sandbox.third_party_agents.clis.codex.path",
+	"sandbox.third_party_agents.clis.codex.preset_args",
+	"sandbox.third_party_agents.clis.claude-code.path",
+	"sandbox.third_party_agents.clis.claude-code.preset_args",
+	"sandbox.third_party_agents.clis.opencode.path",
+	"sandbox.third_party_agents.clis.opencode.preset_args",
+}
+
+// rateLimitContractPath is the contract schema the sandbox rate-limit values
+// are stored under — the wildcard expansion source named in c7Keys.
+const rateLimitContractPath = "../../../contracts/components/schemas/RateLimitConfig.yaml"
+
+// rateLimitLeafKeys reads the contract schema and returns its writable leaf
+// property names, sorted — the `sandbox.rate_limits.*` expansion. A property
+// whose own description says it is GET-only ("Only present in GET responses",
+// the derived `enabled`) is not a stored value and is excluded.
+func rateLimitLeafKeys(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(rateLimitContractPath)
+	if err != nil {
+		t.Fatalf("BLOCKED (FR-101): the rate-limit contract %s could not be read — the `sandbox.rate_limits.*` "+
+			"wildcard expands against it: %v", rateLimitContractPath, err)
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Description string `yaml:"description"`
+		} `yaml:"properties"`
+	}
+	if err := yaml.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("BLOCKED (FR-101): the rate-limit contract %s did not parse: %v", rateLimitContractPath, err)
+	}
+	var leaves []string
+	for name, prop := range schema.Properties {
+		if strings.Contains(prop.Description, "Only present in GET responses") {
+			continue
+		}
+		leaves = append(leaves, name)
+	}
+	if len(leaves) == 0 {
+		t.Fatalf("BLOCKED (FR-101): the rate-limit contract %s yielded no writable leaf properties — "+
+			"the wildcard expansion cannot stand in for nothing", rateLimitContractPath)
+	}
+	sort.Strings(leaves)
+	return leaves
+}
+
+// equalSets reports whether the two slices hold the same keys, ignoring
+// order and duplicates.
+func equalSets(a, b []string) bool {
+	set := map[string]int{}
+	for _, k := range a {
+		set[k]++
+	}
+	for _, k := range b {
+		set[k]--
+		if set[k] < 0 {
+			return false
+		}
+	}
+	for _, n := range set {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // retentionDottedKeys verifies the agent-tool field-table line still names
@@ -273,7 +507,7 @@ func c7Keys(t *testing.T) []string {
 // table: "user-only, because they delete data on a schedule").
 func retentionDottedKeys(t *testing.T, doc string) []string {
 	t.Helper()
-	var keys []string
+	keys := make([]string, 0, len(retentionTrio))
 	for _, r := range retentionTrio {
 		if !strings.Contains(doc, "`"+r.undotted+"`") {
 			t.Fatalf("BLOCKED (FR-101): the spec's agent-tool field table no longer names %s — reconcile", r.undotted)
@@ -459,12 +693,18 @@ func fr101Inventory(t *testing.T) []string {
 
 	c7 := c7Keys(t)
 	tables := specFieldTableKeys(t)
-	for _, k := range c7 {
+	// The FIRST table's concrete keys must also surface in the whole-document
+	// field-table scan. The SECOND table's wildcard and placeholder tokens
+	// (`sandbox.rate_limits.*`, the `<codex, claude-code, opencode>` fans)
+	// exist only in the C-7 ruling table — keyShape cannot see them — so
+	// their expansions are added to the inventory directly below instead.
+	for _, k := range c7.performance {
 		if !contains(tables, k) {
-			t.Fatalf("BLOCKED (FR-101): the C-7 key %s is not yielded by the whole-document field-table scan", k)
+			t.Fatalf("BLOCKED (FR-101): the C-7 Performance key %s is not yielded by the whole-document field-table scan", k)
 		}
 	}
 	keys := append(append([]string{}, tables...), retentionDottedKeys(t, doc)...)
+	keys = append(keys, c7.userOnly...)
 	keys = append(keys, wireframeValueKeys(t)...)
 	seen := map[string]bool{}
 	unique := keys[:0]
@@ -523,6 +763,54 @@ func parityViolations(inventory, keys []string) []string {
 	return violations
 }
 
+// listedUserOnlyReasons — FR-101's "listed user-only reason" set: the two
+// C-7 tables (the FIRST table's seven Performance values and the SECOND
+// table's ruling values, wildcard and placeholder tokens expanded) plus the
+// agent-tool field table's retention trio, which FR-101's sentence lists in
+// the same breath ("retention values: user-only, 'deletes data on a
+// schedule'").
+func listedUserOnlyReasons(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatalf("BLOCKED (FR-101): the approved spec %s could not be read: %v", specPath, err)
+	}
+	c7 := c7Keys(t)
+	keys := append(append([]string{}, c7.performance...), c7.userOnly...)
+	return append(keys, retentionDottedKeys(t, string(raw))...)
+}
+
+// refusalListingViolations — FR-101's closing sentence (team-lead spec edit
+// 1dd97e82bd, CHECK R4-02): "A refusal the test observes but no C-7 table
+// lists is a parity failure, not a pass." BOTH directions fail: a refusal
+// row whose key no listed reason covers is a parity failure, and a listed
+// key with no refusal row is a listing the guard never honors through the
+// real tool.
+func refusalListingViolations(listed []string, rows []guardRow) []string {
+	var violations []string
+	drivenRefusals := map[string]bool{}
+	for _, r := range rows {
+		if r.wantInRefusal == "" {
+			continue
+		}
+		drivenRefusals[r.key] = true
+		if !contains(listed, r.key) {
+			violations = append(violations, fmt.Sprintf(
+				"refusal row %s observes a refusal no C-7 table or retention listing covers (FR-101: a refusal the "+
+					"test observes but no C-7 table lists is a parity failure)", r.key))
+		}
+	}
+	for _, k := range listed {
+		if !drivenRefusals[k] {
+			violations = append(violations, fmt.Sprintf(
+				"listed user-only value %s has no refusal row — a listing is pinned only by a passing refusal "+
+					"through the real set_config tool", k))
+		}
+	}
+	sort.Strings(violations)
+	return violations
+}
+
 // guardRow is one driven row of the FR-101 guard. wantInRefusal pins a
 // refusal family ("unknown config key", "not writable via this tool",
 // "Settings → Limits", "Settings →"); an empty wantInRefusal marks a setter
@@ -552,7 +840,7 @@ var storedAsOverrides = map[string]any{
 // these document today's tool, they are not spec claims, and any drift the
 // tool makes fails here loudly.
 func allGuardRows() []guardRow {
-	rows := []guardRow{
+	refusals := []guardRow{
 		// The spec's listed user-only reasons (kept verbatim from the round-1
 		// guard; spec: retention "user-only, because they delete data on a
 		// schedule", C-7 rider + D-16 rows 5-8 for #936, #904's screen naming).
@@ -567,11 +855,17 @@ func allGuardRows() []guardRow {
 		{"tools.manifest.compressed", false, "Settings → Limits"},
 		{"agents.defaults.max_tool_iterations", float64(900), "Settings →"},
 
-		// Characterization pins — refused as "unknown config key" (observed;
-		// not a spec-listed reason). The seven Context values and the Active
-		// transcriber have no set_config write path today; the C-6 writer is
-		// PUT /settings/context (FR-074) and the transcriber write is the
-		// provider configure call.
+		// The second C-7 table's listed user-only reasons (team-lead ruling
+		// 2026-11-21, closing CHECK R3-02 — no longer characterization pins:
+		// FR-101 now names these rows' listing, and a refusal the tables do
+		// not list is a parity failure, not a pass). The refusal FAMILY each
+		// row pins below is the family the tool shows today; the spec's
+		// listing is the reason, the observed family stays the receipt.
+		// The seven Context values: "They bound how much tool output and
+		// history an agent itself receives; like the Performance values, an
+		// agent must not change its own limits." Their write path is
+		// PUT /settings/context (FR-074), the transcriber's is the provider
+		// configure call.
 		{"context.mcp_result_cap", float64(30), "unknown config key"},
 		{"context.builtin_success_cap", float64(9), "unknown config key"},
 		{"context.builtin_failure_cap", float64(11), "unknown config key"},
@@ -579,11 +873,15 @@ func allGuardRows() []guardRow {
 		{"context.ingest_bound_bytes", float64(1048577), "unknown config key"},
 		{"context.default_context_window", float64(32000), "unknown config key"},
 		{"context.model_overrides", []any{}, "unknown config key"},
+		// Active transcriber: "It chooses which outside service receives the
+		// person's voice recordings; that is the person's choice, behind the
+		// password."
 		{"integrations.active_transcriber", "elevenlabs", "unknown config key"},
 
-		// Characterization pins — refused as "not writable via this tool"
-		// (observed; the sandbox namespace is the enforcement boundary, the
-		// egress-proxy toggle and the CLI runner paths are runner-owned).
+		// The Sandbox row: "The sandbox is the boundary that confines agents;
+		// an agent must never loosen its own confinement" — the concrete
+		// keys the ruling table names plus `sandbox.rate_limits.*` expanded
+		// over RateLimitConfig.yaml's writable leaves.
 		{"sandbox.auto_approve", true, "not writable via this tool"},
 		{"sandbox.prompt_injection_level", "high", "not writable via this tool"},
 		{"sandbox.mode", "permissive", "not writable via this tool"},
@@ -595,6 +893,12 @@ func allGuardRows() []guardRow {
 		{"sandbox.rate_limits.max_agent_tool_calls_per_minute", float64(75), "not writable via this tool"},
 		{"sandbox.god_mode", true, "not writable via this tool"},
 		{"sandbox.tool_policies", map[string]any{}, "not writable via this tool"},
+		// The egress proxy switch ("Part of the same boundary: it controls
+		// how an agent's shell commands reach the network") and the
+		// CLI-runner row's placeholder expansion (`sandbox.third_party_agents.
+		// clis.<codex, claude-code, opencode>.path` / `.preset_args`: "They
+		// name the program the app starts for a worker; an agent that could
+		// change them could run any program outside its tool policy").
 		{"tools.exec.enable_proxy", true, "not writable via this tool"},
 		{"sandbox.third_party_agents.clis.codex.path", "/usr/bin/env", "not writable via this tool"},
 		{"sandbox.third_party_agents.clis.codex.preset_args", "--x", "not writable via this tool"},
@@ -633,7 +937,10 @@ func allGuardRows() []guardRow {
 		{"agents.defaults.recap_chars_per_token", float64(4), ""},
 		{"agents.defaults.bootstrap_recap_min_spacing_seconds", float64(120), ""},
 	}
-	return append(rows, setters...)
+	rows := make([]guardRow, 0, len(refusals)+len(setters))
+	rows = append(rows, refusals...)
+	rows = append(rows, setters...)
+	return rows
 }
 
 // guardRowKeys lists the driven rows' keys for the completeness comparison.
@@ -697,6 +1004,17 @@ func TestSettingsAgentWriteParity(t *testing.T) {
 		t.Fatalf("PARITY (FR-101): the guard's rows and the two-source inventory disagree:\n  %s\n"+
 			"every value the spec lets a person edit needs an agent setter or a listed user-only reason "+
 			"with a passing refusal; reconcile this guard with the spec's field tables and the wireframe map",
+			strings.Join(violations, "\n  "))
+	}
+
+	// R4-02 (FR-101's closing sentence): every driven refusal must be listed
+	// by one of the two C-7 tables or the retention listing, and every listed
+	// value must have its refusal row — an observed-but-unlisted refusal is a
+	// parity failure, not a pass.
+	if violations := refusalListingViolations(listedUserOnlyReasons(t), rows); len(violations) > 0 {
+		t.Fatalf("PARITY (FR-101): the driven refusals and the spec's listed user-only reasons disagree:\n  %s\n"+
+			"a refusal the test observes but no C-7 table lists is a parity failure, not a pass; "+
+			"reconcile this guard with the two C-7 tables and the agent-tool field table",
 			strings.Join(violations, "\n  "))
 	}
 
@@ -801,5 +1119,24 @@ func TestSettingsAgentWriteParity_PositiveControl(t *testing.T) {
 	if violations := parityViolations(append(append([]string{}, inventory...), orphan), rowKeys); len(violations) == 0 {
 		t.Fatalf("POSITIVE CONTROL (FR-101): the undriven inventory value %q was NOT reported — the parity "+
 			"comparison cannot detect a value with no row and proves nothing", orphan)
+	}
+
+	// R4-02: the refusal-listing check's own instrument arms, over the REAL
+	// listed set and the REAL rows. A refusal row no table lists must fail
+	// it, and a listed value with no refusal row must fail it — if either
+	// passes, the check cannot see the fault FR-101's closing sentence names.
+	listed := listedUserOnlyReasons(t)
+	if violations := refusalListingViolations(listed, allGuardRows()); len(violations) > 0 {
+		t.Fatalf("POSITIVE CONTROL (FR-101): the real listed set and the real guard rows already disagree, so "+
+			"the listing check cannot run: %v", violations)
+	}
+	unlistedRow := append(append([]guardRow{}, allGuardRows()...), guardRow{key: "gateway.future_setting", value: "x", wantInRefusal: "unknown config key"})
+	if violations := refusalListingViolations(listed, unlistedRow); len(violations) == 0 {
+		t.Fatalf("POSITIVE CONTROL (FR-101): an unlisted refusal row was NOT reported — the listing check cannot " +
+			"detect a refusal no C-7 table lists and proves nothing")
+	}
+	if violations := refusalListingViolations(append(append([]string{}, listed...), "context.orphan_setting"), allGuardRows()); len(violations) == 0 {
+		t.Fatalf("POSITIVE CONTROL (FR-101): a listed value with no refusal row was NOT reported — the listing " +
+			"check cannot detect an unpinned listing and proves nothing")
 	}
 }
