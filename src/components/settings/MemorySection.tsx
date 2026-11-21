@@ -25,6 +25,7 @@ import {
   recapLimitError,
   type RecapLimitDrafts,
 } from './recapLimits'
+import { usePrimaryVariant } from './SaveBar'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
@@ -230,6 +231,7 @@ function replaceFallback(list: FallbackModel[], model: string, entry: FallbackMo
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function MemorySection(): React.ReactElement {
+  const primaryVariant = usePrimaryVariant()
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
@@ -857,6 +859,7 @@ export function MemorySection(): React.ReactElement {
 
         <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] flex justify-end">
           <Button
+            variant={primaryVariant}
             size="sm"
             onClick={handleSave}
             disabled={writing || invalidLimit}

@@ -407,10 +407,40 @@ export function SandboxSection(): React.ReactElement {
   // After a "changed somewhere else" check the read becomes the saved
   // configuration, but the sent drafts stay drafts (FR-012, FR-020).
   const syncOverrideRef = useRef<SandboxConfigResponse | null>(null)
+  // What the last Save sent (set by the part's write below).
+  const sentRef = useRef<SandboxUpdateBody | null>(null)
+  // The page's drafts as of the last render, read when the saved
+  // configuration changes (FR-010, FR-011, F03).
+  const draftsRef = useRef<{
+    mode?: { changed: boolean; value: string | undefined }
+    fs?: { changed: boolean; value: string | undefined }
+    ws?: { changed: boolean; value: boolean | undefined }
+    paths?: { changed: boolean; value: string[] }
+    ssrf?: { changed: boolean; value: string[] }
+  }>({})
   useEffect(() => {
     if (!configData) return
-    syncFromServer(syncOverrideRef.current ?? configData)
+    const incoming = syncOverrideRef.current ?? configData
     syncOverrideRef.current = null
+    // A new saved configuration replaces a field only when the field holds
+    // no newer draft: a draft typed after the Save went out (not sent, or
+    // different from what was sent) stays a draft (FR-010, FR-011, F03).
+    const sent = sentRef.current ?? {}
+    const d = draftsRef.current
+    const newer = <T,>(draft: { changed: boolean; value: T } | undefined, sentValue: T | undefined, same: (a: T, b: T) => boolean) =>
+      !!draft && draft.changed && (sentValue === undefined || !same(draft.value, sentValue))
+    const eq = <T,>(a: T, b: T) => a === b
+    const eqList = (a: string[], b: string[]) => sameList(a, b)
+    let merged: SandboxConfigResponse = incoming
+    if (newer(d.mode, sent.mode, eq)) merged = { ...merged, mode: d.mode!.value } as SandboxConfigResponse
+    if (newer(d.fs, sent.filesystem_model, eq)) merged = { ...merged, filesystem_model: d.fs!.value } as SandboxConfigResponse
+    const wsKey = readWorkspaceLimit(incoming)?.key
+    if (wsKey && newer(d.ws, sent[wsKey], eq)) merged = { ...merged, [wsKey]: d.ws!.value } as SandboxConfigResponse
+    if (newer(d.paths, sent.allowed_paths, eqList)) merged = { ...merged, allowed_paths: d.paths!.value }
+    if (newer(d.ssrf, sent.ssrf?.allow_internal, eqList)) {
+      merged = { ...merged, ssrf: { ...merged.ssrf, allow_internal: d.ssrf!.value } } as SandboxConfigResponse
+    }
+    syncFromServer(merged)
     setPathRestartedRows(new Set())
   }, [configData, syncFromServer])
 
@@ -421,6 +451,18 @@ export function SandboxSection(): React.ReactElement {
     workspaceLimitSupported && !workspaceLimitEnvLocked && currentWorkspaceLimit !== undefined && currentWorkspaceLimit !== savedWorkspaceLimit
   const pathsChanged = !sameList(pathList, savedPaths)
   const ssrfChanged = !sameList(ssrfList, savedSsrf)
+  // Declared after the sync effect on purpose: effects run in order, so the
+  // sync reads the drafts measured against the saved configuration they
+  // were typed over, not against the incoming one.
+  useEffect(() => {
+    draftsRef.current = {
+      mode: { changed: modeChanged, value: currentMode },
+      fs: { changed: fsChanged, value: currentFsModel },
+      ws: { changed: wsChanged, value: currentWorkspaceLimit },
+      paths: { changed: pathsChanged, value: pathList },
+      ssrf: { changed: ssrfChanged, value: ssrfList },
+    }
+  })
 
   // Visible label, changed?, needs a gateway restart? (FR-025, FR-037)
   const rows: [string, boolean, boolean][] = [
@@ -443,7 +485,6 @@ export function SandboxSection(): React.ReactElement {
     if (ssrfChanged) body.ssrf = { allow_internal: ssrfList }
     return body
   }
-  const sentRef = useRef<SandboxUpdateBody | null>(null)
   // The saved configuration when the Save started: the C-6 check tells
   // "before" from a third value with it.
   const sentBeforeRef = useRef<SandboxConfigResponse | null>(null)
@@ -766,7 +807,7 @@ const SANDBOX_MODES: Array<{ value: 'enforce' | 'permissive' | 'off'; label: str
     {
       value: 'off',
       label: 'Off',
-      desc: 'No operating-system protection: a program an agent starts can reach whatever your own account can reach. Development only \u2014 the production warning banner will fire. This does not switch off the shell workspace limit or the blocked command patterns below; those are separate rules with their own settings.',
+      desc: 'No operating-system protection: a program an agent starts can reach whatever your own account can reach. Development only \u2014 the production warning banner will fire. It does not switch off the shell workspace limit below or the shell command rules in your configuration file; those are separate rules.',
     },
   ]
 
@@ -784,7 +825,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
   {
     value: 'off',
     label: 'Any path on this machine',
-    desc: 'Shell commands may name files anywhere your own account can reach. Blocked command patterns and the process sandbox above still apply \u2014 this setting lifts neither.',
+    desc: 'Shell commands may name files anywhere your own account can reach. The shell command rules in your configuration file and the process sandbox above still apply \u2014 this setting lifts neither.',
   },
 ]
 

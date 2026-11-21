@@ -13,6 +13,7 @@ import { SmartSelect } from '@/components/ui/smart-select'
 import { Separator } from '@/components/ui/separator'
 import { useUiStore } from '@/store/ui'
 import { fetchUserContext, updateUserContext, changePassword, getErrorMessage } from '@/lib/api'
+import { usePrimaryVariant } from './SaveBar'
 
 const TIMEZONES = [
   'UTC',
@@ -59,6 +60,7 @@ function savePref(key: string, value: unknown): boolean {
 }
 
 export function ProfileSection() {
+  const primaryVariant = usePrimaryVariant()
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
@@ -352,6 +354,7 @@ export function ProfileSection() {
             )}
 
             <Button
+              variant={primaryVariant}
               type="submit"
               size="sm"
               disabled={isChangingPassword}
