@@ -9,6 +9,7 @@ import type { ServerFrame, WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { getMessages } from './messages'
 import { useChatStore } from './store'
 
 const SID = 'opencode-helper-resume-1895'
@@ -62,6 +63,85 @@ function visibleTail() {
 // Preserve the measured done-without-message_id shape. Sequence numbers are
 // normalized to include the received acknowledgement and user echo in order.
 describe('#1895 resumed external-helper answer through the real wire parser and chat store', () => {
+  // CHECK-ROUND2 F1: this dedicated file must see the older baked tool-only
+  // bubble, not just the last two text rows. A second viewer never sent the
+  // instruction locally, so a sender-side early close cannot hide the defect.
+  it('closes the older baked tool-call bubble at the first resumed token for a second viewer', () => {
+    const send = vi.fn<WsConnection['send']>().mockReturnValue(true)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send, close: vi.fn() } as unknown as WsConnection, isConnected: true,
+      })
+    })
+    const callId = 'gate-f1-older-tool-call'
+    feed({
+      type: 'tool_call_start', session_id: SID, seq: 1, agent_id: WORKER,
+      call_id: callId, tool: 'read_file', params: { path: 'fixture.txt' },
+    })
+    feed({
+      type: 'tool_call_result', session_id: SID, seq: 2, agent_id: WORKER,
+      call_id: callId, tool: 'read_file', result: 'ready', status: 'success',
+    })
+    const original = useChatStore.getState().messages.filter((message) => message.role === 'assistant')
+    expect(original, 'instrument: create a real older tool-only bubble through the parser').toHaveLength(1)
+    const originalId = original[0].id
+    function assertOlderBubble(streaming: boolean) {
+      const state = useChatStore.getState()
+      // Fresh lookups are essential: baking replaces the old message object.
+      for (const rows of [state.messages, getMessages(state.sessionsById[SID])]) {
+        const older = rows.find((message) => message.id === originalId)
+        expect(older, 'inspect the same older bubble in foreground and saved-session projections').toMatchObject({
+          id: originalId, role: 'assistant', content: '',
+          status: streaming ? 'streaming' : 'done', isStreaming: streaming,
+        })
+        if (!streaming) {
+          expect(older?.tool_calls?.map(({ id, status }) => ({ id, status }))).toStrictEqual([
+            { id: callId, status: 'success' },
+          ])
+        }
+      }
+    }
+    assertOlderBubble(true)
+    // SessionChatState documents live calls in toolCalls; only the token's
+    // producer boundary bakes them onto the owner message (types.ts).
+    for (const calls of [useChatStore.getState().toolCalls, useChatStore.getState().sessionsById[SID].toolCalls]) {
+      expect(calls[callId]).toMatchObject({
+        call_id: callId, tool: 'read_file', params: { path: 'fixture.txt' }, result: 'ready', status: 'success',
+      })
+    }
+    feed({ type: 'message_status', session_id: SID, seq: 3, client_message_id: CLIENT_ID, state: 'received' })
+    feed({
+      type: 'user_message', session_id: SID, seq: 4, id: 'gate-f1-saved-person-row',
+      client_message_id: CLIENT_ID, content: FOLLOWUP, timestamp: '2026-11-21T08:00:00Z',
+    })
+    assertOlderBubble(true) // No local send or original done has already closed it.
+    expect(send).not.toHaveBeenCalled()
+    feed({
+      type: 'token', session_id: SID, seq: 5, agent_id: WORKER,
+      turn_id: RESUMED_TURN, message_id: MESSAGE_ID, content: ANSWER,
+    })
+    assertOlderBubble(false) // Assert now, before a final done could mask a stale row.
+    expect(visibleTail()).toStrictEqual([
+      { role: 'user', content: FOLLOWUP },
+      { id: MESSAGE_ID, role: 'assistant', content: ANSWER, turnId: RESUMED_TURN, status: 'streaming', isStreaming: true },
+    ])
+    expect(useChatStore.getState().isStreaming).toBe(true)
+    expect(useChatStore.getState().sessionsById[SID].isStreaming).toBe(true)
+    feed({
+      type: 'done', session_id: SID, seq: 6, turn_id: RESUMED_TURN, message_id: MESSAGE_ID,
+      stats: { tokens: 0, session_tokens_total: 0, cost: 0, duration_ms: 303 },
+    })
+    assertOlderBubble(false)
+    expect(visibleTail()).toStrictEqual([
+      { role: 'user', content: FOLLOWUP },
+      { id: MESSAGE_ID, role: 'assistant', content: ANSWER, turnId: RESUMED_TURN, status: 'done', isStreaming: false },
+    ])
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(useChatStore.getState().sessionsById[SID].isStreaming).toBe(false)
+    expect(getDroppedFrameCount(), 'all six frames used the real generated validator').toBe(0)
+    expect(send, 'second viewer needs no send, reload or replay to close the older bubble').not.toHaveBeenCalled()
+  })
+
   it('shows the resumed answer after the person row while streaming, then completes that same row', () => {
     const send = vi.fn<WsConnection['send']>().mockReturnValue(true)
     const socket = { send, close: vi.fn() }

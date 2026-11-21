@@ -8,14 +8,20 @@ import (
 	"testing"
 )
 
-// TrustedProgramDir puts executable fixtures in the test checkout, not inside
-// the agent-writable runtime temp folder (Q49). It never changes TMPDIR, TMP or
-// TEMP. Callers still configure their separate writable home/workspace roots.
+// TrustedProgramDir puts executable fixtures in the test checkout's ignored
+// build folder, not inside the agent-writable runtime temp folder (Q49). Crash
+// residue stays ignored; normal cleanup still removes each unique directory.
+// It never changes TMPDIR, TMP or TEMP. Callers still configure their separate
+// writable home/workspace roots.
 func TrustedProgramDir(t *testing.T) string {
 	t.Helper()
 	base, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("SETUP: locate trusted fixture checkout: %v", err)
+	}
+	base = filepath.Join(base, "build") // Already ignored by the checked-in build/ rule.
+	if mkdirErr := os.MkdirAll(base, 0o700); mkdirErr != nil {
+		t.Fatalf("SETUP: create ignored trusted fixture parent: %v", mkdirErr)
 	}
 	dir, err := os.MkdirTemp(base, ".t11-trusted-program-")
 	if err != nil {
