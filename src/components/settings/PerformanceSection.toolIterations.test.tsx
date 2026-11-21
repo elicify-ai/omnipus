@@ -407,7 +407,7 @@ describe(SUITE, () => {
     expect(summary).toHaveTextContent(expected)
   })
 
-  it('the inline summary is persistent — it stays while the next edit is drafted (F4)', async () => {
+  it('the inline summary is cleared by the next edit of the field, and that edit drafts without writing (tool-iteration-limit-spec:272, settings spec regression table #904, FR-010)', async () => {
     vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 200, agents: [AGENT_A] })
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue({
       ...SETTINGS,
@@ -424,13 +424,23 @@ describe(SUITE, () => {
     await activePrompt.resolveWith('reauth_tok')
     await screen.findByTestId('performance-lowered-summary', {}, WAIT)
 
-    // F4 pins a PERSISTENT inline summary (contrast: the 10 s toast); it
-    // does not say the summary is cleared by the next edit — the retired
-    // clear-on-edit behaviour has no spec basis. The persistence property:
-    // the summary is still shown while the next draft sits on the bar.
+    // tool-iteration-limit-spec.md:272 (F4): the inline summary is a
+    // PERSISTENT element — contrast: the 10-second toast — that "stays until
+    // the admin NEXT EDITS THE FIELD or leaves the page". So the next edit
+    // of the field clears it; while the summary persists, a leftover line
+    // would misdescribe the new draft as the earlier completed lowering.
+    // The settings spec's regression table (#904 "must stay green under the
+    // Save bar") keeps this result behaviour; only the summary's old
+    // AUTOSAVE trigger is retired (FR-010).
     fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '210' } })
     expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
-    expect(screen.getByTestId('performance-lowered-summary')).toBeInTheDocument()
+    expect(screen.queryByTestId('performance-lowered-summary')).not.toBeInTheDocument()
+    // Retired with the old flow is only the trigger: the edit is a draft on
+    // the bar (FR-010) — no fresh preview, no second prompt, no second write
+    // until the next Save changes.
+    expect(api.fetchMaxToolIterationsLoweringPreview).not.toHaveBeenCalled()
+    expect(api.updatePerformanceSettings).toHaveBeenCalledTimes(1)
+    expect(activePrompt.prompts).toHaveLength(1)
   })
 })
 
