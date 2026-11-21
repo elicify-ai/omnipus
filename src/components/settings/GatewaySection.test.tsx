@@ -265,6 +265,51 @@ describe('GatewaySection — a newer edit of the same field survives an older in
   })
 })
 
+// ── F14: the loading state is text WITH a spinner and Skeleton cards ─────────
+//
+// Settings redesign #1519 (CHECK F14; FR-065 spec:1981): each section shows
+// "Loading <section>…" with a spinner and Skeleton cards until its reads
+// answer. The current Gateway loading branch renders the text div alone, so
+// a text-only loading assertion passes while the required affordances are
+// missing — this test holds the read and observes the primitives.
+
+describe('GatewaySection — loading state (FR-065, FR-075)', () => {
+  it('with the config read held: the loading text with a spinner and Skeleton cards, then the loaded content; the primitives stop under reduced motion (FR-065, FR-075)', async () => {
+    let releaseRead: (() => void) | null = null
+    vi.mocked(fetchConfig).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseRead = () => resolve(makeConfig({}))
+        }) as never,
+    )
+    renderSection()
+    // FR-065: the loading state names the section…
+    expect(await screen.findByText('Loading Gateway…')).toBeInTheDocument()
+    // …and shows the loading PRIMITIVES, not the text alone (CHECK F14).
+    // The kit Skeleton becomes visible past the loading-visibility delay
+    // token, so the primitives are observed after that window.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const spinner = document.querySelector('.animate-spin')
+    expect(spinner, 'FR-065: the loading state must show a spinner, not only text').not.toBeNull()
+    const skeletons = document.querySelectorAll('[class*="skeleton-shimmer"]')
+    expect(skeletons.length, 'FR-065: the loading state must show Skeleton cards').toBeGreaterThanOrEqual(1)
+    // FR-075: under reduced motion the spinner rotation and the Skeleton
+    // pulse/shimmer MUST stop. jsdom cannot observe the computed animation,
+    // so the assertion is the motion-reduce classes that generate it — the
+    // kit tests' established jsdom pattern (spinner.test/skeleton.test).
+    expect(spinner?.getAttribute('class')).toContain('motion-reduce:animate-none')
+    expect(skeletons[0].getAttribute('class')).toContain('motion-reduce:animate-none')
+    expect(skeletons[0].getAttribute('class')).toContain('motion-reduce:transition-none')
+
+    // The read answers: the loaded content replaces the loading state.
+    await act(async () => {
+      releaseRead?.()
+    })
+    await waitFor(() => expect(screen.getByLabelText(/log level/i)).toBeInTheDocument())
+    expect(screen.queryByText('Loading Gateway…')).not.toBeInTheDocument()
+  })
+})
+
 // ── US-4 / FR-008: Preview toggle (ADR-044, preview-on-main-listener) ────────
 //
 // Settings redesign #1519 reconciliation (FR-010): every Gateway value waits
