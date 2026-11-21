@@ -24,6 +24,11 @@ import (
 
 func t131DoctorPlantOperatorManifest(t *testing.T, home string, kind component.Kind, root, exeName string, files []string) {
 	t.Helper()
+	// D13 (team-lead 2026-11-21): the executable must be among the
+	// fingerprinted files, or the manifest fails to parse before the
+	// own-folder check and the doctor reports the wrong finding.
+	require.Contains(t, files, exeName,
+		"t131 doctor precondition: the manifest's executable must be among the fingerprinted files")
 	hashes := make(map[string]string, len(files))
 	for _, name := range files {
 		sum, _, err := component.HashFile(filepath.Join(root, name))
@@ -80,7 +85,9 @@ func TestT131_DoctorWarnsRegisteredOutsideOwnFolder(t *testing.T) {
 		t.Run(tc.code, func(t *testing.T) {
 			root := filepath.Join(home, "elsewhere", string(tc.kind))
 			require.NoError(t, os.MkdirAll(root, 0o700))
-			files := []string{"manifest-fixture.bin", "dependency.dat"}
+			// D13: the executable is among the fingerprinted files, so the
+			// planted manifest parses and the own-folder check is reached.
+			files := []string{tc.exeName, "manifest-fixture.bin", "dependency.dat"}
 			for _, name := range files {
 				require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte("t131 doctor fixture: "+name), 0o600))
 			}

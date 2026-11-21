@@ -43,6 +43,10 @@ func t132StageLockedPackagedSlots(t *testing.T, own string) (officeSlot, pdfiumS
 	require.NoError(t, os.MkdirAll(filepath.Join(officeSlot, "program"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(officeSlot, "program", "soffice.bin"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(officeSlot, "program", "soffice"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	// D14 (team-lead 2026-11-21): the packaged-manifest writer reads the
+	// slot's product version (program/versionrc or share/registry/main.xcd);
+	// without one the SETUP fails on every tree, before the row's subject.
+	require.NoError(t, os.WriteFile(filepath.Join(officeSlot, "program", "versionrc"), []byte("ProductVersion=26.8.1.1\n"), 0o644))
 	require.NoError(t, component.WritePackagedOfficeManifest(officeSlot, component.PackagedOfficeOptions{GOOS: "linux", GOARCH: "amd64"}))
 
 	pdfiumSlot = filepath.Join(own, "pdfium")

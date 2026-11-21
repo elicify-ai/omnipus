@@ -10,7 +10,13 @@ package component_test
 //
 // This file uses the DEFAULT program path (the running program, resolved as
 // component.NewResolver resolves it), so OWN is the running binary's
-// dir(E)/../share/omnipus, created by the test. The explicit-program-path
+// dir(E)/../share/omnipus, created by the test. Its refusal rows register
+// through the component API; its refusal texts here are the UNPREFIXED
+// OF-3 sentences, because this package may not import the internal
+// components package (Go's internal-package rule) — the command layer's
+// prefixed error is pinned in pkg/app/internal/components instead. The
+// acceptance guards also use the direct API because they assert manifest
+// fields. The explicit-program-path
 // shapes of T-130 (c) live in registration_own_folder_shapes_linux_test.go,
 // which needs the new RegisterOptions field (spec §13 staging: it compiles
 // red until the field stub lands).
@@ -92,13 +98,18 @@ func t130RendererFixture(t *testing.T, root string) {
 }
 
 func t130OfficeText(folder, own string) string {
-	return "office not registered: LibreOffice folder " + folder + " is outside Omnipus's own folder (" + own +
+	// Unprefixed: the component API's error text. The command layer returns
+	// this with the `office not registered: ` prefix (spec line 972), which
+	// register_own_folder_command_linux_test.go pins where the command
+	// lives.
+	return "LibreOffice folder " + folder + " is outside Omnipus's own folder (" + own +
 		"); on Linux, Omnipus accepts only a LibreOffice inside that folder. Re-run the Omnipus installer, which puts LibreOffice in " +
 		own + "/office, or put LibreOffice in a new folder inside " + own + " and register that folder"
 }
 
 func t130RendererText(folder, own string) string {
-	return "pdf-renderer not registered: PDF renderer folder " + folder + " is outside Omnipus's own folder (" + own +
+	// Unprefixed: see t130OfficeText.
+	return "PDF renderer folder " + folder + " is outside Omnipus's own folder (" + own +
 		"); on Linux, Omnipus accepts only a PDF renderer inside that folder. Re-run the Omnipus installer, which puts the renderer in " +
 		own + "/pdfium, or unpack the renderer release in a new folder inside " + own + " and register that folder"
 }
@@ -110,6 +121,31 @@ func t130Refused(t *testing.T, err error, want string, home string, kind compone
 	require.EqualError(t, err, want, "T-130: the refusal must be the OF-3 text word for word")
 	require.NoFileExists(t, filepath.Join(component.RegisteredDir(home, kind), "manifest.json"),
 		"T-130: a refused registration writes nothing")
+}
+
+// t130CommandHome is retired (D12 second attempt): this package may not
+// import pkg/app/internal/components — Go's internal-package rule — so the
+// command path lives in the components package instead
+// (register_own_folder_command_linux_test.go pins the person-visible
+// prefixed text there, spec line 972 / behavior B-89).
+
+// t130RegisterOffice and t130RegisterRenderer register through the
+// component API (D12, team-lead 2026-11-21, sanctioned fallback: "add the
+// prefix in the test" — the prefix cannot be driven here because the
+// command package is internal to pkg/app). The texts below are therefore
+// the component layer's UNPREFIXED OF-3 sentences; the
+// `<kind> not registered: ` prefix that spec line 972 puts on the command's
+// returned error is composed and pinned at the command layer.
+func t130RegisterOffice(t *testing.T, home string, folder string) error {
+	t.Helper()
+	_, err := component.RegisterOffice(component.RegisterOptions{Home: home, Folder: folder, Operator: "t130", GOOS: "linux"})
+	return err
+}
+
+func t130RegisterRenderer(t *testing.T, home string, folder string) error {
+	t.Helper()
+	_, err := component.RegisterRenderer(component.RegisterOptions{Home: home, Folder: folder, Operator: "t130", GOOS: "linux"})
+	return err
 }
 
 // t130Outside asserts the precondition that path lies outside own by whole
@@ -130,13 +166,13 @@ func TestT130_RegistrationRefusedOutsideOwnFolder(t *testing.T) {
 	office := filepath.Join(base, "elsewhere", "opt", "libreoffice26.8")
 	t130OfficeFixture(t, office)
 	t130Outside(t, office, own, "the office fixture")
-	_, err := component.RegisterOffice(component.RegisterOptions{Home: home, Folder: office, Operator: "t130", GOOS: "linux"})
+	err := t130RegisterOffice(t, home, office)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(office), own), home, component.KindOffice)
 
 	renderer := filepath.Join(base, "elsewhere", "usr", "lib", "pdfium")
 	t130RendererFixture(t, renderer)
 	t130Outside(t, renderer, own, "the renderer fixture")
-	_, err = component.RegisterRenderer(component.RegisterOptions{Home: home, Folder: renderer, Operator: "t130", GOOS: "linux"})
+	err = t130RegisterRenderer(t, home, renderer)
 	t130Refused(t, err, t130RendererText(filepath.Clean(renderer), own), home, component.KindPDFRenderer)
 }
 
@@ -164,7 +200,7 @@ func TestT130_RegistrationRefusedInRealSystemFolders(t *testing.T) {
 	out, err = exec.Command("sudo", "-n", "chmod", "-R", "a+rX", office).CombinedOutput()
 	require.NoError(t, err, "sudo chmod: %s", out)
 	t.Cleanup(func() { _ = exec.Command("sudo", "-n", "rm", "-rf", filepath.Dir(office)).Run() })
-	_, err = component.RegisterOffice(component.RegisterOptions{Home: home, Folder: office, Operator: "t130", GOOS: "linux"})
+	err = t130RegisterOffice(t, home, office)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(office), own), home, component.KindOffice)
 
 	tmpRenderer := t.TempDir()
@@ -177,7 +213,7 @@ func TestT130_RegistrationRefusedInRealSystemFolders(t *testing.T) {
 	out, err = exec.Command("sudo", "-n", "chmod", "-R", "a+rX", renderer).CombinedOutput()
 	require.NoError(t, err, "sudo chmod: %s", out)
 	t.Cleanup(func() { _ = exec.Command("sudo", "-n", "rm", "-rf", filepath.Dir(renderer)).Run() })
-	_, err = component.RegisterRenderer(component.RegisterOptions{Home: home, Folder: renderer, Operator: "t130", GOOS: "linux"})
+	err = t130RegisterRenderer(t, home, renderer)
 	t130Refused(t, err, t130RendererText(filepath.Clean(renderer), own), home, component.KindPDFRenderer)
 }
 
@@ -209,7 +245,7 @@ func TestT130_LinksAreJudgedByBothForms(t *testing.T) {
 	resolved, err := filepath.EvalSymlinks(outsideLink)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Clean(real), filepath.Clean(resolved), "instrument: the link resolves into OWN")
-	_, err = component.RegisterOffice(component.RegisterOptions{Home: home, Folder: outsideLink, Operator: "t130", GOOS: "linux"})
+	err = t130RegisterOffice(t, home, outsideLink)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(outsideLink)+" (links lead to "+resolved+")", own), home, component.KindOffice)
 
 	// A link INSIDE OWN leading to a real folder outside.
@@ -220,13 +256,16 @@ func TestT130_LinksAreJudgedByBothForms(t *testing.T) {
 	resolvedAway, err := filepath.EvalSymlinks(insideLink)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Clean(away), filepath.Clean(resolvedAway), "instrument: the inside link resolves outside OWN")
-	_, err = component.RegisterOffice(component.RegisterOptions{Home: home, Folder: insideLink, Operator: "t130", GOOS: "linux"})
+	err = t130RegisterOffice(t, home, insideLink)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(insideLink)+" (links lead to "+resolvedAway+")", own), home, component.KindOffice)
 
 	// OWN itself a link to another real folder; a fixture inside it is
-	// accepted (guard).
+	// accepted (guard). The acceptance keeps the direct API: it asserts the
+	// manifest fields, which is what this guard row is about. RemoveAll (not
+	// Remove): the earlier cases in this test left their fixtures inside
+	// OWN, so the folder is not empty here.
 	other := t.TempDir()
-	require.NoError(t, os.Remove(own))
+	require.NoError(t, os.RemoveAll(own))
 	require.NoError(t, os.Symlink(other, own))
 	inOwn := filepath.Join(own, "libreoffice-in-link")
 	t130OfficeFixture(t, inOwn)
@@ -249,16 +288,16 @@ func TestT130_TraversalAndNamePrefixRefused(t *testing.T) {
 	traversal := own + sep + "a" + sep + ".." + sep + ".." + sep + "elsewhere" + sep + "lo"
 	t130OfficeFixture(t, filepath.Join(base, "elsewhere", "lo"))
 	t130Outside(t, filepath.Clean(traversal), own, "the traversal target")
-	_, err := component.RegisterOffice(component.RegisterOptions{Home: home, Folder: traversal, Operator: "t130", GOOS: "linux"})
+	err := t130RegisterOffice(t, home, traversal)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(traversal), own), home, component.KindOffice)
 
 	sibling := filepath.Join(filepath.Dir(own), "omnipus-other", "lo")
 	t130OfficeFixture(t, sibling)
 	t130Outside(t, sibling, own, "the prefix-named sibling")
-	_, err = component.RegisterOffice(component.RegisterOptions{Home: home, Folder: sibling, Operator: "t130", GOOS: "linux"})
+	err = t130RegisterOffice(t, home, sibling)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(sibling), own), home, component.KindOffice)
 
-	_, err = component.RegisterOffice(component.RegisterOptions{Home: home, Folder: own, Operator: "t130", GOOS: "linux"})
+	err = t130RegisterOffice(t, home, own)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(own), own), home, component.KindOffice)
 }
 
@@ -278,7 +317,7 @@ func TestT130_CheckRunsBeforeAnythingInsideIsRead(t *testing.T) {
 	t130Outside(t, locked, own, "the locked fixture")
 	require.NoError(t, os.Chmod(locked, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
-	_, err := component.RegisterOffice(component.RegisterOptions{Home: home, Folder: locked, Operator: "t130", GOOS: "linux"})
+	err := t130RegisterOffice(t, home, locked)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(locked), own), home, component.KindOffice)
 }
 
@@ -292,7 +331,7 @@ func TestT130_MissingOwnFolderRefusesEverything(t *testing.T) {
 	t130OfficeFixture(t, office)
 	require.NoError(t, os.RemoveAll(own))
 	t.Cleanup(func() { _ = os.MkdirAll(own, 0o755) })
-	_, err := component.RegisterOffice(component.RegisterOptions{Home: home, Folder: office, Operator: "t130", GOOS: "linux"})
+	err := t130RegisterOffice(t, home, office)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(office), own), home, component.KindOffice)
 }
 

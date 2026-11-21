@@ -47,6 +47,12 @@ func t131StageOwn(t *testing.T, base string) (bin, own string) {
 // this is called (the hashes are computed from them).
 func t131PlantedOperatorManifest(t *testing.T, home string, kind component.Kind, rootDir, exeName string, files []string) {
 	t.Helper()
+	// D13 (team-lead 2026-11-21): a manifest whose executable is not among
+	// the fingerprinted files fails to PARSE before the OF-4 check, so the
+	// row would observe the wrong refusal. The precondition makes that
+	// impossible to reintroduce silently.
+	require.Contains(t, files, exeName,
+		"t131 precondition: the manifest's executable must be among the fingerprinted files, or the manifest fails to parse before the own-folder check")
 	hashes := make(map[string]string, len(files))
 	for _, name := range files {
 		sum, _, err := component.HashFile(filepath.Join(rootDir, name))
@@ -189,7 +195,9 @@ func TestT131_ConfinementStartupGrantsSkipOutsideRoots(t *testing.T) {
 	plant := func(kind component.Kind, exeName string) string {
 		root := filepath.Join(base, "elsewhere", string(kind))
 		require.NoError(t, os.MkdirAll(root, 0o755))
-		files := []string{"manifest-fixture.bin", "dependency.dat"}
+		// D13: the executable is among the fingerprinted files, so the
+		// planted manifest parses and the OF-4 check is reached.
+		files := []string{exeName, "manifest-fixture.bin", "dependency.dat"}
 		for _, name := range files {
 			require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte("t131d fixture"), 0o600))
 		}

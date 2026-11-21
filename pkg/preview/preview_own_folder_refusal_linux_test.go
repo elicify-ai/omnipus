@@ -107,6 +107,37 @@ func t131PlantedRenderer(t *testing.T, home, outside string) string {
 	return root
 }
 
+// t131PlantedOffice is the office half of the same pre-§3.9 state (D15,
+// team-lead 2026-11-21): the outside-refusal row needs the office root
+// OUTSIDE OWN — the real RegisterOffice would refuse such a folder today,
+// but refusing outside registrations is OF-3's job; this OF-4 row's subject
+// is the USE refusal of a registration that predates §3.9, so the manifest
+// is written directly, with the executable fingerprinted so it parses and
+// the own-folder check is reached (D13). Nothing inside the root is ever
+// used — the refusal comes first — so a stub executable suffices.
+func t131PlantedOffice(t *testing.T, home, outside string) string {
+	t.Helper()
+	root := filepath.Join(outside, "libreoffice-pre9")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "soffice.bin"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	sum, _, err := component.HashFile(filepath.Join(root, "soffice.bin"))
+	require.NoError(t, err)
+	files := map[string]string{"soffice.bin": sum}
+	m := component.Manifest{
+		Schema: component.ManifestSchema, Component: component.KindOffice,
+		Version: "26.8.0.3", BuildID: "t131-office-pre9", ProtocolVersion: 1,
+		Platform: component.Platform(), Executable: "soffice.bin",
+		Files: files, FileListSHA256: component.FileListDigest(files),
+		Trust: component.TrustOperatorRegistered, Root: root, RegisteredBy: "t131-pre9",
+	}
+	dir := component.RegisteredDir(home, component.KindOffice)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	raw, err := json.Marshal(m)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, component.ManifestFile), raw, 0o600))
+	return root
+}
+
 func t131PreviewDocx(t *testing.T, svc *Service) (*Result, error) {
 	t.Helper()
 	doc := t126DocxFixture(t)
@@ -137,8 +168,11 @@ func TestT131_ServiceRefusesRegisteredRootOutsideOwn(t *testing.T) {
 		t.Run(record, func(t *testing.T) {
 			base, bin, own := t131StageProgramWorld(t)
 			home := t.TempDir()
-			officeRoot := t131RegisteredRealOffice(t, home, own)
-			rendererRoot := t131PlantedRenderer(t, home, filepath.Join(base, "elsewhere"))
+			outside := filepath.Join(base, "elsewhere")
+			officeRoot := t131PlantedOffice(t, home, outside)
+			t131NotInsideOwnService(t, officeRoot, own, "the planted office root")
+			rendererRoot := t131PlantedRenderer(t, home, outside)
+			t131NotInsideOwnService(t, rendererRoot, own, "the planted renderer root")
 			resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
 			svc, err := New(Config{Home: home, Self: bin, Resolver: resolver})
 			require.NoError(t, err)
@@ -167,7 +201,10 @@ func TestT131_ServiceRefusesRegisteredRootOutsideOwn(t *testing.T) {
 
 			wantRenderer := "PDF renderer is disabled: the registered folder " + rendererRoot +
 				" is outside Omnipus's own folder (" + own + "); on Linux, Omnipus uses only preview programs inside it. " +
-				"Remove the registration with \"omnipus pdf-renderer unregister\", or put the renderer in a folder inside " + own + " and register that folder."
+				// D16 (team-lead 2026-11-21): spec line 984's reason text ends
+				// "register that folder" with no closing period (the period in
+				// the spec line belongs to the enclosing sentence).
+				"Remove the registration with \"omnipus pdf-renderer unregister\", or put the renderer in a folder inside " + own + " and register that folder"
 			res, previewErr = t131PreviewPDF(t, svc)
 			require.NoError(t, previewErr, "T-131(b): the renderer denial is a degraded result, not an error")
 			require.NotNil(t, res)
