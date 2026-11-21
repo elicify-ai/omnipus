@@ -27,7 +27,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -167,6 +167,48 @@ describe('FR-020 — each write ends in one of four outcomes', () => {
     await renderSaveBarWith(async () => { throw new TypeError('network down') })
     await waitFor(() => expect(screen.getByText(/1 change[s]? may not have been saved/i)).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    vi.unstubAllGlobals()
+  })
+
+  it('Discard with an unknown result asks first — the confirm says the server may already hold the new value; Cancel keeps the draft and the result; confirmed Discard stores nothing (FR-012, spec BDD "An unknown result is checked by reading back")', async () => {
+    const onSave = vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) }))
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network down') }))
+    const SaveBar = await loadSaveBar()
+    render(
+      <SaveBar
+        section="gateway"
+        fields={[{ key: 'gateway.log_level', label: 'Log level', value: 'info', kind: 'select', options: ['info', 'debug'] }]}
+        onSave={onSave}
+        onDiscard={vi.fn()}
+      />,
+    )
+    await userEvent.selectOptions(screen.getByLabelText('Log level'), 'debug')
+    await userEvent.click(screen.getByRole('button', { name: /save/i }))
+    // The write's answer AND both reads of the saved-state check failed:
+    // the result is unknown, the bar says so with Retry, the draft stays.
+    expect(await screen.findByText(/1 change may not have been saved/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Log level')).toHaveValue('debug')
+    // FR-012 (spec:1916): for a write whose result is still unknown, its
+    // confirm says the server may already hold the new value. Pressing
+    // Discard must NOT silently clear an unknown write.
+    await userEvent.click(screen.getByRole('button', { name: /discard/i }))
+    const confirm = await screen.findByRole('dialog')
+    expect(confirm).toHaveTextContent(/already hold/i)
+    // Cancel: the unknown result and the draft stay exactly as they were.
+    await userEvent.click(within(confirm).getByRole('button', { name: /cancel/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByText(/1 change may not have been saved/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Log level')).toHaveValue('debug')
+    // Confirmed Discard stores nothing: no further write goes out (one Save
+    // so far), the draft returns to the saved value and the unknown result
+    // is dismissed by the person who was told the server may hold it.
+    await userEvent.click(screen.getByRole('button', { name: /discard/i }))
+    const confirm2 = await screen.findByRole('dialog')
+    await userEvent.click(within(confirm2).getByRole('button', { name: /discard|confirm/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(screen.getByLabelText('Log level')).toHaveValue('info')
+    expect(screen.queryByText(/1 change may not have been saved/i)).not.toBeInTheDocument()
     vi.unstubAllGlobals()
   })
 })
