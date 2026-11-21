@@ -243,7 +243,14 @@ describe('D-9 rows 5-6, row 8 — Providers voice, moved-out skills, God Mode', 
 
   it('Gateway has no God Mode control (FR-051)', async () => {
     await openSettings('?tab=gateway')
-    await screen.findByRole('heading', { name: 'Gateway', level: 2 }).catch(() => {})
+    // FR-051 (spec:1968) means God Mode absent FROM a working Gateway
+    // section — not a section that failed to render passing as compliant.
+    // The old oracle swallowed the heading lookup's rejection
+    // (.catch(() => {})), so Gateway rendering nothing at all still passed.
+    // The section and one of its real controls must both be present before
+    // the absence assertion can mean anything.
+    expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
+    expect(await screen.findByLabelText('Log level')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /God Mode/i })).not.toBeInTheDocument()
   })
 })
