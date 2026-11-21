@@ -619,20 +619,27 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 		return ""
 	}
 
+	// #1960 S0 (ADR D1, FR-1): running a program by its absolute path is not
+	// refused only because the file lies outside the working directory.
+	// Execute is open at the kernel layer under the Open filesystem model
+	// (ADR-062), and the same program run by name passes this guard. The
+	// protected-file leg (guardProtectedOperands) already ran unconditionally;
+	// the secret-set check is repeated so another agent's or workspace's files
+	// stay refused even as a program. Every other operand of the command is
+	// still judged on its own candidate.
+	programRuns := use.exec && use.programPath && (!readPolicyOK || !t.inTurnSecretSet(p, turnPolicy))
+
 	rel, err := filepath.Rel(cwdPath, p)
 	if err != nil {
+		// CHECK F4: on Windows, Rel cannot relate two drives (D: and C:), so a
+		// program on another drive is outside by definition.
+		if programRuns {
+			return ""
+		}
 		return "Command blocked by safety guard (cannot resolve relative path)"
 	}
 	if strings.HasPrefix(rel, "..") {
-		// #1960 S0 (ADR D1, FR-1): running a program by its absolute path is
-		// not refused only because the file lies outside the working
-		// directory. Execute is open at the kernel layer (ADR-062), and the
-		// same program run by name passes this guard. The protected-file leg
-		// (guardProtectedOperands) already ran unconditionally; the secret-set
-		// check is repeated here so another agent's or workspace's files stay
-		// refused even as a program. Every other operand of the command is
-		// still judged on its own candidate.
-		if use.exec && use.programPath && (!readPolicyOK || !t.inTurnSecretSet(p, turnPolicy)) {
+		if programRuns {
 			return ""
 		}
 
@@ -897,6 +904,34 @@ func (c pathUseClassifier) classify(start int) pathUseVerdict {
 
 	segStart, segEnd := c.segmentBounds(start)
 	seg := c.cmd[segStart:segEnd]
+	word := c.wordStart(start, segStart)
+
+	// Rule 4: a program word is exec, not read; a leading assignment's value
+	// is an operand the guard cannot prove is a read. Checked before the head
+	// allowlist so each is reported as what it is rather than as "head not on
+	// the allowlist" (D-66). #1960 S0: the program word is found after
+	// assignments, keywords and known wrappers (commandWordRoles), so
+	// `VAR=/x gh` judges `/x` as an operand, not as the program (ADR C4).
+	//
+	// Checked before rule 3, but only for a word that ends before the
+	// segment's first UNQUOTED brace (CHECK F2): brace expansion rewrites
+	// words from that brace on, never the words before it, and a quoted brace
+	// (`--jq '{login:.login}'`) is not expansion at all. A word at or after an
+	// unquoted brace still gets rule 3's refusal, and so does a word the brace
+	// is glued to (`/usr/bin/tee{,}` expands to `tee /usr/bin/tee`).
+	if brace := c.firstUnquotedBrace(segStart, segEnd); brace == segEnd || c.wordEnd(word, segEnd) < brace {
+		programs, assignments := c.commandWordRoles(segStart, segEnd)
+		switch {
+		case programs[word]:
+			return pathUseVerdict{
+				exec:        true,
+				programPath: strings.Trim(c.cmd[word:start], `"'`) == "",
+				reason:      "the path is in command position — the shell would RUN it, which is not a read",
+			}
+		case assignments[word]:
+			return pathUseVerdict{reason: "the path is the value of a variable assignment, which the program may use as a place to write, so the guard cannot prove it is a read"}
+		}
+	}
 
 	// Rule 3: unmodelled brace expansion.
 	if strings.ContainsAny(seg, "{}") {
@@ -917,25 +952,6 @@ func (c pathUseClassifier) classify(start int) pathUseVerdict {
 	// costs only the absolute spellings (`/bin/cat f`) and keeps the doctrine
 	// intact: prove a read, or call it a write.
 	head, headIsExpansion, headNormalised := shellCommandHeadDetailed(seg)
-	word := c.wordStart(start, segStart)
-
-	// Rule 4: a program word is exec, not read; a leading assignment's value
-	// is an operand the guard cannot prove is a read. Checked before the head
-	// allowlist so each is reported as what it is rather than as "head not on
-	// the allowlist" (D-66). #1960 S0: the program word is found after
-	// assignments, keywords and known wrappers (commandWordRoles), so
-	// `VAR=/x gh` judges `/x` as an operand, not as the program (ADR C4).
-	programs, assignments := c.commandWordRoles(segStart, segEnd)
-	switch {
-	case programs[word]:
-		return pathUseVerdict{
-			exec:        true,
-			programPath: strings.Trim(c.cmd[word:start], `"'`) == "",
-			reason:      "the path is in command position — the shell would RUN it, which is not a read",
-		}
-	case assignments[word]:
-		return pathUseVerdict{reason: "the path is the value of a variable assignment, which the program may use as a place to write, so the guard cannot prove it is a read"}
-	}
 	switch {
 	case headIsExpansion:
 		return pathUseVerdict{reason: "the command word is a shell expansion, so the guard cannot tell which program runs"}
@@ -1024,6 +1040,27 @@ func (c pathUseClassifier) firstWordStart(segStart, segEnd int) int {
 	return i
 }
 
+// wordEnd returns the offset just past the shell word that begins at word,
+// never past segEnd; quoted word-break characters do not end it.
+func (c pathUseClassifier) wordEnd(word, segEnd int) int {
+	j := word
+	for j < segEnd && (c.mask[j] || !isShellWordBreak(c.cmd[j])) {
+		j++
+	}
+	return j
+}
+
+// firstUnquotedBrace returns the offset of the segment's first `{` or `}`
+// that the shell would act on (not quoted or escaped), or segEnd if none.
+func (c pathUseClassifier) firstUnquotedBrace(segStart, segEnd int) int {
+	for i := segStart; i < segEnd; i++ {
+		if !c.mask[i] && (c.cmd[i] == '{' || c.cmd[i] == '}') {
+			return i
+		}
+	}
+	return segEnd
+}
+
 // programIntroducingKeywords are the shell keywords whose next word is a
 // command (`if gh …`, `then gh …`, `do gh …`, `! gh …`). Keywords followed by
 // something else (`for`, `in`, `case`, `function`) are deliberately absent:
@@ -1073,7 +1110,7 @@ func (c pathUseClassifier) commandWordRoles(segStart, segEnd int) (programs, ass
 			name = name[slash+1:]
 		}
 		n, isWrapper := shellrule.WrapperArgCount(name, texts[i+1:])
-		if !isWrapper {
+		if !isWrapper || slices.ContainsFunc(texts[i+1:i+1+n], ambiguousWrapperOption) {
 			break
 		}
 		for k := i + 1; k <= i+n; k++ {
@@ -1084,6 +1121,23 @@ func (c pathUseClassifier) commandWordRoles(segStart, segEnd int) (programs, ass
 		i += 1 + n
 	}
 	return programs, assignments
+}
+
+// ambiguousWrapperOption reports a wrapper option after which the guard can no
+// longer be sure which word is the program (CHECK F1): env's split-string
+// option (`-S`, `--split-string`), whose value is itself a command line, and
+// any short-option cluster or attached value (`-ao FILE`, `-iS`, `-n10`),
+// whose letters the shared wrapper table does not split. Unwrapping stops
+// there, so every later word stays an ordinary operand: conservative, never a
+// wider allowance.
+func ambiguousWrapperOption(tok string) bool {
+	if tok == "--split-string" || strings.HasPrefix(tok, "--split-string=") {
+		return true
+	}
+	if !strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "--") {
+		return false
+	}
+	return tok == "-S" || len(tok) > 2
 }
 
 // segmentCommandWords splits the segment into shell words as [start, end)
