@@ -227,18 +227,23 @@ func TestExecTool_BackgroundRunSweepsOnCompletion(t *testing.T) {
 	assert.Contains(t, all.String(), "etclink")
 }
 
-// TestGuardCommand_RefusalNamesWhatWasRefused pins D-44 and D-66: a program
-// run by absolute path is described as an EXEC, not a WRITE; an unproven read
-// names the command word and why it is not on the allowlist; a proven read is
-// allowed; and every refusal states honestly that the guard is a text scan.
+// TestGuardCommand_RefusalNamesWhatWasRefused pins D-44 and D-66 as amended
+// by #1960 S0: a program run by absolute path is no longer refused (FR-1); a
+// path glued into the command word is described as such, not as a WRITE; an
+// unproven read names the command word and why it is not on the allowlist; a
+// proven read is allowed; and every refusal names the guard rule without the
+// runtime-assembly explanation D1 removed from agent-facing text (FR-6).
 func TestGuardCommand_RefusalNamesWhatWasRefused(t *testing.T) {
 	tool, cwd := guardFixture(t)
 	outside := sweepTempDir(t)
 	ctx := context.Background()
 
-	execMsg := tool.guardCommand(ctx, outside+"/bin/omnipus records import-obsidian --dry-run", cwd)
+	assert.Empty(t, tool.guardCommand(ctx, outside+"/bin/omnipus records import-obsidian --dry-run", cwd),
+		"#1960 FR-1: a program run by absolute path is not refused for lying outside the workspace")
+
+	execMsg := tool.guardCommand(ctx, "cat["+outside+"/x]", cwd)
 	require.NotEmpty(t, execMsg)
-	assert.Contains(t, execMsg, "RUNNING a program")
+	assert.Contains(t, execMsg, "not the program itself")
 	assert.NotContains(t, execMsg, "a WRITE outside the working directory needs")
 
 	findMsg := tool.guardCommand(ctx, "find "+outside+" -name '*.md'", cwd)
@@ -250,8 +255,8 @@ func TestGuardCommand_RefusalNamesWhatWasRefused(t *testing.T) {
 	assert.Empty(t, tool.guardCommand(ctx, "ls "+outside, cwd), "ls is a proven read")
 
 	for _, msg := range []string{execMsg, findMsg} {
-		assert.Contains(t, msg, "advisory", "every path-guard refusal must say what the guard is")
-		assert.Contains(t, msg, "assembled at runtime")
+		assert.Contains(t, msg, "Rule: bash workspace path guard", "every path-guard refusal must name its rule")
+		assert.NotContains(t, msg, "assembled at runtime", "#1960 D1: no path-obfuscation explanation in agent-facing text")
 	}
 }
 
