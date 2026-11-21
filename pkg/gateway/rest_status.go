@@ -155,9 +155,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "medium",
 			"title":          "Sandbox is disabled",
 			"description":    "Filesystem and process sandboxing is not enabled. Agent tool executions run without confinement.",
-			"recommendation": "Go to Settings → Security → Advanced to enable sandbox mode.",
-			"action_link":    "/settings?tab=security",
-			"action_label":   "Open security settings",
+			"recommendation": "Turn on Sandbox mode in Settings → Sandbox & network.",
+			"action_link":    "/settings?tab=sandbox",
+			"action_label":   "Open Sandbox & network",
 		})
 	}
 
