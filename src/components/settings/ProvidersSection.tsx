@@ -99,6 +99,8 @@ import type {
   EntitlementResponse,
 } from '@/lib/api/generated/openapi-types'
 import { usePrimaryVariant } from './SaveBar'
+import { useSettingsShell } from './SettingsShellContext'
+import { settingsRow } from './settingsSections'
 
 // The item shown in the Sheet — either an existing configured provider (configure
 // mode) or a catalog entry for first-time setup (connect mode).
@@ -260,6 +262,35 @@ function ProviderConfigSheet({
     if (!open) setDiscardPrompt(false)
   }, [open])
 
+  // FR-069: stacked dialogs close one at a time, each returning focus to the
+  // control that opened it. The prompt's opener is whatever had focus when
+  // the close gesture asked; the sheet's opener is whatever had focus when
+  // the sheet opened. A gone opener falls back to the dialog still open (the
+  // sheet's first focusable control), else to the section heading.
+  const shell = useSettingsShell()
+  const sheetRef = useRef<HTMLDivElement>(null)
+  const sheetOpenerRef = useRef<HTMLElement | null>(null)
+  const promptOpenerRef = useRef<HTMLElement | null>(null)
+  const promptWasOpen = useRef(false)
+  useEffect(() => {
+    const wasOpen = promptWasOpen.current
+    promptWasOpen.current = discardPrompt
+    if (!wasOpen || discardPrompt || !open) return
+    const opener = promptOpenerRef.current
+    promptOpenerRef.current = null
+    if (opener?.isConnected && sheetRef.current?.contains(opener)) {
+      opener.focus()
+      return
+    }
+    sheetRef.current
+      ?.querySelector<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')
+      ?.focus()
+  }, [discardPrompt, open])
+  const askDiscard = () => {
+    promptOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setDiscardPrompt(true)
+  }
+
   if (!target) return null
 
   // Determine the provider id and entry in both modes.
@@ -332,7 +363,7 @@ function ProviderConfigSheet({
       action,
     })
     if (decision.prompt) {
-      setDiscardPrompt(true)
+      askDiscard()
       return
     }
     closeAndClear()
@@ -352,6 +383,20 @@ function ProviderConfigSheet({
         widthClass="w-[90vw] sm:max-w-lg"
         className="p-0"
         data-testid="provider-config-sheet"
+        ref={sheetRef}
+        // FR-069: Radix gives focus back to the sheet's opener when it closes;
+        // when that control is gone, focus goes to the section heading.
+        onOpenAutoFocus={() => {
+          sheetOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        }}
+        onCloseAutoFocus={(e) => {
+          const opener = sheetOpenerRef.current
+          sheetOpenerRef.current = null
+          if (opener?.isConnected) return
+          if (!shell.focusHeading) return
+          e.preventDefault()
+          shell.focusHeading()
+        }}
         // See the ProviderConfigSheetProps.obscuredByDialog doc comment: keep
         // the background Sheet inert and hidden while the step-up dialog is
         // the one true top-level modal.
@@ -1177,7 +1222,7 @@ export function ProvidersSection() {
 
   return (
     <div className="space-y-[var(--space-3)]">
-      <div className="flex items-start justify-between gap-[var(--space-2-5)]">
+      <div className="flex items-start justify-between gap-[var(--space-2-5)]" {...settingsRow('Model providers')}>
         <div>
           <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h3>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">

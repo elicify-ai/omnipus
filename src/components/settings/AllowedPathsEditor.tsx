@@ -3,6 +3,7 @@ import { Trash, Plus } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { settingsRow } from './settingsSections'
 
 // Read-only badge with tooltip for allowed_paths rows.
 // Deliberately a <span>, not a <button>: it performs no action (no onClick,
@@ -65,7 +66,7 @@ export function AllowedPathsEditor({
   badges,
 }: AllowedPathsEditorProps) {
   return (
-    <div className="space-y-[var(--space-2)]">
+    <div className="space-y-[var(--space-2)]" {...settingsRow('Allowed folders')}>
       <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
         Allowed folders
         {badges}

@@ -28,6 +28,7 @@ import { Card } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/error-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { settingsRow } from './settingsSections'
 
 const PURPOSE: Record<(typeof SYSTEM_AGENT_IDS)[number], string> = {
   [JUDGE_AGENT_ID]: 'Checks whether goals and tasks meet their acceptance criteria.',
@@ -98,7 +99,7 @@ function SystemAgentRow({ id, agent }: { id: (typeof SYSTEM_AGENT_IDS)[number]; 
   const binding = agent ? providerBindingCopy(agent) : null
   return (
     <li>
-      <Card className="flex items-center gap-[var(--space-2-5)] p-[var(--space-2-5)]" data-testid={`system-agent-${id}`}>
+      <Card className="flex items-center gap-[var(--space-2-5)] p-[var(--space-2-5)]" data-testid={`system-agent-${id}`} {...settingsRow(FALLBACK_NAME[id])}>
         <AgentMark agent={agent} name={name} size={26} />
         <div className="min-w-0 flex-1">
           <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{name}</p>

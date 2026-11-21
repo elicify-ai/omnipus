@@ -18,6 +18,7 @@ import { GatewaySection } from './GatewaySection'
 import { DataRetentionSection } from './DataRetentionSection'
 import { AboutSection } from './AboutSection'
 import type { SettingsSectionId } from './settingsSections'
+import { settingsRow } from './settingsSections'
 
 export interface SettingsSectionBodyProps { // not-wire-format: React props
   section: SettingsSectionId
@@ -28,7 +29,7 @@ export interface SettingsSectionBodyProps { // not-wire-format: React props
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section aria-label={title} className="space-y-[var(--space-2)]">
+    <section aria-label={title} className="space-y-[var(--space-2)]" {...settingsRow(title)}>
       <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">{title}</h3>
       {children}
     </section>

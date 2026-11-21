@@ -10,7 +10,7 @@ Settings has 11 sections in three groups, listed down the left side (on a phone,
 - **Security**: Protection, Sandbox & network, Keys & secrets
 - **System**: Gateway, Data & retention, About
 
-The open section is part of the address (`/settings?tab=gateway`), so a reload or a shared link opens the same section, and Back and Forward move between sections. The **Search settings** box above the list finds a setting by name and tells you when a setting has moved elsewhere, for example web search and tool permissions to Skills & Tools, or Verbose chat to Profile.
+The open section is part of the address (`/settings?tab=gateway`), so a reload or a shared link opens the same section, and Back and Forward move between sections. The **Search settings** box above the list finds a setting by name and tells you when a setting has moved elsewhere, for example web search and tool permissions to Skills & Tools, or Verbose chat to Profile. Choosing a setting in the results opens its section, scrolls to that setting and highlights it with a short flash (with reduced motion turned on, it is marked without the flash). A link can do the same with `row`, for example `/settings?tab=gateway&row=port`.
 
 Personal things are not sections here. Profile is its own screen, holding your name, timezone, password, the context your agents read about you, and **Chat display** (Verbose chat). Usage is its own screen, showing token totals by agent, model, provider, and session.
 

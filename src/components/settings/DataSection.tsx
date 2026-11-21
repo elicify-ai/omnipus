@@ -18,6 +18,7 @@ import {
   getErrorMessage,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { settingsRow } from './settingsSections'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -89,7 +90,7 @@ export function DataSection() {
   if (isLoading) return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading storage…</div>
 
   return (
-    <div className="space-y-[var(--space-4)]">
+    <div className="space-y-[var(--space-4)]" {...settingsRow('Storage')}>
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Storage</h3>
@@ -134,7 +135,7 @@ export function DataSection() {
       {/* Danger zone */}
       <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-error)] uppercase tracking-wider">Danger Zone</h3>
-        <Card className="border-[var(--color-error)]/30 p-[var(--space-3)] flex items-center justify-between">
+        <Card className="border-[var(--color-error)]/30 p-[var(--space-3)] flex items-center justify-between" {...settingsRow('Clear all chat history')}>
           <div>
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Chat history</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Deletes every chat transcript. This cannot be undone.</p>

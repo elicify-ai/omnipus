@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
+import { settingsRow } from './settingsSections'
 
 // SSRF preset definitions — also consumed by SandboxSection for the
 // configData→state hydration effect and the re-auth-cancel-revert helper
@@ -75,7 +76,7 @@ export function SsrfEditor({
   }
 
   return (
-    <div className="space-y-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]">
+    <div className="space-y-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]" {...settingsRow('Internal network addresses')}>
       <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
         Internal network addresses
         {badges}

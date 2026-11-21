@@ -28,6 +28,7 @@ import { checkFormPart, toWriteResponse, type PartCheck } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 import { AllowedPathsEditor } from './AllowedPathsEditor'
 import { SsrfEditor, SSRF_PRESETS } from './SsrfEditor'
+import { settingsRow } from './settingsSections'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -959,7 +960,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
       {!configIsError && (
         <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           {/* ── Mode radio — top of config section ── */}
-          <div className="space-y-[var(--space-2)]">
+          <div className="space-y-[var(--space-2)]" {...settingsRow('Sandbox mode')}>
             <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
               Sandbox mode
               <RestartBadge />
@@ -1039,7 +1040,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                 or because that path happened to be enumerated. Before this the
                 only way to change it was to hand-edit config.json. */}
             {!configLoading && (
-              <fieldset className="space-y-[var(--space-2)] mt-[var(--space-3)] border-t border-[var(--color-border)] pt-[var(--space-3)]">
+              <fieldset className="space-y-[var(--space-2)] mt-[var(--space-3)] border-t border-[var(--color-border)] pt-[var(--space-3)]" {...settingsRow('Filesystem model')}>
                 <legend className="sr-only">Filesystem model</legend>
                 <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
                   Filesystem model
@@ -1099,6 +1100,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
           <div
             className="space-y-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-3)]"
             data-testid="workspace-limit-section"
+            {...settingsRow('Shell workspace limit')}
           >
             <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
               Shell workspace limit
