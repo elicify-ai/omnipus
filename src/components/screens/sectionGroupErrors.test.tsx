@@ -250,6 +250,33 @@ describe('FR-066 — a failed read blocks only its groups', () => {
     expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
   })
 
+  it('Retry with the read now healthy refills the group with the read value (FR-066 BDD "A section that cannot load" recovery)', async () => {
+    const { getContextSettings, fetchPerformanceSettings } = await import('@/lib/api')
+    await openSettings('?tab=limits')
+    await screen.findByRole('heading', { name: 'Limits', level: 2 })
+    // The failed shape first: both context groups show their error Callouts.
+    expect((await screen.findAllByText(/context settings unreadable/i)).length).toBeGreaterThanOrEqual(2)
+    // The gateway answers the Retry: the failed read returns healthy values
+    // (the BDD recovery of FR-066 — the callout's "one thing to do" works).
+    apiState.contextFails = false
+    const contextReads = vi.mocked(getContextSettings).mock.calls.length
+    const perfReads = vi.mocked(fetchPerformanceSettings).mock.calls.length
+    const retries = await screen.findAllByRole('button', { name: /retry/i })
+    await userEvent.click(retries[0])
+    // Retry re-reads ONLY the failed read (FR-066); the healthy one is not re-issued.
+    await waitFor(() => expect(vi.mocked(getContextSettings).mock.calls.length).toBeGreaterThan(contextReads))
+    expect(vi.mocked(fetchPerformanceSettings).mock.calls.length).toBe(perfReads)
+    // The group FILLS with the read value: the error Callout is replaced by
+    // the section's fields carrying what the read answered (the group the
+    // failure left open stays open — the refill lands in place).
+    const cap = await screen.findByLabelText('MCP tool result cap')
+    await waitFor(() => expect(cap).toHaveValue('20'))
+    expect(screen.queryByText(/context settings unreadable/i)).not.toBeInTheDocument()
+    // The read's other fields filled too, and no draft existed to lose (a
+    // fresh page): the values are exactly the read's.
+    expect(screen.getByLabelText('Built-in tool result cap')).toHaveValue('5')
+  })
+
   it('the working group still saves: exactly one PUT /performance, no PUT /settings/context', async () => {
     const { updatePerformanceSettings, putContextSettings } = await import('@/lib/api')
     await openSettings('?tab=limits')
