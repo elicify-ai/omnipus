@@ -177,6 +177,27 @@ func skipWrapperArgs(spec wrapperSpec, args []string) (rest []string, ok bool) {
 	return args[i:], true
 }
 
+// WrapperArgCount reports how many of args a known command wrapper (head, in
+// any letter case) consumes as its own flags, flag values, `VAR=value`
+// assignments and leading positional value before the command it runs:
+// `timeout 5 gh` gives 1 for args ["5", "gh"]. ok is false when head is not a
+// known wrapper or no command is left after the wrapper's own arguments.
+//
+// Exported for pkg/tools' bash path guard (#1960 S0, ADR D1), which must find
+// the real program word of a segment the same way D3 rule matching does —
+// one wrapper list, not a second copy that can drift.
+func WrapperArgCount(head string, args []string) (int, bool) {
+	spec, known := wrapperSpecFor(head)
+	if !known {
+		return 0, false
+	}
+	rest, ok := skipWrapperArgs(spec, args)
+	if !ok {
+		return 0, false
+	}
+	return len(args) - len(rest), true
+}
+
 // maxWrapperDepth bounds unwrapWrappers' recursion (`env sudo nice timeout
 // ... rm`) against a pathological or hostile chain — fail closed rather than
 // loop unboundedly.

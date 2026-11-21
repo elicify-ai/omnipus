@@ -5,6 +5,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
 var (
@@ -555,9 +557,16 @@ func (t *ExecTool) operandIsProtected(p string, policy fspolicy.FSPolicy, policy
 type pathUseVerdict struct {
 	// readOnly is true only when rules 1-6 all hold.
 	readOnly bool
-	// exec is true when the candidate sits in the segment's command position
-	// — the command would RUN it, which is neither a read nor a write.
+	// exec is true when the candidate sits in a word the shell RUNS as a
+	// program — the command word after any leading assignments, keywords and
+	// known wrappers, or a wrapper word itself (commandWordRoles). That is
+	// neither a read nor a write.
 	exec bool
+	// programPath is true when exec holds and the candidate IS that program
+	// word (it starts the word, after at most its opening quote), rather than
+	// a path glued into it (`cat[/etc/x]`). #1960 S0 (ADR D1, FR-1): such a
+	// program is not refused only for lying outside the working directory.
+	programPath bool
 	// reason explains, for a human or an agent, why the read proof failed.
 	// Empty when readOnly is true.
 	reason string
@@ -615,6 +624,18 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 		return "Command blocked by safety guard (cannot resolve relative path)"
 	}
 	if strings.HasPrefix(rel, "..") {
+		// #1960 S0 (ADR D1, FR-1): running a program by its absolute path is
+		// not refused only because the file lies outside the working
+		// directory. Execute is open at the kernel layer (ADR-062), and the
+		// same program run by name passes this guard. The protected-file leg
+		// (guardProtectedOperands) already ran unconditionally; the secret-set
+		// check is repeated here so another agent's or workspace's files stay
+		// refused even as a program. Every other operand of the command is
+		// still judged on its own candidate.
+		if use.exec && use.programPath && (!readPolicyOK || !t.inTurnSecretSet(p, turnPolicy)) {
+			return ""
+		}
+
 		// Outside the working dir — but a workspace mount may cover it. The
 		// kernel policy and the app-layer path resolver both grant paths under
 		// an AllowedRoots mount (matchedAllowedRoot); the guard must not reject a
@@ -706,32 +727,34 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 
 		// ADR-068 §6: an unexplained denial is what drives operators to switch
 		// off the entire boundary rather than the one rule in their way, so the
-		// message names the rule, the field behind it, and both ways to change
-		// it. `sandbox.workspace_path_guard` is the operator-facing key that
-		// resolves into AgentDefaults.RestrictToWorkspace (pkg/config/sandbox.go);
-		// the env var is the recovery path that outranks it. Neither is the
-		// kernel sandbox (`sandbox.mode`) — the confusion between the two is
-		// precisely what UAT defect 002 reported.
+		// message names the rule. #1960 S0 (ADR D1, FR-6) moved the operator's
+		// switch (`sandbox.workspace_path_guard`, its env override, and the
+		// difference from `sandbox.mode`) out of the agent-facing text into the
+		// gateway log — see outsideWorkDirRefusal.
 		return outsideWorkDirRefusal(p, cwdPath, use, readOnly && !readPolicyOK)
 	}
 	return ""
 }
 
 // outsideWorkDirRefusal builds the message for an absolute path outside the
-// working directory that no mount covers. It says exactly which of three
-// things was refused — running a program, a reference the guard could not
-// prove is a read, or a read withheld because the turn policy was
-// unresolvable — instead of calling every one of them "a WRITE" (UAT
-// 2026-09-13 D-66, D-44). It also states plainly what this guard is (D-14):
-// a scan of the command text, which a path assembled at runtime never
-// reaches, and names the layer that actually enforces the boundary on this
-// host.
+// working directory that no mount covers. It says exactly which thing was
+// refused — a program in another agent's or workspace's files, a path glued
+// into the command word, a reference the guard could not prove is a read, or
+// a read withheld because the turn policy was unresolvable — instead of
+// calling every one of them "a WRITE" (UAT 2026-09-13 D-66, D-44).
+//
+// #1960 S0 (ADR D1, FR-6): the agent-facing text names the rule and the one
+// remedy an agent can ask for (a mount). It no longer advises copying
+// programs, switching the guard off, or — the former D-14 note — that a path
+// assembled at runtime escapes this text scan. The operator remedy is logged
+// to the gateway log instead, where a person reviewing refusals finds it.
 func outsideWorkDirRefusal(p, cwdPath string, use pathUseVerdict, readWithheld bool) string {
 	var what string
 	switch {
+	case use.exec && use.programPath:
+		what = "Running a program by its full path is allowed from any folder except Omnipus's protected ones (other agents' and other workspaces' files), and this program is in one of them."
 	case use.exec:
-		what = "RUNNING a program from outside the working directory by its absolute path is refused: ADR-068 opens reads only, and executing is neither a read nor a write. " +
-			"Fix: copy or install the program inside the workspace, or run it through an approved mount."
+		what = "The path is glued into the command word but is not the program itself, so the guard cannot tell which program runs. Separate the program from its arguments with a space."
 	case readWithheld:
 		what = "This looks like a read, but the turn's filesystem policy could not be resolved, so the read exemption is withheld for this command (fail closed). Retry; if it persists, the gateway log names the cause."
 	default:
@@ -742,31 +765,15 @@ func outsideWorkDirRefusal(p, cwdPath string, use pathUseVerdict, readWithheld b
 		what = fmt.Sprintf("The guard treats this reference as a WRITE because %s. Reads outside the working directory are allowed (ADR-068) only when the guard can PROVE the reference is a read from the command text; every other reference needs an approved workspace mount. "+
 			"read_file and list_directory answer the same read without this limitation.", reason)
 	}
+	slog.Info("bash workspace path guard refused a command",
+		"path", p, "working_dir", cwdPath, "kernel_sandbox_active", sandbox.TurnPolicyBaseInstalled(),
+		"operator_remedy", "mount the folder into the workspace, or turn the guard off with sandbox.workspace_path_guard=false "+
+			"(env OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false); this guard is separate from the kernel sandbox setting sandbox.mode")
 	return fmt.Sprintf(
 		"Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it. %s "+
-			"Rule: bash workspace path guard (RestrictToWorkspace). "+
-			"Fixes: request a mount for that folder (request_mount), or have an operator set sandbox.workspace_path_guard=false (env OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false). "+
-			"This is NOT the kernel sandbox setting (sandbox.mode). %s",
-		p, cwdPath, what, guardNatureStatement())
-}
-
-// guardNatureStatement is the honest one-liner every path-guard refusal
-// carries (UAT 2026-09-13 D-14): this guard reads the command TEXT, so a path
-// the command assembles at runtime (an interpreter concatenating strings) is
-// invisible to it. It is a courtesy check for a cooperative agent, not the
-// boundary. The boundary is the kernel sandbox where the platform has one;
-// where it does not, the statement says so rather than implying a protection
-// that is not there. The post-command symlink sweep (sweepEscapingSymlinks)
-// is named because it is the one check that does look at what the command
-// actually did rather than what it said — and it reports, never removes.
-func guardNatureStatement() string {
-	if sandbox.TurnPolicyBaseInstalled() {
-		return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
-			"The enforced boundary is the kernel sandbox, which confines the command by the real path it touches; " +
-			"symlinks inside the workspace that point outside it are reported after the command runs (never removed) and recorded for the operator."
-	}
-	return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
-		"On this host NO kernel sandbox is active, so this scan and the post-command symlink sweep are the only checks on where a command writes."
+			"Rule: bash workspace path guard (RestrictToWorkspace): writes, and references the guard cannot prove are reads, stay inside the working directory and approved mounts. "+
+			"To work in that folder, request a mount for it (request_mount).",
+		p, cwdPath, what)
 }
 
 // pathUseClassifier answers one question about one command: is the
@@ -794,10 +801,11 @@ func guardNatureStatement() string {
 //     brace expansion, and bash rewrites the words before parsing
 //     (`{cat,/etc/passwd}` runs `cat /etc/passwd`), so any `{` or `}` means the
 //     command we are judging is not the command that will run.
-//  4. The candidate is not in the segment's FIRST word. A path in command
-//     position is an EXEC, not a read — `echo hi;/etc/shadow` and
-//     `cat[/etc/shadow]` both land here. ADR-068 rules on reads only; exec
-//     stays where it was.
+//  4. The candidate is not in a program word or a leading assignment
+//     (commandWordRoles). A path in command position is an EXEC, not a read
+//     — `echo hi;/etc/shadow` and `cat[/etc/shadow]` both land here; #1960
+//     S0 lets the first (the path IS the program) run and keeps the second
+//     refused. An assignment value (`PATH=/x make`) is never a proven read.
 //  5. The candidate's word is not the target of an output redirect (`>`, `>>`,
 //     `2>`, `&>`, `>&file`, `<>`). The check scans back from the start of the
 //     WORD, not from the path, so a redirect onto an expansion-prefixed target
@@ -911,11 +919,22 @@ func (c pathUseClassifier) classify(start int) pathUseVerdict {
 	head, headIsExpansion, headNormalised := shellCommandHeadDetailed(seg)
 	word := c.wordStart(start, segStart)
 
-	// Rule 4: command position is exec, not read. Checked before the head
-	// allowlist so an absolute path in command position is reported as an
-	// EXEC rather than as "head not on the allowlist" (D-66).
-	if word == c.firstWordStart(segStart, segEnd) {
-		return pathUseVerdict{exec: true, reason: "the path is in command position — the shell would RUN it, which is not a read"}
+	// Rule 4: a program word is exec, not read; a leading assignment's value
+	// is an operand the guard cannot prove is a read. Checked before the head
+	// allowlist so each is reported as what it is rather than as "head not on
+	// the allowlist" (D-66). #1960 S0: the program word is found after
+	// assignments, keywords and known wrappers (commandWordRoles), so
+	// `VAR=/x gh` judges `/x` as an operand, not as the program (ADR C4).
+	programs, assignments := c.commandWordRoles(segStart, segEnd)
+	switch {
+	case programs[word]:
+		return pathUseVerdict{
+			exec:        true,
+			programPath: strings.Trim(c.cmd[word:start], `"'`) == "",
+			reason:      "the path is in command position — the shell would RUN it, which is not a read",
+		}
+	case assignments[word]:
+		return pathUseVerdict{reason: "the path is the value of a variable assignment, which the program may use as a place to write, so the guard cannot prove it is a read"}
 	}
 	switch {
 	case headIsExpansion:
@@ -1003,6 +1022,106 @@ func (c pathUseClassifier) firstWordStart(segStart, segEnd int) int {
 		i++
 	}
 	return i
+}
+
+// programIntroducingKeywords are the shell keywords whose next word is a
+// command (`if gh …`, `then gh …`, `do gh …`, `! gh …`). Keywords followed by
+// something else (`for`, `in`, `case`, `function`) are deliberately absent:
+// commandWordRoles stops at them, so nothing after them counts as a program.
+var programIntroducingKeywords = map[string]bool{
+	"if": true, "then": true, "else": true, "elif": true,
+	"do": true, "while": true, "until": true, "!": true,
+}
+
+// maxCommandWrapperDepth bounds wrapper unwrapping (`env timeout 5 nohup gh`),
+// matching shellrule's own bound on the same chain.
+const maxCommandWrapperDepth = 8
+
+// commandWordRoles reports, for one segment, which words the shell RUNS as
+// programs and which are leading `NAME=value` assignments, keyed by word
+// start offset (#1960 S0, ADR D1).
+//
+// The program word follows any leading assignments, redirections and
+// program-introducing keywords. When that word names a known command wrapper
+// (shellrule.WrapperArgCount — the one wrapper list D3 rule matching uses),
+// the wrapper's own flags, flag values and positional value are skipped, its
+// `NAME=value` arguments (env's) are assignments, and the command it runs is
+// a program word too, recursively. Every other word is an ordinary operand
+// and keeps the guard's normal checks.
+func (c pathUseClassifier) commandWordRoles(segStart, segEnd int) (programs, assignments map[int]bool) {
+	programs, assignments = map[int]bool{}, map[int]bool{}
+	words := c.segmentCommandWords(segStart, segEnd)
+	texts := make([]string, len(words))
+	for k, w := range words {
+		texts[k] = stripShellQuotes(c.cmd[w[0]:w[1]])
+	}
+	i := 0
+	for ; i < len(words); i++ {
+		raw := c.cmd[words[i][0]:words[i][1]]
+		if isShellAssignment(raw) {
+			assignments[words[i][0]] = true
+			continue
+		}
+		if !programIntroducingKeywords[raw] {
+			break
+		}
+	}
+	for depth := 0; i < len(words) && depth < maxCommandWrapperDepth; depth++ {
+		programs[words[i][0]] = true
+		name := texts[i]
+		if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
+			name = name[slash+1:]
+		}
+		n, isWrapper := shellrule.WrapperArgCount(name, texts[i+1:])
+		if !isWrapper {
+			break
+		}
+		for k := i + 1; k <= i+n; k++ {
+			if isShellAssignment(c.cmd[words[k][0]:words[k][1]]) {
+				assignments[words[k][0]] = true
+			}
+		}
+		i += 1 + n
+	}
+	return programs, assignments
+}
+
+// segmentCommandWords splits the segment into shell words as [start, end)
+// byte ranges, leaving out redirections: a redirect target (`> f`, `<f`,
+// `2>&1`'s `1`) and the file-descriptor number glued to a redirect operator
+// (`2` in `2>/dev/null`). Word boundaries are the same as wordStart's, so a
+// candidate's word start is a key of the result.
+func (c pathUseClassifier) segmentCommandWords(segStart, segEnd int) [][2]int {
+	var words [][2]int
+	for i := segStart; i < segEnd; {
+		if !c.mask[i] && isShellWordBreak(c.cmd[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < segEnd && (c.mask[j] || !isShellWordBreak(c.cmd[j])) {
+			j++
+		}
+		fdNumber := j < segEnd && !c.mask[j] && (c.cmd[j] == '>' || c.cmd[j] == '<') && isAllDigits(c.cmd[i:j])
+		if !fdNumber && !c.precededByRedirect(i, segStart) {
+			words = append(words, [2]int{i, j})
+		}
+		i = j
+	}
+	return words
+}
+
+// precededByRedirect reports whether the word beginning at word is the target
+// of any redirect, input (`<`) or output (precededByOutputRedirect).
+func (c pathUseClassifier) precededByRedirect(word, segStart int) bool {
+	if c.precededByOutputRedirect(word, segStart) {
+		return true
+	}
+	i := word - 1
+	for i >= segStart && !c.mask[i] && (c.cmd[i] == ' ' || c.cmd[i] == '\t') {
+		i--
+	}
+	return i >= segStart && !c.mask[i] && (c.cmd[i] == '<' || (c.cmd[i] == '&' && i > segStart && !c.mask[i-1] && c.cmd[i-1] == '<'))
 }
 
 // precededByOutputRedirect reports whether the word beginning at word is the
