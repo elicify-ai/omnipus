@@ -42,7 +42,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -322,6 +322,73 @@ describe('D-11 — one password prompt per Save', () => {
     expect(bodies.join(' ')).not.toContain('correct horse')
     // The prompt closed and its field is gone.
     expect(screen.queryByTestId('reauth-password-input')).not.toBeInTheDocument()
+  })
+})
+
+// FR-028 (spec:1933): "The typed password MUST be cleared from the prompt
+// and from page state AS SOON AS the one POST /auth/reauth returns, whatever
+// its result." CHECK F02/M10: removing the success wipe left these tests
+// green, because none of them observed the prompt's own state — only the
+// wire and the closed field. The prompt component stays mounted, so the
+// observables are: the reopened prompt's field after a 200, and the field
+// of the still-open prompt after a 401 and a 429.
+describe('FR-028 — the typed password is cleared whatever the reauth returns', () => {
+  it('after a 200: the password is gone from page state — a second Save reopens an EMPTY prompt, and its fresh consent writes once (FR-028, FR-026)', async () => {
+    const calls = stubFetch()
+    await renderAndSave([FS_MODEL_FIELD])
+    await userEvent.type(screen.getByTestId('reauth-password-input'), 'correct horse')
+    await userEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => expect(callsTo(calls, PROTECTED_ENDPOINT)).toHaveLength(1))
+    expect(callsTo(calls, PROTECTED_ENDPOINT)[0].init.headers).toHaveProperty('X-Reauth-Token', 'rt')
+
+    // A second, independent Save: its prompt is the SAME still-mounted
+    // dialog component. A retained password would sit in its field. (The
+    // second change drafts on the already-saved field: 'open' was just
+    // stored, so 'confined' is a new change against it.)
+    await userEvent.selectOptions(screen.getByLabelText('Filesystem model'), 'confined')
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    const reopened = await screen.findByTestId('reauth-password-input')
+    expect(reopened).toHaveValue('')
+    // The second consent is spent on its own write: still one prompt per
+    // Save, one token per write, and no request carries the first password.
+    await userEvent.type(reopened, 'second horse')
+    await userEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => expect(callsTo(calls, PROTECTED_ENDPOINT)).toHaveLength(2))
+    expect(callsTo(calls, '/auth/reauth')).toHaveLength(2)
+    const bodies = callsTo(calls, PROTECTED_ENDPOINT).map((c) => String(c.init?.body ?? ''))
+    expect(bodies.join(' ')).not.toContain('correct horse')
+    expect(bodies.join(' ')).not.toContain('second horse')
+  })
+
+  it('after a 401: the prompt stays open with its message and focus, and the field it refocuses is EMPTY (FR-028, FR-029)', async () => {
+    const calls = stubFetch({ reauth: () => ({ status: 401, body: { error: 'invalid password' } }) })
+    await renderAndSave([FS_MODEL_FIELD])
+    await userEvent.type(screen.getByTestId('reauth-password-input'), 'wrong')
+    await userEvent.click(screen.getByTestId('reauth-confirm'))
+    expect(await screen.findByText('The password is incorrect.')).toBeInTheDocument()
+    expect(screen.getByTestId('reauth-password-input')).toHaveFocus()
+    // FR-028 "whatever its result": the refusal clears the typed password —
+    // the person retypes, the old attempt is not left in the field.
+    expect(screen.getByTestId('reauth-password-input')).toHaveValue('')
+    expect(callsTo(calls, PROTECTED_ENDPOINT)).toHaveLength(0)
+    // The empty field is still usable: retyping the right password goes
+    // through (FR-029's retry is compatible with a cleared field).
+    await userEvent.type(screen.getByTestId('reauth-password-input'), 'correct horse')
+    await userEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => expect(callsTo(calls, PROTECTED_ENDPOINT)).toHaveLength(1))
+    expect(callsTo(calls, PROTECTED_ENDPOINT)[0].init.headers).toHaveProperty('X-Reauth-Token', 'rt')
+  })
+
+  it('after a 429: the prompt says to wait, keeps focus, and the field is EMPTY (FR-028, FR-029)', async () => {
+    const calls = stubFetch({ reauth: () => ({ status: 429, body: { error: 'rate limited' } }) })
+    await renderAndSave([FS_MODEL_FIELD])
+    await userEvent.type(screen.getByTestId('reauth-password-input'), 'whatever')
+    await userEvent.click(screen.getByTestId('reauth-confirm'))
+    expect(await screen.findByText(/too many tries/i)).toBeInTheDocument()
+    expect(screen.getByText(/wait a minute/i)).toBeInTheDocument()
+    // FR-028 "whatever its result": the rate-limit refusal clears the field too.
+    expect(screen.getByTestId('reauth-password-input')).toHaveValue('')
+    expect(callsTo(calls, PROTECTED_ENDPOINT)).toHaveLength(0)
   })
 })
 
