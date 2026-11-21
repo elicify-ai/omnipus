@@ -131,8 +131,8 @@ func functionalPreviewCall(t *testing.T, svc *Service, root string, doc function
 			pids = append(pids, receipt.PID)
 			assert.Equal(t, filepath.Join(root, "recorded", "program", "soffice.bin"), receipt.Executable, "instrument: each result comes from unchanged real LibreOffice")
 			assert.Positive(t, receipt.PID)
-			functionalAssertProcessGone(t, receipt.PID, observation.Starts)
-			functionalAssertProcessGone(t, receipt.Recorder, observation.Starts)
+			functionalAssertProcessGone(t, receipt.PID, observation.Starts, root)
+			functionalAssertProcessGone(t, receipt.Recorder, observation.Starts, root)
 		}
 		t.Logf("call=%d actual real LibreOffice exits=%v pids=%v", number, exits, pids)
 		assert.Equal(t, []int{81, 0}, exits, "T-114: actual exit-81 restart followed by successful second start")
