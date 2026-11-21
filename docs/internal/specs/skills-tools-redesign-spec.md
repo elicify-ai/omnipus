@@ -1,13 +1,14 @@
 Status: In review
 
-ADR: none — no open design decision was routed to an ADR. The founder settled the design in the wireframe answers (T-Q1 to T-Q7, T-Q4b). The contract shapes below are architect decisions recorded in "Contract Changes". Two existing ADRs need a dated correction because of founder answers: [ADR-072 — Skill activation and loading: an on-demand `Skill` tool, the per-agent grant as the real gate, and a project's own skills and instructions](../architecture/ADR-072-skill-activation-and-loading.md) (OQ3 "no always-on skill" is reversed by the T-Q4b "Full" level, see FQ-1) and [ADR-071 — Tool manifest tier redesign](../architecture/ADR-071-tool-manifest-tier-redesign.md) (the fixed tier lists become stored, editable levels). Both corrections are ADR-TODO rows in "User-facing documentation".
+ADR: none — no open design decision was routed to an ADR. The founder settled the design in the wireframe answers (T-Q1 to T-Q7, T-Q4b). The contract shapes below are architect decisions recorded in "Contract Changes". Two existing ADRs need a dated correction because of founder answers: [ADR-072 — Skill activation and loading: an on-demand `Skill` tool, the per-agent grant as the real gate, and a project's own skills and instructions](../architecture/ADR-072-skill-activation-and-loading.md) (OQ3 "no always-on skill" is reversed by the T-Q4b "Full" level if ST-Q1 is answered A [pending ST-Q1]) and [ADR-071 — Tool manifest tier redesign](../architecture/ADR-071-tool-manifest-tier-redesign.md) (the fixed tier lists become stored, editable levels). Both corrections are ADR-TODO rows in "User-facing documentation".
 
 # Feature Specification: Skills & Tools redesign (page F)
 
 **Created**: 2026-11-21
 **Input**: founder-approved wireframe and notes (`/workspace/omnipus-coordination/handoffs/ui-redesign/skills-tools-wireframe/`: `design-notes.md`, `questions.md`, `re-ask-2026-11-20.md`, `review-response.md`, `index.html`, `app.js`); inventory of today's page (`/workspace/logs/ui-1519/skills-tools/inventory.md`, read at `7faff52915`); UX review (`/workspace/logs/ui-1519/skills-tools/ux-review.md`); requirements R30–R39 (`/workspace/omnipus-coordination/handoffs/ui-redesign/navigation-menu-wireframe/requirements.md`); Settings S-Q8 and `docs/internal/specs/settings-redesign-spec.md` FR-060 on branch `landing/settings-1519` (`30e1050627`). Founder answers, final: T-Q1 A (with the note that Allow / Ask / Deny look and work identically for tools and skills, on this page and in each agent's own settings), T-Q2 A, T-Q3 B, T-Q4b B, T-Q5 (Omnipus chat), T-Q6 A, T-Q7 (this page sets the global default; the agent level is stricter only, reusing today's tool-policy model; no per-agent "what the model sees"). No interview-me output file exists; the wireframe answers take its place.
+**Round 1**: fixed after grill round 1 (BLOCK, 4 CRIT, 15 MAJ, 1 MIN); see "Round-1 fix log" at the end. Points that wait for the founder are marked **[pending ST-Qn]** with the recommended option in place (questions ST-Q1 to ST-Q7).
 **Code baseline**: release `4e34afa416`. Every `file::symbol` and line below was read at that commit. GitNexus MCP tools were not available in this session; discovery used `grep`/`Read` (impact rows are therefore Inferred).
-**Epic**: #1519 (Stage: Spec; Horizon: Now).
+**Epic**: #1519 as named in the brief. Round 1 found that #1519's body describes the *second* UI round and lists first-round Skills & Tools separately ("Stage: Requirements. Horizon: Later."); the owning epic, Stage and Horizon are **Unknown** until the chief reconciles them.
 **Riders** (proposed by the architect; the chief confirms before the design is final): IN — #1920, #1297, #1298, #1411, #99, #1570, #1576. FOR THE CHIEF TO DECIDE — #817 item 1, #1063, #708, #1031, #1380. Details: "Riders" near the end.
 **Agent tool field table**: see "Agent tool parity" under Contract Changes (C-10). Objects changed: the agent (per-agent skill permission) and the skill (global permission, what the model sees, category). Global settings (skill trust, tool and skill permission ceilings, levels) stay operator-only, refused to `set_config` for the reason already recorded in `pkg/sysagent/tools/config.go::blockedConfigKeys` ("sandbox").
 
@@ -17,7 +18,7 @@ ADR: none — no open design decision was routed to an ADR. The founder settled 
 
 Today, what an agent may use is decided in three places. The Skills & Tools page only lists skills, connected services and built-in tools; it points to Settings → Security for the global Allow / Ask / Deny of every tool, and Settings also holds the skill trust choice. Each agent's own Tools tab holds that agent's stricter values and three role presets. Skills have no Allow / Ask / Deny of their own: one tool, `Skill`, is a single switch for every skill. How much the model is told about each tool is fixed in code, and the per-skill level does not exist.
 
-This package makes Skills & Tools the one place for the global answer to "may this run, and what does the model see about it", for Omnipus tools, external (MCP) tools and skills. Every tool and every skill gets the same Allow / Ask / Deny control, here and in each agent's Tools tab, where an agent can only be stricter (founder T-Q1, T-Q2, T-Q7). Skill trust becomes the same three words for unverified skills (T-Q1 A). Every tool and skill gets one of four "What the model sees" levels: Hidden, Name only, Name and short description, Full (T-Q4b B), set globally only (T-Q7). Every change saves on its own, with no Save button and no confirm, including "Set all" (T-Q3 B). The three role presets go away on this page and on every agent's Tools tab (T-Q6 A). The New skill menu opens the Omnipus chat to write a skill (T-Q5), and an install asks for a category (R32).
+This package makes Skills & Tools the one place for the global answer to "may this run, and what does the model see about it", for Omnipus tools, external (MCP) tools and skills. Every tool and every skill gets the same Allow / Ask / Deny control, here and in each agent's Tools tab, where an agent can only be stricter (founder T-Q1, T-Q2, T-Q7). Skill trust becomes the same three words for unverified skills (T-Q1 A). Every tool and skill gets one of four "What the model sees" levels: Hidden, Name only, Name and short description, Full (T-Q4b B), set globally only (T-Q7). Every change saves on its own, with no Save button and no confirm, including "Set all" (T-Q3 B) — except the one existing warning before autonomous plan execution is allowed [pending ST-Q7]. The three role presets go away on this page and on every agent's Tools tab (T-Q6 A). The New skill menu opens the Omnipus chat to write a skill (T-Q5), and an install asks for a category (R32).
 
 Settings (page G) removes tool permissions, skill trust and web search from Settings because this page carries them; Settings is cut only after this page has landed (`settings-redesign-spec.md` FR-060). This package therefore also moves the Web & Search provider settings here as a side panel (R30a).
 
@@ -25,7 +26,7 @@ Settings (page G) removes tool permissions, skill trust and web search from Sett
 
 | Wireframe draws | This spec | Why |
 |---|---|---|
-| A Save bar (Save changes / Discard, "Leave without saving?") and a confirm before a page-wide or 10+-row Set all (T-Q3 D, mapping N19–N21, N26) | No Save bar, no Discard, no leave prompt, no Set all confirm. Every value saves on its own a moment after the click, with a "Saved" signal | T-Q3 **B**: autosave everywhere, no confirm; a wrong Set all is undone by hand |
+| A Save bar (Save changes / Discard, "Leave without saving?") and a confirm before a page-wide or 10+-row Set all (T-Q3 D, mapping N19–N21, N26) | No Save bar, no Discard, no leave prompt, no Set all confirm. Every value saves on its own a moment after the click, with a "Saved" signal. The only dialog left is the existing autonomous-plan warning (FR-010) [pending ST-Q7] | T-Q3 **B**: autosave everywhere, no confirm; a wrong Set all is undone by hand |
 | Skill trust as "Unverified skills" with Block / Warn / Allow all | The same block, with the words **Allow / Ask / Deny** in that order, the same badges as every row | T-Q1 **A** |
 | Model context levels Full description / middle / Hidden, with per-type middle labels | Four levels, one set of labels for tools and skills: Hidden, Name only, Name and short description, Full. Option help text says what each means for a tool or a skill | T-Q4b **B** ("works almost the same for tools and skills") |
 | "Write it in a chat" — a new chat that first asks which agent writes the skill | "Write with Omnipus" — opens the Omnipus chat and starts the write-skill workflow, the way "Create with Omnipus" starts the create-agent workflow | T-Q5 |
@@ -82,9 +83,11 @@ GitNexus was not available; every row below is from `grep`/`Read` at `4e34afa416
 | `GlobalToolPolicies` PUT | MEDIUM | `putToolPolicies`, SPA editor | running-agent reload (`503` path) |
 | `AgentToolsCfg` / PUT `/agents/{id}/tools` | MEDIUM | `updateAgentTools`, `set_agent_permissions`, `get_agent` | agent store, agent reload |
 | Skill trust enforcement at install and load | **HIGH** — security-relevant, focus area | REST install (`rest_skills.go`), `install_skill`, `SkillTool.execLoad` | every install path; every unverified skill load |
+| Skill folder authority (`pkg/tools/skill_turn_authority.go::resolveTurnSkillAuthority`, `pkg/fspolicy/homeguard.go::skillPathDenied`, kernel grant via `turnSkillFolders`) filtered by the skill outcome (C-11) | **HIGH** — security focus area `pkg/fspolicy` | file tools, `bash` helper operands (`pkg/tools/shell_skill_operands.go::loadableSkillReadOrRun`) | every turn's skill-folder access |
+| One-time migrations (C-18, C-19, D7) | **HIGH** — changes stored permissions of every install | config load, `ReconcileToolPolicyCeiling` ordering | every agent after upgrade |
 | `ToolPolicyEditor` (preset removal, Skills group) | MEDIUM | `ToolsAndPermissions.tsx`, `SecuritySection.tsx` (leaves Settings) | agent profile Tools tab |
 
-The four HIGH rows need sign-off before GREEN starts. They touch `pkg/agent` and the tool-policy engine, so hands-on UAT on the cut commit is mandatory (rows ST-01 to ST-18 below).
+The six HIGH rows need sign-off before GREEN starts. They touch `pkg/agent` and the tool-policy engine, so hands-on UAT on the cut commit is mandatory (rows ST-01 to ST-24 below).
 
 ---
 
@@ -96,13 +99,13 @@ The architect decides the shapes; backend-lead edits `contracts/` and regenerate
 
 | Founder words (T-Q7) | Today's mechanism, reused unchanged | Evidence |
 |---|---|---|
-| "The Skills & Tools page sets the GLOBAL default" | Layer 1, the global ceiling `sandbox.tool_policies`, complete for the static catalog, self-healed by `ReconcileToolPolicyCeiling`; written by `PUT /security/tool-policies` | root `CLAUDE.md` line 107 (Hard Constraint #6); `pkg/config/sandbox.go:523`; `pkg/config/validate.go:707`; `pkg/gateway/rest_tool_policies.go:68` |
+| "The Skills & Tools page sets the GLOBAL default" | Layer 1, the global ceiling `sandbox.tool_policies`, complete for the static catalog, self-healed by `ReconcileToolPolicyCeiling`; written by `PATCH /security/permissions` (this page, C-2) and, until the Settings package lands, `PUT /security/tool-policies` (today's Settings screen) | root `CLAUDE.md` line 107 (Hard Constraint #6); `pkg/config/sandbox.go:523`; `pkg/config/validate.go:707`; `pkg/gateway/rest_tool_policies.go:68` |
 | "The agent level sets per-agent permissions and can only be STRICTER" | Layer 2, sparse per-agent overrides `tools_cfg.builtin.policies`, merged strictest-wins | `pkg/config/config.go:767`; `pkg/tools/compositor.go:163`, `:203` |
 | "If the global policy says Ask, the agent cannot say Allow" | The SPA locks the looser badges (`ToolPolicyEditor.tsx::isPolicyLocked`, `:134`); the server stores a looser value but floors it at run time; `set_agent_permissions` reports the clamp | `ToolPolicyEditor.tsx:126-156`; `compositor.go:203-224`; `agent_permissions.go:204`, `:221` |
 | "Reuse it, do not reinvent it" | Skills get the **same two layers and the same merge function**: a global skill map (complete over installed skills) and a sparse per-agent skill map. No third stored layer, no default fallback, no backfill (Hard Constraint #6; `scripts/check-no-fail-closed-backfill.sh`) | this spec C-2, C-4 |
 | "No separate per-agent 'what the model sees' setting" | Levels are global only; an agent's Deny (effective) still removes the item from what the model sees, as today | `FilterToolsByPolicy` (`compositor.go:471`) runs before the manifest is built |
 
-Two resolution-time rules sit beside the merge and are **not stored layers**, exactly like today's always-ask rule (`pkg/tools/always_ask.go:18`): God Mode floors the global side to Allow (unchanged), and the skill-trust floor for unverified skills (C-3). This is the same shape as the always-ask exception and is flagged for security-lead (focus area: `pkg/policy`-equivalent code in `pkg/tools`).
+The full per-skill decision, and every place that must consume it, is C-11; consent is C-12. Two resolution-time rules sit beside the merge and are **not stored layers**, exactly like today's always-ask rule (`pkg/tools/always_ask.go:18`): God Mode floors the global side to Allow (unchanged), and the skill-trust floor for unverified skills (C-3). This is the same shape as the always-ask exception and is flagged for security-lead (focus area: `pkg/policy`-equivalent code in `pkg/tools`).
 
 ### C-1 New schema `ModelVisibility`
 
@@ -114,38 +117,46 @@ Meaning (the oracle for every scenario below):
 
 | Value | On screen | A tool | A skill |
 |---|---|---|---|
-| `full` | Full | Its complete definition is sent every turn; callable at once | Its whole instructions are in the agent's context from the start of every chat (FQ-1) |
+| `full` | Full | Its complete definition is sent every turn; callable at once | Its whole instructions are in the agent's context from the start of every chat **only when the skill's outcome for that agent and chain is `allowed`**; otherwise it is listed as Name and short description (C-14) [pending ST-Q1] |
 | `name_and_description` | Name and short description | Listed as one line: name and the first line of its description (at most 140 characters); loaded through ToolSearch before use | Listed in the skill menu with name and description (today's behaviour) |
 | `name_only` | Name only | Listed by name alone; loaded through ToolSearch before use | Listed in the skill menu by name alone |
-| `hidden` | Hidden | Not listed; ToolSearch can still find and load it | Not listed; `Skill` search and the person's `/name` command can still find and load it |
+| `hidden` | Hidden | Not listed; ToolSearch can still find and load it (founder default, former FQ-7) | Not listed; `Skill` search, ToolSearch (C-17) [pending ST-Q6] and the person's `/name` command can still find it; loading follows C-11 |
 
 An effective Deny for an agent overrides every level for that agent: the item is not listed, not found and not callable (today's rule, `compositor.go:471`).
 
-### C-2 Global permissions and levels: `GlobalToolPolicies` extended
+### C-2 Global permissions and levels: a read model and a per-key change request (rewritten in round 1, CRIT-003, MAJ-012)
 
-| Schema | New / Changed | File | Notes |
+Round 0 added merge members to `GlobalToolPolicies`, whose PUT still required and replaced the whole `policies` map (`contracts/components/schemas/GlobalToolPolicies.yaml` `required: [policies]`; `pkg/gateway/rest_tool_policies.go::putToolPolicies`). A tab that changed one skill would have had to send its cached tool map and could undo another tab's Deny. Round 1 gives this page its own resource that never needs the full map.
+
+| Schema / endpoint | New / Changed | File | Notes |
 |---|---|---|---|
-| `GlobalToolPolicies` | changed | `contracts/components/schemas/GlobalToolPolicies.yaml` | adds three optional members, below; `policies` unchanged |
+| `GET /security/permissions` | new | `contracts/openapi.yaml` | returns `PermissionSettings`; signed-in person (same auth as `/security/tool-policies`) |
+| `PATCH /security/permissions` | new | `contracts/openapi.yaml` | body `PermissionSettingsPatch`; 200 `PermissionSettings`; 400/403/409 `ErrorResponse`; 503 saved-not-applied (existing text) |
+| `PermissionSettings` | new | `contracts/components/schemas/PermissionSettings.yaml` | complete stored maps: `policies` (tool → `ToolPolicy`, as `GlobalToolPolicies.policies`), `skill_policies` (skill key → `ToolPolicy`), `visibility` (tool name or `mcp_<server>_*` → `ModelVisibility`), `skill_visibility` (skill key → `ModelVisibility`), `skill_trust` (`allow`/`ask`/`deny`) |
+| `PermissionSettingsPatch` | new | `contracts/components/schemas/PermissionSettingsPatch.yaml` | the same five members, all optional; each map names **only the keys to change** |
+| `GlobalToolPolicies`, `GET/PUT /security/tool-policies` | unchanged shape | — | kept for today's Settings screen (C-22). PUT gains the per-key audit below |
 
-New members:
+`PATCH` rules (the oracle for Dataset D6):
 
-- `skill_policies`: object, key = installed skill id (case-insensitive identity, as skills already are), value `ToolPolicy` (`allow`/`ask`/`deny`). GET returns the complete map over every installed skill. PUT: an omitted member leaves every stored skill value unchanged; a supplied member sets the listed keys only (a merge, never a delete). An unknown skill id → 400, nothing saved.
-- `visibility`: object, key = tool name (static catalog name, or an MCP tool name, or an `mcp_<server>_*` wildcard), value `ModelVisibility`. GET returns the complete effective map over every tool in `GET /tools`. PUT merges like `skill_policies`. A locked tool (C-6) with any value other than its locked value → 400 "`<tool>` is always loaded: agents need it to work, so its level cannot be changed.", nothing saved.
-- `skill_visibility`: object, key = installed skill id, value `ModelVisibility`. Same GET/PUT rules.
+- An omitted member and an empty map change nothing. A request that changes no key at all → 400 "Nothing to change.".
+- `null` for a member or a value → 400 naming the key; there is no delete through PATCH (keys disappear only with their skill or service).
+- The whole request is validated before anything is written; one bad key → 400 naming the first bad key, nothing saved.
+- Tool keys are validated as the PUT validates them today (`ValidateSubmittedToolPolicyMap`, the `mcp_` rule). Skill keys must be a known skill key (C-19), compared case-insensitively; two keys in one request that are the same skill → 400 "`plan` is listed twice.".
+- Per-key guards: always-ask tools cannot be `allow` (`pkg/tools/always_ask.go::AlwaysAskAllowViolation`); `ToolSearch` and `Skill` accept only `allow` (C-6); locked levels accept only their locked value (C-6); `skill_trust` accepts only `allow`/`ask`/`deny`.
+- Applied under the existing config write lock: read stored config, change only the named keys, write atomically, reload agents. A key the request does not name is never written, so two tabs changing **different** keys both keep their change. Two tabs changing the **same** key: the later acknowledged write wins; every response returns the complete stored `PermissionSettings`, and the page replaces its view with it, and re-reads on window focus.
+- Audit: one `EmitSecuritySettingChange` per **changed** key with actor, old and new value, computed from the stored config inside the write lock — resources `sandbox.tool_policies.<key>`, `sandbox.skill_policies.<key>`, `sandbox.tool_visibility.<key>`, `sandbox.skill_visibility.<key>`, `sandbox.skill_trust`. A key sent with its stored value writes no entry. A refused request writes no change entry. The legacy `PUT /security/tool-policies` gets the same per-key entries (today it logs only `policy_count`). An audit-write failure is handled as for every security setting today (logged at Error by the audit package; the save result is unchanged) — this package does not change audit durability, and says so in DOC-004.
 
-The existing PUT outcomes stay: 200 = saved and applied; 503 = saved, not applied, exact existing text. Audit: every PUT that changes a skill value, a level or a skill level writes one `EmitSecuritySettingChange` entry per changed key with old and new value (resources `sandbox.skill_policies.<id>`, `sandbox.tool_visibility.<name>`, `sandbox.skill_visibility.<id>`).
+Storage (architect decision): `sandbox.skill_policies`, `sandbox.tool_visibility`, `sandbox.skill_visibility` in `config.json`, beside `sandbox.tool_policies`; trust stays `sandbox.skill_trust`, now `allow`/`ask`/`deny`. Reason: the whole `sandbox` subtree is already operator-only and refused to `set_config` (`pkg/sysagent/tools/config.go::blockedConfigKeys`).
 
-Storage (architect decision): `sandbox.skill_policies`, `sandbox.tool_visibility`, `sandbox.skill_visibility` in `config.json`, beside `sandbox.tool_policies`. Reason: the whole `sandbox` subtree is already operator-only and refused to `set_config` (`pkg/sysagent/tools/config.go::blockedConfigKeys`), which is the correct rule for global ceilings and levels (C-10).
-
-Self-heal (same pattern as `ReconcileToolPolicyCeiling`, additive, never overwriting): on every load and after every install, a skill with no stored global permission gets **Allow** (FQ-3) and a skill with no stored level gets `name_and_description`; a tool with no stored level gets its starting level (C-6). Removing a skill removes its two keys. Retired keys are not re-added.
+Self-heal (same pattern as `ReconcileToolPolicyCeiling`, additive, never overwriting, runs after the one-time migrations of C-19): a skill key with no stored global permission gets **Allow** [pending ST-Q3] and one with no stored level gets `name_and_description`; a tool with no stored level and no matching server key gets its starting level (C-6). Removing a skill removes its two keys. Retired keys are not re-added.
 
 ### C-3 Skill trust becomes Allow / Ask / Deny
 
 | Schema | New / Changed | File | Notes |
 |---|---|---|---|
-| `SkillTrustResponse` | changed | `contracts/components/schemas/SkillTrustResponse.yaml` | `level` enum becomes `allow`, `ask`, `deny` |
-| `SkillTrustUpdateRequest` | changed | `contracts/components/schemas/SkillTrustUpdateRequest.yaml` | same enum; a legacy value (`block_unverified`, `warn_unverified`, `allow_all`) → 400 "Use allow, ask or deny.", nothing saved |
-| `SkillTrustUpdateResponse` | changed | `contracts/components/schemas/SkillTrustUpdateResponse.yaml` | `applied_level` same enum; `warning` present for `allow`: "Allow turns off the check for unverified skills." |
+| `SkillTrustResponse` | unchanged at this landing | `contracts/components/schemas/SkillTrustResponse.yaml` | legacy enum, mapped (C-22); `PermissionSettings.skill_trust` carries the new enum |
+| `SkillTrustUpdateRequest` | unchanged at this landing | `contracts/components/schemas/SkillTrustUpdateRequest.yaml` | keeps the legacy enum for today's Settings screen, mapped to the stored value (C-22). The new page writes trust as `PermissionSettingsPatch.skill_trust` (`allow`/`ask`/`deny`; any other value → 400 "Use allow, ask or deny.") |
+| `SkillTrustUpdateResponse` | unchanged at this landing | `contracts/components/schemas/SkillTrustUpdateResponse.yaml` | legacy enum (C-22). The Allow warning text "Allow turns off the check for unverified skills." is shown by the new page itself |
 
 Config: `sandbox.skill_trust` stores `allow`/`ask`/`deny`. On load, a legacy stored value is rewritten once: `block_unverified` → `deny`, `warn_unverified` → `ask`, `allow_all` → `allow`; an empty value is treated as `ask` (today's empty value means `warn_unverified`, `rest_skill_trust.go:47-49`). The rewrite writes one audit entry.
 
@@ -154,10 +165,10 @@ Meaning (applies to **unverified** skills only, C-5):
 | Trust | Install of an unverified skill (screen, REST, `install_skill`) | Load of an unverified skill by an agent |
 |---|---|---|
 | `allow` | proceeds | follows the skill's own permission only |
-| `ask` | proceeds after the person confirms in the install review (screen); `install_skill` keeps its own Ask | the effective permission is at least Ask: the normal approval card, also under Auto-approve and in God Mode (FQ-2) |
+| `ask` | proceeds only with a person's review of that exact revision: the install review (screen, C-13) or a trust card bound to the staged revision (`install_skill`, C-12); `POST /skills/install` without a review → 409 | the trust check of C-12: a trust card unless that revision was approved, also under Auto-approve and in God Mode [pending ST-Q2] |
 | `deny` | refused: "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed." | refused: "`<skill>` is unverified, and unverified skills are set to Deny in Skills & Tools." |
 
-The trust floor is a resolution-time rule, not a stored layer (C-0). It survives God Mode, like the always-ask rule (FQ-2).
+The trust floor is a resolution-time rule, not a stored layer (C-0). It survives God Mode, like the always-ask rule [pending ST-Q2]. Its consent rules are C-12; the upgrade order is C-19.
 
 ### C-4 Per-agent skill permissions: `AgentToolsCfg`, `AgentToolsUpdateRequest`, `AgentToolsResponse`
 
@@ -168,7 +179,7 @@ The trust floor is a resolution-time rule, not a stored layer (C-0). It survives
 | `AgentToolsResponse` | changed | `contracts/components/schemas/AgentToolsResponse.yaml` | adds required `skills: AgentSkillEntry[]` |
 | `AgentSkillEntry` | new | `contracts/components/schemas/AgentSkillEntry.yaml` | `name` (skill id), `display_name`, `granted` (bool), `configured_policy` (`ToolPolicy` or null = no override), `global_policy` (`ToolPolicy`), `effective_policy` (`ToolPolicy`, after trust floor and God Mode), `unverified` (bool) |
 
-The per-agent value is stored as given (like tools today) and floored at run time; the screen locks looser badges; `set_agent_permissions` reports the clamp (C-0).
+The per-agent value is stored as given (like tools today) and floored at run time; the screen locks looser badges; `set_agent_permissions` reports the clamp (C-0). Every other writer of the agent's tool settings keeps `skills.policies` when it does not name it (C-21). Project skills are keyed `project:<workspace>/<slug>` (C-19).
 
 ### C-5 Skill fields: `Skill`, `SkillInstallRequest`, `SkillCategory`
 
@@ -178,7 +189,7 @@ The per-agent value is stored as given (like tools today) and floored at run tim
 | `Skill` | changed | `contracts/components/schemas/Skill.yaml` | adds required `category` (`SkillCategory`); `verified` redefined: true for a built-in skill, or for a skill whose install was checked against a registry hash **and** whose folder has no local changes since; false otherwise |
 | `SkillInstallRequest` | changed | `contracts/components/schemas/SkillInstallRequest.yaml` | adds optional `category` (`SkillCategory`). Absent → the file's `metadata.category` when it is one of the values, else `uncategorised` |
 
-The category and the install-time verification result are stored in Omnipus's own data, outside the skill folder (R32: never written into the skill file). A built-in skill takes its category from its own `metadata.category` (Omnipus-owned file; proposed values in Assumptions, FQ-5). The category is set at install only; no later edit control exists (R32, UX review F21).
+The category and the install-time verification result are stored in Omnipus's own data, outside the skill folder (R32: never written into the skill file). A built-in skill takes its category from its own `metadata.category` (Omnipus-owned file; values in Assumptions, decided by founder default). The category is set at install; a skill stored as Uncategorised can have it chosen once (C-21); after that no edit exists (R32, UX review F21).
 
 ### C-6 `ToolRegistryEntry` carries the level and the fixed rows
 
@@ -188,20 +199,23 @@ The category and the install-time verification result are stored in Omnipus's ow
 
 - `permission_fixed: true` for `ToolSearch` and `Skill`: no Allow / Ask / Deny on screen; every Set all skips them. `ToolSearch` keeps today's sentence; `Skill` shows "Permissions are set per skill on the Skills tab." with a link (T-Q2 A). Their stored global value is `allow` and is not editable (PUT with another value → 400 "`<tool>` has no permission of its own.").
 - `visibility_locked: true` for `ToolSearch`, `Skill`, `AskUserQuestion`, `goal_claim`, `set_goal` (R31's list; `switch_agent` in R31 does not exist at `4e34afa416`). Locked value: `full` (ToolSearch shows "Always available for discovery." instead of a level).
-- Starting levels (an upgrade changes nothing an agent sees, R31): the 36 tools in `fullManifestToolNames` → `full`; `serve_web` → `name_and_description`; every other static tool → `hidden`; MCP tools of a server whose `deferred` is unset or true → `hidden`, of a server with `deferred: false` → `full`. With `tools.manifest.preview_all_lazy` on, every lazy tool starts `name_and_description`. After the one-time migration, `MCPServerConfig.deferred` and `preview_all_lazy` are no longer read; a stored value is left in place, ignored, with one warning at load.
+- Starting levels are derived from the **whole** pre-upgrade request pipeline, not from labels (round-1 MAJ-004); Dataset D7 is the literal table. In short: with `tools.manifest.compressed` on, the 36 tools in `fullManifestToolNames` → `full`, `serve_web` → `name_and_description`, every other static tool → `hidden` (`name_and_description` when `preview_all_lazy` is on); every MCP tool → `hidden` (it is lazy and search-only in a compressed request, whatever `deferred` says — `pkg/tools/manifest.go::ToolManifestTier`), except that with `preview_all_lazy` on a tool registered visible → `name_and_description`. With `compressed` off, every static tool → `full`; an MCP server that is effectively deferred (`pkg/agent/loop_mcp.go::serverIsDeferred`: `tools.mcp.discovery.enabled` on and `deferred` unset or true) → `hidden`, otherwise → `full`.
+- The MCP starting level is stored per **server** as `visibility["mcp_<server>_*"]`, so a server that is offline at upgrade, and tools a server adds later, get the migrated level; an exact tool key overrides the server key (same exact-then-wildcard rule as policies).
+- After the one-time migration (marker in `sandbox.migrations`), `tools.manifest.compressed`, `preview_all_lazy` and `MCPServerConfig.deferred` are no longer read [pending ST-Q4]; stored values stay in place, ignored, with one warning at load; `set_config` refuses them (C-21).
 - `AgentToolEntry.manifest_tier` stays and is derived: `full` → `full`; `name_and_description`, `name_only`, `hidden` → `compressed`; ToolSearch → `infra`.
 
-"Load tools on demand" (`tools.manifest.compressed`, kept in Settings → Performance by the Settings spec) keeps its meaning: when off, every allowed tool is sent in full whatever its level, and the two tool tabs say so (FQ-4).
+"Load tools on demand" (`tools.manifest.compressed`): [pending ST-Q4] option B in place — the four levels are the only control; an install that had the switch off is migrated so every agent is sent the same as before (the `compressed`-off rows of D7). Option A (switch kept): levels apply only while the switch is on; when it is off every allowed tool except effectively deferred MCP tools is sent in full, the tool tabs show "Load tools on demand is off in Settings, so every allowed tool is sent in full. These levels apply when it is on.", and `deferred` keeps being read. Switch point: this paragraph, D7, FR-037, FR-039, S-44, C-21 last row, C-22.
+- Changing a level while chats run: C-15.
 
 ### C-7 New service tools start at Ask; no "Unset"
 
-No schema change. Behaviour of `POST /mcp-servers` and the `add_mcp_server` agent tool: adding a service writes the global key `mcp_<server>_*` = `ask`, which covers every tool the service has now and adds later (R30b). One-time upgrade: a configured service with no `mcp_<server>_*` key gets one, value per FQ-6. After this, every tool row has a value; the screen has no "Unset" state (R30b).
+No schema change. Behaviour of `POST /mcp-servers` and the `add_mcp_server` agent tool: adding a service writes the global key `mcp_<server>_*` = `ask` when no global key already covers the service, which covers every tool the service has now and adds later (R30b). The one-time upgrade and the exact meaning of "covered" are C-18 (round-1 CRIT-004 replaced the round-0 "no exact server key" rule). After this, every tool row has a value; the screen has no "Unset" state (R30b).
 
 ### C-8 `WorkflowStart` gains the write-skill workflow
 
 | Schema | New / Changed | File | Notes |
 |---|---|---|---|
-| `WorkflowStart` | changed | `contracts/components/schemas/WorkflowStart.yaml` **and** the inline copy in `contracts/asyncapi.yaml` (kept in sync by hand, per the schema's own description) | `workflow` enum adds `W5` (write-skill, `pkg/coreagent/prompts_adr090.go:102`). `target_workspace_id` becomes required for `W1` and `W18` only; for `W5` it is absent (skills are installation-wide) |
+| `WorkflowStart` | changed | `contracts/components/schemas/WorkflowStart.yaml` **and** the inline copy in `contracts/asyncapi.yaml` (kept in sync by hand, per the schema's own description) | `workflow` enum adds `W5` (write-skill, `pkg/coreagent/prompts_adr090.go:102`). `target_workspace_id` becomes required for `W1` and `W18` only; for `W5` it is optional: absent from Skills & Tools, where the write-skill card proposes a global skill and still lets the person pick a workspace's project shelf (the workflow already supports both, `pkg/skills/embedded/write-skill/SKILL.md`) |
 
 ### C-9 Approval card names the skill
 
@@ -213,40 +227,208 @@ No schema change. Behaviour of `POST /mcp-servers` and the `add_mcp_server` agen
 
 ### C-10 Agent tool parity (field table)
 
-| Object | Property | User can set | Agent can set | Reason if different / refusal |
-|---|---|---|---|---|
-| Agent | per-agent skill permission | yes — agent's Tools tab | yes — `set_agent_permissions` gains `skill_policy_changes` (`{set, remove}`, same shape as `ToolPolicyChanges`); same clamp report; same Ask rule for Omnipus; read through `get_agent` `skill_permissions` | — |
-| Agent | per-agent tool permission | yes | yes (unchanged) | — |
-| Agent | skill grants | yes (agent Skills tab) | yes (`create_agent`/`update_agent` `skills`, unchanged) | — |
-| Skill | global permission | yes — this page | no | Global ceilings are operator-only; `set_config` refuses `sandbox.*` with its existing reason (`config.go::blockedConfigKeys`). An agent tool must not loosen its own ceiling |
-| Skill | what the model sees | yes — this page | no | Same reason and refusal |
-| Skill | category | at install (screen, REST) | at install — `install_skill` gains optional `category` (`SkillCategory`); a value outside the enum is refused naming the allowed values | Neither can change it later (R32, F21) |
-| Tool | global permission, what the model sees | yes — this page | no | Same as skill global permission |
-| Setting | skill trust | yes — this page | no | Same reason |
+Replaced in round 1 by C-21, which lists every create, update and read path separately (MAJ-008). The parity tests named there supersede the round-0 list.
 
-Parity tests (named in RED by qa-lead): `TestSetAgentPermissions_SkillPolicyChangesParity` (fails when the agent tab can store a skill override the tool cannot), `TestInstallSkillCategoryParity` (fails when the screen can send a category `install_skill` cannot), and a new row in the existing `set_config` sandbox refusal test for `sandbox.skill_policies`, `sandbox.tool_visibility`, `sandbox.skill_visibility`.
+### C-11 Every way a skill's instructions or files reach an agent follows one decision (round-1 fix, CRIT-001, CRIT-002)
+
+The per-skill decision is computed once per agent and turn by one function beside `pkg/tools/compositor.go::resolveEffectivePolicyWith` (C-0): **grant (or project authority) → global skill value × agent override (strictest wins) → God Mode floor on the global side → trust floor for an unverified skill → consent state (C-12)**. Its outcome is one of `deny`, `ask_pending`, `allowed`. Every entry point below consumes that outcome; none computes its own.
+
+| # | Entry point at `4e34afa416` | What it gives the agent | Rule under this spec |
+|---|---|---|---|
+| E1 | `Skill` load: `pkg/tools/skill.go::SkillTool.execLoad` → `pkg/agent/loop_wire.go` → `pkg/agent/skill_activation.go::loadSkillActivation` | the instructions | `allowed` → loads; `ask_pending` → approval card (interactive) or refusal (unattended); `deny` → refused naming the setting |
+| E2 | Skill menu: `pkg/skills/loader.go::BuildSkillsSummaryFuncWithProject` | name / description | listed at its level only when the outcome is not `deny` |
+| E3 | `Skill` search: `pkg/tools/skill.go::SkillTool.execSearch` | name / description | found only when not `deny` |
+| E4 | Person's `/name`: `pkg/agent/loop_slash.go::applyExplicitSkillCommand` (sets `ForcedSkills`) | the instructions | the person asking by name is the consent for an ordinary skill Ask (unchanged from round 0); `deny` and a trust `ask_pending` are **not** bypassed: trust Ask shows the trust card first [pending ST-Q2] |
+| E5 | Delegation: `delegate` `requested_skill` → `pkg/agent/subturn_identity.go::resolveRequestedSkillForChild` | the instructions, in the child | decided for the **child** agent; `ask_pending` raises the card in the root chat (interactive) or refuses (unattended) |
+| E6 | File tools on a skill folder: `pkg/tools/skill_turn_authority.go::resolveTurnSkillAuthority` → `pkg/skills/observe.go::LoadableFolders` → `pkg/fspolicy/homeguard.go::skillPathDenied`; kernel grant via `turnSkillFolders` | the files, including the instructions | a folder is in the loadable set only when the outcome is `allowed`. `deny` and `ask_pending` folders are left out, exactly as an ungranted skill's folder is today, in the app-level guard **and** in the kernel grant (both read `resolveTurnSkillAuthority`) |
+| E7 | Helper execution: `pkg/tools/shell_skill_operands.go::loadableSkillReadOrRun` | runs helper scripts | same folder set as E6, so same rule |
+| E8 | Full level (C-1, new) | the instructions, from the first turn | injected only when the outcome is `allowed` for that agent **and** chain (C-14). `ask_pending` → listed as Name and short description; the load then goes through E1 |
+| E9 | Unified search (C-17, new) [pending ST-Q6] | name / description | found only when not `deny`; never loads |
+
+**Editor exception, kept separate.** Today `resolveTurnSkillAuthority` sets `readAll` when `edit_skill` is not denied, so an agent allowed to edit skills can read every skill folder for authoring. This stays. It is read-for-editing only: it never injects instructions, never counts as a load, never records consent, and never adds a folder to the E7 helper set. A Deny on a skill therefore does not stop an editor agent from *reading* its files; the skill's own Deny stops it being *used*. The page says so in the `edit_skill` row's help text: "Agents allowed to edit skills can read every skill's files, including denied ones." Text already disclosed to a model earlier in a chat cannot be withdrawn; a later Deny applies from the next turn (C-15).
+
+### C-12 Consent: ordinary skill Ask versus the trust check (round-1 fix, MAJ-001) [pending ST-Q2]
+
+| Situation | Ordinary skill Ask (verified skill, or trust Allow) | Trust check (unverified skill, trust Ask) — option A in place |
+|---|---|---|
+| Interactive chat, Auto-approve off | approval card: Approve Once, Deny, Always Allow | trust card: "Approve this version", Deny. No Always Allow |
+| Interactive chat, Auto-approve on | follows the existing Auto rule for the `Skill` tool (`pkg/tools/auto_approve.go`: `Skill` is `AutoRuns`) — loads with no card | trust card still shown |
+| God Mode | global side floored to Allow (as for tools); a per-agent Ask still asks | trust card still shown |
+| Remembered "Always Allow" (`pkg/security/approvalgrants.go::ApprovalGrantStore.IsAllowed`, keyed by session, agent, tool, arguments) | the remembered grant's arguments are `{name, revision}` (revision = `pkg/skills/capture.go::ContentRevision` of the folder); a changed skill asks again | never consulted |
+| Where consent is stored | the existing session grant store (per chat) | a new installation-wide record "trust approvals": (skill key, revision, who, when) in Omnipus's own data, outside the skill folder; written only by a person's action |
+| What counts as consent | Approve Once / Always Allow on the card | (a) "Approve this version" on a trust card; (b) installing through the install review (C-13), which records the reviewed revision; (c) "Approve this version" in the skill's More actions on the Skills tab |
+| Revision changes | asks again (new arguments) | the old approval no longer matches; asks again |
+| Unattended chain (task, plan, scheduled) | refused: "Not run: needs approval, and task and plan runs never ask." | refused with the same text; no card |
+| `install_skill` by an agent, interactive | `install_skill`'s own tool policy applies first, as today | then, for an unverified skill, a trust card bound to the **staged** revision before publishing; the tool policy of `install_skill` (shipped Ask, `pkg/config/defaults.go`) is **not** treated as the trust check |
+| `install_skill`, unattended | as today | refused, nothing installed |
+| `POST /skills/install` without a review | — | refused for an unverified skill: 409 "Review needed: this skill is unverified, and unverified skills are set to Ask. Review it in Skills & Tools first." |
+| Pending card when policy, grant or revision changes before the answer | the answer is re-checked against the current outcome before loading; a stale yes does not load | same, against the current revision |
+
+Option B (if the founder answers ST-Q2 B): the right-hand column collapses into the left-hand one; the trust card becomes the ordinary card with Always Allow, and Auto/God apply. Switch point: the row "Interactive chat, Auto-approve on" and "God Mode" of this table, D1 rows 9–10, S-30, S-31, ST-10, FR-030 and DOC-004.
+
+### C-13 Install review before publishing (round-1 fix, MAJ-002)
+
+| Schema / endpoint | New / Changed | File | Notes |
+|---|---|---|---|
+| `POST /skills/install/review` | new | `contracts/openapi.yaml` | body `SkillInstallRequest` (catalog slug + version, or upload reference); stages the skill with the existing staging code in `pkg/gateway/rest_skills.go::installSkill` **without** `publishSkillInstall`; returns `SkillInstallReview` |
+| `SkillInstallReview` | new | `contracts/components/schemas/SkillInstallReview.yaml` | `review_id`, `name`, `version`, `revision` (`ContentRevision` of the staged folder), `verification` (enum `matched`, `no_registry_hash`, `mismatch`, `unavailable`), `verified` (true only for `matched`), `suggested_category` (`SkillCategory` or null, from `metadata.category` when valid), `replaces_existing` (bool), `has_local_changes_to_replace` (bool), `expires_at` |
+| `DELETE /skills/install/review/{review_id}` | new | `contracts/openapi.yaml` | discards the staged folder; 204; unknown or expired id → 404 |
+| `SkillInstallRequest` | changed | as C-5 | adds `review_id` and `category`. With `review_id`, the server publishes **exactly** the staged folder of that review: if its current `ContentRevision` differs from the reviewed `revision` → 409 "The skill changed after review. Review it again."; expired → 410 "This review expired. Open the skill again to review it." |
+
+- `mismatch` is refused at review time (existing rule: a hash mismatch always fails, `pkg/skills/clawhub_registry.go`): 422 "The downloaded skill does not match the catalog's checksum. Nothing was installed."
+- `unavailable` (registry did not answer the hash lookup) → `verified: false`; trust applies.
+- Trust changed between review and Install: re-checked at publish; Deny → 403 (C-3 text).
+- A staged review lives 15 minutes and is removed on expiry, on DELETE, and after publish.
+- **Cancel**: before Install is pressed, Cancel sends DELETE and closes; "Nothing was installed." is true. After Install is pressed, Cancel is disabled until the server answers. If the answer is lost, the review shows "Could not confirm the install. Checking…", re-reads `GET /skills`, and then shows either "Installed <name>." or "Not installed." — never a guess.
+- Agents: `install_skill` uses the same stage-then-publish path internally; for an unverified skill under trust Ask the trust card (C-12) is bound to the staged `revision`.
+
+### C-14 Full skills: when they are injected and what happens when they do not fit (round-1 fix, CRIT-001, MAJ-006) [pending ST-Q1]
+
+Option A in place.
+
+| Effective outcome for this agent and chain (C-11) | Interactive | Unattended |
+|---|---|---|
+| `allowed` | whole instructions in the context from the first turn | same |
+| `ask_pending` (ordinary Ask, or trust Ask without a matching approval) | not injected; listed as Name and short description; a load raises the card; after approval the skill is loaded the normal way (E1) | not injected; listed as Name and short description; a load is refused |
+| `deny` | nothing | nothing |
+
+- Full never counts as consent and never bypasses E1's checks.
+- **Budget.** The injected instructions are charged once to the existing request budget (`pkg/agent/context_budget.go::contextBudget`, `::pinnedCoreOverheadTokens`), as part of the pinned overhead. If pinned overhead including all Full skills plus the output reserve does not fit the agent's model, the turn is **not sent** and the chat shows: "The skills set to Full for <agent> need about <n> tokens, more than <model> can take with this chat. Set some of them to Name and short description in Skills & Tools, or choose a model with a larger context." with a link to the Skills tab filtered to Full. Nothing is trimmed silently. The check runs every turn, so a model switch or a skill that grew is caught on the next turn.
+- **Page warning.** Each Full skill row shows its size ("about 3,200 tokens"); when the Full total for any agent exceeds half of that agent's model context, the Skills tab shows a warning callout naming the agents.
+
+Option B (ST-Q1 B): Full for a skill means name, description and the skill's `metadata` summary, never the instructions; this whole section except "Budget" falls away. Switch point: C-1 row `full` (skill column), E8, this section, FR-038, S-42, ST-13, DOC-003, ADR-TODO-1.
+
+### C-15 Changing a level or a permission while chats are running (round-1 fix, MAJ-005)
+
+- **One visibility authority.** Manifest building (`pkg/agent/tool_manifest.go::buildCompressedToolDefs`, `::buildToolManifestNote`), search membership (`pkg/tools/registry.go::SnapshotSearchableTools`) and the skill menu read the stored levels through one function. The fixed lists in `pkg/tools/manifest.go` are deleted, not kept beside the levels. `SnapshotSearchableTools` includes every tool whose level is not `full` and that is not ToolSearch, so demoting an old Full built-in to Hidden makes it searchable.
+- **Levels govern what is advertised at the start of each turn.** A level change takes effect from the next turn of every chat, new or running. Definitions already loaded in a running chat (`pkg/agent/prompt_cache_sessions.go::restoreLoadedToolRetention`, `::pruneLoadedTools`) stay loaded until that chat's existing retention drops them; a level change does not evict them.
+- **Permissions are different.** An effective Deny removes the tool from the next turn's tool list even if loaded (`FilterToolsByPolicy` runs every turn; `pruneLoadedTools` receives only allowed tools), as today. For skills, a Deny removes the skill from the menu, from search and from the loadable folders (C-11) from the next turn.
+- **Skill menu cache.** `freezeSessionSkillMenu` freezes the menu per session generation. The generation key gains a hash of the agent's skill outcomes and levels, so a permission, trust, grant or level change rebuilds the menu on the next turn (one prompt-cache miss for that chat).
+- Visibility never grants the right to call anything.
+
+### C-16 Saving, step by step (round-1 fix, MAJ-009)
+
+| State | Shown on the row / page | How it ends |
+|---|---|---|
+| queued | the new value, with a small "Saving…" | the request starts within 1,000 ms of the click |
+| in flight | same | one of the four below |
+| saved and applied (200) | "Saved" | the page takes the stored maps from the response |
+| saved, not applied (503) | "Saved, but not applied to running agents yet. Retry applying the change, or restart Omnipus." + Retry | Retry re-sends the same change |
+| refused (4xx) | "Not saved: <server reason>." + Retry; the row shows the stored value from a fresh `GET` | — |
+| outcome unknown (network error, timeout, no response) | "Couldn't confirm the save. Checking…", then the stored value from a fresh `GET` and "Showing what is stored now." | the page never assumes the old value came back |
+
+- Each click (one badge, one level, one Set all) is its own `PATCH` naming only its own keys. Requests are sent in click order, one at a time, never merged. "Saved" refers to the change whose response arrived; a later response never marks an earlier change Saved.
+- **Ownership.** The queue lives in an app-level store, not in the page, so in-app navigation does not stop it. A failure that arrives after the person left the page shows a toast: "A change on Skills & Tools was not saved: <reason>." with "Open Skills & Tools".
+- **Closing the browser.** Requests use `fetch` with `keepalive`, so a request already started continues. A change clicked in the last moment before closing may not be sent; reopening the page shows what is stored. No leave prompt (T-Q3 B).
+- `useAutoSave` (`src/hooks/useAutoSave.ts`) is not used for this page's permission and level writes because it coalesces queued changes to the latest snapshot; the agent Tools tab keeps it for its own fields, with the C-4 preservation rule.
+
+### C-17 One search for tools and skills (round-1 fix, MAJ-015) [pending ST-Q6]
+
+Option A in place. `ToolSearch` (`pkg/tools/tools_tool.go`) also searches the skills the calling agent may use (granted or project-authorized, outcome not `deny`, any level including Hidden), with the same keyword ranking. Each result line starts with its kind: `[tool]` or `[skill]`. A skill result gives its name and description and the sentence "Load it with the Skill tool." It does not load the skill and does not change grants or permissions. ToolSearch output is tool text, not a wire schema, so no contract file changes; the tool's description changes to say it finds skills too. `Skill` search stays.
+
+Option B (ST-Q6 B): no change to ToolSearch; R31's "one search" is delivered in part and tracked as a follow-up issue named at landing. Switch point: this section, E9, FR-073, S-96, DOC-003.
+
+### C-18 Migration of external tools that have no global value (round-1 fix, CRIT-004) [pending ST-Q5]
+
+"Covered globally" is decided by the resolver itself: for service `S`, the probe name `mcp_<S>_\x00probe` is resolved against the **global** map with `pkg/tools/compositor.go::resolveFromMap` (exact, then most specific wildcard). A match means covered. This sees broader wildcards such as `mcp_*` and prefix overlaps (a `mcp_git_*` key covers service `git_hub`).
+
+| State before upgrade (God Mode off; service assigned to the agent) | Agent before | Migration writes | Agent after | Change? |
+|---|---|---|---|---|
+| Global key covers `S` (exact server wildcard, or broader such as `mcp_*`) | per that key and any agent override | nothing | same | none |
+| Some tools of `S` have exact global keys; the probe has no match | exact-key tools per their key; others: agent override, else deny | `mcp_<S>_*` = ask | exact-key tools unchanged (exact beats wildcard); the rest as the rows below | as below |
+| No global match; no agent override for the tool | deny (no entry either side, logged Error) | `mcp_<S>_*` = ask | ask | **yes: deny → ask** (R30b, intended) |
+| No global match; agent override `allow` | allow (sole layer) | `mcp_<S>_*` = ask | ask (strictest wins) | **yes: allow → ask** (named; the agent's work now asks once) |
+| No global match; agent override `ask` | ask | same | ask | none |
+| No global match; agent override `deny` | deny | same | deny | none |
+| God Mode on, any of the above | global side floored to allow | same | per-agent value, else allow | none |
+
+No agent entry is ever written (Hard Constraint #6: no per-agent backfill). Exactly the two "yes" rows change behaviour; both are listed in the upgrade note (DOC-004) and in SC-003's exceptions. The migration runs once (a `sandbox.migrations` marker), before the self-heal of C-2, and is idempotent: a second start writes nothing.
+
+New service (after upgrade, screen or `add_mcp_server`): `mcp_<S>_*` = ask is written only when the probe has no global match; under a broader operator rule (for example `mcp_*: deny`) nothing is written and the rows show that rule's value.
+
+Option B (ST-Q5 B): the value written for uncovered services at upgrade is `deny`; then the row "no agent override" is unchanged and the row "agent override allow" changes allow → deny. New services still start at Ask (R30b). Switch point: this table's "Migration writes" column, FR-045, S-59, S-88, D8.
+
+### C-19 Project-folder skills have their own keys (round-1 fix, MAJ-003)
+
+| Shelf (`pkg/skills/shelf.go::ResolveSkillName`) | Permission and level key | Created | Removed |
+|---|---|---|---|
+| built-in, registry, uploaded, written in Omnipus | the skill id (lower case) | install, copy, first sight at reconcile | when the skill is removed |
+| project shelf of workspace `W` | `project:<W>/<slug>` | when Omnipus first reads `W`'s project shelf (turn start or reconcile) | when `W` is deleted, or at reconcile when the folder is gone |
+
+- A project skill and an installed skill with the same slug have different keys; `ResolveSkillName`'s existing precedence decides which skill runs, and that skill's key applies.
+- Project skills have no grant list; authority is the workspace mount, as today. Their starting permission is the same as installed skills [pending ST-Q3]; their starting level is Name and short description.
+- Project skills are not listed on the Skills tab (#1380 not a rider), so their keys are edited only through `PATCH /security/permissions` and `set_agent_permissions` (C-10). They count as unverified (anyone with write access to the workspace can change them), so trust applies; this is a named behaviour change in DOC-004.
+- **Upgrade order** (one-time, marked done in `sandbox.migrations`, idempotent): (1) trust value (C-3); (2) every installed skill's global value = old global `Skill` value; every project skill found at that moment the same; (3) each agent's old per-agent `Skill` value copied to each skill granted to that agent and to each project skill of each workspace the agent is mounted on; (4) the old `Skill` entries (global and per-agent) are removed and `Skill` becomes fixed `allow`; (5) levels (C-6, D7); (6) external tools (C-18); (7) self-heal. If Omnipus stops midway, the marker is not written and the whole migration re-runs from the stored old values, which are removed only in step 4 after steps 2–3 are written in the same atomic config write.
+- Explicit per-agent tool values written earlier by role presets are ordinary overrides and are left unchanged.
+- **Named change.** A skill granted to an agent after the upgrade follows the global value; it does not inherit the agent's old blanket `Skill` restriction. DOC-004 says so.
+
+### C-20 Bulk changes, row by row (round-1 fix, MAJ-010)
+
+| Row kind | Allowed values (global page) | Allowed values (agent tab) | In a Set all to a value it cannot take |
+|---|---|---|---|
+| ordinary tool or skill | Allow, Ask, Deny | values at least as strict as the global value | — |
+| always-ask tool (`set_channel_outbound`, `pkg/tools/always_ask.go::AlwaysAskTools`) | Ask, Deny (Allow disabled: "Always asks: this tool never runs without your yes.") | Ask, Deny | skipped |
+| Tool search, Skill (`permission_fixed`) | none | none | skipped |
+| Omnipus agent, any row | — | Allow (if global allows), Deny; Ask disabled with the existing Omnipus text | skipped for Ask |
+| locked level | — | — | skipped by level Set all |
+
+- The Set all control counts only rows that will change: "Set 11 of 12 to Allow". Its accessible name carries the same numbers. After the save a note names what was skipped and why ("1 skipped: Send to channel always asks.").
+- No row is ever silently given a different value from the one chosen. The server guards (`AlwaysAskAllowViolation`, Omnipus 422) stay; the page never sends a value they would refuse.
+- God Mode on: Deny on an always-ask tool is allowed and saved, as today.
+
+### C-21 Agent tool parity, by path (round-1 fix, MAJ-008; replaces the C-10 table)
+
+| Field | Screen | REST create | REST update | Agent create | Agent update / read | Difference and reason |
+|---|---|---|---|---|---|---|
+| per-agent skill permission | agent Tools tab | `AgentCreateRequestMain.tools_cfg.skills.policies` (C-4) via `pkg/gateway/rest_agents_create.go::agentCreateToolsCfgFromWire` | `PUT /agents/{id}/tools` `skills`; `PUT /agents/{id}` `tools_cfg` | `create_agent` gains `skill_policy_changes` (`{set}` only), listed in `pkg/sysagent/tools/agent_apply_args.go::agentCreateArgNames` | `set_agent_permissions` `skill_policy_changes`; `get_agent` `skill_permissions` | none |
+| preservation | — | — | `pkg/gateway/rest_agents_update.go::updateToolsConfig` keeps the stored `skills.policies` when the request's `tools_cfg` omits `skills`, as it already does for `builtin` and `mcp`; `{}` clears | — | `set_agent_permissions` with only tool changes leaves skill overrides untouched | — |
+| skill grants | agent Skills tab | `skills` | unchanged | `create_agent.skills` | `update_agent.skills` | unchanged |
+| skill category | install review; "Choose category" for an Uncategorised skill (once) | `POST /skills/install` `category`; `POST /skills/{name}/copy` gains `category` (default: the source's) | `PUT /skills/{name}/category` — only while the stored category is `uncategorised` (else 409 "The category is set at install and cannot be changed.") | `install_skill.category`; `edit_skill` `copy` gains `category` | `edit_skill` gains action `set_category`, same once-only rule | none. "Set once" keeps R32/F21 ("no later edit") while giving written and copied skills a reachable path |
+| skill global permission, level; tool global permission, level; trust | Skills & Tools | `PATCH /security/permissions` | same | refused | `set_config` refuses `sandbox.*` (existing) | operator-only ceilings |
+| retired manifest switches (`tools.manifest.compressed`, `tools.manifest.preview_all_lazy`, `tools.mcp.servers.<id>.deferred`) | — | — | — | — | `set_config` refuses them from this landing: "This setting was replaced by levels in Skills & Tools." [pending ST-Q4; under A only `compressed` is refused, with Settings' text] | prevents an agent from overriding every level |
+
+The write-skill workflow (`pkg/skills/embedded/write-skill/SKILL.md`) gains: the card asks for a category; after writing, Omnipus calls `edit_skill` `set_category`. Category is never written into the skill file.
+
+Parity tests: `TestSetAgentPermissions_SkillPolicyChangesParity`, `TestCreateAgent_SkillPolicyChangesParity`, `TestUpdateAgentToolsCfg_PreservesSkillPolicies` (REST update without `skills` keeps them), `TestInstallSkillCategoryParity`, `TestEditSkill_SetCategoryOnce`, `TestWriteSkillWorkflow_PublishesCategorisedSkill` (scripted model, W5 through to a listed skill with its category), and the `set_config` refusal rows for the `sandbox.*` keys and the retired manifest keys.
+
+### C-22 First landing next to today's Settings (round-1 fix, MAJ-007)
+
+This package lands before the Settings package. Nothing on today's Settings screen may break in between, and this package does not edit Settings files except where the table says so.
+
+| Today's Settings element | What this landing does |
+|---|---|
+| Skill trust control (`src/components/settings/SkillTrustSection.tsx`, legacy enum) | `GET/PUT /security/skill-trust` **keep their legacy enum** for that screen, mapped to the stored value (`deny`↔`block_unverified`, `ask`↔`warn_unverified`, `allow`↔`allow_all`). The new page reads and writes trust through `PermissionSettings.skill_trust` (C-2). The legacy endpoint is retired by the Settings package. (This replaces the round-0 "legacy value → 400" rule.) |
+| Global tool grid (`SecuritySection.tsx`) | `GET/PUT /security/tool-policies` unchanged for it, plus per-key audit (C-2) |
+| "Load tools on demand" (`PerformanceSection.tsx`) | [pending ST-Q4] B: the key is retired by migration (C-6) and `set_config` refuses it; the switch is removed by the Settings package, which needs a matching change to its spec (it currently keeps the switch in Limits; team-lead to route). Until then it has no effect. A: kept; this landing adds the `set_config` refusal now (it was planned for the Settings package, `settings-redesign-spec.md` FR-100) |
+| Links from this page to Settings | use today's `?tab=` addresses (`security`); the Settings package's old-link redirect (its US-1 AS3) carries them to the new sections. Link text names no section that does not exist yet: "Open Settings to change Auto-approve and God Mode.", "Shell safety rules (Settings)" |
+
+Release rule: the release branch must not ship this package without the Settings package, because between them the old Settings trust control still says "Warn" for what is now Ask. Both are planned for v0.1.1 (Inferred from FR-065 and Settings FR-060).
 
 ### Collisions checked
 
 - `skill_policies` keys are skill ids; they never enter `sandbox.tool_policies`, so the static-catalog validators (`ValidateSubmittedToolPolicyMap`, `config.go`/`validate.go:592`) and the `mcp_` carve-out are unchanged.
-- No existing schema named `ModelVisibility`, `SkillCategory`, `AgentSkillEntry` or `AgentSkillPermission` (`ls contracts/components/schemas`).
+- No existing schema named `ModelVisibility`, `SkillCategory`, `AgentSkillEntry`, `AgentSkillPermission`, `PermissionSettings`, `PermissionSettingsPatch` or `SkillInstallReview` (`ls contracts/components/schemas`), and no existing path `/security/permissions`, `/skills/install/review` or `/skills/{name}/category` in `contracts/openapi.yaml` (round 1, `grep`).
 - The Settings package changes no schema used here (its C-1 to C-7 are retention, restart, Performance and key deletion).
 
 ## API and Data
 
 | Endpoint / event | Change |
 |---|---|
-| `GET/PUT /security/tool-policies` | C-2 members; this page's Omnipus tools, External tools and Skills tabs write through it |
-| `GET/PUT /security/skill-trust` | C-3 enum |
+| `GET/PATCH /security/permissions` | new (C-2): this page reads and writes every permission, level and trust value through it, one per-key change per request |
+| `GET/PUT /security/tool-policies` | unchanged for today's Settings screen; PUT gains per-key audit (C-2) |
+| `POST /skills/install/review`, `DELETE /skills/install/review/{id}` | new (C-13) |
+| `PUT /skills/{name}/category` | new, once only (C-21) |
+| `POST /skills/{name}/copy` | gains `category` (C-21) |
+| `GET/PUT /security/skill-trust` | legacy enum kept for today's Settings screen (C-22) |
 | `GET /tools` | C-6 fields |
 | `GET /skills` | C-5 `category`, redefined `verified` |
-| `POST /skills/install` | C-5 `category`; trust Deny refuses an unverified install (C-3) |
+| `POST /skills/install` | C-5 `category`, C-13 `review_id`; trust Deny refuses an unverified install (C-3); trust Ask needs a review (C-12) |
 | `GET/PUT /agents/{id}/tools` | C-4 `skills` |
 | `POST /mcp-servers` | writes the service's Ask key (C-7) |
 | WS `tool_approval_required` | C-9 `skill` |
 | WS `message` with `workflow_start` | C-8 `W5` |
 
-Stored data, behaviourally: one global permission and one level per installed skill; one level per tool; per-agent skill overrides inside the agent's tool settings; each skill's category and install-time verification result in Omnipus's own data.
+Stored data, behaviourally: one global permission and one level per installed skill and per project skill (C-19); one level per tool and per external server; per-agent skill overrides inside the agent's tool settings; each skill's category, install-time verification result and trust approvals (skill, revision) in Omnipus's own data; a `sandbox.migrations` marker.
 
 ---
 ## User Stories & Acceptance Criteria
@@ -262,13 +444,15 @@ A person who runs Omnipus wants to decide, in one place, which tools every agent
 **Acceptance Scenarios**:
 
 1. **Given** the Omnipus tools tab, **When** the person clicks Deny on a tool row, **Then** the row shows Deny, a "Saved" signal appears, and after a reload the row still shows Deny.
-2. **Given** a group of 12 tools on screen, **When** the person uses that group's Set all → Ask, **Then** all 12 rows show Ask and are saved, with no confirm.
+2. **Given** a group of 12 tools on screen, all able to take Ask, **When** the person uses that group's Set all → Ask, **Then** all 12 rows show Ask and are saved in one request, with no confirm. Rows that cannot take the chosen value are skipped and named (C-20).
 3. **Given** the External tools tab and a service with 5 tools, **When** the person uses the service's Set all → Allow, **Then** all 5 tools show Allow and are saved.
 4. **Given** any tool row, **When** the page shows it, **Then** exactly one of Allow, Ask, Deny is selected and "Unset" never appears.
-5. **Given** a single click or a Set all that would make `execute_plan` resolve to Allow, **When** the person makes it, **Then** the existing "Confirm autonomous plan execution" dialog appears first, and Cancel changes nothing.
+5. **Given** a single click or a Set all that would make `execute_plan` resolve to Allow, **When** the person makes it, **Then** the existing "Confirm autonomous plan execution" dialog appears first, and Cancel changes nothing [pending ST-Q7; option B removes this scenario].
 6. **Given** the Tool search row, **When** shown, **Then** it has no Allow / Ask / Deny and reads "Always available for discovery. The tools it finds still follow their own permissions."; every Set all leaves it out.
 7. **Given** the save is refused, **When** the server answers with an error, **Then** the page shows the server's reason with Retry, and the rows show the values that are actually saved.
 8. **Given** the save is stored but running agents could not be updated, **When** the server says so, **Then** the page shows "Saved, but not applied to running agents yet. Retry applying the change, or restart Omnipus." with Retry.
+9. **Given** two browser tabs on this page, **When** tab A denies `send_email` and tab B then changes skill `plan` to Ask, **Then** both changes are stored (C-2).
+10. **Given** a save whose response never arrives, **When** the page cannot confirm it, **Then** it shows "Couldn't confirm the save. Checking…" and then the stored value (C-16).
 
 ### User Story 2 — Give every skill its own Allow / Ask / Deny (Priority: P0)
 
@@ -281,13 +465,14 @@ A person wants one skill to run freely, another to ask first, and a third never 
 **Acceptance Scenarios**:
 
 1. **Given** the Skills tab, **When** the person clicks Deny on a skill row, **Then** it is saved, and an agent granted that skill can no longer load it and no longer sees it in its skill list.
-2. **Given** a skill set to Ask, **When** an agent in a chat tries to load it, **Then** the normal approval card appears naming the skill, with Approve Once, Deny and Always Allow.
+2. **Given** a verified skill set to Ask and Auto-approve off, **When** an agent in a chat tries to load it, **Then** the normal approval card appears naming the skill, with Approve Once, Deny and Always Allow; an Always Allow is remembered for that skill's current revision only (C-12).
 3. **Given** a skill set to Ask, **When** a task, plan or scheduled run tries to load it, **Then** the load is refused with "Not run: needs approval, and task and plan runs never ask." and no card appears.
 4. **Given** a skill set to Allow and granted to the agent, **When** the agent loads it, **Then** it loads with no card.
 5. **Given** a skill not granted to the agent, **When** the agent tries to load it, **Then** it is refused as today, whatever its permission (the grant stays the gate, ADR-072 D4).
 6. **Given** the Omnipus tools tab, **When** the `Skill` row is shown, **Then** it has no Allow / Ask / Deny and reads "Permissions are set per skill on the Skills tab." with a link to the Skills tab.
 7. **Given** an install upgraded from a version without per-skill permissions, **When** it first starts, **Then** every skill's global permission equals the old global `Skill` value, and each agent's old per-agent `Skill` value is copied to each skill granted to that agent at that moment, so no agent's behaviour changes.
-8. **Given** a new skill is installed, **When** it appears, **Then** its global permission is Allow (FQ-3) and its level is "Name and short description".
+8. **Given** a new skill is installed, **When** it appears, **Then** its global permission is Allow [pending ST-Q3] and its level is "Name and short description".
+9. **Given** a granted skill whose effective value for an agent is Deny (or Ask not yet approved), **When** that agent reads the skill's folder with a file tool or runs its helper script, **Then** the read or run is refused as for an ungranted skill (C-11 E6, E7).
 
 ### User Story 3 — An agent's Tools tab is the same editor, stricter only, without presets (Priority: P0)
 
@@ -321,9 +506,9 @@ A person decides what happens to unverified skills — skills Omnipus cannot con
 1. **Given** the Skills tab, **When** it opens, **Then** "Unverified skills" is the first block, with Allow / Ask / Deny badges and one line per choice always visible.
 2. **Given** trust = Deny, **When** the person reviews an unverified install, **Then** "Install skill" is disabled with "Unverified skills are set to Deny above. Choose Ask or Allow to install this skill."
 3. **Given** trust = Deny, **When** `install_skill` or the install endpoint installs an unverified skill, **Then** it is refused with "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed."
-4. **Given** trust = Ask and an unverified skill whose own permission is Allow, **When** an agent in a chat loads it, **Then** an approval card appears naming the skill and saying it is unverified, also with Auto-approve on.
+4. **Given** trust = Ask and an unverified skill whose own permission is Allow and whose current revision has no trust approval, **When** an agent in a chat loads it, **Then** a trust card appears naming the skill, saying it is unverified, with "Approve this version" and Deny and no Always Allow, also with Auto-approve on [pending ST-Q2].
 5. **Given** trust = Allow, **When** chosen, **Then** a warning callout reads "Allow turns off the check for unverified skills. Choose Ask to turn it back on."
-6. **Given** an upgrade from a stored Block unverified / Warn unverified / Allow all, **When** Omnipus starts, **Then** trust shows Deny / Ask / Allow respectively.
+6. **Given** an upgrade from a stored Block unverified / Warn unverified / Allow all, **When** Omnipus starts, **Then** trust shows Deny / Ask / Allow respectively, and today's Settings trust control keeps working (C-22).
 7. **Given** a registry skill whose hash matched at install, **When** its folder is later changed, **Then** it shows as unverified and trust applies to it.
 8. **Given** a built-in skill, **When** trust is Deny, **Then** it still loads (built-ins are verified).
 
@@ -343,9 +528,11 @@ A person wants rarely used tools hidden from the model to save cost, and importa
 4. **Given** a tool set to Hidden, **When** an agent searches for it with ToolSearch, **Then** it is found and loadable if allowed.
 5. **Given** a locked tool (Tool search, Skill, Ask the user, goal_claim, set_goal), **When** shown, **Then** its level is fixed with the visible reason "Always loaded: agents need this to work, so its level cannot be changed."
 6. **Given** an item an agent may not run (effective Deny), **When** that agent's turn starts, **Then** the item is not listed and not found, whatever its level.
-7. **Given** an upgrade, **When** Omnipus first starts, **Then** every tool's level matches what agents were sent before (36 Full, `serve_web` Name and short description, the rest Hidden; external services per their old setting) and every skill is Name and short description.
-8. **Given** a skill set to Full and granted, **When** a new chat of that agent starts, **Then** the skill's whole instructions are in its context from the first turn (FQ-1).
-9. **Given** "Load tools on demand" is off in Settings, **When** a tool tab opens, **Then** a note says "Load tools on demand is off in Settings → Performance, so every allowed tool is sent in full. These levels apply when it is on." with a link.
+7. **Given** an upgrade, **When** Omnipus first starts, **Then** every tool's level is the D7 value for that install's old settings, so the first-turn request of every agent is the same as before apart from the named changes (SC-003), and every skill is Name and short description.
+8. **Given** a skill set to Full, granted, and Allow for that agent, **When** a new chat of that agent starts, **Then** the skill's whole instructions are in its context from the first turn; if the skill is Ask (not approved) they are not, and it is listed as Name and short description (C-14) [pending ST-Q1].
+9. **Given** an install that had "Load tools on demand" off before the upgrade, **When** Omnipus first starts, **Then** every static tool's level is Full and the tool tabs show no note, because the levels are the only control [pending ST-Q4; option A keeps the switch and shows the note "Load tools on demand is off in Settings, so every allowed tool is sent in full. These levels apply when it is on."].
+10. **Given** a running chat that already loaded `browser_evaluate`, **When** the person sets it to Hidden, **Then** the chat keeps the loaded definition, and new chats do not list it (C-15).
+11. **Given** Full skills for an agent that do not fit its model, **When** a turn starts, **Then** nothing is sent and the chat shows the C-14 text with a link to the Skills tab [pending ST-Q1].
 
 ### User Story 6 — Find any tool or skill and change a group at once (Priority: P1)
 
@@ -360,9 +547,9 @@ A person with 53 skills and 200 tools needs search, filters and group actions.
 1. **Given** the page, **When** it opens, **Then** it shows three tabs with counts — Skills, External tools (MCP), Omnipus tools — and Skills is selected.
 2. **Given** a tab, **When** shown, **Then** one search field and two flat filters (Permission, What the model sees) sit on one line above one grouped list whose groups start collapsed.
 3. **Given** a search, **When** text is typed, **Then** groups with matches open and only matching rows show; Escape in the field or the clear button empties it.
-4. **Given** a search or filter is on, **When** the person uses a group's Set all, **Then** exactly the rows on screen change, and the control's label and accessible name carry the same count ("Set 3 matching").
+4. **Given** a search or filter is on, **When** the person uses a group's Set all, **Then** exactly the rows on screen that can take the value change, and the control's label and accessible name carry the same counts ("Set 3 of 3 matching", C-20).
 5. **Given** no row matches, **When** the list is empty, **Then** "No tools match “zzzz”" shows with "Clear search and filters".
-6. **Given** a filter is on and a row's value is changed so it no longer matches, **When** the save completes, **Then** the row leaves the list.
+6. **Given** a filter is on and a row's value is changed so it no longer matches, **When** the save completes, **Then** the row leaves the list, focus moves as "Accessibility and Keyboard" says, and the status region announces the change and the new count.
 7. **Given** a "What the model sees" filter is on, **When** the list shows, **Then** a note says "Denied items are not loaded, so this filter leaves them out. Use the Permission filter to find them."
 
 ### User Story 7 — Add a skill: write it with Omnipus, upload it or install it from the catalog, with a category (Priority: P1)
@@ -376,11 +563,13 @@ A person with 53 skills and 200 tools needs search, filters and group actions.
 1. **Given** the Skills tab, **When** the person opens New skill, **Then** it offers "Write with Omnipus", "Upload a skill" and "Browse the catalog", and no item names a retired agent.
 2. **Given** "Write with Omnipus", **When** chosen, **Then** the Omnipus chat opens and receives "Write a new skill" with the write-skill workflow start.
 3. **Given** the connection is down, **When** "Write with Omnipus" is chosen, **Then** nothing is sent and a warning reads "Not connected — “Write a new skill” was not sent. Press the button again once you are reconnected."
-4. **Given** a catalog result or an uploaded file, **When** the person chooses Install, **Then** a review shows name, version, whether it is verified, the current trust choice, and a required Category.
+4. **Given** a catalog result or an uploaded file, **When** the person chooses Install, **Then** the server stages it without installing (C-13) and the review shows name, version, whether it is verified (from the staged files), the current trust choice, and a required Category.
 5. **Given** no category is picked, **When** Install is pressed, **Then** the field shows "Choose a category." and nothing is installed.
 6. **Given** a skill file with `metadata.category: research`, **When** the review opens, **Then** Research is preselected.
 7. **Given** skills are installed, **When** the Skills tab lists them, **Then** they are grouped by category; skills without one are under Uncategorised; empty categories are not shown.
-8. **Given** a skill row, **When** the person opens More actions, **Then** it offers Make a copy, plus Remove for a skill that is not built-in.
+8. **Given** a skill row, **When** the person opens More actions, **Then** it offers Make a copy, plus Remove for a skill that is not built-in, plus "Choose category" while the skill is Uncategorised, plus "Approve this version" for an unverified skill under trust Ask.
+9. **Given** Write with Omnipus completes, **When** the person approved the write-skill card with a category, **Then** the new skill is listed under that category (C-21).
+10. **Given** the person presses Cancel in an install review before Install, **When** it closes, **Then** the staged copy is discarded and nothing is installed; after Install is pressed Cancel is disabled until the answer (C-13).
 
 ### User Story 8 — Manage external services on the same tab (Priority: P2)
 
@@ -390,7 +579,7 @@ A person with 53 skills and 200 tools needs search, filters and group actions.
 
 **Acceptance Scenarios**:
 
-1. **Given** "Add service", **When** a service is added, **Then** all its tools show Ask, and tools it adds later also show Ask.
+1. **Given** "Add service" and no global rule covering it, **When** a service is added, **Then** all its tools show Ask, and tools it adds later also show Ask; under a broader global rule (for example `mcp_*` Deny) they show that rule's value (C-18).
 2. **Given** a service group header, **When** shown, **Then** it carries the on/off switch, Test, Edit and Remove, and the switch acts at once.
 3. **Given** a service that cannot connect, **When** its group is opened, **Then** an error notice shows the server's reason with Retry and Edit.
 4. **Given** Remove, **When** pressed, **Then** "Remove this service? Agents that use it lose its tools." asks first.
@@ -405,8 +594,8 @@ A person with 53 skills and 200 tools needs search, filters and group actions.
 **Acceptance Scenarios**:
 
 1. **Given** the Web & Search group, **When** the person presses its Settings button, **Then** a side panel opens with today's Default search and Fallback cards and their behaviour, unchanged.
-2. **Given** the Shell group, **When** shown, **Then** it links "Shell safety rules" to Settings → Sandbox & network.
-3. **Given** the Omnipus tools intro, **When** shown, **Then** it reads "Open Settings → Protection to change Auto-approve and God Mode." with the link.
+2. **Given** the Shell group, **When** shown, **Then** it links "Shell safety rules (Settings)" to today's Settings address that holds them; the Settings package's old-link redirect carries it to its new section (C-22).
+3. **Given** the Omnipus tools intro, **When** shown, **Then** it reads "Open Settings to change Auto-approve and God Mode." with a link to today's Settings address for them (C-22).
 4. **Given** the page, **When** any tab is shown, **Then** no link sends the person to Settings → Security for permissions.
 
 ### User Story 10 — Every tab loads, fails and reads the same way; phone and keyboard (Priority: P2)
@@ -430,10 +619,11 @@ Omnipus, asked in its chat, can set one agent's per-skill permission and install
 
 **Acceptance Scenarios**:
 
-1. **Given** `set_agent_permissions` with a skill change, **When** approved, **Then** the agent's override is stored and reported like a tool change, including the clamp sentence when the global value is stricter.
+1. **Given** `set_agent_permissions` with a skill change, **When** approved, **Then** the agent's override is stored and reported like a tool change, including the clamp sentence when the global value is stricter; `create_agent` accepts the same `skill_policy_changes` (C-21).
 2. **Given** `install_skill` with `category: research`, **When** it installs, **Then** the skill shows under Research.
 3. **Given** `set_config` with key `sandbox.skill_policies.plan`, **When** called, **Then** it is refused with the existing sandbox reason.
 4. **Given** `get_agent` with `fields: ["skill_permissions"]`, **When** called, **Then** each granted skill is listed with its effective value and override.
+5. **Given** an agent with skill overrides, **When** `PUT /agents/{id}` changes only its MCP servers, **Then** the skill overrides are unchanged (C-21).
 
 ### User Story 12 — Rider fixes on the same files (Priority: P2)
 
@@ -442,16 +632,18 @@ See "Riders"; each rider has its own BDD scenario under "Feature: Riders".
 ### Edge Cases
 
 - A skill removed while its row is on screen: the next save of that row is refused (unknown skill, 400); the page reloads the list and says "This skill was removed."
-- Two people change the same value in two browser tabs: the global map has no revision; the last save wins and each tab shows its own last saved value until reload (Ambiguity Warning 2).
-- A Set all clicked twice quickly: one save per click; the page ends on the last saved state.
+- Two browser tabs: different keys both survive (each request names only its own keys, C-2); the same key — the later acknowledged write wins, and each tab shows the stored maps from its latest response and re-reads on focus.
+- A Set all clicked twice quickly: one request per click, sent in order, never merged (C-16); the page ends on the stored state of the last response.
 - A skill granted to an agent but denied globally: the agent's row shows Deny, Allow and Ask disabled with "Global setting is Deny; an agent can only be stricter."
 - A stored per-agent Allow below a later global Ask: stored as is, floored at run time; the row shows the true effective value (as for tools, `ToolPolicyEditor.tsx::trueEffectivePolicy`).
-- An unverified skill with God Mode on: the trust floor still applies (FQ-2).
-- A project-folder skill (mount shelf, ADR-072 D4.1): no grant list; it follows trust (unverified unless built-in), its global permission (C-2 default) and its level; it is not listed on the Skills tab (#1380 is not a rider by default), so it cannot be edited on screen (Assumptions).
+- An unverified skill with God Mode on: the trust check still applies (C-12) [pending ST-Q2].
+- A project-folder skill (mount shelf, ADR-072 D4.1): no grant list; its own key `project:<workspace>/<slug>` (C-19); it follows trust (unverified), its global permission and its level; it is not listed on the Skills tab (#1380 is not a rider by default), so it is changed through `PATCH /security/permissions` or an agent tool, not on screen (Assumptions).
 - A skill and a tool with the same name: separate maps; no collision.
 - An external service whose id contains underscores: its Ask key uses the id the registry reports (`ToolRegistryEntry.server_id`), never a prefix parsed from tool names.
 - `delegate` with `requested_skill` naming an Ask skill: the child's load raises the card in the root chat (#1263 routing); in an unattended chain it is refused.
-- The person's own `/skill` command on an Ask skill: it loads without a card (the person asked by name); Deny and trust Deny still refuse it.
+- The person's own `/skill` command on an ordinary Ask skill: it loads without a card (the person asked by name); Deny and trust Deny still refuse it; an unverified skill under trust Ask still shows the trust card unless that revision was approved (C-11 E4) [pending ST-Q2].
+- An agent allowed `edit_skill` can read a denied skill's files for editing (C-11 editor exception); it still cannot load it or run its helpers.
+- A skill whose files change while a trust or approval card is open: the answer is checked against the current revision; a yes for the old revision does not load the new one (C-12).
 
 ---
 
@@ -463,9 +655,11 @@ See "Riders"; each rider has its own BDD scenario under "Feature: Riders".
 | External tools tab | spinner "Loading services…" | "No external services yet" + "Add service" | callout + Retry | a service not connected: "Not connected" in its header and the error notice inside; others normal | one group per service |
 | Omnipus tools tab | spinner "Loading tools…" | "No Omnipus tools reported" + Retry | callout + Retry | levels fail, permissions load: level shows "Could not load" + Retry; badges work | one group per category |
 | Agent Tools tab | as today | Skills group: "No skills granted. Grant skills on this agent's Skills tab." | as today (three Retry states) | global ceiling missing: read-only, today's text | rows, "Saved" |
-| Install review | "Installing…" with Cancel usable | — | server reason; trust Deny refusal | — | toast "Installed <name>. No agent is granted it yet; grant it on an agent's Skills tab." |
+| Install review | "Checking the skill…" while staging (Cancel usable, discards); "Installing…" after Install (Cancel disabled) | — | server reason; trust Deny refusal; "This review expired. Open the skill again to review it."; "The skill changed after review. Review it again."; outcome unknown → "Could not confirm the install. Checking…" then the real result | verification unavailable: "Not verified: the catalog did not answer." and trust applies | toast "Installed <name>. No agent is granted it yet; grant it on an agent's Skills tab." |
 | Web & Search panel | today's states | today's | today's | today's | today's |
-| Page save signal | "Saving…" | — | "Not saved: <server reason>." + Retry; rows show stored values | "Saved, but not applied to running agents yet. Retry applying the change, or restart Omnipus." + Retry | "Saved" |
+| Page save signal | "Saving…" (queued or in flight, C-16) | — | "Not saved: <server reason>." + Retry; rows show stored values; outcome unknown → "Couldn't confirm the save. Checking…" then "Showing what is stored now." | "Saved, but not applied to running agents yet. Retry applying the change, or restart Omnipus." + Retry | "Saved" |
+| Full skills too large | — | — | in the chat: the C-14 text; on the Skills tab: a warning callout naming the agents whose Full total exceeds half of their model's context [pending ST-Q1] | — | each Full row shows its size |
+| After leaving the page | — | — | a late failure shows a toast "A change on Skills & Tools was not saved: <reason>." with "Open Skills & Tools" | — | — |
 
 ## User Journey
 
@@ -476,15 +670,16 @@ See "Riders"; each rider has its own BDD scenario under "Feature: Riders".
 5. External tools: Add service; its tools show Ask (US-8 AS1); the service's Set all (US-1 AS3).
 6. Omnipus tools: a group's Set all (US-1 AS2); Web & Search → Settings panel (US-9 AS1).
 7. An agent → Tools tab: the same rows, stricter only, with a Skills group (US-3).
-Exit: through the sidebar; nothing is ever unsaved (T-Q3 B).
+Exit: through the sidebar; changes already clicked keep saving after the page is left, and a late failure appears as a toast (C-16). A change clicked in the moment the browser closes may not be sent; reopening shows what is stored (T-Q3 B, no leave prompt).
 
 ## Accessibility and Keyboard
 
-- Tabs: the flat view switch with tablist semantics; arrow keys, Home, End.
+- Tabs: the catalogued `tabs` component (Radix tabs: `tablist`, `tab`, `tabpanel`); arrow keys, Home, End.
+- A row that leaves a filtered list after its save: focus moves to the same control in the next row of the list; if there is none, the previous row; if the group became empty, its header; if the list became empty, the "Clear search and filters" button. The polite status region announces "<name> set to <value>. It no longer matches the filter. <n> shown." A failed save leaves the row and focus where they were. A Set all that empties the group moves focus to the group header. Background refreshes never move focus.
 - Allow / Ask / Deny: toggle buttons with `aria-pressed` in a group named "Permission for <name>"; a locked badge is disabled and its reason is visible text referenced by `aria-describedby`.
 - Trust block: a radio group of three badges, one tab stop, arrow keys; all three meanings always visible, each linked by `aria-describedby`.
 - "What the model sees": a menu button named "What the model sees for <name>: <level>"; arrow keys, Enter; Escape closes and returns focus.
-- Group headers: `aria-expanded`, `aria-controls`. Set all: named "Set <n> matching: permission for the <n> matching <items> in <group>", the same number as its label.
+- Group headers: `aria-expanded`, `aria-controls`. Set all: named "Set <k> of <n> matching to <value>: <group>", the same numbers as its label (C-20).
 - Save signal: polite status region; errors use `role="alert"`.
 - Focus: the design system's one focus ring (focus-visible ownership, `omnipus-design-system`).
 - Touch: 44 × 44 px minimum at 390 px; no sideways scroll; every badge carries an icon and a word.
@@ -496,7 +691,7 @@ Checked against `design-system/catalog.json` first; no new catalogued component 
 | Element | Component |
 |---|---|
 | Page header and the one gold main action per tab | `page-header`, `button` (default variant), `dropdown-menu` (New skill) |
-| Tabs | `view-switch` |
+| Tabs | `tabs` (`src/components/ui/tabs.tsx`, catalogued in `design-system/catalog.json`; tablist semantics) — not `view-switch`, which is a radio group (round-1 MIN-001) |
 | Search and filters | `search-field`, `filter-menu` |
 | Grouped list | `list-group` (flat accordion, R35) |
 | Permission badges | `PolicyBadge` (product shared component, reused) |
@@ -509,7 +704,7 @@ The wireframe's Save bar is not built (T-Q3 B), so nothing new is published.
 
 ## Security and User Promises
 
-- security-lead reviews before GREEN: the trust floor and its enforcement at every install and load path (supply chain), the skill policy resolution beside `pkg/tools/compositor.go`, the audit entries (`pkg/audit`), and the `set_config` refusal rows.
+- security-lead reviews before GREEN: the C-11 entry-point inventory and the skill-folder authority change (`pkg/fspolicy`), the C-12 consent rules, the C-18/C-19 migrations, the trust floor and its enforcement at every install and load path (supply chain), the skill policy resolution beside `pkg/tools/compositor.go`, the audit entries (`pkg/audit`), and the `set_config` refusal rows.
 - Changed user promises (`docs/skills.md`, `docs/tools.md`, `docs/security.md`): trust words and meanings, per-skill permissions, `Skill` no longer a master switch, presets gone, levels, new services at Ask, the global grid's new home.
 - The trust default moves from "warn and continue" to Ask: an unverified skill that loaded silently now asks in a chat and is refused in unattended runs (T-Q1 A). The docs and the upgrade note say so plainly (DOC-004).
 - Hard Constraint #6 stays intact: two stored layers for skills as for tools, no default fallback, no backfill; trust and God Mode are resolution-time rules, like always-ask (C-0).
@@ -521,11 +716,11 @@ The wireframe's Save bar is not built (T-Q3 B), so nothing new is published.
 
 Primary flows:
 - When a person changes a permission, a level or the trust choice, the system saves it with no further action and shows "Saved".
-- When a person uses a group's Set all, the system changes exactly the rows shown in that group, in one save, with no confirm — except the existing autonomous-plan confirm when `execute_plan` would resolve to Allow.
-- When an agent loads a granted skill, the system applies the strictest of the skill's global permission, the agent's own value, and — for an unverified skill — the trust choice.
-- When an agent's turn starts, the system lists each allowed tool and each granted, not-denied skill at its global level.
+- When a person uses a group's Set all, the system changes exactly the rows shown in that group that can take the value, in one request, with no confirm, and names the skipped rows — except the existing autonomous-plan confirm when `execute_plan` would resolve to Allow [pending ST-Q7].
+- When an agent loads a granted skill, the system applies the strictest of the skill's global permission, the agent's own value, and — for an unverified skill — the trust choice, and every other path to that skill's instructions or files (menu, search, `/name`, delegation, file tools, helpers, Full) follows the same outcome (C-11).
+- When an agent's turn starts, the system lists each allowed tool and each granted, not-denied skill at its global level; a Full skill's instructions are included only when its outcome is `allowed` (C-14).
 - When a person opens an agent's Tools tab, the system offers only values at least as strict as the global value.
-- When a service is added, the system sets all its tools, now and later, to Ask.
+- When a service is added and no global rule covers it, the system sets all its tools, now and later, to Ask (C-18).
 
 Error flows:
 - When a save is refused, the system shows the server's reason with Retry and the stored values.
@@ -537,14 +732,16 @@ Error flows:
 Boundary conditions:
 - When a locked tool's level is sent with another value, the system refuses it.
 - When a group contains Tool search or Skill, every Set all skips them.
-- When "Load tools on demand" is off, every allowed tool is sent in full whatever its level.
+- The levels are the only control of what is sent about tools [pending ST-Q4].
+- When Full skills do not fit the agent's model, the turn is not sent and the chat says why (C-14).
+- When a save's outcome is unknown, the system re-reads and shows what is stored, never a guess (C-16).
 - When a filter is on, Set all counts and changes only matching rows.
 
 ## Explicit Non-Behaviors & Safeguards
 
 ### Qualitative Prohibitions
 
-- The system must not show a Save bar, Discard, a leave prompt or a Set all confirm on Skills & Tools, because T-Q3 B chose autosave with no confirm.
+- The system must not show a Save bar, Discard, a leave prompt or a Set all confirm on Skills & Tools, because T-Q3 B chose autosave with no confirm. The single exception is the existing autonomous-plan warning (FR-010) [pending ST-Q7].
 - The system must not show Cautious / Balanced / Full access anywhere, because T-Q6 A removes them.
 - The system must not offer a per-agent "What the model sees" control, because T-Q7 rules it out.
 - The system must not let an agent tool change a global permission, a level or trust, because global ceilings are operator-only (C-10).
@@ -552,22 +749,30 @@ Boundary conditions:
 - The system must not write a category, permission or level into a skill's folder, because that breaks the hash check (R32).
 - The system must not show "Unset" for any tool or skill (R30b).
 - The system must not name Ava, Admin or any retired agent in menus, toasts or built-in skill text.
-- The system must not make ToolSearch search skills or change the grant model; both are out of scope (Assumptions).
-- The system must not change Settings screens (page G), Tasks and Board, or signed-in browsers (#1951).
+- The system must not change the grant model. ToolSearch finds skills but never loads them (C-17) [pending ST-Q6].
+- The system must not inject a skill's instructions, or open its folder to file tools or helpers, before its outcome is `allowed` (C-11).
+- The system must not write any per-agent policy entry during migration (Hard Constraint #6; C-18, C-19).
+- The system must not change Settings screens (page G), Tasks and Board, or signed-in browsers (#1951), apart from what C-22 lists; it must not break today's Settings trust or tool-grid controls at this landing.
 
 ### Machine-Verifiable Constraints
 
 **Error Codes / Messages** (all bodies `ErrorResponse`):
-- `PUT /security/tool-policies`, unknown skill id in `skill_policies` or `skill_visibility` → 400, nothing saved.
-- `PUT /security/tool-policies`, a locked tool's level changed → 400, "`<tool>` is always loaded: agents need it to work, so its level cannot be changed."
-- `PUT /security/tool-policies`, `ToolSearch` or `Skill` in `policies` with a value other than `allow` → 400, "`<tool>` has no permission of its own."
-- `PUT /security/skill-trust`, a legacy value → 400, "Use allow, ask or deny."
+- `PATCH /security/permissions`, unknown skill key in `skill_policies` or `skill_visibility` → 400, nothing saved.
+- `PATCH /security/permissions`, a locked tool's level changed → 400, "`<tool>` is always loaded: agents need it to work, so its level cannot be changed."
+- `PATCH /security/permissions`, `ToolSearch` or `Skill` in `policies` with a value other than `allow` → 400, "`<tool>` has no permission of its own."
+- `PATCH /security/permissions`, `set_channel_outbound: allow` → 400 (existing always-ask text).
+- `PATCH /security/permissions`, no key changed → 400 "Nothing to change."; duplicate skill → 400 "`<skill>` is listed twice."; `null` → 400 naming the key.
+- `PATCH /security/permissions`, `skill_trust` other than `allow`/`ask`/`deny` → 400, "Use allow, ask or deny."
+- `POST /skills/install`, unverified skill, trust `ask`, no `review_id` → 409 "Review needed: this skill is unverified, and unverified skills are set to Ask. Review it in Skills & Tools first."
+- `POST /skills/install`, reviewed revision differs → 409 "The skill changed after review. Review it again."; expired review → 410.
+- `POST /skills/install/review`, checksum mismatch → 422 "The downloaded skill does not match the catalog's checksum. Nothing was installed."
+- `PUT /skills/{name}/category` when a category is already set → 409 "The category is set at install and cannot be changed."
 - `POST /skills/install`, unverified skill with trust `deny` → 403, "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed."
 - `POST /skills/install`, `category` outside `SkillCategory` → 400.
 - `PUT /agents/omnipus/tools`, `skills.policies` containing `ask` → 422, the existing Omnipus refusal text and code.
 - `PUT /agents/{id}/tools`, `skills.policies` key that is not installed → 400.
 
-**Performance Bounds**: a single click MUST start its save request within 1,000 ms; a Set all MUST issue exactly 1 save request.
+**Performance Bounds**: a single click MUST start its save request within 1,000 ms (start, not completion); a Set all MUST issue exactly 1 save request; requests from separate clicks are never merged.
 
 **Scope Boundaries**: levels MUST change only what is listed to the model, never whether a tool or skill may run.
 
@@ -597,6 +802,7 @@ Boundary conditions:
 
 ### Settings package (page G)
 - **Order**: this package lands before Settings is cut (Settings FR-060). Readiness: the Skills & Tools route renders the tool permission grid, web search settings and skill trust.
+- **Compatibility at this landing**: C-22. Today's Settings trust control and tool grid keep working against unchanged endpoints; links use today's Settings addresses. Changes the Settings package needs: retire `/security/skill-trust`'s legacy enum and, under ST-Q4 B, drop "Load tools on demand" from Limits (team-lead routes this to the Settings spec owner).
 
 ---
 
@@ -604,8 +810,8 @@ Boundary conditions:
 
 | # | What's Ambiguous | Likely Agent Assumption | Question to Resolve |
 |---|---|---|---|
-| 1 | Whether a Hidden, allowed tool or skill can be found | Not at all (re-ask text "not told at all") | Spec: not listed, but ToolSearch / `Skill` search find it (R31, ADR-071 search-only). Confirm: FQ-7 |
-| 2 | Two tabs editing the global map at once | Add a revision field | Out of scope; last write wins, as today. Accepted unless the grill says otherwise |
+| 1 | Whether a Hidden, allowed tool or skill can be found | Not at all (re-ask text "not told at all") | Decided (founder default, former FQ-7): not listed, but ToolSearch / `Skill` search find it (R31) |
+| 2 | Two tabs editing the global map at once | Add a revision field | Resolved in round 1: per-key PATCH (C-2); different keys both survive; same key, later acknowledged write wins |
 | 3 | The person's `/skill` command on an Ask skill | It raises a card | Spec: no card (the person asked by name); Deny still refuses |
 | 4 | Which skills the agent's Skills group lists | All installed | Spec: granted skills only (the grant is the gate, ADR-072 D4) |
 | 5 | Labels of the four levels | Per-type labels | Spec: one set of labels; help text per type |
@@ -665,7 +871,7 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **Then** every row of that service has exactly one of Allow, Ask, Deny selected
 - **But** the word "Unset" appears nowhere on the page
 
-#### Scenario: S-05 Set all that would allow autonomous plans asks first
+#### Scenario: S-05 Set all that would allow autonomous plans asks first [pending ST-Q7]
 
 **Traces to**: User Story 1, Acceptance Scenario 5
 **Category**: Alternate Path
@@ -727,7 +933,7 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 **Traces to**: User Story 2, Acceptance Scenario 2
 **Category**: Happy Path
 
-- **Given** `deep-research` at Ask globally
+- **Given** `deep-research` at Ask globally and Auto-approve off
 - **When** Mia loads `deep-research` in a web chat
 - **Then** an approval card appears with tool `Skill`, the skill named "Deep Research", and the buttons Approve Once, Deny and Always Allow
 
@@ -938,16 +1144,16 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 
 - **Given** trust Ask, Auto-approve on, unverified `notes-helper` at Allow, granted to Mia
 - **When** Mia loads `notes-helper` in a chat
-- **Then** an approval card appears naming "notes-helper" and marked unverified
+- **Then** a trust card appears naming "notes-helper", marked unverified, with "Approve this version" and Deny and no Always Allow [pending ST-Q2]
 
-#### Scenario: S-31 Trust Ask applies in God Mode
+#### Scenario: S-31 Trust Ask applies in God Mode [pending ST-Q2]
 
 **Traces to**: User Story 4, Acceptance Scenario 4
 **Category**: Edge Case
 
 - **Given** God Mode on and the setup of S-30
 - **When** Mia loads `notes-helper` in a chat
-- **Then** an approval card appears (FQ-2)
+- **Then** a trust card appears (C-12) [pending ST-Q2]
 
 #### Scenario: S-32 Choosing Allow shows the warning
 
@@ -1001,8 +1207,9 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 **Category**: Error Path
 
 - **Given** trust Ask
-- **When** a client sends trust `warn_unverified`
+- **When** a client sends `PATCH /security/permissions` with `skill_trust: warn_unverified`
 - **Then** the answer is 400 with "Use allow, ask or deny." and trust stays Ask
+- **But** today's Settings control sending `warn_unverified` to `PUT /security/skill-trust` still succeeds and stores Ask (C-22)
 
 ### Feature: What the model sees (User Story 5)
 
@@ -1020,7 +1227,7 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 **Traces to**: User Story 5, Acceptance Scenarios 2, 3, 4
 **Category**: Happy Path
 
-- **Given** "Load tools on demand" on, Mia allowed `serve_web`, and `serve_web` at `<level>`
+- **Given** Mia allowed `serve_web`, and `serve_web` at `<level>`, in a new chat with nothing loaded
 - **When** Mia's next turn starts
 - **Then** `<sent>`
 
@@ -1052,23 +1259,26 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **When** Mia's next turn starts
 - **Then** `fetch_url` is not in Mia's tool list and a ToolSearch for it finds nothing
 
-#### Scenario: S-41 Upgrade keeps what agents are sent
+#### Scenario Outline: S-41 Upgrade keeps what agents are sent
 
-**Traces to**: User Story 5, Acceptance Scenario 7
+**Traces to**: User Story 5, Acceptance Scenarios 7, 9
 **Category**: Edge Case
 
-- **Given** an install from before this release, with service `context7` stored without `deferred` and service `macos` stored with `deferred: false`
+- **Given** an install from before this release with `<old settings>`
 - **When** Omnipus starts on this release
-- **Then** `read_file` shows Full, `serve_web` Name and short description, `browser_evaluate` Hidden, every `context7` tool Hidden, every `macos` tool Full, and every skill Name and short description
+- **Then** `<tool>` shows `<level>`
+- **And** a request captured from Mia's first turn in a new chat lists `<tool>` exactly as a request captured before the upgrade did (literal fixture, not built by the new code)
+
+**Examples**: every row of Dataset D7.
 
 #### Scenario: S-42 A Full skill is in context from the first turn
 
 **Traces to**: User Story 5, Acceptance Scenario 8
 **Category**: Alternate Path
 
-- **Given** `plan` at Full and granted to Mia
+- **Given** `plan` at Full, granted to Mia and Allow for Mia, with the sentinel sentence "ZEBRA-PLAN-7" in its instructions
 - **When** a new chat with Mia starts
-- **Then** the first turn's context holds the whole `plan` instructions without a `Skill` call
+- **Then** the captured first request holds the whole `plan` instructions, including "ZEBRA-PLAN-7", without a `Skill` call [pending ST-Q1]
 
 #### Scenario Outline: S-43 Each skill level changes the skill menu
 
@@ -1087,14 +1297,16 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 | Name only | lists `deep-research` without its description |
 | Hidden | does not list `deep-research`; `Skill` with query "research sources" returns it |
 
-#### Scenario: S-44 Load tools on demand off is explained
+#### Scenario: S-44 Levels are the only control after the upgrade [pending ST-Q4]
 
 **Traces to**: User Story 5, Acceptance Scenario 9
 **Category**: Alternate Path
 
-- **Given** "Load tools on demand" off in Settings → Performance
-- **When** the Omnipus tools tab opens
-- **Then** the note "Load tools on demand is off in Settings → Performance, so every allowed tool is sent in full. These levels apply when it is on." is shown with a link
+- **Given** an install that had "Load tools on demand" off and `browser_evaluate` allowed for Mia
+- **When** Omnipus starts on this release
+- **Then** `browser_evaluate` shows Full and Mia's first-turn request carries its definition, as before
+- **And** the tool tabs show no "Load tools on demand" note
+- **And** `set_config` with `tools.manifest.compressed: true` is refused with "This setting was replaced by levels in Skills & Tools."
 
 ### Feature: Search, filters and Set all scope (User Story 6)
 
@@ -1131,9 +1343,9 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 **Category**: Edge Case
 
 - **Given** the Skills tab, Permission filter = Deny, and 1 of 53 skills at Deny
-- **When** the person uses "Set 1 matching" → Allow in All skills
+- **When** the person uses "Set 1 of 1 matching" → Allow in All skills
 - **Then** exactly 1 skill changes to Allow
-- **And** the control's accessible name starts "Set 1 matching"
+- **And** the control's accessible name starts "Set 1 of 1 matching"
 
 #### Scenario: S-49 No match shows the empty state
 
@@ -1236,7 +1448,7 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 **Traces to**: User Story 8, Acceptance Scenario 1
 **Category**: Happy Path
 
-- **Given** no service `notion`
+- **Given** no service `notion` and no global key covering `mcp_notion_`
 - **When** the person adds service `notion` with 4 tools
 - **Then** all 4 tool rows show Ask
 - **And** when `notion` later reports a 5th tool, that row also shows Ask
@@ -1295,8 +1507,9 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 
 - **Given** the Omnipus tools tab
 - **When** it opens
-- **Then** the intro reads "Open Settings → Protection to change Auto-approve and God Mode." with a link, the Shell group links "Shell safety rules" to Settings → Sandbox & network
-- **But** no link points to Settings → Security for permissions
+- **Then** the intro reads "Open Settings to change Auto-approve and God Mode." with a link, and the Shell group shows "Shell safety rules (Settings)"
+- **And** following each link opens today's Settings screen at the section that holds that setting
+- **But** no link points to Settings for tool permissions
 
 ### Feature: States, phone and keyboard (User Story 10)
 
@@ -1449,6 +1662,233 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **When** the person makes a copy named `plan-mine`
 - **Then** the new row is labelled `plan-mine`, not "Plan"
 
+### Feature: Round-1 additions (saving, authority, consent, migration, parity)
+
+#### Scenario: S-82 Two tabs changing different keys both keep their change
+
+**Traces to**: User Story 1, Acceptance Scenario 9
+**Category**: Edge Case
+
+- **Given** tabs A and B opened on Skills & Tools with `send_email` at Ask and `plan` at Allow
+- **When** tab A sets `send_email` to Deny and then tab B sets `plan` to Ask
+- **Then** `GET /security/permissions` returns `send_email: deny` and `plan: ask`
+- **And** tab B's request body names only `plan`
+
+#### Scenario: S-83 A lost response is never shown as Not saved
+
+**Traces to**: User Story 1, Acceptance Scenario 10
+**Category**: Error Path
+
+- **Given** the server stores the next change but its response is dropped
+- **When** the person clicks Deny on `fetch_url`
+- **Then** the page shows "Couldn't confirm the save. Checking…", then Deny with "Showing what is stored now."
+- **But** the row never shows the old value as if the save had failed
+
+#### Scenario: S-84 Set all skips the always-ask tool and says so
+
+**Traces to**: User Story 1, Acceptance Scenario 2
+**Category**: Edge Case
+
+- **Given** a group of 12 rows including `set_channel_outbound`
+- **When** the person opens Set all
+- **Then** the Allow item reads "Set 11 of 12 to Allow"
+- **And** after choosing it, 11 rows show Allow, `set_channel_outbound` keeps its value, and a note reads "1 skipped: Send to channel always asks."
+
+#### Scenario: S-85 A denied skill's files cannot be read or run by the agent
+
+**Traces to**: User Story 2, Acceptance Scenario 9
+**Category**: Error Path
+
+- **Given** Mia granted `notes-helper`, Mia's own value for it Deny, and `edit_skill` denied for Mia
+- **When** Mia reads `notes-helper/SKILL.md` with `read_file` and runs its helper script with `bash`
+- **Then** both are refused as for an ungranted skill
+- **And** the kernel grant list for Mia's turn does not contain the `notes-helper` folder
+
+#### Scenario: S-86 An Ask skill's files open only after approval
+
+**Traces to**: User Story 2, Acceptance Scenario 9
+**Category**: Edge Case
+
+- **Given** `deep-research` at Ask, granted to Mia, not yet approved in this chat
+- **When** Mia reads its `SKILL.md` with `read_file`
+- **Then** the read is refused
+- **And** after the person approves a `Skill` load of it, the same read succeeds in that chat
+
+#### Scenario: S-87 An editor agent can read but not use a denied skill
+
+**Traces to**: User Story 2, Acceptance Scenario 9
+**Category**: Edge Case
+
+- **Given** Omnipus allowed `edit_skill` and skill `notes-helper` Deny for Omnipus
+- **When** Omnipus reads `notes-helper/SKILL.md` with `read_file` and then loads it with `Skill`
+- **Then** the read succeeds and the load is refused naming the skill setting
+
+#### Scenario Outline: S-88 External tools without global coverage are migrated exactly
+
+**Traces to**: User Story 8, Acceptance Scenario 1
+**Category**: Edge Case
+
+- **Given** before the upgrade the global map has `<global>`, Mia has `<agent>` for `mcp_github_read`, God Mode off, and `github` assigned to Mia
+- **When** Omnipus starts on this release
+- **Then** the global map gains `<written>` and Mia's effective value for `mcp_github_read` is `<after>`
+- **And** Mia's own entries are unchanged
+
+**Examples**: every row of Dataset D8.
+
+#### Scenario: S-89 A Full skill that needs approval is not injected [pending ST-Q1]
+
+**Traces to**: User Story 5, Acceptance Scenario 8
+**Category**: Error Path
+
+- **Given** `notes-helper` at Full, granted to Mia, unverified, trust Ask, no approval, sentinel "ZEBRA-NOTES-3" in its instructions
+- **When** a new chat with Mia starts and Mia's first request is captured
+- **Then** the request does not contain "ZEBRA-NOTES-3" and lists `notes-helper` with its description
+- **And** a scheduled run of Mia's captured request does not contain it either
+
+#### Scenario: S-90 Full skills that do not fit stop the turn with a reason [pending ST-Q1]
+
+**Traces to**: User Story 5, Acceptance Scenario 11
+**Category**: Error Path
+
+- **Given** a scripted model with an 8,000-token context and Mia with Full skills totalling about 9,000 tokens
+- **When** the person sends a message to Mia
+- **Then** no request is sent to the model
+- **And** the chat shows "The skills set to Full for Mia need about 9,000 tokens, more than <model> can take with this chat. Set some of them to Name and short description in Skills & Tools, or choose a model with a larger context."
+
+#### Scenario: S-91 A level change does not unload a tool from a running chat
+
+**Traces to**: User Story 5, Acceptance Scenario 10
+**Category**: Edge Case
+
+- **Given** a chat in which Mia loaded `browser_evaluate` through ToolSearch
+- **When** the person sets `browser_evaluate` to Hidden and Mia's next turn starts
+- **Then** that chat's request still carries the `browser_evaluate` definition
+- **And** a new chat's first request does not list `browser_evaluate`
+
+#### Scenario: S-92 A demoted built-in becomes searchable
+
+**Traces to**: User Story 5, Acceptance Scenario 10
+**Category**: Edge Case
+
+- **Given** `read_file` at Full (its starting level)
+- **When** the person sets it to Hidden
+- **Then** a new chat's first request does not list `read_file`
+- **And** ToolSearch with query "read file" returns `read_file`
+
+#### Scenario: S-93 A trust approval covers one version only [pending ST-Q2]
+
+**Traces to**: User Story 4, Acceptance Scenario 4
+**Category**: Edge Case
+
+- **Given** trust Ask and `notes-helper` approved with "Approve this version"
+- **When** one of its files changes and Mia loads it again
+- **Then** a trust card appears again
+- **And** with God Mode on and Auto-approve on, the trust card still appears
+
+#### Scenario: S-94 The install publishes exactly what was reviewed
+
+**Traces to**: User Story 7, Acceptance Scenarios 4, 10
+**Category**: Error Path
+
+- **Given** a review of uploaded `weather.zip` with revision R1
+- **When** the staged files change before Install and the person presses Install
+- **Then** the answer is "The skill changed after review. Review it again." and nothing is installed
+- **And** pressing Cancel before Install discards the staged copy and shows "Nothing was installed."
+
+#### Scenario: S-95 A direct install under trust Ask needs a review
+
+**Traces to**: User Story 4, Acceptance Scenario 3
+**Category**: Error Path
+
+- **Given** trust Ask
+- **When** a client calls `POST /skills/install` for an unverified skill without `review_id`
+- **Then** the answer is 409 "Review needed: this skill is unverified, and unverified skills are set to Ask. Review it in Skills & Tools first." and nothing is installed
+
+#### Scenario: S-96 ToolSearch finds a Hidden skill and labels it [pending ST-Q6]
+
+**Traces to**: User Story 5, Acceptance Scenario 4
+**Category**: Happy Path
+
+- **Given** `deep-research` granted to Mia, Allow, at Hidden
+- **When** Mia calls ToolSearch with "research sources"
+- **Then** a result line starts with "[skill] deep-research" and says "Load it with the Skill tool."
+- **And** the skill is not loaded by the search
+- **But** a skill Denied for Mia is not returned
+
+#### Scenario: S-97 An unrelated agent update keeps skill overrides
+
+**Traces to**: User Story 11, Acceptance Scenario 5
+**Category**: Error Path
+
+- **Given** Mia with skill override `plan: deny`
+- **When** `PUT /agents/mia` sends `tools_cfg` with only `mcp`
+- **Then** Mia's `plan: deny` override is still stored
+
+#### Scenario: S-98 Write with Omnipus ends with a categorised skill
+
+**Traces to**: User Story 7, Acceptance Scenario 9
+**Category**: Happy Path
+
+- **Given** a scripted model driving Omnipus's write-skill workflow
+- **When** the person approves the card for skill `trip-notes` with category Lifestyle
+- **Then** `GET /skills` lists `trip-notes` with category `lifestyle` and no agent granted
+- **And** `trip-notes/SKILL.md` contains no category field added by Omnipus
+
+#### Scenario: S-99 Each changed key is audited once
+
+**Traces to**: User Story 1, Acceptance Scenario 1
+**Category**: Happy Path
+
+- **Given** an empty audit log
+- **When** the person sets `bash` to Deny, sets `plan` to Ask, runs Set all Allow on a group of 5 that changes 5 rows, re-sends `plan: ask`, and sends one refused request
+- **Then** the audit log holds exactly 7 change entries, each with actor, key, old and new value
+
+#### Scenario: S-100 Focus after the focused row leaves a filtered list
+
+**Traces to**: User Story 6, Acceptance Scenario 6
+**Category**: Edge Case
+
+- **Given** Permission filter = Ask showing 3 rows, focus on the Deny badge of the last row
+- **When** the person presses Enter and the save is acknowledged
+- **Then** focus moves to the Deny badge of the previous row
+- **And** the status region announces "<name> set to Deny. It no longer matches the filter. 2 shown."
+
+#### Scenario: S-101 Today's Settings trust control still works at this landing
+
+**Traces to**: User Story 4, Acceptance Scenario 6
+**Category**: Edge Case
+
+- **Given** this landing without the Settings package
+- **When** the person chooses Block unverified in today's Settings trust control
+- **Then** it saves, and Skills & Tools shows trust Deny
+
+#### Scenario: S-102 A project skill and an installed skill with one name keep separate values
+
+**Traces to**: User Story 2, Acceptance Scenario 7
+**Category**: Edge Case
+
+- **Given** installed `notes` at Allow and project skill `notes` in workspace W1 at Deny (`project:w1/notes`)
+- **When** an agent in W1 loads `notes`
+- **Then** the skill that `ResolveSkillName` picks decides which value applies, and the other value is unchanged
+
+#### Scenario: S-103 create_agent sets skill permissions like the screen
+
+**Traces to**: User Story 11, Acceptance Scenario 1
+**Category**: Happy Path
+
+- **Given** global `plan` at Allow
+- **When** Omnipus calls `create_agent` with `skills: ["plan"]` and `skill_policy_changes: {set: {plan: ask}}`
+- **Then** the new agent's override `plan: ask` is stored and `get_agent` reports it
+
+#### Scenario: S-104 A category can be chosen once for an Uncategorised skill
+
+**Traces to**: User Story 7, Acceptance Scenario 8
+**Category**: Alternate Path
+
+- **Given** skill `trip-notes` stored as Uncategorised
+- **When** the person chooses "Choose category" → Lifestyle, and later calls `PUT /skills/trip-notes/category` with `research`
+- **Then** the first saves Lifestyle and the second is refused with 409 "The category is set at install and cannot be changed."
+
 ---
 
 ## Test-Driven Development Plan
@@ -1473,16 +1913,22 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | ST-03 | US-1 AS5 | Set all → Allow on the Plans group | autonomous-plan confirm; Cancel changes nothing | execute_plan confirm | Cancel then reload | stable |
 | ST-04 | US-2 AS1–4 | `deep-research` Ask; Mia loads it in chat; Always Allow; load again | card naming the skill; second load without card | skill load resolution | repeat in a new chat (card again) | stable |
 | ST-05 | US-2 AS3 | `deep-research` Ask; scheduled task of Mia loads it | refused with the unattended text; no card | unattended path | check task conversation text | needs scheduler time control |
-| ST-06 | US-2 AS7, US-5 AS7 | Upgrade a saved pre-release data folder; open the page and two agents | permissions and levels as in S-16 and S-41 | migration | compare listed values to the saved config | stable with fixture |
+| ST-06 | US-2 AS7, US-5 AS7 | Capture Mia's and Jim's first-turn requests (scripted model, request log) on a saved pre-release data folder; upgrade; capture again | requests identical tool by tool and skill by skill, except the SC-003 named changes; a mutation that resets one migrated level makes the comparison fail | migration | diff the two captured requests, not the config | stable with fixture |
 | ST-07 | US-3 AS1–3 | Open Mia → Tools | no presets; Skills group with granted skills; Allow disabled where global Ask | agent editor | open Jim and a custom agent too | stable |
 | ST-08 | US-3 AS5 | Omnipus → Tools → a skill → Ask | refused with the Omnipus text | Omnipus guard | Deny is accepted | stable |
-| ST-09 | US-4 AS2–3 | Trust Deny; upload an unverified zip; ask Omnipus to install an unverified catalog skill | both refused; nothing installed | trust at install | list skills folder afterwards | stable |
+| ST-09 | US-4 AS2–3 | Trust Deny; (a) upload an unverified zip on screen; (b) ask Omnipus to install an unverified catalog skill; (c) `POST /skills/install` directly with a review id; then trust Ask and (d) direct `POST /skills/install` without a review | (a)–(c) refused, nothing installed; (d) 409 | trust at install | list the skills folder after each | stable |
 | ST-10 | US-4 AS4 | Trust Ask, Auto-approve on; Mia loads an unverified granted skill | card naming the skill as unverified | trust at load | repeat with God Mode on | stable |
 | ST-11 | US-4 AS6 | Start with stored `warn_unverified` | trust shows Ask; audit has one entry | trust migration | read audit log | stable with fixture |
-| ST-12 | US-5 AS2–4 | Set `serve_web` to each level; inspect the next request Mia sends (debug request log) | matches S-38 | manifest | ToolSearch finds Hidden | needs request capture |
-| ST-13 | US-5 AS8 | `plan` Full; new chat with Mia; ask what the plan skill says without loading | answers from the instructions with no `Skill` call in the transcript | skill menu / Full | check transcript for no `Skill` call | model-dependent, keep manual |
+| ST-12 | US-5 AS2–4, AS10 | Set `serve_web` to each level; capture the next request Mia sends; load it, then set Hidden and capture again; demote `read_file` to Hidden | matches S-38, S-91, S-92 | manifest | ToolSearch finds Hidden and demoted tools | needs request capture |
+| ST-13 | US-5 AS8, US-5 AS11 | A test skill with sentinel "ZEBRA-PLAN-7": Full + Allow → capture first request; Full + Ask → capture (sentinel absent until approval); several large Full skills → too-large text | sentinel present only when allowed; too-large text shown, nothing sent | Full / consent / budget | the captured request, never the model's answer | stable with scripted model |
 | ST-14 | US-6 AS1–5 | Open page; search "browser"; Escape; "zzzz" | as S-45 to S-49 | page | same on phone width | stable |
-| ST-15 | US-7 AS2–3 | Write with Omnipus online and offline | chat opens with "Write a new skill" and `write-skill` loads; offline warning, nothing sent | workflow start | offline via disabled network | stable |
+| ST-15 | US-7 AS2–3, AS9 | Write with Omnipus online: complete the card with category Research, approve; offline: press again | online: a new skill is listed under Research with no agent granted; offline warning, nothing sent | workflow start to published skill | reload Skills tab and check group and category | stable |
+| ST-19 | US-2 AS9 | Mia granted `notes-helper` (Deny for Mia), `edit_skill` denied; ask Mia to read its SKILL.md with a file tool and to run its helper | both refused; then set Allow: both work | C-11 E6/E7 | repeat with Ask (refused until approved) | stable |
+| ST-20 | US-1 AS9 | Two browser tabs: A denies `send_email`, B sets `plan` Ask; reload both | both stored | per-key save | read `GET /security/permissions` | stable |
+| ST-21 | US-4 AS4 | Trust Ask, approve `notes-helper` v1; change one file; load again | second load asks again | trust approvals | God Mode on, repeat | stable |
+| ST-22 | US-8 AS1, C-18 | Upgrade fixtures for each C-18 row | each row's "Agent after" holds; no agent entry written | MCP migration | diff agent configs before/after | stable with fixture |
+| ST-23 | FR-040 | Change one tool, one skill, a Set all of 5, a no-op, a refused request | audit has exactly 1 + 1 + 5 + 0 + 0 entries with old/new | audit | read the audit log | stable |
+| ST-24 | US-4 AS6, C-22 | On the same build, change trust in today's Settings screen, then on Skills & Tools | both screens show the same stored value | first-landing compatibility | reload both | stable |
 | ST-16 | US-7 AS4–7 | Install from catalog with and without category; upload a file with `metadata.category` | category required; preselected; grouped | install review | reload and check group | stable |
 | ST-17 | US-8 AS1 | Add a service with tools | all tools Ask | MCP add | restart and check still Ask | needs a test service |
 | ST-18 | US-10 AS3, US-9 AS1 | 390 × 844: every tab, Web & Search panel | 44 px targets, no sideways scroll; panel works | phone, panel | measure targets | stable |
@@ -1498,7 +1944,7 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | 5 | TestPutSkillTrust_RefusesLegacy | Integration Go | S-36 | 400 text |
 | 6 | TestInstall_TrustDenyRefusesUnverified (REST and install_skill) | Integration Go | S-27, S-28 | nothing on disk afterwards |
 | 7 | TestSkillVerified_LocalChangeUnverifies | Integration Go | S-34 | stored verification + local change |
-| 8 | TestPutToolPolicies_SkillAndVisibilityMembers | Integration Go | S-01, S-09, S-39 | Dataset D6 |
+| 8 | TestPermissionsPatch_SkillAndVisibilityMembers | Integration Go | S-01, S-09, S-39 | Dataset D6 |
 | 9 | TestVisibilityStartingLevels_Upgrade | Unit Go | S-41 | Dataset D7 |
 | 10 | TestManifest_LevelsShapeTurn | Unit Go | S-38, S-40, S-44 | Dataset D2 |
 | 11 | TestSkillsSummary_Levels | Unit Go | S-42, S-43 | menu per level |
@@ -1523,6 +1969,24 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | 30 | SkillsToolsPage.states.test | Unit TS | S-66, S-67 | |
 | 31 | skills-tools.spec.ts | E2E | S-03, S-15, S-20, S-57, S-58, S-60 to S-65, S-68, S-69 | targeted spec file |
 | 32 | Rider tests (one each) | mixed | S-75 to S-81 | per rider |
+| 33 | TestSkillAuthority_FoldersFollowOutcome | Integration Go | S-85, S-86, S-87 | E6/E7 app-level and kernel grant lists |
+| 34 | TestSkillConsent_Table | Unit Go | S-10, S-11, S-30, S-31, S-93 | Dataset D10 |
+| 35 | TestInstallReview_StageBindsRevision | Integration Go | S-94, S-95 | C-13 |
+| 36 | TestFullSkills_SentinelAndBudget | Integration Go (scripted provider, request capture) | S-42, S-89, S-90 | Dataset D9 |
+| 37 | TestVisibilityTransitions | Integration Go | S-91, S-92 | Dataset D11 |
+| 38 | TestPermissionsPatch_PerKey | Integration Go | S-82, S-99 | Dataset D6 |
+| 39 | TestMcpMigration_CoverageMatrix | Unit Go | S-88 | Dataset D8 |
+| 40 | TestProjectSkillKeys | Unit Go | S-102 | C-19 |
+| 41 | TestToolSearch_FindsSkills | Integration Go | S-96 | C-17 |
+| 42 | TestUpdateAgentToolsCfg_PreservesSkillPolicies; TestCreateAgent_SkillPolicyChangesParity | Integration Go | S-97, S-103 | C-21 |
+| 43 | TestWriteSkillWorkflow_PublishesCategorisedSkill; TestEditSkill_SetCategoryOnce | Integration Go | S-98, S-104 | C-21 |
+| 44 | SkillsToolsPage.saveStates.test | Unit TS | S-83 | Dataset D12 |
+| 45 | SkillsToolsPage.focus.test | Unit TS | S-100 | |
+| 46 | LegacySkillTrust.compat.test | Integration Go | S-101 | C-22 |
+
+**Positive controls (MAJ-014).** Each of tests 33, 34, 36, 37, 38 and the migration tests ships with a recorded mutation probe run by CHECK: remove the outcome filter from `LoadableFolders`, skip the trust floor, inject Full unconditionally, keep the old tier lists, write the full map instead of the named keys, drop one audit call, reset one migrated value. Each probe must turn its test red. Expected values come from this spec and from literal pre-upgrade fixtures, never from calling the new resolver or builder.
+
+**Execution checklist.** Targeted Go tests with `heavy --local` only when needed; `npm run typecheck` (never bare `tsc`); the design-system gate and the full suites run in CI at the cut, which is the authority.
 
 ### Test Datasets
 
@@ -1540,7 +2004,7 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | 6 | allow, none, ask, no, off | trust ask | ask | BDD Scenario: S-30 | |
 | 7 | allow, none, allow, no, off | trust allow | allow | BDD Scenario: S-32 | |
 | 8 | ask, none, allow, no, on | God Mode floors global | allow | BDD Scenario: S-31 | |
-| 9 | allow, none, ask, no, on | trust survives God Mode | ask | BDD Scenario: S-31 | FQ-2 |
+| 9 | allow, none, ask, no, on | trust survives God Mode | ask (trust card) | BDD Scenario: S-31 | [pending ST-Q2] |
 | 10 | allow, ask, ask, yes, on | per-agent survives God Mode | ask | BDD Scenario: S-19 | as for tools |
 | 11 | allow, none, deny, yes (built-in), off | built-in verified | allow | BDD Scenario: S-35 | |
 | 12 | deny, allow, allow, yes, on | God Mode floors global deny | allow | BDD Scenario: S-76 | same rule as tools today |
@@ -1549,7 +2013,7 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | 15 | upgrade: Skill global ask, agent none | upgrade | skill global ask | BDD Scenario: S-16 | |
 | 16 | upgrade: Skill global allow, agent deny | upgrade | skill global allow, agent deny (granted skills) | BDD Scenario: S-16 | |
 
-#### Dataset D2: Tool level → what the agent is sent (Load tools on demand on unless stated)
+#### Dataset D2: Tool level → what the agent is sent (new chat, nothing loaded, unless stated)
 
 | # | Input | Boundary Type | Expected Output | Traces to | Notes |
 |---|---|---|---|---|---|
@@ -1559,8 +2023,10 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | 4 | name_only | middle | name only, no description | BDD Scenario: S-38 | |
 | 5 | hidden, ToolSearch by keyword | bottom | not listed; found and loaded | BDD Scenario: S-38 | |
 | 6 | full, effective deny | deny wins | not listed, not found | BDD Scenario: S-40 | |
-| 7 | hidden, Load tools on demand off | switch off | definition in tool list | BDD Scenario: S-44 | |
-| 8 | locked tool, PUT hidden | locked | 400, nothing saved | BDD Scenario: S-39 | |
+| 7 | old install with Load tools on demand off | migrated | static tools Full, definition in tool list | BDD Scenario: S-44 | [pending ST-Q4]; under A: hidden + switch off → definition in tool list |
+| 8 | `browser_evaluate` loaded in a running chat, then set Hidden | level change mid-chat | still loaded in that chat; not listed in a new chat | BDD Scenario: S-91 | C-15 |
+| 9 | `read_file` (old Full) set Hidden | demoted built-in | not listed; ToolSearch "read file" finds it | BDD Scenario: S-92 | C-15 |
+| 10 | locked tool, PATCH hidden | locked | 400, nothing saved | BDD Scenario: S-39 | |
 
 #### Dataset D3: Skill trust values
 
@@ -1570,10 +2036,12 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | 2 | stored `warn_unverified` | legacy | ask | BDD Scenario: S-33 | |
 | 3 | stored `allow_all` | legacy | allow | BDD Scenario: S-33 | |
 | 4 | stored empty | empty | ask | BDD Scenario: S-33 | |
-| 5 | PUT `deny` | valid | 200, deny | BDD Scenario: S-27 | |
-| 6 | PUT `warn_unverified` | legacy on wire | 400 "Use allow, ask or deny." | BDD Scenario: S-36 | |
-| 7 | PUT `Deny` | wrong case | 400 | BDD Scenario: S-36 | case-sensitive as today |
-| 8 | PUT `allow` | warning | 200 with warning text | BDD Scenario: S-32 | C-3 |
+| 5 | PATCH `skill_trust: deny` | valid | 200, deny | BDD Scenario: S-27 | |
+| 6 | PATCH `skill_trust: warn_unverified` | legacy on new endpoint | 400 "Use allow, ask or deny." | BDD Scenario: S-36 | |
+| 7 | PATCH `skill_trust: Deny` | wrong case | 400 | BDD Scenario: S-36 | case-sensitive as today |
+| 8 | PATCH `skill_trust: allow` | warning | 200; page shows the warning callout | BDD Scenario: S-32 | |
+| 9 | legacy `PUT /security/skill-trust` `warn_unverified` | old Settings screen | 200; stored `ask`; GET legacy returns `warn_unverified` | BDD Scenario: S-101 | C-22 |
+| 10 | stored value already `ask`, start twice | repeat migration | no rewrite, no audit entry | BDD Scenario: S-33 | idempotent |
 
 #### Dataset D4: Set all scope and count
 
@@ -1585,6 +2053,10 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | 4 | group with Tool search, Set all Deny | fixed row | all but Tool search change | BDD Scenario: S-06 | |
 | 5 | group with execute_plan, Set all Allow | confirm | confirm first; Cancel → 0 change | BDD Scenario: S-05 | |
 | 6 | level Set all, group with a locked tool | locked row | locked row unchanged | BDD Scenario: S-39 | |
+| 7 | group with `set_channel_outbound`, Set all Allow, 12 rows | always-ask row | 11 change; label "Set 11 of 12 to Allow"; note names the skipped row | BDD Scenario: S-84 | C-20 |
+| 8 | Omnipus agent tab, Set all Ask | Omnipus rule | control disabled with the Omnipus text; 0 change | BDD Scenario: S-22 | C-20 |
+| 9 | two Set all clicks 100 ms apart | race | 2 requests, in order; final rows = second response's stored maps | BDD Scenario: S-82 | C-16 |
+| 10 | filter Permission = Ask, Set all Deny empties the group | focused last result | focus on group header; status announces "0 shown" | BDD Scenario: S-100 | |
 
 #### Dataset D5: Install category
 
@@ -1597,30 +2069,117 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | 5 | `install_skill` `category: games` | invalid | refused naming allowed values | BDD Scenario: S-72 | |
 | 6 | `install_skill` `category: lifestyle` | valid | Lifestyle | BDD Scenario: S-71 | |
 
-#### Dataset D6: `PUT /security/tool-policies` validation
+#### Dataset D6: `PATCH /security/permissions` validation
 
 | # | Input | Boundary Type | Expected Output | Traces to | Notes |
 |---|---|---|---|---|---|
-| 1 | `skill_policies: {plan: deny}` | valid | 200; only `plan` changed | BDD Scenario: S-09 | merge |
+| 1 | `skill_policies: {plan: deny}` | valid | 200; only `plan` changed; 1 audit entry | BDD Scenario: S-09 | |
 | 2 | `skill_policies: {nope: deny}` | unknown key | 400, nothing saved | BDD Scenario: S-07 | |
-| 3 | `skill_policies: {}` | empty | 200, nothing changed | BDD Scenario: S-09 | merge never deletes |
-| 4 | no `skill_policies` member | omitted | stored values unchanged | BDD Scenario: S-01 | |
+| 3 | `skill_policies: {}` with `policies: {bash: ask}` | empty member | 200, only `bash` changed | BDD Scenario: S-82 | |
+| 4 | `{}` | nothing | 400 "Nothing to change." | BDD Scenario: S-07 | |
 | 5 | `visibility: {AskUserQuestion: hidden}` | locked | 400 lock text | BDD Scenario: S-39 | |
 | 6 | `policies: {ToolSearch: deny}` | fixed | 400 "has no permission of its own" | BDD Scenario: S-06 | |
 | 7 | `skill_visibility: {plan: full}` | valid | 200 | BDD Scenario: S-42 | |
-| 8 | `skill_policies: {PLAN: ask}` | letter case | 200, applies to `plan` | BDD Scenario: S-09 | skill identity ignores case |
+| 8 | `skill_policies: {PLAN: ask}` | letter case | 200, applies to `plan` | BDD Scenario: S-09 | |
+| 9 | `skill_policies: {plan: ask, PLAN: deny}` | duplicate | 400 "`plan` is listed twice.", nothing saved | BDD Scenario: S-07 | |
+| 10 | `skill_policies: {plan: null}` | null | 400 naming `plan` | BDD Scenario: S-07 | |
+| 11 | `{plan: deny}` valid + `{nope: deny}` invalid in one request | atomic | 400, `plan` unchanged | BDD Scenario: S-07 | |
+| 12 | `policies: {set_channel_outbound: allow}` | always-ask | 400 | BDD Scenario: S-84 | |
+| 13 | tab A `policies: {send_email: deny}`, then tab B `skill_policies: {plan: ask}` | different keys | both stored | BDD Scenario: S-82 | CRIT-003 |
+| 14 | tab A `policies: {bash: deny}`, tab B `policies: {bash: allow}` | same key | stored `allow` (later); tab A shows `allow` after its next response or focus | BDD Scenario: S-82 | |
+| 15 | `skill_policies: {plan: deny}` when stored `deny` | no-op | 200; no audit entry | BDD Scenario: S-99 | |
+| 16 | `skill_policies: {"project:w1/notes": ask}` | project key | 200 | BDD Scenario: S-102 | C-19 |
 
-#### Dataset D7: Starting levels at upgrade
+#### Dataset D7: Starting levels at upgrade (rewritten in round 1, MAJ-004)
+
+Old behaviour comes from `pkg/tools/manifest.go::ToolManifestTier`, `::ToolManifestVisibility`, `pkg/agent/loop_mcp.go::serverIsDeferred` and `pkg/agent/tool_manifest.go::buildCompressedToolDefs` at `4e34afa416`. Each row also needs a literal captured request from the old build as its fixture (ST-06); these levels are the spec's oracle, the captures check them.
+
+| # | Input (compressed, discovery, deferred, preview_all_lazy, tool) | Boundary Type | Expected Output (level) | Traces to | Notes |
+|---|---|---|---|---|---|
+| 1 | on, –, –, off, `read_file` (in the 36) | full list | full | BDD Scenario: S-41 | |
+| 2 | on, –, –, off, `serve_web` | previewed | name_and_description | BDD Scenario: S-41 | |
+| 3 | on, –, –, off, `browser_evaluate` | search-only | hidden | BDD Scenario: S-41 | |
+| 4 | on, –, –, on, `browser_evaluate` | old switch | name_and_description | BDD Scenario: S-41 | |
+| 5 | on, on, unset, off, MCP tool | deferred server | hidden (server key) | BDD Scenario: S-41 | |
+| 6 | on, on, `false`, off, MCP tool | registered visible but lazy | hidden (server key) | BDD Scenario: S-41 | round 0 said full: wrong |
+| 7 | on, on, `false`, on, MCP tool | visible + preview | name_and_description (server key) | BDD Scenario: S-41 | |
+| 8 | on, on, unset, on, MCP tool | registered hidden | hidden (server key) | BDD Scenario: S-41 | Inferred from `RegisterMCP` / `GetAll`: hidden-registered tools never reach the preview; the old-build capture is the authority |
+| 9 | off, –, –, any, any static tool | uncompressed | full | BDD Scenario: S-44 | [pending ST-Q4] |
+| 10 | off, on, unset or `true`, any, MCP tool | effectively deferred | hidden (server key) | BDD Scenario: S-41 | |
+| 11 | off, off, `true`, any, MCP tool | discovery off | full (server key) | BDD Scenario: S-41 | `serverIsDeferred` returns false when discovery is off |
+| 12 | off, on, `false`, any, MCP tool | not deferred | full (server key) | BDD Scenario: S-41 | |
+| 13 | server offline at upgrade, rows 5–12 | offline | server key written from its stored config; its tools get it when they appear | BDD Scenario: S-41 | |
+| 14 | every skill | skills | name_and_description | BDD Scenario: S-41 | |
+| 15 | any row, second start | repeat | nothing written | BDD Scenario: S-41 | idempotent |
+
+#### Dataset D8: External tools migration (C-18) [pending ST-Q5]
+
+| # | Input (global map, Mia's entry for `mcp_github_read`, God Mode) | Boundary Type | Expected Output (written; Mia after) | Traces to | Notes |
+|---|---|---|---|---|---|
+| 1 | `mcp_github_*: allow`, none, off | covered exact server key | nothing; allow | BDD Scenario: S-88 | |
+| 2 | `mcp_*: deny`, none, off | covered by broader key | nothing; deny | BDD Scenario: S-88 | round-0 rule would have made it ask |
+| 3 | `mcp_github_read: deny` only, none, off | partly covered | `mcp_github_*: ask`; deny (exact wins) | BDD Scenario: S-88 | other github tools: ask |
+| 4 | no match, none, off | uncovered | `mcp_github_*: ask`; ask | BDD Scenario: S-88 | named change deny → ask |
+| 5 | no match, `allow`, off | agent-only | `mcp_github_*: ask`; ask | BDD Scenario: S-88 | named change allow → ask |
+| 6 | no match, `deny`, off | agent-only | `mcp_github_*: ask`; deny | BDD Scenario: S-88 | |
+| 7 | no match, `allow`, on | God Mode | `mcp_github_*: ask`; allow | BDD Scenario: S-88 | |
+| 8 | `mcp_git_*: deny`, none, off; service `git_hub` | prefix overlap | nothing for `git_hub`; deny | BDD Scenario: S-88 | probe matches the shorter key |
+| 9 | row 4, second start | repeat | nothing written | BDD Scenario: S-88 | |
+| 10 | new service after upgrade, no match | new | `mcp_<s>_*: ask` | BDD Scenario: S-59 | R30b |
+| 11 | new service after upgrade, `mcp_*: deny` | new, covered | nothing; rows show deny | BDD Scenario: S-59 | |
+
+#### Dataset D9: Full skills, consent and budget (C-14) [pending ST-Q1]
 
 | # | Input | Boundary Type | Expected Output | Traces to | Notes |
 |---|---|---|---|---|---|
-| 1 | `read_file` (in the 36) | full list | full | BDD Scenario: S-41 | |
-| 2 | `serve_web` | previewed | name_and_description | BDD Scenario: S-41 | |
-| 3 | `browser_evaluate` | search-only | hidden | BDD Scenario: S-41 | |
-| 4 | service without `deferred` | default | hidden | BDD Scenario: S-41 | |
-| 5 | service `deferred: false` | explicit | full | BDD Scenario: S-41 | |
-| 6 | `preview_all_lazy: true`, `browser_evaluate` | old switch | name_and_description | BDD Scenario: S-41 | |
-| 7 | every skill | skills | name_and_description | BDD Scenario: S-41 | |
+| 1 | Full, Allow, verified, chat | allowed | sentinel in first request | BDD Scenario: S-42 | |
+| 2 | Full, Ask, verified, chat, not approved | ask | sentinel absent; listed with description | BDD Scenario: S-89 | |
+| 3 | Full, Allow, unverified, trust Ask, no approval | trust ask | sentinel absent | BDD Scenario: S-89 | |
+| 4 | row 3 after "Approve this version" | approved | sentinel present from next turn | BDD Scenario: S-89 | |
+| 5 | Full, Ask, unattended run | unattended | sentinel absent; load refused | BDD Scenario: S-89 | |
+| 6 | Full, Deny | deny | not listed, sentinel absent | BDD Scenario: S-89 | |
+| 7 | Full total exactly fits (context 8,000, pinned+Full+reserve = 8,000) | just fits | request sent | BDD Scenario: S-90 | |
+| 8 | one token over | one over | not sent; C-14 text | BDD Scenario: S-90 | |
+| 9 | fits on model A, switch to smaller model B | model switch | next turn not sent; C-14 text | BDD Scenario: S-90 | |
+| 10 | a Full skill grows past the limit between turns | content growth | next turn not sent | BDD Scenario: S-90 | |
+
+#### Dataset D10: Consent (C-12)
+
+| # | Input (kind, Auto, God, remembered, revision) | Boundary Type | Expected Output | Traces to | Notes |
+|---|---|---|---|---|---|
+| 1 | ordinary Ask, off, off, none | card | approval card with Always Allow | BDD Scenario: S-10 | |
+| 2 | ordinary Ask, on, off, none | Auto | loads, no card | BDD Scenario: S-10 | `Skill` is AutoRuns |
+| 3 | ordinary Ask, off, off, Always Allow same revision | remembered | loads, no card | BDD Scenario: S-11 | |
+| 4 | ordinary Ask, off, off, Always Allow older revision | changed | card again | BDD Scenario: S-11 | |
+| 5 | trust Ask, on, on, none | trust | trust card, no Always Allow | BDD Scenario: S-31 | [pending ST-Q2] |
+| 6 | trust Ask, off, off, approved same revision | approved | loads | BDD Scenario: S-93 | |
+| 7 | trust Ask, off, off, approved older revision | changed | trust card | BDD Scenario: S-93 | |
+| 8 | trust Ask, person's `/name` | slash | trust card first | BDD Scenario: S-93 | |
+| 9 | ordinary Ask, person's `/name` | slash | loads, no card | BDD Scenario: S-13 | |
+| 10 | any Ask, unattended | unattended | refused, unattended text | BDD Scenario: S-12 | |
+| 11 | card open, then permission set to Deny, then Approve | stale | not loaded; refused naming the setting | BDD Scenario: S-93 | |
+
+#### Dataset D11: Visibility transitions (C-15)
+
+| # | Input | Boundary Type | Expected Output | Traces to | Notes |
+|---|---|---|---|---|---|
+| 1 | loaded tool, level → hidden | demote loaded | stays in that chat; not in new chats | BDD Scenario: S-91 | |
+| 2 | `read_file` full → hidden | demote built-in | searchable | BDD Scenario: S-92 | |
+| 3 | hidden → full | promote | definition from next turn | BDD Scenario: S-38 | |
+| 4 | loaded tool, permission → deny | revoke | gone from next turn, also in that chat | BDD Scenario: S-40 | |
+| 5 | deny → allow | re-allow | listed per level from next turn | BDD Scenario: S-40 | |
+| 6 | skill menu frozen, skill level → name_only | menu cache | next turn's menu shows name only | BDD Scenario: S-43 | |
+
+#### Dataset D12: Save states (C-16)
+
+| # | Input | Boundary Type | Expected Output | Traces to | Notes |
+|---|---|---|---|---|---|
+| 1 | 200 | saved | "Saved" | BDD Scenario: S-01 | |
+| 2 | 503 | saved, not applied | saved-not-applied text + Retry | BDD Scenario: S-08 | |
+| 3 | 400 | refused | "Not saved: …" + stored value | BDD Scenario: S-07 | |
+| 4 | response dropped | unknown | "Couldn't confirm…" then stored value | BDD Scenario: S-83 | |
+| 5 | two clicks, first response arrives after second request starts | ordering | "Saved" shown for each in order; never early | BDD Scenario: S-82 | |
+| 6 | failure after navigating away | late failure | toast with "Open Skills & Tools" | BDD Scenario: S-83 | |
 
 ### Regression Test Requirements
 
@@ -1643,6 +2202,10 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | 4 | Omnipus per-agent `bash: ask` | 422 | 422 | Regression: Omnipus guard |
 | 5 | MCP tool with `mcp_github_*: deny` | deny | deny | Regression: wildcard |
 | 6 | ungranted skill load | refused | refused | Regression: grant gate |
+| 7 | `PUT /security/tool-policies` full map from today's Settings screen | replaces map | replaces map (plus per-key audit) | Regression: legacy endpoint |
+| 8 | ungranted skill folder read by a file tool | refused | refused | Regression: skill authority |
+| 9 | agent with `edit_skill` allowed reads any skill folder | allowed | allowed (editor exception) | Regression: editor read |
+| 10 | `PUT /agents/{id}` with `tools_cfg.mcp` only | builtin policies kept | builtin and skill policies kept | Regression: update preservation |
 
 ---
 
@@ -1651,26 +2214,26 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 ### Page, search and saving (US-1, US-6)
 - **FR-001**: The Skills & Tools page MUST show three tabs with counts — Skills, External tools (MCP), Omnipus tools — opening on Skills.
 - **FR-002**: Each tab MUST show one search field and two flat filters (Permission; What the model sees) on one line, above one grouped list whose groups start collapsed; a search MUST open groups with matches; Escape and the clear button MUST empty it.
-- **FR-003**: A group's Set all MUST change exactly the rows on screen (search and both filters applied), in one save, with the count in its label and accessible name; Tool search, Skill and locked levels MUST be skipped where they have no value to set.
+- **FR-003**: A group's Set all MUST change exactly the rows on screen (search and both filters applied) that can take the chosen value (C-20), in one request, with "<k> of <n>" in its label and accessible name, and MUST name the skipped rows and why.
 - **FR-004**: An empty result MUST show "No <items> match “<text>”" with "Clear search and filters".
 - **FR-005**: A row whose saved value no longer matches the active filter MUST leave the list.
 - **FR-006**: With a "What the model sees" filter on, the page MUST show the denied-items note.
-- **FR-007**: Every value on this page (permission, level, trust, a service's switch) MUST save on its own within 1,000 ms of the click and show "Saved"; the page MUST NOT show a Save bar, Discard, a leave prompt or a Set all confirm.
+- **FR-007**: Every value on this page (permission, level, trust, a service's switch) MUST start saving on its own within 1,000 ms of the click and show "Saved" only when that change is acknowledged (C-16); the page MUST NOT show a Save bar, Discard, a leave prompt or a Set all confirm, other than FR-010's warning [pending ST-Q7].
 - **FR-008**: A refused save MUST show "Not saved: <server reason>." with Retry, and the rows MUST show the stored values.
 - **FR-009**: A 503 save MUST show "Saved, but not applied to running agents yet. Retry applying the change, or restart Omnipus." with Retry.
-- **FR-010**: Any change, single or Set all, that would make `execute_plan` resolve to Allow MUST open the existing autonomous-plan confirm first.
+- **FR-010**: Any change, single or Set all, that would make `execute_plan` resolve to Allow MUST open the existing autonomous-plan confirm first; Cancel changes no row of that action [pending ST-Q7; option B deletes this FR and S-05, ST-03].
 - **FR-011**: Every tool row MUST show exactly one stored value; "Unset" MUST NOT appear.
 - **FR-012**: Tool search and Skill MUST show no permission badges (C-6 `permission_fixed`), with their fixed texts; the server MUST refuse any value but `allow` for them.
 
 ### Per-skill permissions (US-2)
-- **FR-013**: The server MUST store one global permission per installed skill and serve and accept it through `GlobalToolPolicies.skill_policies` (C-2), merging on PUT.
+- **FR-013**: The server MUST store one global permission per skill key (C-19) and serve and change it through `GET/PATCH /security/permissions` (C-2), changing only the keys a request names.
 - **FR-014**: A skill load MUST resolve to the strictest of the global skill value, the agent's own value and, for an unverified skill, the trust value; God Mode MUST floor only the global skill value (C-0, C-3; Dataset D1).
 - **FR-015**: The grant check MUST run before the permission check and keep its current refusal.
-- **FR-016**: An Ask load in an interactive chain MUST raise the normal approval card with the C-9 `skill` object; Always Allow MUST remember it for the chat.
+- **FR-016**: An ordinary Ask load in an interactive chain MUST follow C-12: the normal approval card with the C-9 `skill` object (unless Auto-approve runs it); Always Allow MUST remember it for the chat and the skill's current revision only.
 - **FR-017**: An Ask load in an unattended chain MUST be refused with "Not run: needs approval, and task and plan runs never ask." and no card.
 - **FR-018**: A skill whose effective value is Deny for an agent MUST NOT appear in that agent's skill menu or `Skill` search results.
-- **FR-019**: The first start on this release MUST set every skill's global value to the old global `Skill` value and copy each agent's own old `Skill` value to each skill granted to that agent at that moment; then `Skill`'s own value is fixed at `allow`.
-- **FR-020**: A skill with no stored global value or level MUST get Allow (FQ-3) and `name_and_description`, additively, never overwriting a stored value.
+- **FR-019**: The first start on this release MUST run the C-19 upgrade order once and idempotently: every installed and project skill's global value = the old global `Skill` value; each agent's own old `Skill` value copied to each skill granted to that agent and each project skill on its mounts; then the old `Skill` entries are removed and `Skill` is fixed at `allow`.
+- **FR-020**: A skill key with no stored global value or level MUST get Allow [pending ST-Q3] and `name_and_description`, additively, never overwriting a stored value.
 - **FR-021**: The server MUST store sparse per-agent skill overrides and accept them through `AgentToolsUpdateRequest.skills` (C-4), reporting `AgentToolsResponse.skills`.
 
 ### Agent Tools tab (US-3)
@@ -1681,10 +2244,10 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 - **FR-026**: Judge and Plan Supervisor MUST stay read-only and external workers MUST keep their notice, for skills as for tools.
 
 ### Skill trust (US-4)
-- **FR-027**: Trust MUST use `allow` / `ask` / `deny` on the wire and in storage (C-3); legacy stored values MUST be rewritten once on load (Dataset D3) with one audit entry; legacy values on PUT MUST be refused with 400 "Use allow, ask or deny."
+- **FR-027**: Trust MUST be stored as `allow` / `ask` / `deny` and served that way by `PermissionSettings.skill_trust` (C-2); legacy stored values MUST be rewritten once on load (Dataset D3) with one audit entry; `PATCH` MUST refuse other values with 400 "Use allow, ask or deny."; the legacy `/security/skill-trust` endpoint MUST keep its enum, mapped, until the Settings package retires it (C-22).
 - **FR-028**: The Skills tab MUST open with the "Unverified skills" block: Allow, Ask, Deny badges in that order, all three meanings visible, and the Allow warning callout fully visible after choosing Allow, also at 390 px.
-- **FR-029**: With trust Deny, every install path (screen, `POST /skills/install`, `install_skill`) MUST refuse an unverified skill with the C-3 text and leave nothing installed; the install review MUST disable Install with its own text.
-- **FR-030**: With trust Ask, an unverified skill's load MUST be at least Ask, including under Auto-approve and God Mode (FQ-2); with trust Deny it MUST be refused with the C-3 load text.
+- **FR-029**: With trust Deny, every install path (screen, `POST /skills/install`, `install_skill`) MUST refuse an unverified skill with the C-3 text and leave nothing installed; the install review MUST disable Install with its own text. With trust Ask, an unverified install MUST need a person's review of that exact revision (C-12, C-13); `POST /skills/install` without one → 409.
+- **FR-030**: With trust Ask, an unverified skill's load MUST need a trust approval of its current revision per C-12, including under Auto-approve and God Mode and never satisfied by a remembered Always Allow [pending ST-Q2]; with trust Deny it MUST be refused with the C-3 load text.
 - **FR-031**: `verified` MUST be true only for built-in skills and for registry installs whose hash matched and whose folder has no local changes since (C-5); the install result MUST be stored outside the skill folder.
 - **FR-032**: Every trust change MUST keep its existing audit entry with old and new value.
 
@@ -1693,37 +2256,37 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 - **FR-034**: At the start of a turn, each allowed tool MUST be presented per its level (C-1; Dataset D2).
 - **FR-035**: Tool search, Skill, Ask the user, goal_claim and set_goal MUST have fixed levels with the visible lock reason; the server MUST refuse a change (400).
 - **FR-036**: An item with effective Deny for an agent MUST NOT be listed or found for that agent, whatever its level.
-- **FR-037**: The first start on this release MUST set starting levels per C-6 (Dataset D7) so that no agent's request changes; `MCPServerConfig.deferred` and `preview_all_lazy` MUST no longer be read after migration, with one load warning if present.
-- **FR-038**: Each granted, not-denied skill MUST be presented per its level (C-1), including Full in context from the first turn (FQ-1).
-- **FR-039**: With "Load tools on demand" off, both tool tabs MUST show the C-6 note; every allowed tool is sent in full.
-- **FR-040**: Every change of a skill permission, a tool level or a skill level MUST write one audit entry per changed key with old and new value (C-2).
+- **FR-037**: The first start on this release MUST set starting levels per C-6 and Dataset D7, including per-server levels for external services, so that each agent's first-turn request is unchanged apart from SC-003's named changes; after migration `tools.manifest.compressed`, `preview_all_lazy` and `MCPServerConfig.deferred` MUST no longer be read, with one load warning if present [pending ST-Q4].
+- **FR-038**: Each granted, not-denied skill MUST be presented per its level (C-1); a Full skill's instructions MUST be injected only when its outcome is `allowed` for that agent and chain, and MUST be charged to the request budget, with the C-14 refusal when they do not fit [pending ST-Q1].
+- **FR-039**: The four levels MUST be the only control of what is sent about tools; `set_config` MUST refuse the retired manifest keys (C-21) [pending ST-Q4; under A: with the switch off both tool tabs MUST show the C-6 note].
+- **FR-040**: Every change of a tool permission, a skill permission, a tool level, a skill level or trust — through `PATCH /security/permissions` or the legacy PUT endpoints — MUST write one audit entry per changed key with actor, old and new value, and none for unchanged keys or refused requests (C-2).
 
 ### Adding skills (US-7)
 - **FR-041**: New skill MUST offer "Write with Omnipus", "Upload a skill", "Browse the catalog"; "Write with Omnipus" MUST open the Omnipus chat and send "Write a new skill" with `workflow_start {workflow: W5}`; offline it MUST send nothing and show the C-8-pattern warning.
-- **FR-042**: Every install (catalog and file) MUST pass a review showing name, version, verified or not, the trust value, and a required Category; `metadata.category` MUST preselect when it is a valid value.
+- **FR-042**: Every install (catalog and file) MUST pass a review of the staged files (C-13) showing name, version, verified or not, the trust value, and a required Category; `metadata.category` MUST preselect when it is a valid value; Install MUST publish exactly the reviewed revision.
 - **FR-043**: Each skill's category MUST be stored outside its folder (C-5) and the Skills tab MUST group by category, hiding empty ones, with Uncategorised for the rest.
-- **FR-044**: Each skill row MUST offer More actions: Make a copy; Remove only when not built-in.
+- **FR-044**: Each skill row MUST offer More actions: Make a copy; Remove only when not built-in; "Choose category" only while Uncategorised; "Approve this version" only for an unverified skill under trust Ask.
 
 ### External services (US-8)
-- **FR-045**: Adding a service (screen or `add_mcp_server`) MUST store Ask for all its current and future tools (C-7); the one-time upgrade MUST store a value for every service without one (FQ-6).
+- **FR-045**: Adding a service (screen or `add_mcp_server`) MUST store Ask for all its current and future tools when no global key covers it (C-7); the one-time upgrade MUST follow C-18 exactly, writing only global server keys [pending ST-Q5].
 - **FR-046**: Each service group header MUST carry the switch (acts at once), Test, Edit, Remove; a failing service MUST show its reason with Retry and Edit.
 - **FR-047**: Remove MUST confirm with "Remove this service? Agents that use it lose its tools."; the local-program confirm MUST keep the safe choice as the main, focused button.
 
 ### Tool settings and links (US-9)
 - **FR-048**: The Web & Search group MUST have a Settings button opening the existing search-provider settings in a side panel, behaviour unchanged.
-- **FR-049**: The Shell group MUST link to Settings → Sandbox & network; the Omnipus tools intro MUST link to Settings → Protection; no link MUST point to Settings → Security for permissions.
+- **FR-049**: The Shell group and the Omnipus tools intro MUST link to the Settings addresses that hold shell rules and Auto-approve / God Mode at this landing, with text that names no section that does not exist yet (C-22); no link MUST point to Settings for tool permissions.
 
 ### States, phone, keyboard, wording (US-10)
 - **FR-050**: Each tab MUST show the loading, empty, error and partial states in "UI Screens and States"; no write MUST be possible while a tab is loading or failed.
 - **FR-051**: At 390 × 844 every control MUST be at least 44 × 44 px and the page MUST NOT scroll sideways; rows MUST become cards.
-- **FR-052**: Keyboard and screen-reader behaviour MUST follow "Accessibility and Keyboard".
+- **FR-052**: Keyboard and screen-reader behaviour MUST follow "Accessibility and Keyboard", including the focus rules for rows that leave a filtered list, using the catalogued `tabs` component for the three tabs.
 - **FR-053**: No on-screen text MUST name a retired agent, an issue number, a requirement tag or "contact support".
 
 ### Agent tool parity (US-11)
 - **FR-054**: `set_agent_permissions` MUST accept `skill_policy_changes` (`set`/`remove`) and report clamps like tool changes.
 - **FR-055**: `get_agent` MUST return `skill_permissions` for `fields: ["skill_permissions"]`.
-- **FR-056**: `install_skill` MUST accept an optional `category` from `SkillCategory` and refuse other values naming the allowed ones.
-- **FR-057**: `set_config` MUST refuse `sandbox.skill_policies`, `sandbox.tool_visibility` and `sandbox.skill_visibility` with the existing sandbox reason.
+- **FR-056**: `install_skill` and `edit_skill` `copy` MUST accept an optional `category` from `SkillCategory` and refuse other values naming the allowed ones; `edit_skill` `set_category` MUST work once, only while the skill is Uncategorised (C-21).
+- **FR-057**: `set_config` MUST refuse `sandbox.skill_policies`, `sandbox.tool_visibility` and `sandbox.skill_visibility` with the existing sandbox reason, and the retired manifest keys with "This setting was replaced by levels in Skills & Tools." (C-21).
 
 ### Riders (US-12)
 - **FR-058**: (#1920) No built-in `SKILL.md` MUST name Ava or Admin as an agent; the retired-agent guard SHOULD also scan embedded skill text.
@@ -1734,23 +2297,42 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 - **FR-063**: (#1570) One unreadable skill MUST NOT fail the whole skill list; it shows "Cannot load" with its reason.
 - **FR-064**: (#1576) A copy MUST show its own name, not the source's display name.
 
+### Round-1 additions
+- **FR-066**: Every entry point E1–E9 of C-11 MUST use the single per-skill outcome; a skill whose outcome is `deny` or `ask_pending` MUST NOT be loaded, injected, found by search (`deny` only), readable by file tools or runnable as a helper for that agent, in the app-level guard and in the kernel grant alike; the editor read exception MUST stay read-only and separate.
+- **FR-067**: Consent MUST follow C-12: ordinary Ask uses the existing card, Auto rule and session grants bound to the skill revision; the trust check [pending ST-Q2] uses installation-wide approvals of one revision, offers no Always Allow, and a pending answer MUST be re-checked against the current outcome before use.
+- **FR-068**: Installs MUST go through the C-13 review: stage without publishing, return verified facts and the revision, publish exactly that revision, expire after 15 minutes, and report Cancel and lost answers truthfully.
+- **FR-069**: When an agent's Full skills do not fit its model, the turn MUST NOT be sent and the chat MUST show the C-14 text; nothing is trimmed silently [pending ST-Q1].
+- **FR-070**: A level change MUST apply from the next turn without evicting loaded definitions; a permission Deny MUST remove the item from the next turn; manifest, search membership and skill menu MUST read one visibility authority, and the skill menu MUST rebuild when an outcome or level changes (C-15).
+- **FR-071**: The page MUST implement the C-16 save states, one request per click in click order, an app-level queue that survives in-app navigation, a toast for late failures, and a re-read for unknown outcomes.
+- **FR-072**: `PATCH /security/permissions` MUST change only named keys, validate the whole request first, and follow every rule of C-2; `GET/PUT /security/tool-policies` MUST keep working for today's Settings screen.
+- **FR-073**: ToolSearch MUST also return the skills the agent may use, labelled `[skill]`, without loading them (C-17) [pending ST-Q6].
+- **FR-074**: The external-tool migration MUST follow C-18 and Dataset D8, decide coverage with the resolver's own matching, write only global server keys, and run once.
+- **FR-075**: Project skills MUST have their own keys and lifecycle (C-19); the upgrade MUST run in the C-19 order and be idempotent and restart-safe.
+- **FR-076**: Bulk changes MUST follow C-20: only rows that can take the value change; the label counts them; skipped rows are named.
+- **FR-077**: Every write path of C-21 MUST carry the agent's skill permissions and the skill category: `create_agent` `skill_policy_changes`; preservation in `updateToolsConfig`; `edit_skill` `set_category` and copy `category`; `PUT /skills/{name}/category` once; the write-skill workflow sets the category.
+- **FR-078**: At this landing, today's Settings trust control and tool grid MUST keep working and links MUST resolve (C-22).
+- **FR-079**: Each Full skill row MUST show its approximate size, and the Skills tab MUST warn when an agent's Full total exceeds half of its model's context [pending ST-Q1].
+- **FR-080**: `GET /skills` and agent turns MUST create missing project-skill keys at first sight and remove them with their workspace or folder (C-19).
+
 ### Dependency
 - **FR-065**: This package MUST land before the Settings package is cut (Settings FR-060); at its landing the route MUST render the tool permission grid, web search settings and skill trust.
 
 ## Success Criteria
 
-- **SC-001**: All 81 BDD scenarios pass in RED → GREEN, with the RED logs saved.
-- **SC-002**: Hands-on rows ST-01 to ST-18 PASS on the cut commit, validated independently.
-- **SC-003**: After upgrading a saved pre-release data folder, the request each of 3 sample agents sends on its first turn is identical, tool by tool and skill by skill, to the request before the upgrade (ST-06).
+- **SC-001**: All 104 BDD scenarios pass in RED → GREEN, with the RED logs saved, except scenarios removed by a founder answer to ST-Q1 to ST-Q7.
+- **SC-002**: Hands-on rows ST-01 to ST-24 PASS on the cut commit, validated independently.
+- **SC-003**: After upgrading a saved pre-release data folder, the request each of 3 sample agents sends on its first turn, captured with a scripted model, is identical tool by tool and skill by skill to the request captured before the upgrade (ST-06), except these named changes: trust Warn becomes Ask (unverified skills now ask; C-3); external tools with no global coverage go from Deny or agent-only Allow to Ask (C-18) [pending ST-Q5]; project skills now count as unverified (C-19).
 - **SC-004**: `grep -r "Cautious\|toolPolicyPresets" src/` returns 0 matches in production code.
-- **SC-005**: Every install path refuses an unverified skill under trust Deny (3 of 3 paths, ST-09).
+- **SC-005**: Every install path refuses an unverified skill under trust Deny: screen, agent tool and direct REST, each driven and asserted separately (3 of 3, ST-09 a–c); a direct REST install under trust Ask without a review is refused (ST-09 d).
+- **SC-006**: With a skill Denied (or Ask not approved) for an agent, 0 of 5 paths give that agent its instructions or files: `Skill`, menu/search, Full, file read, helper run (ST-19, ST-13).
+- **SC-007**: Two tabs changing different keys keep both changes in 10 of 10 repetitions (ST-20).
 
 ---
 
 ## Reachability
 
-- **Tool registration**: no new tool. Changed tools: `set_agent_permissions` (`skill_policy_changes`), `get_agent` (`skill_permissions`), `install_skill` (`category`), `add_mcp_server` (Ask key). Their policy entries already exist in `pkg/config/defaults.go` and the agent seeds (`pkg/coreagent/seed.go`); `grep -rl '"set_agent_permissions"' pkg/coreagent/ pkg/config/ pkg/tools/` must stay non-zero. The `Skill` tool's global value becomes fixed `allow`; per-skill values live in `sandbox.skill_policies` (global) and each agent's `tools_cfg.skills.policies` (per agent).
-- **Screen**: `/skills` route (`src/routes/_app/skills.tsx`), sidebar "Skills & Tools" — the rewritten Skills & Tools screen; each agent's profile → Tools tab (`ToolsAndPermissions`); the Omnipus chat for W5.
+- **Tool registration**: no new tool. Changed tools: `set_agent_permissions` (`skill_policy_changes`), `create_agent` (`skill_policy_changes`), `get_agent` (`skill_permissions`), `install_skill` (`category`, stage-then-publish, trust card), `edit_skill` (`copy` `category`, `set_category`), `add_mcp_server` (Ask key only when uncovered), `set_config` (refusals), `ToolSearch` (finds skills [pending ST-Q6]). Their policy entries already exist in `pkg/config/defaults.go` and the agent seeds (`pkg/coreagent/seed.go`); `grep -rl '"set_agent_permissions"' pkg/coreagent/ pkg/config/ pkg/tools/` must stay non-zero. The `Skill` tool's global value becomes fixed `allow`; per-skill values live in `sandbox.skill_policies` (global) and each agent's `tools_cfg.skills.policies` (per agent).
+- **Screen**: `/skills` route (`src/routes/_app/skills.tsx`), sidebar "Skills & Tools" — the rewritten Skills & Tools screen, writing through `GET/PATCH /security/permissions`; the install review (`/skills/install/review`); each agent's profile → Tools tab (`ToolsAndPermissions`); the Omnipus chat for W5 through to a published, categorised skill; the save-failure toast from any screen.
 - **Test plan execution**: RED (qa-lead) writes and runs the tests in "Test Implementation Order" against the pre-change code and saves the failing logs; GREEN (backend-lead and frontend-lead) makes them pass; CHECK audits integrity; the hands-on rows run on the cut commit by uat-tester and uat-validator.
 
 ## User-facing documentation
@@ -1759,14 +2341,17 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 |---|---|---|---|
 | DOC-001 | Global tool permissions move to Skills & Tools; autosave; Set all; no presets; no Unset | `docs/tools.md` | Rewrite "How to change an agent's tool access" (drop preset step 3), the "installation-wide setting" paragraph (now Skills & Tools → Omnipus tools / External tools), "Tools from connected servers" (new tab names, Add service, tools start at Ask) |
 | DOC-002 | Per-skill Allow / Ask / Deny; Skill tool no longer one switch; grants stay | `docs/skills.md` | New section "Allow, ask or deny a skill"; table row for `Skill` in `docs/tools.md` defaults updated |
-| DOC-003 | What the model sees: four levels | `docs/tools.md`, `docs/skills.md` | New section on the levels, what each means for a tool and a skill, locked tools, and the "Load tools on demand" interplay |
-| DOC-004 | Skill trust words and enforcement; Warn becomes Ask | `docs/skills.md` (line with Block/Warn/Allow all), `docs/security.md` | New words, where it applies (install and load), what changed on upgrade, unattended runs refuse |
+| DOC-003 | What the model sees: four levels | `docs/tools.md`, `docs/skills.md` | New section on the levels, what each means for a tool and a skill, locked tools, and that the levels replace "Load tools on demand" [pending ST-Q4] |
+| DOC-004 | Skill trust words and enforcement; Warn becomes Ask; upgrade changes | `docs/skills.md` (line with Block/Warn/Allow all), `docs/security.md` | New words; where it applies (install and load, every path of C-11); approving a version; unattended runs refuse; the named upgrade changes of SC-003; project skills count as unverified; a later grant no longer inherits the old blanket `Skill` value; audit-write failures are logged, not blocking (unchanged) |
+| DOC-010 | Editor exception; Full size limit; level changes in running chats | `docs/skills.md`, `docs/tools.md` | Agents allowed to edit skills can read denied skills' files; Full skills must fit the model; a level change applies from the next turn and does not unload loaded tools |
+| DOC-011 | Install review and categories for written skills | `docs/skills.md` | Review step, expiry, "Choose category" once, write-skill asks for a category |
 | DOC-005 | New skill menu; install review with category; categories | `docs/skills.md` "How to add a skill and grant it" | New steps and tab names |
 | DOC-006 | Agent Tools tab: Skills group, stricter only, no presets | `docs/agents.md`, `docs/tools.md` | Steps and screenshots text |
 | DOC-007 | Agent tools gain skill fields | `docs/tools.md` (get_agent paragraph), `docs/skills.md` | `skill_permissions`, `skill_policy_changes`, `install_skill` category |
 | DOC-008 | Web & Search settings live on Skills & Tools | `docs/tools.md` ("Web search works without setup" bullet) | Point to Omnipus tools → Web & Search → Settings |
+| DOC-012 | One search finds tools and skills [pending ST-Q6] | `docs/tools.md` (ToolSearch paragraph) | ToolSearch also lists skills, typed, and does not load them |
 | DOC-009 | Settings no longer holds tool permissions or trust | `docs/settings.md` | Coordinated with the Settings package DOC-007; this package owns the Skills & Tools side |
-| ADR-TODO-1 | Full skill level reverses ADR-072 OQ3 | `docs/internal/architecture/ADR-072-skill-activation-and-loading.md` | Dated correction by the architect after FQ-1 is answered |
+| ADR-TODO-1 | Full skill level reverses ADR-072 OQ3 | `docs/internal/architecture/ADR-072-skill-activation-and-loading.md` | Dated correction by the architect after ST-Q1 is answered |
 | ADR-TODO-2 | Tier lists become stored levels | `docs/internal/architecture/ADR-071-tool-manifest-tier-redesign.md` | Dated correction |
 
 ## Traceability Matrix
@@ -1784,8 +2369,8 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | FR-009 | US-1 | S-08 | SkillsToolsPage.autosave.test | DOC-001 |
 | FR-010 | US-1 | S-05 | SkillsToolsPage.setAll.test | DOC-001 |
 | FR-011 | US-1 | S-04 | TestMcpAdd_WritesAskWildcard | DOC-001 |
-| FR-012 | US-1, US-2 | S-06, S-15 | SkillsToolsPage.setAll.test; TestPutToolPolicies_SkillAndVisibilityMembers | DOC-002 |
-| FR-013 | US-2 | S-09 | TestPutToolPolicies_SkillAndVisibilityMembers | DOC-002 |
+| FR-012 | US-1, US-2 | S-06, S-15 | SkillsToolsPage.setAll.test; TestPermissionsPatch_SkillAndVisibilityMembers | DOC-002 |
+| FR-013 | US-2 | S-09 | TestPermissionsPatch_SkillAndVisibilityMembers | DOC-002 |
 | FR-014 | US-2 | S-09, S-13, S-19, S-31 | TestSkillPolicyResolution_Table | DOC-002 |
 | FR-015 | US-2 | S-14 | TestSkillPolicyResolution_Table | DOC-002 |
 | FR-016 | US-2 | S-10, S-11 | TestSkillApprovalFrame_CarriesSkill | DOC-002 |
@@ -1807,12 +2392,12 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | FR-032 | US-4 | S-33 | TestSkillTrustMigration_LegacyValues | DOC-004 |
 | FR-033 | US-5 | S-37 | SkillsToolsPage.levels.test | DOC-003 |
 | FR-034 | US-5 | S-38 | TestManifest_LevelsShapeTurn | DOC-003 |
-| FR-035 | US-5 | S-39 | SkillsToolsPage.levels.test; TestPutToolPolicies_SkillAndVisibilityMembers | DOC-003 |
+| FR-035 | US-5 | S-39 | SkillsToolsPage.levels.test; TestPermissionsPatch_SkillAndVisibilityMembers | DOC-003 |
 | FR-036 | US-5 | S-40 | TestManifest_LevelsShapeTurn | DOC-003 |
 | FR-037 | US-5 | S-41 | TestVisibilityStartingLevels_Upgrade | DOC-003 |
 | FR-038 | US-5 | S-42, S-43 | TestSkillsSummary_Levels | DOC-003 |
 | FR-039 | US-5 | S-44 | SkillsToolsPage.levels.test; TestManifest_LevelsShapeTurn | DOC-003 |
-| FR-040 | US-5 | S-09, S-37 | TestPutToolPolicies_SkillAndVisibilityMembers | none — audit log content has no user page beyond `docs/security.md` audit section, covered by DOC-004 |
+| FR-040 | US-1, US-5 | S-99 | TestPermissionsPatch_PerKey | DOC-004 |
 | FR-041 | US-7 | S-52, S-53, S-54 | NewSkillMenu.test; TestWorkflowStart_W5 | DOC-005 |
 | FR-042 | US-7 | S-55, S-56 | InstallReview.category.test | DOC-005 |
 | FR-043 | US-7 | S-57 | skills-tools.spec.ts | DOC-005 |
@@ -1824,7 +2409,7 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | FR-049 | US-9 | S-65 | skills-tools.spec.ts | DOC-008, DOC-009 |
 | FR-050 | US-10 | S-66, S-67 | SkillsToolsPage.states.test | DOC-001 |
 | FR-051 | US-10 | S-68 | skills-tools.spec.ts | none — layout only, no behaviour to document |
-| FR-052 | US-10 | S-69 | skills-tools.spec.ts | none — keyboard follows product-wide conventions |
+| FR-052 | US-10, US-6 | S-69, S-100 | skills-tools.spec.ts; SkillsToolsPage.focus.test | none — keyboard follows product-wide conventions |
 | FR-053 | US-10 | S-52, S-75 | NewSkillMenu.test | none — wording rule, no user page |
 | FR-054 | US-11 | S-70 | TestSetAgentPermissions_SkillPolicyChangesParity | DOC-007 |
 | FR-055 | US-11 | S-74 | TestGetAgent_SkillPermissions | DOC-007 |
@@ -1837,15 +2422,30 @@ Oracle: C-0, C-3 (strictest wins; trust floor only for unverified; God Mode floo
 | FR-062 | US-12 | S-79 | rider test #99 | DOC-004 |
 | FR-063 | US-12 | S-80 | rider test #1570 | none — error state already described |
 | FR-064 | US-12 | S-81 | rider test #1576 | none — bug fix |
-| FR-065 | — | S-64, S-26, S-01 | cut checklist | DOC-009 |
+| FR-065 | — | S-64, S-26, S-01, S-101 | cut checklist | DOC-009 |
+| FR-066 | US-2 | S-85, S-86, S-87 | TestSkillAuthority_FoldersFollowOutcome | DOC-010 |
+| FR-067 | US-2, US-4 | S-10, S-11, S-30, S-31, S-93 | TestSkillConsent_Table | DOC-004 |
+| FR-068 | US-7 | S-94, S-95 | TestInstallReview_StageBindsRevision | DOC-011 |
+| FR-069 | US-5 | S-89, S-90 | TestFullSkills_SentinelAndBudget | DOC-010 |
+| FR-070 | US-5 | S-91, S-92 | TestVisibilityTransitions | DOC-010 |
+| FR-071 | US-1 | S-83 | SkillsToolsPage.saveStates.test | DOC-001 |
+| FR-072 | US-1 | S-82 | TestPermissionsPatch_PerKey | none — internal API; the screen behaviour is covered by DOC-001 |
+| FR-073 | US-5 | S-96 | TestToolSearch_FindsSkills | DOC-012 |
+| FR-074 | US-8 | S-88 | TestMcpMigration_CoverageMatrix | DOC-004 |
+| FR-075 | US-2 | S-102, S-16 | TestProjectSkillKeys; TestSkillPolicyUpgrade_FromSkillTool | DOC-004 |
+| FR-076 | US-1, US-6 | S-84 | SkillsToolsPage.setAll.test | DOC-001 |
+| FR-077 | US-7, US-11 | S-97, S-98, S-103, S-104 | TestUpdateAgentToolsCfg_PreservesSkillPolicies; TestCreateAgent_SkillPolicyChangesParity; TestWriteSkillWorkflow_PublishesCategorisedSkill; TestEditSkill_SetCategoryOnce | DOC-007, DOC-011 |
+| FR-078 | US-4, US-9 | S-101, S-65 | LegacySkillTrust.compat.test; skills-tools.spec.ts | DOC-009 |
+| FR-079 | US-5 | S-90 | SkillsToolsPage.levels.test | DOC-010 |
+| FR-080 | US-2 | S-102 | TestProjectSkillKeys | DOC-004 |
 
-**Completeness check**: every FR appears with at least one scenario and one test; scenarios S-01 to S-81 each appear at least once (S-03 in FR-001's page test set via skills-tools.spec.ts row 31; S-20, S-57, S-58, S-60 to S-65, S-68, S-69 through FR-024 and FR-043 to FR-052).
+**Completeness check** (round 1: re-run over S-01 to S-104 and FR-001 to FR-080): every FR appears with at least one scenario and one test; scenarios S-01 to S-104 each appear at least once (S-03 in FR-001's page test set via skills-tools.spec.ts row 31; S-20, S-57, S-58, S-60 to S-65, S-68, S-69 through FR-024 and FR-043 to FR-052).
 
 ---
 
 ## Riders
 
-Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:title" --state open` (exit 0, 74 issues), plus the design notes' #1920. The chief confirms before the design is final.
+Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:title" --state open` (exit 0, 74 issues), plus the design notes' #1920. The chief confirms before the design is final; not confirmed as of round 1. The owning epic is also to be reconciled (header).
 
 | Issue | Why it rides | Proposed |
 |---|---|---|
@@ -1867,10 +2467,10 @@ Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:ti
 ## Assumptions
 
 - Grants stay the gate (ADR-072 D4): per-skill permission is a second check after the grant, the way a service assignment and a tool permission are two checks for MCP tools (Hard Constraint #6, ADR-090).
-- ToolSearch keeps searching tools only; a Hidden skill is found through `Skill` search (ADR-072 D1) and the person's `/name`. R31's "one search for both" is not in this package.
-- Skill categories for built-ins (FQ-5), proposal from R32 Appendix B mapped to today's 29 skills: Tools — add-connector, add-provider, capability-plan, change-agent, connect-channel, create-agent, dependency-check, disable-channel, doctor-usage, inbox-triage, install-skill, provider-config, remove-agent, remove-connector, shell-diagnosis, team-delegation, team-setup, welcome-workspace, write-skill; Business — interview, define-goal, plan, orchestrate; Research — deep-research; Testing & Security — verify; Content & Media — elicify-docx, elicify-pdf, elicify-pptx, elicify-xlsx.
-- Project-folder (mount) skills are not listed on the Skills tab (#1380 not a rider by default); their permission and level use the C-2 defaults.
-- The Settings package removes the controls from Settings; this package does not edit Settings files.
+- ToolSearch also finds skills (C-17) [pending ST-Q6]; round 0 had left R31's "one search for both" out without a founder decision (round-1 MAJ-015).
+- Skill categories for built-ins (decided: founder default, former FQ-5), proposal from R32 Appendix B mapped to today's 29 skills: Tools — add-connector, add-provider, capability-plan, change-agent, connect-channel, create-agent, dependency-check, disable-channel, doctor-usage, inbox-triage, install-skill, provider-config, remove-agent, remove-connector, shell-diagnosis, team-delegation, team-setup, welcome-workspace, write-skill; Business — interview, define-goal, plan, orchestrate; Research — deep-research; Testing & Security — verify; Content & Media — elicify-docx, elicify-pdf, elicify-pptx, elicify-xlsx.
+- Project-folder (mount) skills are not listed on the Skills tab (#1380 not a rider by default); they have their own keys, migration and defaults (C-19).
+- The Settings package removes the controls from Settings; this package does not edit Settings files (C-22). Two Settings-spec changes follow from this spec and need its owner: retiring the legacy trust endpoint, and under ST-Q4 B removing "Load tools on demand" from Limits (its section name; round 0 wrongly said Performance for the post-Settings layout).
 - Removed template sections: none.
 
 ## Clarifications
@@ -1884,21 +2484,57 @@ Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:ti
 - Q: New skill item? → A: opens the Omnipus chat (T-Q5); W5 is Omnipus's write-skill workflow (`pkg/coreagent/prompts_adr090.go:102`).
 - Q: Presets on agent tabs? → A: removed in the same build (T-Q6 A).
 - Q: Per-agent levels? → A: none; this page sets the global default; agents only stricter, reusing today's model (T-Q7).
+- Q: Categories of the 29 built-in skills (former FQ-5)? → A: the mapping in Assumptions, founder default via team-lead, 2026-11-21.
+- Q: Can a Hidden item be found by search (former FQ-7)? → A: yes — not listed, found by search (R31), founder default via team-lead, 2026-11-21.
+- Pending, asked as ST-Q1 to ST-Q7 (`/workspace/logs/skills-tools-1519f/founder-questions-r1.md`): see "Questions for the founder".
 
 ## Questions for the founder
 
-Each needs a one-line answer, e.g. "FQ-1 A, FQ-2 A". The spec is written with the recommendation (marked) so work can continue.
+Round 0's FQ-1 to FQ-7 were reworked by grill round 1. Team-lead sent seven questions to the founder on 2026-11-21 (`/workspace/logs/skills-tools-1519f/founder-questions-r1.md`); FQ-5 (built-in categories) and FQ-7 (Hidden still searchable) take the default and are recorded under Clarifications. Until the answers arrive, the spec carries the recommended option, and every place that depends on an answer is marked **[pending ST-Qn]**. Changing one answer means editing only the switch points listed here.
 
-**FQ-1 — Does "Full" for a skill mean its whole instructions in every chat?** Context: you chose four levels that work almost the same for tools and skills. For a tool, Full means the agent can use it at once. For a skill, the matching meaning is: its whole instructions are loaded at the start of every chat. In September you decided the opposite (ADR-072: "no always-on skill", because a skill loaded every time costs tokens on every message). Impact: A reverses that decision for skills set to Full only. A **(recommended)** — yes, Full loads the whole instructions every chat; we correct ADR-072. B — Full for a skill means name, description and its extra details (no instructions), so no skill is ever always on.
+| Question | Option in place | Switch points if the other option is chosen |
+|---|---|---|
+| ST-Q1 What "Full" means for a skill | A — whole instructions every new chat, only after the permission allows it; visible cannot-fit outcome | C-1 (Full, skill column), C-11 E8, C-14, FR-038, FR-069, FR-079, US-5 AS8 and AS11, S-42, S-89, S-90, D9, ST-13, DOC-003, DOC-010, ADR-TODO-1 |
+| ST-Q2 Trust check under God Mode, Auto-approve and Always Allow | A — separate check per skill version, survives all three; a reviewed install counts | C-3 `ask` row, C-11 E4, C-12 right-hand column, FR-030, FR-067, US-4 AS4, S-30, S-31, S-93, D1 rows 8–9, D10 rows 5–8, ST-10, ST-21, DOC-004 |
+| ST-Q3 Starting permission of a new skill | A — Allow (project skills: same rule, stated separately in C-19) | C-2 self-heal, C-19, FR-020, US-2 AS8, S-17, D1 row 13 |
+| ST-Q4 Which control decides what the model sees about tools | B — the four levels only; the switch is retired by migration | C-6 (two paragraphs), C-21 last row, C-22, FR-037, FR-039, US-5 AS9, S-44, D2 row 7, D7 rows 9–12, Settings-spec change request |
+| ST-Q5 External tools with no permission at upgrade | A — Ask for genuinely uncovered tools; covered tools unchanged | C-18 "Migration writes" column, FR-045, FR-074, S-88, D8 rows 4–7, SC-003, DOC-004 |
+| ST-Q6 One search for tools and skills | A — included in this package | C-1 (Hidden, skill column), C-11 E9, C-17, FR-073, S-96, DOC-012, Assumptions |
+| ST-Q7 The autonomous-plan warning | A — keep this one warning only | Overview, departure table, FR-007, FR-010, US-1 AS5, Behavioral Contract, Qualitative Prohibitions, S-05, ST-03 |
 
-**FQ-2 — Does trust "Ask" still ask in God Mode and under Auto-approve?** Context: God Mode lifts global Ask for tools; Auto-approve skips safe Ask calls. Trust protects against unreviewed skill files. A **(recommended)** — yes, an unverified skill always asks (like the one tool that always asks today). B — God Mode and Auto-approve treat it like any other Ask.
+### Notes for team-lead (not founder questions)
 
-**FQ-3 — What permission does a newly installed skill start with?** Context: a new skill does nothing until you grant it to an agent; unverified ones are also covered by trust. A **(recommended)** — Allow, like the `Skill` tool today. B — Ask, like new external services.
+- **Settings spec changes needed** (C-22): retire the legacy `/security/skill-trust` enum after Settings lands; under ST-Q4 B remove "Load tools on demand" from Limits. Route to the Settings spec owner.
+- **Project skills count as unverified** (C-19). This makes trust Ask ask once per version of a project skill that loaded silently before. It follows from the round-0 edge case and ST-Q2 A; if the founder wants project skills treated as local and trusted, that is a separate question — recommended to raise only if ST-Q2 comes back A.
+- **Epic and riders**: the owning epic and the rider set are still unconfirmed (header, Riders).
 
-**FQ-4 — "Load tools on demand" stays in Settings → Performance (the approved Settings spec keeps it), but your requirement R30a said to remove it.** When it is off, every allowed tool is sent in full and the levels have no effect for tools. A **(recommended)** — keep it; the tool tabs show a note when it is off. B — remove it in this build (changes the Settings package).
+---
 
-**FQ-5 — Categories of the 29 built-in skills.** The October proposal named 22 older skills. The mapping in Assumptions is my proposal for today's 29. A **(recommended)** — use it. B — you change rows.
+## Round-1 fix log
 
-**FQ-6 — External tools that never had a permission.** Today such a tool is blocked for every agent (Omnipus treats "no value" as Deny). Your R30b said to set them to Ask on upgrade, which would let assigned agents use them after asking. A — Ask, as R30b says. B **(recommended)** — Deny, so nothing an agent can do changes on upgrade; you set Ask where you want it.
+Grill round 1 report: `docs/internal/specs/skills-tools-redesign-spec-review.md` (untracked, at review commit `5028ff7b01`).
 
-**FQ-7 — "Hidden": can the agent still find it by searching?** Your re-ask text said "not told at all"; R31 and today's search-only tools mean "not listed, but found by search". A **(recommended)** — not listed, found by search (keeps today's 70+ search-only tools working). B — never found; only you can name it.
+| Finding | What changed | Where |
+|---|---|---|
+| CRIT-001 Full before consent | Full injects only when the skill's outcome is `allowed` for that agent and chain; Ask or trust-Ask Full skills are listed as Name and short description until approved; unattended never injects; sentinel tests on captured requests | C-1, C-11 E8, C-14, FR-038, US-5 AS8, S-42, S-89, D9, ST-13 [pending ST-Q1] |
+| CRIT-002 File reads and helpers bypass the skill gate | Inventory of nine entry points with one outcome; denied and unapproved skill folders leave the loadable set in the app guard and the kernel grant; editor read exception kept separate and read-only | C-11, FR-066, US-2 AS9, S-85–S-87, ST-19, SC-006, DOC-010 |
+| CRIT-003 Partial save needs the whole tool map | New `GET/PATCH /security/permissions` naming only changed keys; whole-request validation; null, empty, duplicate rules; two-tab test; legacy PUT kept for today's Settings | C-2, API and Data, FR-013, FR-072, D6, S-82, ST-20, SC-007 |
+| CRIT-004 Missing server key is not missing permission | Coverage decided by the resolver's own matching; full state matrix incl. broader wildcards, partial coverage, agent-only values, God Mode; two named behaviour changes; no agent entries written | C-7, C-18, FR-045, FR-074, D8, S-88, ST-22, SC-003 [pending ST-Q5] |
+| MAJ-001 One consent contract | Consent table: ordinary Ask vs trust check, Auto, God, remembered grants bound to revision, installs, REST, unattended, stale answers | C-3, C-12, FR-016, FR-030, FR-067, D10, S-10, S-30, S-93, ST-21 [pending ST-Q2] |
+| MAJ-002 Install review lacks facts | Stage-only review endpoint returning verification, revision, suggested category; publish exactly the reviewed revision; expiry; truthful Cancel and lost answers | C-13, FR-042, FR-068, US-7 AS4/AS10, S-94, S-95, UI states |
+| MAJ-003 Project skills have no identity | Own keys `project:<workspace>/<slug>`, lifecycle, same-slug rule, migration order (idempotent, restart-safe), named change for later grants | C-19, FR-019, FR-075, FR-080, Edge Cases, S-102, D6 row 16 |
+| MAJ-004 Visibility migration copied labels | Starting levels derived from compression, discovery, deferred, preview flag; per-server keys for offline and future tools; literal captured requests as fixtures; SC-003 lists named changes | C-6, D7, FR-037, S-41, ST-06, SC-003 [pending ST-Q4] |
+| MAJ-005 Live level changes undefined | One visibility authority; levels apply from next turn without evicting loaded definitions; Deny removes; skill menu rebuilds on change; demoted built-ins searchable | C-15, FR-070, S-91, S-92, D11, ST-12 |
+| MAJ-006 Full has no capacity outcome | Charged once to the request budget; turn not sent with a clear text; page shows sizes and a warning | C-14, FR-069, FR-079, S-90, D9 rows 7–10, UI states [pending ST-Q1] |
+| MAJ-007 First landing breaks Settings | Legacy trust endpoint kept and mapped; legacy tool grid kept; links use today's addresses and neutral text; `set_config` refusal of the manifest keys lands here; Settings-spec change requests named; Performance vs Limits naming corrected | C-21, C-22, FR-049, FR-078, US-9 AS2/AS3, S-36, S-65, S-101, ST-24, Assumptions [pending ST-Q4] |
+| MAJ-008 Parity misses create, updates, authoring | Per-path parity table; `create_agent` `skill_policy_changes`; update preservation; category set once for written and copied skills; write-skill sets category; new parity tests | C-10 (pointer), C-21, FR-056, FR-057, FR-077, S-97, S-98, S-103, S-104, ST-15 |
+| MAJ-009 Autosave promises | Six save states; one request per click in order; app-level queue; late-failure toast; keepalive; 1,000 ms is request start | C-16, FR-007, FR-071, US-1 AS10, S-83, D12, UI states, User Journey |
+| MAJ-010 Set all vs always-ask | Per-row allowed values; ineligible rows skipped and named; counts in label; server guards unchanged | C-20, FR-003, FR-076, US-1 AS2, US-6 AS4, S-48, S-84, D4 rows 7–10 |
+| MAJ-011 No-confirm vs plan warning | Single exception stated everywhere and tied to the founder question | Overview, departures, FR-007, FR-010, prohibitions, S-05 [pending ST-Q7] |
+| MAJ-012 Tool edits not audited per key | Per-key audit for every map and trust, on PATCH and the legacy PUT; none for no-ops and refusals; failure handling stated; FR-040 now traces to an audit scenario | C-2, FR-040, S-99, ST-23, D6 row 15, Traceability |
+| MAJ-013 Focus lost when a row leaves a filter | Deterministic focus destinations and announcement | Accessibility and Keyboard, FR-052, US-6 AS6, S-100, D4 row 10 |
+| MAJ-014 Checks that cannot fail | Captured requests with sentinels instead of model answers; literal migration fixtures; W5 to a published categorised skill; direct REST install path; audit assertions; mutation probes and execution checklist | Hands-on rows ST-06, ST-09, ST-12, ST-13, ST-15, ST-19–ST-24; Test Implementation Order (positive controls); SC-003, SC-005 |
+| MAJ-015 Unified search dropped without decision | ToolSearch finds skills, typed, no loading; recorded as pending, not as an assumption | C-17, FR-073, S-96, Assumptions, DOC-012 [pending ST-Q6] |
+| MIN-001 view-switch is a radio group | Tabs use the catalogued `tabs` component | Design-System Components, Accessibility and Keyboard, FR-052 |
+| Coordination warning (epic, riders) | Header states the epic mismatch as Unknown for the chief; riders still unconfirmed | Header, Riders, Notes for team-lead |
+| FQ-5, FQ-7 | Recorded as decisions (founder default) | Clarifications, Ambiguity Warning 1, C-1 |
