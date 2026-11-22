@@ -92,7 +92,12 @@ func TestCreateAgent_SkillPolicyChangesParity(t *testing.T) {
 	found := false
 	for _, rowAny := range rows {
 		row, _ := rowAny.(map[string]any)
-		if row == nil || row["name"] != "plan" {
+		// AgentSkillPermission's required fields are skill/effective/override
+		// (contracts/components/schemas/AgentSkillPermission.yaml) — the row
+		// is selected by its `skill` key, not a `name` (CHECK round 1
+		// finding 12: the earlier select read a field the carrier has never
+		// carried).
+		if row == nil || row["skill"] != "plan" {
 			continue
 		}
 		found = true

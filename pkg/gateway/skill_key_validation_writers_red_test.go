@@ -48,18 +48,21 @@ import (
 )
 
 // seedKeyValidationMounts writes the W1/W2 project-skill fixtures and points
-// the agent record's workspace at W1 (mounted on W1, not on W2).
+// the agent record's workspace at W1 (mounted on W1, not on W2). Each
+// SKILL.md carries its directory's slug as its name — a fixture whose
+// frontmatter name disagrees with the slug is not the skill the key names
+// (CHECK round 1 finding 13).
 func seedKeyValidationMounts(t *testing.T, api *restAPI, agentID string) (w1, w2 string) {
 	t.Helper()
 	w1 = filepath.Join(api.homePath, "workspaces", "w1")
 	w2 = filepath.Join(api.homePath, "workspaces", "w2")
-	for _, dir := range []string{
-		filepath.Join(w1, ".claude", "skills", "notes"),
-		filepath.Join(w2, ".claude", "skills", "todo"),
+	for slug, dir := range map[string]string{
+		"notes": filepath.Join(w1, ".claude", "skills", "notes"),
+		"todo":  filepath.Join(w2, ".claude", "skills", "todo"),
 	} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
-			[]byte("---\nname: x\ndescription: Project skill fixture.\n---\n\nBody."), 0o644))
+			[]byte("---\nname: "+slug+"\ndescription: Project skill fixture "+slug+".\n---\n\nBody."), 0o644))
 	}
 	if _, err := agentstore.New(api.homePath).Update(agentID, func(ac *config.AgentConfig) error {
 		ac.Home = w1
@@ -88,23 +91,30 @@ func sysDepsFor(t *testing.T, api *restAPI) *systools.Deps {
 	}
 }
 
-// sysStoredSkillOverrides reads the agent entity record's
-// tools.skills.policies the way pkg/sysagent/tools' tests do.
+// sysStoredSkillOverrides reads the agent entity record's stored overrides
+// from the FLAT durable AgentConfig — pkg/entity/store.go::Store.write
+// marshals the AgentConfig directly, and the per-agent override map (tool
+// keys and skill keys alike) is AgentConfig.Tools.Builtin.Policies
+// (pkg/sysagent/tools/agent_read.go::storedOverrides). CHECK round 1
+// finding 12: the earlier invented `agent.tools.skills` wrapper decoded
+// correct flat records into zero values.
 func sysStoredSkillOverrides(t *testing.T, home, agentID string) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(home, "entities", "agents", agentID+".json"))
 	require.NoError(t, err, "entity record must exist")
-	var stored struct {
-		Agent struct {
-			Tools struct {
-				Skills struct {
-					Policies map[string]any `json:"policies"`
-				} `json:"skills"`
-			} `json:"tools"`
-		} `json:"agent"`
+	var ac config.AgentConfig
+	require.NoError(t, json.Unmarshal(raw, &ac), "flat AgentConfig entity JSON: %s", raw)
+	if ac.Tools == nil {
+		return nil
 	}
-	require.NoError(t, json.Unmarshal(raw, &stored), "entity JSON")
-	return stored.Agent.Tools.Skills.Policies
+	if ac.Tools.Builtin.Policies == nil {
+		return nil
+	}
+	out := make(map[string]any, len(ac.Tools.Builtin.Policies))
+	for k, v := range ac.Tools.Builtin.Policies {
+		out[k] = string(v)
+	}
+	return out
 }
 
 // sysSetAgentPermissions drives the real set_agent_permissions tool with the
@@ -123,50 +133,77 @@ func sysSetAgentPermissions(t *testing.T, deps *systools.Deps, agentID string, c
 }
 
 // sysGetAgentSkillOverrides drives the real get_agent tool and returns the
-// skills overrides its body reports ("" = none).
+// stored overrides its FLAT body reports (agent_get.go::storedDetail puts
+// `stored_overrides` at the top level, next to id and skills). CHECK round 1
+// finding 12: the earlier invented nested wrapper parsed zero values.
 func sysGetAgentSkillOverrides(t *testing.T, deps *systools.Deps, agentID string) map[string]any {
 	t.Helper()
 	res := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": agentID})
 	require.False(t, res.IsError, "get_agent must answer: %s", res.ForLLM)
 	var body struct {
-		Agent struct {
-			Tools struct {
-				Skills struct {
-					Policies map[string]any `json:"policies"`
-				} `json:"skills"`
-			} `json:"tools"`
-		} `json:"agent"`
+		StoredOverrides map[string]any `json:"stored_overrides"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(res.ForLLM), &body), "get_agent body: %s", res.ForLLM)
-	return body.Agent.Tools.Skills.Policies
+	return body.StoredOverrides
 }
 
-// readBackThroughBothReaders asserts the C-4/parity read-back pair: the
-// override appears through get_agent AND through GET /agents/{id}/tools.
-func readBackThroughBothReaders(t *testing.T, api *restAPI, deps *systools.Deps, agentID, key, want string) {
+// readBackDurable asserts the DURABLE storage read-back through get_agent's
+// flat stored_overrides: exactly the wanted value, or the key absent.
+func readBackDurable(t *testing.T, deps *systools.Deps, agentID, key, want string) {
 	t.Helper()
 	sys := sysGetAgentSkillOverrides(t, deps, agentID)
 	if want == "" {
-		require.Nil(t, sys[key], "get_agent read-back: %v must not carry %s", sys, key)
+		require.Nil(t, sys[key], "get_agent durable read-back: %v must not carry %s", sys, key)
 	} else {
-		require.Equal(t, want, sys[key], "get_agent read-back carries the override")
+		require.Equal(t, want, sys[key], "get_agent durable read-back carries the override")
 	}
+}
+
+// readBackEligibleRow asserts the C-4 UI listing on GET /agents/{id}/tools:
+// AgentToolsResponse.skills lists GRANTED installed skills plus MOUNTED
+// project skills — the eligible rows — never every stored ungranted
+// override (CHECK round 1 finding 13: the earlier helper demanded a row
+// whenever any override existed, which an installed-but-ungranted key can
+// never satisfy). want "" asserts the row, when listed, carries no
+// configured_policy.
+func readBackEligibleRow(t *testing.T, api *restAPI, agentID, key, want string) {
+	t.Helper()
 	skills := readAgentToolsSkills(t, api, agentID)
-	var found bool
 	for _, s := range skills {
 		entry, ok := s.(map[string]any)
 		require.True(t, ok)
 		if entry["key"] == key {
-			found = true
 			if want == "" {
 				require.Nil(t, entry["configured_policy"], "GET tools read-back: %v", entry)
 			} else {
 				require.Equal(t, want, entry["configured_policy"], "GET tools read-back: %v", entry)
 			}
+			return
 		}
 	}
-	if want != "" {
-		require.True(t, found, "GET tools read-back lists %s (C-4 lists the project skills of the mounts): %v", key, skills)
+	require.Fail(t, "GET tools read-back lists the eligible key",
+		"%s must be listed (C-4 lists granted installed skills and mounted project skills): %v", key, skills)
+}
+
+// readBackThroughBothReaders asserts BOTH surfaces for an ELIGIBLE key
+// (granted installed or mounted project): durable storage and the UI row.
+func readBackThroughBothReaders(t *testing.T, api *restAPI, deps *systools.Deps, agentID, key, want string) {
+	t.Helper()
+	readBackDurable(t, deps, agentID, key, want)
+	readBackEligibleRow(t, api, agentID, key, want)
+}
+
+// requireNotListedInUITools asserts an INELIGIBLE key (an installed skill
+// the agent is not granted) carries no row on GET /agents/{id}/tools — the
+// stored override exists durably but must not create a UI listing row.
+func requireNotListedInUITools(t *testing.T, api *restAPI, agentID, key string) {
+	t.Helper()
+	skills := readAgentToolsSkills(t, api, agentID)
+	for _, s := range skills {
+		entry, ok := s.(map[string]any)
+		require.True(t, ok)
+		require.NotEqual(t, key, entry["key"],
+			"an ungranted installed override must not appear as a UI listing row; skills: %v", skills)
 	}
 }
 
@@ -250,13 +287,18 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		require.Equal(t, "ask", stored[mountedKey], "D16#5: the project key is stored on the created agent")
 	})
 
-	t.Run("D16#6 an installed, not-granted key is stored by any writer", func(t *testing.T) {
+	t.Run("D16#6 an installed, not-granted key is stored durably and creates no UI row", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		installPlanSkillFixture(t, api.homePath) // plan installed, NOT granted
 		seedKeyValidationMounts(t, api, "test-agent")
 		w := putAgentSkills(t, api, "test-agent", `{"policies":{"plan":"deny"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "D16#6: stored, body: %s", w.Body.String())
-		readBackThroughBothReaders(t, api, sysDepsFor(t, api), "test-agent", "plan", "deny")
+		// Durable storage carries the override (CHECK finding 13: durable and
+		// eligible-listing are separate surfaces).
+		readBackDurable(t, sysDepsFor(t, api), "test-agent", "plan", "deny")
+		// The C-4 UI listing lists granted installed skills and mounted
+		// project skills — an ungranted override never creates a row.
+		requireNotListedInUITools(t, api, "test-agent", "plan")
 	})
 
 	t.Run("D16#7 an unknown key is refused by any writer with nothing stored", func(t *testing.T) {
@@ -285,8 +327,14 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		installPlanSkillFixture(t, api.homePath)
 		grantPlanSkill(t, api, "test-agent")
 		seedKeyValidationMounts(t, api, "test-agent")
-		w := putAgentSkills(t, api, "test-agent", `{"policies":{"plan":"deny"}}`)
+		// Seed a positive skill override AND an unrelated TOOL override first
+		// (CHECK finding 13: require a positive seeded override before testing
+		// its removal, and prove the tool override survives the skills-only
+		// clear).
+		w := putAgentSkills(t, api, "test-agent", `{"policies":{"plan":"deny","send_email":"deny"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "setup: %s", w.Body.String())
+		readBackDurable(t, sysDepsFor(t, api), "test-agent", "plan", "deny")
+		readBackDurable(t, sysDepsFor(t, api), "test-agent", "send_email", "deny")
 		// skills-only envelope: revision, override_names: [], skills.policies: {}
 		body := `{"override_names":[],"skills":{"policies":{}}}`
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent/tools", strings.NewReader(body))
@@ -296,6 +344,8 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		api.updateAgentTools(w2, r, "test-agent")
 		require.Equal(t, http.StatusOK, w2.Code, "D16#9: 200, body: %s", w2.Body.String())
 		readBackThroughBothReaders(t, api, sysDepsFor(t, api), "test-agent", "plan", "")
+		// The unrelated tool override survives the skills-only clear.
+		readBackDurable(t, sysDepsFor(t, api), "test-agent", "send_email", "deny")
 	})
 
 	t.Run("D16#10 override_names without builtin is refused with the envelope text", func(t *testing.T) {
