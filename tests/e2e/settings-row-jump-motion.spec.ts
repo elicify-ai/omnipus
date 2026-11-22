@@ -85,9 +85,20 @@ test.describe('FR-075 motion — the search-reached row flash, in real Chromium'
   test('normal motion: one flash animation, once, non-zero — Port (outside any group) and Model overrides (inside a closed group)', async ({ page }) => {
     for (const [query, section, rowId] of [
       ['port', 'Gateway', 'port'],
-      ['model overrides', 'Context and tool results', 'model-overrides'],
+      ['model overrides', 'Limits', 'model-overrides'],
     ] as const) {
       const row = await jumpToRow(page, query, section, rowId)
+      if (rowId === 'model-overrides') {
+        // R10-02: the section heading is Limits; the grouped-row claim is its
+        // own FR-075 leg — the Model overrides GROUP (LimitsSection's
+        // `overrides` group) must be OPEN, asserted on its disclosure control
+        // by role and name. "Context and tool results" is a sibling group the
+        // jump need not open; nothing is asserted on it.
+        await expect(
+          page.getByRole('button', { name: 'Model overrides' }),
+          'FR-075: a row inside a closed group — the jump must open that group first',
+        ).toHaveAttribute('aria-expanded', 'true')
+      }
       await expect(row,
         `FR-075: the reached ${rowId} row must be marked to assistive tech`).toHaveAttribute('aria-current', 'true')
       const flashes = await readFlash(row)
@@ -106,9 +117,18 @@ test.describe('FR-075 motion — the search-reached row flash, in real Chromium'
     await page.emulateMedia({ reducedMotion: 'reduce' })
     for (const [query, section, rowId] of [
       ['port', 'Gateway', 'port'],
-      ['model overrides', 'Context and tool results', 'model-overrides'],
+      ['model overrides', 'Limits', 'model-overrides'],
     ] as const) {
       const row = await jumpToRow(page, query, section, rowId)
+      if (rowId === 'model-overrides') {
+        // R10-02: same grouped-row leg as the normal-motion arm — the Model
+        // overrides group's own disclosure must be open; the sibling
+        // "Context and tool results" group is not asserted.
+        await expect(
+          page.getByRole('button', { name: 'Model overrides' }),
+          'FR-075: a row inside a closed group — the jump must open that group first',
+        ).toHaveAttribute('aria-expanded', 'true')
+      }
       const count = await row.evaluate((el) => el.getAnimations().length)
       expect(count,
         `FR-075: under prefers-reduced-motion: reduce the reached ${rowId} row must not animate`).toBe(0)
