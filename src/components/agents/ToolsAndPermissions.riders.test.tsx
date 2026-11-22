@@ -121,7 +121,7 @@ beforeEach(() => {
   // Runtime God Mode: enabled (S-76's Given). The tab must consult it —
   // fetchGodMode reads the live runtime state ({ enabled, available,
   // supported }) per src/lib/api/security.ts.
-  vi.mocked(api.fetchGodMode).mockResolvedValue({ enabled: true, available: true, supported: true })
+  vi.mocked(api.fetchGodMode).mockResolvedValue({ enabled: true, persisted: true, available: true, supported: true })
 })
 
 describe('Rider #1297 (S-76): the Tools tab shows what the run does under God Mode', () => {
