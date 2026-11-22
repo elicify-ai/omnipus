@@ -123,27 +123,21 @@ func sortedKeys(m map[string]any) []string {
 	return keys
 }
 
-// continuationText finds the record's continuation surface by key name (any
-// key containing "continuation", case-insensitive) and returns its text. The
-// surface's exact wire name is GREEN's; a record with no continuation-shaped
-// key is the caller's BLOCKED case.
-func continuationText(m map[string]any) (string, bool) {
-	for k, v := range m {
-		if !strings.Contains(strings.ToLower(k), "continuation") {
-			continue
-		}
-		switch tv := v.(type) {
-		case string:
-			return tv, tv != ""
-		case map[string]any:
-			for _, inner := range tv {
-				if s, ok := inner.(string); ok && s != "" {
-					return s, true
-				}
-			}
-		}
+// s1ProgramGeneration reads the specified field on the object supplied by the
+// caller. Callers pass Card or CardReceipt, never the containing internal Record.
+// No continuation-named persisted fields are required or searched.
+func s1ProgramGeneration(t *testing.T, value any, surface string) float64 {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	var state map[string]any
+	require.NoError(t, json.Unmarshal(raw, &state))
+	generation, ok := state["program_generation"].(float64)
+	if !ok {
+		t.Fatalf("BLOCKED: %s lacks program_generation — required by S-54/Contract Changes (keys %v)", surface, sortedKeys(state))
 	}
-	return "", false
+	require.GreaterOrEqual(t, generation, float64(1))
+	return generation
 }
 
 func TestRequestSecret_ProgramRecipient(t *testing.T) {
@@ -195,45 +189,50 @@ func TestRequestSecret_ProgramRecipient(t *testing.T) {
 	})
 
 	t.Run("S54_submission_generation_and_continuation", func(t *testing.T) {
-		// S-54's settlement clauses at the registry level. ("When the check
-		// ends the card shows Connected as octocat" is the async-check face —
-		// pinned by the gateway lifecycle rows with the fake gh; Dev's
-		// programs staying unchanged is pinned by the parity rows.) The
-		// submitted record is read through its marshalled form: the wire
-		// fields (program_generation, the continuation) arrive at GREEN.
+		// Observe the actual delivery seam captured by matrixEnv.options.Resume,
+		// and the actual sole message producer. Check-running timing/settlement
+		// needs the gateway's held-check integration, named separately below.
 		f := s1ProgramsCfg(t)
+		agentBefore, err := json.Marshal(f.cfg.Agents.List)
+		require.NoError(t, err)
 		sid := f.newSession("dev", "")
 		rec, err := f.reg.Create(context.Background(), sid, "dev", "web-card", "",
 			s1Input(t, map[string]any{"purpose": "connect GitHub", "program": "github"}))
 		if err != nil {
 			t.Fatalf("BLOCKED: the program card cannot be raised — required by FR-051/S-54 (registry said: %v)", err)
 		}
-		submitted, serr := f.reg.Submit(rec.Card.RequestId, matrixOwner,
+		require.NotEmpty(t, rec.Card.Fields)
+		submitted, err := f.reg.Submit(rec.Card.RequestId, matrixOwner,
 			valuesInput(map[string]string{rec.Card.Fields[0].Key: "tok_valid_12345"}))
-		require.NoError(t, serr, "the valid submission settles the card: %v", serr)
-		require.Equal(t, "submitted", submitted.Card.State, "the request is submitted")
+		require.NoError(t, err)
+		require.Equal(t, "submitted", submitted.Card.State)
+		receipt, exists, err := f.store.CardReceipt(rec.Card.RequestId)
+		require.NoError(t, err)
+		require.True(t, exists, "the exact submitted card has a committed receipt")
+		require.Equal(t, sid, receipt.SessionID)
+		require.Equal(t, submitted.Card.ReferenceNames, receipt.References)
+		committed := s1ProgramGeneration(t, receipt, "CardReceipt")
+		require.Equal(t, committed, s1ProgramGeneration(t, submitted.Card, "submitted.Card"))
+		require.Len(t, f.attempts, 1, "the real Options.Resume seam receives this card, not a continuation-shaped field")
+		delivered := f.attempts[0]
+		require.Equal(t, submitted.Card, delivered.Card)
+		require.Equal(t, committed, s1ProgramGeneration(t, delivered.Card, "Resume argument.Card"))
+		message := secretrequest.ResumeMessage(delivered)
+		require.Contains(t, strings.ToLower(message), "stored for github")
+		require.Contains(t, strings.ToLower(message), "account check is running")
+		require.NotContains(t, strings.ToLower(message), "connected as")
+		requireValueFree(t, "actual ResumeMessage", message, "tok_valid_12345")
+		agentAfter, err := json.Marshal(f.cfg.Agents.List)
+		require.NoError(t, err)
+		require.Equal(t, string(agentBefore), string(agentAfter), "this exact submission leaves Dev programs unchanged")
+		require.Len(t, f.reg.Snapshot(matrixOwner, sid), 1)
+		require.Equal(t, committed, s1ProgramGeneration(t, f.reg.Snapshot(matrixOwner, sid)[0], "snapshot Card"))
+		boot := secretrequest.NewRegistry(f.options())
+		require.NoError(t, boot.Recover())
+		restored, err := boot.Get(rec.Card.RequestId, matrixOwner)
+		require.NoError(t, err)
+		require.Equal(t, committed, s1ProgramGeneration(t, restored.Card, "recovered Card"))
 
-		raw, merr := json.Marshal(submitted)
-		require.NoError(t, merr)
-		var m map[string]any
-		require.NoError(t, json.Unmarshal(raw, &m))
-		// program_generation: the generation the submission committed (spec
-		// contract table; taken from the CardReceipt so it survives restart).
-		genRaw, has := m["program_generation"]
-		if !has {
-			t.Fatalf("BLOCKED: the submitted request state carries no program_generation — required by S-54 and the contract table (record keys: %v)", sortedKeys(m))
-		}
-		gen, _ := genRaw.(float64)
-		require.GreaterOrEqual(t, gen, float64(1), "program_generation is at least 1")
-		// The continuation: Dev continues at once — the token is stored for
-		// GitHub and the account check is running; it never claims a result.
-		cont, hasCont := continuationText(m)
-		if !hasCont {
-			t.Fatalf("BLOCKED: the submitted record carries no continuation surface — required by S-54's continuation clause (record keys: %v)", sortedKeys(m))
-		}
-		require.Contains(t, cont, "stored for GitHub", "the continuation says the token is stored")
-		require.Contains(t, cont, "account check is running", "the continuation says the check is running")
-		require.NotContains(t, cont, "Connected", "the continuation does not claim a result")
 	})
 
 	t.Run("S99_chat_card_uses_program_token_rules", func(t *testing.T) {
@@ -267,7 +266,10 @@ func TestRequestSecret_ProgramRecipient(t *testing.T) {
 	})
 
 	t.Run("S55_channel_turn_refused_existing_text", func(t *testing.T) {
-		f := s1ProgramsCfg(t)
+		// This pre-existing refusal precedes recipient resolution. No Programs
+		// field/catalog is a prerequisite for keeping the channel guard alive.
+		f := newMatrixEnv(t)
+		f.cfg.Agents.List = append(f.cfg.Agents.List, config.AgentConfig{ID: "dev", Name: "Dev"})
 		sid := f.newSession("dev", "")
 		origin := tools.NewTurnOrigin()
 		origin.AddChannelPerson("a person", "telegram:1")
@@ -285,4 +287,11 @@ func TestRequestSecret_ProgramRecipient(t *testing.T) {
 		require.Contains(t, result.ForLLM, "open the web app and ask",
 			"the refusal is the existing channel-turn card text: %s", result.ForLLM)
 	})
+	t.Run("S54_held_check_resume_before_completion", func(t *testing.T) {
+		t.Fatal("BLOCKED: the actual Programs check coordinator has no held-check binding to secretrequest.Options — required by S-54; registry callback/message coverage does not prove resume while the same check remains held")
+	})
+	t.Run("S54_same_card_check_settles_Connected_as_octocat_after_reload", func(t *testing.T) {
+		t.Fatal("BLOCKED: no real account-check settlement binding to this program card exists — required by S-54; an unrelated REST row reaching connected is not this same-card/reload oracle")
+	})
+
 }
