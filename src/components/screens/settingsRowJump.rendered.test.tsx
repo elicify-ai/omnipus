@@ -78,6 +78,7 @@ import { routeTree } from '@/routeTree.gen'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { SETTINGS_SEARCH_INDEX, sectionInfo, type SettingsSectionId } from '@/components/settings/settingsSections'
+import type { IntegrationProvidersResponse } from '@/lib/api/generated/openapi-types'
 
 // The REAL stylesheet the SPA ships, read from disk: vitest's `?raw` returns
 // '' for a .css import, and jsdom computes no CSS — the stylesheet-side
@@ -289,7 +290,8 @@ function stubMatchMedia(reduce: boolean): void {
   })
 }
 
-async function openSettings(search = ''): Promise<void> {
+/** Return this render's query client so state witnesses read the fixture data, not the DOM. */
+async function openSettings(search = ''): Promise<QueryClient> {
   const router = createRouter({
     routeTree,
     history: createMemoryHistory({ initialEntries: [`/settings${search}`] }),
@@ -302,6 +304,7 @@ async function openSettings(search = ''): Promise<void> {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   )
+  return client
 }
 
 /** The search jump of FR-075's first arm: type "port", click the result link. */
@@ -481,6 +484,7 @@ const WITNESS_KINDS: Record<string, WitnessKind> = {
   'max-tool-calls-per-turn': 'control', // row 84: number
   'mcp-tool-result-cap': 'control', // row 14: cap number
   'default-context-window': 'control', // row 19: number
+  'model-overrides': 'control', // FR-058 (spec:1984): named collapsible group; spec:541/544: named disclosure control
   'auto-approve': 'control', // row 36: the Auto-approve switch
   'audit-log': 'control', // row 48: the "View log" action
   'sandbox-mode': 'control', // row 42: 3 radios — the named fieldset group
@@ -515,6 +519,16 @@ const WITNESS_KINDS: Record<string, WitnessKind> = {
   'recap-limits': 'name-line', // row 71: the collapsed group's own name
   'summarization-model': 'name-line', // row 69: the row's own name line
   'how-long-memory-is-kept': 'name-line', // rows 61/72/73; spec:399: the row's own name line
+}
+
+/** Missing or invalid metadata is an assertion failure, never an omitted witness leg (R11-01). */
+function requiredWitnessKind(rowId: string): WitnessKind {
+  const kind = WITNESS_KINDS[rowId]
+  expect(
+    ['control', 'heading', 'name-line'],
+    `FR-075 (CHECK R11-01): WITNESS_KINDS must define a supported kind for "${rowId}" — ownership assertions may not be skipped`,
+  ).toContain(kind)
+  return kind
 }
 
 /**
@@ -614,8 +628,19 @@ const WITNESS_SHARED_CONTROL_NAMES: Record<string, { phrase: string; coWitness: 
  * gap (the state table lacks the zero-voice-services state) is with
  * spec-sync via team-lead.
  */
-const WITNESS_STATE_WITNESSES: Record<string, { phrase: string; kind: WitnessKind }[]> = {
-  'active-transcriber': [{ phrase: 'No voice providers available.', kind: 'name-line' }],
+const WITNESS_STATE_WITNESSES: Record<string, {
+  phrase: string
+  kind: WitnessKind
+  appliesTo: (fixture: IntegrationProvidersResponse | undefined) => boolean
+}[]> = {
+  'active-transcriber': [{
+    phrase: 'No voice providers available.',
+    kind: 'name-line',
+    // R11-02: the section's actual fixture query data is the state boundary.
+    // No separate empty-state flag or rendered notice decides this. An absent
+    // read is not zero services; configured services never allow this witness.
+    appliesTo: (fixture) => fixture?.voice.length === 0,
+  }],
 }
 
 /**
@@ -674,7 +699,13 @@ function headingWitness(matches: Element[], row: Element): Element | null {
  * typographic casing may differ from the spec's ("Remote Access", "View
  * Log", "opencode program path").
  */
-function findSpecWitness(row: Element, phrases: string[], kind: WitnessKind, entryRowId?: string): Element | null {
+function findSpecWitness(
+  row: Element,
+  phrases: string[],
+  kind: WitnessKind,
+  entryRowId?: string,
+  integrationFixture?: IntegrationProvidersResponse,
+): Element | null {
   for (const phrase of phrases) {
     const pattern = exactNamePattern(phrase)
     if (kind === 'heading') {
@@ -696,7 +727,7 @@ function findSpecWitness(row: Element, phrases: string[], kind: WitnessKind, ent
         if (allowance && allowance.phrase === phrase) {
           const coMatches = exactTextMatches(allowance.coWitness)
           const coInside = coMatches.filter((m) => row.contains(m))
-          if (coMatches.length === coInside.length) return inside[0]
+          if (coMatches.length > 0 && coMatches.length === coInside.length) return inside[0]
         }
         return null // a same-named copy outside the marked row: not owned
       }
@@ -705,12 +736,13 @@ function findSpecWitness(row: Element, phrases: string[], kind: WitnessKind, ent
     const witness = legWitness(exactTextMatches(phrase), row)
     if (witness) return witness
   }
-  // State-scoped witnesses (WITNESS_STATE_WITNESSES): tried only when the
-  // row's primary spec-named phrases hold nothing — the states where the
-  // primary control is legitimately absent. The same ownership rules apply:
-  // perceivable, inside the marked row, no copy outside it.
+  // State-scoped witnesses require BOTH absent primary phrases and the
+  // matching fixture data (R11-02); a notice alone cannot select its state.
+  // The same ownership rules apply: perceivable, inside the marked row,
+  // no copy outside it. Foreign-witness probes pass no fixture/state fallback.
   if (entryRowId) {
     for (const stateWitness of WITNESS_STATE_WITNESSES[entryRowId] ?? []) {
+      if (!stateWitness.appliesTo(integrationFixture)) continue
       const pattern = exactNamePattern(stateWitness.phrase)
       if (stateWitness.kind === 'heading') {
         const witness = headingWitness(screen.queryAllByRole('heading', { name: pattern }), row)
@@ -844,7 +876,7 @@ async function expectGroupOpen(testId: string, headerName: string): Promise<HTML
  */
 async function expectExactlyThisRowMarked(
   row: HTMLElement,
-  witnesses?: { groupWitness?: HTMLElement; entryRowId?: string },
+  witnesses?: { groupWitness?: HTMLElement; entryRowId?: string; queryClient?: QueryClient },
 ): Promise<void> {
   await waitFor(() => {
     expect(row, 'RED (FR-075): the reached row must be marked').toHaveAttribute('data-settings-row-target')
@@ -871,24 +903,31 @@ async function expectExactlyThisRowMarked(
   }
   if (witnesses?.entryRowId) {
     const phrases = WITNESS_PHRASES[witnesses.entryRowId]
-    const kind = WITNESS_KINDS[witnesses.entryRowId]
-    if (phrases && kind) {
-      const statePhrases = (WITNESS_STATE_WITNESSES[witnesses.entryRowId] ?? []).map((w) => w.phrase)
+    expect(
+      phrases,
+      `FR-075 (CHECK R11-01): WITNESS_PHRASES must define the requested row "${witnesses.entryRowId}" — ownership assertions may not be skipped`,
+    ).toBeDefined()
+    const kind = requiredWitnessKind(witnesses.entryRowId)
+    // Read the fixture response actually supplied to this section, including
+    // C01's valid query-result transform to voice:[]. Never infer it from the
+    // DOM, nor from the raw mock before a query function transforms its data.
+    const integrationFixture = witnesses.queryClient?.getQueryData<IntegrationProvidersResponse>(['integrations'])
+    const statePhrases = (WITNESS_STATE_WITNESSES[witnesses.entryRowId] ?? [])
+      .filter((w) => w.appliesTo(integrationFixture)).map((w) => w.phrase)
+    expect(
+      findSpecWitness(row, phrases, kind, witnesses.entryRowId, integrationFixture),
+      `RED (FR-075, CHECK R8-01/R9-01/R10-01): the marked row must own the requested setting's witness — no ${kind} leg for "${witnesses.entryRowId}" (${phrases.join(' / ')}${statePhrases.length > 0 ? `; state witnesses: ${statePhrases.join(' / ')}` : ''}) holds with every exact-name match inside the marked row, while the id agrees with the implementation`,
+    ).not.toBeNull()
+    for (const [otherId, otherPhrases] of Object.entries(WITNESS_PHRASES)) {
+      if (otherId === witnesses.entryRowId) continue
+      const other = findSpecWitness(row, otherPhrases, requiredWitnessKind(otherId))
+      if (!other) continue
+      const otherRow = document.querySelector<HTMLElement>(`[data-settings-row="${otherId}"]`)
+      if (otherRow && (row === otherRow || row.contains(otherRow) || otherRow.contains(row))) continue
       expect(
-        findSpecWitness(row, phrases, kind, witnesses.entryRowId),
-        `RED (FR-075, CHECK R8-01/R9-01/R10-01): the marked row must own the requested setting's witness — no ${kind} leg for "${witnesses.entryRowId}" (${phrases.join(' / ')}${statePhrases.length > 0 ? `; state witnesses: ${statePhrases.join(' / ')}` : ''}) holds with every exact-name match inside the marked row, while the id agrees with the implementation`,
-      ).not.toBeNull()
-      for (const [otherId, otherPhrases] of Object.entries(WITNESS_PHRASES)) {
-        if (otherId === witnesses.entryRowId) continue
-        const other = findSpecWitness(row, otherPhrases, WITNESS_KINDS[otherId])
-        if (!other) continue
-        const otherRow = document.querySelector<HTMLElement>(`[data-settings-row="${otherId}"]`)
-        if (otherRow && (row === otherRow || row.contains(otherRow) || otherRow.contains(row))) continue
-        expect(
-          other,
-          `FR-075 (CHECK R8-01): the marked row for "${witnesses.entryRowId}" carries another listed setting's witness (${otherId}: ${otherPhrases.join(' / ')}) while that setting's own row is elsewhere — the mark may not sit on a foreign row`,
-        ).toBeNull()
-      }
+        other,
+        `FR-075 (CHECK R8-01): the marked row for "${witnesses.entryRowId}" carries another listed setting's witness (${otherId}: ${otherPhrases.join(' / ')}) while that setting's own row is elsewhere — the mark may not sit on a foreign row`,
+      ).toBeNull()
     }
   }
 }
@@ -1586,6 +1625,16 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn() as unknown as typeof Element.prototype.scrollIntoView
 })
 
+describe('FR-075 witness metadata (CHECK R11-01)', () => {
+  it('every WITNESS_PHRASES key has a WITNESS_KINDS entry', () => {
+    expect(
+      Object.keys(WITNESS_KINDS).sort(),
+      'FR-075 (CHECK R11-01): every phrase row needs a witness kind — missing metadata must never skip ownership assertions',
+    ).toEqual(Object.keys(WITNESS_PHRASES).sort())
+    for (const rowId of Object.keys(WITNESS_PHRASES)) requiredWitnessKind(rowId)
+  })
+})
+
 describe('FR-075 — reaching one setting row from a search result or a deep link (CHECK R4-05)', () => {
   it('a search result opens the row\'s section, marks exactly that row, and the flash runs once (normal motion)', async () => {
     await openSettings()
@@ -1785,7 +1834,7 @@ const ROW_ENTRIES: Array<{ label: string; row: string; section: SettingsSectionI
 
 describe('FR-075 reach — every setting the search index names is reachable and marks exactly its row', () => {
   it.each(ROW_ENTRIES)('search reaches "$label" and marks exactly that row', async (entry) => {
-    await openSettings()
+    const queryClient = await openSettings()
     await jumpViaEntry(entry.label)
     // "the section opens": the entry's own section is the one shown.
     expect(
@@ -1801,7 +1850,7 @@ describe('FR-075 reach — every setting the search index names is reachable and
         entry.row,
         `RED (FR-075): the setting row the index names for "${entry.label}" (${entry.row}) must be reachable — the row must render in its opened section`,
       ),
-      { entryRowId: entry.row },
+      { entryRowId: entry.row, queryClient },
     )
   }, 20_000)
 })
