@@ -59,8 +59,6 @@ func t131PlantedOperatorManifest(t *testing.T, home string, kind component.Kind,
 		require.NoError(t, err)
 		hashes[name] = sum
 	}
-	names := make([]string, 0, len(files))
-	names = append(names, files...)
 	list := component.FileListDigest(hashes)
 	m := component.Manifest{
 		Schema:          component.ManifestSchema,

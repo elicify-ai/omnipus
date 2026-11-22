@@ -237,14 +237,14 @@ func TestT130_LinksAreJudgedByBothForms(t *testing.T) {
 	home := t.TempDir()
 
 	// A real fixture inside OWN, reached through a link that lives outside.
-	real := filepath.Join(own, "libreoffice-real")
-	t130OfficeFixture(t, real)
+	insideOwn := filepath.Join(own, "libreoffice-real")
+	t130OfficeFixture(t, insideOwn)
 	outsideLink := filepath.Join(base, "elsewhere", "office-link")
 	require.NoError(t, os.MkdirAll(filepath.Dir(outsideLink), 0o755))
-	require.NoError(t, os.Symlink(real, outsideLink))
+	require.NoError(t, os.Symlink(insideOwn, outsideLink))
 	resolved, err := filepath.EvalSymlinks(outsideLink)
 	require.NoError(t, err)
-	require.Equal(t, filepath.Clean(real), filepath.Clean(resolved), "instrument: the link resolves into OWN")
+	require.Equal(t, filepath.Clean(insideOwn), filepath.Clean(resolved), "instrument: the link resolves into OWN")
 	err = t130RegisterOffice(t, home, outsideLink)
 	t130Refused(t, err, t130OfficeText(filepath.Clean(outsideLink)+" (links lead to "+resolved+")", own), home, component.KindOffice)
 
