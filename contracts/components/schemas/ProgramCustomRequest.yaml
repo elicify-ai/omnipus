@@ -1,0 +1,31 @@
+title: ProgramCustomRequest
+description: >
+  Create (POST /programs) or edit (PUT /programs/{id}) of a custom entry
+  (spec FR-019, dataset D-2). A create requires display_name, program_words
+  and token_variables; an edit requires `revision` and changes only the
+  fields it carries.
+type: object
+additionalProperties: false
+properties:
+  display_name:
+    type: string
+  program_words:
+    type: array
+    items:
+      type: string
+  token_variables:
+    type: array
+    items:
+      type: string
+  network_sites:
+    type: array
+    items:
+      type: string
+  git:
+    $ref: './ProgramGit.yaml'
+  identity_check:
+    $ref: './ProgramIdentityCheck.yaml'
+  revision:
+    type: integer
+    format: int64
+    minimum: 0

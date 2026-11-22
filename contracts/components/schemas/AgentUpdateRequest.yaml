@@ -13,6 +13,18 @@ additionalProperties: false
 required:
   - revision
 properties:
+  programs:
+    type: array
+    maxItems: 32
+    description: >
+      Ids of the connected programs switched on for this agent (spec
+      cli-credentials FR-007). The full list replaces the stored one. Accepted only from a signed-in
+      person's browser session; any other caller is refused 403 before any
+      change.
+    items:
+      type: string
+      minLength: 1
+      maxLength: 64
   revision:
     $ref: './ConfigurationRevision.yaml'
   mcp_servers:
