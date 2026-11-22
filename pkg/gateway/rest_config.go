@@ -1009,7 +1009,7 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 	// Deep merge nested objects so partial updates don't wipe sibling keys
 	// (e.g., updating gateway.port must not delete gateway.users).
 	var changed []configKeyPath
-	if err := a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
+	if _, err := a.safeUpdateConfigJSONRecorded(applyFailedSourceRefresh, func(m map[string]any) error {
 		// #1519 C-3 / C-7: the effective retention and Performance values
 		// before the merge — the baseline checkConfigEffectUnchanged compares.
 		effectBefore, effectErr := storedConfigEffect(m)

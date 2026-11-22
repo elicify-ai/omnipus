@@ -195,7 +195,7 @@ func (a *restAPI) putRetentionSettings(w http.ResponseWriter, r *http.Request) {
 	// inside the config write lock and named in details.keys (C-6).
 	written := retentionUpdateKeys(upd)
 	var before, after config.OmnipusRetentionConfig
-	writeErr := a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
+	_, writeErr := a.safeUpdateConfigJSONRecorded(applyFailedSourceRefresh, func(m map[string]any) error {
 		retention, mapErr := retentionMapForWrite(m)
 		if mapErr != nil {
 			return mapErr

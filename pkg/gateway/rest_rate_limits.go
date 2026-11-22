@@ -122,7 +122,7 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		keyNames = append(keyNames, "sandbox.rate_limits.max_agent_tool_calls_per_minute")
 	}
 	keys := canonicalConfigKeys(keyNames...)
-	ticket, writeErr := a.safeUpdateConfigJSONRecordedAs(applyFailedSourceRateLimits, func(m map[string]any) error {
+	ticket, writeErr := a.safeUpdateConfigJSONRecorded(applyFailedSourceRateLimits, func(m map[string]any) error {
 		rl := ensureMap(m, "sandbox", "rate_limits")
 		if newLLM != nil {
 			rl["max_agent_llm_calls_per_hour"] = *newLLM

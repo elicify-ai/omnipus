@@ -122,7 +122,7 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 	}
 	var previous map[string]config.ThirdPartyCLIConfig
 	var written []configKeyPath
-	err = a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
+	_, err = a.safeUpdateConfigJSONRecorded(applyFailedSourceRefresh, func(m map[string]any) error {
 		previous = readThirdPartyRows(m)
 		before, copyErr := deepCopyJSONMap(m)
 		if copyErr != nil {

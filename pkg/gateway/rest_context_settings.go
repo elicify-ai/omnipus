@@ -237,7 +237,7 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 	// survive in either order (same field: the later write wins; a list is
 	// one field).
 	written := contextUpdateKeys(&req, clearsDefaultWindow)
-	ticket, err := a.safeUpdateConfigJSONRecordedAs(applyFailedSourceRefresh, func(m map[string]any) error {
+	ticket, err := a.safeUpdateConfigJSONRecorded(applyFailedSourceRefresh, func(m map[string]any) error {
 		ctxSection := ensureMap(m, "context")
 		next, decodeErr := storedContextSettings(ctxSection)
 		if decodeErr != nil {

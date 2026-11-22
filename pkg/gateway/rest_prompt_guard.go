@@ -67,7 +67,7 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keys := canonicalConfigKeys("sandbox.prompt_injection_level")
-	ticket, writeErr := a.safeUpdateConfigJSONRecordedAs(applyFailedSourcePromptGuard, func(m map[string]any) error {
+	ticket, writeErr := a.safeUpdateConfigJSONRecorded(applyFailedSourcePromptGuard, func(m map[string]any) error {
 		ensureMap(m, "sandbox")["prompt_injection_level"] = string(body.Level)
 		return nil
 	}, func() []configKeyPath { return keys })

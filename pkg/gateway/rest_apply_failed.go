@@ -103,21 +103,6 @@ type applyFailedRegistry struct {
 	generation map[applyFailedSource]uint64
 }
 
-// record adds keys whose last save did not apply through source.
-func (r *applyFailedRegistry) record(source applyFailedSource, keys []configKeyPath) {
-	if len(keys) == 0 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.entries == nil {
-		r.entries = make(map[string]applyFailedEntry)
-	}
-	for _, k := range keys {
-		r.entries[k.identity()] = applyFailedEntry{path: append(configKeyPath(nil), k...), source: source}
-	}
-}
-
 // clearSource removes every entry the now-successful source applied. Called
 // under the config write lock; it supersedes every earlier ticket of source.
 func (r *applyFailedRegistry) clearSource(source applyFailedSource) {
@@ -224,23 +209,16 @@ func writeSavedNotRefreshed(w http.ResponseWriter, text string, keys []configKey
 // safeUpdateConfigJSONRecorded is safeUpdateConfigJSON for the Save-bar
 // writers: when config.json was written but the live refresh failed
 // (configRefreshError), the keys changedKeys reports are recorded as
-// apply_failed while configMu is still held — before the caller answers.
-// changedKeys is called only after mutate ran.
+// apply_failed under source while configMu is still held — before the
+// caller answers. changedKeys is called only after mutate ran.
+//
+// source names the apply path: a writer whose change is applied by its own
+// reload (prompt guard, rate limits) records under its own source, so only
+// its own later successful apply clears the entry (B3, SFH-03); every other
+// writer uses applyFailedSourceRefresh. It also returns the write's ticket,
+// taken under the config write lock, for the writer's later reload outcome
+// (recordAt / clearSourceAt, B5). The ticket is 0 when nothing was written.
 func (a *restAPI) safeUpdateConfigJSONRecorded(
-	mutate func(m map[string]any) error, changedKeys func() []configKeyPath,
-) error {
-	_, err := a.safeUpdateConfigJSONRecordedAs(applyFailedSourceRefresh, mutate, changedKeys)
-	return err
-}
-
-// safeUpdateConfigJSONRecordedAs is safeUpdateConfigJSONRecorded with the
-// apply path named: a writer whose change is applied by its own reload
-// (prompt guard, rate limits) records under its own source, so only its own
-// later successful apply clears the entry (B3, SFH-03). It also returns the
-// write's ticket, taken under the config write lock, for the writer's later
-// reload outcome (recordAt / clearSourceAt, B5). The ticket is 0 when
-// nothing was written.
-func (a *restAPI) safeUpdateConfigJSONRecordedAs(
 	source applyFailedSource, mutate func(m map[string]any) error, changedKeys func() []configKeyPath,
 ) (uint64, error) {
 	store := a.pairingOrderStore()
