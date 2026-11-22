@@ -119,7 +119,12 @@ func t131PlantedOffice(t *testing.T, home, outside string) string {
 	t.Helper()
 	root := filepath.Join(outside, "libreoffice-pre9")
 	require.NoError(t, os.MkdirAll(root, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "soffice.bin"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	// TA-06 (gate round 2): the stub is the launch marker. A real converter
+	// start runs it, and it writes next to the production --outdir — the one
+	// folder a confined converter may write — so the marker observes the
+	// launch path actually used, confined or not, where the confined-only
+	// start hooks stay silent.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "soffice.bin"), []byte(t131ConverterMarkerScript()), 0o755))
 	sum, _, err := component.HashFile(filepath.Join(root, "soffice.bin"))
 	require.NoError(t, err)
 	files := map[string]string{"soffice.bin": sum}
@@ -197,6 +202,13 @@ func TestT131_ServiceRefusesRegisteredRootOutsideOwn(t *testing.T) {
 			require.EqualError(t, previewErr, wantOffice,
 				"T-131(b): the office denial must be the OF-4 sentence word for word; got %q", previewErr)
 			require.Zero(t, officeStarts, "T-131(b): the converter must never start")
+			// TA-06: the start hooks observe only the confined spawn path, so
+			// in an unconfined environment they cannot see an illicit start.
+			// The planted converter is the launch marker: a real start —
+			// confined or not — writes into the call's work folder. (Its
+			// observer is proven live by TestT131_LaunchObserverPositiveControl.)
+			require.False(t, t131MarkerUnder(t, home),
+				"T-131(b)/TA-06: the refusal must precede any converter start — no work-folder marker may exist")
 			assert.Empty(t, rendererStarts, "T-131(b): the office refusal must not touch the renderer")
 
 			wantRenderer := "PDF renderer is disabled: the registered folder " + rendererRoot +
@@ -212,6 +224,8 @@ func TestT131_ServiceRefusesRegisteredRootOutsideOwn(t *testing.T) {
 			require.Equal(t, wantRenderer, res.RenderDetail,
 				"T-131(b): the renderer denial must be the OF-4 sentence word for word; got %q", res.RenderDetail)
 			require.Zero(t, rendererStarts, "T-131(b): the renderer must never start")
+			require.False(t, t131MarkerUnder(t, home),
+				"T-131(b)/TA-06: the renderer denial must not launch the office converter either")
 		})
 	}
 }
@@ -253,6 +267,16 @@ func TestT131_ServiceRefusesCachedRootThatBecameLink(t *testing.T) {
 			// never changes. The live count proof of the cached case belongs
 			// to a confined real row; the mutant-killer here is the exact
 			// refusal text of previews 2 and 3.
+			//
+			// TA-06 (gate round 2) disposition: the converter here is the
+			// REAL LibreOffice, so it cannot carry the marker stub the
+			// planted rows use. Its launch observation is the OUTCOME:
+			// run-limited waits for the converter synchronously, so a start
+			// behind these refusals would surface as a different, later
+			// result, and the exact instant refusals of previews 2 and 3
+			// (plus the unchanged count and unchanged results) pin that. The
+			// positive control is preview 1's produced pages — a real,
+			// observed launch — against which the frozen counts are read.
 			startsAfterFirst := starts
 
 			// The root becomes a link pointing OUTSIDE OWN; the manifest is
@@ -299,4 +323,64 @@ func t131NotInsideOwnService(t *testing.T, path, own, what string) {
 	t.Helper()
 	inside := path == own || (len(path) > len(own) && path[:len(own)] == own && path[len(own)] == filepath.Separator)
 	require.False(t, inside, "T-131(b) precondition: %s (%s) must resolve outside Omnipus's own folder %s", what, path, own)
+}
+
+// t131ConverterMarkerName is the file a real converter start leaves in the
+// call's work folder (TA-06).
+const t131ConverterMarkerName = "converter-started.marker"
+
+// t131ConverterMarkerScript is the stub converter: it records its own launch
+// next to the production --outdir argument and exits without converting. The
+// work folder is the one folder the confined rules let the converter write,
+// so the marker observes the launch path actually used in every
+// configuration.
+func t131ConverterMarkerScript() string {
+	return "#!/bin/sh\n" +
+		"out=\"\"\n" +
+		"prev=\"\"\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$prev\" = \"--outdir\" ]; then out=\"$a\"; fi\n" +
+		"  prev=\"$a\"\n" +
+		"done\n" +
+		"if [ -n \"$out\" ]; then printf 'started\\n' > \"$out/" + t131ConverterMarkerName + "\" 2>/dev/null || true; fi\n" +
+		"exit 73\n"
+}
+
+// t131MarkerUnder reports whether any converter-start marker exists under
+// root (the call folders live below the data home).
+func t131MarkerUnder(t *testing.T, root string) bool {
+	t.Helper()
+	found := false
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && d.Name() == t131ConverterMarkerName {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	require.NoError(t, walkErr, "TA-06: the data home is walkable")
+	return found
+}
+
+// TestT131_LaunchObserverPositiveControl — TA-06 (gate round 2): the
+// refusal rows below assert "no converter start" through the marker; this
+// control proves the marker really appears when a launch happens. The
+// planted office sits INSIDE OWN, so nothing refuses and the service really
+// launches the stub, which marks the call's work folder and then fails to
+// convert — the call errors, and the marker is there.
+func TestT131_LaunchObserverPositiveControl(t *testing.T) {
+	_, bin, own := t131StageProgramWorld(t)
+	home := t.TempDir()
+	t131PlantedOffice(t, home, own)
+	resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
+	svc, err := New(Config{Home: home, Self: bin, Resolver: resolver})
+	require.NoError(t, err)
+	res, previewErr := t131PreviewDocx(t, svc)
+	require.Error(t, previewErr, "TA-06 control: the marker stub cannot convert; the call fails after its real launch")
+	require.Nil(t, res)
+	require.True(t, t131MarkerUnder(t, home),
+		"TA-06 control: a real converter start must leave the work-folder marker — without this the refusal rows' no-marker assertions would be vacuous")
 }

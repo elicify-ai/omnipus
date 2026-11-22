@@ -41,7 +41,9 @@ func t132StageLockedPackagedSlots(t *testing.T, own string) (officeSlot, pdfiumS
 	}
 	officeSlot = filepath.Join(own, "office")
 	require.NoError(t, os.MkdirAll(filepath.Join(officeSlot, "program"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(officeSlot, "program", "soffice.bin"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	// TA-06: the converter is the marker stub — a real start writes the
+	// work-folder marker (observed live by TestT132_LaunchObserverPositiveControl).
+	require.NoError(t, os.WriteFile(filepath.Join(officeSlot, "program", "soffice.bin"), []byte(t131ConverterMarkerScript()), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(officeSlot, "program", "soffice"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	// D14 (team-lead 2026-11-21): the packaged-manifest writer reads the
 	// slot's product version (program/versionrc or share/registry/main.xcd);
@@ -86,16 +88,32 @@ func t132StageLockedPackagedSlots(t *testing.T, own string) (officeSlot, pdfiumS
 
 // t132Reason checks the shared <reason> conditions and returns it.
 func t132Reason(t *testing.T, message string) string {
+	return t132ReasonWithPrefix(t, message, "packaged manifest unreadable:")
+}
+
+// t132ReasonWithPrefix checks the reason conditions against a required
+// prefix and returns it (TA-05 adds the registered-manifest and
+// fingerprinted-file sources, whose causes name their own site).
+func t132ReasonWithPrefix(t *testing.T, message, wantPrefix string) string {
 	t.Helper()
 	open := strings.Index(message, "(")
 	close := strings.LastIndex(message, ")")
 	require.Greater(t, close, open, "T-132: the reason must be parenthesised")
 	reason := message[open+1 : close]
-	require.True(t, strings.HasPrefix(reason, "packaged manifest unreadable:"),
-		"T-132: the reason must begin with the manifest-unreadable cause; got %q", reason)
+	require.True(t, strings.HasPrefix(reason, wantPrefix),
+		"T-132: the reason must begin with %q; got %q", wantPrefix, reason)
 	require.Contains(t, reason, "permission denied",
 		"T-132: the refused read must be a permission failure; got %q", reason)
 	return reason
+}
+
+// t132NoConverterMarker asserts the TA-06 launch observer saw no start: the
+// packaged office converter is the marker stub, so any real start — confined
+// or not — would have left its marker in the call's work folder.
+func t132NoConverterMarker(t *testing.T, home string) {
+	t.Helper()
+	require.False(t, t131MarkerUnder(t, home),
+		"T-132/TA-06: the refusal must precede any converter start — no work-folder marker may exist")
 }
 
 // TestT132_RefusedReadUnderActiveRecordNamesTheRestart — RS-1 (a): with a
@@ -128,6 +146,7 @@ func TestT132_RefusedReadUnderActiveRecordNamesTheRestart(t *testing.T) {
 		"T-132(a): the office denial must be the RS-1 sentence; got %q", errText)
 	t132Reason(t, errText)
 	require.Zero(t, officeStarts, "T-132(a): the converter must never start")
+	t132NoConverterMarker(t, home)
 
 	res, previewErr = t131PreviewPDF(t, svc)
 	require.NoError(t, previewErr, "T-132(a): the renderer denial is a degraded result")
@@ -166,6 +185,7 @@ func TestT132_RefusedReadWithoutRecordKeepsDamagedText(t *testing.T) {
 	require.NotContains(t, errText, "stop and start Omnipus",
 		"T-132(b): no restart sentence without an active record")
 	require.Zero(t, starts, "T-132(b): the converter must never start")
+	t132NoConverterMarker(t, home)
 
 	res, previewErr = t131PreviewPDF(t, svc)
 	require.NoError(t, previewErr, "T-132(b): the renderer denial is a degraded result")
@@ -209,4 +229,125 @@ func TestT132_NonPermissionRefusalKeepsDamagedText(t *testing.T) {
 	require.NotContains(t, previewErr.Error(), "stop and start Omnipus",
 		"T-132(c): a non-permission refusal carries no restart sentence")
 	_ = res
+}
+
+// TestT132_RefusedRegisteredReadsNameTheRestart — TA-05 (gate round 2): the
+// two permission sources the packaged-manifest rows do not cover, on a
+// REGISTERED component inside OWN — (i) a fingerprinted file that cannot be
+// read (Verify's hash read) and (ii) the registered manifest itself made
+// unreadable. Under an ACTIVE startup record each source must produce the
+// RS-1 texts; without a record, today's damaged texts; refusal always
+// stands, the cause names its own site with "permission denied", and no
+// converter or renderer starts (TA-06 marker + hooks).
+func TestT132_RefusedRegisteredReadsNameTheRestart(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Fatalf("BLOCKED: T-132 runs as a non-root user — required by office-preview spec §3.9 T-132; as root a mode-000 file is still readable and the refused read cannot be produced")
+	}
+	for _, source := range []string{"fingerprinted-file", "registered-manifest"} {
+		for _, record := range []string{"active-startup-record", "no-startup-record"} {
+			t.Run(source+"/"+record, func(t *testing.T) {
+				base, bin, own := t131StageProgramWorld(t)
+				_ = base
+				home := t.TempDir()
+				officeRoot := t131PlantedOffice(t, home, own)
+				rendererRoot := t131PlantedRenderer(t, home, own)
+				var officeReason, rendererReason string
+				switch source {
+				case "fingerprinted-file":
+					officeExe := filepath.Join(officeRoot, "soffice.bin")
+					require.NoError(t, os.Chmod(officeExe, 0o000))
+					t.Cleanup(func() { _ = os.Chmod(officeExe, 0o600) })
+					_, readErr := os.ReadFile(officeExe)
+					require.ErrorIs(t, readErr, os.ErrPermission,
+						"T-132 precondition: the fingerprinted file must be unreadable, or the refused read cannot be distinguished from success")
+					rendererExe := filepath.Join(rendererRoot, "omnipus-pdfium")
+					require.NoError(t, os.Chmod(rendererExe, 0o000))
+					t.Cleanup(func() { _ = os.Chmod(rendererExe, 0o600) })
+					_, readErr = os.ReadFile(rendererExe)
+					require.ErrorIs(t, readErr, os.ErrPermission, "T-132 precondition: the renderer's fingerprinted file must be unreadable")
+					officeReason, rendererReason = "soffice.bin unreadable:", "omnipus-pdfium unreadable:"
+				case "registered-manifest":
+					for _, kind := range []component.Kind{component.KindOffice, component.KindPDFRenderer} {
+						locked := filepath.Join(component.RegisteredDir(home, kind), component.ManifestFile)
+						require.NoError(t, os.Chmod(locked, 0o000))
+						t.Cleanup(func() { _ = os.Chmod(locked, 0o600) })
+						_, readErr := os.ReadFile(locked)
+						require.ErrorIs(t, readErr, os.ErrPermission, "T-132 precondition: the registered manifest must be unreadable")
+					}
+					officeReason, rendererReason = "registered manifest unreadable:", "registered manifest unreadable:"
+				}
+				resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
+				svc, err := New(Config{Home: home, Self: bin, Resolver: resolver})
+				require.NoError(t, err)
+				if record == "active-startup-record" {
+					rec := &component.StartupGrantRecord{}
+					require.NoError(t, rec.AddGranted(own))
+					component.SetStartupGrants(rec)
+					t.Cleanup(func() { component.SetStartupGrants(nil) })
+				}
+				officeStarts, rendererStarts := 0, 0
+				testHookConverterStart = func(converterStart) { officeStarts++ }
+				testHookRendererStart = func(converterStart) { rendererStarts++ }
+				t.Cleanup(func() { testHookConverterStart = nil; testHookRendererStart = nil })
+
+				res, previewErr := t131PreviewDocx(t, svc)
+				require.Error(t, previewErr, "T-132/TA-05: the refused registered read must not convert")
+				require.Nil(t, res)
+				errText := previewErr.Error()
+				if record == "active-startup-record" {
+					require.True(t, strings.HasPrefix(errText, t132OfficeRSPrefix) && strings.HasSuffix(errText, t132OfficeRSTail),
+						"T-132/TA-05: the office denial must be the RS-1 sentence under the active record; got %q", errText)
+				} else {
+					require.True(t, strings.HasPrefix(errText, "Office preview is damaged (") && strings.HasSuffix(errText, "). Reinstall or re-register the Office preview component."),
+						"T-132/TA-05: today's damaged office text must stand without an active record; got %q", errText)
+					require.NotContains(t, errText, "stop and start Omnipus",
+						"T-132/TA-05: no restart sentence without an active record")
+				}
+				t132ReasonWithPrefix(t, errText, officeReason)
+				require.Zero(t, officeStarts, "T-132/TA-05: the converter must never start")
+				t132NoConverterMarker(t, home)
+
+				res, previewErr = t131PreviewPDF(t, svc)
+				require.NoError(t, previewErr, "T-132/TA-05: the renderer denial is a degraded result")
+				require.NotNil(t, res)
+				require.Equal(t, "renderer_damaged", res.RenderReason, "T-132/TA-05: the renderer reason code")
+				if record == "active-startup-record" {
+					require.True(t, strings.HasPrefix(res.RenderDetail, t132RenderRSPrefix) && strings.HasSuffix(res.RenderDetail, t132RenderRSTail),
+						"T-132/TA-05: the renderer denial must be the RS-1 sentence under the active record; got %q", res.RenderDetail)
+				} else {
+					require.True(t, strings.HasPrefix(res.RenderDetail, "PDF renderer damaged (") && strings.HasSuffix(res.RenderDetail, ")"),
+						"T-132/TA-05: today's damaged renderer text must stand; got %q", res.RenderDetail)
+					require.NotContains(t, res.RenderDetail, "stop and start Omnipus",
+						"T-132/TA-05: no restart sentence without an active record")
+				}
+				t132ReasonWithPrefix(t, res.RenderDetail, rendererReason)
+				require.Zero(t, rendererStarts, "T-132/TA-05: the renderer must never start")
+			})
+		}
+	}
+}
+
+// TestT132_LaunchObserverPositiveControl — TA-06: proves the marker
+// observer is live for the packaged-slot rows. With the office manifest
+// made readable the slot resolves, the service really launches the marker
+// stub, and the call fails on the stub's exit — with the marker present.
+func TestT132_LaunchObserverPositiveControl(t *testing.T) {
+	base, bin, own := t131StageProgramWorld(t)
+	_ = base
+	officeSlot, _ := t132StageLockedPackagedSlots(t, own)
+	require.NoError(t, os.Chmod(filepath.Join(officeSlot, "manifest.json"), 0o600))
+	home := t.TempDir()
+	resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
+	svc, err := New(Config{Home: home, Self: bin, Resolver: resolver})
+	require.NoError(t, err)
+	rec := &component.StartupGrantRecord{}
+	require.NoError(t, rec.AddGranted(own))
+	require.NoError(t, rec.AddGranted(officeSlot))
+	component.SetStartupGrants(rec)
+	t.Cleanup(func() { component.SetStartupGrants(nil) })
+	res, previewErr := t131PreviewDocx(t, svc)
+	require.Error(t, previewErr, "TA-06 control: the marker stub cannot convert; the call fails after its real launch")
+	require.Nil(t, res)
+	require.True(t, t131MarkerUnder(t, home),
+		"TA-06 control: a real converter start must leave the work-folder marker — without this the refusal rows' no-marker assertions would be vacuous")
 }
