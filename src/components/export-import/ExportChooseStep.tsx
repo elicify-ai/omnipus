@@ -1,6 +1,6 @@
 // ExportChooseStep — the export wizard's agent choice (spec "Export · Choose
 // agent"): the person's own agents only (built-in, locked and system agents
-// are never offered), a radio group with kind labels, a filter field, the
+// are never offered), a radio group with kind labels, a search field, the
 // one-agent note, Review gating, the empty state and the refusal shown inline.
 //
 // Review asks the server for the review (POST /packages/export/plan); a
@@ -13,7 +13,7 @@ import { createPackageExportPlan, packageErrorMessage } from '@/lib/api/packages
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Callout, CalloutDescription } from '@/components/ui/callout'
-import { Input } from '@/components/ui/input'
+import { SearchField } from '@/components/ui/search-field'
 import { QueryErrorState } from '@/components/ui/query-error-state'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -122,11 +122,11 @@ export function ExportChooseStep({ preselect, initialChosen, notice, onReviewed 
       )}
       {agentsQuery.isSuccess && own.length > 0 && (
         <>
-          <Input
+          <SearchField
             value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter agents"
-            aria-label="Filter agents"
+            onValueChange={setFilter}
+            placeholder="Search agents…"
+            aria-label="Search agents"
           />
           {shown.length === 0 ? (
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No agent matches.</p>

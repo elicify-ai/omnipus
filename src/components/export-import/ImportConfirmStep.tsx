@@ -29,7 +29,9 @@ import {
 } from '@/lib/api/packages'
 import { Button } from '@/components/ui/button'
 import { Callout, CalloutDescription } from '@/components/ui/callout'
+import { Label } from '@/components/ui/label'
 import { QueryErrorState } from '@/components/ui/query-error-state'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { clearImportRecord, readImportRecord, updateImportRecord, writeImportRecord } from './importRecord'
 import { BusyNotice, InlineError, EXPORT_IMPORT_PATH, ImportOutcomeUnknown, StepHeading } from './shared'
@@ -143,6 +145,18 @@ export function ImportConfirmStep({
     },
   })
 
+  // The one Import: never sent while one is in flight, nor again once the tab
+  // record says Import was sent for this upload (its outcome is unknown).
+  function sendImport() {
+    if (apply.isPending) return
+    const record = readImportRecord()
+    if (record?.staging_id === stagingId && record.phase === 'apply_sent') {
+      setOutcome({ kind: 'unknown' })
+      return
+    }
+    apply.mutate({ wsId: workspaceId, wsName: workspaceName })
+  }
+
   function chooseWorkspace(id: string) {
     setChosen(id)
     const name = workspaces.find((w) => w.id === id)?.name
@@ -214,23 +228,21 @@ export function ImportConfirmStep({
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Create a workspace first.</p>
       )}
       {workspacesQuery.isSuccess && workspaces.length > 0 && (
-        <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-label-size)] text-[var(--color-secondary)]">
-          Workspace
-          <select
-            value={workspaceId}
-            disabled={busy}
-            onChange={(e) => chooseWorkspace(e.target.value)}
-            tabIndex={0}
-            className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <option value="">Choose a workspace</option>
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-col gap-[var(--space-1)]">
+          <Label htmlFor="import-workspace">Workspace</Label>
+          <Select value={workspaceId} onValueChange={chooseWorkspace} disabled={busy}>
+            <SelectTrigger id="import-workspace">
+              <SelectValue placeholder="Choose a workspace" />
+            </SelectTrigger>
+            <SelectContent>
+              {workspaces.map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       )}
 
       <InlineError text={outcome?.kind === 'refused' ? outcome.text : null} />
@@ -253,7 +265,7 @@ export function ImportConfirmStep({
         {workspacesQuery.isSuccess && workspaces.length > 0 && (
           <Button
             disabled={!workspaceId || busy}
-            onClick={() => apply.mutate({ wsId: workspaceId, wsName: workspaceName })}
+            onClick={sendImport}
           >
             {outcome?.kind === 'refused' && outcome.tryAgain ? 'Try again' : 'Import'}
           </Button>

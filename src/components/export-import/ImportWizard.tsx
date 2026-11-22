@@ -104,12 +104,14 @@ export function ImportWizard({ search }: { search: ExportImportSearch }) {
       return { kind: 'landing' }
     }
     if ((s.step === 'preview' || s.step === 'confirm') && s.staging_id) {
-      if (held.current?.staging_id === s.staging_id) {
-        return { kind: s.step, preview: held.current }
-      }
+      // The tab record outranks the held preview: once Import was sent for
+      // this upload, Back/Forward shows the unknown outcome, never the form.
       const record = readImportRecord()
       if (record?.staging_id === s.staging_id && record.phase === 'apply_sent') {
         return { kind: 'unknown', workspaceId: record.workspace_id }
+      }
+      if (held.current?.staging_id === s.staging_id) {
+        return { kind: s.step, preview: held.current }
       }
       return { kind: 'reloading', stagingId: s.staging_id }
     }
@@ -141,7 +143,6 @@ export function ImportWizard({ search }: { search: ExportImportSearch }) {
       show({ kind: 'uncertain', workspaceId }, search)
     })
     // One cancel per reloaded upload; the answer decides the view.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadStaging])
 
   // Leaving the wizard: one silent cancel for an upload that was previewed
@@ -171,6 +172,12 @@ export function ImportWizard({ search }: { search: ExportImportSearch }) {
 
   // Cancel on Preview or Confirm: the one cancel, its answer decides.
   async function cancelUpload(stagingId: string) {
+    // An Import already sent for this upload: no cancel, the outcome is unknown.
+    const record = readImportRecord()
+    if (record?.staging_id === stagingId && record.phase === 'apply_sent') {
+      show({ kind: 'unknown', workspaceId: record.workspace_id }, search)
+      return
+    }
     if (cancelSent.current.has(stagingId)) return
     cancelSent.current.add(stagingId)
     setCancelling(true)

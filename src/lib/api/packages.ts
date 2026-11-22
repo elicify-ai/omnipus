@@ -25,7 +25,7 @@ import {
 } from './generated/schemas'
 import type { ZodType } from 'zod'
 import { request, requestResponse, type RequestOptions } from './http'
-import { isApiError, PLANTED_COOKIE_CLEARED_CODE, type ApiError } from '../api-error'
+import { ApiError, isApiError, PLANTED_COOKIE_CLEARED_CODE } from '../api-error'
 
 export type {
   PackageImportPreview,
@@ -256,14 +256,19 @@ export async function getPackageExportPlan(planId: string): Promise<PackageExpor
   )
 }
 
+// Only a 204 proves the cancel ran (spec "What a cancel answer proves"). Any
+// other successful answer (a proxy's 200 page, a 202, a 205) proves nothing:
+// it is rejected with its raw status so the wizard shows Uncertain. Error
+// answers keep the transport's ApiError (session, coded 500, network).
 export async function cancelPackageImport(stagingId: string): Promise<void> {
-  await request<void>(
+  const res = await requestResponse(
     `/packages/import/${encodeURIComponent(stagingId)}`,
     { method: 'DELETE' },
-    undefined,
-    undefined,
     NO_REPLAY,
   )
+  if (res.status !== 204) {
+    throw new ApiError(res.status, PACKAGE_TEXT.uncertain, { code: 'cancel_unconfirmed' })
+  }
 }
 
 export async function exportPackage(agentIds: string[]): Promise<PackageDownload> {
