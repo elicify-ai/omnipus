@@ -28,6 +28,8 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { expectA11yClean } from './fixtures/a11y';
+import { closeSidebar, openSidebar } from './fixtures/selectors';
+import { e2eAgentModelFields } from './fixtures/e2e-agent-model';
 import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
@@ -108,6 +110,10 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
         name: AGENT_NAME,
         soul: soulText,
         description: 'Seeded for the export/import B1 end-to-end row',
+        // Every agent an e2e spec creates carries the sanctioned model fixture
+        // (tests/e2e/README.md, "Which pair a fixture uses") — never literals
+        // at the call site.
+        ...e2eAgentModelFields('live'),
       },
     });
     expect(created.status(), await created.text()).toBe(201);
@@ -120,8 +126,15 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     await expect(page.getByTestId('workspace-top-bar')).toBeVisible({ timeout: 20_000 });
 
     // ── US-1: the sidebar entry opens the landing. ──
+    // At the e2e viewport the sidebar is closed and its nav is mounted only
+    // while open (Sidebar.tsx), so the shared helper opens it first (CI PR
+    // #1971, E2E - ui-4: the bare link click timed out). The unpinned drawer
+    // leaves a click-catcher overlay that would intercept every later
+    // click, so it is closed again before the wizard steps begin.
+    await openSidebar(page);
     await page.getByRole('link', { name: 'Export & Import' }).click();
     await expect(page.getByRole('heading', { name: 'Export & Import' })).toBeVisible();
+    await closeSidebar(page);
     await expectA11yClean(page);
 
     // ── US-2: export the seeded agent. ──
@@ -200,13 +213,20 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     await expectA11yClean(page);
 
     // ── The imported agent is reachable in the workspace Team. ──
+    // Open Team lands on the chat page with the team PANEL (?panel=team,
+    // shared.tsx::useOpenTeam); the panel renders the same member cards as
+    // the Team tab (TeamListView's TeamAgentCard).
     await page.getByRole('button', { name: 'Open Team' }).click();
     await expect(page.getByText(IMPORTED_NAME)).toBeVisible({ timeout: 20_000 });
 
     // ── US-3: the sheets — no Export on Mia, Export lands on Choose ticked. ──
+    // A member card opens its sheet only through the card's actions menu
+    // (TeamListView: "Actions for <name>" → "Edit <name>" →
+    // openEditAgentSlideOver); the card's name text is not a trigger.
     // The sheet must be OPEN before its buttons are judged (CHECK W03): a
     // closed sheet would also have no Export button, proving nothing.
-    await page.getByText('Mia').first().click();
+    await page.getByRole('button', { name: 'Actions for Mia' }).click();
+    await page.getByRole('button', { name: 'Edit Mia' }).click();
     const miaSheet = page.getByRole('dialog');
     await expect(miaSheet, "Mia's sheet is open before its controls are judged").toBeVisible();
     await expect(miaSheet.getByRole('button', { name: 'Export' })).toHaveCount(0);
@@ -214,16 +234,24 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
 
     // Exact created-agent selection (CHECK 2 W03): after the import, both
     // "Writer B1" and a suffixed imported copy exist — a substring locator
-    // would match either. The seeded agent's row is matched by its exact
-    // name.
-    await page.getByText(AGENT_NAME, { exact: true }).click();
+    // would match either. The sheet step anchors on the IMPORTED COPY: the
+    // import joins the copy to the chosen workspace, while the seeded source
+    // stays workspaceless and has no Team card to click. It is the same
+    // custom-agent sheet the row names (US-3), now addressed by the id the
+    // apply response returned (CHECK 3 N05/N06).
+    const importedCard = page.getByTestId(`team-card-${importedId}`);
+    await expect(importedCard, 'the imported copy has a Team card').toBeVisible();
+    await importedCard.getByRole('button', { name: /^Actions for / }).click();
+    await page
+      .getByRole('button', { name: new RegExp(`^Edit ${AGENT_NAME} \\(imported( \\d+)?\\)$`) })
+      .click();
     const writerSheet = page.getByRole('dialog');
-    await expect(writerSheet, 'the seeded agent sheet is open').toBeVisible();
+    await expect(writerSheet, 'the imported agent sheet is open').toBeVisible();
     await writerSheet.getByRole('button', { name: 'Export' }).click();
     await expect(page).toHaveURL(/export-import/);
-    // The Choose step landed with THE SEEDED agent ticked — the imported copy
-    // must not satisfy this assertion, so the radio is matched exactly too.
-    await expect(page.getByRole('radio', { name: AGENT_NAME, exact: true })).toBeChecked();
+    // The Choose step landed with THE IMPORTED agent ticked — the preselect
+    // carries the id the apply response returned.
+    await expect(page.getByRole('radio', { name: IMPORTED_NAME })).toBeChecked();
   } catch (e) {
     // The finally block below runs on this path too; keep the primary error
     // so cleanup can never mask or replace it (CHECK 3 W03).
@@ -234,9 +262,25 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     // cleanup or replace the flow's own failure.
     for (const id of createdIds) {
       try {
-        const del = await page.request.delete(`${baseURL}/api/v1/agents/${id}`, {
+        // Deletion requires the agent's current revision — the gateway
+        // refuses a bare DELETE as a malformed revision before any
+        // destructive write (rest_agents.go deleteAgent, FR-037/C-DELETE),
+        // so the revision is fetched first, as tool-iteration-limit.spec.ts
+        // does. An agent already gone (404) stays clean.
+        const got = await page.request.get(`${baseURL}/api/v1/agents/${id}`, {
           headers: await apiHeaders(page),
         });
+        if (!got.ok()) {
+          if (got.status() !== 404) {
+            problems.push(`fetch ${id} for revision failed: ${got.status()}`);
+          }
+          continue;
+        }
+        const { revision } = (await got.json()) as { revision?: string };
+        const del = await page.request.delete(
+          `${baseURL}/api/v1/agents/${id}?revision=${encodeURIComponent(String(revision))}`,
+          { headers: await apiHeaders(page) },
+        );
         if (!del.ok() && del.status() !== 404) {
           problems.push(`delete ${id} failed: ${del.status()}`);
         }
