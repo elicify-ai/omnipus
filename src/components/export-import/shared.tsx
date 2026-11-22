@@ -1,8 +1,9 @@
 // Shared pieces of the Export & Import wizards (epic #1094, slice B1): the
 // focused step heading, byte formatting, the address helpers and the two
 // "we cannot tell what happened" screens.
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import type { ExportImportSearch } from '@/routes/_app/export-import'
 import { Button } from '@/components/ui/button'
 import { Callout, CalloutDescription } from '@/components/ui/callout'
 import { PACKAGE_TEXT } from '@/lib/api/packages'
@@ -48,6 +49,65 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/**
+ * A stable key for an address search (key order and unset keys do not
+ * matter), so a wizard can tell its own navigation from an address change
+ * that comes from outside (a link, Back, a reload).
+ */
+export function searchKey(search: object): string {
+  return JSON.stringify(
+    Object.entries(search)
+      .filter(([, value]) => value !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b)),
+  )
+}
+
+/**
+ * A wizard's view, kept in local state and in the address. The view starts
+ * from the address and follows it only when the address changes from
+ * outside; `go` shows the next view at once and writes its address, so a
+ * reload lands on the same step.
+ */
+export function useAddressView<V>(search: ExportImportSearch, seed: (search: ExportImportSearch) => V) {
+  const navigate = useNavigate()
+  const [view, setView] = useState<V>(() => seed(search))
+  const key = searchKey(search)
+  const lastKey = useRef(key)
+  useEffect(() => {
+    if (lastKey.current === key) return
+    lastKey.current = key
+    setView(seed(search))
+    // Only an address change re-seeds the view; `search` and `seed` are read through it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+  const go = useCallback(
+    (next: V, nextSearch: ExportImportSearch) => {
+      setView(next)
+      lastKey.current = searchKey(nextSearch)
+      void navigate({ to: EXPORT_IMPORT_PATH, search: nextSearch })
+    },
+    [navigate],
+  )
+  /** Shows a view whose address a step writes itself. */
+  const show = useCallback((next: V, nextSearch: ExportImportSearch) => {
+    setView(next)
+    lastKey.current = searchKey(nextSearch)
+  }, [])
+  return { view, setView, go, show }
+}
+
+// A one-shot notice for the landing, set by a wizard just before it leaves
+// for the landing (the upload was cancelled but its temporary files stay).
+let landingNotice: string | undefined
+
+export function setLandingNotice(text: string | undefined): void {
+  landingNotice = text
+}
+
+export function peekLandingNotice(): string | undefined {
+  return landingNotice
 }
 
 /** Opens the Team panel of a workspace's chat (the Team lives there, `?panel=team`). */

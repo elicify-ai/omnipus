@@ -1,15 +1,11 @@
 // ExportWizard — the export wizard shell (spec "Export · Choose agent",
 // "Review", "Download"): the Stepper plus the current step.
 //
-// The step lives in the address (`wizard=export&step=…&plan_id=…`). The shell
-// keeps a local copy initialised from the search, so a step change shows at
-// once, and it also writes the address so a reload lands on the same step.
-// The local copy follows the search only when the search itself changes.
-import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+// The step lives in the address (`wizard=export&step=…&plan_id=…`); see
+// useAddressView for how the local view and the address stay together.
 import { Stepper } from '@/components/ui/stepper'
 import type { ExportImportSearch } from '@/routes/_app/export-import'
-import { EXPORT_IMPORT_PATH, EXPORT_STEPS } from './shared'
+import { EXPORT_STEPS, useAddressView } from './shared'
 import { ExportChooseStep, EXPORT_EXPIRED_NOTICE } from './ExportChooseStep'
 import { ExportReviewStep } from './ExportReviewStep'
 import { ExportDownloadStep } from './ExportDownloadStep'
@@ -32,39 +28,23 @@ function viewFromSearch(search: ExportImportSearch): ExportView {
 }
 
 export function ExportWizard({ search }: { search: ExportImportSearch }) {
-  const navigate = useNavigate()
-  const [view, setView] = useState<ExportView>(() => viewFromSearch(search))
-
-  const searchKey = JSON.stringify(search)
-  const lastKey = useRef(searchKey)
-  useEffect(() => {
-    if (lastKey.current === searchKey) return
-    lastKey.current = searchKey
-    setView(viewFromSearch(search))
-    // Only the address change re-seeds the view; `search` is read through it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchKey])
-
+  const { view, go } = useAddressView(search, viewFromSearch)
   const preselect = search.preselect
 
-  function go(next: ExportView) {
-    setView(next)
-    void navigate({
-      to: EXPORT_IMPORT_PATH,
-      search: {
-        wizard: 'export',
-        step: next.step,
-        scope: 'agents',
-        ...(next.planId ? { plan_id: next.planId } : {}),
-        ...(preselect !== undefined ? { preselect } : {}),
-      },
+  function goStep(next: ExportView, keepPreselect = true) {
+    go(next, {
+      wizard: 'export',
+      step: next.step,
+      scope: 'agents',
+      ...(keepPreselect && preselect !== undefined ? { preselect } : {}),
+      ...(next.planId ? { plan_id: next.planId } : {}),
     })
   }
 
   // The review is gone (expired, evicted, or the gateway restarted): back to
   // Choose with the notice; the agent stays ticked only through the address.
   function expired() {
-    go({ step: 'choose', notice: EXPORT_EXPIRED_NOTICE })
+    goStep({ step: 'choose', notice: EXPORT_EXPIRED_NOTICE })
   }
 
   const current = view.step === 'choose' ? 0 : view.step === 'review' ? 1 : 2
@@ -77,27 +57,24 @@ export function ExportWizard({ search }: { search: ExportImportSearch }) {
           preselect={preselect}
           notice={view.notice}
           initialChosen={view.chosenId}
-          onReviewed={(planId) => go({ step: 'review', planId })}
+          onReviewed={(planId) => goStep({ step: 'review', planId })}
         />
       )}
       {view.step === 'review' && view.planId && (
         <ExportReviewStep
           planId={view.planId}
-          onBack={(agentId) => go({ step: 'choose', chosenId: agentId })}
-          onDownload={() => go({ step: 'download', planId: view.planId })}
+          onBack={(agentId) => goStep({ step: 'choose', chosenId: agentId })}
+          onDownload={() => goStep({ step: 'download', planId: view.planId })}
           onExpired={expired}
         />
       )}
       {view.step === 'download' && view.planId && (
         <ExportDownloadStep
           planId={view.planId}
-          onBackToReview={() => go({ step: 'review', planId: view.planId })}
+          onBackToReview={() => goStep({ step: 'review', planId: view.planId })}
           onExpired={expired}
-          onExportAnother={() => {
-            setView({ step: 'choose' })
-            void navigate({ to: EXPORT_IMPORT_PATH, search: { wizard: 'export', step: 'choose', scope: 'agents' } })
-          }}
-          onDone={() => void navigate({ to: EXPORT_IMPORT_PATH, search: {} })}
+          onExportAnother={() => goStep({ step: 'choose' }, false)}
+          onDone={() => go({ step: 'choose' }, {})}
         />
       )}
     </>

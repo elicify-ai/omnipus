@@ -3,17 +3,21 @@
 // agents as a bundle file."), **Start import** ("Add an agent from a bundle
 // file.")); outside the self-hosted edition the page shows the unavailable
 // notice instead and offers no wizard.
+import { useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { PageHeader } from '@/components/ui/page-header'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Callout, CalloutDescription } from '@/components/ui/callout'
-import { EXPORT_IMPORT_PATH } from './shared'
+import { EXPORT_IMPORT_PATH, peekLandingNotice, setLandingNotice } from './shared'
 
 const PAGE_TITLE = 'Export & Import'
 
-export function ExportImportLanding({ notice }: { notice?: string }) {
+export function ExportImportLanding() {
   const navigate = useNavigate()
+  // A notice handed over by the wizard that just left (shown once).
+  const [notice] = useState(peekLandingNotice)
+  useEffect(() => setLandingNotice(undefined), [])
   return (
     <>
       <PageHeader title={PAGE_TITLE} />
