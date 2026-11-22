@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -179,7 +180,7 @@ func classifyProgramError(err error, proc *launcher.Process) *failure {
 	case "wall":
 		return programFailure("rendering stopped: time limit exceeded")
 	}
-	if waitErr := proc.Wait(); waitErr != nil && strings.Contains(waitErr.Error(), "cputime limit exceeded") {
+	if cpuLimitKilled(proc.Wait()) {
 		return programFailure("rendering stopped: CPU time exceeded")
 	}
 	if protocol.IsProtocolError(err) {
@@ -189,6 +190,21 @@ func classifyProgramError(err error, proc *launcher.Process) *failure {
 		return programFailure("PDF renderer failed (" + tail + ")")
 	}
 	return programFailure("PDF renderer failed (" + err.Error() + ")")
+}
+
+// cpuLimitKilled reports a program ended by its CPU-time limit
+// (programCPUSeconds, RLIMIT_CPU with soft = hard): killed by a signal after
+// using at least the limit. The signal differs by system: Linux sends SIGKILL
+// at the hard limit (kernel posix-cpu-timers), macOS SIGXCPU; so the signal's
+// name or the error text cannot tell it apart, the CPU time used can. On
+// Windows a process never ends by a signal, so this is always false there.
+func cpuLimitKilled(waitErr error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) || exitErr.ProcessState == nil || exitErr.Exited() {
+		return false
+	}
+	used := exitErr.UserTime() + exitErr.SystemTime()
+	return used >= programCPUSeconds*time.Second
 }
 
 // officeConversion converts one Office document to PDF with LibreOffice.
