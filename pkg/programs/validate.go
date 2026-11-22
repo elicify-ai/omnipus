@@ -179,17 +179,15 @@ func validateCustom(req *CustomRequest, existing []ProgramEntry) error {
 		return err
 	}
 	name := strings.TrimSpace(req.DisplayName)
-	custom := 0
 	for _, e := range existing {
 		if strings.EqualFold(strings.TrimSpace(e.DisplayName), name) || strings.EqualFold(e.ID, name) {
 			return conflict("The name %s is already used by %s. Choose another name.", name, e.DisplayName)
 		}
-		if e.Kind == KindCustom {
-			custom++
-		}
 	}
-	if custom >= MaxEntries {
-		return conflict("There are already %d custom programs, the most allowed. Delete one first.", MaxEntries)
+	// The cap counts every entry in Settings → Programs, presets included
+	// (scope boundary "≤ 32 entries", D-2 row 31).
+	if len(existing) >= MaxEntries {
+		return conflict("Settings → Programs already has %d programs, the most allowed. Delete one first.", MaxEntries)
 	}
 	return nil
 }
