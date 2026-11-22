@@ -8,6 +8,12 @@
 # installing, then checked for the pinned version and started once so a missing
 # system library stops here with its own message.
 # Renderer: native/omnipus-pdfium/build.sh, which verifies its own pins.
+#
+# Both land in Omnipus's own-folder layout under <output dir>/prefix:
+# prefix/share/omnipus/office and prefix/share/omnipus/pdfium. On Linux a
+# component is registered and used only strictly inside dir(E)/../share/omnipus
+# (office-preview spec §3.9 OF-3, OF-4), so the tests take the program path
+# E = <output dir>/prefix/bin/omnipus from these folders.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,7 +57,13 @@ while IFS= read -r -d '' deb; do
 done < <(find "$work" -name '*.deb' -print0)
 [ "$found" -gt 0 ] || { echo "office-real: the archive held no packages" >&2; exit 4; }
 
-office="$out/libreoffice/$LIBREOFFICE_DIR"
+own="$out/prefix/share/omnipus"
+mkdir -p "$own"
+[ -d "$out/libreoffice/$LIBREOFFICE_DIR" ] || { echo "office-real: $LIBREOFFICE_DIR missing from the unpacked packages" >&2; exit 4; }
+# A move, never a link: a link out of the own folder is refused (§3.9 OF-3).
+mv "$out/libreoffice/$LIBREOFFICE_DIR" "$own/office"
+rm -rf "$out/libreoffice"
+office="$own/office"
 for f in program/soffice program/soffice.bin share/registry/main.xcd; do
   [ -f "$office/$f" ] || { echo "office-real: $f missing from the unpacked LibreOffice" >&2; exit 4; }
 done
@@ -70,7 +82,7 @@ case "$version_output" in
   *) echo "office-real: unexpected version output: $version_output" >&2; exit 5 ;;
 esac
 
-renderer="$out/pdfium"
+renderer="$own/pdfium"
 bash "$repo/native/omnipus-pdfium/build.sh" linux-amd64 "$renderer" "$dl"
 for f in omnipus-pdfium libpdfium.so manifest.json; do
   [ -f "$renderer/$f" ] || { echo "office-real: $f missing from the renderer build" >&2; exit 6; }
