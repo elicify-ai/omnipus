@@ -100,6 +100,11 @@ type exportedAgent struct {
 	files    []packagedFile
 	name     string
 	envNames []string // removed executor environment-override names (FR-014)
+	// stored is the record as the store returned it, before cleaning. Only
+	// the export review reads it, to say which removed settings were present
+	// (names only; B1 left_out rules). It never enters the package.
+	stored []byte
+	kind   string // the review's agent kind (main, worker, external_worker)
 }
 
 // collectAgentFiles reads and cleans the record and captures SOUL.md and
@@ -153,7 +158,14 @@ func collectAgentFiles(src ExportSource, id string) (*exportedAgent, error) {
 	if mdPresent {
 		files = append(files, packagedFile{path: agentInstructionsPath(id), body: agentMD})
 	}
-	return &exportedAgent{files: files, name: v.Name, envNames: envNames}, nil
+	kind := PlanKindMain
+	switch {
+	case external:
+		kind = PlanKindExternalWorker
+	case ac.IsWorker():
+		kind = PlanKindWorker
+	}
+	return &exportedAgent{files: files, name: v.Name, envNames: envNames, stored: raw, kind: kind}, nil
 }
 
 // sourceErr passes a coded source error through and wraps any other.
