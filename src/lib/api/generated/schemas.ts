@@ -16162,7 +16162,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/settings/retention",
     alias: "updateRetentionSettings",
-    description: `The only write path for retention (Settings redesign #1519, C-3). Takes RetentionSettingsUpdate, applies the sent fields to the stored values read inside the config write lock, writes once, and answers 200 with RetentionSettings. Ranges are enforced in the handler whatever gateway.validate_inbound is (review MAJ-004): session_days 1–365, memory_retros_days 1–730 (validated whenever sent, also while memory_retros_forever is true), memory_retros_forever a boolean; a body carrying keep_everything_forever or any unknown field, an empty body, and a wrong type each answer 400 naming the field and its range. Every other writer that would change the effective retention values — the generic PUT /config included — is refused by effect (FR-044).
+    description: `The only write path for retention (Settings redesign #1519, C-3). Takes RetentionSettingsUpdate, applies the sent fields to the stored values read inside the config write lock, writes once, and answers 200 with RetentionSettings. Ranges are enforced in the handler whatever gateway.validate_inbound is (review MAJ-004): session_days 1–365, memory_retros_days 1–730 (validated whenever sent, also while memory_retros_forever is true), memory_retros_forever a boolean; a body carrying keep_everything_forever or any unknown field, an empty body, and a wrong type each answer 400 naming the field and its range. Every other writer that would change the effective retention values — the generic PUT /config included — is refused by effect (FR-044). If config.json was written but the running settings could not be refreshed afterwards, the answer is 500 ErrorResponse with code &quot;saved_not_refreshed&quot; and details.keys naming the changed storage.retention.* keys, which are also listed as apply_failed in GET /config/pending-restart (C-6 outcome table): saved, not in use; the retention sweeps keep the running values until a later refresh or a restart. A failure before config.json was written answers 500 without that code.
 `,
     requestFormat: "json",
     parameters: [
@@ -16182,6 +16182,12 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Failed before the write (no code), or written and then the live refresh failed (code &quot;saved_not_refreshed&quot;, details.keys).
+`,
         schema: ErrorResponse,
       },
       {
