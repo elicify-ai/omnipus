@@ -89,7 +89,7 @@ GitNexus was not available; every row below is from `grep`/`Read` at `4e34afa416
 | Approval grant store re-keyed by agent with end times; every approval card (C-26) | **HIGH** — security focus areas `pkg/security`, `pkg/sandbox`, `pkg/audit`; every Ask tool of every agent | `checkStandingGrant`, `HandleToolApprovals`, `approvalGrantRecorder`, shell D7/D8 pre-flights, `inheritSessionPermissions`, `session_end.go`, approval card components | every Ask decision in chats and unattended runs; egress proxy tokens |
 | `ToolPolicyEditor` (preset removal, Skills group) | MEDIUM | `ToolsAndPermissions.tsx`, `SecuritySection.tsx` (leaves Settings) | agent profile Tools tab |
 
-The seven HIGH rows need sign-off before GREEN starts. They touch `pkg/agent` and the tool-policy engine, so hands-on UAT on the cut commit is mandatory (rows ST-01 to ST-31 below).
+The seven HIGH rows need sign-off before GREEN starts. They touch `pkg/agent` and the tool-policy engine, so hands-on UAT on the cut commit is mandatory (rows ST-01 to ST-32 below).
 
 ---
 
@@ -277,12 +277,13 @@ A Deny anywhere (global, the agent's own value, trust Deny for an unverified ski
 - Rows 6 and 8 stage the skill (download and unpack into the existing staging area; never published) before the card is raised, through the existing pre-approval seam (`pkg/agent/loop_run_turn_tools.go::requestAskApproval` → `prepareApprovalRequest`), so the card shows the real revision and verification. A staged copy that is denied, times out or is refused is discarded. `install_skill` stays `AutoAsks`; its own permission is never dropped to save a card.
 - God Mode lifts a global Ask; an agent's own Ask still counts, and Auto-approve is never active in God Mode, so that Ask gives row 2 (card) or a skip.
 - A card answered after its facts changed is re-checked before anything is stored (C-24).
+- A change of the skill's permission (global or this agent's own) ends this agent's running allowance for it, so the next load follows the table from the top (C-26 point 7). A trust change ends nothing: an allowance never covers the trust part.
 
 Stored consent:
 
 | Kind | Where | Lifetime |
 |---|---|---|
-| Timed allowance | the existing in-memory grant store (`pkg/security/approvalgrants.go::ApprovalGrantStore`), re-keyed by C-26: agent and skill key (C-23); never written to disk | until its end time (1 hour, 3 hours or 1 day after the answer) or a gateway restart; covers the permission part only, so an unverified skill's changed revision still gets a trust card |
+| Timed allowance | the existing in-memory grant store (`pkg/security/approvalgrants.go::ApprovalGrantStore`), re-keyed by C-26: agent and skill key (C-23); never written to disk | until its end time (1 hour, 3 hours or 1 day after the answer), a gateway restart, or a change of that skill's permission for that agent or globally (C-26 point 7); covers the permission part only, so an unverified skill's changed revision still gets a trust card |
 | Trust approval | `$OMNIPUS_HOME/system/skill-trust-approvals.json` (C-24): skill key, revision, who, when; written only by a person's action | installation-wide; that revision only |
 | Global permission | `sandbox.skill_policies` (C-2) | until a person changes it |
 
@@ -513,8 +514,8 @@ Server rules — one handler path, `pkg/gateway/rest_tool_registry.go::HandleToo
 | Order of effects | (1) the trust approval, when the action includes it (durable write); (2) the timed allowance, for `allow_for` and `approve_version_allow_for` (in memory, C-26); (3) release the waiting call. Each step starts only after the previous one has finished |
 | Partial failure | (1) fails → nothing else happens; 500 "Could not save the approval. Nothing was changed."; the card stays open for another answer until the approval times out. (2) fails after (1) → the call is still released (its consent is complete: trust approved, this call approved); `applied.timed_allowance` is false and `not_applied_reason` reads "Approved for this request only. The time limit was not saved: <reason>."; the card shows that line |
 | Replay and expiry | An answered, timed-out or unknown approval id → the existing 404 "approval … not found"; nothing happens twice. A retry after a 500 uses the same id while it is still pending |
-| Audit | every trust approval writes `skill.trust_approved` with key, revision and actor; a timed allowance writes the C-26 audit entry (agent, subject, duration, end time, actor). No stored permission changes, so no `sandbox.skill_policies` entry is written by a card |
-| Scope | A timed allowance from a skill card covers that agent's use of that skill — the permission part only — in all its chats, its task, plan and scheduled runs and its own helpers, until it ends (C-26). It never counts as a trust approval, of this or a later revision, and never changes a stored permission. The card shows under the time choices: "Covers <agent> in all its chats, tasks and its own helpers until the time ends or Omnipus restarts. Other agents still ask." |
+| Audit | every trust approval writes `skill.trust_approved` with key, revision and actor; a timed allowance writes the C-26 audit entry (agent, subject, duration, end time, actor), and a permission change that ends it writes `approval.allowance_ended`. No stored permission changes, so no `sandbox.skill_policies` entry is written by a card |
+| Scope | A timed allowance from a skill card covers that agent's use of that skill — the permission part only — in all its chats, its task, plan and scheduled runs and its own helpers, until it ends or the skill's permission changes (C-26). It never counts as a trust approval, of this or a later revision, and never changes a stored permission. The card shows under the time choices: "Covers <agent> in all its chats, tasks and its own helpers until the time ends or Omnipus restarts. Other agents still ask." |
 
 Approve Once keeps today's meaning. Neither Approve Once nor a timed allowance records a trust approval or changes a stored permission.
 
@@ -547,13 +548,19 @@ The Linux kernel extension is 🔶 Inferred (medium confidence): the enumeration
 4. A lasting Allow exists only as stored policy: the agent's own policy for the tool or skill (its Tools tab) under a global value of Allow (Skills & Tools). The global policy always wins, as today: an agent cannot be Allow where the global value is Ask or Deny. Where the screen offers to set an agent to Allow while the global value is Ask, that control is disabled, with a tooltip saying the global policy must be Allow first and a link to it.
 5. A timed allowance is a person's answer to an Ask, so it works wherever Approve Once works — under a global Ask and under the agent's own Ask; under Deny no card appears. Unattended task, plan and scheduled runs honour a timed allowance that is still running (replacing today's per-chat "Always Allow grant" wording), and they still never ask or wait.
 
+**Follow-up rulings, 2026-11-22** (founder Q4 B at 05:07Z and team-lead's calls, relayed by team-lead):
+
+6. On an **ordinary tool card** a time choice covers the **whole tool** for that agent until it ends — like a timed agent-level Allow, whatever the arguments (founder Q4 B). The narrow cards stay narrow: one path with its access, the named network address(es), one shell command or command family. A skill card's time choice covers that skill's permission part. The global value still wins: an allowance answers an Ask and never lifts a Deny.
+7. Any change of a tool's or a skill's stored permission — global or for one agent, including setting it back to Ask — ends that tool's or skill's running allowances for every agent the change affects, and each ended allowance is audited (team-lead).
+8. The server keeps today's behaviour for a looser agent value: it may be stored, the stricter global value wins at run time, and only the screen blocks it (team-lead).
+
 Unchanged: strictest wins (C-0); God Mode lifts a global Ask and never an agent's own Ask or Deny; Auto-approve and its order (checked before the unattended refusal, C-12); Approve Once; Deny; Cancel where a card has it today; operator `command_rules`; `omnipus run --yes` (sends `allow_once`, `pkg/app/internal/run/run.go::resolveApproval`).
 
 **Which card offers what**
 
-| Card | Today | After this package | What a time choice covers (same subject as today's grant, now for the agent and timed) |
+| Card | Today | After this package | What a time choice covers, for that agent until it ends |
 |---|---|---|---|
-| Ordinary tool card (any tool at Ask) | Approve Once, Deny, Always Allow, Cancel | Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny, Cancel | the same tool with the same arguments (today's exact-call fingerprint, `fingerprintArgs`) |
+| Ordinary tool card (any tool at Ask) | Approve Once, Deny, Always Allow, Cancel | Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny, Cancel | the **whole tool**, any arguments (founder Q4 B; wider than today's exact-call grant) |
 | Shell card | the same, with the exact / prefix choice for Always Allow | the same, with the exact / prefix choice applied to the time choice | the exact command, or the command family (`ShellPrefixGrant`: resolved program, argument prefix, foreground or background) |
 | Shell file-access pre-flight card (D7) | Approve Once, Always Allow (one path) | Approve Once, Allow for …, Deny | that one path with the access the command needed |
 | Shell network pre-flight card naming addresses (D8) | Approve Once, Always Allow (those addresses) | Approve Once, Allow for …, Deny | exactly the named addresses |
@@ -568,12 +575,13 @@ Unchanged: strictest wins (C-0); God Mode lifts a global Ask and never an agent'
 
 | Topic | Rule |
 |---|---|
-| Key | (agent id, kind, subject). The session id is no longer part of the key. The agent is the pending approval's `entry.AgentID` — the agent named on the card — also when the card is shown in another agent's chat (a helper's card in the root chat) |
+| Key | (agent id, kind, subject). Subject: the tool name for an ordinary tool card; the command or command family, the path with its access, or the address set for the shell cards; the skill key for a skill card. The session id is no longer part of the key. The agent is the pending approval's `entry.AgentID` — the agent named on the card — also when the card is shown in another agent's chat (a helper's card in the root chat) |
 | Covers | every session of that agent: its chats in every workspace, group-chat steps, channel conversations, task, plan and scheduled runs, and helpers it starts for itself (same agent id). A helper of another agent, or a delegation to another agent, is not covered and asks as usual |
 | Length | `1h`, `3h` or `1d` (24 hours), measured on the server's monotonic clock from the moment the allowance is recorded. `expires_at` reports the end in wall-clock time |
 | A second answer for the same subject | the later end time wins; an answer never shortens a running allowance |
-| End | at the end time, at a gateway stop or restart (the store is in memory), or when the agent is deleted (`pkg/gateway/rest_agents.go::deleteAgent` and `pkg/sysagent/tools/agent.go` delete paths drop its allowances). Nothing ends it early otherwise; there is no list to review it, as today (open point for team-lead and security review, below) |
-| Deny | a Deny anywhere (global, the agent's own) refuses before any allowance is looked at, as today. An allowance is not removed by a policy change; if a Deny is lifted back to Ask while the allowance is still running, the allowance applies again (open point for team-lead, below) |
+| End | at the end time; at a gateway stop or restart (the store is in memory); when the agent is deleted (`pkg/gateway/rest_agents.go::deleteAgent` and the `pkg/sysagent/tools/agent.go` delete paths drop its allowances); or when the permission it answers changes (next row). There is no list to review running allowances, as today |
+| A permission change | Any write that changes the stored permission of a tool or skill ends that tool's or skill's running allowances (every kind: for `bash` that includes its command, command-family, path and address allowances) for every agent the change affects: a global change → every agent; a change of one agent's own value, including clearing it (Inherit) → that agent; an external server's wildcard `mcp_<server>_*` → every tool of that server. Setting the same value again is not a change and ends nothing. Writers: `PATCH /security/permissions` (C-2), `PUT /agents/{id}/tools` (`pkg/gateway/rest_tools.go::updateAgentTools`), `set_agent_permissions` (`pkg/sysagent/tools/agent_permissions.go`), and a config reload that changes a stored value. The ending happens after the write is durable and before the response; each ended allowance writes one audit entry. Ending a `bash` allowance also revokes that agent's live egress tokens. Trust (`sandbox.skill_trust`), levels, Auto-approve and God Mode are not permissions and end nothing |
+| Deny | a Deny anywhere (global, the agent's own) refuses before any allowance is looked at, as today; an allowance never lifts a Deny. Setting the Deny ends the allowance (previous row), so lifting it back to Ask brings a card again |
 | Decision time | an allowance is checked when a call is decided. A call released before the end keeps running. A shell command started before the end keeps the kernel policy it started with; at the end Omnipus revokes the agent's live egress-proxy tokens (`pkg/sandbox/egress_proxy.go::EgressProxy.RevokeRunToken`, which exists today; 🔶 Inferred that this is enough), so a running command opens no new connection to an expired address; the agent's next command gets a fresh token with the addresses still allowed |
 | Unattended | `resolveAskPolicy` consults Auto-approve and standing allowances before the unattended refusal, as it does today with grants; a running allowance lets the call run; nothing asks or waits |
 | Storage | none. No file, no config key, no agent field. The founder ruled out a new storage object for a lasting allow |
@@ -593,13 +601,14 @@ Unchanged: strictest wins (C-0); God Mode lifts a global Ask and never an agent'
 
 Refusals on `POST /tool-approvals/{approval_id}`: `action: allow` (a screen from before the upgrade) → 400 "This choice is no longer offered. Choose Approve Once or a time limit."; a `*_allow_for` action without `duration`, or with another value → 400 "Choose 1 hour, 3 hours or 1 day."; `duration` with any other action → 400 "A time limit applies only to Allow for."; an action not in the card's `offered_actions` → 409 "This choice is not available for this request." (C-24). An always-ask tool keeps today's 400 for a remembering action, now for `allow_for` (checked before the offered-actions rule): its approvals are never remembered.
 
-**Audit.** `shell.grant_recorded` (`pkg/audit/shell_permission_events.go`) gains `duration` and `expires_at`; its scope taxonomy (exact, prefix, path widening, network widening) is unchanged. A non-shell timed allowance writes the existing approval-decision entry with `action: allow_for`, `duration`, `expires_at`, the agent and the tool or skill key. The end of an allowance writes no entry (architect decision: the record entry already states the end time).
+**Audit.** `shell.grant_recorded` (`pkg/audit/shell_permission_events.go`) gains `duration` and `expires_at`; its scope taxonomy (exact, prefix, path widening, network widening) is unchanged. A non-shell timed allowance writes the existing approval-decision entry with `action: allow_for`, `duration`, `expires_at`, the agent and the tool or skill key. An allowance that reaches its end time writes no entry (the record entry already states the end time). An allowance ended by a permission change writes `approval.allowance_ended` with agent, subject, the changed key, old and new value, the actor of the change and reason `permission_changed`.
 
 **Code paths that change (impact analysis; 🔶 Inferred from `grep`/`Read` at `4e34afa416`, GitNexus not available)**
 
 | File::symbol | Today | Change |
 |---|---|---|
-| `pkg/security/approvalgrants.go::ApprovalGrantStore` (`grantKey`, `Record`, `IsAllowed`, `RecordPrefixGrant`, `IsPrefixAllowed`, `RecordPathGrant`, `PathGrantsFor`, `RecordNetworkGrant`, `RecordNetworkGrantWithHosts`, `HasNetworkGrant`, `NetworkHostsFor`, `RecordNetworkHosts`) | keyed by (session, agent); no expiry; "in-memory-only, cleared on session close" | keyed by agent; every entry carries its end time; every lookup ignores ended entries; every `Record*` takes the duration and returns the end time |
+| `pkg/security/approvalgrants.go::ApprovalGrantStore` (`grantKey`, `Record`, `IsAllowed`, `RecordPrefixGrant`, `IsPrefixAllowed`, `RecordPathGrant`, `PathGrantsFor`, `RecordNetworkGrant`, `RecordNetworkGrantWithHosts`, `HasNetworkGrant`, `NetworkHostsFor`, `RecordNetworkHosts`) | keyed by (session, agent); no expiry; "in-memory-only, cleared on session close" | keyed by agent; every entry carries its end time; every lookup ignores ended entries; every `Record*` takes the duration and returns the end time; for a non-bash tool `Record`/`IsAllowed` key by tool name and no longer use `fingerprintArgs` (the exact fingerprint stays only for the bash exact scope) |
+| new `ApprovalGrantStore.EndFor(agentIDs, key)`, called by every permission writer (`PATCH /security/permissions`, `updateAgentTools`, `set_agent_permissions`, config reload) | — | ends the matching allowances, returns them for the audit, and (for `bash`) the caller revokes the egress tokens |
 | `ApprovalGrantStore.ClearSession`, `pkg/agent/session_end.go` | clears every grant of the session | no longer clears allowances (they belong to the agent); still revokes the session's egress tokens (`NetworkTokensForSession` → `RevokeRunToken`) |
 | `ApprovalGrantStore.InheritFrom`, `pkg/agent/loop_policy.go::inheritSessionPermissions` | copies grants parent → child, also to a different agent | copies no grants (self-helpers share the key; other agents get nothing); Auto-approve modifier copy unchanged |
 | new `ApprovalGrantStore.ClearAgent`, called from the agent delete paths | — | drops a deleted agent's allowances and revokes its tokens |
@@ -621,11 +630,13 @@ Refusals on `POST /tool-approvals/{approval_id}`: `action: allow` (a screen from
 | # | Point |
 |---|---|
 | 1 | The scope grows from one chat to every session of one agent — every workspace it works in, its channel conversations and its unattended runs — for up to a day. |
-| 2 | There is still no list of running allowances and no way to end one early except a restart, deleting the agent, or setting Deny. |
+| 2 | There is still no list of running allowances. One ends early only through a restart, deleting the agent, or a change of that tool's or skill's permission (audited). |
 | 3 | A time choice on a network card with no readable address opens ports 80, 443 and 53 to any address for that agent until the end (today: for one chat). |
 | 4 | A path allowance from one workspace's chat also covers the agent's sessions in other workspaces. |
 | 5 | Narrowing: a delegation to another agent no longer inherits the delegating chat's grants. |
 | 6 | Ending a network allowance relies on revoking egress tokens of running commands (🔶 Inferred sufficient). |
+| 7 | **One timed click on an ordinary tool card allows the whole tool for that agent, with any arguments, for up to a day** (founder Q4 B), in every session of the agent including unattended runs. Today the same click allows one exact call in one chat. This includes tools that always ask under Auto-approve (`pkg/tools/auto_approve.go`, class `AutoAsks`), for example `environment_setup` (any install command or script), `request_mount` (any folder), `send_email` (any recipient), `browser_evaluate` (any script), `set_config`, `delete_task` and `install_skill` (any skill that needs no trust card). |
+| 8 | A permission change ends allowances only on the writers listed in C-26; a write path not on that list would leave an allowance running (test 63 covers each writer). |
 
 ### Collisions checked
 
@@ -861,17 +872,18 @@ A person answering an approval card wants to let one agent do the same thing aga
 
 **Why this priority**: founder decision R2-Q1 (timed allowances only); it changes every approval card in the product and is security-relevant.
 
-**Independent Test**: `send_email` at global Ask, Auto-approve off; Mia's card answered with "Allow for 1 hour"; the same call in Mia's other chat runs with no card; Jim's same call asks; after the hour (test clock) Mia asks again.
+**Independent Test**: `send_email` at global Ask, Auto-approve off; Mia's card answered with "Allow for 1 hour"; a `send_email` call with other arguments in Mia's other chat runs with no card; Jim's same call asks; after the hour (test clock) Mia asks again.
 
 **Acceptance Scenarios**:
 
 1. **Given** any tool or skill card that today offers Always Allow, **When** it appears, **Then** it offers Approve Once, Allow for 1 hour, Allow for 3 hours, Allow for 1 day, and Deny (and Cancel where it has it today), and no card anywhere offers "Always Allow", "Always allow" or "Allow everywhere" (C-26).
 2. **Given** a time choice on a card raised for agent Mia, **When** Mia makes the same call in another chat, in another workspace, in a task, plan or scheduled run, or in a helper she started for herself, **Then** it runs with no card until the time ends; **And** the same call by Jim, or by a helper Mia delegated to Jim, still asks (C-26).
-3. **Given** a shell card, a file-access card or a network card, **When** the person picks a time, **Then** the allowance covers exactly what today's Always Allow covered — the exact command or the command family chosen, the one path with its access, or the named addresses — for Mia until the time ends (C-26).
+3. **Given** a shell card, a file-access card or a network card, **When** the person picks a time, **Then** the allowance covers exactly what today's Always Allow covered — the exact command or the command family chosen, the one path with its access, or the named addresses — for Mia until the time ends; **And given** an ordinary tool card, the allowance covers the whole tool for Mia, any arguments (founder Q4 B) (C-26).
 4. **Given** a running allowance, **When** its time ends or Omnipus restarts, **Then** the next matching call asks again (or, in an unattended run, is skipped with the unattended text without waiting), and nothing about it was ever written to disk.
 5. **Given** `set_channel_outbound`, **When** its card appears, **Then** it is unchanged: Approve Once, Deny and Cancel, with "This approval applies to this one request." and no time choice.
 6. **Given** a time choice is answered, **When** the card closes, **Then** its result line reads "Allowed for <agent> until <time>." (with the day when it is not today).
 7. **Given** a screen or client that still sends the old `allow` action, **When** it answers a card, **Then** the answer is refused with "This choice is no longer offered. Choose Approve Once or a time limit." and the card stays answerable.
+8. **Given** a running allowance of Mia for a tool or skill, **When** a person or an agent changes that tool's or skill's permission, globally or for Mia (also back to Ask), **Then** the allowance ends, the next call asks (or is refused under Deny), and the audit log records the ended allowance; a change for Jim alone does not end Mia's (C-26).
 
 ### Edge Cases
 
@@ -892,7 +904,8 @@ A person answering an approval card wants to let one agent do the same thing aga
 - A card answered twice, or after it timed out: the second answer gets the existing 404 and changes nothing (C-24).
 - A helper's card shown in the root chat of another agent: a time choice is recorded for the helper's agent (the agent named on the card), never for the chat's agent (C-26).
 - Two time choices for the same subject: the later end time wins; a shorter choice never cuts a running allowance short (C-26).
-- A Deny set while an allowance runs: the call is refused (Deny comes first). If the Deny is lifted back to Ask before the end, the allowance applies again (C-26; open point for team-lead).
+- A Deny set while an allowance runs: the Deny ends the allowance (any permission change does) and the call is refused; lifting it back to Ask brings a card (C-26).
+- A permission change for one agent: only that agent's allowances for that tool or skill end; a global change ends them for every agent (C-26).
 - An allowance that ends while a shell command runs: the command keeps the access it started with, except that new network connections to an address that is no longer allowed are refused (C-26).
 - An install whose answer is lost while the files are still being published: the review keeps checking the install status and never reports "Not installed" from the skills list alone (C-13).
 
@@ -975,7 +988,7 @@ Primary flows:
 - When an agent's turn starts, the system lists each allowed tool and each granted, not-denied skill at its global level; a Full skill's instructions are included only when its outcome is `allowed` (C-14).
 - When a person opens an agent's Tools tab, the system offers only values at least as strict as the global value; a looser badge is disabled with a tooltip and a link to the global setting.
 - When a service is added and no global rule covers it, the system sets all its tools, now and later, to Ask (C-18).
-- When a person answers a card with a time choice, the system lets that agent repeat exactly the approved thing without a card, in every session of that agent and its own helpers, until the time ends or the gateway restarts, and stores nothing (C-26).
+- When a person answers a card with a time choice, the system lets that agent use the whole tool (ordinary card), the approved command, path or addresses (shell cards) or the skill (skill card) without a card, in every session of that agent and its own helpers, until the time ends, the gateway restarts or that permission changes, and stores nothing (C-26).
 
 Error flows:
 - When a save is refused, the system shows the server's reason with Retry and the stored values.
@@ -2350,7 +2363,7 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **When** Mia calls `send_email` with arguments A in a second chat in another workspace, in a helper she starts for herself, and in a scheduled task; and Jim, and a helper Mia delegates to Jim, call it with arguments A
 - **Then** Mia's three calls run with no card
 - **And** Jim's call and the delegated helper's call each raise a card (the helper's in Mia's root chat)
-- **And** Mia's call with different arguments B raises a card (same subject as today: the exact call)
+- **And** Mia's call with different arguments B also runs with no card (an ordinary card covers the whole tool, founder Q4 B)
 
 #### Scenario Outline: S-121 Narrow cards keep their narrow subject, now per agent and timed
 
@@ -2361,7 +2374,7 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **When** Mia runs `<next command>` in another chat
 - **Then** the result is `<result>`
 
-**Examples**: Dataset D17 (all rows).
+**Examples**: Dataset D17 rows 1–9, 12 and 13.
 
 #### Scenario: S-122 A restart ends every allowance and nothing is written
 
@@ -2412,6 +2425,18 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **When** the person chooses "Allow for 1 hour"
 - **Then** the card closes with "Allowed for Mia until 14:05."
 - **And** choosing "Allow for 1 day" on another card at 13:05 shows "Allowed for Mia until tomorrow 13:05."
+
+#### Scenario Outline: S-128 A permission change ends the running allowances it affects
+
+**Traces to**: User Story 13, Acceptance Scenario 8
+**Category**: Edge Case
+
+- **Given** running allowances of Mia and Jim from `<card>` answered with "Allow for 3 hours"
+- **When** `<change>` is saved by `<writer>`
+- **Then** Mia's next matching call `<Mia result>` and Jim's `<Jim result>`
+- **And** one `approval.allowance_ended` audit entry is written per ended allowance, naming the changed key and the actor
+
+**Examples**: Dataset D17 rows 10, 11 and 14–20.
 
 #### Scenario: S-127 An agent cannot be set to Allow under a global Ask; the control says why and links to the global setting
 
@@ -2470,9 +2495,10 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | ST-26 | US-2 AS10, C-24, C-26 | Unverified `notes-helper` at global Ask, granted to Mia and to Ray (own Deny); Auto-approve off; answer Mia's combined card with "Approve this version and allow for 1 day"; run scheduled tasks of Mia and Ray; restart Omnipus; run them again; open a chat with Mia and load it; answer a stale card | before the restart Mia's task loads and Ray's is refused; after it Mia's task skips (allowance ended) while R1 stays approved (the chat shows a permission card only); the stale card stores nothing (409); the global value is still Ask and no policy audit entry exists | approval actions end to end | read audit log and `GET /security/permissions` | stable |
 | ST-27 | US-2 AS7, C-19 | On a saved pre-release data folder, run the test build's upgrade with its stop seam at each Dataset D13 boundary, then start normally twice | every row ends in the S-110 state; no Deny or Ask is lost | upgrade recovery | diff agent records and `config.json` against the expected files | stable with fixture |
 | ST-28 | US-2 AS9, C-25 | On Linux with an enforcing kernel sandbox, on macOS, and on Windows (or a failed sandbox): Mia reads a gated project-skill file with a file tool and with `bash cat`, and runs its helper | file tool and helper refused everywhere; `bash cat` refused where the kernel layer enforces it; the run log says which platform paths are app-level only | project-skill gate per platform | record the platform table | per platform |
-| ST-29 | US-13 AS1–3, AS5–6 | `send_email` Ask, Auto-approve off: answer Mia's card with "Allow for 3 hours"; repeat the call in another chat, another workspace, a helper Mia starts for herself, and by Jim; then shell cards: a command family, a file-access card and a network card naming one address, each with "Allow for 1 hour", repeated from another chat; `set_channel_outbound` card | no card anywhere offers Always Allow; Mia's repeats run without a card, Jim's asks; each narrow card covers only its subject (Dataset D17); the result line names the end time; `set_channel_outbound` unchanged | every approval card | re-drive one repeat as Jim and one with other arguments | stable |
+| ST-29 | US-13 AS1–3, AS5–6 | `send_email` Ask, Auto-approve off: answer Mia's card with "Allow for 3 hours"; repeat it with other arguments in another chat, another workspace, a helper Mia starts for herself, and by Jim; then shell cards: a command family, a file-access card and a network card naming one address, each with "Allow for 1 hour", repeated from another chat; `set_channel_outbound` card | no card anywhere offers Always Allow; Mia's repeats run without a card (whole tool), Jim's asks; each narrow card covers only its subject (Dataset D17); the result line names the end time; `set_channel_outbound` unchanged | every approval card | re-drive one repeat as Jim and one with other arguments | stable |
 | ST-30 | US-13 AS4, US-2 AS10 | With running allowances for Mia (a tool call used by her scheduled task, a path, an address): run the task; record checksums of `config.json`, the agent files and `system`; restart; run the task again; answer one card with a stale client sending `allow` | task runs before the restart and is skipped with the unattended text after it, without waiting; checksums unchanged; the stale answer gets the 400 text | allowance lifetime | compare checksums; read the task conversation | stable; the end-of-time case needs the test clock (automated tests 57, 61) |
 | ST-31 | US-3 AS2 | On the phone width (390 × 844) and with the keyboard: Mia → Tools, global Ask and global Deny rows | the tooltip opens on tap and on focus; the link is reachable by Tab and is 44 px; screen reader reads the reason | locked badge accessibility | re-drive with a screen reader | stable |
+| ST-32 | US-13 AS8 | Mia and Jim each hold a `send_email` allowance and Mia a `weather` skill allowance: set `send_email` for Mia to Ask on her Tools tab; set global `send_email` Ask → Allow → Ask on Skills & Tools; ask Omnipus to set Mia's `weather` to Deny, then clear it; save a same-value change | after Mia's change only Mia asks; after the global change both ask; the skill change ends Mia's skill allowance; the same-value save ends nothing; the audit log lists each ended allowance with the actor | allowance ending on permission change | read the audit log | stable |
 
 ### Test Implementation Order
 
@@ -2534,14 +2560,15 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | 54 | TestSkillKeyValidation_AllWriters | Integration Go | S-116 | Dataset D16 |
 | 55 | TestInstallSkill_OneCard | Integration Go | S-118 | C-12 rows 6–8 |
 | 56 | TestToolSurface_ConversionToolSearch | Integration Go (request capture) | S-41, S-44 | Dataset D7 row 16; goal-narrowed and normal requests |
-| 57 | TestApprovalGrantStore_AgentScopedTimed | Unit Go (controlled clock) | S-11, S-120, S-122 | key by agent; end times; later end wins; a new store after restart holds nothing; `ClearAgent` |
+| 57 | TestApprovalGrantStore_AgentScopedTimed | Unit Go (controlled clock) | S-11, S-120, S-122 | key by agent; whole-tool key for ordinary tools, narrow keys for shell; end times; later end wins; a new store after restart holds nothing; `ClearAgent` |
 | 58 | TestToolApprovals_TimedActions | Integration Go | S-119, S-124, S-125 | `offered_actions`, `allow_durations`, the four refusals, always-ask unchanged, `expires_at`, audit fields |
 | 59 | TestShellTimedAllowances_NarrowSubjects | Integration Go (enforcing sandbox on Linux; egress proxy) | S-121 | Dataset D17, including token revocation at the end |
 | 60 | TestTimedAllowance_HelpersAndOtherAgents | Integration Go | S-120 | a self-helper shares the allowance; a delegation to another agent asks; no grant copy at spawn |
 | 61 | TestTimedAllowance_Unattended | Integration Go (scripted model, test clock) | S-123 | runs within the time; refused after it with the unattended text; never waits |
 | 62 | ApprovalCard.timeChoices.test; ToolPolicyEditor.lockTooltip.test; repository guard for card labels | Unit TS; guard over `src/` and `pkg/` | S-119, S-126, S-127 | labels, scope line, result line, tooltip and link; no "Always Allow" or "Allow everywhere" label in production code |
+| 63 | TestTimedAllowance_EndsOnPermissionChange | Integration Go (each writer: PATCH, PUT agent tools, `set_agent_permissions`, config reload) | S-128 | Dataset D17 rows 10, 11, 14–20; audit entries; egress token revoked for `bash` |
 
-**Positive controls (MAJ-014, R2-MAJ-008).** Each of tests 33, 34, 36, 37, 38, 49–62 and the migration tests ships with a recorded mutation probe run by CHECK: remove the outcome filter from `LoadableFolders`, skip the trust floor, inject Full unconditionally, keep the old tier lists, write the full map instead of the named keys, drop one audit call, reset one migrated value, read an old value from `config.json` instead of the snapshot, drop the project-skill gate leg, let a broader mount grant re-admit a gated folder, accept an action that was not offered, skip the revision re-check, decide an install from the skills list, start the next save before the previous one resolves, reverse the shelf precedence, key an allowance by session again, ignore an allowance's end time, copy allowances to another agent at delegation, write an allowance to disk, and offer a time choice on an always-ask tool. Each probe must turn its test red. Expected values come from this spec and from literal pre-upgrade fixtures, never from calling the new resolver or builder.
+**Positive controls (MAJ-014, R2-MAJ-008).** Each of tests 33, 34, 36, 37, 38, 49–63 and the migration tests ships with a recorded mutation probe run by CHECK: remove the outcome filter from `LoadableFolders`, skip the trust floor, inject Full unconditionally, keep the old tier lists, write the full map instead of the named keys, drop one audit call, reset one migrated value, read an old value from `config.json` instead of the snapshot, drop the project-skill gate leg, let a broader mount grant re-admit a gated folder, accept an action that was not offered, skip the revision re-check, decide an install from the skills list, start the next save before the previous one resolves, reverse the shelf precedence, key an allowance by session again, ignore an allowance's end time, copy allowances to another agent at delegation, write an allowance to disk, offer a time choice on an always-ask tool, key an ordinary tool's allowance by its arguments, and skip ending allowances on one permission writer. Each probe must turn its test red. Expected values come from this spec and from literal pre-upgrade fixtures, never from calling the new resolver or builder.
 
 **Execution checklist.** Targeted Go tests with `heavy --local` only when needed; `npm run typecheck` (never bare `tsc`); the design-system gate and the full suites run in CI at the cut, which is the authority.
 
@@ -2743,6 +2770,7 @@ Every row states all inputs; "–" means the input does not matter for that row.
 | 28 | the same answer sent twice | replay | second answer 404; nothing happens twice | BDD Scenario: S-112 | |
 | 29 | load; Ask; none; verified; –; off; off; running for this agent; unattended | allowance in a run | loads | BDD Scenario: S-109 | C-26 point 5 |
 | 30 | load; Ask; none; verified; –; off; off; running; chat, after a restart | restart | permission card (the restart ended it) | BDD Scenario: S-113 | C-26 |
+| 31 | load; Ask; none; verified; –; off; off; running, then the agent's own value set to Ask; chat | permission change | permission card (the change ended it); 1 `approval.allowance_ended` | BDD Scenario: S-128 | C-26 point 7 |
 
 #### Dataset D11: Visibility transitions (C-15)
 
@@ -2871,7 +2899,7 @@ Fixture of S-110. "Stop" means the test build's stop seam ends the process right
 
 #### Dataset D17: Timed allowance subjects and lifetime (C-26)
 
-Oracle: C-26 "Which card offers what" and "Lifetime and scope" (each subject equals today's grant subject, now per agent and timed). Every row: Mia, the allowance answered with "Allow for 1 hour" in chat 1, the next call in chat 2 within the hour unless stated.
+Oracle: C-26 "Which card offers what" and "Lifetime and scope" (narrow cards: today's grant subject; ordinary card: the whole tool; ended by a permission change). Every row: Mia, the allowance answered with "Allow for 1 hour" in chat 1, the next call in chat 2 within the hour unless stated.
 
 | # | Input (card answered; next call) | Boundary Type | Expected Output | Traces to | Notes |
 |---|---|---|---|---|---|
@@ -2884,9 +2912,17 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (each subject equ
 | 7 | network card with no readable address (`npm install`); `npm install` | no address | runs; ports 80, 443 and 53 to any address for Mia until the end | BDD Scenario: S-121 | same as today; security review point 3 |
 | 8 | any of rows 1, 4, 6; the same call by Jim | other agent | card | BDD Scenario: S-121 | |
 | 9 | as row 6; the test clock passes the hour during a running `curl` loop that opens a new connection to `example.com` | end during a command | the new connection is refused; the command is not killed | BDD Scenario: S-121 | token revoked |
-| 10 | `send_email` card with arguments A; global `send_email` then set to Deny; Mia calls A | Deny first | refused naming the global Deny; no card | BDD Scenario: S-121 | |
-| 11 | as row 10, then global set back to Ask within the hour; Mia calls A | policy lifted | runs, no card | BDD Scenario: S-121 | allowance not removed by a policy change (open point for team-lead) |
-| 12 | `send_email` card A answered "Allow for 3 hours", then a second card for A answered "Allow for 1 hour" | two answers | end stays at 3 hours | BDD Scenario: S-121 | later end wins |
+| 10 | `send_email` card with arguments A; global `send_email` then set to Deny; Mia calls A | Deny ends it | refused naming the global Deny; no card; 1 `approval.allowance_ended` | BDD Scenario: S-128 | |
+| 11 | as row 10, then global set back to Ask within the hour; Mia calls A | policy lifted | card (the allowance ended at the Deny) | BDD Scenario: S-128 | team-lead 2026-11-22 |
+| 12 | `send_email` card A answered "Allow for 3 hours", then a second card answered "Allow for 1 hour" | two answers | end stays at 3 hours | BDD Scenario: S-121 | later end wins |
+| 13 | `send_email` card with arguments A; Mia calls `send_email` with arguments B | ordinary card, other arguments | runs, no card | BDD Scenario: S-121 | founder Q4 B: whole tool |
+| 14 | Mia and Jim each hold a `send_email` allowance; global `send_email` Ask → Allow by `PATCH /security/permissions` | global change | Mia's and Jim's allowances end (calls run anyway under Allow); 2 audit entries | BDD Scenario: S-128 | |
+| 15 | as row 14, then global back to Ask | global change back to Ask | Mia and Jim get a card | BDD Scenario: S-128 | |
+| 16 | Mia and Jim each hold a `send_email` allowance; Mia's own value set to Ask by `PUT /agents/mia/tools` | one agent's change | Mia gets a card; Jim runs with no card; 1 audit entry | BDD Scenario: S-128 | |
+| 17 | Mia holds a `weather` skill allowance; Omnipus sets Mia's `weather` override to Deny with `set_agent_permissions`, then clears it (Inherit) | agent writer, skill | the Deny ends it (refused); after clearing, a card | BDD Scenario: S-128 | |
+| 18 | Mia holds a `send_email` allowance; `PATCH /security/permissions` sends `send_email: ask` (the stored value) | same value | 200, nothing ended, no audit entry; Mia runs with no card | BDD Scenario: S-128 | |
+| 19 | Mia holds a `bash` address allowance for `example.com` and a command-family allowance; global `bash` Ask → Deny → Ask | bash change | both end; Mia's live egress token is revoked; next `curl https://example.com` asks | BDD Scenario: S-128 | FR-094 |
+| 20 | Mia holds a `weather` skill allowance; trust changed Ask → Allow | not a permission | allowance kept | BDD Scenario: S-128 | C-26 |
 
 ## Functional Requirements
 
@@ -3002,12 +3038,13 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (each subject equ
 
 ### Timed allowances (R2-Q1, founder 2026-11-22)
 - **FR-089**: No approval card MUST offer "Always Allow", "Always allow" or "Allow everywhere"; every card that offered Always Allow MUST offer Approve Once, Allow for 1 hour / 3 hours / 1 day, and Deny (and Cancel where it had it); always-ask tools, trust cards and the unverified-install card MUST offer no time choice (C-26).
-- **FR-090**: A timed allowance MUST be keyed by the agent named on the card and the subject today's grant used (exact call, command family, path with its access, named addresses or the no-address ports, or a skill's permission part), and MUST cover every session of that agent and the helpers it starts for itself, and no other agent (C-26).
-- **FR-091**: A timed allowance MUST end 1 hour, 3 hours or 24 hours after it was recorded, at a gateway restart, or when its agent is deleted; it MUST never be written to disk; a later answer for the same subject MUST keep the later end time (C-26).
+- **FR-090**: A timed allowance MUST be keyed by the agent named on the card and a subject: the whole tool for an ordinary tool card (founder Q4 B); today's grant subject for the narrow cards (exact command or command family, path with its access, named addresses or the no-address ports); a skill's permission part for a skill card; and MUST cover every session of that agent and the helpers it starts for itself, and no other agent (C-26).
+- **FR-091**: A timed allowance MUST end 1 hour, 3 hours or 24 hours after it was recorded, at a gateway restart, when its agent is deleted, or when the permission it answers changes (FR-096); it MUST never be written to disk; a later answer for the same subject MUST keep the later end time (C-26).
 - **FR-092**: A Deny anywhere MUST refuse before any allowance is consulted; Auto-approve and running allowances MUST be consulted before the unattended refusal; unattended runs MUST honour a running allowance and MUST NOT ask or wait (C-12, C-26).
 - **FR-093**: The approval contract MUST carry server-computed `offered_actions` and `allow_durations` on `tool_approval_required` and on pending-approval state, MUST accept `allow_for` and `approve_version_allow_for` only with a `duration` of `1h`, `3h` or `1d`, MUST refuse the retired `allow` with 400, and MUST return `expires_at` for a recorded allowance (C-26).
 - **FR-094**: When an allowance ends, the system MUST revoke the agent's live egress-proxy tokens so that no new connection reaches an address no longer allowed; a call or command already released MUST keep running (C-26).
 - **FR-095**: Every recorded allowance MUST be audited with agent, subject, duration, end time and actor; `shell.grant_recorded` MUST carry `duration` and `expires_at` (C-26).
+- **FR-096**: Every write that changes a tool's or a skill's stored permission, globally or for one agent (including back to Ask and clearing an override), MUST end that tool's or skill's running allowances for every agent the change affects before its response, MUST write one `approval.allowance_ended` audit entry per ended allowance, and MUST end nothing on a same-value write or on a trust, level, Auto-approve or God Mode change (C-26).
 - **FR-080**: `GET /skills` and agent turns MUST create missing project-skill keys at first sight and remove them with their workspace or folder (C-19).
 
 ### Dependency
@@ -3016,7 +3053,7 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (each subject equ
 ## Success Criteria
 
 - **SC-001**: All 127 BDD scenarios pass in RED → GREEN, with the RED logs saved.
-- **SC-002**: Hands-on rows ST-01 to ST-31 PASS on the cut commit, validated independently (ST-28 as a per-platform record).
+- **SC-002**: Hands-on rows ST-01 to ST-32 PASS on the cut commit, validated independently (ST-28 as a per-platform record).
 - **SC-003**: After upgrading a saved pre-release data folder, the request each of 3 sample agents sends on its first turn, captured with a scripted model, is identical tool by tool and skill by skill to the request captured before the upgrade (ST-06), except these named changes: trust Warn becomes Ask (unverified skills now ask; C-3); external tools with no global coverage go from Deny or agent-only Allow to Ask (C-18) (ST-Q5 A); project skills now count as unverified (C-19, ST-Q8 A); skills added after the upgrade start at Ask (ST-Q3 B); ToolSearch is offered to installs that had "Load tools on demand" off (C-6). For an agent with a goal, both the goal-narrowed first request and the next normal request are compared.
 - **SC-004**: `grep -r "Cautious\|toolPolicyPresets" src/` returns 0 matches in production code.
 - **SC-005**: Every install path refuses an unverified skill under trust Deny: screen, agent tool and direct REST, each driven and asserted separately (3 of 3, ST-09 a–c); a direct REST install under trust Ask without a review is refused (ST-09 d).
@@ -3053,8 +3090,8 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (each subject equ
 | DOC-009 | Settings no longer holds tool permissions, trust or web search | `docs/settings.md` | Web search leaves Providers; the Protection notice; coordinated with the Settings package DOC-007; this package owns the Skills & Tools side |
 | ADR-TODO-1 | Full skill level reverses ADR-072 OQ3 | `docs/internal/architecture/ADR-072-skill-activation-and-loading.md` | Dated correction by the architect after ST-Q1 is answered |
 | ADR-TODO-2 | Tier lists become stored levels | `docs/internal/architecture/ADR-071-tool-manifest-tier-redesign.md` | Dated correction |
-| DOC-015 | No Always Allow; time choices per agent (C-26) | `docs/tools.md`: the Allow / ask / deny table ("What you see" for Ask), the paragraph on Approve Once and Always Allow, the `set_channel_outbound` bullet ("There is no **Always Allow**"), the task-and-plan bullet ("an \"Always Allow\" grant") | The card offers Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny; a time choice covers that agent in all its chats, tasks and own helpers until it ends or Omnipus restarts, other agents still ask, nothing is saved; a lasting Allow is set on Skills & Tools (and an agent can only be stricter); `set_channel_outbound` offers no time choice; unattended runs honour a running allowance |
-| DOC-016 | same | `docs/security.md`: the shell file-prompt paragraph (Always Allow opens one path for the chat), the network-prompt and proxy paragraphs ("for the rest of that chat", "remembered for the rest of the chat only"), "Task, plan, scheduled and other unattended runs" ("an existing \"Always Allow\" grant"), "Approve a request" (button sentence, the **Always Allow** table row, the reload sentence "or always allow", the group-chat sentence "**Always Allow** still lasts for the agent's own chat", the paragraph "What **Always Allow** remembers … Agents that this chat hands work to inherit it"), and the shell sections on Always Allow's exact / prefix choice | Rewrite each promise for timed, per-agent allowances: helpers of the same agent are covered, a delegation to another agent asks; ends at its time or a restart; never written to `config.json`; the no-address network choice opens the usual ports for that agent until it ends |
+| DOC-015 | No Always Allow; time choices per agent (C-26) | `docs/tools.md`: the Allow / ask / deny table ("What you see" for Ask), the paragraph on Approve Once and Always Allow, the `set_channel_outbound` bullet ("There is no **Always Allow**"), the task-and-plan bullet ("an \"Always Allow\" grant") | The card offers Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny; a time choice on an ordinary tool card allows the whole tool for that agent (shell cards stay narrow) in all its chats, tasks and own helpers until it ends, Omnipus restarts or that tool's permission changes, other agents still ask, nothing is saved; a lasting Allow is set on Skills & Tools (and an agent can only be stricter); `set_channel_outbound` offers no time choice; unattended runs honour a running allowance |
+| DOC-016 | same | `docs/security.md`: the shell file-prompt paragraph (Always Allow opens one path for the chat), the network-prompt and proxy paragraphs ("for the rest of that chat", "remembered for the rest of the chat only"), "Task, plan, scheduled and other unattended runs" ("an existing \"Always Allow\" grant"), "Approve a request" (button sentence, the **Always Allow** table row, the reload sentence "or always allow", the group-chat sentence "**Always Allow** still lasts for the agent's own chat", the paragraph "What **Always Allow** remembers … Agents that this chat hands work to inherit it"), and the shell sections on Always Allow's exact / prefix choice | Rewrite each promise for timed, per-agent allowances: helpers of the same agent are covered, a delegation to another agent asks; ends at its time, at a restart or when that tool's or skill's permission changes (audited); never written to `config.json`; the no-address network choice opens the usual ports for that agent until it ends |
 | DOC-017 | same | `docs/tasks.md` (task-run paragraph naming an "Always Allow" grant), `docs/using-omnipus-ui.md` (chat paragraph: "approve it once, deny it, or always allow it") | "a running time allowance"; the new button names |
 | ADR-TODO-3 | Grants become timed and per agent; no copy to other agents (R2-Q1) | `docs/internal/architecture/ADR-092-shell-permission-modes.md` (D4, D7, D8 grant lifetime "ends with the chat"), the ADR-057 delegation decision (FR-031, grant inheritance) | Dated corrections by the architect |
 
@@ -3151,12 +3188,13 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (each subject equ
 | FR-087 | US-7 | S-115 | TestInstallReview_OutcomeStatus; InstallReview.lostAnswer.test | DOC-011 |
 | FR-088 | US-11 | S-116, S-102 | TestSkillKeyValidation_AllWriters | DOC-007 |
 | FR-089 | US-13 | S-10, S-106, S-119, S-125 | TestToolApprovals_TimedActions; ApprovalCard.timeChoices.test | DOC-015, DOC-016, DOC-017 |
-| FR-090 | US-13, US-2 | S-11, S-120, S-121 | TestApprovalGrantStore_AgentScopedTimed; TestTimedAllowance_HelpersAndOtherAgents; TestShellTimedAllowances_NarrowSubjects | DOC-015, DOC-016 |
+| FR-090 | US-13, US-2 | S-11, S-120, S-121, S-128 | TestApprovalGrantStore_AgentScopedTimed; TestTimedAllowance_HelpersAndOtherAgents; TestShellTimedAllowances_NarrowSubjects | DOC-015, DOC-016 |
 | FR-091 | US-13 | S-11, S-113, S-122 | TestApprovalGrantStore_AgentScopedTimed | DOC-015, DOC-016 |
 | FR-092 | US-13, US-2 | S-109, S-123 | TestTimedAllowance_Unattended; TestSkillConsent_Table | DOC-015, DOC-016, DOC-017 |
 | FR-093 | US-13 | S-119, S-124, S-126 | TestToolApprovals_TimedActions; ApprovalCard.timeChoices.test | DOC-016 |
 | FR-094 | US-13 | S-121 | TestShellTimedAllowances_NarrowSubjects | DOC-016 |
 | FR-095 | US-13 | S-113, S-121 | TestToolApprovals_TimedActions; TestShellTimedAllowances_NarrowSubjects | DOC-016 |
+| FR-096 | US-13 | S-128 | TestTimedAllowance_EndsOnPermissionChange | DOC-015, DOC-016 |
 
 **Completeness check** (round 1, the founder-answer passes and round 2: re-run over S-01 to S-118 and FR-001 to FR-088): every FR appears with at least one scenario and one test; scenarios S-01 to S-118 each appear at least once (S-03 in FR-001's page test set via skills-tools.spec.ts row 31; S-20, S-57, S-58, S-60 to S-65, S-68, S-69 through FR-024 and FR-043 to FR-052).
 
@@ -3223,6 +3261,13 @@ Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:ti
 - Founder answers to the round-2 questions, Discord #team-b, 2026-11-22 03:34–03:55Z, relayed by team-lead:
   - Q: Does "Allow everywhere" change a skill's global permission for good (R2-Q1)? → A: no; neither "Allow everywhere" nor "Always Allow" exists any more, for tools and skills (the founder page's Q3 B, "timed only"; team-lead's recommended A was not taken). Cards offer Approve Once, Allow for 1 hour / 3 hours / 1 day, and Deny; a timed allowance belongs to the agent (all its chats and the helpers it starts for itself), covers the same narrow thing as today's grant, ends at its time or at a restart, and is never saved; a lasting Allow exists only as stored policy, the global value always wins, and the screen disables an agent Allow under a global Ask with a tooltip and a link. Team-lead's defaults, told to the founder and not contradicted: a timed allowance works wherever Approve Once works, never under Deny; unattended runs honour a running one and never ask or wait (C-12, C-24, C-26).
   - Q: Does a newly added skill need a person's first yes even with Auto-approve on (R2-Q2)? → A: no; a new, already-checked skill at Ask is settled by Auto-approve like any Ask; the trust check still asks for unchecked skills (C-12).
+- Follow-up rulings on the architect's R2-Q1 points, 2026-11-22, relayed by team-lead:
+  - Q: What does a time choice on an ordinary tool card cover? → A: the whole tool for that agent until it ends, like a timed agent-level Allow; narrow cards stay narrow; a skill card covers the skill's permission part; it answers an Ask and never lifts a Deny (founder, Q4 B, Discord #team-b, 05:07Z) (C-26 point 6, FR-090, S-120, D17 row 13).
+  - Q: Does a permission change end a running allowance? → A: yes; any change of that tool's or skill's permission, globally or for that agent, including back to Ask, ends its allowances for the affected agents, audited (team-lead's call, "the safe side") (C-26 point 7, FR-096, S-128, ST-32). Architect's reading, stated in C-26: trust, levels, Auto-approve and God Mode are not permissions and end nothing; a same-value save ends nothing.
+  - Q: May the server store an agent value looser than the global one? → A: keep as today: stored, floored at run time, blocked only on the screen (team-lead's call) (C-0, C-26 point 8).
+  - Q: Does a delegation to another agent still inherit the chat's grants? → A: no (founder's "other agents are unaffected"); kept as written (team-lead).
+  - Q: Does Cancel stay on cards that have it today? → A: yes; kept as written (team-lead).
+  - Q: ST-Q9 A narrowed by R2-Q1? → kept as written (team-lead), see the next item.
   - Effect on ST-Q9 A ("approving once in a chat makes it work everywhere, also in tasks and plans"): narrowed by R2-Q1. A chat answer now makes the skill work for that agent's tasks and plans until the time ends; for every agent and for good, the person sets Allow on Skills & Tools.
 
 ## Questions for the founder
@@ -3232,7 +3277,7 @@ ST-Q1 to ST-Q10 are answered (Clarifications, 2026-11-21). The two grill-round-2
 - **R2-Q1** — answered 2026-11-22 (Discord #team-b, 03:34–03:55Z, relayed by team-lead): timed allowances only, the founder page's Q3 B. Written into C-12, C-24, C-26, US-2, US-3, US-13, FR-016, FR-023, FR-067, FR-083, FR-089 to FR-095, Datasets D10 and D17, ST-04, ST-26, ST-29 to ST-31, DOC-013, DOC-015 to DOC-017.
 - **R2-Q2** — answered 2026-11-22, same message: A (Auto-approve settles a checked new skill's Ask; the trust check is the protection). The reading already in place stays; its markers are removed.
 
-No question is open for the founder. Points for team-lead to settle or confirm are under "Notes for team-lead".
+No question is open for the founder or for team-lead. The architect's R2-Q1 points were settled on 2026-11-22 (Clarifications).
 
 ### Notes for team-lead
 
@@ -3256,18 +3301,8 @@ No question is open for the founder. Points for team-lead to settle or confirm a
 | 14 | D-9 row 6 and the retired endpoints | `GET/PUT /security/skill-trust` and `GET/PUT /security/tool-policies` are retired by Skills & Tools (its C-22 row 6), not by Settings; the legacy layout of `SecuritySection` is deleted there |
 | 15 | DOC-007 (`docs/security.md`) and the Settings user page | Settings' docs say tool permissions and skill trust "are in Skills & Tools"; that is true only after Skills & Tools lands, so either word it as "move to Skills & Tools" or let Skills & Tools update those sentences at its landing (its DOC-009, DOC-014) |
 
-**R2-Q1 points for team-lead (raised, not decided by the architect).**
-
-| # | Point | Spec as written | Option |
-|---|---|---|---|
-| 1 | A stored-policy change does not end a running allowance. If a Deny is set and lifted back to Ask within the time, the allowance applies again (D17 row 11). | not ended (no rule given) | end every allowance a changed permission covers (safer; one more rule) |
-| 2 | The ordinary tool card's subject is the exact call (same arguments), as today's Always Allow. Founder point 2 names only the narrow cards; this reads "same thing as today" for every card. | exact call | the whole tool for that agent (wider; needs the founder) |
-| 3 | The server still stores an agent value looser than the global one and floors it at run time (C-0, today's behaviour); only the screen disables the control, and `set_agent_permissions` reports the clamp. Founder point 4 says "an agent cannot be Allow where the global value is Ask". | unchanged: floored, not refused | refuse such writes with 400 on every writer (C-21 change) |
-| 4 | Today a delegation to another agent inherits the delegating chat's grants (`docs/security.md`: "Agents that this chat hands work to inherit it"). Founder point 2 ("other agents are unaffected") ends that. | no inheritance to other agents | — (stated so docs and tests follow) |
-| 5 | Cancel stays on the cards that have it today; the founder's list names Approve Once, the time choices and Deny. | Cancel kept | remove Cancel (a separate product change) |
-| 6 | This is now a product-wide change of every approval card, in `pkg/security`, `pkg/sandbox`, `pkg/audit` and `pkg/agent`: the Opus sizing rule and the agent-engine hands-on UAT apply, and the security-lead's one review should cover C-26's six points. | flagged | — |
-
 **Other notes.**
+- This is a product-wide change of every approval card, in `pkg/security`, `pkg/sandbox`, `pkg/audit` and `pkg/agent`: the Opus sizing rule and the agent-engine hands-on UAT apply, and the security-lead's one review covers C-26's eight points.
 - Between the two landings the release branch has no screen for the global tool grid and skill trust (C-22). The spec makes "do not cut the release in between" a rule (FR-065); a stopgap in Settings is the alternative (row 4). Team-lead decides; not a founder question unless the gap is unacceptable.
 - This package edits files the Settings team owns (`PerformanceSection.tsx`, `IntegrationsSection.tsx`, `SecuritySection.tsx`, the Settings search answers, `src/lib/api/config.ts`). It lands after Settings, so there are no two writers at once, but the Settings owners should know.
 - The Linux kernel rendering of the project-skill gate (C-25) is 🔶 Inferred feasible, not built. If it proves infeasible, Linux falls back to the app-level gate for project skills, as on Windows, and DOC-004 says so; that is a security trade-off for security-lead and, if needed, the founder.
@@ -3327,3 +3362,4 @@ Grill round 2 report: `docs/internal/specs/skills-tools-redesign-spec-review-rou
 | R2-MAJ-008 Oracles not independent | S-102 literal winners for a granted and an ungranted agent; S-88 takes every D8 dimension and asserts all rows ran; D9 fit and one-over with headroom, reserve and unavoidable content; disabled Omnipus Ask split from the API 422; test 5 retargeted to PATCH; consent and approval actions get handler, restart and scheduled-run tests plus a hands-on row; new mutation probes | S-22, S-88, S-102, D8, D9, tests 5, 14, 22, 39, 40, 46, 47, 51–56, Positive controls, ST-08, ST-26 |
 | Coordination: epic | Header names #1963 under #1519; Stage and Horizon Unknown | Header |
 | Founder answers R2-Q1 (timed only) and R2-Q2 A, 2026-11-22 | No Always Allow or Allow everywhere on any card; Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny; per-agent, in-memory, ending at its time or a restart; contract, impact analysis, migration, security-review points; locked agent badge tooltip and link; every pending marker resolved | Header, C-9, C-12, C-24, C-26 (new), API and Data, Impact Assessment, US-2, US-3, US-4, US-13 (new), Edge Cases, UI States, Accessibility, Security and User Promises, Behavioral Contract, Prohibitions, Machine-Verifiable Constraints, S-10, S-11, S-30, S-106, S-107, S-109, S-112 to S-114, S-118, S-119 to S-127 (new), D10, D17 (new), ST-04, ST-07, ST-26, ST-29 to ST-31 (new), tests 51, 52, 57 to 62, FR-016, FR-017, FR-023, FR-030, FR-067, FR-083, FR-086, FR-089 to FR-095 (new), SC-001, SC-002, SC-009 (new), DOC-006, DOC-013, DOC-015 to DOC-017, ADR-TODO-3, Clarifications, Questions, Notes for team-lead |
+| Follow-up rulings 2026-11-22 (founder Q4 B; team-lead on the architect's points) | Ordinary card covers the whole tool; a permission change ends running allowances, audited; looser agent values kept as today; delegation, Cancel and ST-Q9 narrowing kept; notes moved to Clarifications | C-24, C-26 (points 6–8, Key, End, A permission change, Deny, Audit, impact rows, security points 2, 7, 8), US-13 (AS3, new AS8), Edge Cases, Behavioral Contract, S-120, S-121, S-128 (new), D17 rows 10–20, ST-29, ST-32 (new), tests 57, 63 (new), FR-090, FR-091, FR-096 (new), SC-002, DOC-015, DOC-016, Clarifications, Questions, Notes for team-lead |
