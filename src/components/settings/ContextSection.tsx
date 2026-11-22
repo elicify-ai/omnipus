@@ -345,8 +345,11 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
     return toWriteResponse(() => putContextSettings(body))
   }
 
+  const readFailed = useRef(false)
+  readFailed.current = isError
   const part: FormSavePart = {
     id: 'context',
+    blocked: () => readFailed.current,
     count: changedFields.length,
     invalidCount: form ? Object.keys(localErrors).length : 0,
     write,

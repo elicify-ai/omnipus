@@ -36,6 +36,13 @@ export interface FormSavePart { // not-wire-format: one endpoint's share of a se
   id: string
   /** Number of changed values in the part. */
   count: number
+  /**
+   * True while the part's read failed (FR-066). Its drafts stay (they still
+   * count for the leave guard), but Save leaves the part out. Asked again
+   * right before the part's write, so a read that fails during the password
+   * prompt still blocks it.
+   */
+  blocked?: () => boolean
   /** Number of changed or shown values that fail the screen's own checks. */
   invalidCount: number
   /** Visible labels of the changed values that need a gateway restart. */
@@ -78,6 +85,11 @@ const EMPTY: PartResult = { failed: 0, unknown: 0, message: null }
 /** A part's outcome after a Save: a write outcome, or a value changed elsewhere. */
 type PartOutcome = WriteOutcome | { kind: 'changed-elsewhere'; text: string }
 
+/** A part with drafts whose read has not failed: Save writes it. */
+function writable(p: FormSavePart): boolean {
+  return p.count > 0 && !p.blocked?.()
+}
+
 export function useFormSaveBar(parts: FormSavePart[]) {
   const shell = useSettingsShell()
   const [saving, setSaving] = useState(false)
@@ -86,8 +98,8 @@ export function useFormSaveBar(parts: FormSavePart[]) {
 
   const count = parts.reduce((n, p) => n + p.count, 0)
   const invalidCount = parts.reduce((n, p) => n + p.invalidCount, 0)
-  const restartLabels = useMemo(() => parts.flatMap((p) => (p.count ? p.restartLabels ?? [] : [])), [parts])
-  const passwordLabels = useMemo(() => parts.flatMap((p) => (p.count ? p.passwordLabels ?? [] : [])), [parts])
+  const restartLabels = useMemo(() => parts.flatMap((p) => (writable(p) ? p.restartLabels ?? [] : [])), [parts])
+  const passwordLabels = useMemo(() => parts.flatMap((p) => (writable(p) ? p.passwordLabels ?? [] : [])), [parts])
   const failedCount = Object.values(results).reduce((n, r) => n + r.failed, 0)
   const unknownCount = Object.values(results).reduce((n, r) => n + r.unknown, 0)
 
@@ -175,8 +187,12 @@ export function useFormSaveBar(parts: FormSavePart[]) {
       shell.announce(`Fix ${plural(invalidCount, 'value', 'values')} before saving.`)
       return
     }
-    const changed = parts.filter((p) => p.count > 0)
-    if (!changed.length) return
+    // FR-066: a part whose read failed is left out; its drafts stay.
+    const changed = parts.filter(writable)
+    if (!changed.length) {
+      if (parts.some((p) => p.count > 0)) shell.announce('Nothing was saved. The changed settings could not be loaded; load them again first.')
+      return
+    }
     // FR-016: every pre-save confirm runs before the password prompt.
     for (const p of changed) if (p.preSave && !(await p.preSave())) return
     // FR-030 / C-4: one Save has one consent token, so the password-marked
@@ -200,6 +216,7 @@ export function useFormSaveBar(parts: FormSavePart[]) {
     try {
       const outcomes: { part: FormSavePart; outcome: PartOutcome; n: number }[] = []
       for (const part of ordered) {
+        if (part.blocked?.()) continue
         const usesToken = !!part.passwordLabels?.length
         const written = await classifyWrite(() => part.write({ reauthToken: usesToken ? reauthToken : undefined }))
         const outcome: PartOutcome = written.kind === 'unknown' ? ((await checkUnknown(part)) ?? written) : written

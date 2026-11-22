@@ -387,8 +387,11 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
 
   const discard = () => setDrafts({})
 
+  const readFailed = useRef(false)
+  readFailed.current = !!error
   const part: FormSavePart = {
     id: 'performance',
+    blocked: () => readFailed.current,
     count: changed.length,
     invalidCount: Object.keys(errors).length,
     passwordLabels: changed.map((k) => LABELS[k]),
