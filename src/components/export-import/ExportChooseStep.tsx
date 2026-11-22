@@ -13,12 +13,11 @@ import { createPackageExportPlan, packageErrorMessage } from '@/lib/api/packages
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Callout, CalloutDescription } from '@/components/ui/callout'
-import { FormError } from '@/components/ui/FormError'
 import { Input } from '@/components/ui/input'
 import { QueryErrorState } from '@/components/ui/query-error-state'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
-import { BusyNotice, StepHeading } from './shared'
+import { BusyNotice, InlineError, StepHeading } from './shared'
 
 export const EXPORT_EXPIRED_NOTICE = 'The review expired. Check your choice and review again.'
 
@@ -149,7 +148,7 @@ export function ExportChooseStep({ preselect, initialChosen, notice, onReviewed 
                         {kind && <Badge variant="outline">{kind}</Badge>}
                       </span>
                       {agent.description && (
-                        <span className="whitespace-normal text-[length:var(--type-caption-size)] font-normal text-[var(--color-muted)]">
+                        <span className="whitespace-normal text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                           {agent.description}
                         </span>
                       )}
@@ -159,7 +158,7 @@ export function ExportChooseStep({ preselect, initialChosen, notice, onReviewed 
               })}
             </RadioGroup>
           )}
-          <FormError error={plan.isError ? packageErrorMessage(plan.error, 'export') : null} />
+          <InlineError text={plan.isError ? packageErrorMessage(plan.error, 'export') : null} />
           {plan.isPending && <BusyNotice>Preparing the review…</BusyNotice>}
           <div className="flex flex-wrap items-center gap-[var(--space-2-5)]">
             <Button disabled={!chosenId || plan.isPending} onClick={() => plan.mutate(chosenId)}>

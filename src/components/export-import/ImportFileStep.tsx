@@ -19,9 +19,8 @@ import {
 } from '@/lib/api/packages'
 import { Button } from '@/components/ui/button'
 import { Callout, CalloutDescription } from '@/components/ui/callout'
-import { FormError } from '@/components/ui/FormError'
 import { Spinner } from '@/components/ui/spinner'
-import { BusyNotice, StepHeading } from './shared'
+import { BusyNotice, InlineError, StepHeading } from './shared'
 
 /** The most a bundle may weigh (spec: 64 MB); larger files are never sent. */
 export const MAX_BUNDLE_BYTES = 67_108_864
@@ -104,7 +103,7 @@ export function ImportFileStep({ notices = [], onUploaded }: ImportFileStepProps
           <BusyNotice>Checking the bundle…</BusyNotice>
         </div>
       )}
-      <FormError error={error} />
+      <InlineError text={error} />
     </section>
   )
 }

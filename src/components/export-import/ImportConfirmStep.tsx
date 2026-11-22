@@ -29,13 +29,10 @@ import {
 } from '@/lib/api/packages'
 import { Button } from '@/components/ui/button'
 import { Callout, CalloutDescription } from '@/components/ui/callout'
-import { FormError } from '@/components/ui/FormError'
 import { QueryErrorState } from '@/components/ui/query-error-state'
-import { selectTriggerVariants } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
-import { cn } from '@/lib/utils'
 import { clearImportRecord, readImportRecord, updateImportRecord, writeImportRecord } from './importRecord'
-import { BusyNotice, EXPORT_IMPORT_PATH, ImportOutcomeUnknown, StepHeading } from './shared'
+import { BusyNotice, InlineError, EXPORT_IMPORT_PATH, ImportOutcomeUnknown, StepHeading } from './shared'
 
 interface ImportConfirmStepProps {
   stagingId: string
@@ -223,7 +220,8 @@ export function ImportConfirmStep({
             value={workspaceId}
             disabled={busy}
             onChange={(e) => chooseWorkspace(e.target.value)}
-            className={cn(selectTriggerVariants({ variant: 'field' }))}
+            tabIndex={0}
+            className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="">Choose a workspace</option>
             {workspaces.map((w) => (
@@ -235,7 +233,7 @@ export function ImportConfirmStep({
         </label>
       )}
 
-      <FormError error={outcome?.kind === 'refused' ? outcome.text : null} />
+      <InlineError text={outcome?.kind === 'refused' ? outcome.text : null} />
       {cancelError && (
         <Callout variant="warning">
           <CalloutDescription>{cancelError}</CalloutDescription>

@@ -35,6 +35,16 @@ export function StepHeading({ children }: { children: ReactNode }) {
   )
 }
 
+/** An inline error next to the action that failed (role alert through the error Callout). */
+export function InlineError({ text }: { text: string | null | undefined }) {
+  if (!text) return null
+  return (
+    <Callout variant="error">
+      <CalloutDescription>{text}</CalloutDescription>
+    </Callout>
+  )
+}
+
 /** A polite live region for busy states ("Preparing the review…"). */
 export function BusyNotice({ children }: { children: ReactNode }) {
   return (
