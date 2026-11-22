@@ -1,4 +1,4 @@
-`Status: In review`
+Status: In review
 
 `ADR: Export & Import, end to end (bundles, wizards, sidebar page), epic elicify-ai/omnipus#1094 — revision 3` (draft at `/workspace/logs/1094/adr-export-import-e2e.md`; on promotion it becomes amendments A12+ to [Export and import packages](../architecture/ADR-export-import-packages.md)). Base S1 spec: [export-import-s1-spec.md](export-import-s1-spec.md).
 
