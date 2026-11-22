@@ -35,7 +35,7 @@ func TestWriteExclusionConservativelyCoversRegexMatches(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			home, base, work := t.TempDir(), t.TempDir(), t.TempDir()
+			home, base, work := t.TempDir(), officepreview.OwnRoot(t), t.TempDir()
 			// Isolate the specified regex escape from the host's temporary
 			// prefix alias; both spellings must pass the real write guard.
 			base, err := filepath.EvalSymlinks(base)
@@ -54,7 +54,7 @@ func TestWriteExclusionConservativelyCoversRegexMatches(t *testing.T) {
 	}
 	for _, flag := range []string{"(?m)", "(?i)"} {
 		t.Run(flag, func(t *testing.T) {
-			home, work, root := t.TempDir(), t.TempDir(), t.TempDir()
+			home, work, root := t.TempDir(), t.TempDir(), officepreview.OwnRoot(t)
 			root, err := filepath.EvalSymlinks(root)
 			require.NoError(t, err)
 			t.Setenv("OMNIPUS_HOME", home)
@@ -73,7 +73,7 @@ func TestWriteExclusionConservativelyCoversRegexMatches(t *testing.T) {
 func TestWriteExclusionRejectsUnknownAuthority(t *testing.T) {
 	for _, source := range []string{"nil_config", "nil_callback"} {
 		t.Run(source, func(t *testing.T) {
-			home, work, root := t.TempDir(), t.TempDir(), t.TempDir()
+			home, work, root := t.TempDir(), t.TempDir(), officepreview.OwnRoot(t)
 			t.Setenv("OMNIPUS_HOME", home)
 			target := officepreview.TrustedOffice(t, home, root)
 			pattern := "^" + regexp.QuoteMeta(root) + "(?:/|$)"
@@ -97,7 +97,7 @@ func TestWriteExclusionRejectsUnknownAuthority(t *testing.T) {
 // A symlink loop then makes identity unknowable (ELOOP, not mere ENOENT).
 // The retained-kernel-authority variant has its own held-child proof.
 func securityUnknownIdentity(t *testing.T) {
-	home, work, base := t.TempDir(), t.TempDir(), t.TempDir()
+	home, work, base := t.TempDir(), t.TempDir(), officepreview.OwnRoot(t)
 	t.Setenv("OMNIPUS_HOME", home)
 	root := filepath.Join(base, "office")
 	target := officepreview.TrustedOffice(t, home, root)

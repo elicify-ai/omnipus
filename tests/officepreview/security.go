@@ -19,6 +19,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// OwnRoot returns a fresh folder strictly inside Omnipus's Linux own folder
+// for the running test executable (component.OwnFolder of the resolved test
+// binary, simulated GOOS "linux"), so a registered fixture passes the §3.9
+// own-folder rule on hosted Linux (spec "Existing tests affected"). On every
+// other system the rule does not apply and a plain per-test temp folder is
+// returned. The folder is removed at cleanup; distinct calls get distinct
+// folders, so sibling-name rows create their siblings inside one OwnRoot.
+func OwnRoot(t *testing.T) string {
+	t.Helper()
+	self, err := os.Executable()
+	require.NoError(t, err)
+	resolved, err := filepath.EvalSymlinks(self)
+	require.NoError(t, err)
+	own := component.OwnFolder(resolved, "linux")
+	if own == "" {
+		return t.TempDir()
+	}
+	root, err := os.MkdirTemp(own, "trusted-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	return root
+}
+
 // TrustedOffice builds a process-edge fixture, NOT an official Office install.
 // Its executable is fingerprinted; the harmless resource is deliberately not:
 // AD-4 protects Office libraries/configuration through global writer exclusion.

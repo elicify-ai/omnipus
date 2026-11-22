@@ -6,6 +6,9 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/preview"
@@ -33,13 +36,42 @@ func init() {
 // Service uses test-owned protected registration and real installed components.
 // Test-only environment variables name fixture locations; the production
 // resolver never receives those variables as component-root configuration.
+//
+// On Linux the registered roots must lie inside the own folder of the program
+// path the resolver uses (§3.9). The provisioned real-program layout is
+// <prefix>/share/omnipus/{office,pdfium}, so the prefix derives from the
+// requested root itself and the program path is <prefix>/bin/omnipus — a pure
+// path calculation; the file need not exist (RegisterOptions.Program and
+// Resolver.Executable). On every other system OwnFolder is "" and the test
+// executable stays the program path. Nothing is registered when both flags
+// are false, so that case keeps the test executable (the own folder of the
+// test binary stages no packaged slots, and "absent" stays absent).
 func Service(t *testing.T, office, renderer bool) *preview.Service {
 	t.Helper()
 	officeRoot, rendererRoot := realprograms.Roots(t, office, renderer)
 	self, err := os.Executable()
 	require.NoError(t, err)
+	program := self
+	root := ""
+	if office {
+		root = officeRoot
+	} else if renderer {
+		root = rendererRoot
+	}
+	if root != "" && runtime.GOOS == "linux" {
+		// <prefix>/share/omnipus/<slot> → <prefix>; the slot depth is fixed by
+		// the provision layout. A root that does not fit it cannot pass the
+		// Linux own-folder rule, so it blocks loudly instead of resolving
+		// nothing or silently registering outside. Other platforms have no
+		// own-folder rule (OwnFolder is ""), so the test executable stays.
+		prefix := filepath.Dir(filepath.Dir(filepath.Dir(root)))
+		program = filepath.Join(prefix, "bin", "omnipus")
+		own := component.OwnFolder(program, "linux")
+		require.True(t, own != "" && strings.HasPrefix(root, own+string(filepath.Separator)),
+			"BLOCKED: the provisioned real-program layout must be <prefix>/share/omnipus/<slot> (got root %s, derived own folder %s) — required by office-preview spec §3.9 on Linux", root, own)
+	}
 	home := t.TempDir()
-	opts := component.RegisterOptions{Home: home, Operator: "office-preview-test"}
+	opts := component.RegisterOptions{Home: home, Operator: "office-preview-test", Program: program}
 	if office {
 		opts.Folder = officeRoot
 		_, err = component.RegisterOffice(opts)
@@ -50,7 +82,7 @@ func Service(t *testing.T, office, renderer bool) *preview.Service {
 		_, err = component.RegisterRenderer(opts)
 		require.NoError(t, err)
 	}
-	svc, err := preview.New(preview.Config{Home: home, Self: self, Resolver: &component.Resolver{Home: home, Executable: self}})
+	svc, err := preview.New(preview.Config{Home: home, Self: self, Resolver: &component.Resolver{Home: home, Executable: program}})
 	require.NoError(t, err)
 	return svc
 }

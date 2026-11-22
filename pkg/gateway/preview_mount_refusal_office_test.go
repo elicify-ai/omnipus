@@ -44,7 +44,7 @@ func TestOfficePreviewMountRESTAndPickerRefuseProgramFolders(t *testing.T) {
 			api := newTestRestAPIWithHome(t)
 			t.Setenv(config.EnvHome, api.homePath)
 			wsID := createTestWorkspace(t, api, "T-86 mount refusal")
-			root := filepath.Join(t.TempDir(), "office")
+			root := officepreview.OwnRoot(t)
 			officepreview.TrustedOffice(t, api.homePath, root)
 			root, err := filepath.EvalSymlinks(root)
 			require.NoError(t, err)

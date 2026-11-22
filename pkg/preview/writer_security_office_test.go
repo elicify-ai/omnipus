@@ -48,7 +48,7 @@ func securityWrite(t *testing.T, work, target string, patterns ...string) {
 func TestOfficeWriterExclusion_ActualRegexAuthorities(t *testing.T) {
 	for _, name := range []string{"folder_form", "plain_prefix", "quantified_last_character", "alternation", "case_insensitive", "unanchored", "symlink"} {
 		t.Run(name, func(t *testing.T) {
-			home, base, work := t.TempDir(), t.TempDir(), t.TempDir()
+			home, base, work := t.TempDir(), officepreview.OwnRoot(t), t.TempDir()
 			// These rows test regex semantics, not the host temporary alias.
 			// The real write guard vets lexical AND resolved paths; construct
 			// this fixture under its physical parent so both are authorized.
@@ -100,7 +100,7 @@ func TestOfficeWriterExclusion_UnreadableAuthorityFailsClosed(t *testing.T) {
 		t.Run(source, func(t *testing.T) {
 			home, work := t.TempDir(), t.TempDir()
 			t.Setenv("OMNIPUS_HOME", home)
-			root := filepath.Join(t.TempDir(), "office")
+			root := officepreview.OwnRoot(t)
 			target := officepreview.TrustedOffice(t, home, root)
 			cfg := &config.Config{}
 			current := cfg

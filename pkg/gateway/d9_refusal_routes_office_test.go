@@ -50,7 +50,7 @@ type d9Outcome struct {
 // and the seeded file's bytes (the byte-identical oracle's baseline).
 func d9SeedOverlap(t *testing.T, api *restAPI) (string, []byte) {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "office")
+	root := officepreview.OwnRoot(t)
 	officepreview.TrustedOffice(t, api.homePath, root)
 	resolved, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err)

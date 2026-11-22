@@ -22,7 +22,7 @@ func TestWriteExclusionUsesFreshConfigAndAllSessions(t *testing.T) {
 		api, cleanup := newTestRestAPI(t)
 		t.Cleanup(cleanup)
 		t.Setenv("OMNIPUS_HOME", api.homePath)
-		root := filepath.Join(t.TempDir(), "office")
+		root := officepreview.OwnRoot(t)
 		target := officepreview.TrustedOffice(t, api.homePath, root)
 		svc := officeSecurityBoot(t, api)
 		require.Equal(t, "ready", svc.ComponentStatus().Office)

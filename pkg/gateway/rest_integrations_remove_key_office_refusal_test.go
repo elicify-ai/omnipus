@@ -94,7 +94,7 @@ func sec02Child(t *testing.T) {
 
 	// A registered LibreOffice the published configuration knows nothing
 	// about; the §3.2 check reads the registry fresh at check time.
-	root := filepath.Join(t.TempDir(), "office")
+	root := officepreview.OwnRoot(t)
 	officepreview.TrustedOffice(t, api.homePath, root)
 	resolved, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err)

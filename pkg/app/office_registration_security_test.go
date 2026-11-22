@@ -14,6 +14,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/tests/officepreview"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +22,7 @@ import (
 // service callback returning nil. A candidate outside home is writable by an
 // operator allowance; corrupt settings must not make that authority disappear.
 func TestOfficeRegistration_UnreadableConfigurationRefuses(t *testing.T) {
-	home, work, candidate := t.TempDir(), t.TempDir(), t.TempDir()
+	home, work, candidate := t.TempDir(), t.TempDir(), officepreview.OwnRoot(t)
 	t.Setenv("OMNIPUS_HOME", home)
 	configPath := filepath.Join(home, "config.json")
 	t.Setenv("OMNIPUS_CONFIG", configPath)

@@ -29,7 +29,7 @@ func TestOfficePreviewShellRefusesProgramWriteApproval(t *testing.T) {
 				tool, ctx, requester, _ := permTestFixture(t, ShellModeAuto, true)
 				requester.recordGrant = answer == "Allow"
 				home := config.OmnipusHomeDir()
-				root := filepath.Join(t.TempDir(), "office")
+				root := officepreview.OwnRoot(t)
 				officepreview.TrustedOffice(t, home, root)
 				root, err := filepath.EvalSymlinks(root)
 				require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestOfficePreviewShellRefusesProgramWriteApproval(t *testing.T) {
 	})
 	t.Run("program_read_not_refused", func(t *testing.T) {
 		tool, ctx, requester, _ := permTestFixture(t, ShellModeAuto, true)
-		root := filepath.Join(t.TempDir(), "office")
+		root := officepreview.OwnRoot(t)
 		file := officepreview.TrustedOffice(t, config.OmnipusHomeDir(), root)
 		_, result := tool.enforceShellPermissionMode(ctx, "cat '"+file+"'")
 		require.Nil(t, result, "S2 refuses writes, not reads")
@@ -95,7 +95,7 @@ func TestOfficePreviewRequestMountRefusesProgramFolders(t *testing.T) {
 		t.Run(shape, func(t *testing.T) {
 			home, wsID, _ := newMountFixture(t)
 			t.Setenv(config.EnvHome, home)
-			root := filepath.Join(t.TempDir(), "office")
+			root := officepreview.OwnRoot(t)
 			officepreview.TrustedOffice(t, home, root)
 			root, err := filepath.EvalSymlinks(root)
 			require.NoError(t, err)
