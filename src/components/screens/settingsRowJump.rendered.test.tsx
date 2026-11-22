@@ -354,6 +354,11 @@ async function portRow(): Promise<HTMLElement> {
  * "Providers" and the index entry "Model providers" opens that row, so the
  * heading is spec-named, not taken from the implementation; the marker
  * stays where it is in production).
+ *
+ * The locator (findSpecWitness, CHECK R9-01) binds each phrase by
+ * accessible role and EXACT accessible name — or, for rows whose witness is
+ * a read-only value or the row's own name line, exact own visible text —
+ * perceivable only: hidden text and prefix matches never witness a row.
  */
 const WITNESS_PHRASES: Record<string, string[]> = {
   'model-providers': ['Providers'], // FR-001 names the section "Providers" — the row heading is spec-named (team-lead ruling, part 25)
@@ -408,31 +413,116 @@ const WITNESS_PHRASES: Record<string, string[]> = {
 }
 
 /**
- * Locate a spec-named witness on or inside the row: an element whose
- * aria-label contains the phrase (switches, icon buttons, radio groups and
- * segmented controls name themselves), or whose own text STARTS with it —
- * the row's name line, heading, field label or button text, bounded to 150
- * characters so a long description that merely MENTIONS another setting
- * never matches — or, for the link rows the spec names by their target
- * ("a link row to Data & retention", D-9 row 9), a link whose text contains
- * it. Matching is case-insensitive: the sheet's typographic casing may
- * differ from the spec's ("Remote Access", "View Log", "opencode program
- * path").
+ * The ARIA roles a spec-named control, value or row name can carry. The
+ * words are the spec's own control vocabulary, not an inventory of this
+ * build: design-notes §2 names switches, radios, Select fields, number and
+ * text fields, buttons and link rows; headings carry row names and the
+ * ruling-B section heading; a `fieldset`/`group` carries a named radio
+ * group ("Sandbox mode"). Testing Library role queries ignore hidden
+ * elements by default (`hidden: false`), which is the perceivability rule
+ * the witness needs (CHECK R9-01).
  */
-function findSpecWitness(row: Element, phrases: string[]): Element | null {
+const WITNESS_ROLES = [
+  'button',
+  'switch',
+  'checkbox',
+  'radio',
+  'combobox',
+  'textbox',
+  'spinbutton',
+  'slider',
+  'searchbox',
+  'link',
+  'heading',
+  'group',
+] as const
+
+/**
+ * Whole-name, case-insensitive accessible-name pattern: the phrase must be
+ * the element's COMPLETE accessible name (whitespace runs fold), never a
+ * prefix of it — "Portable charger status" is not the spec-named "Port"
+ * (CHECK R9-01/N133), and "Restart gateway…" is not "Restart gateway".
+ */
+function exactNamePattern(phrase: string): RegExp {
+  const escaped = phrase.trim().replace(/[.*+?${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${escaped.replace(/\s+/g, '\\s+')}$`, 'i')
+}
+
+/**
+ * Perceivable in this jsdom harness: no `hidden` attribute, no
+ * `aria-hidden="true"`, no inline `display:none`/`visibility:hidden` on the
+ * element itself or any ancestor. Hidden elements never witness a row
+ * (CHECK R9-01/N131, N132). Stated limit: jsdom applies no stylesheet in
+ * this file, so stylesheet-driven hiding is invisible here — the
+ * real-browser test (tests/e2e/settings-row-jump-motion.spec.ts) owns the
+ * rendered truth for FR-075.
+ */
+function isPerceivable(el: Element): boolean {
+  for (let node: Element | null = el; node !== null; node = node.parentElement) {
+    if (node.hasAttribute('hidden')) return false
+    if ((node.getAttribute('aria-hidden') ?? '').trim().toLowerCase() === 'true') return false
+    const inline = node.getAttribute('style') ?? ''
+    if (/(?:^|;)\s*display\s*:\s*none/i.test(inline)) return false
+    if (/(?:^|;)\s*visibility\s*:\s*hidden/i.test(inline)) return false
+  }
+  return true
+}
+
+/** The element's OWN text (direct text nodes only), whitespace-folded, lowercased. */
+function ownText(el: Element): string {
+  let text = ''
+  for (const child of el.childNodes) {
+    if (child.nodeType === child.TEXT_NODE) text += child.textContent ?? ''
+  }
+  return text.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+/**
+ * One locator leg's binding (CHECK R9-01): the matched set must be the ONLY
+ * element in the document with that exact name and role — one match, and it
+ * must lie on or inside the marked row. When several elements share the
+ * name and role (the section heading and the row's own heading, for ruling
+ * B's "Providers"), the one inside the marked row must sit on the row that
+ * carries the requested `data-settings-row` id — the tie that keeps a
+ * duplicated name from witnessing a foreign row.
+ */
+function legWitness(matches: Element[], row: Element, tiedToRowId?: string): Element | null {
+  const inside = matches.filter((m) => row.contains(m))
+  if (matches.length === 1) return inside.length === 1 ? inside[0] : null
+  if (inside.length === 0) return null
+  if (tiedToRowId) {
+    for (const m of inside) {
+      if (!m.closest(`[data-settings-row="${tiedToRowId}"]`)) return null
+    }
+  }
+  return inside[0]
+}
+
+/**
+ * Locate the requested setting's own spec-named control or value for the
+ * marked row (CHECK R9-01, strengthening R8-01): the witness is bound by
+ * accessible ROLE and EXACT accessible name — Testing Library role queries
+ * over WITNESS_ROLES with the whole name, never a prefix — or, for the
+ * read-only values and row names that carry no control role (the Version
+ * span, the row's own name line), the element whose OWN visible text is
+ * exactly the phrase. Hidden text witnesses nothing, and a longer word that
+ * merely starts with the phrase witnesses nothing. Matching is
+ * case-insensitive: the sheet's typographic casing may differ from the
+ * spec's ("Remote Access", "View Log", "opencode program path").
+ */
+function findSpecWitness(row: Element, phrases: string[], tiedToRowId?: string): Element | null {
   for (const phrase of phrases) {
-    const needle = phrase.toLowerCase()
-    const descendants = Array.from(row.querySelectorAll('*'))
-    for (const el of [row, ...descendants]) {
-      const aria = (el.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
-      if (aria.includes(needle)) return el
+    const pattern = exactNamePattern(phrase)
+    for (const role of WITNESS_ROLES) {
+      const witness = legWitness(screen.queryAllByRole(role, { name: pattern }), row, tiedToRowId)
+      if (witness) return witness
     }
-    for (const el of [...descendants, row]) {
-      const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
-      if (!text) continue
-      if (text.startsWith(needle) && text.length <= 150) return el
-      if ((el.tagName === 'A' || el.getAttribute('role') === 'link') && text.includes(needle)) return el
-    }
+    const needle = phrase.replace(/\s+/g, ' ').trim().toLowerCase()
+    const textMatches = Array.from(document.body.querySelectorAll('*')).filter(
+      (el) => isPerceivable(el) && ownText(el) === needle,
+    )
+    const witness = legWitness(textMatches, row, tiedToRowId)
+    if (witness) return witness
   }
   return null
 }
@@ -527,15 +617,22 @@ async function expectGroupOpen(testId: string, headerName: string): Promise<HTML
  *    furniture is required either. A text-only stand-in stays bounded by
  *    the identity, only-one-mark and scroll-receiver legs — and, for the
  *    closed-group cases, by the witnessed group header above.
- * 3. The requested setting's own witness (CHECK R8-01/N114, N115): when the
- *    caller names the entry's row id, the marked row must carry the
- *    spec-named control or value of THAT setting (WITNESS_PHRASES, from
- *    Dataset D-9's map, never from the implementation), and must not carry
- *    another listed setting's witness while that setting's own row sits
- *    elsewhere — the id, mark and scroll moving TOGETHER onto a wrong real
- *    row (the Log-level row answering a Bind-address or Port jump) is the
- *    fault this leg kills. A real nested row is not a foreign mark: the
- *    other row genuinely lying inside (or around) the marked one passes.
+ * 3. The requested setting's own witness (CHECK R8-01/N114, N115; strength-
+ *    ened CHECK R9-01/N131–N133): when the caller names the entry's row id,
+ *    the marked row must carry the spec-named control or value of THAT
+ *    setting (WITNESS_PHRASES, from Dataset D-9's map, never from the
+ *    implementation), and must not carry another listed setting's witness
+ *    while that setting's own row sits elsewhere — the id, mark and scroll
+ *    moving TOGETHER onto a wrong real row (the Log-level row answering a
+ *    Bind-address or Port jump) is the fault this leg kills. The witness is
+ *    the real, perceivable control or value: found by accessible role and
+ *    exact accessible name (role queries skip hidden elements; exact whole
+ *    name, never a prefix), or for read-only values and row names by exact
+ *    own visible text — unique in the document for its name and role, or
+ *    tied to the requested row's id. Hidden text and "Portable charger
+ *    status" do not witness a Port jump. A real nested row is not a foreign
+ *    mark: the other row genuinely lying inside (or around) the marked one
+ *    passes.
  */
 async function expectExactlyThisRowMarked(
   row: HTMLElement,
@@ -568,8 +665,8 @@ async function expectExactlyThisRowMarked(
     const phrases = WITNESS_PHRASES[witnesses.entryRowId]
     if (phrases) {
       expect(
-        findSpecWitness(row, phrases),
-        `RED (FR-075, CHECK R8-01): the marked row must be the requested setting's own row — none of the spec-named controls/values for "${witnesses.entryRowId}" (${phrases.join(' / ')}) lies on or inside it, while the id agrees with the implementation`,
+        findSpecWitness(row, phrases, witnesses.entryRowId),
+        `RED (FR-075, CHECK R8-01/R9-01): the marked row must be the requested setting's own row — none of the spec-named controls/values for "${witnesses.entryRowId}" (${phrases.join(' / ')}) lies on or inside it under the role + exact-name + perceivable locator, while the id agrees with the implementation`,
       ).not.toBeNull()
       for (const [otherId, otherPhrases] of Object.entries(WITNESS_PHRASES)) {
         if (otherId === witnesses.entryRowId) continue
