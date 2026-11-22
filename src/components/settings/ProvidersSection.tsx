@@ -102,6 +102,8 @@ import { usePrimaryVariant } from './SaveBar'
 import { useSettingsShell } from './SettingsShellContext'
 import { settingsRow } from './settingsSections'
 import { useReturnFocus } from './useReturnFocus'
+import { SectionLoading } from './SectionLoading'
+import { ReadErrorCallout } from './ReadErrorCallout'
 
 // The item shown in the Sheet — either an existing configured provider (configure
 // mode) or a catalog entry for first-time setup (connect mode).
@@ -831,7 +833,14 @@ export function ProvidersSection() {
   // session genuinely needs a fresh approval.
   const [manageTarget, setManageTarget] = useState<{ id: string; label: string; accountLabel?: string } | null>(null)
 
-  const { data: providers = [], isLoading, isError: providersError } = useQuery({
+  const {
+    data: providers = [],
+    isLoading,
+    isError: providersError,
+    error: providersReadError,
+    refetch: refetchProviders,
+    isFetching: providersFetching,
+  } = useQuery({
     queryKey: ['providers'],
     queryFn: fetchProviders,
   })
@@ -1319,18 +1328,15 @@ export function ProvidersSection() {
       {defaultOutcome}
 
       {providersError ? (
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]" data-testid="providers-error">
-          Failed to load providers. Please try again.
-        </p>
+        <ReadErrorCallout
+          title="The providers could not be loaded"
+          error={providersReadError}
+          onRetry={() => void refetchProviders()}
+          retrying={providersFetching}
+          data-testid="providers-error"
+        />
       ) : isLoading ? (
-        <div className="space-y-[var(--space-2)]">
-          {[1, 2, 3].map((i) => (
-            <Card
-              key={i}
-              className="h-14 animate-pulse"
-            />
-          ))}
-        </div>
+        <SectionLoading label="Providers" />
       ) : hasConfigured ? (
         /* ── Configured-only list, grouped only when a company has ≥2
              configured variants (FIX-2); a single configured provider is a

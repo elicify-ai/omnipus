@@ -574,7 +574,7 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
   const firstInvalid = Object.keys(localErrors)[0]
   const invalidGroup: 'context' | 'overrides' | null = !firstInvalid ? null : firstInvalid.startsWith('model_overrides') ? 'overrides' : 'context'
 
-  return { part, fieldsView, overridesView, invalidGroup, ready: !!form && !isError, loadFailed: isError, overrideCount: form?.model_overrides.length ?? 0 }
+  return { part, fieldsView, overridesView, invalidGroup, loading: isLoading, ready: !!form && !isError, loadFailed: isError, overrideCount: form?.model_overrides.length ?? 0 }
 }
 
 /** Context and tool results plus Model overrides on their own, with their own Save bar. */

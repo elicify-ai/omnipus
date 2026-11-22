@@ -30,6 +30,7 @@ import { useSectionSavePart } from './SectionSaveScope'
 import { AllowedPathsEditor } from './AllowedPathsEditor'
 import { SsrfEditor, SSRF_PRESETS } from './SsrfEditor'
 import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -911,6 +912,9 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
       </Card>
     )
   }
+
+  // FR-065: the section's loading frame until both of its reads answer.
+  if (statusLoading && configLoading) return <SectionLoading label="Sandbox & network" />
 
   return (
     <section className="space-y-[var(--space-2-5)]">

@@ -8,6 +8,8 @@ import { fetchAboutInfo, fetchVersion, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { OMNIPUS_MARK_URL as omnipusLogo } from '@/lib/brandAssets'
 import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
+import { ReadErrorCallout } from './ReadErrorCallout'
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
@@ -22,7 +24,7 @@ function formatUptime(seconds: number): string {
 export function AboutSection() {
   const { addToast } = useUiStore()
 
-  const { data: info, isLoading, isError } = useQuery({
+  const { data: info, isLoading, isError, error: infoError, refetch: refetchInfo, isFetching: infoFetching } = useQuery({
     queryKey: ['about'],
     queryFn: fetchAboutInfo,
     retry: 1,
@@ -90,11 +92,19 @@ export function AboutSection() {
 
         <Card className="divide-y divide-[var(--color-border)]">
           {isLoading && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading system info...</div>
+            <div className="p-[var(--space-3)]">
+              <SectionLoading label="About" />
+            </div>
           )}
           {isError && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-              Could not fetch system info — gateway may be offline.
+            <div className="p-[var(--space-3)]">
+              <ReadErrorCallout
+                title="The system information could not be loaded"
+                error={infoError}
+                onRetry={() => void refetchInfo()}
+                retrying={infoFetching}
+                blocksSaving={false}
+              />
             </div>
           )}
           {info && (

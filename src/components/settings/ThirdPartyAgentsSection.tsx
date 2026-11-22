@@ -22,7 +22,6 @@ import { Card } from '@/components/ui/card'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import { QueryErrorState } from '@/components/ui/query-error-state'
 import {
   fetchCliValidate,
@@ -41,6 +40,7 @@ import { SaveBarPanel, SaveOutcomeLine } from './SaveBar'
 import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
 
 type CliKey = keyof ThirdPartyAgentSettingsView['clis']
 type PresetField = keyof CliPreset
@@ -102,20 +102,6 @@ function checkResultToast(label: string, result: CliValidateResponse): { message
     default:
       return { message: `${label} CLI check: ${detail}. Nothing was saved.`, variant: 'warning' }
   }
-}
-
-function LoadingRows() {
-  return (
-    <div data-testid="third-party-agents-loading" aria-busy="true" className="space-y-[var(--space-2-5)]">
-      {CLI_ROWS.map(({ cli }) => (
-        <Card key={cli} className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
-          <Skeleton className="h-4 w-32" />
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-full" />
-        </Card>
-      ))}
-    </div>
-  )
 }
 
 export function ThirdPartyAgentsSection() {
@@ -297,7 +283,7 @@ export function ThirdPartyAgentsSection() {
     }
   }
 
-  if (isPending) return <LoadingRows />
+  if (isPending) return <SectionLoading label="Third-party agents" cards={CLI_ROWS.length} data-testid="third-party-agents-loading" />
 
   if (isError) {
     return (

@@ -7,7 +7,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { Button } from '@/components/ui/button'
-import { Spinner } from '@/components/ui/spinner'
 import { fetchRetentionSettings, updateRetentionSettings, getErrorMessage } from '@/lib/api'
 import type { RetentionSettingsUpdate } from '@/lib/api'
 import { SaveBar } from './SaveBar'
@@ -16,6 +15,7 @@ import type { SaveBarField, SaveBarValue } from './useSaveBar'
 import { DataSection } from './DataSection'
 import { ReadErrorCallout } from './ReadErrorCallout'
 import { useSettingsShell } from './SettingsShellContext'
+import { SectionLoading } from './SectionLoading'
 
 const RETENTION_QUERY_KEY = ['settings', 'retention'] as const
 
@@ -44,12 +44,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
 
   let retention: React.ReactNode
   if (isLoading) {
-    retention = (
-      <div className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
-        <Spinner decorative />
-        Loading Data & retention…
-      </div>
-    )
+    retention = <SectionLoading label="Data & retention" />
   } else if (!data) {
     retention = (
       <Callout variant="error" data-testid="retention-error">

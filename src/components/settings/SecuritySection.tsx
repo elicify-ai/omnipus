@@ -81,6 +81,7 @@ import { useStepUp } from './useStepUp'
 import { AutoApproveAskList } from './AutoApproveAskList'
 import { settingsRow } from './settingsSections'
 import { useReturnFocus } from './useReturnFocus'
+import { SectionLoading } from './SectionLoading'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -343,12 +344,18 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
   // The config read still decides the section's loading and error states; the
   // per-agent limits come from their own route below (#1882).
-  const { isLoading, isError: configError } = useQuery({
+  const {
+    isLoading,
+    isError: configError,
+    error: configReadError,
+    refetch: refetchConfig,
+    isFetching: configFetching,
+  } = useQuery({
     queryKey: ['config'],
     queryFn: fetchConfig,
   })
 
-  const { data: credentials = [], isError: credentialsError } = useQuery({
+  const { data: credentials = [], isError: credentialsError, isLoading: credentialsLoading } = useQuery({
     queryKey: ['credentials'],
     queryFn: fetchCredentials,
     retry: false,
@@ -359,6 +366,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   const {
     data: rateLimits,
     isError: rateLimitsError,
+    isLoading: rateLimitsLoading,
     error: rateLimitsReadError,
     refetch: refetchRateLimits,
     isFetching: rateLimitsFetching,
@@ -572,12 +580,21 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       })
   }
 
-  if (isLoading) {
-    return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading...</div>
+  // FR-065: each view shows its section's loading frame until its reads answer.
+  const sectionLabel = view === 'keys' ? 'Keys & secrets' : 'Protection'
+  if (isLoading || (view === 'keys' ? credentialsLoading : rateLimitsLoading)) {
+    return <SectionLoading label={sectionLabel} />
   }
 
   if (configError) {
-    return <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load security settings. Please try again.</p>
+    return (
+      <ReadErrorCallout
+        title={`The ${sectionLabel} settings could not be loaded`}
+        error={configReadError}
+        onRetry={() => void refetchConfig()}
+        retrying={configFetching}
+      />
+    )
   }
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.

@@ -28,8 +28,6 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Spinner } from '@/components/ui/spinner'
 import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, getErrorMessage, type Config } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { usePendingRestart } from '@/hooks/restart'
@@ -38,6 +36,7 @@ import { toWriteResponse } from './saveOutcome'
 import { useSaveBar, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { GatewayRestartModal } from './GatewayRestartModal'
 import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
 
 // ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
 
@@ -216,17 +215,7 @@ export function GatewaySection() {
   // FR-065: loading text with a spinner and Skeleton cards until the reads
   // answer; both stop moving under reduced motion (FR-075).
   if (isLoading) {
-    return (
-      <div className="space-y-[var(--space-2)]" aria-busy="true" data-testid="gateway-loading">
-        <div role="status" className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-          <Spinner decorative />
-          Loading Gateway…
-        </div>
-        {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-[var(--space-8)] w-full" />
-        ))}
-      </div>
-    )
+    return <SectionLoading label="Gateway" data-testid="gateway-loading" />
   }
 
   if (isConfigError || !config) {

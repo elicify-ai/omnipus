@@ -26,9 +26,8 @@ import { providerBindingCopy } from '@/components/agents/AgentCard'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/error-state'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Spinner } from '@/components/ui/spinner'
 import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
 
 const PURPOSE: Record<(typeof SYSTEM_AGENT_IDS)[number], string> = {
   [JUDGE_AGENT_ID]: 'Checks whether goals and tasks meet their acceptance criteria.',
@@ -63,15 +62,7 @@ export function SystemAgentsSection(): React.ReactElement {
       </p>
 
       {isPending ? (
-        <div className="space-y-[var(--space-2)]" data-testid="system-agents-loading" aria-busy="true">
-          <div role="status" className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-            <Spinner decorative />
-            Loading System agents…
-          </div>
-          {SYSTEM_AGENT_IDS.map((id) => (
-            <Skeleton key={id} className="h-[var(--space-7)] w-full" />
-          ))}
-        </div>
+        <SectionLoading label="System agents" cards={SYSTEM_AGENT_IDS.length} data-testid="system-agents-loading" />
       ) : isError && !data ? (
         <ErrorState message="Could not load the system agents." onRetry={() => void refetch()} />
       ) : (

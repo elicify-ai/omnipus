@@ -544,7 +544,7 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
     />
   ) : null
 
-  return { part, view, dialogs, ready: !!data && !error, loadFailed: !!error && !isLoading }
+  return { part, view, dialogs, loading: isLoading, ready: !!data && !error, loadFailed: !!error && !isLoading }
 }
 
 /** Agents and goals on its own, with its own Save bar. */

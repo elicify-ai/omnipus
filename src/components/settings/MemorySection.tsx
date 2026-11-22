@@ -27,19 +27,8 @@ import {
 } from './recapLimits'
 import { usePrimaryVariant } from './SaveBar'
 import { settingsRow } from './settingsSections'
-
-// ── Skeleton ──────────────────────────────────────────────────────────────────
-
-function Skeleton() {
-  return (
-    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
-      <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
-      <div className="h-3 w-full rounded bg-[var(--color-border)]" />
-      <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
-      <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
-    </Card>
-  )
-}
+import { SectionLoading } from './SectionLoading'
+import { ReadErrorCallout } from './ReadErrorCallout'
 
 // ── Toggle row ────────────────────────────────────────────────────────────────
 
@@ -236,7 +225,7 @@ export function MemorySection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['memory-settings'],
     queryFn: fetchMemorySettings,
   })
@@ -560,14 +549,16 @@ export function MemorySection(): React.ReactElement {
     removeFallback(modelSlug)
   }
 
-  if (isLoading) return <Skeleton />
+  if (isLoading) return <SectionLoading label="Memory & recaps" />
 
   if (isError) {
     return (
-      <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }}>
-        Failed to load memory settings:{' '}
-        {error instanceof Error ? error.message : 'Unknown error'}
-      </p>
+      <ReadErrorCallout
+        title="The memory settings could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+      />
     )
   }
 

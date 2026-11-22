@@ -16,6 +16,7 @@ import { SaveBarPanel, SaveOutcomeLine } from './SaveBar'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 import { settingsRow, settingsRowId } from './settingsSections'
 import { useSettingsShell } from './SettingsShellContext'
+import { SectionLoading } from './SectionLoading'
 
 type GroupId = 'context' | 'overrides' | 'agents'
 
@@ -99,6 +100,9 @@ export function LimitsSection({ prefillOverride }: LimitsSectionProps) {
   }, [performanceFailed])
 
   const toggle = (g: GroupId) => (expanded: boolean) => setOpen((o) => ({ ...o, [g]: expanded }))
+
+  // FR-065: until either group read answers, the section shows its loading frame.
+  if (context.loading && performance.loading) return <SectionLoading label="Limits" />
 
   return (
     <div className="space-y-[var(--space-3)]">
