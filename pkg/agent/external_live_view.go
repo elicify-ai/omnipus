@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -130,26 +131,42 @@ func (al *AgentLoop) finishExternalLiveView(ctx context.Context, ts *turnState, 
 	return err
 }
 
-// withoutSaveFailure returns err with every occurrence of the turn's latched
-// transcript-save failure removed: nil when that was all err held, otherwise
-// the remaining errors. Other finalize errors (the streamer's own write) stay.
+// withoutSaveFailure returns err with the turn's latched transcript-save
+// failure removed: nil when that was all err held, otherwise the remaining
+// errors. It never drops anything else. Only the latched value itself is
+// removed (identity, not errors.Is, which would match any wrapper that merely
+// contains it), and only errors.Join nodes are taken apart and rebuilt; every
+// other wrapper is kept whole, even one that also wraps the save failure, so
+// an unrelated cause inside it survives. finalizeStreamer returns the latched
+// value bare or joined with the flush and streamer-finalize errors, which is
+// the shape removed here.
 func withoutSaveFailure(err, saveErr error) error {
 	if err == nil || saveErr == nil {
 		return err
 	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		var rest []error
-		for _, e := range joined.Unwrap() {
-			if e = withoutSaveFailure(e, saveErr); e != nil {
-				rest = append(rest, e)
-			}
-		}
-		return errors.Join(rest...)
-	}
-	if errors.Is(err, saveErr) {
+	if sameErrorValue(err, saveErr) {
 		return nil
 	}
-	return err
+	if reflect.TypeOf(err) != joinErrorType {
+		return err
+	}
+	var rest []error
+	for _, e := range err.(interface{ Unwrap() []error }).Unwrap() {
+		if e = withoutSaveFailure(e, saveErr); e != nil {
+			rest = append(rest, e)
+		}
+	}
+	return errors.Join(rest...)
+}
+
+// joinErrorType is the dynamic type errors.Join returns for a non-empty list.
+var joinErrorType = reflect.TypeOf(errors.Join(errors.New("join probe")))
+
+// sameErrorValue reports whether a and b are the same error value, guarding
+// against a panic on an uncomparable dynamic type.
+func sameErrorValue(a, b error) bool {
+	t := reflect.TypeOf(a)
+	return t == reflect.TypeOf(b) && t.Comparable() && a == b
 }
 
 // emitExternalErrorFrame emits the typed error frame for an external-CLI exit
