@@ -633,6 +633,8 @@ export function MemorySection(): React.ReactElement {
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Primary model</p>
             <RecapModelSlot
               scope="recap-model"
+              // A Save in progress does not lock the slot: a newer pick stays a draft.
+              disabled={false}
               value={{ provider: form.recap_provider, model: form.recap_model, effort: form.recap_reasoning_effort }}
               contextName={`Effort for the recap model, ${form.recap_model}`}
               note={primaryNote}
@@ -700,6 +702,8 @@ export function MemorySection(): React.ReactElement {
                       </span>
                       <RecapModelSlot
                         scope="recap-fallback"
+                        // A Save in progress does not lock the slot: a newer pick stays a draft.
+                        disabled={false}
                         value={{ provider: entry.provider ?? '', model: entry.model, effort: entry.reasoning_effort ?? '' }}
                         contextName={`Effort for recap fallback ${idx + 1}, ${entry.model}`}
                                   note={fallbackNotes[entry.model] ?? null}
