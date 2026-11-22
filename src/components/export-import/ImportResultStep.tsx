@@ -64,7 +64,7 @@ export function ImportResultStep({ result, workspaceName, onOpenTeam, onImportAn
           {`${created.name} was added to ${workspaceName}.`}
         </p>
       )}
-      {!active && result.activation_message && (
+      {result.activation_message && (
         <Callout variant="info">
           <CalloutDescription>{result.activation_message}</CalloutDescription>
         </Callout>

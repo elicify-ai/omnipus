@@ -90,7 +90,6 @@ export function useAddressView<V>(search: ExportImportSearch, seed: (search: Exp
     lastKey.current = key
     setView(seed(search))
     // Only an address change re-seeds the view; `search` and `seed` are read through it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
   const go = useCallback(
     (next: V, nextSearch: ExportImportSearch) => {

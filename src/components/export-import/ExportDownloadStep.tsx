@@ -104,7 +104,6 @@ export function ExportDownloadStep({ planId, onBackToReview, onExpired, onExport
       },
     )
     // One re-read and one export per arrival at this step.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const download = exportMutation.data

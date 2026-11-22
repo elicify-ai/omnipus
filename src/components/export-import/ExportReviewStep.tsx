@@ -21,6 +21,13 @@ const FILE_LABELS: Record<string, string> = {
   'AGENT.md': 'Instructions',
 }
 
+// Paths are full bundle paths (omnipus/agents/<id>/SOUL.md); the label is
+// read from the file name, the path column keeps the full path.
+function fileLabel(path: string): string {
+  const base = path.slice(path.lastIndexOf('/') + 1)
+  return FILE_LABELS[base] ?? path
+}
+
 const KIND_LABELS: Record<PackageExportPlan['elements'][number]['kind'], string> = {
   main: 'Main',
   worker: 'Worker',
@@ -65,7 +72,6 @@ export function ExportReviewStep({ planId, onBack, onDownload, onExpired }: Expo
   useEffect(() => {
     if (gone) onExpired()
     // onExpired is a fresh closure each render; the 404 is acted on once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gone])
 
   if (planQuery.isPending || gone) {
@@ -124,7 +130,7 @@ export function ExportReviewStep({ planId, onBack, onDownload, onExpired }: Expo
           <TableBody>
             {(element?.files ?? []).map((file) => (
               <TableRow key={file.path}>
-                <TableCell>{FILE_LABELS[file.path] ?? file.path}</TableCell>
+                <TableCell>{fileLabel(file.path)}</TableCell>
                 <TableCell>
                   <code className="font-mono text-[length:var(--type-code-size)]">{file.path}</code>
                 </TableCell>

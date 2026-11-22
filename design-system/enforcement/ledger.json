@@ -8997,6 +8997,16 @@
       "path": "src/components/layout/Sidebar.exportImport.test.tsx",
       "kind": "test",
       "reason": "Exact test-only boundary for #1967 B1 (Sidebar Export & Import entry): the test mocks Link, motion.aside and motion.div with plain elements carrying the caller's className, like the other Sidebar test files. Test-only styling never ships; no production import, public export, scanner rule or assertion is changed."
+    },
+    {
+      "path": "src/components/export-import/ImportConfirmStep.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1967 B1 (Confirm workspace choice, GREEN CHECK P07): the test shims the catalogued Select with plain elements (a role=combobox button trigger), following the ConnectorsScreen.test.tsx Radix-select precedent. Test-only markup never ships; no production import, public export, scanner rule or assertion is changed."
+    },
+    {
+      "path": "src/components/export-import/ExportImportWizard.reload.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1967 B1 (Import wizard reload rows, GREEN CHECK P07): the test shims the catalogued Select with plain elements (a role=combobox button trigger), the same shim as ImportConfirmStep.test.tsx. Test-only markup never ships; no production import, public export, scanner rule or assertion is changed."
     }
   ]
 }
