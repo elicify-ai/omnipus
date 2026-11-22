@@ -188,7 +188,16 @@ describe('Chat action decided by the agent lookup (FR-023, D4-1…4)', () => {
     renderResult(validResult())
     expect(mockFetchAgent).toHaveBeenCalledWith('a-new')
     expect(screen.getByText(SUMMARY)).toBeInTheDocument()
-    expect(screen.getByRole('status'), 'a busy placeholder while the type is looked up').toBeInTheDocument()
+    // Scoped to the named busy placeholder (dispute D-1, verified): the
+    // spec shows the REST of the result at once, and every catalogued
+    // Button portals its own empty role=status announcement — so an
+    // unscoped getByRole('status') throws on the placeholder's own
+    // announcement regions' siblings. The NAME keeps the row's teeth: no
+    // placeholder, no match, and this row still dies.
+    expect(
+      screen.getByRole('status', { name: 'Checking the new agent' }),
+      'a busy placeholder while the type is looked up',
+    ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Open chat' })).toBeNull()
     expect(screen.queryByText('Open it from the Team.')).toBeNull()
   })
