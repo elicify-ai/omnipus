@@ -280,8 +280,17 @@ func TestT132_RefusedRegisteredReadsNameTheRestart(t *testing.T) {
 				svc, err := New(Config{Home: home, Self: bin, Resolver: resolver})
 				require.NoError(t, err)
 				if record == "active-startup-record" {
+					// The record models the RS-1 premise: the components were
+					// in the startup record, and NOW a read is refused. The
+					// registered roots must therefore be granted too — §3.8
+					// BR-2.5 refuses a root the record does not cover with
+					// the after-start sentence BEFORE anything in it is read
+					// (component.go::Resolve's CheckStartupGrant step), which
+					// is that gate's own correct behaviour, not this row's.
 					rec := &component.StartupGrantRecord{}
 					require.NoError(t, rec.AddGranted(own))
+					require.NoError(t, rec.AddGranted(officeRoot))
+					require.NoError(t, rec.AddGranted(rendererRoot))
 					component.SetStartupGrants(rec)
 					t.Cleanup(func() { component.SetStartupGrants(nil) })
 				}
