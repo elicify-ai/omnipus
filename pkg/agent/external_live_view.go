@@ -147,11 +147,12 @@ func withoutSaveFailure(err, saveErr error) error {
 	if sameErrorValue(err, saveErr) {
 		return nil
 	}
-	if reflect.TypeOf(err) != joinErrorType {
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok || reflect.TypeOf(err) != joinErrorType {
 		return err
 	}
 	var rest []error
-	for _, e := range err.(interface{ Unwrap() []error }).Unwrap() {
+	for _, e := range joined.Unwrap() {
 		if e = withoutSaveFailure(e, saveErr); e != nil {
 			rest = append(rest, e)
 		}
@@ -166,7 +167,7 @@ var joinErrorType = reflect.TypeOf(errors.Join(errors.New("join probe")))
 // against a panic on an uncomparable dynamic type.
 func sameErrorValue(a, b error) bool {
 	t := reflect.TypeOf(a)
-	return t == reflect.TypeOf(b) && t.Comparable() && a == b
+	return t == reflect.TypeOf(b) && t.Comparable() && a == b //nolint:errorlint // identity is the point: errors.Is would also match a wrapper holding other causes
 }
 
 // emitExternalErrorFrame emits the typed error frame for an external-CLI exit
