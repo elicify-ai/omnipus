@@ -153,7 +153,7 @@ async function openRecapLimits() {
   await user.click(screen.getByRole('button', { name: /recap limits/i }))
 }
 
-const saveButton = () => screen.getByRole('button', { name: /save memory settings/i })
+const saveButton = () => screen.getByRole('button', { name: /save changes/i })
 
 // ── C2-02 / S-60: the real Memory screen, not an explicit picker prop ────────
 
@@ -266,13 +266,16 @@ describe('MemorySection — T-L4 "Recap limits" area', () => {
     await user.clear(input)
     await user.type(input, '600')
     expect(screen.getByText('Summary length must be between 50 and 500')).toBeInTheDocument()
-    expect(saveButton()).toBeDisabled()
+    expect(saveButton()).toHaveAttribute('aria-disabled', 'true')
     expect(input).toHaveFocus()
   })
 
   // Traces to: effort-levels-spec-r10.md S-82 (200 accepted with summary
   // "1 changed"; Reset puts all ten back without saving; Save stores defaults).
-  it('S-82: 200 is accepted ("1 changed"); Reset restores the defaults without saving; Save stores them', async () => {
+  it('S-82 / F1: 200 is accepted ("1 changed"); Reset drafts defaults; Save sends the changed default only', async () => {
+    // FR-011/015: Reset from a non-default saved value creates a real draft;
+    // Reset to an already-saved default would correctly leave no Save bar.
+    vi.mocked(fetchMemorySettings).mockResolvedValue(settings({ recap_summary_words: 200 }))
     await openRecapLimits()
     const input = screen.getByLabelText(/^Summary length/)
     await user.clear(input)
@@ -293,9 +296,7 @@ describe('MemorySection — T-L4 "Recap limits" area', () => {
       fireEvent.click(saveButton())
     })
     await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
-    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledWith(
-      expect.objectContaining(DEFAULT_LIMITS),
-    )
+    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledExactlyOnceWith({ recap_summary_words: 150 })
   })
 
   // Traces to: effort-levels-spec-r10.md S-82 And (r8, R6-MIN-001): the
@@ -349,45 +350,48 @@ describe('MemorySection — T-L7 recap-slot autosave with unsaved limit drafts',
     expect(
       screen.getByText('Conversation sent for the recap must be between 500 and 32000'),
     ).toBeInTheDocument()
-    expect(saveButton()).toBeDisabled()
+    expect(saveButton()).toHaveAttribute('aria-disabled', 'true')
   })
 
-  // Traces to: effort-levels-spec-r10.md S-93 main row: switching the recap
-  // model autosaves EXACTLY ONE slot-only request (recap_model, recap_provider,
-  // recap_reasoning_effort — merge semantics, no limit keys); the drafts, the
-  // FormError, the "2 changed" summary, the dirty state and the blocked Save
-  // survive it; the mapping note shows.
-  it('S-93: switching the recap model autosaves a slot-only body and keeps the drafts, counters and blocked Save', async () => {
+  // F1 / FR-010 supersedes S-93's slot autosave only. The model switch
+  // completes as a draft; limits, error, counters and blocked Save survive.
+  // FR-015 sends all and only these changed values after validation succeeds.
+  it('S-93 / F1: switching the recap model stays a draft and keeps limits, counters and blocked Save', async () => {
     await typeDrafts()
     expect(screen.getByText('2 changed')).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('recap-model-trigger'))
     fireEvent.click(await screen.findByText('deepseek/deepseek-v4.1-flash'))
 
-    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
-    const body = vi.mocked(updateMemorySettings).mock.calls[0][0] as Record<string, unknown>
-    expect(body).toEqual({
-      recap_model: 'deepseek/deepseek-v4.1-flash',
-      recap_provider: 'openrouter',
-      recap_reasoning_effort: 'low',
-    })
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
 
-    // Nothing was disturbed by the autosave.
+    // Nothing was disturbed by the model draft.
     expect(screen.getByLabelText(/^Summary length/)).toHaveValue(80)
     expect(screen.getByLabelText(/^Conversation sent for the recap/)).toHaveValue(100)
     expect(
       screen.getByText('Conversation sent for the recap must be between 500 and 32000'),
     ).toBeInTheDocument()
     expect(screen.getByText('2 changed')).toBeInTheDocument()
-    expect(saveButton()).toBeDisabled()
+    expect(saveButton()).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByText(/Effort set to Low\. deepseek\/deepseek-v4\.1-flash doesn't offer Medium\./)).toBeInTheDocument()
+    fireEvent.click(saveButton())
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText(/^Conversation sent for the recap/), { target: { value: '1000' } })
+    await act(async () => { fireEvent.click(saveButton()) })
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledExactlyOnceWith({
+      recap_model: 'deepseek/deepseek-v4.1-flash',
+      recap_reasoning_effort: 'low',
+      recap_summary_words: 80,
+      recap_input_tokens: 1000,
+    }))
   })
 
   // Traces to: effort-levels-spec-r10.md S-93 And (r7, R5-MAJ-002; counters
   // named r8, R6-MIN-001): a deferred explicit Save never overwrites later
   // edits — held response, draft 250 survives the 200 baseline, dirty and
-  // "1 changed" move independently, the second Save persists 250 and cleans;
-  // and (r6 one-writer rule) slot pickers are disabled while Save is pending.
+  // "1 changed" move independently, the second Save persists 250 and cleans.
+  // F1/F4 / FR-011/020 supersede the old autosave picker lock: only another
+  // Save is blocked while the submitted request is held; newer drafts stay.
   it('S-93: a deferred Save keeps the later 250 edit; counters move independently; the second Save persists 250', async () => {
     await openRecapLimits()
     let resolveFirst: ((value: MemorySettings) => void) | undefined
@@ -405,8 +409,9 @@ describe('MemorySection — T-L7 recap-slot autosave with unsaved limit drafts',
       fireEvent.click(saveButton())
     })
     expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
-    expect(screen.getByText('Saving…')).toBeInTheDocument()
-    expect(screen.getByTestId('recap-model-trigger')).toBeDisabled() // one writer while Save pending
+    expect(saveButton()).toHaveAttribute('aria-disabled', 'true') // F1: common Save is busy
+    fireEvent.click(saveButton())
+    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
 
     await user.clear(input) // drafts stay editable while the request is in flight
     await user.type(input, '250')
@@ -415,7 +420,7 @@ describe('MemorySection — T-L7 recap-slot autosave with unsaved limit drafts',
     await act(async () => {
       resolveFirst?.(settings({ recap_summary_words: 200 }))
     })
-    await waitFor(() => expect(screen.queryByText('Saving…')).toBeNull())
+    await waitFor(() => expect(saveButton()).not.toHaveAttribute('aria-disabled', 'true'))
     // Baseline became 200; the draft stays 250 — nothing presented as saved,
     // the save state is dirty, the defaults summary reads "1 changed".
     expect(input).toHaveValue(250)
@@ -432,7 +437,7 @@ describe('MemorySection — T-L7 recap-slot autosave with unsaved limit drafts',
       expect.objectContaining({ recap_summary_words: 250 }),
     )
     expect(input).toHaveValue(250)
-    expect(screen.getByText('Saved')).toBeInTheDocument() // clean now
+    expect(await screen.findByText(/Saved at/)).toBeInTheDocument() // FR-018: clean now
     expect(screen.getByText('1 changed')).toBeInTheDocument() // defaults summary unaffected
   })
 
@@ -448,12 +453,14 @@ describe('MemorySection — T-L7 recap-slot autosave with unsaved limit drafts',
     await act(async () => {
       fireEvent.click(saveButton())
     })
-    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
-    expect(screen.getByText(/save failed/i)).toBeInTheDocument()
+    // F1 / FR-020: a transport error is unknown, never an immediate rollback.
+    expect(await screen.findByText('1 change may not have been saved')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
     expect(input).toHaveValue(80)
     expect(screen.getByText('1 changed')).toBeInTheDocument()
   })
-  it('S-93: held fallback autosave serializes the next write as [A-prime, B-prime], never stale [A, B-prime]',async()=>{
+  it('S-93 / F1: held fallback Save serializes the next Save as [A-prime, B-prime], never stale [A, B-prime]',async()=>{
     const original=[{provider:'openrouter',model:'openai/gpt-6.1-sol',reasoning_effort:'medium'},{provider:'openrouter',model:'google/gemini-2.5-flash',reasoning_effort:'high'}]
     const afterA=[{provider:'openrouter',model:'deepseek/deepseek-v4.1-flash',reasoning_effort:'low'},original[1]]
     const final=[afterA[0],{provider:'openrouter',model:'anthropic/claude-3.5-haiku',reasoning_effort:'high'}]
@@ -466,17 +473,28 @@ describe('MemorySection — T-L7 recap-slot autosave with unsaved limit drafts',
     const rowA=screen.getByTestId('recap-fallback-row-openai/gpt-6.1-sol')
     await user.click(within(rowA).getByRole('combobox'))
     await user.click(await screen.findByText('deepseek/deepseek-v4.1-flash',{exact:true}))
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
+    await user.click(saveButton())
     await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(updateMemorySettings).mock.calls[0][0]).toEqual({recap_fallback_models:afterA})
     const pickerB=within(screen.getByTestId('recap-fallback-row-google/gemini-2.5-flash')).getByRole('combobox')
-    expect(pickerB).toBeDisabled()
-    await user.click(pickerB)
-    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
-    expect(saveButton()).toBeDisabled()
-    await act(async()=>{releaseFirst(settings({recap_fallback_models:afterA}))})
-    await waitFor(()=>expect(pickerB).toBeEnabled())
+    // F1/F4 / FR-011/020: edit B while the submitted A request is held.
+    // A's acknowledgement may update only its submitted value, not erase B.
     await user.click(pickerB)
     await user.click(await screen.findByText('anthropic/claude-3.5-haiku',{exact:true}))
+    expect(screen.getByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeInTheDocument()
+    expect(screen.getByText('1 unsaved change')).toBeInTheDocument()
+    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
+    expect(saveButton()).toHaveAttribute('aria-disabled', 'true')
+    await user.click(saveButton())
+    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
+    await act(async()=>{releaseFirst(settings({recap_fallback_models:afterA}))})
+    await waitFor(()=>expect(saveButton()).not.toHaveAttribute('aria-disabled', 'true'))
+    expect(screen.getByTestId('recap-fallback-row-deepseek/deepseek-v4.1-flash')).toBeInTheDocument()
+    expect(screen.getByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeInTheDocument()
+    expect(screen.getByText('1 unsaved change')).toBeInTheDocument()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+    await user.click(saveButton())
     await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(2))
     expect(vi.mocked(updateMemorySettings).mock.calls[1][0]).toEqual({recap_fallback_models:final})
     expect(vi.mocked(updateMemorySettings).mock.calls.map(([body])=>body)).not.toContainEqual({recap_fallback_models:[original[0],final[1]]})
