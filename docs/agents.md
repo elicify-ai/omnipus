@@ -128,7 +128,12 @@ To change an agent, open its card on the workspace's **Team**, or its row menu i
 
 ## How to move an agent to another install
 
-You can copy one custom agent to another Omnipus you run yourself. The command line packs it into one file and, on the other install, adds it as a **new** agent. The commands, the preview, the confirm step and the exit codes are in [Using the Omnipus command line](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). There is no screen for it, and asking an agent does not do it.
+You can copy one custom agent to another Omnipus you run yourself. It is packed into one file, a bundle (`.omnpkg`), and on the other install it is added as a **new** agent.
+
+- **In the app:** the [Export & Import](export-import.md) page in the sidebar (self-hosted edition). **Export** in an agent's edit sheet opens the export with that agent already chosen.
+- **On the command line:** the commands, the preview, the confirm step and the exit codes are in [Using the Omnipus command line](using-omnipus-cli.md#how-to-move-an-agent-to-another-install).
+
+Asking an agent does not do it.
 
 **Built-in agents never go into a package.** That is Mia, Jim, Omnipus, the shipped workers Planner, Researcher and General Purpose, and the internal agents Judge and Plan Supervisor. Export refuses them, and the message says they cannot be exported. Import never changes a built-in agent. A custom agent that only shares a built-in's name, such as a custom agent named Mia, can be exported. On an install that already has Mia, it arrives as a new custom agent named Mia (imported), with a new id. The built-in Mia's record, prompt and memory are unchanged.
 

@@ -221,8 +221,6 @@ export interface RequestOptions { // not-wire-format: in-browser transport switc
    * recovery — epic #1094 spec "No automatic resend"). Default true, so every
    * other caller keeps today's one-retry toast.
    *
-   * RED STUB (issue #1967 slice B1): declared only — no code reads it yet.
-   * GREEN wires it in request() beside raisePlantedCookieToast.
    */
   plantedCookieToast?: boolean
 }
@@ -335,19 +333,62 @@ export async function request<T>(
   try {
     return await requestOnce(path, init, schema, onResponseHeaders, options)
   } catch (err) {
-    if (isPlantedCookieClearedError(err)) {
+    if (isPlantedCookieClearedError(err) && options?.plantedCookieToast !== false) {
       await raisePlantedCookieToast(err, () => requestOnce<T>(path, init, schema, onResponseHeaders, options))
     }
     throw err
   }
 }
 
-async function requestOnce<T>(
+/**
+ * requestResponse is request()'s raw-response sibling for a binary answer
+ * (the package export download): the same client CSRF gate, the same CSRF
+ * recovery (switchable with `csrfRetry`) and the same planted-cookie toast
+ * (switchable with `plantedCookieToast`), but the successful Response is
+ * returned unread so the caller can take its blob and headers. A non-2xx
+ * answer throws the usual ApiError; a transport failure throws a status-0
+ * ApiError.
+ */
+export async function requestResponse(
   path: string,
   init?: RequestInit,
-  schema?: ZodType<T>,
-  onResponseHeaders?: (headers: Headers) => void,
   options?: RequestOptions,
+): Promise<Response> {
+  const once = () => gateAndDispatch(path, init, options, () => performRawRequest(path, init))
+  try {
+    return await once()
+  } catch (err) {
+    if (isPlantedCookieClearedError(err) && options?.plantedCookieToast !== false) {
+      await raisePlantedCookieToast(err, once)
+    }
+    throw err
+  }
+}
+
+async function performRawRequest(path: string, init?: RequestInit): Promise<Response> {
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1${path}`, {
+      ...init,
+      credentials: 'include',
+      headers: buildHeaders(init?.headers),
+    })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res)
+  }
+  return res
+}
+
+// The client CSRF gate and the optional one-time CSRF recovery shared by
+// requestOnce (JSON) and requestResponse (raw).
+function gateAndDispatch<T>(
+  path: string,
+  init: RequestInit | undefined,
+  options: RequestOptions | undefined,
+  attempt: () => Promise<T>,
 ): Promise<T> {
   // Client-side CSRF gate: reject state-changing calls that would be
   // guaranteed to 403 at the server. This gives a clear error immediately
@@ -366,16 +407,26 @@ async function requestOnce<T>(
     !isPathCSRFExempt(path) &&
     readCSRFCookie() === null
   ) {
-    throw new ApiError(
-      403,
-      `CSRF cookie missing — cannot ${method} ${path}. ` +
-        `Log in or complete onboarding first so the server can issue the CSRF cookie.`,
-      { code: 'csrf_missing' },
+    return Promise.reject(
+      new ApiError(
+        403,
+        `CSRF cookie missing — cannot ${method} ${path}. ` +
+          `Log in or complete onboarding first so the server can issue the CSRF cookie.`,
+        { code: 'csrf_missing' },
+      ),
     )
   }
-
-  const attempt = () => performRequest<T>(path, init, schema, onResponseHeaders)
   return stateChanging && options?.csrfRetry !== false ? withCsrfRetry(attempt) : attempt()
+}
+
+async function requestOnce<T>(
+  path: string,
+  init?: RequestInit,
+  schema?: ZodType<T>,
+  onResponseHeaders?: (headers: Headers) => void,
+  options?: RequestOptions,
+): Promise<T> {
+  return gateAndDispatch(path, init, options, () => performRequest<T>(path, init, schema, onResponseHeaders))
 }
 
 async function performRequest<T>(

@@ -5669,6 +5669,27 @@
       "syntax": "EffortControl#className",
       "reason": "Caller pass-through: the effort control forwards its own className unchanged through cn to its wrapper span. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data.",
       "owner": "frontend-lead — effort levels WP-FE"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/stepper.tsx",
+      "syntax": "Stepper#className",
+      "owner": "frontend-lead — #1967 B1 Export & Import",
+      "reason": "Caller pass-through: the published Stepper (#1967 B1) forwards its own className unchanged through cn to its wrapper element, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/stepper.tsx",
+      "syntax": "Stepper#className",
+      "owner": "frontend-lead — #1967 B1 Export & Import",
+      "reason": "Caller pass-through: the published Stepper (#1967 B1) forwards its own className unchanged through cn to its wrapper element, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/stepper.tsx",
+      "syntax": "Stepper#className",
+      "owner": "frontend-lead — #1967 B1 Export & Import",
+      "reason": "Caller pass-through: the published Stepper (#1967 B1) forwards its own className unchanged through cn to its wrapper element, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
     }
   ],
   "reviewedBoundaries": [
@@ -8971,6 +8992,11 @@
       "path": "src/components/settings/ProvidersSection.removalRefused.test.tsx",
       "kind": "test",
       "reason": "Exact test-only boundary for #1620 T8: mounts the existing application-classified ToastContainer beside the real ProvidersSection so the refused DELETE shows the real visible notice. The application-only import is confined to this test; no production consumer, public export, scanner rule, or assertion is changed."
+    },
+    {
+      "path": "src/components/layout/Sidebar.exportImport.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1967 B1 (Sidebar Export & Import entry): the test mocks Link, motion.aside and motion.div with plain elements carrying the caller's className, like the other Sidebar test files. Test-only styling never ships; no production import, public export, scanner rule or assertion is changed."
     }
   ]
 }
