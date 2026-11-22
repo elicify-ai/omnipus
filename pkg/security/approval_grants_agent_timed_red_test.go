@@ -1,300 +1,424 @@
 //go:build goolm && stdjson
 
-package security
+package security_test
 
-// Order 57 — TestApprovalGrantStore_AgentScopedTimed (S-120, S-122; C-26
-// points 2 and 3; Dataset D17 rows 12 and 13). Oracle:
-// skills-tools-redesign-spec.md, C-26 "Lifetime and scope":
-//   Key: (agent id, kind, subject); the session id is no longer part of the
-//        key. Subject: the tool name for an ordinary tool card; the command
-//        or command family, the path with its access, or the address set
-//        for the shell cards.
-//   Covers: every session of that agent — its chats in every workspace,
-//        group-chat steps, channel conversations, task, plan and scheduled
-//        runs, and helpers it starts for itself. A helper of another agent,
-//        or a delegation to another agent, is not covered (S-120).
-//   Length: 1h, 3h or 1d (24 hours) on the server's monotonic clock. A
-//        second answer for the same subject: the later end time wins; an
-//        answer never shortens a running allowance (D17 row 12).
-//   End: at the end time, at a gateway stop or restart, or when the agent
-//        is deleted (S-122, ClearAgent at pkg/gateway/rest_agents.go::
-//        deleteAgent).
-//   Storage: none — no file, no config key, no agent field (S-122's
-//        checksums of config.json, every agent file and the system folder).
-//   Ordinary card scope: the whole tool, whatever the arguments (founder
-//        Q4 B; D17 row 13). Narrow subjects stay exactly today's narrow
-//        things: one shell command or command family (ShellPrefixGrant:
-//        resolved program, argument prefix, foreground or background), one
-//        path with its access, the named addresses, or the usual web and
-//        name-lookup ports.
+// Order 57 / CHECK F17 and F21: C-26, S-120/S-122, D17#1–8/#12–13.
+// Plan: real store Record*/lookup calls, independent wall/monotonic clock,
+// exact 1h/3h/24h ends, before/at/after boundaries and later-end-wins.
+// Home is the actual process OMNIPUS_HOME, with protected entity fixtures;
+// enumerate ALL persisted paths/bytes/modes, not three nominated files.
+// A real same-home fresh subprocess proves the legacy restart instrument.
+// It is NOT a gateway restart or a duration-bearing card-answer acceptance.
 //
-// The C-26 store does not exist: ApprovalGrantStore is still session-keyed
-// with no end times and no ClearAgent (pkg/security/approvalgrants.go).
-// GREEN re-keys it per C-26 and wires the seams below onto the re-keyed
-// store. Nil keeps the RED run loud (BLOCKED), never a skip.
-//
-// RED today: every store leg is BLOCKED at its seam. The one control leg
-// pins the in-memory, fail-safe contract C-26 keeps (a fresh store holds
-// nothing; a nil store asks) on today's real methods — if GREEN's re-key
-// reshapes those method signatures, this leg is reconciled with the store,
-// never deleted.
+// Only clock injection is a callback. The absent duration-taking Record*
+// and ClearAgent operations stay fatal BLOCKED in thin adapters: they may
+// later call real methods, never manufacture ends, coverage or lifecycle.
+// Lookups below are always direct real-store calls. Native enforcement and
+// the two real agent-delete entry paths are not certified by this unit test;
+// gateway restart/delete integration stays UNVERIFIED (ST-29/ST-30).
+// Mutations for independent CHECK: 55/65 minutes, wall-clock expiry, wrong
+// 24h end, shortening a second answer, new persisted file, restored grants,
+// or clearing Jim along with Mia. GREEN/mutation proof remains deferred.
+
 import (
-	"crypto/sha256"
+	"context"
+	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
-
+	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// timedSubject describes the subject half of a C-26 allowance key for the
-// seam record call: which kind of card answered, and that card's subject.
-type timedSubject struct {
-	Kind   string // "tool" | "shell_exact" | "shell_family" | "path" | "network_hosts" | "network_ports"
-	Tool   string
-	Args   map[string]any     // kind tool: the answered call's arguments (recorded, never matched)
-	Family ShellPrefixGrant   // kind shell_family
-	Path   fspolicy.PathGrant // kind path
-	Hosts  []string           // kind network_hosts
+// Test-only clock boundary, NOT a store/action/lookup replacement. The
+// production store currently has neither duration recording nor a clock.
+var injectTimedStoreClock func(*security.ApprovalGrantStore, func() time.Time, func() time.Duration)
+
+type allowanceStoreClock struct {
+	wall    time.Time
+	elapsed time.Duration
 }
 
-// timedCall describes the call an allowance is looked up against: what the
-// agent is about to run right now.
-type timedCall struct {
-	Binary          string         // shell kinds: the resolved program
-	Args            []string       // shell kinds: the argument words
-	RunInBackground bool           // shell kinds: the D4 background dimension
-	ToolArgs        map[string]any // kind tool: the new call's arguments
+func (c *allowanceStoreClock) advance(d time.Duration) {
+	c.wall = c.wall.Add(d)
+	c.elapsed += d
 }
 
-// The seams GREEN wires to the re-keyed C-26 store. recordTimedAllowance
-// records one allowance for agentID and returns its end time (and, for the
-// network kinds, the live egress token it pushed). allowanceCoversAt looks
-// a new call up at an arbitrary moment on the controlled test clock — the
-// monotonic-clock measurement of C-26 without waiting. clearAgentAllowances
-// is the agent-deleted end. (The end-time egress-token revocation is order
-// 59's seam in shell_timed_allowances_narrow_subjects_red_test.go, next to
-// its row.) Declared after the test so
-// the RED failure names the missing behaviour first.
-var (
-	recordTimedAllowance func(t testing.TB, s *ApprovalGrantStore, agentID string, subj timedSubject, duration string, now time.Time) (end time.Time, token string)
-	allowanceCoversAt    func(t testing.TB, s *ApprovalGrantStore, agentID string, subj timedSubject, call timedCall, at time.Time) bool
-	clearAgentAllowances func(t testing.TB, s *ApprovalGrantStore, agentID string)
-)
+func allowanceStoreStart() time.Time {
+	return time.Date(2026, time.November, 22, 12, 0, 0, 0, time.UTC)
+}
+
+func newTimedStoreWithClock(t *testing.T, c *allowanceStoreClock) *security.ApprovalGrantStore {
+	t.Helper()
+	store := security.NewApprovalGrantStore()
+	if injectTimedStoreClock == nil {
+		t.Fatal("BLOCKED: C-26 duration-taking Record* and controlled wall/monotonic store clock are not implemented — required by S-120/S-122; no timed record or lookup is claimed")
+	}
+	injectTimedStoreClock(store, func() time.Time { return c.wall }, func() time.Duration { return c.elapsed })
+	return store
+}
+
+type allowanceStoreSubject struct {
+	kind, tool           string
+	recordArgs, callArgs map[string]any
+	family               security.ShellPrefixGrant
+	path                 fspolicy.PathGrant
+	hosts                []string
+}
+
+func allowanceStoreSubjects(home string) []allowanceStoreSubject {
+	return []allowanceStoreSubject{
+		{kind: "tool", tool: "delete_task", recordArgs: map[string]any{"task_id": "argument-A"}, callArgs: map[string]any{"task_id": "argument-B"}},
+		{kind: "shell_exact", tool: "bash", recordArgs: map[string]any{"command": "npm run test"}, callArgs: map[string]any{"command": "npm run test"}},
+		{kind: "shell_family", tool: "bash", family: security.ShellPrefixGrant{Binary: "/usr/bin/npm", ArgPrefix: "run test"}},
+		{kind: "path", tool: "bash", path: fspolicy.PathGrant{Path: filepath.Join(home, "workspace", "out.pdf"), Access: fspolicy.PathGrantAccessWrite}},
+		{kind: "network_hosts", tool: "bash", hosts: []string{"example.com"}},
+		{kind: "network_ports", tool: "bash"},
+	}
+}
+
+// No successful test implementation of recording: reconciliation must call
+// the actual duration-bearing Record* method and return its real end time.
+func recordActualTimedStore(t *testing.T, _ *security.ApprovalGrantStore, agent string, subject allowanceStoreSubject, duration string) time.Time {
+	t.Helper()
+	t.Fatalf("BLOCKED: actual duration-bearing Record* for agent=%s kind=%s duration=%s is not implemented — required by C-26 Length/S-120; legacy recording is not a timed answer", agent, subject.kind, duration)
+	return time.Time{} // Unreachable after Fatal; never an invented expected end.
+}
+
+func clearActualTimedAgent(t *testing.T, _ *security.ApprovalGrantStore, agent string) {
+	t.Helper()
+	t.Fatalf("BLOCKED: ApprovalGrantStore.ClearAgent(%q) is not implemented — required by C-26 End/S-122; no callback may simulate agent deletion", agent)
+}
+
+func recordLegacyStoreSubject(t *testing.T, store *security.ApprovalGrantStore, session, agent string, subject allowanceStoreSubject) {
+	t.Helper()
+	switch subject.kind {
+	case "tool", "shell_exact":
+		require.True(t, store.Record(session, agent, subject.tool, subject.recordArgs))
+	case "shell_family":
+		require.True(t, store.RecordPrefixGrant(session, agent, subject.tool, subject.family))
+	case "path":
+		require.True(t, store.RecordPathGrant(session, agent, subject.path))
+	case "network_hosts":
+		require.True(t, store.RecordNetworkGrantWithHosts(session, agent, subject.hosts))
+	case "network_ports":
+		require.True(t, store.RecordNetworkGrant(session, agent))
+	default:
+		t.Fatalf("fixture: unknown subject kind %q", subject.kind)
+	}
+}
+
+// Observe actual production lookups; this is an assertion helper, not a
+// boolean-returning implementation of coverage. Path/access/hosts are exact.
+func assertActualStoreSubject(t *testing.T, store *security.ApprovalGrantStore, session, agent string, subject allowanceStoreSubject, active bool) {
+	t.Helper()
+	context := fmt.Sprintf("agent=%s session=%s kind=%s active=%t", agent, session, subject.kind, active)
+	switch subject.kind {
+	case "tool", "shell_exact":
+		assert.Equal(t, active, store.IsAllowed(session, agent, subject.tool, subject.callArgs), context)
+	case "shell_family":
+		assert.Equal(t, active, store.IsPrefixAllowed(session, agent, subject.tool, subject.family.Binary, []string{"run", "test", "--", "--watch"}, false), context)
+	case "path":
+		if active {
+			assert.Equal(t, []fspolicy.PathGrant{subject.path}, store.PathGrantsFor(session, agent), context)
+		} else {
+			assert.Empty(t, store.PathGrantsFor(session, agent), context)
+		}
+	case "network_hosts":
+		if active {
+			assert.Equal(t, subject.hosts, store.NetworkHostsFor(session, agent), context)
+		} else {
+			assert.Empty(t, store.NetworkHostsFor(session, agent), context)
+		}
+	case "network_ports":
+		assert.Equal(t, active, store.HasNetworkGrant(session, agent), context)
+	default:
+		t.Fatalf("fixture: unknown subject kind %q", subject.kind)
+	}
+}
 
 func TestApprovalGrantStore_AgentScopedTimed(t *testing.T) {
-	t.Run("control: the store stays in-memory and fail-safe", func(t *testing.T) {
-		// C-26 point 3 keeps the fail-safe consent boundary: a nil store and a
-		// fresh store both ask (never approve). Today's real methods; GREEN's
-		// re-key must keep the contract, reshaping only the key.
-		var nilStore *ApprovalGrantStore
-		require.False(t, nilStore.IsAllowed("sess", "mia", "delete_task", map[string]any{"id": "t1"}),
-			"C-26: a nil store asks (fail-safe consent boundary kept)")
-		require.False(t, NewApprovalGrantStore().IsAllowed("sess", "mia", "delete_task", map[string]any{"id": "t1"}),
-			"C-26: a fresh store holds nothing — every call asks")
-	})
-
-	t.Run("C-26 key: the allowance belongs to the agent, not the chat (S-120)", func(t *testing.T) {
-		if recordTimedAllowance == nil || allowanceCoversAt == nil {
-			t.Fatal("BLOCKED: the C-26 timed, agent-keyed allowance store is not implemented — " +
-				"required by S-120 and C-26 point 2 (the key is (agent id, kind, subject); " +
-				"the session id is no longer part of the key)")
-		}
-		s := NewApprovalGrantStore()
-		argsA := map[string]any{"task_id": "t1"}
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task", Args: argsA}, "3h", time.Now())
-
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{ToolArgs: argsA}, time.Now()),
-			"S-120: Mia's call in a SECOND chat runs with no card — the key is the agent")
-		require.False(t, allowanceCoversAt(t, s, "jim", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{ToolArgs: argsA}, time.Now()),
-			"S-120: Jim is unaffected and asks")
-	})
-
-	t.Run("D17#13: an ordinary card covers the whole tool, any arguments", func(t *testing.T) {
-		if recordTimedAllowance == nil || allowanceCoversAt == nil {
-			t.Fatal("BLOCKED: the C-26 store is not implemented — required by D17 row 13 " +
-				"(founder Q4 B: an ordinary card's time choice covers the whole tool)")
-		}
-		s := NewApprovalGrantStore()
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task",
-			Args: map[string]any{"task_id": "t1"}}, "1h", time.Now())
-
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{ToolArgs: map[string]any{"task_id": "t2"}}, time.Now()),
-			"D17#13: the next call with different arguments B runs with no card — the subject is the tool name, never the arguments")
-	})
-
-	t.Run("C-26: the narrow subjects stay narrow (D17 rows 1–7)", func(t *testing.T) {
-		if recordTimedAllowance == nil || allowanceCoversAt == nil {
-			t.Fatal("BLOCKED: the C-26 store is not implemented — required by S-121/D17 " +
-				"rows 1–7 (the narrow cards keep today's narrow subject, now per agent and timed)")
-		}
-		s := NewApprovalGrantStore()
-		now := time.Now()
-
-		// Row 1: the exact command — the same command in another chat runs.
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "shell_exact", Tool: "bash",
-			Args: map[string]any{"command": "npm run test"}}, "1h", now)
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "shell_exact"},
-			timedCall{Binary: "/usr/bin/npm", Args: []string{"run", "test"}}, now.Add(time.Minute)),
-			"D17#1: the exact command runs in another chat with no card")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "shell_exact"},
-			timedCall{Binary: "/usr/bin/npm", Args: []string{"run", "build"}}, now.Add(time.Minute)),
-			"D17#1: another exact command still asks — the subject stays the exact command")
-
-		// Rows 2–3: the command family covers its prefix, not past the token
-		// boundary; the background dimension stays separate.
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "shell_family", Tool: "bash",
-			Family: ShellPrefixGrant{Binary: "/usr/bin/npm", ArgPrefix: "run test"}}, "1h", now)
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "shell_family"},
-			timedCall{Binary: "/usr/bin/npm", Args: []string{"run", "test", "--", "--watch"}}, now.Add(time.Minute)),
-			"D17#2: the command family runs — ShellPrefixGrant keeps its argument prefix")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "shell_family"},
-			timedCall{Binary: "/usr/bin/npm", Args: []string{"run", "testfoo"}}, now.Add(time.Minute)),
-			"D17#3: past the token boundary the card appears again")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "shell_family"},
-			timedCall{Binary: "/usr/bin/npm", Args: []string{"run", "test"}, RunInBackground: true}, now.Add(time.Minute)),
-			"C-26: the family keeps today's foreground/background dimension (a foreground grant does not cover run_in_background)")
-
-		// Rows 4–5: one path with its access.
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "path", Tool: "bash",
-			Path: fspolicy.PathGrant{Path: "/home/p/Desktop/out.pdf", Access: fspolicy.PathGrantAccessWrite}}, "1h", now)
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "path"},
-			timedCall{}, now.Add(time.Minute)),
-			"D17#4: writing the same path in another chat runs with no card")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "path", Path: fspolicy.PathGrant{Path: "/home/p/Desktop/other.pdf", Access: fspolicy.PathGrantAccessWrite}},
-			timedCall{}, now.Add(time.Minute)),
-			"D17#5: another path asks — the subject is that one path with its access")
-
-		// Row 6: the named addresses only.
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "network_hosts", Tool: "bash",
-			Hosts: []string{"example.com"}}, "1h", now)
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "network_hosts", Hosts: []string{"example.com"}},
-			timedCall{}, now.Add(time.Minute)),
-			"D17#6: curl https://example.com runs with no card")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "network_hosts", Hosts: []string{"example.org"}},
-			timedCall{}, now.Add(time.Minute)),
-			"D17#6: curl https://example.org asks — exactly the named addresses")
-
-		// Row 7: the no-address card — the usual ports to any address.
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "network_ports", Tool: "bash"}, "1h", now)
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "network_ports"},
-			timedCall{}, now.Add(time.Minute)),
-			"D17#7: the ports grant covers ports 80, 443 and 53 to any address for Mia until the end")
-	})
-
-	t.Run("C-26 length: the three end times, and the later end wins (D17#12)", func(t *testing.T) {
-		if recordTimedAllowance == nil || allowanceCoversAt == nil {
-			t.Fatal("BLOCKED: the C-26 store is not implemented — required by C-26 Length " +
-				"(1h, 3h, 1d on the monotonic clock) and D17 row 12 (the later end wins)")
-		}
-		s := NewApprovalGrantStore()
-		start := time.Now()
-
-		end1h, _ := recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, "1h", start)
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{}, start.Add(time.Hour-time.Second)),
-			"C-26: one second before its end the 1h allowance still runs")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{}, end1h),
-			"C-26: at its end time the allowance has ended — the next call asks")
-
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, "3h", start)
-		end3h := start.Add(3 * time.Hour)
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{}, end3h.Add(-time.Second)), "C-26: the 3h allowance runs until its end")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{}, end3h), "C-26: the 3h allowance ends at three hours")
-
-		end1d, _ := recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, "1d", start)
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{}, start.Add(24*time.Hour-time.Second)), "C-26: the 1d allowance runs until its end")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{}, end1d), "C-26: the 1d allowance ends at 24 hours")
-
-		// D17#12: a 1h answer after a running 3h allowance never shortens it.
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, "3h", start)
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, "1h", start.Add(30*time.Minute))
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{}, start.Add(2*time.Hour)),
-			"D17#12: the end stays at 3 hours — an answer never shortens a running allowance")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"},
-			timedCall{}, start.Add(3*time.Hour)),
-			"D17#12: the 3h end is the one that holds")
-	})
-
-	t.Run("S-122: a restart ends every allowance and nothing is written", func(t *testing.T) {
-		if recordTimedAllowance == nil || allowanceCoversAt == nil || clearAgentAllowances == nil {
-			t.Fatal("BLOCKED: the C-26 store is not implemented — required by S-122 (the " +
-				"restart ends every allowance; no storage object)")
-		}
-		home := t.TempDir()
-		writeHome := func(rel, body string) {
-			t.Helper()
-			path := filepath.Join(home, rel)
-			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-		}
-		writeHome("config.json", `{"sandbox":{"tool_policies":{"delete_task":"ask"}}}`)
-		writeHome("agents/mia.json", `{"id":"mia"}`)
-		writeHome("system/skill-trust-approvals.json", `{"approvals":[]}`)
-		digest := func() map[string][32]byte {
-			t.Helper()
-			out := map[string][32]byte{}
-			for _, rel := range []string{"config.json", "agents/mia.json", "system/skill-trust-approvals.json"} {
-				raw, err := os.ReadFile(filepath.Join(home, rel))
-				require.NoError(t, err)
-				out[rel] = sha256.Sum256(raw)
+	if slices.Contains(os.Args, "--allowance-store-restart-child") {
+		home := config.OmnipusHomeDir()
+		require.Equal(t, os.Getenv(config.EnvHome), home, "child uses the same actual app home")
+		require.FileExists(t, filepath.Join(home, "entities", "agents", "mia.json"))
+		fresh := security.NewApprovalGrantStore()
+		for _, subject := range allowanceStoreSubjects(home) {
+			for _, session := range []string{"source-chat", "other-chat"} {
+				for _, agent := range []string{"mia", "jim"} {
+					assertActualStoreSubject(t, fresh, session, agent, subject, false)
+					source := subject
+					source.callArgs = source.recordArgs
+					assertActualStoreSubject(t, fresh, session, agent, source, false)
+				}
 			}
-			return out
 		}
-		before := digest()
-
-		s := NewApprovalGrantStore()
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, "1h", time.Now())
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "shell_family", Tool: "bash",
-			Family: ShellPrefixGrant{Binary: "/usr/bin/npm", ArgPrefix: "run test"}}, "1h", time.Now())
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "path", Tool: "bash",
-			Path: fspolicy.PathGrant{Path: "/home/p/Desktop/out.pdf", Access: fspolicy.PathGrantAccessWrite}}, "1h", time.Now())
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "network_hosts", Tool: "bash",
-			Hosts: []string{"example.com"}}, "1h", time.Now())
-
-		require.Equal(t, before, digest(),
-			"S-122: recording allowances writes nothing — the checksums of config.json, every agent file and the system folder are unchanged")
-
-		// The restart: a fresh store (in memory only) holds nothing, and the
-		// answers after it still wrote nothing.
-		s = NewApprovalGrantStore()
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, timedCall{}, time.Now()),
-			"S-122: after the restart the tool call asks again")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "shell_family"}, timedCall{Binary: "/usr/bin/npm", Args: []string{"run", "test"}}, time.Now()),
-			"S-122: after the restart the shell family asks again")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "path"}, timedCall{}, time.Now()),
-			"S-122: after the restart the path asks again")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "network_hosts", Hosts: []string{"example.com"}}, timedCall{}, time.Now()),
-			"S-122: after the restart the address asks again")
-		require.Equal(t, before, digest(),
-			"S-122: the restart answers wrote nothing either — no storage object (R2-Q1 point 3)")
+		t.Log("RESTART_INSTRUMENT: same-home fresh process, all six grant kinds absent")
+		return
+	}
+	t.Run("instrument independent wall and monotonic clock", func(t *testing.T) {
+		c := allowanceStoreClock{wall: allowanceStoreStart()}
+		c.advance(30 * time.Minute)
+		c.wall = c.wall.Add(48 * time.Hour)
+		assert.Equal(t, 30*time.Minute, c.elapsed)
+		assert.Equal(t, time.Date(2026, time.November, 24, 12, 30, 0, 0, time.UTC), c.wall)
+		c.wall = c.wall.Add(-96 * time.Hour)
+		assert.Equal(t, 30*time.Minute, c.elapsed)
+		assert.Equal(t, time.Date(2026, time.November, 20, 12, 30, 0, 0, time.UTC), c.wall)
 	})
-
-	t.Run("C-26: deleting the agent ends its allowances", func(t *testing.T) {
-		if recordTimedAllowance == nil || allowanceCoversAt == nil || clearAgentAllowances == nil {
-			t.Fatal("BLOCKED: the C-26 store is not implemented — required by C-26 End " +
-				"(when the agent is deleted its allowances drop; deleteAgent)")
+	t.Run("instrument whole app-home observer", testAllowanceTreeInstrument)
+	t.Run("control actual nil and fresh stores have no consent", func(t *testing.T) {
+		home := seedAllowanceAppHome(t)
+		var nilStore *security.ApprovalGrantStore
+		for _, subject := range allowanceStoreSubjects(home) {
+			assertActualStoreSubject(t, nilStore, "source-chat", "mia", subject, false)
+			assertActualStoreSubject(t, security.NewApprovalGrantStore(), "source-chat", "mia", subject, false)
 		}
-		s := NewApprovalGrantStore()
-		_, _ = recordTimedAllowance(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, "3h", time.Now())
-		require.True(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, timedCall{}, time.Now()))
-
-		clearAgentAllowances(t, s, "mia")
-		require.False(t, allowanceCoversAt(t, s, "mia", timedSubject{Kind: "tool", Tool: "delete_task"}, timedCall{}, time.Now()),
-			"C-26: the deleted agent's allowance is gone")
-		require.False(t, allowanceCoversAt(t, s, "jim", timedSubject{Kind: "tool", Tool: "delete_task"}, timedCall{}, time.Now()),
-			"C-26: deleting Mia never granted Jim anything")
 	})
+	t.Run("S-120 real agent-only whole-tool scope", func(t *testing.T) {
+		home := seedAllowanceAppHome(t)
+		subject := allowanceStoreSubjects(home)[0]
+		store := security.NewApprovalGrantStore()
+		recordLegacyStoreSubject(t, store, "source-chat", "mia", subject)
+		source := subject
+		source.callArgs = source.recordArgs
+		require.True(t, store.IsAllowed("source-chat", "mia", source.tool, source.callArgs), "instrument: actual source record exists")
+		assertActualStoreSubject(t, store, "other-chat", "mia", source, true)
+		assertActualStoreSubject(t, store, "source-chat", "mia", subject, true)
+		assertActualStoreSubject(t, store, "source-chat", "jim", source, false)
+		assert.False(t, store.IsAllowed("source-chat", "mia", "create_task", source.callArgs), "another tool is not covered")
+	})
+	t.Run("instrument legacy memory-only same-home fresh process", func(t *testing.T) {
+		home := seedAllowanceAppHome(t)
+		before := readAllowanceAppTree(t, home)
+		store := security.NewApprovalGrantStore()
+		for _, subject := range allowanceStoreSubjects(home) {
+			recordLegacyStoreSubject(t, store, "source-chat", "mia", subject)
+			subject.callArgs = subject.recordArgs // Observe the actual recorded source, not changed arguments.
+			assertActualStoreSubject(t, store, "source-chat", "mia", subject, true)
+		}
+		assertAllowanceTreeUnchanged(t, before, readAllowanceAppTree(t, home))
+		runAllowanceFreshProcess(t, home)
+		assertAllowanceTreeUnchanged(t, before, readAllowanceAppTree(t, home))
+	})
+	t.Run("C-26 exact lengths and boundaries", testActualTimedStoreLengths)
+	t.Run("C-26 monotonic lifetime ignores wall-clock jumps", testActualTimedStoreWallJumps)
+	t.Run("D17#12 second answer uses the later end", testActualTimedStoreLaterEnd)
+	t.Run("S-122 timed memory-only and fresh-process restart", func(t *testing.T) {
+		home := seedAllowanceAppHome(t)
+		before := readAllowanceAppTree(t, home)
+		store := newTimedStoreWithClock(t, &allowanceStoreClock{wall: allowanceStoreStart()})
+		for _, subject := range allowanceStoreSubjects(home) {
+			end := recordActualTimedStore(t, store, "mia", subject, "3h")
+			assert.Equal(t, time.Date(2026, time.November, 22, 15, 0, 0, 0, time.UTC), end)
+			assertActualStoreSubject(t, store, "other-chat", "mia", subject, true)
+		}
+		assertAllowanceTreeUnchanged(t, before, readAllowanceAppTree(t, home))
+		runAllowanceFreshProcess(t, home)
+		assertAllowanceTreeUnchanged(t, before, readAllowanceAppTree(t, home))
+	})
+	t.Run("C-26 actual ClearAgent preserves another agent", func(t *testing.T) {
+		home := seedAllowanceAppHome(t)
+		store := security.NewApprovalGrantStore()
+		for _, agent := range []string{"mia", "jim"} {
+			for _, subject := range allowanceStoreSubjects(home) {
+				recordLegacyStoreSubject(t, store, "source-chat", agent, subject)
+				subject.callArgs = subject.recordArgs
+				assertActualStoreSubject(t, store, "source-chat", agent, subject, true)
+			}
+		}
+		clearActualTimedAgent(t, store, "mia")
+		for _, subject := range allowanceStoreSubjects(home) {
+			subject.callArgs = subject.recordArgs
+			assertActualStoreSubject(t, store, "source-chat", "mia", subject, false)
+			assertActualStoreSubject(t, store, "source-chat", "jim", subject, true)
+		}
+	})
+}
+
+func testActualTimedStoreLengths(t *testing.T) {
+	rows := []struct {
+		duration string
+		length   time.Duration
+		end      time.Time
+	}{
+		{"1h", time.Hour, time.Date(2026, time.November, 22, 13, 0, 0, 0, time.UTC)},
+		{"3h", 3 * time.Hour, time.Date(2026, time.November, 22, 15, 0, 0, 0, time.UTC)},
+		{"1d", 24 * time.Hour, time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)},
+	}
+	for _, subject := range allowanceStoreSubjects(t.TempDir()) {
+		for _, row := range rows {
+			t.Run(subject.kind+"/"+row.duration, func(t *testing.T) {
+				clock := &allowanceStoreClock{wall: allowanceStoreStart()}
+				store := newTimedStoreWithClock(t, clock)
+				end := recordActualTimedStore(t, store, "mia", subject, row.duration)
+				require.Equal(t, row.end, end, "exact server wall-clock end, independently derived from C-26")
+				clock.advance(row.length - time.Nanosecond)
+				assertActualStoreSubject(t, store, "other-chat", "mia", subject, true)
+				assertActualStoreSubject(t, store, "other-chat", "jim", subject, false)
+				clock.advance(time.Nanosecond)
+				assertActualStoreSubject(t, store, "other-chat", "mia", subject, false)
+				clock.advance(time.Nanosecond)
+				assertActualStoreSubject(t, store, "other-chat", "mia", subject, false)
+			})
+		}
+	}
+}
+
+func testActualTimedStoreWallJumps(t *testing.T) {
+	for _, shift := range []time.Duration{48 * time.Hour, -48 * time.Hour} {
+		t.Run(shift.String(), func(t *testing.T) {
+			clock := &allowanceStoreClock{wall: allowanceStoreStart()}
+			store := newTimedStoreWithClock(t, clock)
+			subject := allowanceStoreSubjects(t.TempDir())[0]
+			end := recordActualTimedStore(t, store, "mia", subject, "1h")
+			require.Equal(t, time.Date(2026, time.November, 22, 13, 0, 0, 0, time.UTC), end)
+			clock.wall = clock.wall.Add(shift)
+			clock.advance(time.Hour - time.Nanosecond)
+			assertActualStoreSubject(t, store, "other-chat", "mia", subject, true)
+			clock.advance(time.Nanosecond)
+			assertActualStoreSubject(t, store, "other-chat", "mia", subject, false)
+		})
+	}
+}
+
+func testActualTimedStoreLaterEnd(t *testing.T) {
+	for _, subject := range allowanceStoreSubjects(t.TempDir()) {
+		for _, first := range []string{"3h", "1h"} {
+			t.Run(subject.kind+"/first-"+first, func(t *testing.T) {
+				clock := &allowanceStoreClock{wall: allowanceStoreStart()}
+				store := newTimedStoreWithClock(t, clock)
+				firstEnd := recordActualTimedStore(t, store, "mia", subject, first)
+				firstHour, second := 15, "1h"
+				want := time.Date(2026, time.November, 22, 15, 0, 0, 0, time.UTC)
+				if first == "1h" {
+					firstHour, second = 13, "3h"
+					want = time.Date(2026, time.November, 22, 15, 30, 0, 0, time.UTC)
+				}
+				require.Equal(t, time.Date(2026, time.November, 22, firstHour, 0, 0, 0, time.UTC), firstEnd)
+				clock.advance(30 * time.Minute)
+				secondEnd := recordActualTimedStore(t, store, "mia", subject, second)
+				require.Equal(t, want, secondEnd, "later end wins, including the reported server expiry")
+				clock.advance(want.Sub(allowanceStoreStart()) - clock.elapsed - time.Nanosecond)
+				assertActualStoreSubject(t, store, "other-chat", "mia", subject, true)
+				clock.advance(time.Nanosecond)
+				assertActualStoreSubject(t, store, "other-chat", "mia", subject, false)
+				clock.advance(time.Nanosecond)
+				assertActualStoreSubject(t, store, "other-chat", "mia", subject, false)
+			})
+		}
+	}
+}
+
+func seedAllowanceAppHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvConfig, filepath.Join(home, "config.json"))
+	require.Equal(t, home, config.OmnipusHomeDir(), "the actual process resolves this app home")
+	for relative, body := range map[string]string{
+		"config.json":                   `{"sandbox":{"tool_policies":{"delete_task":"ask","bash":"ask"}}}`,
+		"entities/agents/mia.json":      `{"id":"mia","name":"Mia","tools":{"builtin":{"policies":{"delete_task":"ask"}}}}`,
+		"entities/agents/jim.json":      `{"id":"jim","name":"Jim","tools":{"builtin":{"policies":{"delete_task":"ask"}}}}`,
+		"system/retention-sentinel.bin": "KEEP-SYSTEM-9Z\n",
+		"unlisted/nested/preserve.bin":  "KEEP-UNLISTED-9Z\n",
+	} {
+		path := filepath.Join(home, relative)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	}
+	return home
+}
+
+type allowanceAppEntry struct {
+	info fs.FileInfo
+	body []byte
+}
+
+func readAllowanceAppTree(t *testing.T, home string) map[string]allowanceAppEntry {
+	t.Helper()
+	out := map[string]allowanceAppEntry{}
+	require.NoError(t, filepath.WalkDir(home, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("unexpected non-regular persisted path %s", path)
+		}
+		rel, err := filepath.Rel(home, path)
+		if err != nil {
+			return err
+		}
+		var body []byte
+		if !entry.IsDir() {
+			body, err = os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+		}
+		out[filepath.ToSlash(rel)] = allowanceAppEntry{info: info, body: body}
+		return nil
+	}))
+	return out
+}
+
+func assertAllowanceTreeUnchanged(t *testing.T, before, after map[string]allowanceAppEntry) {
+	t.Helper()
+	require.Len(t, after, len(before), "no added or removed persisted path anywhere in the actual home")
+	for path, old := range before {
+		current, found := after[path]
+		require.True(t, found, "persisted path remains: %s", path)
+		assert.Equal(t, old.info.Mode(), current.info.Mode(), path)
+		assert.Equal(t, old.body, current.body, path)
+		assert.True(t, os.SameFile(old.info, current.info), "no atomic same-bytes replacement: %s", path)
+		assert.Equal(t, old.info.ModTime(), current.info.ModTime(), "no rewrite: %s", path)
+	}
+}
+
+func testAllowanceTreeInstrument(t *testing.T) {
+	home := seedAllowanceAppHome(t)
+	before := readAllowanceAppTree(t, home)
+	added := filepath.Join(home, "unlisted", "new-allowance.json")
+	require.NoError(t, os.WriteFile(added, []byte(`{"allowance":"must-be-seen"}`), 0o600))
+	after := readAllowanceAppTree(t, home)
+	require.Len(t, after, len(before)+1, "observer includes a previously unlisted new file")
+	require.Equal(t, []byte(`{"allowance":"must-be-seen"}`), after["unlisted/new-allowance.json"].body)
+	target := filepath.Join(home, "entities", "agents", "mia.json")
+	original := before["entities/agents/mia.json"]
+	require.NoError(t, os.WriteFile(target, []byte(`{"id":"mia","unexpected":"write"}`), 0o600))
+	assert.NotEqual(t, original.body, readAllowanceAppTree(t, home)["entities/agents/mia.json"].body)
+	replacement := filepath.Join(home, "replacement.tmp")
+	require.NoError(t, os.WriteFile(replacement, original.body, 0o600))
+	require.NoError(t, os.Rename(replacement, target))
+	current := readAllowanceAppTree(t, home)["entities/agents/mia.json"]
+	assert.Equal(t, original.body, current.body)
+	assert.False(t, os.SameFile(original.info, current.info), "instrument sees same-bytes replacement")
+}
+
+func runAllowanceFreshProcess(t *testing.T, home string) {
+	t.Helper()
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "-test.run=^TestApprovalGrantStore_AgentScopedTimed$", "-test.v", "--", "--allowance-store-restart-child")
+	cmd.Env = os.Environ() // Includes this row's real OMNIPUS_HOME and OMNIPUS_CONFIG.
+	output, err := cmd.CombinedOutput()
+	t.Logf("same-home fresh process:\n%s", output)
+	require.NoError(t, err, "child exit/timeout is a fixture failure, not restart acceptance")
+	require.NoError(t, ctx.Err())
+	require.Equal(t, home, config.OmnipusHomeDir())
+	require.Contains(t, string(output), "RESTART_INSTRUMENT: same-home fresh process, all six grant kinds absent")
 }
