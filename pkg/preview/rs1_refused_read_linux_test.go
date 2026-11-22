@@ -97,9 +97,9 @@ func t132Reason(t *testing.T, message string) string {
 func t132ReasonWithPrefix(t *testing.T, message, wantPrefix string) string {
 	t.Helper()
 	open := strings.Index(message, "(")
-	close := strings.LastIndex(message, ")")
-	require.Greater(t, close, open, "T-132: the reason must be parenthesised")
-	reason := message[open+1 : close]
+	closeIdx := strings.LastIndex(message, ")")
+	require.Greater(t, closeIdx, open, "T-132: the reason must be parenthesised")
+	reason := message[open+1 : closeIdx]
 	require.True(t, strings.HasPrefix(reason, wantPrefix),
 		"T-132: the reason must begin with %q; got %q", wantPrefix, reason)
 	require.Contains(t, reason, "permission denied",
