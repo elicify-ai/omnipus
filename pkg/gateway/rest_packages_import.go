@@ -178,8 +178,9 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 	payload = elementPayload(el, payload)
 	raw := payload[packageAgentPath(el.SourceID, omnpkg.AgentRecordName)]
 	// Sign-off C-2: the REST raw-body effort rule on the record bytes, so a
-	// JSON null or an over-long value is refused, not silently dropped.
-	if msg, field := effortBodyRefusal(raw); msg != "" {
+	// JSON null or an over-long value is refused, not silently dropped. Every
+	// letter-case spelling is checked, as the typed decode reads any (#1952).
+	if msg, field := effortRecordRefusal(raw); msg != "" {
 		return nil, notCreatable(field, msg)
 	}
 	if err := refuseExternalUnsupportedFields(raw, el.SourceID); err != nil {
@@ -192,6 +193,12 @@ func (a *restAPI) planPackageAgent(el omnpkg.ManifestElement, payload map[string
 	var rec config.AgentConfig
 	if err = json.Unmarshal(mapped.Record, &rec); err != nil {
 		return nil, packageErr(omnpkg.CodeInvalidElement, "element", el.SourceID, "reason", "agent.json has a field of the wrong type")
+	}
+	// The same rule on the record create will store (#1952): the mapping
+	// works on the typed interpretation, so this repeats the verdict above;
+	// it stays so that no mapping change can hand create an unchecked record.
+	if err = refuseExternalUnsupported(rec); err != nil {
+		return nil, err
 	}
 	name, err := omnpkg.ResolveImportName(rec.Name, existing)
 	if preview && omnpkg.CodeOf(err) == omnpkg.CodeNameSuffixExhausted {
@@ -256,6 +263,11 @@ func refuseExternalUnsupportedFields(raw []byte, sourceID string) error {
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return packageErr(omnpkg.CodeInvalidElement, "element", sourceID, "reason", "agent.json has a field of the wrong type")
 	}
+	return refuseExternalUnsupported(rec)
+}
+
+// refuseExternalUnsupported applies the FR-047 rule to one decoded record.
+func refuseExternalUnsupported(rec config.AgentConfig) error {
 	if !rec.IsExternalCLIWorker() {
 		return nil
 	}
