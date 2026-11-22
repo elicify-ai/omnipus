@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -263,42 +264,66 @@ func TestCredentialStore_ProgramOwnedGuard(t *testing.T) {
 
 	t.Run("program_scoped_methods_called_only_from_pkg_programs", func(t *testing.T) {
 		// Oracle: FR-048 — "The program-scoped methods MUST be called only
-		// from pkg/programs". The source sweep covers pkg/ and cmd/.
+		// from pkg/programs". The rule guards the SHIPPED call graph: the
+		// sweep covers pkg/ and cmd/ and the _test.go exclusion is part of
+		// the guard's own definition — test fixtures in any package drive
+		// the real methods by design (the gateway sweep fixture, the
+		// sysagent-tools S129 fixture) and ship nowhere. (CHECK F09; chief
+		// rerun C1 proved the unscoped guard flagged its own fixtures.)
 		root := repoRootFromCaller()
 		var offenders []string
 		walkGoFiles(t, root, func(path, src string) {
 			rel, _ := filepath.Rel(root, path)
-			// The leading dot distinguishes a receiver CALL from the method
-			// definition (`func (s *Store) CommitProgramCredential(`).
-			for _, m := range []string{".CommitProgramCredential(", ".RemoveProgramCredential("} {
-				if strings.Contains(src, m) {
-					inCredentialsTest := strings.HasPrefix(rel, "pkg/credentials/") &&
-						strings.HasSuffix(rel, "_test.go")
-					if !strings.HasPrefix(rel, "pkg/programs/") && !inCredentialsTest {
-						offenders = append(offenders, fmt.Sprintf("%s calls %s", rel, strings.TrimSuffix(m, "(")))
-					}
-				}
+			if !strings.HasPrefix(rel, "pkg/") && !strings.HasPrefix(rel, "cmd/") {
+				return
+			}
+			if callerGuardOffender(rel, src) {
+				offenders = append(offenders, rel)
 			}
 		})
 		require.Empty(t, offenders,
-			"program-scoped store methods must be called only from pkg/programs (FR-048): %v", offenders)
+			"program-scoped store methods must be called only from pkg/programs (FR-048, production files): %v", offenders)
+
+		// Instrument proof (F09): the checker fires on a planted production
+		// caller outside pkg/programs and spares the identical _test.go
+		// fixture caller and the sanctioned pkg/programs caller itself.
+		const plantedSrc = `func f(s *credentials.Store) { s.CommitProgramCredential("R", "v", nil) }`
+		require.True(t, callerGuardOffender("pkg/gateway/rest_settings.go", plantedSrc),
+			"instrument: a production caller outside pkg/programs is flagged")
+		require.False(t, callerGuardOffender("pkg/gateway/rest_settings_test.go", plantedSrc),
+			"instrument: the identical _test.go fixture caller is exempt")
+		require.False(t, callerGuardOffender("pkg/programs/service.go", plantedSrc),
+			"instrument: pkg/programs is the sanctioned caller")
 	})
 
 	t.Run("every_exported_mutator_writes_only_inside_transact", func(t *testing.T) {
 		// Oracle: FR-049 / S-127(d) — every exported mutating method changes
-		// the file only inside s.transact; no direct loadFileInternal →
-		// saveFileNoLock pair outside it.
+		// the file only inside s.transact; no direct or helper-reached
+		// saveFileNoLock outside it (CHECK F11: writes reachable through
+		// same-package helpers are part of the rule).
 		dir := filepath.Join(repoRootFromCaller(), "pkg", "credentials")
-		entries, err := os.ReadDir(dir)
-		require.NoError(t, err)
-		var offenders []string
-		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			offenders = append(offenders, checkTransactOnlyWrites(t, filepath.Join(dir, name))...)
+
+		// Instrument proof first (F11): planted controls — the checker fires
+		// on a direct outside write and on a helper-reached outside write,
+		// and stays silent on the transact-wrapped write. A verdict from a
+		// checker that cannot fire proves nothing.
+		planted := t.TempDir()
+		writePlantedSource(t, planted, "planted_direct.go", plantedDirectWrite)
+		writePlantedSource(t, planted, "planted_helper.go", plantedHelperWrite)
+		writePlantedSource(t, planted, "planted_clean.go", plantedCleanWrite)
+		plantedOffenders := transactWriteOffenders(t, planted)
+		require.Contains(t, plantedOffenders, "planted_direct.go::PlantedDirectWrite writes outside s.transact",
+			"instrument: a direct outside write is flagged: %v", plantedOffenders)
+		require.Contains(t, plantedOffenders, "planted_helper.go::PlantedIndirectWrite writes outside s.transact",
+			"instrument: a helper-reached outside write is flagged: %v", plantedOffenders)
+		for _, o := range plantedOffenders {
+			require.NotContains(t, o, "planted_clean.go",
+				"instrument: the transact-wrapped write is not flagged: %v", plantedOffenders)
 		}
+
+		// The verdict on the real package (at RED: every mutator writes
+		// outside s.transact — FR-049's transaction machinery does not exist).
+		offenders := transactWriteOffenders(t, dir)
 		require.Empty(t, offenders,
 			"exported Store methods must write the store file only inside s.transact (FR-049): %v", offenders)
 	})
@@ -365,64 +390,198 @@ func walkGoFiles(t *testing.T, root string, fn func(path, src string)) {
 	}))
 }
 
-// checkTransactOnlyWrites parses one non-test file of pkg/credentials and
-// returns offender descriptions for every exported Store method that calls
-// saveFileNoLock outside a s.transact function literal.
-func checkTransactOnlyWrites(t *testing.T, path string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	require.NoError(t, err, "parse %s", path)
-	var offenders []string
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Recv == nil || fd.Name == nil || !fd.Name.IsExported() {
-			continue
-		}
-		if !storePtrReceiver(fd) {
-			continue
-		}
-		method := fd.Name.Name
-		var transactRanges []token.Pos // [start, end] pairs flattened
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "transact" {
-				for _, arg := range call.Args {
-					if lit, ok := arg.(*ast.FuncLit); ok {
-						transactRanges = append(transactRanges, lit.Pos(), lit.End())
-					}
-				}
-			}
-			return true
-		})
-		insideTransact := func(pos token.Pos) bool {
-			for i := 0; i+1 < len(transactRanges); i += 2 {
-				if pos >= transactRanges[i] && pos <= transactRanges[i+1] {
-					return true
-				}
-			}
-			return false
-		}
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "saveFileNoLock" && !insideTransact(call.Pos()) {
-				offenders = append(offenders, fmt.Sprintf("%s::%s writes outside s.transact",
-					filepath.Base(path), method))
-			}
-			return true
-		})
+// callerGuardOffender reports whether one file calls the program-scoped store
+// methods from PRODUCTION code outside pkg/programs (FR-048). The _test.go
+// exclusion is part of the guard's definition: test fixtures in any package
+// drive the real methods by design and ship nowhere; the rule guards the
+// shipped call graph.
+func callerGuardOffender(relPath, src string) bool {
+	if strings.HasSuffix(relPath, "_test.go") {
+		return false
 	}
+	if strings.HasPrefix(relPath, "pkg/programs/") {
+		return false
+	}
+	// The leading dot distinguishes a receiver CALL from the method
+	// definition (`func (s *Store) CommitProgramCredential(`).
+	for _, m := range []string{".CommitProgramCredential(", ".RemoveProgramCredential("} {
+		if strings.Contains(src, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// Planted sources for the transact analyzer's instrument proof (CHECK F11).
+const (
+	plantedDirectWrite = `package credentials
+
+func (s *Store) PlantedDirectWrite() error {
+	sf, err := s.loadFileInternal()
+	if err != nil {
+		return err
+	}
+	return s.saveFileNoLock(sf)
+}
+`
+	plantedHelperWrite = `package credentials
+
+func (s *Store) writeThroughPlanted(sf *storeFile) error {
+	return s.saveFileNoLock(sf)
+}
+
+func (s *Store) PlantedIndirectWrite() error {
+	sf, err := s.loadFileInternal()
+	if err != nil {
+		return err
+	}
+	return s.writeThroughPlanted(sf)
+}
+`
+	plantedCleanWrite = `package credentials
+
+func (s *Store) PlantedCleanWrite() error {
+	return s.transact(func(sf *storeFile) error {
+		return s.saveFileNoLock(sf)
+	})
+}
+`
+)
+
+func writePlantedSource(t *testing.T, dir, name, src string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600), "write planted source %s", name)
+}
+
+// transactWriteOffenders parses every non-test .go file of one package
+// directory and returns offender descriptions for every EXPORTED Store method
+// that can reach a saveFileNoLock call outside a s.transact function literal —
+// directly or through any chain of same-package helpers (CHECK F11; the
+// reachability is a fixpoint over the call graph). A call to s.transact never
+// taints its caller: the writes inside its literal are the sanctioned write
+// path (FR-049). Name-based call matching is the documented heuristic, same
+// as the caller guard's dot-call match.
+func transactWriteOffenders(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	type fnInfo struct {
+		file     string
+		exported bool
+		isMethod bool // receiver *Store
+		direct   bool // unsanctioned saveFileNoLock in own body
+		calls    []string
+	}
+	fns := map[string]*fnInfo{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		fset := token.NewFileSet()
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		require.NoError(t, perr, "parse %s", name)
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Name == nil || fd.Body == nil {
+				continue
+			}
+			info := &fnInfo{file: name, exported: fd.Name.IsExported(), isMethod: storePtrReceiver(fd)}
+			info.direct, info.calls = scanFnBody(fd.Body)
+			fns[fd.Name.Name] = info
+		}
+	}
+	dirty := map[string]bool{}
+	for {
+		changed := false
+		for name, info := range fns {
+			if dirty[name] {
+				continue
+			}
+			d := info.direct
+			for _, callee := range info.calls {
+				if callee != "transact" && dirty[callee] {
+					d = true
+					break
+				}
+			}
+			if d {
+				dirty[name] = true
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	var offenders []string
+	for name, info := range fns {
+		if dirty[name] && info.isMethod && info.exported {
+			offenders = append(offenders, fmt.Sprintf("%s::%s writes outside s.transact", info.file, name))
+		}
+	}
+	sort.Strings(offenders)
 	return offenders
 }
 
+// scanFnBody reports whether the body calls saveFileNoLock outside a
+// s.transact function literal (the sanctioned write path), and collects the
+// names of all called functions for the reachability fixpoint. Calls into
+// s.transact are excluded — its literal is where writes are allowed.
+func scanFnBody(body ast.Node) (directWrite bool, calls []string) {
+	var litRanges []token.Pos // [start, end] pairs flattened
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "transact" {
+			for _, arg := range call.Args {
+				if lit, ok := arg.(*ast.FuncLit); ok {
+					litRanges = append(litRanges, lit.Pos(), lit.End())
+				}
+			}
+		}
+		return true
+	})
+	insideSanctioned := func(pos token.Pos) bool {
+		for i := 0; i+1 < len(litRanges); i += 2 {
+			if pos >= litRanges[i] && pos <= litRanges[i+1] {
+				return true
+			}
+		}
+		return false
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			switch sel.Sel.Name {
+			case "transact":
+				return true // sanctioned write path
+			case "saveFileNoLock":
+				if !insideSanctioned(call.Pos()) {
+					directWrite = true
+				}
+				return true
+			default:
+				calls = append(calls, sel.Sel.Name)
+			}
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); ok {
+			calls = append(calls, id.Name)
+		}
+		return true
+	})
+	return directWrite, calls
+}
+
 func storePtrReceiver(fd *ast.FuncDecl) bool {
-	if len(fd.Recv.List) != 1 {
+	if fd.Recv == nil || len(fd.Recv.List) != 1 {
 		return false
 	}
 	star, ok := fd.Recv.List[0].Type.(*ast.StarExpr)
