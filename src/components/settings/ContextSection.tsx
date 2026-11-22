@@ -274,6 +274,92 @@ function sameOverrides(a: OverrideRow[], b: OverrideRow[]): boolean {
 }
 
 /** Context and tool results plus Model overrides as one Save-bar part. */
+interface OverridesCardArgs { // not-wire-format: React view inputs
+  rows: OverrideRow[]
+  errors: FieldErrors
+  setRow: (i: number, patch: Partial<OverrideRow>) => void
+  removeRow: (i: number) => void
+  addRow: () => void
+}
+
+/** The Model overrides rows with their add and remove controls. */
+function overridesCard({ rows, errors, setRow, removeRow, addRow }: OverridesCardArgs): React.ReactNode {
+  return (
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2)]" id="model-overrides">
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+        The context length for one provider and model, for endpoints that do not report one or to keep a model below its advertised limit. An override can only lower the window.
+      </p>
+      {rows.length === 0 ? (
+        <p data-testid="context-overrides-empty" className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+          No overrides. Every model uses its catalog or live context length.
+        </p>
+      ) : (
+        <ul className="space-y-[var(--space-2)]">
+          {rows.map((row, i) => {
+            const keys = (['provider', 'model', 'context_window'] as const).map((k) => `model_overrides.${i}.${k}`)
+            const rowErrors = keys.map((k) => errors[k]).filter(Boolean)
+            return (
+              <li key={i} data-testid="context-override-row" className="space-y-[var(--space-1)]">
+                <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+                  <Input
+                    aria-label={`Override ${i + 1} provider`}
+                    data-settings-field={`settings-limits-model_overrides-${i}-provider`}
+                    data-testid="context-override-provider"
+                    placeholder="Provider"
+                    value={row.provider}
+                    aria-invalid={errors[keys[0]] ? true : undefined}
+                    onChange={(e) => setRow(i, { provider: e.target.value })}
+                    className="max-w-[10rem]"
+                  />
+                  <Input
+                    aria-label={`Override ${i + 1} model`}
+                    data-settings-field={`settings-limits-model_overrides-${i}-model`}
+                    data-testid="context-override-model"
+                    placeholder="Model"
+                    value={row.model}
+                    aria-invalid={errors[keys[1]] ? true : undefined}
+                    onChange={(e) => setRow(i, { model: e.target.value })}
+                    className="max-w-[14rem]"
+                  />
+                  <Input
+                    aria-label={`Override ${i + 1} context length, tokens`}
+                    data-settings-field={`settings-limits-model_overrides-${i}-context_window`}
+                    data-testid="context-override-window"
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="Tokens"
+                    value={row.context_window}
+                    aria-invalid={errors[keys[2]] ? true : undefined}
+                    onChange={(e) => setRow(i, { context_window: e.target.value })}
+                    className="max-w-[8rem]"
+                  />
+                  <Button type="button" variant="ghost" size="sm" aria-label={`Remove override ${i + 1}`} data-testid="context-override-remove" onClick={() => removeRow(i)}>
+                    <X size={14} aria-hidden="true" />
+                  </Button>
+                </div>
+                {rowErrors.map((m) => (
+                  <p key={m} role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+                    {m}
+                  </p>
+                ))}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {errors.model_overrides && (
+        <p role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+          {errors.model_overrides}
+        </p>
+      )}
+      <Button type="button" variant="outline" size="sm" data-testid="context-override-add" onClick={addRow}>
+        <Plus size={14} aria-hidden="true" /> Add override
+      </Button>
+    </Card>
+
+  )
+}
+
 export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
   const queryClient = useQueryClient()
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
@@ -497,79 +583,7 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
     </Card>
   )
 
-  const overridesView = status ?? (
-    <Card className="p-[var(--space-3)] space-y-[var(--space-2)]" id="model-overrides">
-      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-        The context length for one provider and model, for endpoints that do not report one or to keep a model below its advertised limit. An override can only lower the window.
-      </p>
-      {form!.model_overrides.length === 0 ? (
-        <p data-testid="context-overrides-empty" className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-          No overrides. Every model uses its catalog or live context length.
-        </p>
-      ) : (
-        <ul className="space-y-[var(--space-2)]">
-          {form!.model_overrides.map((row, i) => {
-            const keys = (['provider', 'model', 'context_window'] as const).map((k) => `model_overrides.${i}.${k}`)
-            const rowErrors = keys.map((k) => errors[k]).filter(Boolean)
-            return (
-              <li key={i} data-testid="context-override-row" className="space-y-[var(--space-1)]">
-                <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-                  <Input
-                    aria-label={`Override ${i + 1} provider`}
-                    data-settings-field={`settings-limits-model_overrides-${i}-provider`}
-                    data-testid="context-override-provider"
-                    placeholder="Provider"
-                    value={row.provider}
-                    aria-invalid={errors[keys[0]] ? true : undefined}
-                    onChange={(e) => setRow(i, { provider: e.target.value })}
-                    className="max-w-[10rem]"
-                  />
-                  <Input
-                    aria-label={`Override ${i + 1} model`}
-                    data-settings-field={`settings-limits-model_overrides-${i}-model`}
-                    data-testid="context-override-model"
-                    placeholder="Model"
-                    value={row.model}
-                    aria-invalid={errors[keys[1]] ? true : undefined}
-                    onChange={(e) => setRow(i, { model: e.target.value })}
-                    className="max-w-[14rem]"
-                  />
-                  <Input
-                    aria-label={`Override ${i + 1} context length, tokens`}
-                    data-settings-field={`settings-limits-model_overrides-${i}-context_window`}
-                    data-testid="context-override-window"
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="Tokens"
-                    value={row.context_window}
-                    aria-invalid={errors[keys[2]] ? true : undefined}
-                    onChange={(e) => setRow(i, { context_window: e.target.value })}
-                    className="max-w-[8rem]"
-                  />
-                  <Button type="button" variant="ghost" size="sm" aria-label={`Remove override ${i + 1}`} data-testid="context-override-remove" onClick={() => removeRow(i)}>
-                    <X size={14} aria-hidden="true" />
-                  </Button>
-                </div>
-                {rowErrors.map((m) => (
-                  <p key={m} role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-                    {m}
-                  </p>
-                ))}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-      {errors.model_overrides && (
-        <p role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-          {errors.model_overrides}
-        </p>
-      )}
-      <Button type="button" variant="outline" size="sm" data-testid="context-override-add" onClick={addRow}>
-        <Plus size={14} aria-hidden="true" /> Add override
-      </Button>
-    </Card>
-  )
+  const overridesView = status ?? overridesCard({ rows: form!.model_overrides, errors, setRow, removeRow, addRow })
 
   const firstInvalid = Object.keys(localErrors)[0]
   const invalidGroup: 'context' | 'overrides' | null = !firstInvalid ? null : firstInvalid.startsWith('model_overrides') ? 'overrides' : 'context'

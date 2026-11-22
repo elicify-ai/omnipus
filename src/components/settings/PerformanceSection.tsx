@@ -203,6 +203,143 @@ interface LoweringState { // not-wire-format: screen-only dialog state
   resolve: (ok: boolean) => void
 }
 
+interface PerformanceViewArgs { // not-wire-format: React view inputs
+  value: (k: Key) => string | boolean
+  setDraft: (k: Key, v: string | boolean) => void
+  errors: Partial<Record<Key, string>>
+  toolIterError: string | null
+  loweredSummary: string | null
+  known: Partial<Values>
+  read: {
+    data: PerformanceSettings | undefined
+    isLoading: boolean
+    error: unknown
+    refetch: () => unknown
+    isFetching: boolean
+  }
+}
+
+/** The Agents and goals fields, or their loading and failed-read states. */
+function performanceView({ value, setDraft, errors, toolIterError, loweredSummary, known, read }: PerformanceViewArgs): React.ReactNode {
+  const { data, isLoading, error, refetch, isFetching } = read
+  const numberRow = (k: Key, description: React.ReactNode, opts: { unit?: string; placeholder?: string; testId: string; disabled?: boolean; allowsEmpty?: boolean }) => (
+    <FormRow
+      key={k}
+      label={LABELS[k]}
+      description={description}
+      error={errors[k] ?? (k === 'max_tool_iterations' ? toolIterError : undefined)}
+      password
+      fieldId={`settings-limits-${k}`}
+    >
+      {({ id, describedBy, invalid, fieldId }) => (
+        <div className="flex items-center gap-[var(--space-2)]">
+          <Input
+            id={id}
+            data-settings-field={fieldId}
+            data-testid={opts.testId}
+            // A field where empty means "no limit" stays text; the others are numbers.
+            type={opts.allowsEmpty ? 'text' : 'number'}
+            inputMode="numeric"
+            value={String(value(k))}
+            placeholder={opts.placeholder}
+            disabled={opts.disabled}
+            onChange={(e) => setDraft(k, e.target.value)}
+            aria-describedby={describedBy}
+            aria-invalid={invalid || undefined}
+            className="max-w-[10rem]"
+          />
+          {opts.unit && <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">{opts.unit}</span>}
+        </div>
+      )}
+    </FormRow>
+  )
+
+  const switchRow = (k: Key, description: React.ReactNode, testId: string) => (
+    <FormRow key={k} label={LABELS[k]} description={description} password fieldId={`settings-limits-${k}`}>
+      {({ id, describedBy, fieldId }) => (
+        <Switch
+          id={id}
+          data-settings-field={fieldId}
+          data-testid={testId}
+          checked={value(k) === true}
+          onCheckedChange={(c) => setDraft(k, c)}
+          aria-describedby={describedBy}
+        />
+      )}
+    </FormRow>
+  )
+
+  if (isLoading) {
+    return (
+      <div role="status" data-testid="performance-loading" className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
+        <Spinner decorative />
+        Loading Agents and goals…
+      </div>
+    )
+  }
+  if (error || !data) {
+    return (
+      <ReadErrorCallout
+        title="Agents and goals could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="performance-load-error"
+        retryTestId="performance-retry-btn"
+      />
+    )
+  }
+  const parallel = wholeNumber(String(value('max_parallel_agents')))
+  const savedWarning = savedStateWarning(data.max_tool_iterations_saved_state, data.max_tool_iterations_saved_raw, data.max_tool_iterations)
+  return (
+    <div className="space-y-[var(--space-2)]">
+      {data.pending_apply && (
+        <Callout variant="info" data-testid="performance-unapplied-notice">
+          <CalloutTitle>Some saved values are not in use yet</CalloutTitle>
+          <CalloutDescription>{performancePendingApplyMessage(data.pending_apply)} {pendingFieldsLine(data.pending_apply, known)}</CalloutDescription>
+        </Callout>
+      )}
+      <Card className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+        Currently in use: {data.effective_max_parallel_agents ?? 'unknown'} parallel agents
+        {data.max_parallel_agents_configured === false ? ' · without a limit, the number is bounded by available memory.' : '.'}
+      </Card>
+      <Card className="px-[var(--space-3)]">
+        {numberRow('max_parallel_agents', 'Empty means no fixed limit. 1 or more. Above 2,000 the server may run out of threads.', {
+          placeholder: 'No limit',
+          testId: 'performance-max-agents-input',
+          allowsEmpty: true,
+        })}
+        {parallel !== null && parallel > PHYSICAL_THREAD_CEILING && (
+          <p data-testid="performance-high-value-warning" className="flex items-start gap-[var(--space-1)] pb-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
+            <Warning size={14} aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0" />
+            {parallel} is used exactly as set, but above {PHYSICAL_THREAD_CEILING.toLocaleString('en-US')} the server may run out of threads and stop.
+          </p>
+        )}
+        {numberRow('goal_max_rounds', 'How many rounds an agent gets to finish one goal. 1 or more. Default 20.', { unit: 'rounds', testId: 'performance-goal-max-rounds-input' })}
+        {numberRow('goal_reminder_quiet_seconds', '30 to 3,600 seconds. Default 60.', { unit: 's', testId: 'performance-goal-quiet-seconds-input' })}
+        {switchRow('goal_stalled_checkin_enabled', 'Ask a stuck agent how it is doing.', 'performance-goal-stalled-checkin-switch')}
+        {numberRow('goal_stalled_checkin_minutes', '5 to 1,440 minutes. Default 30.', {
+          unit: 'minutes',
+          testId: 'performance-goal-stalled-minutes-input',
+          disabled: value('goal_stalled_checkin_enabled') !== true,
+        })}
+        {numberRow('max_tool_iterations', '1 to 1,000. Lowering it first shows which agents are affected.', { testId: 'performance-max-tool-iterations-input' })}
+        {savedWarning && (
+          <p role="status" className="pb-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
+            {savedWarning}
+          </p>
+        )}
+        {loweredSummary && (
+          <p role="status" data-testid="performance-lowered-summary" className="pb-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+            {loweredSummary}
+          </p>
+        )}
+        {switchRow('tools_on_demand', 'Load tools only when an agent needs them, so each message stays small.', 'performance-tools-on-demand-switch')}
+      </Card>
+    </div>
+  )
+}
+
 export function usePerformanceForm(options: { onReconfirmed?: () => void } = {}) {
   const { onReconfirmed } = options
   const queryClient = useQueryClient()
@@ -407,124 +544,10 @@ export function usePerformanceForm(options: { onReconfirmed?: () => void } = {})
     discard,
   }
 
-  // ── View ───────────────────────────────────────────────────────────────
-  const numberRow = (k: Key, description: React.ReactNode, opts: { unit?: string; placeholder?: string; testId: string; disabled?: boolean; allowsEmpty?: boolean }) => (
-    <FormRow
-      key={k}
-      label={LABELS[k]}
-      description={description}
-      error={errors[k] ?? (k === 'max_tool_iterations' ? toolIterError : undefined)}
-      password
-      fieldId={`settings-limits-${k}`}
-    >
-      {({ id, describedBy, invalid, fieldId }) => (
-        <div className="flex items-center gap-[var(--space-2)]">
-          <Input
-            id={id}
-            data-settings-field={fieldId}
-            data-testid={opts.testId}
-            // A field where empty means "no limit" stays text; the others are numbers.
-            type={opts.allowsEmpty ? 'text' : 'number'}
-            inputMode="numeric"
-            value={String(value(k))}
-            placeholder={opts.placeholder}
-            disabled={opts.disabled}
-            onChange={(e) => setDraft(k, e.target.value)}
-            aria-describedby={describedBy}
-            aria-invalid={invalid || undefined}
-            className="max-w-[10rem]"
-          />
-          {opts.unit && <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">{opts.unit}</span>}
-        </div>
-      )}
-    </FormRow>
-  )
-
-  const switchRow = (k: Key, description: React.ReactNode, testId: string) => (
-    <FormRow key={k} label={LABELS[k]} description={description} password fieldId={`settings-limits-${k}`}>
-      {({ id, describedBy, fieldId }) => (
-        <Switch
-          id={id}
-          data-settings-field={fieldId}
-          data-testid={testId}
-          checked={value(k) === true}
-          onCheckedChange={(c) => setDraft(k, c)}
-          aria-describedby={describedBy}
-        />
-      )}
-    </FormRow>
-  )
-
-  let view: React.ReactNode
-  if (isLoading) {
-    view = (
-      <div role="status" data-testid="performance-loading" className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
-        <Spinner decorative />
-        Loading Agents and goals…
-      </div>
-    )
-  } else if (error || !data) {
-    view = (
-      <ReadErrorCallout
-        title="Agents and goals could not be loaded"
-        error={error}
-        onRetry={() => void refetch()}
-        retrying={isFetching}
-        data-testid="performance-load-error"
-        retryTestId="performance-retry-btn"
-      />
-    )
-  } else {
-    const parallel = wholeNumber(String(value('max_parallel_agents')))
-    const savedWarning = savedStateWarning(data.max_tool_iterations_saved_state, data.max_tool_iterations_saved_raw, data.max_tool_iterations)
-    view = (
-      <div className="space-y-[var(--space-2)]">
-        {data.pending_apply && (
-          <Callout variant="info" data-testid="performance-unapplied-notice">
-            <CalloutTitle>Some saved values are not in use yet</CalloutTitle>
-            <CalloutDescription>{performancePendingApplyMessage(data.pending_apply)} {pendingFieldsLine(data.pending_apply, known)}</CalloutDescription>
-          </Callout>
-        )}
-        <Card className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-          Currently in use: {data.effective_max_parallel_agents ?? 'unknown'} parallel agents
-          {data.max_parallel_agents_configured === false ? ' · without a limit, the number is bounded by available memory.' : '.'}
-        </Card>
-        <Card className="px-[var(--space-3)]">
-          {numberRow('max_parallel_agents', 'Empty means no fixed limit. 1 or more. Above 2,000 the server may run out of threads.', {
-            placeholder: 'No limit',
-            testId: 'performance-max-agents-input',
-            allowsEmpty: true,
-          })}
-          {parallel !== null && parallel > PHYSICAL_THREAD_CEILING && (
-            <p data-testid="performance-high-value-warning" className="flex items-start gap-[var(--space-1)] pb-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
-              <Warning size={14} aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0" />
-              {parallel} is used exactly as set, but above {PHYSICAL_THREAD_CEILING.toLocaleString('en-US')} the server may run out of threads and stop.
-            </p>
-          )}
-          {numberRow('goal_max_rounds', 'How many rounds an agent gets to finish one goal. 1 or more. Default 20.', { unit: 'rounds', testId: 'performance-goal-max-rounds-input' })}
-          {numberRow('goal_reminder_quiet_seconds', '30 to 3,600 seconds. Default 60.', { unit: 's', testId: 'performance-goal-quiet-seconds-input' })}
-          {switchRow('goal_stalled_checkin_enabled', 'Ask a stuck agent how it is doing.', 'performance-goal-stalled-checkin-switch')}
-          {numberRow('goal_stalled_checkin_minutes', '5 to 1,440 minutes. Default 30.', {
-            unit: 'minutes',
-            testId: 'performance-goal-stalled-minutes-input',
-            disabled: value('goal_stalled_checkin_enabled') !== true,
-          })}
-          {numberRow('max_tool_iterations', '1 to 1,000. Lowering it first shows which agents are affected.', { testId: 'performance-max-tool-iterations-input' })}
-          {savedWarning && (
-            <p role="status" className="pb-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
-              {savedWarning}
-            </p>
-          )}
-          {loweredSummary && (
-            <p role="status" data-testid="performance-lowered-summary" className="pb-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-              {loweredSummary}
-            </p>
-          )}
-          {switchRow('tools_on_demand', 'Load tools only when an agent needs them, so each message stays small.', 'performance-tools-on-demand-switch')}
-        </Card>
-      </div>
-    )
-  }
+  const view = performanceView({
+    value, setDraft, errors, toolIterError, loweredSummary, known,
+    read: { data, isLoading, error, refetch, isFetching },
+  })
 
   // Rendered outside the collapsible group so a pre-save confirm always shows.
   const dialogs = lowering ? (
