@@ -9,10 +9,10 @@
 // Part (a) is a source guard over the packages that compose agent
 // environments, mirroring the S-111 producer-guard instrument. It scans the
 // production tree (non-test Go files, recursively under every scoped root —
-// CHECK F10) for child-start SITES and reports EVERY site regardless of
-// violations: the classification (S1 mandatory / non-program / unlisted)
-// runs per site, never per file (CHECK R06) — a new child in a previously
-// classified non-program file is a new, unlisted site and fails the guard.
+// CHECK F10) for same-function constructor-to-launch sites, regardless of
+// violations. Classification is still file+function, NOT a complete per-site
+// inventory. Helper-split flows and an added launch in the SAME listed
+// function are explicit loud blockers in spawn_inventory_boundaries_test.go.
 //
 // A site is the LAUNCH of a command constructed from exec.Command or
 // exec.CommandContext (resolved through the file's own import table, so an
@@ -147,8 +147,8 @@ var spawnLocalStartWrappers = map[string]bool{
 }
 
 // spawnSite is one discovered child-start site, whether or not it violates
-// the table or the Attach rule (CHECK F10: the enumeration is complete —
-// classification happens on the full list, never on violations alone).
+// the table or the Attach rule. Classification sees all discovered sites,
+// but discovery is intraprocedural and not a complete typed call graph.
 type spawnSite struct {
 	File              string // repo-relative, forward slashes
 	Line              int    // the launch call's line
@@ -246,7 +246,7 @@ type spawnCtor struct {
 	pos token.Pos
 }
 
-// scanFileForSpawnSites parses one file and returns EVERY child-start site:
+// scanFileForSpawnSites parses one file for same-function child-start sites:
 // one per launch (Start/Run/Output/CombinedOutput) of a command constructed
 // from exec.Command/exec.CommandContext in the same enclosing function —
 // including direct chains exec.Command(...).Run(). Attach-before-launch is
@@ -390,12 +390,9 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 			return true
 		})
 
-		// A launch on a var with no tracked constructor (e.g. the var was
-		// built in a helper) cannot be proven attached here — but it is also
-		// not a site of THIS function; the guard reports the site where the
-		// command is both constructed and launched. Helper-split flows are
-		// the launcher function's responsibility (its constructor helpers
-		// appear as their own sites if they construct).
+		// A launch whose constructor is outside this function is currently
+		// OMITTED. A constructor-only helper emits no site either. The separate
+		// helper-split boundary test blocks any completeness claim (R06).
 		for _, launch := range launches {
 			varName := launch.cmdVar
 			// the construction this launch belongs to: the latest one before it
@@ -456,8 +453,9 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 }
 
 // spawnClassify returns the guard's violations for a full site enumeration:
-// unlisted SITES (file+function — a new child in a listed non-program file
-// is still unlisted, CHECK R06), mandatory sites whose launch has no
+// unlisted file+function pairs (a new function in a listed file is unlisted;
+// another launch in the SAME function still inherits its classification),
+// mandatory sites whose launch has no
 // same-command Attach between construction and launch, and any site whose
 // function composes a literal program-token name without that Attach
 // (I-1: Attach is the only way program variables reach a child).
