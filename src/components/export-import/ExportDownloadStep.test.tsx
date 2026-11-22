@@ -48,11 +48,14 @@ import { useUiStore } from '@/store/ui'
 // Plan validity derives from the real clock (CHECK F07): created one minute
 // ago and valid for EXACTLY the spec's 30-minute lifetime from creation
 // (round 2: the interval was 31 minutes — expires_at now = created_at +
-// 30 min exactly). No wall-clock-pinned fixture.
+// 30 min exactly). No wall-clock-pinned fixture. ONE Date.now() call (CHECK 3
+// minor): two separate calls can differ by a millisecond, making the
+// interval 29:59.999 instead of the exact 30 minutes.
+const planCreated = Date.now() - 60_000
 const plan = {
   plan_id: 'P1',
-  created_at: new Date(Date.now() - 60_000).toISOString(),
-  expires_at: new Date(Date.now() - 60_000 + 30 * 60_000).toISOString(),
+  created_at: new Date(planCreated).toISOString(),
+  expires_at: new Date(planCreated + 30 * 60_000).toISOString(),
   scope: 'agents',
   elements: [
     {

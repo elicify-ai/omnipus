@@ -16,6 +16,7 @@ package omnpkg_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -485,14 +486,36 @@ var b1D6Canaries = []string{
 	"CANARY_ENV",                   // D6-9 environment override value
 }
 
-// b1CanariesIn returns every D6-1…9 canary found in a serialised review body.
-// One scanner for both directions (CHECK F08 round 2): b1ScanBody asserts a
+// b1MasterKeyBytes is the 32-byte test master key whose content embeds the
+// D6-2 canary at offset 0 (CANARY_MASTER_KEY + 15 filler bytes). One helper
+// for the seed, the key-file fixture and the scanner's encoded forms (CHECK
+// 3 F08). Built with explicit appends — no diagnostic suppression (CHECK 3
+// G01).
+func b1MasterKeyBytes() []byte {
+	key := make([]byte, 0, 32)
+	key = append(key, []byte("CANARY_MASTER_KEY")...)
+	key = append(key, bytes.Repeat([]byte{0x4b}, 15)...)
+	return key
+}
+
+// b1EncodedKeyCanaries are the D6-2 master key's persisted representations:
+// the key file stores the key hex-encoded (keymgr format) and base64 is the
+// other common wire encoding. A raw key-file disclosure carries these forms,
+// never the plaintext.
+var b1EncodedKeyCanaries = []string{
+	hex.EncodeToString(b1MasterKeyBytes()),
+	base64.StdEncoding.EncodeToString(b1MasterKeyBytes()),
+}
+
+// b1CanariesIn returns every D6-1…9 canary found in a serialised review body
+// — the plaintext canaries AND the master key's persisted encodings (hex/
+// base64, CHECK 3 F08). One scanner for both directions: b1ScanBody asserts a
 // real review is clean, and the control asserts the SAME scanner sees a
 // planted value — the instrument is proven on the exact function the
 // assertion uses.
 func b1CanariesIn(body []byte) []string {
 	var found []string
-	for _, c := range b1D6Canaries {
+	for _, c := range append(append([]string{}, b1D6Canaries...), b1EncodedKeyCanaries...) {
 		if strings.Contains(string(body), c) {
 			found = append(found, c)
 		}
@@ -525,30 +548,38 @@ func TestPlanExport_NoValuesInPlan(t *testing.T) {
 	src.withAgent(t, testSourceID, rec, nil, []byte(testAgentBody))
 	// Plant D6-1…6 at their REAL installation-store locations in a dedicated
 	// install-home directory (NOT the agent's own folder — the real store
-	// lives at the install level, CHECK F08 round 2), each fixture in its real
-	// format and each verified INDIVIDUALLY before the review runs:
+	// lives at the install level), each fixture in its real format and each
+	// verified INDIVIDUALLY before the review runs:
 	//
-	//	D6-1 CANARY_CRED_VAULT / D6-3 CANARY_CLI_TOKEN /
-	//	D6-6 CANARY_CHANNEL_TOKEN — entries in the REAL encrypted credential
-	//	store, written and read back through pkg/credentials
-	//	D6-2 CANARY_MASTER_KEY — the default key file "n" (hex key bytes, 0600,
-	//	pkg/credentials keymgr format; the key IS the canary)
+	//	D6-1 CANARY_CRED_VAULT / D6-6 CANARY_CHANNEL_TOKEN — entries in the
+	//	REAL encrypted credential store, written and read back through
+	//	pkg/credentials
+	//	D6-2 CANARY_MASTER_KEY — the canonical key file master.key
+	//	(credentials.DefaultKeyFileName; hex key bytes, 0600, keymgr format;
+	//	the key IS the canary)
+	//	D6-3 CANARY_CLI_TOKEN — the canonical CLI token file cli.token (the
+	//	PLAINTEXT bearer the CLI reads, 0600)
 	//	D6-4 CANARY_AUTH_JSON — auth.json
 	//	D6-5 CANARY_PROVIDER_KEY — the provider key in config.json (spec D6-5)
 	//
-	// The review under test is built from the SOURCE only; an unseeded or
-	// unverified install store proves nothing.
+	// Bounded claim (CHECK 3 F08): this unit harness's installHome is NOT
+	// supplied to the fake export source, so this test cannot itself prove
+	// the builder cannot reach installation files — it proves only that a
+	// review built from the SOURCE carries none of the planted values. The
+	// gateway row (TestExportPlanHandler_Canaries over the real home) is that
+	// boundary.
 	installHome := t.TempDir()
-	key := append([]byte("CANARY_MASTER_KEY"), bytes.Repeat([]byte{0x4b}, 15)...)
+	key := b1MasterKeyBytes()
 	require.Len(t, key, 32, "the master key is a full AES-256 key")
-	keyPath := filepath.Join(installHome, "n")
+	keyPath := filepath.Join(installHome, credentials.DefaultKeyFileName)
 	require.NoError(t, os.WriteFile(keyPath, []byte(hex.EncodeToString(key)), 0o600))
+	cliTokenPath := filepath.Join(installHome, "cli.token")
+	require.NoError(t, os.WriteFile(cliTokenPath, []byte("CANARY_CLI_TOKEN"), 0o600))
 	store := credentials.NewStore(filepath.Join(installHome, "credentials.json"))
 	require.NoError(t, store.UnlockWithKey(key), "the store opens with the key file's key")
 	t.Cleanup(store.Close)
 	entries := map[string]string{
 		"vault-canary":  "CANARY_CRED_VAULT",
-		"cli-token":     "CANARY_CLI_TOKEN",
 		"channel-token": "CANARY_CHANNEL_TOKEN",
 	}
 	for name, value := range entries {
@@ -573,6 +604,12 @@ func TestPlanExport_NoValuesInPlan(t *testing.T) {
 	info, serr := os.Stat(keyPath)
 	require.NoError(t, serr)
 	require.Zero(t, info.Mode().Perm()&0o077, "the D6-2 key file is 0600 (keymgr mode)")
+	rawToken, terr := os.ReadFile(cliTokenPath)
+	require.NoError(t, terr, "the D6-3 cli.token must exist before the review runs")
+	require.Contains(t, string(rawToken), "CANARY_CLI_TOKEN", "the D6-3 cli.token carries its plaintext canary")
+	tokenInfo, tserr := os.Stat(cliTokenPath)
+	require.NoError(t, tserr)
+	require.Zero(t, tokenInfo.Mode().Perm()&0o077, "the D6-3 cli.token is 0600 (clitoken mode)")
 	var configSeed struct {
 		Providers []map[string]any `json:"providers"`
 	}
@@ -609,4 +646,96 @@ func TestPlanExport_NoValuesInPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"CANARY_ENV"}, b1CanariesIn(rawPlanted),
 		"the exact rejecting scanner must see the planted value — and only it")
+
+	// Encoded-key positive control (CHECK 3 F08): the scanner must flag the
+	// master key's persisted representations too — a raw key-file disclosure
+	// carries the hex/base64 forms, never the plaintext.
+	for i, encoded := range b1EncodedKeyCanaries {
+		require.Equal(t, []string{encoded}, b1CanariesIn([]byte(encoded)),
+			"the encoded D6-2 key canary (form %d) must trip the SAME scanner", i)
+	}
+}
+
+// TestPlanExport_HoldsNoBundleBytes — spec Performance Bounds (CHECK 3 F09):
+// "the review MUST hold no bundle bytes after it answers". The review the
+// builder RETURNS is the interface the spec names at unit level: every file
+// entry is metadata only (path + size) and no seeded payload byte appears in
+// the serialised review. The instrument is proven first: the same seeded
+// agent's real bundle (built by Export, which the review must mirror) DOES
+// carry the payloads, so a review that embedded bundle bytes would be caught.
+//
+// Deferred to GREEN: the spec's parenthetical "(plan store holds only the
+// response)" needs an implemented plan store to observe — no store exists in
+// this slice's code yet, so the store-level retention observation (that what
+// persists the review keeps only the marshalled response, never the bundle it
+// built internally) is made when GREEN lands the store. The 5-second answer
+// bound is likewise a wall-clock claim on the real implementation, not on a
+// stub that returns instantly.
+func TestPlanExport_HoldsNoBundleBytes(t *testing.T) {
+	now := time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)
+	src := newFakeSource()
+	// Unique sentinel payloads: the WHOLE body is the sentinel repeated, so
+	// any embedding — whole or a partial prefix — trips the assertion.
+	soulSentinel := []byte("B1-BUNDLE-BYTES-SOUL-9d21e4 :: ")
+	agentSentinel := []byte("B1-BUNDLE-BYTES-AGENTMD-41c07a :: ")
+	soul := bytes.Repeat(soulSentinel, 40)
+	agentMD := bytes.Repeat(agentSentinel, 25)
+	src.withAgent(t, testSourceID, d1MainRecord(testSourceID, "Writer", nil), soul, agentMD)
+
+	// Instrument proof (the check could have seen the failure): the real
+	// bundle built from the SAME source carries both payloads — checked in
+	// the DECODED bundle (test-owned zstd/tar decode, this file's convention),
+	// because the compressed bytes of a repetitive payload do not contain its
+	// plaintext, and a leaking review would embed the decoded content.
+	var bundle bytes.Buffer
+	require.NoError(t, omnpkg.Export(testCtx(t), src, omnpkg.Selection{AgentIDs: []string{testSourceID}}, &bundle),
+		"the mirrored Export must succeed so the instrument is proven")
+	dec := decodePackagePlain(t, bundle.Bytes())
+	soulRaw, ok := dec.Payload[soulPath(testSourceID)]
+	require.True(t, ok, "the decoded bundle carries SOUL.md")
+	require.Contains(t, string(soulRaw), string(soulSentinel),
+		"the SOUL payload is real bundle content — the no-bytes assertion has teeth")
+	agentRaw, ok := dec.Payload[instructionsPath(testSourceID)]
+	require.True(t, ok, "the decoded bundle carries AGENT.md")
+	require.Contains(t, string(agentRaw), string(agentSentinel),
+		"the AGENT.md payload is real bundle content — the no-bytes assertion has teeth")
+
+	plan := planAt(t, src, testSourceID, now)
+
+	// Every file entry is metadata only: exactly path + size, and each seeded
+	// payload file's size is the body's length (metadata without the bytes).
+	// The reviewed file list is the spec's three (agent.json, SOUL.md,
+	// AGENT.md — pinned by TestPlanExport_LeftOutRulesPerKind D1-1); the
+	// record's size is not derived here, only required positive.
+	wantSizes := map[string]int64{
+		soulPath(testSourceID):         int64(len(soul)),
+		instructionsPath(testSourceID): int64(len(agentMD)),
+	}
+	require.Len(t, plan.Elements, 1, "B1 reviews exactly one element")
+	seen := make(map[string]bool, len(plan.Elements[0].Files))
+	for _, entry := range plan.Elements[0].Files {
+		require.False(t, seen[entry.Path], "file entry %q appears once", entry.Path)
+		seen[entry.Path] = true
+		if wantSize, seeded := wantSizes[entry.Path]; seeded {
+			require.Equal(t, wantSize, entry.Size, "file entry %q carries its size", entry.Path)
+		} else {
+			require.Equal(t, recordPath(testSourceID), entry.Path, "the third reviewed file is the settings record")
+			require.Positive(t, entry.Size, "the settings record carries a size")
+		}
+		entryJSON, err := json.Marshal(entry)
+		require.NoError(t, err)
+		require.NotContains(t, string(entryJSON), string(soulSentinel),
+			"file entry %q carries no SOUL bundle bytes", entry.Path)
+		require.NotContains(t, string(entryJSON), string(agentSentinel),
+			"file entry %q carries no AGENT.md bundle bytes", entry.Path)
+	}
+	require.True(t, seen[recordPath(testSourceID)] && seen[soulPath(testSourceID)] && seen[instructionsPath(testSourceID)],
+		"the review lists agent.json, SOUL.md and AGENT.md")
+
+	// The whole serialised review carries no payload byte either — catches a
+	// body-bearing field anywhere on the plan or its elements.
+	planJSON, err := json.Marshal(plan)
+	require.NoError(t, err)
+	require.NotContains(t, string(planJSON), string(soulSentinel), "the review carries no SOUL bundle bytes")
+	require.NotContains(t, string(planJSON), string(agentSentinel), "the review carries no AGENT.md bundle bytes")
 }

@@ -108,10 +108,11 @@ describe('Export Choose — the own-agent list (US-2.1)', () => {
   })
 
   it('two own agents with the same name are both listed and disambiguated (ID prefix, FR-016)', async () => {
-    // The ids differ WITHIN a short prefix ('writer-a…' vs 'writer-9…'), so
-    // the ID-prefix disambiguation the spec requires (FR-016) is actually
-    // exercisable: the descriptions alone would not distinguish the rows
-    // (CHECK 2 W02).
+    // The spec's exact disambiguation (rev 5, Ambiguity Warnings item 4):
+    // when two names are equal, also show the FIRST 8 CHARACTERS of the
+    // agent ID. The ids differ within those eight characters ('writer-a' vs
+    // 'writer-9'), so a conforming display is exactly what this row asserts
+    // — no longer prefix may be required of the product (CHECK 3 N04).
     mockAgents.mockResolvedValue([
       { id: 'writer-a1b2c3d4', name: 'Writer', type: 'Main', locked: false, description: 'writes' },
       { id: 'writer-9e8f7a6b', name: 'Writer', type: 'Main', locked: false, description: 'also writes' },
@@ -121,8 +122,8 @@ describe('Export Choose — the own-agent list (US-2.1)', () => {
     expect(radios, 'both same-name agents are listed').toHaveLength(2)
     const names = radios.map((r) => accessibleName(r))
     expect(names.every((n) => n.includes('Writer')), 'both rows carry the agent name').toBe(true)
-    expect(names.filter((n) => n.includes('writer-a1b2')), 'the first id prefix is shown on its row').toHaveLength(1)
-    expect(names.filter((n) => n.includes('writer-9e8f')), 'the second id prefix is shown on its row').toHaveLength(1)
+    expect(names.filter((n) => n.includes('writer-a')), 'the first 8 characters of the first id are shown').toHaveLength(1)
+    expect(names.filter((n) => n.includes('writer-9')), 'the first 8 characters of the second id are shown').toHaveLength(1)
     expect(new Set(names).size, 'duplicate names are disambiguated so each row is addressable').toBe(2)
   })
 

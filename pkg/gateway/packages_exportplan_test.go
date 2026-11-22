@@ -11,6 +11,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -226,48 +227,79 @@ var b1D6Canaries = []string{
 	"--token=CANARY_ARG --verbose", "CANARY_ENV",
 }
 
+// b1MasterKeyBytes is the 32-byte test master key whose content embeds the
+// D6-2 canary at offset 0 (CANARY_MASTER_KEY + 15 filler bytes). One helper
+// for the seed, the key-file fixture and the scanner's encoded forms, so the
+// scanner can see a leaked key in every representation it can be persisted
+// in (CHECK 3 F08: the key file is hex; the scanner must search the encoding
+// too). Built with explicit appends — no diagnostic suppression (CHECK 3
+// G01).
+func b1MasterKeyBytes() []byte {
+	key := make([]byte, 0, 32)
+	key = append(key, []byte("CANARY_MASTER_KEY")...)
+	key = append(key, bytes.Repeat([]byte{0x4b}, 15)...)
+	return key
+}
+
+// b1EncodedKeyCanaries are the D6-2 master key's persisted representations:
+// the key file stores the key hex-encoded (credentials keymgr format), and
+// base64 is the other common wire encoding. A raw-file disclosure of the key
+// carries these forms, not the plaintext.
+var b1EncodedKeyCanaries = []string{
+	hex.EncodeToString(b1MasterKeyBytes()),
+	base64.StdEncoding.EncodeToString(b1MasterKeyBytes()),
+}
+
 // b1SeedD6Sources plants the D6-1…6 canaries at their REAL store locations
 // under the gateway home (spec Dataset D6) and verifies every seed
 // INDIVIDUALLY before the feature runs — an unseeded or unverified source
-// proves nothing (CHECK F08 round 2):
+// proves nothing (CHECK F08 round 2; canonical files fixed in round 3):
 //
 //	D6-1 CANARY_CRED_VAULT     an entry in the REAL encrypted credential store
 //	                           (credentials.json written and read back through
 //	                           pkg/credentials — the real version/salt/
-//	                           nonce/ciphertext format, not an invented
-//	                           plaintext shape)
-//	D6-2 CANARY_MASTER_KEY     the default key file $OMNIPUS_HOME/n — hex key
-//	                           bytes at 0600, exactly pkg/credentials keymgr's
-//	                           format (the key IS the canary)
-//	D6-3 CANARY_CLI_TOKEN      a credential-store entry (CLI tokens are stored
-//	                           credentials)
+//	                           nonce/ciphertext format)
+//	D6-2 CANARY_MASTER_KEY     the canonical key file master.key
+//	                           (credentials.DefaultKeyFileName) — hex key
+//	                           bytes at 0600, exactly the keymgr format (the
+//	                           key IS the canary)
+//	D6-3 CANARY_CLI_TOKEN      the canonical CLI token file cli.token
+//	                           (pkg/app/internal/clitoken/clitoken.go::
+//	                           CLITokenPath — filepath.Join(home, "cli.token");
+//	                           the literal is used here because that package is
+//	                           Go-internal and not importable from pkg/gateway)
+//	                           — the PLAINTEXT bearer the CLI reads, at 0600;
+//	                           config.json holds only its bcrypt hash
 //	D6-4 CANARY_AUTH_JSON      the auth.json file in the home
 //	D6-5 CANARY_PROVIDER_KEY   the provider key in config.json — spec D6-5's
-//	                           explicit location, never seeded in round 1
-//	D6-6 CANARY_CHANNEL_TOKEN  a credential-store entry (channel tokens are
-//	                           stored credentials)
+//	                           explicit location
+//	D6-6 CANARY_CHANNEL_TOKEN  an entry in the REAL encrypted credential store
+//	                           (channel tokens are stored credentials)
 //
 // The encrypted store entries catch leaks that travel through a decrypted
-// read; config.json, auth.json and the key file catch leaks that travel
-// through a raw file read. Test-owned fixtures only; the handlers under test
-// must never read any of them.
+// read; master.key, cli.token, config.json and auth.json catch leaks that
+// travel through a raw file read. Test-owned fixtures only; the handlers
+// under test must never read any of them.
 func b1SeedD6Sources(t *testing.T, home string) {
 	t.Helper()
 
-	// D6-2: the master key IS the canary — 32 bytes whose content embeds
-	// CANARY_MASTER_KEY, persisted hex-encoded in the real default key file.
-	key := append([]byte("CANARY_MASTER_KEY"), bytes.Repeat([]byte{0x4b}, 15)...) //nolint:gocritic // the canary must stay at offset 0
+	// D6-2: the canonical key file, in the keymgr hex format.
+	key := b1MasterKeyBytes()
 	require.Len(t, key, 32, "the master key is a full AES-256 key")
-	keyPath := filepath.Join(home, "n")
+	keyPath := filepath.Join(home, credentials.DefaultKeyFileName)
 	require.NoError(t, os.WriteFile(keyPath, []byte(hex.EncodeToString(key)), 0o600))
 
-	// D6-1/3/6: the real encrypted store, unlocked with the key file's own key.
+	// D6-3: the canonical CLI token file — plaintext bearer, 0600. The literal
+	// name mirrors clitoken.CLITokenPath (Go-internal, not importable here).
+	cliTokenPath := filepath.Join(home, "cli.token")
+	require.NoError(t, os.WriteFile(cliTokenPath, []byte("CANARY_CLI_TOKEN"), 0o600))
+
+	// D6-1/6: the real encrypted store, unlocked with the key file's own key.
 	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
 	require.NoError(t, store.UnlockWithKey(key), "the store opens with the key file's key")
 	t.Cleanup(store.Close)
 	entries := map[string]string{
 		"vault-canary":  "CANARY_CRED_VAULT",
-		"cli-token":     "CANARY_CLI_TOKEN",
 		"channel-token": "CANARY_CHANNEL_TOKEN",
 	}
 	for name, value := range entries {
@@ -297,6 +329,13 @@ func b1SeedD6Sources(t *testing.T, home string) {
 	require.NoError(t, serr)
 	require.Zero(t, info.Mode().Perm()&0o077, "the D6-2 key file is 0600 (keymgr mode)")
 
+	rawToken, terr := os.ReadFile(cliTokenPath)
+	require.NoError(t, terr, "the D6-3 cli.token must exist before the feature runs")
+	require.Contains(t, string(rawToken), "CANARY_CLI_TOKEN", "the D6-3 cli.token carries its plaintext canary")
+	tokenInfo, tserr := os.Stat(cliTokenPath)
+	require.NoError(t, tserr)
+	require.Zero(t, tokenInfo.Mode().Perm()&0o077, "the D6-3 cli.token is 0600 (clitoken mode)")
+
 	rawConfig, cerr := os.ReadFile(configPath)
 	require.NoError(t, cerr, "the D6-5 config.json must exist before the feature runs")
 	var configSeed struct {
@@ -313,13 +352,15 @@ func b1SeedD6Sources(t *testing.T, home string) {
 }
 
 // b1CanariesIn returns every D6 canary found in one scanned surface (a body,
-// a whole header map rendered to text, or a captured log). Callers assert the
-// result is empty for real answers and NON-empty for the planted-leak
-// control — one scanner for both directions, so the control proves the same
-// instrument that polices the product (CHECK F08).
+// a whole header map rendered to text, or a captured log) — the plaintext
+// canaries AND the master key's persisted encodings (hex/base64; CHECK 3
+// F08: a raw key-file disclosure carries the encoded form, never the
+// plaintext). Callers assert the result is empty for real answers and
+// NON-empty for the planted-leak control — one scanner for both directions,
+// so the control proves the same instrument that polices the product.
 func b1CanariesIn(text string) []string {
 	var found []string
-	for _, canary := range b1D6Canaries {
+	for _, canary := range append(append([]string{}, b1D6Canaries...), b1EncodedKeyCanaries...) {
 		if strings.Contains(text, canary) {
 			found = append(found, canary)
 		}
@@ -933,6 +974,14 @@ func TestExportPlanHandler_Canaries(t *testing.T) {
 	require.Equal(t, []string{"CANARY_ENV"},
 		b1CanariesIn(string(gotPlanted.Body)),
 		"the planted-value control must make the SAME scanner trip on the create body")
+
+	// Encoded-key positive control (CHECK 3 F08): the scanner must flag the
+	// master key's persisted representations too — a raw key-file disclosure
+	// carries the hex/base64 forms, never the plaintext.
+	for i, encoded := range b1EncodedKeyCanaries {
+		require.Equal(t, []string{encoded}, b1CanariesIn(encoded),
+			"the encoded D6-2 key canary (form %d) must trip the SAME scanner", i)
+	}
 }
 
 // ---------------------------------------------------------------------------

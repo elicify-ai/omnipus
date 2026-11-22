@@ -78,12 +78,15 @@ const leftOut = [
 // was created one minute ago and is valid for EXACTLY the spec's 30-minute
 // lifetime from creation (round 2: the interval was 31 minutes — expires_at
 // now = created_at + 30 min exactly); the expired variant was created two
-// hours ago. No wall-clock-pinned fixtures.
+// hours ago. No wall-clock-pinned fixtures. ONE Date.now() call per plan
+// (CHECK 3 minor): two separate calls can differ by a millisecond, making the
+// interval 29:59.999 and the exact-30-minute claim flaky.
 export function writerPlan(): PackageExportPlan {
+  const created = Date.now() - 60_000
   return {
     plan_id: 'P1',
-    created_at: new Date(Date.now() - 60_000).toISOString(),
-    expires_at: new Date(Date.now() - 60_000 + 30 * 60_000).toISOString(),
+    created_at: new Date(created).toISOString(),
+    expires_at: new Date(created + 30 * 60_000).toISOString(),
     scope: 'agents',
     elements: [
       {
