@@ -29,8 +29,8 @@ properties:
       "saved_not_refreshed" is a 500 whose write reached disk but whose
       running settings could not be refreshed; the settings endpoint that
       answers it is named here: PUT /settings/third-party-agents (existing),
-      PUT /config and PUT /settings/context (Settings redesign #1519, C-6
-      outcome table). A 500 with this code means saved, not in use — never
+      PUT /config, PUT /settings/context and PUT /settings/retention
+      (Settings redesign #1519, C-6 outcome table). A 500 with this code means saved, not in use — never
       "not saved".
       The package routes (/packages/export, /packages/import,
       /packages/import/{staging_id}/apply) use: export_selection_invalid,

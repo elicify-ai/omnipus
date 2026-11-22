@@ -90,35 +90,82 @@ type applyFailedEntry struct {
 }
 
 // applyFailedRegistry is the zero-value-usable set of failed-apply keys.
+//
+// generation counts, per source, the writes and clears made under the
+// config write lock. A writer whose apply is a reload that runs after the
+// lock is released takes a ticket (nextTicket) under the lock and reports its
+// outcome with recordAt / clearSourceAt: an outcome whose ticket is no longer
+// the source's latest is dropped, because a newer write or apply of that
+// source has already decided the state (B5, M-8).
 type applyFailedRegistry struct {
-	mu      sync.Mutex
-	entries map[string]applyFailedEntry
+	mu         sync.Mutex
+	entries    map[string]applyFailedEntry
+	generation map[applyFailedSource]uint64
 }
 
-// record adds keys whose last save did not apply through source.
-func (r *applyFailedRegistry) record(source applyFailedSource, keys []configKeyPath) {
-	if len(keys) == 0 {
-		return
-	}
+// clearSource removes every entry the now-successful source applied. Called
+// under the config write lock; it supersedes every earlier ticket of source.
+func (r *applyFailedRegistry) clearSource(source applyFailedSource) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.clearLocked(source)
+	r.bumpLocked(source)
+}
+
+func (r *applyFailedRegistry) clearLocked(source applyFailedSource) {
+	for id, e := range r.entries {
+		if e.source == source {
+			delete(r.entries, id)
+		}
+	}
+}
+
+func (r *applyFailedRegistry) bumpLocked(source applyFailedSource) uint64 {
+	if r.generation == nil {
+		r.generation = make(map[applyFailedSource]uint64)
+	}
+	r.generation[source]++
+	return r.generation[source]
+}
+
+// nextTicket starts a new write of source and returns its ticket. Call it
+// while the config write lock is held, right after the write.
+func (r *applyFailedRegistry) nextTicket(source applyFailedSource) uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.bumpLocked(source)
+}
+
+// recordAt records keys for source only when ticket is still the source's
+// latest; it reports whether it recorded.
+func (r *applyFailedRegistry) recordAt(source applyFailedSource, ticket uint64, keys []configKeyPath) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.generation[source] != ticket {
+		return false
+	}
+	if len(keys) == 0 {
+		return true
+	}
 	if r.entries == nil {
 		r.entries = make(map[string]applyFailedEntry)
 	}
 	for _, k := range keys {
 		r.entries[k.identity()] = applyFailedEntry{path: append(configKeyPath(nil), k...), source: source}
 	}
+	return true
 }
 
-// clearSource removes every entry the now-successful source applied.
-func (r *applyFailedRegistry) clearSource(source applyFailedSource) {
+// clearSourceAt clears source's entries only when ticket is still the
+// source's latest; it reports whether it cleared.
+func (r *applyFailedRegistry) clearSourceAt(source applyFailedSource, ticket uint64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for id, e := range r.entries {
-		if e.source == source {
-			delete(r.entries, id)
-		}
+	if r.generation[source] != ticket {
+		return false
 	}
+	r.clearLocked(source)
+	return true
 }
 
 // keys returns the listed keys, sorted by display key then identity.
@@ -162,20 +209,31 @@ func writeSavedNotRefreshed(w http.ResponseWriter, text string, keys []configKey
 // safeUpdateConfigJSONRecorded is safeUpdateConfigJSON for the Save-bar
 // writers: when config.json was written but the live refresh failed
 // (configRefreshError), the keys changedKeys reports are recorded as
-// apply_failed while configMu is still held — before the caller answers.
-// changedKeys is called only after mutate ran.
+// apply_failed under source while configMu is still held — before the
+// caller answers. changedKeys is called only after mutate ran.
+//
+// source names the apply path: a writer whose change is applied by its own
+// reload (prompt guard, rate limits) records under its own source, so only
+// its own later successful apply clears the entry (B3, SFH-03); every other
+// writer uses applyFailedSourceRefresh. It also returns the write's ticket,
+// taken under the config write lock, for the writer's later reload outcome
+// (recordAt / clearSourceAt, B5). The ticket is 0 when nothing was written.
 func (a *restAPI) safeUpdateConfigJSONRecorded(
-	mutate func(m map[string]any) error, changedKeys func() []configKeyPath,
-) error {
+	source applyFailedSource, mutate func(m map[string]any) error, changedKeys func() []configKeyPath,
+) (uint64, error) {
 	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
 	err := a.orderedConfigJSONLocked(store, nil, nil, mutate)
 	var refreshErr *configRefreshError
-	if errors.As(err, &refreshErr) {
-		a.applyFailed.record(applyFailedSourceRefresh, changedKeys())
+	if err != nil && !errors.As(err, &refreshErr) {
+		return 0, err
 	}
-	return err
+	ticket := a.applyFailed.nextTicket(source)
+	if refreshErr != nil {
+		a.applyFailed.recordAt(source, ticket, changedKeys())
+	}
+	return ticket, err
 }
 
 // changedConfigKeys returns the leaf paths whose value differs between

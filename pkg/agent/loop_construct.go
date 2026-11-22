@@ -434,6 +434,7 @@ func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// buckets on any unrelated config change.
 	nal.al.memoryRateLimiter = tools.NewMemoryRateLimiter(tools.MemoryRateLimitConfig{})
 	nal.al.wireMemoryRateLimiterOn(nal.registry, nal.al.memoryRateLimiter)
+	nal.al.wireRetroRecallSourceOn(nal.registry)
 	logger.InfoCF("agent", "Memory write rate limiter initialized",
 		map[string]any{
 			"per_agent_per_minute":  nal.al.memoryRateLimiter.PerAgentLimit(),

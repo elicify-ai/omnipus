@@ -16,6 +16,7 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/memrooms"
@@ -111,7 +112,10 @@ func (a *MemoryStoreAdapter) SearchRetros(query string, limit int) ([]tools.Memo
 		limit = 20
 	}
 	retros, err := a.ms.ReadRetrosForRecall()
-	if err != nil {
+	// B4 (SFH-12): a partial read keeps its readable reflections; the hits
+	// are ranked and returned together with the partial error.
+	var partial *memrooms.PartialReadError
+	if err != nil && !errors.As(err, &partial) {
 		return nil, err
 	}
 	ranked := rankRetrosBM25(retros, query, limit)
@@ -124,7 +128,7 @@ func (a *MemoryStoreAdapter) SearchRetros(query string, limit int) ([]tools.Memo
 			Title:     "Retrospective",
 		})
 	}
-	return out, nil
+	return out, err
 }
 
 // retroSearchText renders a Retro into a single searchable / human-readable
