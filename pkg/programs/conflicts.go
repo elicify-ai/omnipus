@@ -43,6 +43,9 @@ func SwitchConflict(cfg *config.Config, agentID string, current, next []string, 
 		byID[e.ID] = e
 	}
 	agent := AgentName(cfg, agentID)
+	if len(next) > MaxProgramsOnAgent {
+		return invalid("%s can have at most %d programs switched on.", agent, MaxProgramsOnAgent)
+	}
 	var on []ProgramEntry
 	for _, id := range next {
 		e, ok := byID[id]

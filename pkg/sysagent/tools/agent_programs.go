@@ -33,9 +33,6 @@ func (t *AgentPermissionsTool) applyProgramsArg(a *config.AgentConfig, args map[
 			next = append(next, id)
 		}
 	}
-	if len(next) > programs.MaxProgramsOnAgent {
-		return fieldErr("programs", "an agent has at most 32 programs switched on")
-	}
 	var cfg *config.Config
 	if t.deps != nil && t.deps.GetCfg != nil {
 		cfg = t.deps.GetCfg()
