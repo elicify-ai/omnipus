@@ -881,12 +881,19 @@ async function expectExactlyThisRowMarked(
 // media condition beyond the exact `prefers-reduced-motion: reduce` header
 // (N127). The shorthand's own reset (R9-03/N128) IS modeled — play-state
 // resets to running — but only that component: a later shorthand's reset of
-// the other omitted components follows the fold lines above, and anything
-// outside the written grammar fails closed as unsupported. THE REAL-BROWSER
-// TEST BELOW IS THE PROOF OF FR-075 MOTION: tests/e2e/settings-row-jump-
-// motion.spec.ts reads the marked row's element.getAnimations() in real
-// Chromium under normal and reduced motion; this jsdom oracle stays for its
-// 100-plus named kills against the shipped sheet.
+// the other omitted components follows the fold lines above. Stated
+// precisely (CHECK round 10): a declaration the reader RECOGNIZES as
+// animation-related but cannot evaluate is rejected as unsupported — "not
+// proven to flash once"; the challenges above are forms the reader does not
+// recognize at all, so they are named limits, not rejections. THE
+// REAL-BROWSER TEST IS THE AGREED ROUTE for the FR-075 motion claim:
+// tests/e2e/settings-row-jump-motion.spec.ts reads the marked row's
+// element.getAnimations() in real Chromium under normal and reduced motion;
+// its first executed run belongs to the hands-on/CI lane (the author's run
+// is blocked at the e2e key preflight), so it is a pending route here, not
+// an executed result. This jsdom oracle stays for the named kills the
+// retained ledger records for this row test (CHECK round 10: 39 raw KILLED
+// classifications) against the shipped sheet.
 //
 // Effective-cascade oracle (CHECK R5-02; strengthened CHECK R6-01): the
 // required behaviour is visual — a short visible flash once, and NO animation
