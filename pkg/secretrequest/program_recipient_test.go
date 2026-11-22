@@ -30,6 +30,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -64,6 +67,10 @@ const s1ProgramsCfgJSON = `{
 
 // s1ProgramsCfg builds the matrix fixture and swaps its config for the
 // RED-proposed programs shape (the agent roster comes from the same JSON).
+// S-13/S-85's Given — GitHub switched ON for Dev — is expressed on the agent
+// roster entry and VERIFIED BY READ-BACK: AgentConfig has no Programs field
+// at RED, so the fixture fatal-BLOCKs naming it rather than silently running
+// the conflict oracle without its Given (CHECK F15).
 func s1ProgramsCfg(t *testing.T) *matrixEnv {
 	t.Helper()
 	f := newMatrixEnv(t)
@@ -75,6 +82,20 @@ func s1ProgramsCfg(t *testing.T) *matrixEnv {
 	// rides the same literal.
 	cfg.Agents.List = []config.AgentConfig{{ID: "dev", Name: "Dev"}}
 	require.NotEmpty(t, cfg.Agents.List, "instrument: the dev agent rides the roster")
+
+	// The Given: GitHub on for Dev (FR-042). The field is set through
+	// reflection so the fixture compiles at RED, then read back — the Given
+	// is only real when the live config says it.
+	dev := reflect.ValueOf(&cfg.Agents.List[0]).Elem()
+	programsField := dev.FieldByName("Programs")
+	if !programsField.IsValid() || programsField.Kind() != reflect.Slice {
+		t.Fatalf("BLOCKED: config.AgentConfig has no Programs field — required by FR-042 and S-13's Given " +
+			"(GitHub switched on for Dev), S-54, S-85 and S-134; the conflict and lifecycle oracles cannot run without it")
+	}
+	programsField.Set(reflect.ValueOf([]string{"github"}))
+	got, _ := dev.FieldByName("Programs").Interface().([]string)
+	require.Equal(t, []string{"github"}, got,
+		"read-back: GitHub is switched on for Dev (the Given is real, not assumed)")
 	f.cfg = &cfg
 	return f
 }
@@ -89,6 +110,39 @@ func s1Input(t *testing.T, m map[string]any) secretrequest.Input {
 	var in secretrequest.Input
 	require.NoError(t, json.Unmarshal(raw, &in))
 	return in
+}
+
+// sortedKeys lists a decoded record's keys (for BLOCKED diagnostics).
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// continuationText finds the record's continuation surface by key name (any
+// key containing "continuation", case-insensitive) and returns its text. The
+// surface's exact wire name is GREEN's; a record with no continuation-shaped
+// key is the caller's BLOCKED case.
+func continuationText(m map[string]any) (string, bool) {
+	for k, v := range m {
+		if !strings.Contains(strings.ToLower(k), "continuation") {
+			continue
+		}
+		switch tv := v.(type) {
+		case string:
+			return tv, tv != ""
+		case map[string]any:
+			for _, inner := range tv {
+				if s, ok := inner.(string); ok && s != "" {
+					return s, true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 func TestRequestSecret_ProgramRecipient(t *testing.T) {
@@ -137,6 +191,48 @@ func TestRequestSecret_ProgramRecipient(t *testing.T) {
 		require.Contains(t, err.Error(),
 			"GH_TOKEN is used by the program GitHub, which is switched on for this agent. Switch GitHub off first, or use another name.",
 			"the refusal is the spec's private-variable conflict message (got %q)", err.Error())
+	})
+
+	t.Run("S54_submission_generation_and_continuation", func(t *testing.T) {
+		// S-54's settlement clauses at the registry level. ("When the check
+		// ends the card shows Connected as octocat" is the async-check face —
+		// pinned by the gateway lifecycle rows with the fake gh; Dev's
+		// programs staying unchanged is pinned by the parity rows.) The
+		// submitted record is read through its marshalled form: the wire
+		// fields (program_generation, the continuation) arrive at GREEN.
+		f := s1ProgramsCfg(t)
+		sid := f.newSession("dev", "")
+		rec, err := f.reg.Create(context.Background(), sid, "dev", "web-card", "",
+			s1Input(t, map[string]any{"purpose": "connect GitHub", "program": "github"}))
+		if err != nil {
+			t.Fatalf("BLOCKED: the program card cannot be raised — required by FR-051/S-54 (registry said: %v)", err)
+		}
+		submitted, serr := f.reg.Submit(rec.Card.RequestId, matrixOwner,
+			valuesInput(map[string]string{rec.Card.Fields[0].Key: "tok_valid_12345"}))
+		require.NoError(t, serr, "the valid submission settles the card: %v", serr)
+		require.Equal(t, "submitted", submitted.Card.State, "the request is submitted")
+
+		raw, merr := json.Marshal(submitted)
+		require.NoError(t, merr)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(raw, &m))
+		// program_generation: the generation the submission committed (spec
+		// contract table; taken from the CardReceipt so it survives restart).
+		genRaw, has := m["program_generation"]
+		if !has {
+			t.Fatalf("BLOCKED: the submitted request state carries no program_generation — required by S-54 and the contract table (record keys: %v)", sortedKeys(m))
+		}
+		gen, _ := genRaw.(float64)
+		require.GreaterOrEqual(t, gen, float64(1), "program_generation is at least 1")
+		// The continuation: Dev continues at once — the token is stored for
+		// GitHub and the account check is running; it never claims a result.
+		cont, hasCont := continuationText(m)
+		if !hasCont {
+			t.Fatalf("BLOCKED: the submitted record carries no continuation surface — required by S-54's continuation clause (record keys: %v)", sortedKeys(m))
+		}
+		require.Contains(t, cont, "stored for GitHub", "the continuation says the token is stored")
+		require.Contains(t, cont, "account check is running", "the continuation says the check is running")
+		require.NotContains(t, cont, "Connected", "the continuation does not claim a result")
 	})
 
 	t.Run("S99_chat_card_uses_program_token_rules", func(t *testing.T) {
