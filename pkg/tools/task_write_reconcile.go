@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -62,6 +63,12 @@ type TaskWriteRequest struct {
 	// scheduler is brought in line with the persisted trigger under the same
 	// lock hold, after the goal synchronisation (r17 TK-30).
 	ReconcileSchedule ScheduleReconciler
+	// Provenance is the writer's provenance (I-2): the agent turn's for a
+	// tool write; unresolved for a person's UI write, which must leave the
+	// task's stored provenance unchanged (R3-C1). The task record does not
+	// store provenance yet, so this write does not join it; task runs are
+	// unresolved (fail closed) until it does.
+	Provenance bus.Provenance
 }
 
 // TaskWriteOutcome is the result of a reconciled write that landed.

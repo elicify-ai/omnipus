@@ -74,17 +74,18 @@ func (al *AgentLoop) redirectOrdinarySession(ctx context.Context, sessionID, ins
 // its own channel and chat (from metadata when not given), the person as
 // sender, and the chat's own agent.
 func (al *AgentLoop) ordinaryRedirectMessage(sessionID, instruction, userID, replyChannel, replyChatID string) (bus.InboundMessage, error) {
+	var none bus.InboundMessage
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
-		return bus.InboundMessage{}, fmt.Errorf("redirect: session %q not found", sessionID)
+		return none, fmt.Errorf("redirect: session %q not found", sessionID)
 	}
 	meta, err := store.GetMeta(sessionID)
 	if err != nil || meta == nil {
-		return bus.InboundMessage{}, fmt.Errorf("redirect: read session %q: %w", sessionID, errors.Join(err, errNilMeta(meta)))
+		return none, fmt.Errorf("redirect: read session %q: %w", sessionID, errors.Join(err, errNilMeta(meta)))
 	}
 	channel, chatID, instanceID, err := ordinaryRedirectRoute(sessionID, meta, replyChannel, replyChatID)
 	if err != nil {
-		return bus.InboundMessage{}, err
+		return none, err
 	}
 	agentID := strings.TrimSpace(meta.AgentID)
 	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
@@ -95,6 +96,7 @@ func (al *AgentLoop) ordinaryRedirectMessage(sessionID, instruction, userID, rep
 	msg := bus.InboundMessage{
 		Channel: channel, ChatID: chatID, InstanceID: instanceID, SessionID: sessionID, Content: instruction,
 		Sender: bus.SenderInfo{CanonicalID: userID}, GatewayUserID: userID, UserInitiated: true,
+		Provenance: redirectProvenance(replyChannel, instanceID),
 	}
 	if agentID != "" {
 		msg.Metadata = map[string]string{"agent_id": agentID}
@@ -213,4 +215,14 @@ func (al *AgentLoop) reportUndeliveredOrdinaryRedirect(msg bus.InboundMessage, c
 		logger.ErrorCF("agent", "redirect: the not-applied notice could not be sent",
 			map[string]any{"session_id": msg.SessionID, "error": err.Error()})
 	}
+}
+
+// redirectProvenance is the provenance of a person's redirect (I-2
+// producers): typed in a channel conversation it is that connection's;
+// otherwise it was typed in the web chat.
+func redirectProvenance(replyChannel, instanceID string) bus.Provenance {
+	if strings.TrimSpace(replyChannel) != "" && strings.TrimSpace(instanceID) != "" {
+		return bus.NewProvenance(bus.ConnectorOrigin(instanceID))
+	}
+	return bus.NewProvenance(bus.OriginWeb)
 }

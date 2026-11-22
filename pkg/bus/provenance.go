@@ -4,7 +4,10 @@
 
 package bus
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Origin is one provenance origin: "web", "independent" or
 // "connector:<id>" (connected-programs spec, invariant I-2).
@@ -135,4 +138,25 @@ func (p Provenance) WithheldOrigins(allowed func(Origin) bool) []Origin {
 		}
 	}
 	return out
+}
+
+// MarshalJSON writes the origin set as a JSON array; unresolved is null.
+// Durable records (lifecycle, peer request ledger) persist provenance with it.
+func (p Provenance) MarshalJSON() ([]byte, error) {
+	if p.IsUnresolved() {
+		return []byte("null"), nil
+	}
+	return json.Marshal(p.origins)
+}
+
+// UnmarshalJSON reads an origin array back through NewProvenance, so a
+// missing, empty or malformed value loads as unresolved (fail closed, I-2).
+func (p *Provenance) UnmarshalJSON(b []byte) error {
+	var origins []Origin
+	if err := json.Unmarshal(b, &origins); err != nil {
+		*p = Provenance{}
+		return nil //nolint:nilerr // a malformed stored provenance is unresolved by design (fail closed), not a load failure
+	}
+	*p = NewProvenance(origins...)
+	return nil
 }

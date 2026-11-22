@@ -398,6 +398,11 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		WorkspaceID:    req.WorkspaceID,
 		AgentID:        req.TargetAgentID,
 		Origin:         &origin,
+		// FR-050: mode written once at creation. This launch has no turn
+		// provenance in scope: a lineage root stores none (unresolved,
+		// fail closed); a standing conversation stores none by design.
+		ProvenanceMode: session.ClassifyProvenanceMode(session.ProvenanceModeEvidence{Origin: origin.Kind}),
+		Provenance:     nil,
 		InitiatedBy:    cloneInitiatedBy(req.Initiator),
 		// Stamped from the target's resolved executor kind, not a
 		// report-only re-check: this record IS the session's identity for
@@ -581,6 +586,10 @@ func (l *SteerLauncher) launchSteered(
 				AgentID:        req.TargetAgentID,
 				ParentAgentID:  parentAgentID,
 				Origin:         &origin,
+				// I-2: a steered child is lineage, stamped from the launching
+				// turn (unresolved when the launch carries no turn origin).
+				ProvenanceMode: session.ProvenanceModeLineage,
+				Provenance:     provenanceOrigins(tools.ToolTurnProvenance(ctx)),
 				SteeredBy:      steeredBy,
 				Unattended:     unattended,
 				InitiatedBy:    cloneInitiatedBy(req.Initiator),

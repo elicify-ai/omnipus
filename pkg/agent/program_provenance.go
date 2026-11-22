@@ -1,0 +1,128 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package agent
+
+import (
+	"errors"
+
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
+)
+
+// provenanceOrigins is the stored form of a provenance on durable records that
+// cannot import pkg/bus (lifecycle record, request capture): its origin
+// strings, nil when unresolved.
+func provenanceOrigins(p bus.Provenance) []string {
+	origins := p.Origins()
+	if len(origins) == 0 {
+		return nil
+	}
+	out := make([]string, len(origins))
+	for i, o := range origins {
+		out[i] = string(o)
+	}
+	return out
+}
+
+// storedProvenance reads a stored origin list back. Empty or malformed is
+// unresolved (I-2: missing lineage never widens anything).
+func storedProvenance(origins []string) bus.Provenance {
+	if len(origins) == 0 {
+		return bus.UnresolvedProvenance()
+	}
+	conv := make([]bus.Origin, len(origins))
+	for i, o := range origins {
+		conv[i] = bus.Origin(o)
+	}
+	return bus.NewProvenance(conv...)
+}
+
+// stampLineageProvenance writes provenance_mode lineage and the stored
+// provenance on a lifecycle record being created (FR-041, FR-050). The mode is
+// written once, at creation.
+func stampLineageProvenance(rec *session.LifecycleRecord, p bus.Provenance) {
+	if rec == nil {
+		return
+	}
+	rec.ProvenanceMode = session.ProvenanceModeLineage
+	rec.Provenance = provenanceOrigins(p)
+}
+
+// sessionLineageProvenance returns the stored provenance a turn of sessionID
+// must join (I-2 "a turn's provenance"): lineage is true for a lineage
+// session, whose stored provenance is joined into every turn; false for a
+// root, which stores none. The mode comes from the record (written once at
+// creation) or, for a record written before this feature, from the FR-050
+// classification. Every read failure is lineage with unresolved provenance
+// (fail closed). A store-less direct turn has nothing to classify and joins
+// nothing: its consumed inputs alone decide.
+func (al *AgentLoop) sessionLineageProvenance(sessionID string, declared session.OriginKind) (bus.Provenance, bool) {
+	sessions := al.GetSessionStore()
+	lifecycle := al.GetSessionLifecycleStore()
+	if sessionID == "" || sessions == nil || lifecycle == nil {
+		return bus.UnresolvedProvenance(), false
+	}
+	unresolved := func(reason string, err error) (bus.Provenance, bool) {
+		fields := map[string]any{"session_id": sessionID, "reason": reason}
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		logger.WarnCF("agent", "program provenance unresolved for this session; connected programs are withheld", fields)
+		return bus.UnresolvedProvenance(), true
+	}
+	meta, err := sessions.GetMeta(sessionID)
+	if err != nil || meta == nil {
+		return unresolved("session metadata unreadable", err)
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
+		return unresolved("lifecycle record unreadable", err)
+	}
+	mode := session.ProvenanceMode("")
+	if rec != nil {
+		mode = rec.ProvenanceMode
+	}
+	if mode == "" {
+		ev := session.ProvenanceModeEvidence{
+			ParentSessionID: meta.ParentSessionID,
+			TaskID:          meta.TaskID,
+		}
+		switch {
+		case rec != nil && rec.Origin != nil:
+			ev.Origin = rec.Origin.Kind
+		case rec == nil && declared != "":
+			// No record yet (a first turn before its root record is
+			// published): the turn's declared origin kind is the evidence.
+			ev.Origin = declared
+		}
+		if rec == nil {
+			ev.PlanOwned = al.planEngineOwnsSession(sessionID)
+		}
+		mode = session.ClassifyProvenanceMode(ev)
+	}
+	if mode == session.ProvenanceModeRoot {
+		return bus.UnresolvedProvenance(), false
+	}
+	if rec == nil {
+		return unresolved("lineage session has no lifecycle record", nil)
+	}
+	stored := storedProvenance(rec.Provenance)
+	if stored.IsUnresolved() {
+		return unresolved("lineage session has no stored provenance", nil)
+	}
+	return stored, true
+}
+
+// wakeProvenance is the provenance of a server wake that adds no origin of
+// its own into sessionID: the session's stored lineage for a lineage session,
+// unresolved otherwise (I-2: a wake never widens anything).
+func (al *AgentLoop) wakeProvenance(sessionID string) bus.Provenance {
+	stored, lineage := al.sessionLineageProvenance(sessionID, "")
+	if !lineage {
+		return bus.UnresolvedProvenance()
+	}
+	return stored
+}

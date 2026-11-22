@@ -1355,8 +1355,10 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		TranscriptSessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 		SourceKind:          toolName,
 		Content:             content,
-		finishedToolName:    toolName,
-		finishedToolCallID:  session.ToolCallID(toolCallID),
+		// I-2: the background callback carries the turn that started it.
+		Provenance:         ex.rx.rr.rq.ri.rf.rt.ts.origin.Provenance(),
+		finishedToolName:   toolName,
+		finishedToolCallID: session.ToolCallID(toolCallID),
 	}); notifyErr != nil {
 		// Notify owns the safe per-attempt diagnostic and final saved/live/origin
 		// warning. A second raw-cause log here would duplicate that reporting and

@@ -398,6 +398,10 @@ func (te *TaskExecutor) mintTaskLifecycleRecordFor(sessionID string, t *task.Tas
 	}
 	rec := &session.LifecycleRecord{
 		SessionID: sessionID,
+		// FR-050 row 3: a task session is lineage. The task record stores no
+		// provenance yet, so its runs are unresolved (fail closed, I-2).
+		ProvenanceMode: session.ProvenanceModeLineage,
+		Provenance:     nil,
 		// Generation starts at 1 (LifecycleRecord.Generation's own doc
 		// comment, and what every other minter writes —
 		// steer_launcher.go's launchDirect and launchSteered both use 1).

@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -1657,6 +1658,8 @@ func (pe *PlanEngine) completeAbandonAtBoot(rec plan.IntentRecord) error {
 		Verb:                rec.Revision.Verb,
 		FalsifiedAssumption: rec.Revision.FalsifiedAssumption,
 		Reason:              rec.Revision.Reason,
+		// A boot repair rebuilds the handover text only; no turn writes.
+		Provenance: bus.UnresolvedProvenance(),
 	}))
 
 	// failPlanLocked logs its own store failure and returns nothing, so the

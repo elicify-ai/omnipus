@@ -118,6 +118,10 @@ type RequestAdmission struct {
 	// them behind (U8 r4 F12). An error aborts the admission with no receiver
 	// write; it is returned unchanged.
 	BeforeCommit func() error
+	// Provenance is the sender's provenance (I-2): the sending agent turn's,
+	// or {web} for a person typing in the web chat. It is recorded on the
+	// capture; zero is unresolved and never makes the receiving turn eligible.
+	Provenance bus.Provenance
 }
 
 // AdmitRequest records the capture, appends the request to the receiver's main
@@ -184,6 +188,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 		Text:              composeRequestText(requestID, a.SenderLabel, a.Content),
 		Held:              held,
 		SenderMessageID:   a.SenderMessageID,
+		Provenance:        provenanceOrigins(a.Provenance),
 	}
 	// Capture first: if the append below fails the capture is discarded; if it
 	// were written second, a request the model can see might be unanswerable.
@@ -218,7 +223,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 	// The admission wake is "on its way": another turn admitted before it is
 	// processed must not publish a second copy of the same text.
 	al.claimWakeSlot(requestID)
-	if err := al.publishRequestWake(pubCtx, a.Receiver, a.Sender, requestID, receiverSessionID, entry.Content); err != nil {
+	if err := al.publishCaptureWake(pubCtx, capture); err != nil {
 		al.heldRepublished.Delete(requestID)
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. It is HELD exactly like a request for a stopped
@@ -259,13 +264,15 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 // extra adds metadata to the wake (a group-chat room request adds its no-join
 // marker and room id, room_request.go) - the same one publication site.
 func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string, extra ...map[string]string) error {
-	return al.publishRequestWakeMessage(ctx, requestWakeMessage(receiver, sender, requestID, receiverSessionID, content, extra...))
+	// No capture in hand, so no recorded provenance: unresolved (I-2, fail
+	// closed). Admission and held delivery publish through publishCaptureWake.
+	return al.publishRequestWakeMessage(ctx, requestWakeMessage(receiver, sender, bus.UnresolvedProvenance(), requestID, receiverSessionID, content, extra...))
 }
 
 // publishCaptureWake is publishRequestWake for a stored capture: it also hands
 // the request's files to the turn (#1449 FR-019).
 func (al *AgentLoop) publishCaptureWake(ctx context.Context, c addressing.Capture, extra ...map[string]string) error {
-	msg := requestWakeMessage(c.Receiver, c.Sender, c.RequestID, c.ReceiverSessionID, c.Text, extra...)
+	msg := requestWakeMessage(c.Receiver, c.Sender, storedProvenance(c.Provenance), c.RequestID, c.ReceiverSessionID, c.Text, extra...)
 	msg.Media = append([]string(nil), c.Media...)
 	return al.publishRequestWakeMessage(ctx, msg)
 }
@@ -278,7 +285,8 @@ func (al *AgentLoop) publishRequestWakeMessage(ctx context.Context, msg bus.Inbo
 }
 
 // requestWakeMessage is the owner wake of an admitted request.
-func requestWakeMessage(receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string, extra ...map[string]string) bus.InboundMessage {
+// prov is the request's recorded provenance (I-2: the peer request row).
+func requestWakeMessage(receiver addressing.Pair, sender addressing.Sender, prov bus.Provenance, requestID, receiverSessionID, content string, extra ...map[string]string) bus.InboundMessage {
 	meta := map[string]string{"agent_id": receiver.AgentID, "workspace_id": receiver.WorkspaceID, ownerWakeMetadataKey: "1"}
 	if sender.Agent.AgentID != "" {
 		// §6.18: the receiving turn's origin is this peer ("asked by <Agent>").
@@ -297,6 +305,7 @@ func requestWakeMessage(receiver addressing.Pair, sender addressing.Sender, requ
 		SessionID:         receiverSessionID,
 		TranscriptEntryID: requestID,
 		Metadata:          meta,
+		Provenance:        prov,
 	}
 }
 
@@ -337,6 +346,7 @@ func (r AddressRouter) SendPeer(ctx context.Context, req tools.PeerRequest) (too
 			SessionID: req.SenderSessionID,
 		},
 		AskApproved: askApproved,
+		Provenance:  req.Provenance,
 	})
 	if err != nil {
 		return tools.PeerReceipt{RequestID: id, SessionID: sid}, err
@@ -729,6 +739,9 @@ func ownerWakeInbound(c addressing.Capture, ownerAgentID, workspaceID string, an
 		Content:   fmt.Sprintf("%s answered your request %s:\n\n%s", answer.AgentID, c.RequestID, answer.Content),
 		SessionID: c.Source.SessionID,
 		Metadata:  map[string]string{"agent_id": ownerAgentID, "workspace_id": workspaceID, ownerWakeMetadataKey: "1"},
+		// The request's recorded provenance (I-2: peer request row) continues
+		// into the owner's wake; an answer adds no origin of its own.
+		Provenance: storedProvenance(c.Provenance),
 	}
 }
 

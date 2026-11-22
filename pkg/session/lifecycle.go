@@ -271,6 +271,19 @@ type LifecycleRecord struct {
 	// wire SessionLifecycleRecord (it is not session status).
 	Unattended bool `json:"unattended,omitempty"`
 
+	// ProvenanceMode is root or lineage (connected programs FR-050), written
+	// once at creation and never changed. A record loaded without it is
+	// classified by the same table (ClassifyProvenanceMode).
+	//
+	// not-wire-format: internal program-eligibility bookkeeping.
+	ProvenanceMode ProvenanceMode `json:"provenance_mode,omitempty"`
+	// Provenance is the stored origin set of a lineage record (I-2), stamped
+	// at creation from the launching turn or work record, like Unattended.
+	// A root stores none. Missing or malformed lineage provenance is
+	// unresolved (fail closed). Origins are bus.Origin strings; pkg/session
+	// cannot import pkg/bus, so the agent converts with bus.NewProvenance.
+	Provenance []string `json:"provenance,omitempty"`
+
 	// ExternalRunStarted is the durable "this steered external-CLI session has
 	// already started its native CLI conversation" fact (session-core N7,
 	// FR-043). Set once, before the first CLI Run, by
@@ -1002,7 +1015,9 @@ func (s *LifecycleStore) PublishChildUnderParentLock(
 		c := *cur
 		parentRec = &c
 	} else {
-		parentRec = &LifecycleRecord{SessionID: parentID}
+		// A missing parent record carries no stored provenance; fn decides
+		// its mode when it initialises the record.
+		parentRec = &LifecycleRecord{SessionID: parentID, Provenance: nil}
 	}
 
 	childRec, fnErr := fn(parentRec, found)

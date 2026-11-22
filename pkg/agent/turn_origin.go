@@ -24,6 +24,10 @@ type inputOrigin struct {
 	// approval retains the ranked room-aware approval provenance alongside
 	// the channel provenance used by secret policy. Private, never wire data.
 	approval approvalOrigin
+	// provenance is the input message's provenance (I-2), joined into the
+	// turn's. Zero = unresolved: an input recorded without one makes the
+	// turn ineligible for connected programs.
+	provenance bus.Provenance
 }
 
 // inboundInputOrigin derives an input's origin from the inbound message. A
@@ -31,7 +35,7 @@ type inputOrigin struct {
 // .InstanceID, set only by the adapters' single publication point); a peer
 // request's owner wake carries the sending agent.
 func inboundInputOrigin(msg bus.InboundMessage) inputOrigin {
-	var o inputOrigin
+	o := inputOrigin{provenance: msg.Provenance}
 	if conn := strings.TrimSpace(msg.InstanceID); conn != "" {
 		o.connection = conn
 		o.channelPerson = firstNonBlank(msg.Sender.DisplayName, msg.Sender.Username, msg.Sender.CanonicalID, msg.Peer.ID)
@@ -56,6 +60,7 @@ func firstNonBlank(values ...string) string {
 
 // recordInto adds this input to a turn's origin.
 func (o inputOrigin) recordInto(al *AgentLoop, origin *tools.TurnOrigin) {
+	origin.AddProvenance(o.provenance)
 	if o.channelPerson != "" {
 		origin.AddChannelPerson(o.channelPerson, o.connection)
 	}

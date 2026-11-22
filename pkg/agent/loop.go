@@ -1508,6 +1508,8 @@ func (al *AgentLoop) ProcessDirectWithChannelAs(
 		Content:    content,
 		SessionKey: sessionKey,
 		Metadata:   map[string]string{"agent_id": agentID},
+		// The scheduler/heartbeat is a producer: independent work (I-2).
+		Provenance: bus.NewProvenance(bus.OriginIndependent),
 	}
 	resp, _, err := al.processMessage(ctx, msg)
 	return resp, err
@@ -1532,6 +1534,8 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		ChatID:     chatID,
 		Content:    content,
 		SessionKey: sessionKey,
+		// The scheduler/heartbeat is a producer: independent work (I-2).
+		Provenance: bus.NewProvenance(bus.OriginIndependent),
 	}
 
 	resp, _, err := al.processMessage(ctx, msg)

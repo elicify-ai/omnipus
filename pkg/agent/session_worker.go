@@ -168,7 +168,7 @@ func (w *sessionWorker) refillInbox() {
 	for len(w.overflow) > 0 {
 		select {
 		case w.inbox <- w.overflow[0]:
-			w.overflow[0] = bus.InboundMessage{}
+			clear(w.overflow[:1])
 			w.overflow = w.overflow[1:]
 		default:
 			return

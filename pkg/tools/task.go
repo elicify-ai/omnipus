@@ -2331,7 +2331,7 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	// GOAL-FR-029/FR-030: the criteria/dod change lands on the task record
 	// (dual-write) and then on the paired goal record — creating one if this
 	// is a legacy task's first-ever criteria/dod (see SyncTaskGoalRecord).
-	req := TaskWriteRequest{Patch: tu.patch, Prior: tu.triggerSent}
+	req := TaskWriteRequest{Patch: tu.patch, Prior: tu.triggerSent, Provenance: ToolTurnProvenance(tu.ctx)}
 	if tu.triggerSent {
 		// r17 TK-30: every update that carries a trigger reconciles the live
 		// scheduler under the same lock hold (step 3).
