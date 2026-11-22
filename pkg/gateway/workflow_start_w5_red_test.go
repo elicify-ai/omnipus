@@ -1,78 +1,112 @@
-// Omnipus - Ultra-lightweight personal AI agent
-// License: MIT
-// Copyright (c) 2026 Omnipus contributors
-
 package gateway
 
-// RED tests — Skills & Tools redesign (#1963, epic #1519 page F), order 20.
-// TestWorkflowStart_W5: the server-side per-workflow rule on a chat
-// message's workflow_start — W1 and W18 require target_workspace_id (the
-// server refuses the start without it); W5, the write-skill workflow, is
-// accepted with or without a target; unknown workflows stay refused.
-//
-// Oracle: skills-tools-redesign-spec.md C-8 ("workflow enum adds W5 …
-// target_workspace_id becomes required for W1 and W18 only; for W5 it is
-// optional") and the shipped inbound schema
-// pkg/gateway/inboundschemas/WorkflowStart.yaml, which already lists W5 and
-// states: "OpenAPI 3.0 cannot express the per-workflow requirement, so the
-// server enforces it (C-8)." BDD S-53 (the write-skill start carries the
-// person's message and Omnipus loads write-skill) is the client-side half;
-// this test pins the server's per-workflow decision, which no production
-// code reads at this commit (workflow_start.target_workspace_id has no
-// non-test reader in pkg/), so the schema's enforcement promise is the
-// missing behaviour.
-//
-// workflowStartTargetRequired is the test-local seam GREEN wires to the
-// server's per-workflow check; nil keeps the RED run loud (BLOCKED).
+// Order 20 / CHECK F17: C-8 and WorkflowStart's per-workflow requirement.
+// Replace workflowStartTargetRequired's whole-decision boolean with the
+// real authenticated WebSocket read loop, validation, chat admission,
+// inbound bus and persisted transcript. A ping/pong is the intake barrier;
+// absence is inspected only after that barrier, never after an arbitrary sleep.
+// This boundary test does NOT certify S-53's model-driven write-skill load
+// or category/publication chain (order 55/other F17 work still required).
 
 import (
+	"encoding/json"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// workflowStartTargetRequired reports whether a chat message's
-// workflow_start is refused: true = the server refuses the start (W1/W18
-// without a target; an unknown workflow), false = accepted (W5 with or
-// without a target; W1/W18 with one).
-var workflowStartTargetRequired func(workflow string, targetSet bool) bool
-
-// TestWorkflowStart_W5 (order 20).
-// Traces to: BDD S-53; spec C-8; inbound schema WorkflowStart.yaml.
 func TestWorkflowStart_W5(t *testing.T) {
-	if workflowStartTargetRequired == nil {
-		t.Fatal("BLOCKED: the server-side per-workflow enforcement of " +
-			"workflow_start is not implemented — required by " +
-			"skills-tools-redesign-spec C-8 and the WorkflowStart.yaml schema's " +
-			"'the server enforces it (C-8)' note; BDD S-53")
+	// Literal C-8 cases: only W1/W18 require a target; W5 may propose
+	// global installation, and unknown workflows remain refused. Both
+	// validation settings exercise the server check, not just the schema.
+	rows := []struct {
+		name, workflow string
+		target         bool
+		accepted       bool
+	}{
+		{"W5 without target is accepted", "W5", false, true},
+		{"W5 with target is accepted", "W5", true, true},
+		{"W1 without target is refused", "W1", false, false},
+		{"W18 without target is refused", "W18", false, false},
+		{"W1 with target is accepted", "W1", true, true},
+		{"W18 with target is accepted", "W18", true, true},
+		{"unknown workflow is refused", "W9", true, false},
 	}
-	const refusalNote = "C-8: target_workspace_id is required for W1 and W18 only"
-
-	t.Run("W5 without a target is accepted", func(t *testing.T) {
-		if workflowStartTargetRequired("W5", false) {
-			t.Fatalf(refusalNote + " — a W5 start without a target must be accepted (C-8, S-53)")
+	for _, validate := range []bool{false, true} {
+		mode := "validation off/"
+		if validate {
+			mode = "validation on/"
 		}
-	})
-
-	t.Run("W5 with a target is accepted", func(t *testing.T) {
-		if workflowStartTargetRequired("W5", true) {
-			t.Fatalf(refusalNote + " — a W5 start with a target must be accepted (C-8)")
+		for _, row := range rows {
+			t.Run(mode+row.name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv(config.EnvHome, home)
+				t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+				cfg := config.DefaultConfig()
+				cfg.Gateway.DevModeBypass, cfg.Gateway.ValidateInbound = true, validate
+				cfg.Agents.List = []config.AgentConfig{{ID: "omnipus"}}
+				msgBus := bus.NewMessageBus()
+				t.Cleanup(msgBus.Close)
+				al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+				main, err := al.GetSessionStore().GetOrCreateMainSession(testHarnessWorkspaceMembershipID, "omnipus")
+				require.NoError(t, err, "fixture: Omnipus uses its one real main conversation")
+				handler := newWSHandler(msgBus, al, "")
+				t.Cleanup(handler.Wait)
+				srv := httptest.NewServer(handler)
+				t.Cleanup(srv.Close)
+				conn := wu0aWSConn(t, srv)
+				agentID := "omnipus"
+				frame := generated.MessageFrame{
+					Type: string(generated.WsFrameTypeMessage), AgentId: &agentID,
+					Content:       "Write a new skill",
+					SessionId:     &main.ID,
+					WorkflowStart: &generated.WorkflowStart{Workflow: row.workflow},
+				}
+				if row.target {
+					target := testHarnessWorkspaceMembershipID
+					frame.WorkflowStart.TargetWorkspaceId = &target
+				}
+				body, err := json.Marshal(frame)
+				require.NoError(t, err)
+				before, err := al.GetSessionStore().ReadTranscript(main.ID)
+				require.NoError(t, err)
+				errs := wu0aSendAndCollect(t, conn, string(body))
+				// No loop consumes inbound messages in this intake-boundary test.
+				// Pong proves the read loop finished this frame before inspection.
+				if !row.accepted {
+					assert.Len(t, errs, 1, "C-8: one real refusal, not a fixture predicate")
+					if len(errs) == 1 {
+						assert.NotEmpty(t, errs[0], "the wire refusal explains the rejected start; C-8 specifies no literal copy")
+					}
+					assert.Empty(t, msgBus.InboundChan(), "refusal must admit no turn")
+					after, readErr := al.GetSessionStore().ReadTranscript(main.ID)
+					require.NoError(t, readErr)
+					assert.Equal(t, before, after, "a rejected start writes no chat message")
+					return
+				}
+				require.Empty(t, errs, "the actual W5/target control is admitted")
+				require.Len(t, msgBus.InboundChan(), 1, "exactly one real chat message was admitted")
+				message := <-msgBus.InboundChan()
+				require.Equal(t, "Write a new skill", message.Content, "the person's original message is retained")
+				require.NotEmpty(t, message.SessionID)
+				meta, err := al.GetSessionStore().GetMeta(message.SessionID)
+				require.NoError(t, err)
+				require.Equal(t, "omnipus", meta.AgentID, "the real chat belongs to Omnipus")
+				entries, err := al.GetSessionStore().ReadTranscript(message.SessionID)
+				require.NoError(t, err)
+				var userContent []string
+				for _, entry := range entries {
+					if entry.Role == "user" {
+						userContent = append(userContent, entry.Content)
+					}
+				}
+				require.Equal(t, []string{"Write a new skill"}, userContent, "the actual message was persisted once")
+			})
 		}
-	})
-
-	t.Run("W1 without a target is refused", func(t *testing.T) {
-		if !workflowStartTargetRequired("W1", false) {
-			t.Fatalf("C-8: a W1 start without target_workspace_id must be refused")
-		}
-	})
-
-	t.Run("W18 without a target is refused", func(t *testing.T) {
-		if !workflowStartTargetRequired("W18", false) {
-			t.Fatalf("C-8: a W18 start without target_workspace_id must be refused")
-		}
-	})
-
-	t.Run("an unknown workflow is refused", func(t *testing.T) {
-		if !workflowStartTargetRequired("W9", true) {
-			t.Fatalf("the workflow enum must stay closed (Wu0a 'unknown workflow' row)")
-		}
-	})
+	}
 }

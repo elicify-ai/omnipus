@@ -1,70 +1,129 @@
 package agent
 
-// RED tests — Skills & Tools redesign (#1963, epic #1519 page F), order 12.
-// TestSkillLoad_AskUnattendedRefused: a skill load whose effective value is
-// Ask in an unattended chain is skipped with the unattended text and raises
-// no card; with Auto-approve on it loads (Dataset D1 rows 10-11).
-//
-// Oracle: skills-tools-redesign-spec.md S-12 ("the load is refused with
-// 'Not run: needs approval, and task and plan runs never ask.' … no
-// approval card appears anywhere"), C-12 rows 10-11 (Auto checked before
-// the refusal) and FR-017. The transcript text itself already exists for
-// task/plan runs (pkg/agent/tool_denial.go::unattendedDenial); the missing
-// behaviour is the SKILL LOAD reaching that decision through the C-11
-// resolver (its outcome is ask_pending and nothing settles it).
-//
-// Test-harness note (per the dispatch brief): a scripted fake-model loop
-// exists in this package (scriptedToolProvider, eventbus_test.go) and a
-// full unattended-run harness would drive the whole task executor; the
-// decision under test is the loop boundary's skill-load denial, so this
-// test pins it through the seam below and says so. GREEN wires
-// skillLoadUnattendedDenialOf to the C-11 consumer at that boundary; nil
-// keeps the RED run loud (BLOCKED).
+// Order 12 / CHECK F17: S-12, S-13, C-12 and D1#10–11.
+// Real ProcessScheduled -> model tool call -> real Skill/load authority ->
+// transcript/model request. No callback decides whether the skill ran.
+// Only the no-paid-call provider and an unexpected-approval observer are
+// substituted. The observer rejects any prompt: headless runs must never ask.
+// Missing sandbox.skill_policies is a loud BLOCKED, not a second decision
+// implementation. GREEN/mutation proof remains deferred to independent CHECK.
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// skillLoadUnattendedDenialOf is the test-local seam for the loop's
-// skill-load decision in an unattended chain: given the skill's effective
-// outcome ("ask_pending" from the C-11 resolver) and whether Auto-approve
-// applies, it reports the denial the turn records. denied=false means the
-// load runs; transcriptText is the denial's transcript line ("" when the
-// load runs). GREEN wires it to the production boundary; nil keeps the RED
-// run loud (BLOCKED).
-var skillLoadUnattendedDenialOf func(outcome string, autoApprove bool) (denied bool, transcriptText string)
+const unattendedSkillSentinel = "S12-DEEP-RESEARCH-INSTRUCTIONS-9Z"
+const unattendedSkillRefusal = "Not run: needs approval, and task and plan runs never ask."
 
-// TestSkillLoad_AskUnattendedRefused (order 12).
-// Traces to: BDD S-12; spec C-12 rows 10-11, FR-017; Dataset D1 rows 10-11.
 func TestSkillLoad_AskUnattendedRefused(t *testing.T) {
-	if skillLoadUnattendedDenialOf == nil {
-		t.Fatal("BLOCKED: the unattended skill-load decision (C-11 outcome " +
-			"reaching the loop's denial path) is not implemented — required by " +
-			"skills-tools-redesign-spec S-12, C-12 rows 10-11 and FR-017")
+	// Plan/oracles: D1#10 Ask/Auto off refuses; D1#11 Auto settles Ask;
+	// S-13 Allow loads without consent. All are granted and trust Allow so
+	// neither a grant refusal nor a trust card can masquerade as this gate.
+	for _, row := range []struct {
+		name, policy string
+		auto, loads  bool
+	}{
+		{"D1#10 Ask Auto off refuses without a card", "ask", false, false},
+		{"D1#11 Ask Auto on loads without a card", "ask", true, true},
+		{"S-13 granted Allow loads without a card", "allow", false, true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv(config.EnvHome, home)
+			skillDir := filepath.Join(home, "skills", "deep-research")
+			require.NoError(t, os.MkdirAll(skillDir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(
+				"---\nname: deep-research\ndescription: Research for the unattended test.\n---\n\n"+unattendedSkillSentinel+"\n"), 0o600))
+			granted := persistSkillGrantFixture(t, home, config.AgentConfig{ID: "mia", Skills: []string{"deep-research"}})
+
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
+			cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "unattended-skill-script"}
+			cfg.Agents.Defaults.MaxToolIterations = 3
+			cfg.Agents.List = []config.AgentConfig{granted}
+			cfg.Sandbox.AutoApprove, cfg.Sandbox.GodMode = row.auto, false
+			cfg.Sandbox.SkillTrust = config.SkillTrustLevel("allow") // C-5: trust is independent of permission.
+			cfg.Sandbox.ToolPolicies["Skill"] = "allow"              // C-0: the infrastructure tool is fixed Allow.
+			cfg.Tools.Manifest.Compressed = false                    // Discovery is not this test's subject.
+			// Literal input through the real config decoder; do not compute an
+			// ask_pending/allowed result in a test adapter. The final assertion
+			// catches today's ignored/missing map rather than silently certifying it.
+			input, err := json.Marshal(map[string]any{"skill_policies": map[string]string{"deep-research": row.policy}})
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(input, &cfg.Sandbox))
+			provider := testutil.NewScenario().
+				WithToolCall("Skill", `{"name":"deep-research"}`).WithText("done")
+			msgBus := bus.NewMessageBus()
+			t.Cleanup(msgBus.Close)
+			al := mustNewAgentLoop(t, cfg, msgBus, provider)
+			t.Cleanup(al.Close)
+			mia, ok := al.GetRegistry().GetAgent("mia")
+			require.True(t, ok)
+			mia.ContextBuilder.WithSkillAllowlist(granted.Skills).WithSkillBindings(granted.SkillGrants)
+			_, resolved := mia.ContextBuilder.ResolveSkillFullForWorkspace("", "deep-research")
+			require.True(t, resolved, "fixture: real installed generation is granted, not merely a name")
+			approver := &autoRecordingApprover{approve: false}
+			al.SetToolApprover(approver)
+			meta, err := al.GetSessionStore().NewScheduledSession("mia")
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err = al.ProcessScheduled(ctx, "mia", meta.ID, "Load deep-research.", "scheduled", meta.ID)
+			require.NoError(t, err, "real unattended turn finishes without waiting for a person")
+			require.NoError(t, ctx.Err(), "a deadline is not the expected unattended decision")
+			assert.Empty(t, approver.requests(), "S-12/S-13: no card may be requested")
+
+			requests := provider.AllRequests()
+			require.GreaterOrEqual(t, len(requests), 2, "fixture: actual tool result reached a later model request")
+			var toolResults []providers.Message
+			for _, message := range requests[1] {
+				if message.Role == "tool" {
+					toolResults = append(toolResults, message)
+				}
+			}
+			require.Len(t, toolResults, 1, "one result for the one actual Skill call")
+			entries, err := al.GetSessionStore().ReadTranscript(meta.ID)
+			require.NoError(t, err)
+			var transcript strings.Builder
+			for _, entry := range entries {
+				transcript.WriteString(entry.Content)
+				transcript.WriteByte('\n')
+			}
+			if row.loads {
+				assert.Contains(t, toolResults[0].Content, unattendedSkillSentinel, "the real load returned its instructions")
+				assert.NotContains(t, transcript.String(), unattendedSkillRefusal, "a successful load is not refused")
+			} else {
+				assert.NotContains(t, toolResults[0].Content, unattendedSkillSentinel, "refused instructions never reach the model")
+				assert.Contains(t, transcript.String(), unattendedSkillRefusal, "S-12: exact transcript refusal, not a fabricated reply")
+				for _, request := range requests {
+					encoded, marshalErr := json.Marshal(request)
+					require.NoError(t, marshalErr)
+					assert.NotContains(t, string(encoded), unattendedSkillSentinel, "no request may contain refused instructions")
+				}
+			}
+			encoded, err := json.Marshal(cfg.Sandbox)
+			require.NoError(t, err)
+			var stored map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(encoded, &stored))
+			if len(stored["skill_policies"]) == 0 {
+				t.Fatal("BLOCKED: sandbox.skill_policies is not implemented — required by C-2/C-12, S-12 and D1#10–11; the real scheduled path above does not certify the missing setting")
+			}
+			var policies map[string]string
+			require.NoError(t, json.Unmarshal(stored["skill_policies"], &policies))
+			require.Equal(t, row.policy, policies["deep-research"], "the real loop was given the specified raw permission")
+		})
 	}
-	const wantText = "Not run: needs approval, and task and plan runs never ask."
-
-	t.Run("D1#10 Ask with Auto off is skipped with the unattended text", func(t *testing.T) {
-		denied, text := skillLoadUnattendedDenialOf("ask_pending", false)
-		if !denied {
-			t.Fatalf("S-12: an Ask skill load in an unattended run must be skipped")
-		}
-		if text != wantText {
-			t.Fatalf("S-12: the refusal carries the exact unattended text; got %q want %q", text, wantText)
-		}
-	})
-
-	t.Run("D1#11 Auto on loads — Auto is checked before the refusal", func(t *testing.T) {
-		denied, _ := skillLoadUnattendedDenialOf("ask_pending", true)
-		if denied {
-			t.Fatalf("C-12 row 11: Auto-approve settles the Ask before the unattended refusal; the load must run")
-		}
-	})
-
-	t.Run("an allowed skill loads without a card", func(t *testing.T) {
-		denied, _ := skillLoadUnattendedDenialOf("allowed", false)
-		if denied {
-			t.Fatalf("S-13: an allowed load runs unattended with no card")
-		}
-	})
 }
