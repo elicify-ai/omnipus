@@ -1,3 +1,6 @@
+// Not mounted in Settings: device pairing moved out of Settings (Settings
+// redesign #1519; see docs/internal/specs/signed-in-browsers-spec.md). Do not
+// mount this section again; the signed-in browsers work decides its future.
 // DevicesSection — admin-only device pairing management panel
 // Shipped, feature-flag-gated: the "Devices" tab only mounts this component when
 // isDevicePairingEnabled() is true (see SettingsScreen.tsx). The approve/reject
