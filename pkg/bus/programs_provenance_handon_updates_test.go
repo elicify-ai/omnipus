@@ -80,6 +80,16 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 		// — model text never writes provenance — and outputs 0.
 		t.Fatalf("BLOCKED: %s — required by S-82's cannot-forge assertion", s1HandOnSeam)
 	})
+
+	t.Run("S111_omitted_producer_dev_command_gets_no_token_and_the_unresolved_notice", func(t *testing.T) {
+		// CHECK R11's runtime half, individually named (spec S-111 + FR-010
+		// fail-closed): a turn whose producing write request OMITS
+		// provenance starts Dev with NO program variables attached — a Dev
+		// command that would read a token sees nothing — and the turn
+		// carries the unresolved-provenance notice. The omission is fail-
+		// closed at the runtime boundary, never zero-value-permissive.
+		t.Fatalf("BLOCKED: %s — required by S-111's runtime half (the omitted-producer turn: Dev command sees no token, unresolved notice emitted)", s1HandOnSeam)
+	})
 }
 
 func TestProgramProvenance_Updates(t *testing.T) {

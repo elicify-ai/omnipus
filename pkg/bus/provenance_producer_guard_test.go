@@ -18,18 +18,32 @@ package bus
 // request"; the producer table names `LifecycleRecord.Provenance` verbatim):
 //
 //   - bus.InboundMessage                 — the web/channel inbound face
-//   - bus.AsyncNotifyEvent               — the background completion carrier
-//     (agent.AsyncNotifyEvent is the same type through pkg/agent's alias)
 //   - bus.SessionMessageEvent            — the steer transport: parent_to_child
 //     kinds (steer, respond) ride this event (pkg/bus/session_message.go)
+//   - agent.AsyncNotifyEvent             — the background completion carrier
+//     (declared in pkg/agent/async_notifier.go; the earlier "bus" row named a
+//     type pkg/bus does not declare — CHECK R11's dead-row finding)
 //   - tools.PeerRequest                  — the peer request record
 //   - tools.TaskWriteRequest             — the task write request
+//   - plan.CorrectionRequest             — the plan write request: the real
+//     plan write boundary is the correction request (pkg/plan/plan.go,
+//     consumed by pkg/agent/plan_engine_correction.go::AppendCorrection),
+//     aliased identically in pkg/agent and pkg/tools (CHECK R11: aliases are
+//     mapped, not copied)
+//   - agent.CorrectionRequest            — the same type through pkg/agent's
+//     alias declaration (constructions via the alias are the same write)
+//   - tools.CorrectionRequest            — and through pkg/tools' own alias
+//     (pkg/tools/plan_correct.go), found by the inventory enumeration
 //   - session.LifecycleRecord            — every work session's lifecycle record
 //
-// The plan, schedule and goal write requests have no request types at RED
-// (their writes flow through patches on pkg/plan.Plan, pkg/goal.Goal and the
-// cron engine); their rows are added when GREEN names the types — recorded in
-// test-disputes.md section G, not silently dropped.
+// This is a bounded source guard, not a complete write-boundary analysis.
+// The declaration inventory detects known carriers and new *WriteRequest
+// declarations. It cannot establish completeness for arbitrarily named
+// carriers or mutation closures. Current plan.Store.Create/Update,
+// goal.Store.Create/Update and cron.CronService.UpdateJob write records or
+// patches directly. Their individually named BLOCKED rows below retain the
+// missing required-provenance write-request obligation (I-2); section H11
+// of the RED disputes records this remaining integration boundary.
 //
 // Matching resolves the file's own import table (an alias `bb` importing
 // github.com/.../pkg/bus matches bus constructions; a same-named qualifier
@@ -58,17 +72,22 @@ import (
 )
 
 // producerGuardTargets lists the turn-feeding carrier types the guard scans
-// for: canonical package dir suffix under /pkg/ plus the type name.
+// for: canonical package dir suffix under /pkg/ plus the type name. The
+// inventory leaf enumerates this vocabulary from the TREE — the table must
+// cover every declared carrier type and every row must resolve to a real
+// declaration (CHECK R11).
 var producerGuardTargets = []struct {
 	Package string // package dir suffix (matched through the import table)
 	Type    string // type name
 }{
 	{"bus", "InboundMessage"},
-	{"bus", "AsyncNotifyEvent"},
 	{"agent", "AsyncNotifyEvent"},
 	{"bus", "SessionMessageEvent"},
 	{"tools", "PeerRequest"},
 	{"tools", "TaskWriteRequest"},
+	{"plan", "CorrectionRequest"},
+	{"agent", "CorrectionRequest"},
+	{"tools", "CorrectionRequest"},
 	{"session", "LifecycleRecord"},
 }
 
@@ -128,6 +147,150 @@ func TestProgramProvenance_ProducerGuard(t *testing.T) {
 			"unresolved must be ineligible even when every setting allows")
 		require.Empty(t, zero.Origins(), "unresolved carries no origins")
 	})
+
+	t.Run("carrier_inventory_is_enumerated_from_the_tree", func(t *testing.T) {
+		// CHECK R11: the whitelist is a completeness guard, not a wish list.
+		// The carrier vocabulary is enumerated from the TREE (every declared
+		// carrier type in the spec's write-boundary packages) and must match
+		// the guard table in BOTH directions: a carrier type the table does
+		// not list is a hole, and a table row that resolves to no
+		// declaration is a dead row silently covering nothing.
+		root := repoRootForGuard()
+		found := enumerateCarrierTypes(t, root, nil)
+		require.NotEmpty(t, found, "instrument: the enumeration found the vocabulary in the tree")
+
+		listed := map[[2]string]bool{}
+		for _, tgt := range producerGuardTargets {
+			listed[[2]string{tgt.Package, tgt.Type}] = true
+		}
+		var unlisted []string
+		for k, where := range found {
+			if !listed[k] {
+				unlisted = append(unlisted, k[0]+"."+k[1]+" (declared at "+where+")")
+			}
+		}
+		require.Empty(t, unlisted,
+			"S-111's guard covers every declared turn-feeding carrier; these are not listed: %v", unlisted)
+
+		var dead []string
+		for _, tgt := range producerGuardTargets {
+			if _, ok := found[[2]string{tgt.Package, tgt.Type}]; !ok {
+				dead = append(dead, tgt.Package+"."+tgt.Type)
+			}
+		}
+		require.Empty(t, dead,
+			"every guard-table row must resolve to a declared carrier type; these are dead rows: %v", dead)
+	})
+
+	t.Run("new_carrier_omission_is_caught", func(t *testing.T) {
+		// CHECK R11's new-carrier omission: a GREEN-new carrier (the spec's
+		// schedule write request, absent today) planted into the tree is
+		// ENUMERATED, and once listed it is ENFORCED — a construction
+		// without Provenance fails the guard naming the file. A new carrier
+		// is never silently passed as an unknown type.
+		root := repoRootForGuard()
+		decl := "package goal\n\ntype ScheduleWriteRequest struct{ AgentID string }\n"
+		found := enumerateCarrierTypes(t, root, [][2]string{{"<plant-schedule>", decl}})
+		require.NotEmpty(t, found[[2]string{"goal", "ScheduleWriteRequest"}],
+			"instrument: the planted GREEN-new carrier is enumerated from the plant file")
+
+		use := "package probe\n\nimport goal \"github.com/elicify-ai/omnipus/pkg/goal\"\n\nvar w = goal.ScheduleWriteRequest{AgentID: \"dev\"}\n"
+		// Do NOT extend the targets: the ordinary guard must reject the
+		// declaration absent from its inventory all by itself.
+		v := scanProvenanceProducerViolations(t, root, [][2]string{
+			{"<plant-schedule>", decl}, {"<plant-use>", use},
+		})
+		require.True(t, namesFile(v, "<plant-schedule>"),
+			"an unlisted declared carrier fails the ordinary guard without editing its whitelist: %v", v)
+	})
+
+	for _, boundary := range []string{"plan_Create_Update", "goal_Create_Update", "cron_UpdateJob"} {
+		t.Run("S111_required_provenance_request_"+boundary, func(t *testing.T) {
+			t.Fatalf("BLOCKED: %s still accepts a record/patch or mutation closure, not the required-provenance write request — required by I-2/S-111; guard completeness for this write boundary is not established", boundary)
+		})
+	}
+}
+
+// producerBoundaryPkgs are the packages of the spec's write boundaries
+// (S-111's Given). The inventory enumerator scans THESE packages' declared
+// types — independently of the guard table (CHECK R11).
+var producerBoundaryPkgs = map[string]bool{
+	"bus": true, "tools": true, "plan": true, "session": true,
+	"goal": true, "cron": true, "schedule": true, "agent": true,
+}
+
+// producerCarrierExactNames are the vocabulary's exact carrier names; any
+// type name ending in WriteRequest is in the vocabulary too.
+var producerCarrierExactNames = map[string]bool{
+	"InboundMessage": true, "AsyncNotifyEvent": true, "SessionMessageEvent": true,
+	"PeerRequest": true, "TaskWriteRequest": true, "CorrectionRequest": true,
+	"LifecycleRecord": true,
+}
+
+func producerCarrierName(name string) bool {
+	return producerCarrierExactNames[name] || strings.HasSuffix(name, "WriteRequest")
+}
+
+// enumerateCarrierTypes walks the tree (and any extra plant files) and
+// returns every DECLARED carrier type in the boundary packages, mapping
+// (package, type) → the declaration's file:line. Aliased declarations
+// (type X = pkg.Y) count: constructions through the alias are the same
+// write.
+func enumerateCarrierTypes(t *testing.T, root string, extraFiles [][2]string) map[[2]string]string {
+	t.Helper()
+	found := map[[2]string]string{}
+	scanOne := func(label, src string) {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, label, src, 0)
+		if err != nil {
+			found[[2]string{"invalid-source", label}] = fmt.Sprintf("%s: %v", label, err)
+			return // becomes an unlisted-inventory violation, never an empty success
+		}
+		pkgName := f.Name.Name
+		if !producerBoundaryPkgs[pkgName] {
+			return
+		}
+		pos := func(n ast.Node) string {
+			return fmt.Sprintf("%s:%d", label, fset.Position(n.Pos()).Line)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok || !producerCarrierName(ts.Name.Name) {
+				return true
+			}
+			found[[2]string{pkgName, ts.Name.Name}] = pos(ts)
+			return true
+		})
+	}
+	require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "dist", "spa", "src", "docs", "design-system":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			rel = path
+		}
+		scanOne(rel, string(b))
+		return nil
+	}))
+	for _, pair := range extraFiles {
+		scanOne(pair[0], pair[1])
+	}
+	return found
 }
 
 // namesFile reports whether any violation names the given file label.
@@ -142,10 +305,31 @@ func namesFile(violations []string, label string) bool {
 
 // scanProvenanceProducerViolations parses every non-test Go file under root
 // and reports every construction of a guard target whose composite literal
-// does not assign Provenance. extraFiles (label, source pairs) are parsed as
-// additional files labelled by their label. Parse errors are violations, not
-// skips.
+// does not assign Provenance (the guard table's targets). extraFiles
+// (label, source pairs) are parsed as additional files labelled by their
+// label. Parse errors are violations, not skips.
 func scanProvenanceProducerViolations(t *testing.T, root string, extraFiles [][2]string) []string {
+	t.Helper()
+	v := scanProvenanceProducerTargets(t, producerGuardTargets, root, extraFiles)
+	listed := map[[2]string]bool{}
+	for _, row := range producerGuardTargets {
+		listed[[2]string{row.Package, row.Type}] = true
+	}
+	for key, where := range enumerateCarrierTypes(t, root, extraFiles) {
+		if !listed[key] {
+			v = append(v, fmt.Sprintf("%s declares unlisted carrier %s.%s (S-111 inventory)", where, key[0], key[1]))
+		}
+	}
+	return v
+}
+
+// scanProvenanceProducerTargets is the scanner over an explicit target list
+// (the new-carrier plant proves a target added to the list is enforced
+// immediately — CHECK R11).
+func scanProvenanceProducerTargets(t *testing.T, targets []struct {
+	Package string
+	Type    string
+}, root string, extraFiles [][2]string) []string {
 	t.Helper()
 	var violations []string
 	scanOne := func(label, src string) {
@@ -174,16 +358,16 @@ func scanProvenanceProducerViolations(t *testing.T, root string, extraFiles [][2
 					return true
 				}
 				if suffix, imported := aliases[q.Name]; imported {
-					for i := range producerGuardTargets {
-						if suffix == "/pkg/"+producerGuardTargets[i].Package && tt.Sel.Name == producerGuardTargets[i].Type {
-							hit = &producerGuardTargets[i]
+					for i := range targets {
+						if suffix == "/pkg/"+targets[i].Package && tt.Sel.Name == targets[i].Type {
+							hit = &targets[i]
 						}
 					}
 				}
 			case *ast.Ident:
-				for i := range producerGuardTargets {
-					if pkgName == producerGuardTargets[i].Package && tt.Name == producerGuardTargets[i].Type {
-						hit = &producerGuardTargets[i]
+				for i := range targets {
+					if pkgName == targets[i].Package && tt.Name == targets[i].Type {
+						hit = &targets[i]
 					}
 				}
 			}
