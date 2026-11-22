@@ -349,14 +349,14 @@ async function portRow(): Promise<HTMLElement> {
  * label"; "icon buttons name their target"; "Program fields name the
  * program").
  *
- * LISTED, NOT MAPPED — 'model-providers': its row wrapper carries neither
- * the D-9-named control ("Connect a provider" is the section main action,
- * outside the row) nor its own name (the wrapper's heading reads
- * "Providers"). Per the part-25 brief that row is stopped for a ruling
- * instead of guessing a witness; its sweep case keeps the identity,
- * only-one-mark, scroll and content legs.
+ * 'model-providers' is witnessed by its row's own heading "Providers" per
+ * the team-lead ruling on the part-25 report (FR-001 names the section
+ * "Providers" and the index entry "Model providers" opens that row, so the
+ * heading is spec-named, not taken from the implementation; the marker
+ * stays where it is in production).
  */
 const WITNESS_PHRASES: Record<string, string[]> = {
+  'model-providers': ['Providers'], // FR-001 names the section "Providers" — the row heading is spec-named (team-lead ruling, part 25)
   'default-model': ['Change'],
   'active-transcriber': ['Active transcriber'],
   'voice-input': ['Voice input'],
@@ -1453,7 +1453,7 @@ describe('FR-075 reach — every setting the search index names is reachable and
     // "marks exactly that row" — the whole mark shape (identity, the row
     // itself scrolled into view, its own content), scoped to this entry —
     // and bound to the setting's own spec-named control or value (CHECK
-    // R8-01), except for the rows listed for a ruling in WITNESS_PHRASES.
+    // R8-01; every indexed row is mapped in WITNESS_PHRASES).
     await expectExactlyThisRowMarked(
       await rowFor(
         entry.row,
