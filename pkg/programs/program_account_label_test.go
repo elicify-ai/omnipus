@@ -44,13 +44,40 @@ func TestProgramAccountLabel(t *testing.T) {
 		require.NotContains(t, err.Error(), tok, "the error must not quote the token")
 	})
 
-	t.Run("FR046_line_contains_an_8_byte_fragment_of_a_retired_token", func(t *testing.T) {
-		// FR-046: a label that is a substring of 8 or more characters of any
-		// current or RETIRED token is refused.
+	t.Run("FR046_token_fragments_7_8_9_of_current_and_retired", func(t *testing.T) {
+		// FR-046 (CHECK F14): PROPER substrings around the threshold, of a
+		// current AND a retired token — 7 bytes is a valid label, 8 and 9
+		// bytes are refused ("a substring of 8 or more characters of any
+		// current or retired token").
+		current := "tok_valid_12345"
 		retired := "retired_tok_8899"
-		label, err := AccountLabel("github", retired, []string{"tok_valid_12345", retired})
-		require.Error(t, err, "an 8-or-more-byte fragment of a retired token is refused")
-		require.Empty(t, label, "no label may be stored")
+		for name, tok := range map[string]string{"current": current, "retired": retired} {
+			frag7, frag8, frag9 := tok[:7], tok[:8], tok[:9]
+			label, err := AccountLabel("github", frag7, []string{current, retired})
+			require.NoError(t, err, "%s token: a 7-byte fragment (%q) is below the threshold", name, frag7)
+			require.Equal(t, frag7, label, "%s token: the 7-byte fragment is the label", name)
+			for _, frag := range []string{frag8, frag9} {
+				label, err := AccountLabel("github", frag, []string{current, retired})
+				require.Error(t, err, "%s token: an %d-byte fragment (%q) is refused", name, len(frag), frag)
+				require.Empty(t, label, "%s token: no label is stored for %q", name, frag)
+				require.NotContains(t, err.Error(), tok, "%s token: the error never quotes the token", name)
+			}
+			// A fragment from the token's MIDDLE, not just its head.
+			mid := tok[4:13]
+			_, err = AccountLabel("github", mid, []string{current, retired})
+			require.Error(t, err, "%s token: a middle fragment (%q) is refused", name, mid)
+		}
+	})
+
+	t.Run("FR046_embedded_marker_and_fragment_in_longer_line", func(t *testing.T) {
+		// The [FILTERED] marker EMBEDDED in a longer line refuses the label,
+		// and a token fragment embedded in innocent text refuses too.
+		current := "tok_valid_12345"
+		_, err := AccountLabel("github", "octocat [FILTERED] rest", nil)
+		require.Error(t, err, "a line containing [FILTERED] is refused")
+		label, err := AccountLabel("github", "user tok_val done", []string{current})
+		require.Error(t, err, "a line embedding an 8-byte fragment (tok_val..) is refused")
+		require.Empty(t, label, "no label is stored")
 	})
 
 	t.Run("short_overlap_below_8_bytes_is_a_valid_label", func(t *testing.T) {
@@ -63,8 +90,15 @@ func TestProgramAccountLabel(t *testing.T) {
 	})
 
 	t.Run("FR046_label_length_bounds", func(t *testing.T) {
-		// 1–128 printable characters.
-		_, err := AccountLabel("github", strings.Repeat("a", 128), nil)
+		// 1–128 printable characters (CHECK F14: the full boundary ladder
+		// 0, 1, 127, 128, 129).
+		_, err := AccountLabel("github", "", nil)
+		require.Error(t, err, "an empty first non-empty line cannot happen — an empty line is skipped, so a lone empty output has no label")
+		_, err = AccountLabel("github", "a", nil)
+		require.NoError(t, err, "1 printable character is accepted")
+		_, err = AccountLabel("github", strings.Repeat("a", 127), nil)
+		require.NoError(t, err, "127 printable characters are accepted")
+		_, err = AccountLabel("github", strings.Repeat("a", 128), nil)
 		require.NoError(t, err, "128 printable characters are accepted")
 		_, err = AccountLabel("github", strings.Repeat("a", 129), nil)
 		require.Error(t, err, "129 characters are refused")
