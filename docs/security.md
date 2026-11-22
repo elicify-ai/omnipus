@@ -574,7 +574,7 @@ The secret check has an honest limit: it finds a stored value written out in ful
 
 ## Entering a secret from a chat
 
-When an agent needs a provider key, an MCP server environment secret, or a channel credential, it can open a **secure secret card** in the web app. Type the value into that card, not into the chat. The card names the acting agent, explains why the secret is needed, and shows its destination. An Omnipus helper's card appears in Omnipus's main chat; other helpers must ask their parent.
+When an agent needs a provider key, an MCP server environment secret, a channel credential or a program's token (see [Settings → Programs](settings.md#programs)), it can open a **secure secret card** in the web app. A program card can only be submitted from a signed-in browser session, not with an API token, and uses the program token rules (8 to 16,384 characters). Type the value into that card, not into the chat. The card names the acting agent, explains why the secret is needed, and shows its destination. An Omnipus helper's card appears in Omnipus's main chat; other helpers must ask their parent.
 
 Each value must contain 4–16,384 bytes of UTF-8 text and no NUL character, and the complete submission is limited to 65,536 bytes. A card holds at most eight fields; the server chooses them, including Slack's required bot-token and app-token pair. Only one secret request may be pending in a chat session, and at most 64 may be pending across the installation; finish or cancel an existing request before asking for another when a limit is reached.
 

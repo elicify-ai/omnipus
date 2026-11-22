@@ -176,6 +176,25 @@ Every change is recorded in the audit log: a changed path or changed parameters,
 Each worker's **Runtime** tab shows the saved program and parameters read-only, with a link back to this tab. See [agents](agents.md) for what the worker keeps per agent.
 
 
+## Programs
+
+**Settings → Programs** stores the login token of a command-line program your agents use, such as GitHub's `gh` and `git` or Fly's `fly`, so you connect the program once instead of putting the token in an agent's private variables. Only a person signed in to the web app in a browser can use this tab: an API token, the `omnipus` command line and agents are refused before anything is read (`403`).
+
+**Presets and your own entries.** GitHub and Fly come as presets: fixed entries you can connect but not change or delete ("GitHub is a preset and cannot be changed or deleted."). **Add program** creates your own entry: a display name, the program words (the commands, for example `glab`), one to four token variables (the environment variable names the program reads, for example `GLAB_TOKEN`), the network sites it talks to, optionally a git host and username, and optionally an account check (a command that prints the account name). Shells and wrappers such as `bash`, `env` or `sudo` are not accepted as program words. The tab holds at most 32 entries, presets included. Editing an entry needs the revision you loaded; if someone changed it in the meantime, the save is refused with "This program changed since this page was loaded. Check the current state before saving again." An entry that is switched on for an agent cannot be deleted until it is switched off ("… cannot be deleted: it is switched on for Dev. Switch it off first.").
+
+**Connect, replace, check, disconnect.**
+
+- **Paste a token** and save. The token must be 8 to 16,384 characters on one line ("The token is too short. A token has at least 8 characters."). Each save creates a new version of the token.
+- **The account check** then runs the program's own check command (for GitHub: `gh api user --jq .login`) with the new token, in a clean environment: only the program's token variables, the path and a temporary home folder. The row shows **Checking**, then **Connected as** the account name, or why it failed, for example "The account check failed. GitHub said: "Bad credentials"." or "The account check did not finish in 20 s.". If the program is not installed on the computer that runs Omnipus, the token is kept and the row says "Saved, not checked: gh was not found on this computer.". An entry without a check says "Saved, not checked: this program has no account check.".
+- **Check again** reruns the check for the stored token without changing it. **Replace** saves a new token; a check still running for the old one is stopped and never shown. **Disconnect** removes the token; agents that have the program switched on keep the switch, the row shows **Not connected**.
+- If the credential store is busy for more than 5 seconds the save is refused with "The credential store is busy. Try again." and nothing changes. If the save fails, the previous token stays in use.
+
+**From a chat card.** An agent can ask for a program's token with a secure card (`request_secret` with `program`, for example `github`). The card names the program and its commands, for example **Program: GitHub (gh, git)**. It must be filled in from the browser; it uses the same token rules and starts the same account check. The agent continues at once and is told that the token is stored and that the check is running, never a result it does not have yet.
+
+**Program tokens belong to Programs.** The general **Credentials** page and agent tools such as `remove_secret` cannot change or remove a program's token; they refuse with "… belongs to the program GitHub. Change it in Settings → Programs.".
+
+**Who may use the token.** A program's token is offered only to agents that have the program switched on (see [agents](agents.md#programs)), and only for work that a person started in the web chat or through a connection where programs are allowed (see [connectors](connectors.md#programs-on-a-connection)). The web-chat setting on this tab is that switch for work started in the web chat (`web_chat_allowed`).
+
 ## Goal timers
 
 The goal timer controls live in **Settings → Performance**, beside the goal completion budget. They govern when the existing keeper can start another work turn, not how long that turn may run.

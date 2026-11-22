@@ -393,6 +393,14 @@ A heartbeat is a scheduled check-in for one agent in one workspace. The same age
 
 If nothing needs attention, the agent records an all-clear. The sidebar lists chat agents, not individual heartbeat sessions. Heartbeat check-ins use that agent's main chat. If you have that chat open, a check-in appears live: the check-in prompt is inserted as it is saved and the answer streams in as it is written when the model provider streams, and otherwise appears whole once the answer is complete (for example with non-streaming or multi-candidate providers), without a reload. After a successful check-in, the next interval is counted from that check-in's completion, in the same heartbeat conversation; no gateway restart is needed between check-ins. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
 
+## Programs
+
+An agent's profile has a **Programs** switch for each entry in [Settings → Programs](settings.md#programs). A new agent starts with every program off. Switching a program on decides which agent may use its stored token; it does not connect a token, so you can switch a program on before or after connecting it.
+
+- **Who can change it.** A person signed in to the web app in a browser, or an agent through `set_agent_permissions` with `programs` (the full list of program ids; `[]` switches all off). That tool asks a person for approval, and an agent can never change its own list. `update_agent` refuses `programs` and names `set_agent_permissions`; `create_agent` does not take it. `get_agent` reports the list, `[]` when none is on. An API token or the command line cannot change it (`403`). System agents cannot have programs.
+- **Conflicts.** A program cannot be switched on when the agent already has a private variable with one of its token variable names, for example "GitHub cannot be switched on for Dev: Dev already has a private variable GH_TOKEN. Remove that variable, or leave GitHub off." The reverse holds too: a private variable named after a token variable of a switched-on program is refused. Two programs that supply the git login for the same site cannot both be on for one agent ("… already supplies the git login for github.com to Dev. Switch one of them off."), and an entry's git site cannot be edited to clash that way.
+- An agent has at most 32 programs switched on.
+
 ## Limits and things to watch
 
 - Ordinary built-in agents' identity and base instructions are protected. Model and supported execution limits remain editable, as do tool policies, connector assignments and skills.

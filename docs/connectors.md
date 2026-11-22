@@ -118,6 +118,10 @@ Each drop is written to the log as an error and to the audit log, and the connec
 
 Changing a connector from workspace A to B does not move its existing A conversation. Subsequent input uses a separate B-scoped conversation, without carrying A's conversation history or recalled shared notes into it. Existing A archives remain readable in A. Directly trying to reuse an A chat or helper in B is refused with a visible error; open B's conversation instead.
 
+## Programs on a connection
+
+Each bound connection has a **Programs** switch: whether work started by a message on this connection may use the program tokens of [Settings → Programs](settings.md#programs). It is off by default. Only a person signed in to the web app in a browser can change it (an API token, the command line and agents are refused; `set_config` refuses `channels.*.programs_allowed`). A save needs the revision you loaded; a change made in the meantime is refused with `409`. The switch has no effect on a connection that is not bound, and changing the connection's workspace or main agent turns it off, so you decide again for the new binding. The matching switch for the web chat is on the Programs tab of Settings.
+
 ## Starting messages
 
 By default an agent only answers messages that arrive on a connector. Each connector's **Configure** panel has a **Starting messages** section with two choices:
