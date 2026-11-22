@@ -60,6 +60,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
     const fields: SaveBarField[] = [
       {
         key: 'session_days',
+        configKey: 'storage.retention.session_days',
         label: 'Keep chat history for',
         value: data.session_days,
         kind: 'number',
@@ -68,6 +69,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
       },
       {
         key: 'memory_retros_forever',
+        configKey: 'storage.retention.memory_retros_forever',
         label: 'Keep forever',
         value: data.memory_retros_forever,
         kind: 'switch',
@@ -76,6 +78,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
       },
       {
         key: 'memory_retros_days',
+        configKey: 'storage.retention.memory_retros_days',
         label: 'Keep memory for',
         value: data.memory_retros_days,
         kind: 'number',
