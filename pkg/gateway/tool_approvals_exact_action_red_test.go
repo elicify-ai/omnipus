@@ -2,130 +2,290 @@
 
 package gateway
 
-// Order 64 — TestToolApprovals_ExactActionNoTimeChoice (S-129; Dataset D17
-// rows 21–25; C-26 point 9, founder Q5 A 2026-11-22). Oracle:
-// skills-tools-redesign-spec.md —
-//   C-26 point 9: the exact-action tools environment_setup, request_mount,
-//        send_email, browser_evaluate and set_config keep a card for every
-//        action. Their cards offer Approve Once and Deny only, with no
-//        time choices, so the person always sees the exact action (the
-//        ADR-090 promise). A timed allowance can never cover them, and the
-//        server refuses allow_for through the offered-actions rule (C-24):
-//        409 "This choice is not available for this request.", nothing
-//        stored.
-//   S-129: with Auto-approve on, Mia's call shows the card; an
-//        {action: allow_for, duration} answer gets the 409 and stores
-//        nothing; Approve Once releases this one call; the same call again
-//        shows a NEW card with its exact action.
-//
-// Harness: the real handler (rest_tool_registry.go::HandleToolApprovals),
-// the real raise path and the real reload snapshot — the same shape as
-// order 58's pack. The exact-action list itself is GREEN's new
-// pkg/tools/exact_action.go::ExactActionTools (beside AlwaysAskTools) —
-// exactActionToolsOf below is that seam; nil keeps the RED run loud
-// (BLOCKED), never a skip.
-//
-// RED today: the handler computes no offered actions (every frame's
-// offered_actions is empty) and answers allow_for with the "unknown
-// action" 400 — every card leg fails on that; the tool list is BLOCKED at
-// its seam.
+// Order 64 / CHECK F15: C-26 point 9, S-129, D17#21–25.
+// Drive real model calls through AgentLoop.Run -> resolveAskPolicy -> the
+// production policyApproverAdapter -> approval registry -> HTTP answer.
+// Never insert a pending approval from this test. Auto is ON and the global
+// policy is Ask; a second variant plants a real standing grant to prove the
+// exact-action exclusion wins over both early-release paths.
+// Only the paid model and tool side effects (email, installer, browser,
+// config mutation and mount) are replaced. Ask resolution, classification,
+// offered-action construction, registry, handler and grant store are real.
+// C-26's table permits Cancel where the card already has it (spec line 574).
+// RED: the offered-action builder is absent; a planted standing grant also
+// releases a real call without a card. GREEN/mutation proof is CHECK's job.
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/bus"
-
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+	browsertools "github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// exactActionToolsOf returns the exact-action tool list (C-26 point 9).
-// GREEN wires it to pkg/tools/exact_action.go::ExactActionTools; nil keeps
-// the RED run loud (BLOCKED), never a skip.
+// The new list is absent; a nil binding is loud RED, not an empty-list pass.
 var exactActionToolsOf func(t testing.TB) []string
 
-func TestToolApprovals_ExactActionNoTimeChoice(t *testing.T) {
-	t.Run("C-26 point 9: the exact-action list holds exactly the five tools", func(t *testing.T) {
-		if exactActionToolsOf == nil {
-			t.Fatal("BLOCKED: the exact-action tool list (pkg/tools/exact_action.go::" +
-				"ExactActionTools, beside AlwaysAskTools) is not implemented — required by " +
-				"C-26 point 9 (founder Q5 A) and Dataset D17 rows 21–25")
-		}
-		require.Equal(t,
-			[]string{"browser_evaluate", "environment_setup", "request_mount", "send_email", "set_config"},
-			exactActionToolsOf(t),
-			"C-26 point 9: exactly the five exact-action tools (founder Q5 A)")
-	})
+type exactActionRow struct {
+	tool, duration, exactKey string
+	exactValue               any
+	args                     map[string]any
+}
 
-	rows := []struct {
-		name     string
-		tool     string
-		args     map[string]any
-		exactArg string // the D17 row's exact-action fact the repeat card must show
-	}{
-		{"D17#21 environment_setup", "environment_setup",
-			map[string]any{"command": "apt-get install -y poppler-utils"}, "poppler-utils"},
-		{"D17#22 request_mount", "request_mount",
-			map[string]any{"path": "/home/p/Projects"}, "/home/p/Projects"},
-		{"D17#23 send_email", "send_email",
-			map[string]any{"to": "person@example.com", "subject": "Quarterly report", "body": "Hello."}, "person@example.com"},
-		{"D17#24 browser_evaluate", "browser_evaluate",
-			map[string]any{"script": "document.title"}, "document.title"},
-		{"D17#25 set_config", "set_config",
-			map[string]any{"key": "gateway.preview_enabled", "value": true}, "gateway.preview_enabled"},
+type exactActionScript struct {
+	row   exactActionRow
+	calls atomic.Int64
+	armed atomic.Bool
+}
+
+func (p *exactActionScript) GetDefaultModel() string { return "exact-action-script" }
+func (p *exactActionScript) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	// One scripted action per user call; do not infer turn boundaries from
+	// the runtime's reminder/history layout (not the subject of this test).
+	if !p.armed.CompareAndSwap(true, false) {
+		return &providers.LLMResponse{Content: "done"}, nil
 	}
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: fmt.Sprintf("exact-call-%d", p.calls.Add(1)), Type: "function",
+		Name: p.row.tool, Arguments: p.row.args,
+	}}}, nil
+}
 
+// Side-effect sink, not a policy/approval double. Its execution proves the
+// real decision path released a call; no test action inserts a card.
+type exactActionEffectSink struct {
+	tools.Tool // Preserve the real schema, scope, category and description.
+	ran        chan map[string]any
+}
+
+func (s *exactActionEffectSink) AutoApproveVerdict(ctx context.Context, args map[string]any) tools.AutoVerdict {
+	return tools.ClassifyAutoApprove(ctx, s.Name(), s.Tool, args)
+}
+
+func (s *exactActionEffectSink) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+	s.ran <- args
+	return &tools.ToolResult{ForLLM: "effect recorded"}
+}
+
+func exactActionTool(t *testing.T, name string) tools.Tool {
+	t.Helper()
+	// Zero-valued production objects supply only metadata/classification;
+	// their external-effect Execute methods are never called.
+	switch name {
+	case "environment_setup":
+		return &tools.EnvironmentSetupTool{}
+	case "request_mount":
+		return &tools.RequestMountTool{}
+	case "send_email":
+		return &tools.SendEmailTool{}
+	case "browser_evaluate":
+		return &browsertools.EvaluateTool{}
+	case "set_config":
+		return &systools.ConfigSetTool{}
+	default:
+		t.Fatalf("fixture: no production tool metadata for %q", name)
+		return nil
+	}
+}
+
+type exactActionHarness struct {
+	api     *restAPI
+	handler *WSHandler
+	reg     *approvalRegistryV2
+	sink    *exactActionEffectSink
+	session string
+	events  agent.EventSubscription
+	script  *exactActionScript
+}
+
+func newExactActionHarness(t *testing.T, row exactActionRow) *exactActionHarness {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Home = filepath.Join(home, "work")
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "exact-action-script"}
+	cfg.Agents.Defaults.MaxToolIterations = 3
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Name: "Mia"}}
+	cfg.Sandbox.AutoApprove = true
+	cfg.Sandbox.GodMode = false
+	cfg.Sandbox.ToolPolicies[row.tool] = "ask"
+	// Make the five scripted calls callable before exercising Ask; discovery
+	// is not this test's subject. GREEN replaces this retired manifest
+	// fixture with a stored Full level when C-6 lands.
+	cfg.Tools.Manifest.Compressed = false
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	script := &exactActionScript{row: row}
+	al := mustAgentLoop(t, cfg, msgBus, script)
+	sink := &exactActionEffectSink{Tool: exactActionTool(t, row.tool), ran: make(chan map[string]any, 8)}
+	al.RegisterTool(sink)
+	inst, ok := al.GetRegistry().GetAgent("mia")
+	require.True(t, ok)
+	ceiling := make(map[string]config.ToolPolicy, len(cfg.Sandbox.ToolPolicies))
+	for name, policy := range cfg.Sandbox.ToolPolicies {
+		ceiling[name] = config.ToolPolicy(policy)
+	}
+	inst.StoreToolPolicy(&tools.ToolPolicyCfg{GlobalPolicies: ceiling})
+	require.Equal(t, "ask", tools.EffectiveToolPolicy(inst.LoadToolPolicy(), sink.Scope(), inst.AgentType, row.tool),
+		"fixture: the scripted tool resolves to global Ask")
+	reg := newApprovalRegistryV2(64, 30*time.Second)
+	handler := newWSHandler(msgBus, al, "")
+	handler.approvalRegV2 = reg
+	al.SetToolApprover(newPolicyApproverAdapter(reg, handler))
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "web", "mia")
+	require.NoError(t, err)
+	require.True(t, al.SessionAutoApprove(meta.ID), "fixture: Auto is ON")
+	events := al.SubscribeEvents(128)
+	t.Cleanup(func() { al.UnsubscribeEvents(events.ID) })
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- al.Run(runCtx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("approval integration loop did not shut down")
+		}
+		handler.Wait()
+	})
+	return &exactActionHarness{
+		api:     &restAPI{agentLoop: al, approvalReg: reg, homePath: home},
+		handler: handler, reg: reg, sink: sink, session: meta.ID, events: events, script: script,
+	}
+}
+
+func (h *exactActionHarness) call(t *testing.T, callID string) {
+	t.Helper()
+	h.script.armed.Store(true)
+	h.handler.handleChatMessageWithClientID(context.Background(), "exact-chat", h.session,
+		"perform the exact action", "mia", nil, "", "", callID, boolPtr(true), makeTestConn())
+}
+
+// Poll only for admission (not for an expected verdict). A bypass is
+// observed immediately at the real side-effect boundary, not as a timeout.
+func (h *exactActionHarness) pending(t *testing.T) *approvalEntry {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		if entries := h.reg.pendingApprovals(); len(entries) > 0 {
+			require.Len(t, entries, 1, "one pending card for the one actual call")
+			return entries[0]
+		}
+		select {
+		case args := <-h.sink.ran:
+			t.Fatalf("S-129: exact action executed without a card under Auto/standing grant: %v", args)
+		case <-timer.C:
+			t.Fatal("S-129: the real call reached neither approval nor execution; fixture/entry path UNVERIFIED")
+		case <-tick.C:
+		}
+	}
+}
+
+func (h *exactActionHarness) finish(t *testing.T, entry *approvalEntry) {
+	t.Helper()
+	w := postToolApprovalRaw(t, h.api, entry.ApprovalID, `{"action":"allow_once"}`)
+	require.Equal(t, http.StatusOK, w.Code, "Once releases the actual pending call: %s", w.Body.String())
+	select {
+	case got := <-h.sink.ran:
+		require.Equal(t, entry.Args, got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("approved call did not reach the side-effect boundary")
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case e, open := <-h.events.C:
+			require.True(t, open, "fixture: event subscription closed before turn completion")
+			if end, ok := e.Payload.(agent.TurnEndPayload); ok && end.SessionID == h.session {
+				require.Equal(t, agent.TurnEndStatusCompleted, end.Status, "the approved real turn completed")
+				return
+			}
+		case <-timer.C:
+			t.Fatal("fixture: no completion event after approved execution")
+		}
+	}
+}
+
+func assertExactActionCard(t *testing.T, h *exactActionHarness, entry *approvalEntry, row exactActionRow) {
+	t.Helper()
+	snap := h.handler.pendingApprovalSnapshot(entry)
+	require.Equal(t, row.tool, snap.ToolName)
+	require.Equal(t, row.args, snap.Args, "S-129: the card shows the complete exact action")
+	require.Equal(t, row.exactValue, snap.Args[row.exactKey], "D17: exact command/path/recipient/script/key")
+	assert.Equal(t, []string{"allow_once", "deny", "cancel"}, snap.OfferedActions, "C-26: exact one-time choices")
+	assert.Empty(t, snap.AllowDurations, "C-26: exact-action cards offer no duration")
+}
+
+func TestToolApprovals_ExactActionNoTimeChoice(t *testing.T) {
+	t.Run("C-26 exact-action list contains exactly five names", func(t *testing.T) {
+		if exactActionToolsOf == nil {
+			t.Fatal("BLOCKED: ExactActionTools is not implemented — required by C-26 point 9 and D17#21–25")
+		}
+		require.ElementsMatch(t, []string{"browser_evaluate", "environment_setup", "request_mount", "send_email", "set_config"}, exactActionToolsOf(t))
+	})
+	rows := []exactActionRow{
+		{"environment_setup", "1d", "command", "apt-get install -y poppler-utils", map[string]any{"command": "apt-get install -y poppler-utils"}},
+		{"request_mount", "1h", "path", "/home/p/Projects", map[string]any{"path": "/home/p/Projects", "reason": "Edit the project files."}},
+		{"send_email", "3h", "to", []any{"person@example.com"}, map[string]any{"to": []any{"person@example.com"}, "subject": "Quarterly report", "body": "Hello."}},
+		{"browser_evaluate", "1h", "js", "document.title", map[string]any{"js": "document.title"}},
+		{"set_config", "1d", "key", "gateway.preview_enabled", map[string]any{"key": "gateway.preview_enabled", "value": true}},
+	}
 	for _, row := range rows {
-		t.Run(row.name+": Approve Once and Deny only, allow_for refused, every action asks", func(t *testing.T) {
-			msgBus := bus.NewMessageBus()
-			t.Cleanup(msgBus.Close)
-			handler, _ := newTestWSHandlerForModelName(t, msgBus)
-			reg := newApprovalRegistryV2(64, 300*time.Second)
-
-			entry, accepted := reg.requestApproval("tc-exact-1", row.tool, row.args,
-				"mia", "sess-exact", "turn-exact-1")
-			require.True(t, accepted, "S-129: the card appears even with Auto-approve on")
-			t.Cleanup(func() { go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) }() })
-			go func() { <-entry.resultCh }()
-			handler.approvalRegV2 = reg
-
-			snap := handler.pendingApprovalSnapshot(entry)
-			require.Equal(t, []string{"allow_once", "deny", "cancel"}, snap.OfferedActions,
-				"S-129: the card offers Approve Once and Deny only (Cancel where it has it today), got %+v",
-				snap.OfferedActions)
-			require.Empty(t, snap.AllowDurations,
-				"S-129: the frame's allow_durations is empty — no time choice")
-
-			api, reg2 := newTestRestAPIWithApprovalReg(t)
-			entry2, accepted2 := reg2.requestApproval("tc-exact-2", row.tool, row.args,
-				"mia", "sess-exact", "turn-exact-2")
-			require.True(t, accepted2)
-			w := postToolApprovalRaw(t, api, entry2.ApprovalID, `{"action":"allow_for","duration":"1d"}`)
-			require.Equal(t, http.StatusConflict, w.Code,
-				"S-129: the allow_for answer is refused through the offered-actions rule, got %d, body: %s",
-				w.Code, w.Body.String())
-			require.Contains(t, w.Body.String(), notOfferedText,
-				"C-26 point 9: the 409 carries the offered-actions text, body: %s", w.Body.String())
-			require.NotContains(t, w.Body.String(), "expires_at",
-				"S-129: nothing is stored — no allowance in the answer, body: %s", w.Body.String())
-
-			// Approve Once releases this one call.
-			w = postToolApprovalRaw(t, api, entry2.ApprovalID, `{"action":"allow_once"}`)
-			require.Equal(t, http.StatusOK, w.Code,
-				"S-129: Approve Once answers the card, got %d, body: %s", w.Code, w.Body.String())
-
-			// The same call again raises a NEW card with its exact action.
-			again, accepted3 := reg2.requestApproval("tc-exact-3", row.tool, row.args,
-				"mia", "sess-exact", "turn-exact-3")
-			require.True(t, accepted3, "S-129: the same call asks again — no allowance ever covers it")
-			snapAgain := handler.pendingApprovalSnapshot(again)
-			require.NotNil(t, snapAgain, "S-129: the new card exists")
-			require.Equal(t, row.tool, snapAgain.ToolName,
-				"S-129: the new card names the exact-action tool")
-			require.Equal(t, []string{"allow_once", "deny", "cancel"}, snapAgain.OfferedActions,
-				"S-129: the new card offers the same two choices, got %+v", snapAgain.OfferedActions)
-			require.NotEqual(t, entry.ToolCallID, snapAgain.ToolCallId,
-				"S-129: the new card is a distinct call, not the answered one")
+		t.Run(row.tool+"/Auto on, rejected time choice writes no allowance, Once releases only one call", func(t *testing.T) {
+			h := newExactActionHarness(t, row)
+			h.call(t, "first")
+			entry := h.pending(t)
+			assertExactActionCard(t, h, entry, row)
+			grants := h.api.agentLoop.ApprovalGrants()
+			require.False(t, grants.IsAllowed(h.session, "mia", row.tool, row.args))
+			body, err := json.Marshal(map[string]string{"action": "allow_for", "duration": row.duration})
+			require.NoError(t, err)
+			w := postToolApprovalRaw(t, h.api, entry.ApprovalID, string(body))
+			assert.Equal(t, http.StatusConflict, w.Code, "D17 rejected time choice: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "This choice is not available for this request.")
+			require.False(t, grants.IsAllowed(h.session, "mia", row.tool, row.args), "no actual store entry after rejected allow_for")
+			require.False(t, grants.IsAllowed(h.session, "mia", row.tool, nil), "no whole-tool allowance either")
+			h.finish(t, entry)
+			require.False(t, grants.IsAllowed(h.session, "mia", row.tool, row.args), "Approve Once stores no allowance")
+			h.call(t, "second")
+			again := h.pending(t)
+			require.NotEqual(t, entry.ApprovalID, again.ApprovalID, "same action raises a NEW card")
+			require.NotEqual(t, entry.ToolCallID, again.ToolCallID)
+			assertExactActionCard(t, h, again, row)
+			h.finish(t, again)
+		})
+		t.Run(row.tool+"/a standing-grant attempt cannot release the call", func(t *testing.T) {
+			h := newExactActionHarness(t, row)
+			grants := h.api.agentLoop.ApprovalGrants()
+			// Exercise the real legacy writer without requiring the new store
+			// to accept a forbidden grant. Whether rejected at creation or
+			// ignored by resolution, the real next call MUST show a card.
+			recorded := grants.Record(h.session, "mia", row.tool, row.args)
+			t.Logf("legacy grant attempt recorded=%t, lookup=%t", recorded, grants.IsAllowed(h.session, "mia", row.tool, row.args))
+			h.call(t, "with-standing-grant")
+			entry := h.pending(t)
+			assertExactActionCard(t, h, entry, row)
+			h.finish(t, entry)
 		})
 	}
 }
