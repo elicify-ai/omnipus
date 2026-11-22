@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -77,13 +78,25 @@ func (s *Store) transact(fn func(sf *storeFile) error) error {
 	return s.transactUntil(time.Now().Add(ordinaryAdmissionBound), fn)
 }
 
-func (s *Store) transactUntil(deadline time.Time, fn func(sf *storeFile) error) error {
+func (s *Store) transactUntil(deadline time.Time, fn func(sf *storeFile) error) (err error) {
 	transactStage("admission")
 	release, err := acquireStoreLock(s.path, deadline)
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer func() {
+		// A failed transaction reports the release failure with its own
+		// error. After a committed write the release failure cannot undo the
+		// write, and closing the descriptor drops the lock in every case, so
+		// it is reported as an error log rather than as a failed write.
+		if rerr := release(); rerr != nil {
+			if err != nil {
+				err = errors.Join(err, rerr)
+				return
+			}
+			slog.Error("credentials: store lock release failed after a committed write", "error", rerr)
+		}
+	}()
 	transactStage("locked")
 	sf, err := s.loadFileInternal()
 	if err != nil {
@@ -97,7 +110,7 @@ func (s *Store) transactUntil(deadline time.Time, fn func(sf *storeFile) error) 
 
 // acquireStoreLock takes the per-path gate and then the sidecar lock, both
 // before deadline. The returned release drops both.
-func acquireStoreLock(path string, deadline time.Time) (func(), error) {
+func acquireStoreLock(path string, deadline time.Time) (func() error, error) {
 	gate := gateFor(path)
 	wait := time.Until(deadline)
 	if wait <= 0 {
@@ -115,12 +128,9 @@ func acquireStoreLock(path string, deadline time.Time) (func(), error) {
 		<-gate.slot
 		return nil, err
 	}
-	return func() {
-		// An unlock or close failure cannot undo the committed write; closing
-		// the descriptor releases the lock in every case.
-		_ = unlockSidecar(f)
-		_ = f.Close()
-		<-gate.slot
+	return func() error {
+		defer func() { <-gate.slot }()
+		return closeSidecar(f, true)
 	}, nil
 }
 
@@ -129,6 +139,9 @@ func acquireStoreLock(path string, deadline time.Time) (func(), error) {
 // 10 ms until deadline. The lock is only kept on the file that is at the path
 // when it is taken (see fileutil.WithFlock).
 func lockSidecarUntil(lockPath string, deadline time.Time) (*os.File, error) {
+	// The path is the store's own configured location plus the fixed sidecar
+	// suffix, never request input.
+	lockPath = filepath.Clean(lockPath)
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return nil, fmt.Errorf("credentials: create store dir: %w", err)
 	}
@@ -139,22 +152,21 @@ func lockSidecarUntil(lockPath string, deadline time.Time) (*os.File, error) {
 		}
 		locked, err := tryLockSidecar(f)
 		if err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("credentials: lock store: %w", err)
+			return nil, errors.Join(fmt.Errorf("credentials: lock store: %w", err), closeSidecar(f, false))
 		}
 		if locked {
 			current, statErr := sameFileAtPath(f, lockPath)
 			if statErr == nil && current {
 				return f, nil
 			}
-			_ = unlockSidecar(f)
-			_ = f.Close()
-			if statErr != nil {
-				return nil, statErr
+			if cerr := closeSidecar(f, true); cerr != nil || statErr != nil {
+				return nil, errors.Join(statErr, cerr)
 			}
 			continue // replaced while we waited: lock the current file
 		}
-		_ = f.Close()
+		if cerr := closeSidecar(f, false); cerr != nil {
+			return nil, cerr
+		}
 		if time.Now().Add(admissionRetry).After(deadline) {
 			if d := time.Until(deadline); d > 0 {
 				time.Sleep(d)
@@ -165,12 +177,27 @@ func lockSidecarUntil(lockPath string, deadline time.Time) (*os.File, error) {
 	}
 }
 
+// closeSidecar unlocks (when locked) and closes the sidecar lock file,
+// reporting both failures.
+func closeSidecar(f *os.File, locked bool) error {
+	var uerr error
+	if locked {
+		if err := unlockSidecar(f); err != nil {
+			uerr = fmt.Errorf("credentials: unlock store: %w", err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		return errors.Join(uerr, fmt.Errorf("credentials: close store lock: %w", err))
+	}
+	return uerr
+}
+
 func sameFileAtPath(f *os.File, path string) (bool, error) {
 	held, err := f.Stat()
 	if err != nil {
 		return false, fmt.Errorf("credentials: stat store lock: %w", err)
 	}
-	onDisk, err := os.Stat(path)
+	onDisk, err := os.Stat(filepath.Clean(path))
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}

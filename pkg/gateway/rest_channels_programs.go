@@ -50,16 +50,16 @@ func (a *restAPI) putChannelPrograms(w http.ResponseWriter, r *http.Request, id 
 	err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		live := a.agentLoop.GetConfig()
 		if _, ok := live.Channels[id]; !ok {
-			return &errProgramsWrite{status: http.StatusNotFound, message: "unknown instance"}
+			return &programsWriteError{status: http.StatusNotFound, message: "unknown instance"}
 		}
 		if req.Revision != config.ChannelConfigRevision(live, id) {
-			return &errProgramsWrite{status: http.StatusConflict,
+			return &programsWriteError{status: http.StatusConflict,
 				message: "This connection changed since this page was loaded. Check the current state before saving again."}
 		}
 		channels, _ := m["channels"].(map[string]any)
 		ch, _ := channels[id].(map[string]any)
 		if ch == nil {
-			return &errProgramsWrite{status: http.StatusNotFound, message: "unknown instance"}
+			return &programsWriteError{status: http.StatusNotFound, message: "unknown instance"}
 		}
 		if req.Allowed {
 			ch["programs_allowed"] = true
@@ -69,7 +69,7 @@ func (a *restAPI) putChannelPrograms(w http.ResponseWriter, r *http.Request, id 
 		channels[id] = ch
 		return nil
 	})
-	var werr *errProgramsWrite
+	var werr *programsWriteError
 	switch {
 	case errors.As(err, &werr):
 		jsonErr(w, werr.status, werr.message)

@@ -91,7 +91,7 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, timeout time
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	Attach(cmd, ResolvedPrograms{Tokens: []string{token}})
 	setProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
+	if startErr := cmd.Start(); startErr != nil {
 		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
 	}
 	done := make(chan error, 1)

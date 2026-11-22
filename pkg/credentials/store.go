@@ -716,12 +716,12 @@ func (s *Store) saveFileNoLock(sf *storeFile) error {
 	// fileutil.SidecarLockPath). The sidecar is created 0600 like the store,
 	// and the sandbox already withholds it from agents — fspolicy's secret
 	// set covers every credentials.json.<suffix> name.
-	if err := writeFileAtomicFn(s.path, data, 0o600); err != nil {
-		return err
+	if writeErr := writeFileAtomicFn(s.path, data, 0o600); writeErr != nil {
+		return writeErr
 	}
 	// Read-back: the write is the commit point only if the file now holds
 	// exactly what was written (FR-049).
-	got, err := os.ReadFile(s.path)
+	got, err := os.ReadFile(filepath.Clean(s.path))
 	if err != nil {
 		return fmt.Errorf("credentials: read back store file: %w", err)
 	}

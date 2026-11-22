@@ -271,13 +271,13 @@ func writeProgramValidation(w http.ResponseWriter, err error) {
 	jsonErr(w, http.StatusInternalServerError, "internal server error")
 }
 
-// errProgramsWrite carries a refusal decided inside a config write.
-type errProgramsWrite struct {
+// programsWriteError carries a refusal decided inside a config write.
+type programsWriteError struct {
 	status  int
 	message string
 }
 
-func (e *errProgramsWrite) Error() string { return e.message }
+func (e *programsWriteError) Error() string { return e.message }
 
 // writeProgramsSection replaces config.json's programs section with section.
 func writeProgramsSection(m map[string]any, section config.ProgramsConfig) error {
@@ -364,11 +364,11 @@ func (a *restAPI) editProgram(w http.ResponseWriter, r *http.Request, id string)
 		}
 		idx := slices.IndexFunc(cur.Programs.Entries, func(c config.ProgramEntryConfig) bool { return c.ID == id })
 		if idx < 0 {
-			return &errProgramsWrite{status: http.StatusNotFound, message: "program not found"}
+			return &programsWriteError{status: http.StatusNotFound, message: "program not found"}
 		}
 		stored := cur.Programs.Entries[idx]
 		if *wire.Revision != stored.Revision {
-			return &errProgramsWrite{status: http.StatusConflict,
+			return &programsWriteError{status: http.StatusConflict,
 				message: "This program changed since this page was loaded. Check the current state before saving again."}
 		}
 		merged := mergeCustomEdit(stored, wire)
@@ -385,7 +385,7 @@ func (a *restAPI) editProgram(w http.ResponseWriter, r *http.Request, id string)
 		}
 		return writeProgramsSection(m, section)
 	})
-	var werr *errProgramsWrite
+	var werr *programsWriteError
 	switch {
 	case errors.As(err, &werr):
 		jsonErr(w, werr.status, werr.message)
@@ -485,14 +485,14 @@ func (a *restAPI) putProgramSettings(w http.ResponseWriter, r *http.Request) {
 	err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		cur := a.agentLoop.GetConfig()
 		if req.Revision != programsRevision(cur) {
-			return &errProgramsWrite{status: http.StatusConflict,
+			return &programsWriteError{status: http.StatusConflict,
 				message: "The program settings changed since this page was loaded. Check the current state before saving again."}
 		}
 		section := cur.Programs
 		section.WebChatAllowed = req.WebChatAllowed
 		return writeProgramsSection(m, section)
 	})
-	var werr *errProgramsWrite
+	var werr *programsWriteError
 	switch {
 	case errors.As(err, &werr):
 		jsonErr(w, werr.status, werr.message)

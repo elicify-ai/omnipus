@@ -38,13 +38,14 @@ const (
 	MsgNotConnected    = "Connect a token first."
 )
 
-// Service errors. The REST layer maps them to the spec's statuses.
+// Service errors. The REST layer maps them (errors.Is) to the spec's statuses
+// and the Msg texts above.
 var (
 	ErrUnknownProgram  = errors.New("programs: unknown program")
-	ErrStaleGeneration = errors.New(MsgStaleGeneration)
-	ErrStoreBusy       = errors.New(MsgStoreBusy)
-	ErrSaveFailed      = errors.New(MsgSaveFailed)
-	ErrNotConnected    = errors.New(MsgNotConnected)
+	ErrStaleGeneration = errors.New("programs: token generation changed")
+	ErrStoreBusy       = errors.New("programs: credential store busy")
+	ErrSaveFailed      = errors.New("programs: token not saved")
+	ErrNotConnected    = errors.New("programs: no token connected")
 )
 
 // Connection is the persisted connection state of one entry. It never holds
