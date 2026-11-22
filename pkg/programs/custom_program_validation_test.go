@@ -16,6 +16,7 @@ package programs
 // D-2 rows 28–30 are [S2] and deliberately absent.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -154,6 +155,28 @@ func TestCustomProgram_Validation(t *testing.T) {
 		validCheck := acmeBase()
 		validCheck.IdentityCheck = &ProgramIdentityCheck{ProgramWord: "acme", Args: []string{"whoami"}, TimeoutSeconds: 20}
 		require.NoError(t, ValidateCustomRequest(validCheck, existing), "bounds in range accepted")
+	})
+
+	t.Run("accepted_boundaries_exactly_at_every_max", func(t *testing.T) {
+		// CHECK F17: each refused D-2 row has an otherwise-valid boundary
+		// twin — exactly at the max the request is accepted, so a refusal
+		// can never be attributed to the neighbouring field. The 400/409
+		// class split itself arrives with GREEN's typed validation errors
+		// (the RED stub returns plain errors only; see test-disputes B).
+		atMax := acmeBase()
+		atMax.DisplayName = strings.Repeat("a", 64)                                   // row 2's max − refused only at 65
+		atMax.ProgramWords = []string{"w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8"} // row 5's max − 8
+		atMax.TokenVariables = []string{"A1", "B2", "C3", "D4"}                       // row 10's max − 4
+		atMax.NetworkSites = make([]string, 32)                                       // row 16's max − 32
+		for i := range atMax.NetworkSites {
+			atMax.NetworkSites[i] = fmt.Sprintf("host%d.example", i)
+		}
+		atMax.IdentityCheck = &ProgramIdentityCheck{ProgramWord: "w1", Args: make([]string, 16), TimeoutSeconds: 30} // rows 26/27's max
+		for i := range atMax.IdentityCheck.Args {
+			atMax.IdentityCheck.Args[i] = "a"
+		}
+		require.NoError(t, ValidateCustomRequest(atMax, existing),
+			"every field exactly at its dataset maximum is accepted (D-2 boundaries)")
 	})
 
 	t.Run("D2_row22_git_host_normalises_to_canonical", func(t *testing.T) {
