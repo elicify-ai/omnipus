@@ -719,6 +719,26 @@ async function expectExactlyThisRowMarked(
 //     unsupported: the value on the marked element would depend on cascade
 //     details the reader does not model.
 //
+// KNOWN LIMITS of this reader (CHECK round 9, R9-02; team-lead stop rule:
+// the hand-written reader is not extended again). Named boundary challenges
+// it does NOT model, each with CHECK's receipt: the `all` shorthand resets
+// the animation-name (N121); CSS-escaped property names
+// (`anim\61 tion-duration`, N122); a selector other than the exact
+// row-target attribute that also matches the row (`html body *` with
+// !important, N123); transitive custom-property dependency chains — only
+// the row-target rules' own declarations and the tokens file are sources,
+// never an alias that resolves outside them (N124); an unknown function
+// token in the shorthand (N125); duplicate shorthand components (N126); a
+// media condition beyond the exact `prefers-reduced-motion: reduce` header
+// (N127). The shorthand's own reset (R9-03/N128) IS modeled — play-state
+// resets to running — but only that component: a later shorthand's reset of
+// the other omitted components follows the fold lines above, and anything
+// outside the written grammar fails closed as unsupported. THE REAL-BROWSER
+// TEST BELOW IS THE PROOF OF FR-075 MOTION: tests/e2e/settings-row-jump-
+// motion.spec.ts reads the marked row's element.getAnimations() in real
+// Chromium under normal and reduced motion; this jsdom oracle stays for its
+// 100-plus named kills against the shipped sheet.
+//
 // Effective-cascade oracle (CHECK R5-02; strengthened CHECK R6-01): the
 // required behaviour is visual — a short visible flash once, and NO animation
 // under reduced motion — so the oracle reads the cascade the browser would
@@ -1175,6 +1195,14 @@ function effectiveAnimation(rules: RowTargetRule[], css: string): AnimationState
       // The shorthand's components may appear in ANY order (css-animations
       // grammar: each at most once, the two times in appearance order).
       // Classify each token by TYPE, not position (the grammar above).
+      // Shorthand reset (CHECK R9-03/N128): a shorthand omits a component
+      // resets it to its initial value (CSS Animations). The fold already
+      // resets the other omitted components below — name (`?? ''`), the
+      // times (`times[0] ? … : 0`), iteration (`?? '1'`) — and the omitted
+      // play-state resets to the initial `running` here, before the tokens
+      // are classified: a later complete shorthand turns an earlier
+      // `animation-play-state: paused` back into a running animation.
+      state.playState = 'running'
       let name: string | null = null
       let sawNone = false
       const times: string[] = []
