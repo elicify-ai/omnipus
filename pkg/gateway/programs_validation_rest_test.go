@@ -67,7 +67,7 @@ func TestCustomProgram_RESTValidationClasses(t *testing.T) {
 			body[row.field] = row.value
 			raw, err := json.Marshal(body)
 			require.NoError(t, err)
-			w := pgProgramsSessionCall(t, f, http.MethodPost, "/programs", string(raw))
+			w := pgProgramsSessionCall(t, f, http.MethodPost, "/api/v1/programs", string(raw))
 			require.Equal(t, row.status, w.Code, "D-2 %s class: %s", row.name, w.Body.String())
 			if row.status == 409 {
 				require.Contains(t, w.Body.String(), "GitHub")

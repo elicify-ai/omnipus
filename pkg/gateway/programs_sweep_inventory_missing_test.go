@@ -20,7 +20,7 @@ func TestProgramCredential_RouteSweep_MethodInstrument(t *testing.T) {
 	require.Equal(t, []string{p + "|" + http.MethodDelete}, pgMissingSweepRows([]string{p}, handled, nil, nil), "PUT and POST cannot cover missing DELETE")
 	path, _, row := pgSweepTarget(p, http.MethodDelete)
 	require.True(t, row)
-	require.Equal(t, "/programs/github/credential", path, "disconnect is not entry deletion (S-53/S-113)")
+	require.Equal(t, "/api/v1/programs/github/credential", path, "disconnect is not entry deletion (S-53/S-113)")
 }
 
 func TestProgramCredential_RouteSweep_MissingBoundaries(t *testing.T) {

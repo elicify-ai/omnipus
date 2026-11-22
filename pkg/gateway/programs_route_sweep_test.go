@@ -148,46 +148,46 @@ func pgSweepTarget(pattern, method string) (path, body string, isRow bool) {
 	case pattern == "/api/v1/programs":
 		switch method {
 		case http.MethodGet:
-			return "/programs", "", false
+			return "/api/v1/programs", "", false
 		case http.MethodPost:
 			// the custom-program row (the create schema, S-113 "their schemas")
-			return "/programs", `{"display_name":"Sweep","program_words":["sweepw"],` +
+			return "/api/v1/programs", `{"display_name":"Sweep","program_words":["sweepw"],` +
 				`"token_variables":["SWEEP_TOKEN"],"network_sites":["api.sweep.invalid"]}`, true
 		default:
-			return generic("/programs")
+			return generic("/api/v1/programs")
 		}
 	case subtree && strings.Contains(pattern, "programs") && !strings.Contains(pattern, "/channels/"):
 		// the {id} entry subtree: each leaf by method (CHECK R09's collapse fix)
 		switch method {
 		case http.MethodGet:
-			return "/programs/github", "", false
+			return "/api/v1/programs/github", "", false
 		case http.MethodPut:
 			// the credential save row (ProgramCredentialRequest)
-			return "/programs/github/credential", `{"value":"tok_evil_999999"}`, true
+			return "/api/v1/programs/github/credential", `{"value":"tok_evil_999999"}`, true
 		case http.MethodPost:
 			// the check row
-			return "/programs/github/check", `{}`, true
+			return "/api/v1/programs/github/check", `{}`, true
 		default: // DELETE: the disconnect row
-			return "/programs/github/credential", "", true
+			return "/api/v1/programs/github/credential", "", true
 		}
 	case strings.Contains(pattern, "/channels/") && strings.Contains(pattern, "programs"):
 		switch method {
 		case http.MethodGet:
-			return "/channels/telegram/programs", "", false
+			return "/api/v1/channels/telegram/programs", "", false
 		case http.MethodPut:
 			// the channel setting row (its boolean + revision schema)
-			return "/channels/telegram/programs", `{"allowed":true,"revision":1}`, true
+			return "/api/v1/channels/telegram/programs", `{"allowed":true,"revision":1}`, true
 		default:
-			return generic("/channels/telegram/programs")
+			return generic("/api/v1/channels/telegram/programs")
 		}
 	case strings.Contains(pattern, "programs"): // settings and any other Programs route
 		switch method {
 		case http.MethodGet:
-			return "/programs/settings", "", false
+			return "/api/v1/programs/settings", "", false
 		case http.MethodPut:
-			return "/programs/settings", `{"web_chat_allowed":true,"revision":1}`, true
+			return "/api/v1/programs/settings", `{"web_chat_allowed":true,"revision":1}`, true
 		default:
-			return generic("/programs/settings")
+			return generic("/api/v1/programs/settings")
 		}
 	default:
 		return generic(base)

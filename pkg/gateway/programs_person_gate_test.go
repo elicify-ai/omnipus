@@ -84,12 +84,11 @@ func (r *recordingRegistrar) registered() []string {
 
 const pgPersonRefusal = "this action requires a signed-in person"
 
-// The Programs routes use bare /programs paths (the spec's new-path table);
-// the agent route is the existing /api/v1 one.
+// Programs and agents share the /api/v1 server base (contracts/openapi.yaml::servers).
 const (
-	pgSaveRoute     = "/programs/github/credential"
-	pgListRoute     = "/programs"
-	pgSettingsRoute = "/programs/settings"
+	pgSaveRoute     = "/api/v1/programs/github/credential"
+	pgListRoute     = "/api/v1/programs"
+	pgSettingsRoute = "/api/v1/programs/settings"
 	pgAgentsRoute   = "/api/v1/agents/dev"
 )
 
@@ -751,7 +750,7 @@ func TestProgramsREST_BypassAndLegacyEnvRefused(t *testing.T) {
 		if path, err := exec.LookPath("gh"); err != nil || path == "" {
 			t.Fatalf("instrument: the fake gh is not on PATH (%v) — the nothing-started claim below would be vacuous", err)
 		}
-		req := httptest.NewRequest(http.MethodPost, "/programs/github/check", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/programs/github/check", nil)
 		attachCSRF(req)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -768,7 +767,7 @@ func TestProgramsREST_BypassAndLegacyEnvRefused(t *testing.T) {
 	t.Run("D8_row7_legacy_env_token_refused", func(t *testing.T) {
 		handler, _, _ := pgStandaloneAPI(t, false)
 		t.Setenv("OMNIPUS_BEARER_TOKEN", "legacy-machine-secret")
-		req := httptest.NewRequest(http.MethodPut, "/channels/telegram/programs",
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/programs",
 			strings.NewReader(`{"allowed":true,"revision":1}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer legacy-machine-secret")

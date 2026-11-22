@@ -16,7 +16,7 @@ import (
 
 func pgChannelSetting(t *testing.T, f *pgGateFixture) map[string]any {
 	t.Helper()
-	w := pgProgramsSessionCall(t, f, http.MethodGet, "/channels/telegram/programs", "")
+	w := pgProgramsSessionCall(t, f, http.MethodGet, "/api/v1/channels/telegram/programs", "")
 	if w.Code == http.StatusNotFound {
 		routeMissing(t, w, "GET /channels/telegram/programs", "S-45 / FR-009")
 	}
@@ -33,7 +33,7 @@ func pgEnableChannelPrograms(t *testing.T, f *pgGateFixture) {
 	before := pgChannelSetting(t, f)
 	body, err := json.Marshal(map[string]any{"allowed": true, "revision": before["revision"]})
 	require.NoError(t, err)
-	w := pgProgramsSessionCall(t, f, http.MethodPut, "/channels/telegram/programs", string(body))
+	w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/channels/telegram/programs", string(body))
 	require.Equal(t, http.StatusOK, w.Code, "switch-on accepted: %s", w.Body.String())
 	require.Equal(t, true, pgChannelSetting(t, f)["allowed"], "positive: real setting is ON")
 }

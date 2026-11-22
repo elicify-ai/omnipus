@@ -121,7 +121,7 @@ func pgFakeGhSleep(pidFile string) (string, string) {
 // field-agnostically into maps: the generated carrier does not exist at RED.
 func pgProgramsList(t *testing.T, f *pgGateFixture) []map[string]any {
 	t.Helper()
-	w := pgProgramsSessionCall(t, f, http.MethodGet, "/programs", "")
+	w := pgProgramsSessionCall(t, f, http.MethodGet, "/api/v1/programs", "")
 	require.Equal(t, http.StatusOK, w.Code, "GET /programs: %s", w.Body.String())
 	var root map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &root), "GET /programs returns an object: %s", w.Body.String())
@@ -197,7 +197,7 @@ func pgConnectGithub(t *testing.T, f *pgGateFixture) map[string]any {
 	t.Helper()
 	shBody, cmdBody := pgFakeGhAccounts(map[string]string{"tok_valid_12345": "octocat"})
 	pgInstallFakeGh(t, f, shBody, cmdBody)
-	w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential", `{"value":"tok_valid_12345"}`)
+	w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential", `{"value":"tok_valid_12345"}`)
 	if w.Code == http.StatusNotFound {
 		routeMissing(t, w, "PUT /programs/github/credential (save the token)", "S1 contract table / S-01")
 	}
@@ -216,7 +216,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		f := pgPersonAPI(t)
 		shBody, cmdBody := pgFakeGhAccounts(map[string]string{"tok_valid_12345": "octocat"})
 		pgInstallFakeGh(t, f, shBody, cmdBody)
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_valid_12345"}`)
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential (save the token)", "S1 contract table / S-01")
@@ -233,7 +233,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		require.Equal(t, "octocat", pgConnection(t, entry)["account_label"], "the check stored the account label octocat")
 		// And: no response contains tok_valid_12345.
 		require.NotContains(t, w.Body.String(), "tok_valid_12345", "the save response never carries the token")
-		listBody := pgProgramsSessionCall(t, f, http.MethodGet, "/programs", "")
+		listBody := pgProgramsSessionCall(t, f, http.MethodGet, "/api/v1/programs", "")
 		require.NotContains(t, listBody.Body.String(), "tok_valid_12345", "GET /programs never carries the token")
 	})
 
@@ -242,7 +242,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		// Given NO gh on the gateway PATH: an empty PATH segment set wins over
 		// the fixture's fake (the subtest's t.Setenv scopes to this row).
 		t.Setenv("PATH", t.TempDir())
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_valid_12345"}`)
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential (no gh on PATH)", "S1 contract table / S-03")
@@ -258,7 +258,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		f := pgPersonAPI(t)
 		shBody, cmdBody := pgFakeGhAccounts(map[string]string{"tok_valid_12345": "octocat"})
 		pgInstallFakeGh(t, f, shBody, cmdBody) // 401s for any other token
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_wrong_999999"}`)
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential (wrong token)", "S1 contract table / S-04")
@@ -290,7 +290,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 				"(a privileged environment defeats directory DAC); S-05 needs a real write failure at the " +
 				"store's atomic-write edge")
 		}
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_other_67890"}`)
 		require.NoError(t, os.Chmod(f.api.homePath, 0o700), "instrument: the data dir is writable again")
 		require.NoError(t, f.store.Set("S05_instrument", "y"),
@@ -311,7 +311,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		pidFile := filepath.Join(t.TempDir(), "gh-pid")
 		shBody, cmdBody := pgFakeGhSleep(pidFile)
 		pgInstallFakeGh(t, f, shBody, cmdBody)
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_valid_12345"}`)
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential (30s fake gh)", "S1 contract table / S-06")
@@ -328,7 +328,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 	t.Run("S36_no_check_defined_token_still_available", func(t *testing.T) {
 		f := pgPersonAPI(t)
 		// Acme has no account check: create it first (contract: 201).
-		w := pgProgramsSessionCall(t, f, http.MethodPost, "/programs",
+		w := pgProgramsSessionCall(t, f, http.MethodPost, "/api/v1/programs",
 			`{"display_name":"Acme","program_words":["acme"],"token_variables":["ACME_TOKEN"],`+
 				`"network_sites":["api.acme.example"]}`)
 		if w.Code == http.StatusNotFound {
@@ -345,7 +345,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		require.Equal(t, "not_connected", pgConnection(t, created)["state"], "a new entry lists not_connected")
 		// Save without any identity check defined: saved_not_checked, and the
 		// token is available (the message table's none-branch).
-		save := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/"+id+"/credential",
+		save := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/"+id+"/credential",
 			`{"value":"acme_tok_123456"}`)
 		require.Equal(t, http.StatusOK, save.Code, "the save is processed: %s", save.Body.String())
 		entry := pgPollEntryState(t, f, id, "saved_not_checked", 15*time.Second)
@@ -373,7 +373,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 				`"identity_check":{"program_word":"acme","args":["whoami"],"timeout_seconds":20}}`)
 		id, _ := created["id"].(string)
 
-		save := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/"+id+"/credential",
+		save := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/"+id+"/credential",
 			`{"value":"acme_tok_123456"}`)
 		require.Equal(t, http.StatusOK, save.Code, "the save is processed: %s", save.Body.String())
 		entry := pgPollEntryState(t, f, id, "connected", 15*time.Second)
@@ -397,7 +397,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		storeBefore := programstore.Snapshot(t, f.store, canary)
 		body := `{"value":"` + strings.Repeat("a", 65537-len(`{"value":""}`)) + `"}`
 		require.Len(t, body, 65537, "D-1 row 10 is body bytes, not value bytes")
-		huge := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential", body)
+		huge := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential", body)
 		require.Equal(t, http.StatusRequestEntityTooLarge, huge.Code,
 			"a body over 65,536 bytes is answered 413: got %d", huge.Code)
 		after := pgProgramEntryByID(t, f, "github")
@@ -405,7 +405,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 			"the size-refused save wrote nothing")
 		require.Equal(t, storeBefore, programstore.Snapshot(t, f.store, canary))
 
-		control := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		control := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"`+strings.Repeat("a", 16384)+`"}`)
 		if control.Code == http.StatusNotFound {
 			routeMissing(t, control, "PUT /programs/github/credential (16,384-byte value)", "S1 contract table / D-1 row 4")
@@ -424,7 +424,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		before := pgProgramEntryByID(t, f, "github")
 		curGen, ok := pgConnection(t, before)["generation"].(float64)
 		require.True(t, ok, "the entry carries its generation: %s", pgEntryJSON(before))
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			fmt.Sprintf(`{"value":"tok_stale_111111","expected_generation":%v}`, curGen+5))
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential (stale expected_generation)", "S1 contract table / D-1 row 12")
@@ -459,7 +459,7 @@ func TestProgramReplaceCheckDisconnect(t *testing.T) {
 		shBody, cmdBody := pgFakeGhAccounts(map[string]string{
 			"tok_valid_12345": "octocat", "tok_new_654321": "hubot"})
 		pgInstallFakeGh(t, f, shBody, cmdBody)
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_new_654321"}`)
 		require.Equal(t, http.StatusOK, w.Code, "the replace is processed: %s", w.Body.String())
 		var saved map[string]any
@@ -479,7 +479,7 @@ func TestProgramReplaceCheckDisconnect(t *testing.T) {
 		baseline := pgConnection(t, pgProgramEntryByID(t, f, "github"))
 		shBody, cmdBody := pgFakeGhAccounts(map[string]string{}) // 401s for everything
 		pgInstallFakeGh(t, f, shBody, cmdBody)
-		w := pgProgramsSessionCall(t, f, http.MethodPost, "/programs/github/check", `{}`)
+		w := pgProgramsSessionCall(t, f, http.MethodPost, "/api/v1/programs/github/check", `{}`)
 		require.Equal(t, http.StatusAccepted, w.Code, "the re-check is accepted: %s", w.Body.String())
 		failed := pgPollEntryState(t, f, "github", "check_failed", 15*time.Second)
 		failedConn := pgConnection(t, failed)
@@ -494,7 +494,7 @@ func TestProgramReplaceCheckDisconnect(t *testing.T) {
 		// never DELETE /programs/{id} (that is the entry delete — S-38's
 		// preset row answers 422 there).
 		before := pgConnection(t, pgProgramEntryByID(t, f, "github"))
-		w := pgProgramsSessionCall(t, f, http.MethodDelete, "/programs/github/credential", "")
+		w := pgProgramsSessionCall(t, f, http.MethodDelete, "/api/v1/programs/github/credential", "")
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "DELETE /programs/github/credential (disconnect)", "S1 contract table / S-53")
 		}
@@ -549,7 +549,7 @@ func TestProgramEntryDeleteRows(t *testing.T) {
 		// post-delete reads cannot detect mutation by the refused request.
 		before := pgProgramEntryByID(t, f, id)
 
-		del := pgProgramsSessionCall(t, f, http.MethodDelete, "/programs/"+id, "")
+		del := pgProgramsSessionCall(t, f, http.MethodDelete, "/api/v1/programs/"+id, "")
 		if del.Code == http.StatusNotFound {
 			routeMissing(t, del, "DELETE /programs/{id} (delete Acme while on)", "S1 contract table / S-35")
 		}
@@ -564,13 +564,13 @@ func TestProgramEntryDeleteRows(t *testing.T) {
 
 	t.Run("S38_presets_are_read_only_422", func(t *testing.T) {
 		f := pgPersonAPI(t)
-		del := pgProgramsSessionCall(t, f, http.MethodDelete, "/programs/github", "")
+		del := pgProgramsSessionCall(t, f, http.MethodDelete, "/api/v1/programs/github", "")
 		if del.Code == http.StatusNotFound {
 			routeMissing(t, del, "DELETE /programs/github (delete a preset)", "S1 contract table / S-38")
 		}
 		require.Equal(t, http.StatusUnprocessableEntity, del.Code,
 			"deleting a preset is refused 422: got %d %s", del.Code, del.Body.String())
-		put := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github",
+		put := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github",
 			`{"revision":1,"display_name":"GitHub Renamed"}`)
 		require.Equal(t, http.StatusUnprocessableEntity, put.Code,
 			"editing a preset is refused 422 too (contract row: PUT / DELETE, 422 preset): got %d %s",
