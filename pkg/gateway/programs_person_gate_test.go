@@ -28,6 +28,8 @@ package gateway
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -36,6 +38,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,9 +49,35 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// recordingRegistrar records every registered route pattern (the sweep's
+// "registered route list") while still serving handlers on the real mux.
+type recordingRegistrar struct {
+	mu     sync.Mutex
+	mux    *http.ServeMux
+	routes []string
+}
+
+func (r *recordingRegistrar) RegisterHTTPHandler(pattern string, h http.Handler) {
+	r.mu.Lock()
+	r.routes = append(r.routes, pattern)
+	r.mu.Unlock()
+	if r.mux != nil {
+		r.mux.Handle(pattern, h)
+	}
+}
+
+func (r *recordingRegistrar) registered() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.routes...)
+}
 
 const pgPersonRefusal = "this action requires a signed-in person"
 
@@ -74,9 +103,21 @@ type pgGateFixture struct {
 	token    string // the person's own API bearer token from the real login
 	cliToken string
 	ghStarts string
+	store    *credentials.Store // the fixture's real unlocked credential store
 }
 
 func pgPersonAPI(t *testing.T) *pgGateFixture {
+	t.Helper()
+	f, _ := pgNewGateway(t, false)
+	return f
+}
+
+// pgNewGateway builds the person-account gateway. With recordRoutes it
+// registers through a recording registrar and returns every registered route
+// pattern (the S-113 sweep drives "every registered HTTP route"). In the
+// platform edition there is no password login, so the person's API bearer is
+// minted directly into the account's token set (SEC-1) instead.
+func pgNewGateway(t *testing.T, recordRoutes bool) (*pgGateFixture, []string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
@@ -105,31 +146,59 @@ func pgPersonAPI(t *testing.T) *pgGateFixture {
 	require.NoError(t, agentstore.New(tmpDir).Create("dev", &devForStore),
 		"instrument: the dev entity record persists (ADR-054)")
 
-	api := &restAPI{agentLoop: al, homePath: tmpDir, allowedOrigin: "http://localhost:3000"}
+	// The real encrypted store, unlocked under the fixture master key and
+	// wired the way production wires it (submit continuations write card
+	// secrets through it).
+	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
+	store := credentials.NewStore(filepath.Join(tmpDir, "credentials.json"))
+	require.NoError(t, credentials.Unlock(store), "instrument: the store unlocks under the fixture master key")
+	t.Cleanup(func() { store.Close() })
+	al.WireSysagentDeps(&systools.Deps{Home: tmpDir, GetCfg: al.GetConfig, CredStore: store})
+
+	api := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     task.New(tmpDir + "/tasks"),
+		taskLock:      task.TaskFileLock,
+	}
 	mux := http.NewServeMux()
-	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
-	f := &pgGateFixture{t: t, api: api, handler: buildProductionMiddlewareChain(api, mux)}
+	var routes []string
+	if recordRoutes {
+		rec := &recordingRegistrar{mux: mux}
+		api.registerAdditionalEndpoints(rec)
+		routes = rec.registered()
+	} else {
+		api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
+	}
+	f := &pgGateFixture{t: t, api: api, handler: buildProductionMiddlewareChain(api, mux), store: store}
 
 	login := httptest.NewRecorder()
 	api.HandleLogin(login, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
 		strings.NewReader(`{"username":"pg-person","password":"pg-person-password"}`)))
-	require.Equal(t, http.StatusOK, login.Code, "real person login: %s", login.Body.String())
-	f.cookies = login.Result().Cookies()
-	var out map[string]any
-	require.NoError(t, json.Unmarshal(login.Body.Bytes(), &out))
-	f.token, _ = out["token"].(string)
-	found := false
-	for _, c := range f.cookies {
-		if c.Name == middleware.SessionCookieName {
-			found = true
+	if login.Code == http.StatusNotFound {
+		// Platform edition: no password login exists. Mint the person's own
+		// API bearer straight into the account's token set instead.
+		f.token = pgMintUserToken(t, api)
+	} else {
+		require.Equal(t, http.StatusOK, login.Code, "real person login: %s", login.Body.String())
+		f.cookies = login.Result().Cookies()
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(login.Body.Bytes(), &out))
+		f.token, _ = out["token"].(string)
+		found := false
+		for _, c := range f.cookies {
+			if c.Name == middleware.SessionCookieName {
+				found = true
+			}
 		}
+		require.True(t, found, "login must mint a real person session, not an injected role")
 	}
-	require.True(t, found, "login must mint a real person session, not an injected role")
-	// Instrument: the same mux and real cookie authenticate an existing route.
+	// Instrument: the same mux and real identity authenticate an existing
+	// route (bearer works in both editions).
 	control := httptest.NewRequest(http.MethodGet, "/api/v1/settings/memory", nil)
-	for _, c := range f.cookies {
-		control.AddCookie(c)
-	}
+	pgAttach(f, control, f.token, false, false)
 	cw := httptest.NewRecorder()
 	f.handler.ServeHTTP(cw, control)
 	require.Equal(t, http.StatusOK, cw.Code, "positive mux/auth control: %s", cw.Body.String())
@@ -155,7 +224,36 @@ func pgPersonAPI(t *testing.T) *pgGateFixture {
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return f
+	return f, routes
+}
+
+// pgMintUserToken appends an ID-tagged bearer token to the person account's
+// token set (the SEC-1 set login itself appends to) and returns the raw
+// token. Generation mirrors generateUserToken + login's hashing: the bcrypt
+// input is config.TokenSecret(raw), the ID prefix is non-secret routing data.
+func pgMintUserToken(t *testing.T, api *restAPI) string {
+	t.Helper()
+	idBytes := make([]byte, 4)
+	body := make([]byte, 32)
+	_, err := rand.Read(idBytes)
+	require.NoError(t, err)
+	_, err = rand.Read(body)
+	require.NoError(t, err)
+	raw := "omnipus_" + hex.EncodeToString(idBytes) + "_" + hex.EncodeToString(body)
+	hash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(raw)), bcrypt.DefaultCost)
+	require.NoError(t, err)
+	require.NoError(t, api.agentLoop.MutateConfig(func(c *config.Config) error {
+		for i := range c.Gateway.Users {
+			if c.Gateway.Users[i].Username == "pg-person" {
+				c.Gateway.Users[i].Tokens = append(c.Gateway.Users[i].Tokens, config.TokenEntry{
+					ID: config.TokenIDFromRaw(raw), Hash: config.BcryptHash(hash),
+					CreatedAt: time.Now().UTC().Format(time.RFC3339),
+				})
+			}
+		}
+		return config.SaveConfig(api.configPath(), c)
+	}))
+	return raw
 }
 
 func (f *pgGateFixture) ghStarted() int {
