@@ -165,7 +165,7 @@ func TestSFR2_1_UnreadableOwnAncestorKeepsThePermissionCause(t *testing.T) {
 		testHookRendererStart = func(converterStart) { rendererStarts++ }
 		t.Cleanup(func() { testHookConverterStart = nil; testHookRendererStart = nil })
 
-		res, previewErr := t131PreviewDocx(t, svc)
+		officeStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewDocx(t, svc) })
 		require.Error(t, previewErr, "SF-R2-1: the unreadable own folder must refuse the preview")
 		require.Nil(t, res)
 		errText := previewErr.Error()
@@ -175,10 +175,10 @@ func TestSFR2_1_UnreadableOwnAncestorKeepsThePermissionCause(t *testing.T) {
 		require.NotContains(t, errText, "outside Omnipus's own folder",
 			"SF-R2-1: never the OF-4 outside text at the service boundary")
 		require.Zero(t, officeStarts, "SF-R2-1: the converter must never start")
-		require.False(t, t131MarkerUnder(t, home),
-			"SF-R2-1/TA-06: no work-folder marker — no launch happened, confined or not")
+		require.False(t, officeStarted,
+			"SF-R2-1/TA-06: no launch happened, confined or not — the mid-call observer saw no work-folder marker")
 
-		res, previewErr = t131PreviewPDF(t, svc)
+		rendererStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewPDF(t, svc) })
 		require.NoError(t, previewErr, "SF-R2-1: the renderer denial is a degraded result")
 		require.NotNil(t, res)
 		require.Equal(t, "renderer_damaged", res.RenderReason, "SF-R2-1: the renderer denial reason code")
@@ -187,13 +187,14 @@ func TestSFR2_1_UnreadableOwnAncestorKeepsThePermissionCause(t *testing.T) {
 		require.NotContains(t, res.RenderDetail, "outside Omnipus's own folder",
 			"SF-R2-1: never the outside text on the renderer detail")
 		require.Zero(t, rendererStarts, "SF-R2-1: the renderer must never start")
+		require.False(t, rendererStarted, "SF-R2-1/TA-06: the renderer denial must not launch the converter either")
 	})
 
 	t.Run("service-keeps-damaged-text-without-a-record", func(t *testing.T) {
 		resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
 		svc, err := New(Config{Home: home, Self: bin, Resolver: resolver})
 		require.NoError(t, err)
-		res, previewErr := t131PreviewDocx(t, svc)
+		officeStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewDocx(t, svc) })
 		require.Error(t, previewErr, "SF-R2-1: the unreadable own folder must refuse the preview")
 		require.Nil(t, res)
 		errText := previewErr.Error()
@@ -206,7 +207,7 @@ func TestSFR2_1_UnreadableOwnAncestorKeepsThePermissionCause(t *testing.T) {
 			"SF-R2-1: never the OF-4 outside text without a record either")
 		require.NotContains(t, errText, "stop and start Omnipus",
 			"SF-R2-1: no restart sentence without an active record")
-		t132NoConverterMarker(t, home)
+		require.False(t, officeStarted, "SF-R2-1/TA-06: the mid-call observer saw no converter start")
 	})
 
 	t.Run("missing-own-still-refuses-as-outside", func(t *testing.T) {

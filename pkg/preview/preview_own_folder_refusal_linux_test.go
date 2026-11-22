@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
 	"github.com/elicify-ai/omnipus/tests/officepreview/realprograms"
@@ -197,19 +198,17 @@ func TestT131_ServiceRefusesRegisteredRootOutsideOwn(t *testing.T) {
 			wantOffice := "Office preview is disabled: the registered LibreOffice folder " + officeRoot +
 				" is outside Omnipus's own folder (" + own + "); on Linux, Omnipus uses only preview programs inside it. " +
 				"Remove the registration with \"omnipus office unregister\", or put LibreOffice in a folder inside " + own + " and register that folder."
-			res, previewErr := t131PreviewDocx(t, svc)
+			officeStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewDocx(t, svc) })
 			require.Error(t, previewErr, "T-131(b): the outside-own LibreOffice must be refused")
 			require.Nil(t, res)
 			require.EqualError(t, previewErr, wantOffice,
 				"T-131(b): the office denial must be the OF-4 sentence word for word; got %q", previewErr)
 			require.Zero(t, officeStarts, "T-131(b): the converter must never start")
-			// TA-06: the start hooks observe only the confined spawn path, so
-			// in an unconfined environment they cannot see an illicit start.
-			// The planted converter is the launch marker: a real start —
-			// confined or not — writes into the call's work folder. (Its
-			// observer is proven live by TestT131_LaunchObserverPositiveControl.)
-			require.False(t, t131MarkerUnder(t, home),
-				"T-131(b)/TA-06: the refusal must precede any converter start — no work-folder marker may exist")
+			// TA-06: the launch observer watches the call folders DURING the
+			// call — a real start, confined or not, leaves the stub's marker
+			// there. (Its live proof is TestT131_LaunchObserverPositiveControl.)
+			require.False(t, officeStarted,
+				"T-131(b)/TA-06: the refusal must precede any converter start — no work-folder marker appeared")
 			assert.Empty(t, rendererStarts, "T-131(b): the office refusal must not touch the renderer")
 
 			wantRenderer := "PDF renderer is disabled: the registered folder " + rendererRoot +
@@ -218,14 +217,14 @@ func TestT131_ServiceRefusesRegisteredRootOutsideOwn(t *testing.T) {
 				// "register that folder" with no closing period (the period in
 				// the spec line belongs to the enclosing sentence).
 				"Remove the registration with \"omnipus pdf-renderer unregister\", or put the renderer in a folder inside " + own + " and register that folder"
-			res, previewErr = t131PreviewPDF(t, svc)
+			rendererStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewPDF(t, svc) })
 			require.NoError(t, previewErr, "T-131(b): the renderer denial is a degraded result, not an error")
 			require.NotNil(t, res)
 			require.Equal(t, "renderer_damaged", res.RenderReason, "T-131(b): the renderer denial reason code")
 			require.Equal(t, wantRenderer, res.RenderDetail,
 				"T-131(b): the renderer denial must be the OF-4 sentence word for word; got %q", res.RenderDetail)
 			require.Zero(t, rendererStarts, "T-131(b): the renderer must never start")
-			require.False(t, t131MarkerUnder(t, home),
+			require.False(t, rendererStarted,
 				"T-131(b)/TA-06: the renderer denial must not launch the office converter either")
 		})
 	}
@@ -331,10 +330,12 @@ func t131NotInsideOwnService(t *testing.T, path, own, what string) {
 const t131ConverterMarkerName = "converter-started.marker"
 
 // t131ConverterMarkerScript is the stub converter: it records its own launch
-// next to the production --outdir argument and exits without converting. The
-// work folder is the one folder the confined rules let the converter write,
-// so the marker observes the launch path actually used in every
-// configuration.
+// next to the production --outdir argument, holds the record visible for a
+// moment, and exits without converting. The work folder is the one folder
+// the confined rules let the converter write — and the service REMOVES the
+// whole call folder when the call ends, so the marker must be observed
+// DURING the call (t131ObserveCall); the sleep keeps it observable for the
+// poller with a wide margin.
 func t131ConverterMarkerScript() string {
 	return "#!/bin/sh\n" +
 		"out=\"\"\n" +
@@ -344,17 +345,19 @@ func t131ConverterMarkerScript() string {
 		"  prev=\"$a\"\n" +
 		"done\n" +
 		"if [ -n \"$out\" ]; then printf 'started\\n' > \"$out/" + t131ConverterMarkerName + "\" 2>/dev/null || true; fi\n" +
+		"sleep 0.3 2>/dev/null || true\n" +
 		"exit 73\n"
 }
 
-// t131MarkerUnder reports whether any converter-start marker exists under
-// root (the call folders live below the data home).
-func t131MarkerUnder(t *testing.T, root string) bool {
-	t.Helper()
+// t131MarkerExists reports whether any converter-start marker exists under
+// root right now. Pure and goroutine-safe: the call folders are mutated by
+// the service while the poller walks them, so walk errors are ignored, not
+// failed (t131ObserveCall's poller runs on the test's main goroutine).
+func t131MarkerExists(root string) bool {
 	found := false
-	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return nil
 		}
 		if !d.IsDir() && d.Name() == t131ConverterMarkerName {
 			found = true
@@ -362,8 +365,42 @@ func t131MarkerUnder(t *testing.T, root string) bool {
 		}
 		return nil
 	})
-	require.NoError(t, walkErr, "TA-06: the data home is walkable")
 	return found
+}
+
+// t131ObserveCall runs the preview call and reports whether a converter
+// really started, by watching the call folders under the data home for the
+// stub's work-folder marker WHILE the call runs. This is the TA-06 launch
+// observer: the confined start hooks fire only when a sandbox policy
+// applies (confine.go::observedBy), and the work folder — the only folder
+// the confined rules let the converter write — is removed with the call
+// folder when the call ends, so neither the hooks alone nor any post-call
+// walk can observe an unconfined launch. The stub holds its marker for
+// 0.3 s, far longer than the poll needs.
+func t131ObserveCall(t *testing.T, home string, run func() (*Result, error)) (started bool, res *Result, err error) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		res, err = run()
+	}()
+	breakpoint := time.After(30 * time.Second)
+	for {
+		select {
+		case <-done:
+			return t131MarkerExists(home), res, err
+		case <-breakpoint:
+			t.Errorf("TA-06: the observed call never returned; failing the row instead of polling forever")
+			return true, res, err
+		default:
+			if t131MarkerExists(home) {
+				started = true
+				<-done
+				return true, res, err
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
 }
 
 // t131DumpTree lists every path under root — the controls carry it in their
@@ -399,9 +436,9 @@ func TestT131_LaunchObserverPositiveControl(t *testing.T) {
 	resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
 	svc, err := New(Config{Home: home, Self: bin, Resolver: resolver})
 	require.NoError(t, err)
-	res, previewErr := t131PreviewDocx(t, svc)
+	started, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewDocx(t, svc) })
 	require.Error(t, previewErr, "TA-06 control: the marker stub cannot convert; the call fails after its real launch")
 	require.Nil(t, res)
-	require.True(t, t131MarkerUnder(t, home),
-		"TA-06 control: a real converter start must leave the work-folder marker — without this the refusal rows' no-marker assertions would be vacuous; the call failed with: %v\nhome tree:\n%s", previewErr, t131DumpTree(t, home))
+	require.True(t, started,
+		"TA-06 control: a real converter start must appear to the mid-call observer — without this the refusal rows' no-start assertions would be vacuous; the call failed with: %v\nhome tree:\n%s", previewErr, t131DumpTree(t, home))
 }

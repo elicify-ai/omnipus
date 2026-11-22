@@ -107,15 +107,6 @@ func t132ReasonWithPrefix(t *testing.T, message, wantPrefix string) string {
 	return reason
 }
 
-// t132NoConverterMarker asserts the TA-06 launch observer saw no start: the
-// packaged office converter is the marker stub, so any real start — confined
-// or not — would have left its marker in the call's work folder.
-func t132NoConverterMarker(t *testing.T, home string) {
-	t.Helper()
-	require.False(t, t131MarkerUnder(t, home),
-		"T-132/TA-06: the refusal must precede any converter start — no work-folder marker may exist")
-}
-
 // TestT132_RefusedReadUnderActiveRecordNamesTheRestart — RS-1 (a): with a
 // startup record granting the packaged slots, the refused manifest read
 // produces exactly the RS-1 texts and no converter or renderer start.
@@ -138,7 +129,7 @@ func TestT132_RefusedReadUnderActiveRecordNamesTheRestart(t *testing.T) {
 	testHookRendererStart = func(converterStart) { rendererStarts++ }
 	t.Cleanup(func() { testHookConverterStart = nil; testHookRendererStart = nil })
 
-	res, previewErr := t131PreviewDocx(t, svc)
+	officeStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewDocx(t, svc) })
 	require.Error(t, previewErr, "T-132(a): the refused read must not convert")
 	require.Nil(t, res)
 	errText := previewErr.Error()
@@ -146,9 +137,9 @@ func TestT132_RefusedReadUnderActiveRecordNamesTheRestart(t *testing.T) {
 		"T-132(a): the office denial must be the RS-1 sentence; got %q", errText)
 	t132Reason(t, errText)
 	require.Zero(t, officeStarts, "T-132(a): the converter must never start")
-	t132NoConverterMarker(t, home)
+	require.False(t, officeStarted, "T-132/TA-06: the refusal must precede any converter start — the mid-call observer saw no work-folder marker")
 
-	res, previewErr = t131PreviewPDF(t, svc)
+	rendererStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewPDF(t, svc) })
 	require.NoError(t, previewErr, "T-132(a): the renderer denial is a degraded result")
 	require.NotNil(t, res)
 	require.Equal(t, "renderer_damaged", res.RenderReason, "T-132(a): the renderer reason code")
@@ -156,6 +147,7 @@ func TestT132_RefusedReadUnderActiveRecordNamesTheRestart(t *testing.T) {
 		"T-132(a): the renderer denial must be the RS-1 sentence; got %q", res.RenderDetail)
 	t132Reason(t, res.RenderDetail)
 	require.Zero(t, rendererStarts, "T-132(a): the renderer must never start")
+	require.False(t, rendererStarted, "T-132/TA-06: the renderer denial must not launch the converter either")
 }
 
 // TestT132_RefusedReadWithoutRecordKeepsDamagedText — RS-1 (b): the same
@@ -173,7 +165,7 @@ func TestT132_RefusedReadWithoutRecordKeepsDamagedText(t *testing.T) {
 	testHookConverterStart = func(converterStart) { starts++ }
 	t.Cleanup(func() { testHookConverterStart = nil })
 
-	res, previewErr := t131PreviewDocx(t, svc)
+	officeStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewDocx(t, svc) })
 	require.Error(t, previewErr, "T-132(b): the unreadable manifest must not convert")
 	require.Nil(t, res)
 	errText := previewErr.Error()
@@ -185,9 +177,9 @@ func TestT132_RefusedReadWithoutRecordKeepsDamagedText(t *testing.T) {
 	require.NotContains(t, errText, "stop and start Omnipus",
 		"T-132(b): no restart sentence without an active record")
 	require.Zero(t, starts, "T-132(b): the converter must never start")
-	t132NoConverterMarker(t, home)
+	require.False(t, officeStarted, "T-132/TA-06: the refusal must precede any converter start — the mid-call observer saw no work-folder marker")
 
-	res, previewErr = t131PreviewPDF(t, svc)
+	rendererStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewPDF(t, svc) })
 	require.NoError(t, previewErr, "T-132(b): the renderer denial is a degraded result")
 	require.NotNil(t, res)
 	require.Equal(t, "renderer_damaged", res.RenderReason, "T-132(b): the renderer reason code")
@@ -195,6 +187,7 @@ func TestT132_RefusedReadWithoutRecordKeepsDamagedText(t *testing.T) {
 		"T-132(b): today's damaged renderer text must stand; got %q", res.RenderDetail)
 	require.NotContains(t, res.RenderDetail, "stop and start Omnipus",
 		"T-132(b): no restart sentence without an active record")
+	require.False(t, rendererStarted, "T-132/TA-06: the renderer denial must not launch the converter either")
 }
 
 // TestT132_NonPermissionRefusalKeepsDamagedText — RS-1 (c): under an active
@@ -299,7 +292,7 @@ func TestT132_RefusedRegisteredReadsNameTheRestart(t *testing.T) {
 				testHookRendererStart = func(converterStart) { rendererStarts++ }
 				t.Cleanup(func() { testHookConverterStart = nil; testHookRendererStart = nil })
 
-				res, previewErr := t131PreviewDocx(t, svc)
+				officeStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewDocx(t, svc) })
 				require.Error(t, previewErr, "T-132/TA-05: the refused registered read must not convert")
 				require.Nil(t, res)
 				errText := previewErr.Error()
@@ -314,9 +307,9 @@ func TestT132_RefusedRegisteredReadsNameTheRestart(t *testing.T) {
 				}
 				t132ReasonWithPrefix(t, errText, officeReason)
 				require.Zero(t, officeStarts, "T-132/TA-05: the converter must never start")
-				t132NoConverterMarker(t, home)
+				require.False(t, officeStarted, "T-132/TA-05+TA-06: the refusal must precede any converter start — the mid-call observer saw no work-folder marker")
 
-				res, previewErr = t131PreviewPDF(t, svc)
+				rendererStarted, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewPDF(t, svc) })
 				require.NoError(t, previewErr, "T-132/TA-05: the renderer denial is a degraded result")
 				require.NotNil(t, res)
 				require.Equal(t, "renderer_damaged", res.RenderReason, "T-132/TA-05: the renderer reason code")
@@ -331,6 +324,7 @@ func TestT132_RefusedRegisteredReadsNameTheRestart(t *testing.T) {
 				}
 				t132ReasonWithPrefix(t, res.RenderDetail, rendererReason)
 				require.Zero(t, rendererStarts, "T-132/TA-05: the renderer must never start")
+				require.False(t, rendererStarted, "T-132/TA-05+TA-06: the renderer denial must not launch the converter either")
 			})
 		}
 	}
@@ -354,9 +348,9 @@ func TestT132_LaunchObserverPositiveControl(t *testing.T) {
 	require.NoError(t, rec.AddGranted(officeSlot))
 	component.SetStartupGrants(rec)
 	t.Cleanup(func() { component.SetStartupGrants(nil) })
-	res, previewErr := t131PreviewDocx(t, svc)
+	started, res, previewErr := t131ObserveCall(t, home, func() (*Result, error) { return t131PreviewDocx(t, svc) })
 	require.Error(t, previewErr, "TA-06 control: the marker stub cannot convert; the call fails after its real launch")
 	require.Nil(t, res)
-	require.True(t, t131MarkerUnder(t, home),
-		"TA-06 control: a real converter start must leave the work-folder marker — without this the refusal rows' no-marker assertions would be vacuous; the call failed with: %v", previewErr)
+	require.True(t, started,
+		"TA-06 control: a real converter start must appear to the mid-call observer — without this the refusal rows' no-start assertions would be vacuous; the call failed with: %v", previewErr)
 }
