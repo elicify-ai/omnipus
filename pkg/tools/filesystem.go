@@ -698,7 +698,7 @@ func (t *ReadFileTool) readOpenFile(
 		return result
 	}
 	if !paginationSupplied && isPDFSource(sniff[:sniffN]) {
-		if result := t.pdfDocumentResult(ctx, policy, handle, path, sourceIdentity, length, reauthorize); result != nil {
+		if result := t.pdfDocumentResult(ctx, policy, handle, path, sourceIdentity, sniff[:sniffN], length, reauthorize); result != nil {
 			return result
 		}
 	}
