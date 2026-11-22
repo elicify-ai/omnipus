@@ -327,6 +327,11 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
   if (data.agents?.defaults) {
     raw.agents = { defaults: { ...data.agents.defaults } }
   }
+  // tools.exec.enable_proxy only (Sandbox & network's proxy switch). PUT
+  // /config merges maps, so the other exec settings stay as stored.
+  if (data.tools?.exec?.enable_proxy !== undefined) {
+    raw.tools = { exec: { enable_proxy: data.tools.exec.enable_proxy } }
+  }
   return raw
 }
 
