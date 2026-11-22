@@ -42,21 +42,37 @@ var ErrRemoteA2AReserved = fmt.Errorf(
 // name (the config.ExecutorConfig.CLI value: "claude-code", "codex", "opencode").
 // consent may be nil; when nil every permission request is denied by default.
 // An unknown/empty cli name returns an error so the dispatch site can fail the run
-// cleanly rather than silently delegating nowhere.
+// cleanly rather than silently delegating nowhere. A driver that cannot report
+// whether its CLI has announced its native conversation (NativeConversationReporter)
+// is refused too: without it, a steering delivery would interrupt a run whose
+// conversation cannot yet be resumed (#1899).
 func NewDriver(cli string, consent ConsentHandler) (ExternalAgentRunner, error) {
+	var driver ExternalAgentRunner
 	switch cli {
 	case "claude-code":
 		// "claude-code" is the canonical config value (matches conntest.go
 		// supportedCLIs and the AgentExecutorCli enum). No "claude" alias — the
 		// run path and the connection-test path must agree on the same key.
-		return NewClaudeDriver(consent), nil
+		driver = NewClaudeDriver(consent)
 	case "codex":
-		return NewCodexDriver(consent), nil
+		driver = NewCodexDriver(consent)
 	case "opencode":
-		return NewOpencodeDriver(consent), nil
+		driver = NewOpencodeDriver(consent)
 	default:
 		return nil, fmt.Errorf("unknown external CLI %q (supported: %s)", cli, "claude-code, codex, opencode")
 	}
+	return requireNativeConversationReporter(cli, driver)
+}
+
+// requireNativeConversationReporter returns driver when it implements
+// NativeConversationReporter and a clear error otherwise, so a new driver that
+// forgets it fails at construction instead of being interrupted unsafely.
+func requireNativeConversationReporter(cli string, driver ExternalAgentRunner) (ExternalAgentRunner, error) {
+	if _, ok := driver.(NativeConversationReporter); !ok {
+		return nil, fmt.Errorf("external CLI driver for %q (%T) does not implement NativeConversationReporter "+
+			"(HasNativeConversation); every production driver must report its native conversation readiness", cli, driver)
+	}
+	return driver, nil
 }
 
 // DenyByDefault constructs a denial PermissionDecision for use when no consent

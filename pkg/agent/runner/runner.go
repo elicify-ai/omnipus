@@ -362,8 +362,9 @@ var (
 
 // CanResumeAfterInterrupt reports whether interrupting driver's current run
 // can be followed by a Resume of the same native conversation. A driver that
-// cannot report readiness (a test double) keeps the earlier interrupt
-// behaviour: true.
+// cannot report readiness keeps the earlier interrupt behaviour: true. Only a
+// test double reaches that fallback: NewDriver refuses a production driver
+// without NativeConversationReporter.
 func CanResumeAfterInterrupt(driver ExternalAgentRunner) bool {
 	if r, ok := driver.(NativeConversationReporter); ok {
 		return r.HasNativeConversation()

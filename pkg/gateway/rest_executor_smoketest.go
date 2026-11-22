@@ -917,8 +917,9 @@ func (a *restAPI) auditExecutorSmokeTest(
 // smokeTestPresetFlagsDropped lists, through the audit filter, the preset model
 // options the smoke run's driver dropped because it passed the worker's own
 // model (#1880) — the same decision as the driver's buildArgs, re-derived from
-// the preset text the run used (presetApplied is row.PresetArgs as tokenised
-// for RunOptions.PresetArgs).
+// the preset text the run used. presetApplied is the raw saved row.PresetArgs
+// text; this function tokenises it with runner.ParseCLIArgs, exactly as the
+// run did for RunOptions.PresetArgs.
 func smokeTestPresetFlagsDropped(cli, model, presetApplied string, filter func(string) string) []string {
 	dropped := runner.PresetArgsDroppedAtRun(runner.FilterKey(cli), model, runner.ParseCLIArgs(presetApplied, "executor-smoke-test-audit"))
 	if len(dropped) == 0 {

@@ -28,7 +28,8 @@ properties:
     type: string
     description: >
       Additional CLI arguments, one string, stored as typed. Shell
-      metacharacters warn, never refuse. Flags the safety filter would drop
-      are reported in the tool result's cli_args.dropped_at_run and removed
-      at run time.
+      metacharacters warn, never refuse. Flags the run filter would drop (the
+      safety filter's, and any model option, because the model field sets the
+      model) are reported in the tool result's cli_args.dropped_at_run and
+      removed at run time.
     example: "--max-turns 5"
