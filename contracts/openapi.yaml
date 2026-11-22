@@ -1902,6 +1902,10 @@ components:
       $ref: ./components/schemas/PackageManifest.yaml
     PackageExportRequest:
       $ref: ./components/schemas/PackageExportRequest.yaml
+    PackageExportPlanRequest:
+      $ref: ./components/schemas/PackageExportPlanRequest.yaml
+    PackageExportPlan:
+      $ref: ./components/schemas/PackageExportPlan.yaml
     PackageImportPreview:
       $ref: ./components/schemas/PackageImportPreview.yaml
     PackageImportApplyRequest:
@@ -6844,6 +6848,109 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /packages/export/plan:
+    post:
+      operationId: createPackageExportPlan
+      summary: Review what a bundle of one agent would contain (export review)
+      description: 'Runs the same capture, cleaning and refusals as POST /packages/export for exactly one agent, builds the bundle in memory only to measure it, discards the bytes and keeps the review in memory for 30 minutes (at most 32 reviews; adding one more drops expired reviews first, then the oldest). Writes nothing to the data folder, writes no audit entry and uses no upload slot. The review never carries a removed value, only names. Reviews do not survive a gateway restart. Local mode only; refused while developer bypass mode is on.
+
+        '
+      tags:
+      - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackageExportPlanRequest'
+      responses:
+        '201':
+          description: The review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageExportPlan'
+        '400':
+          description: agent_ids does not hold exactly one ID (export_selection_invalid), the body is not valid JSON, has an unknown property, or scope is not agents.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Agent not found (agent_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed (only POST).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: JSON body over 1 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The agent cannot be exported; the same code the export gives (core_agent_not_exportable, agent_prompt_missing, element_not_creatable, agent_file_unreadable, external_worker_not_supported_yet).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Developer bypass mode is on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /packages/export/plan/{plan_id}:
+    get:
+      operationId: getPackageExportPlan
+      summary: Read back an export review
+      description: 'Returns the stored review unchanged while now is before its expires_at. Does not capture the agent again. An unknown, malformed or expired ID, or any ID after a gateway restart, answers 404 plan_not_found. Local mode only; refused while developer bypass mode is on.
+
+        '
+      tags:
+      - Settings
+      parameters:
+      - name: plan_id
+        in: path
+        required: true
+        description: The plan_id from the review.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The stored review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageExportPlan'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Review unknown, malformed or expired (plan_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed (only GET).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Developer bypass mode is on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /packages/import:
     post:
       operationId: uploadPackage
@@ -6883,6 +6990,57 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: The package was refused (not_a_package, package_too_new, element_schema_too_new, package_too_large with details.limit window, checksum_mismatch, manifest_mismatch, unsafe_path, unsafe_entry_type, no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable, external_worker_not_supported_yet).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Developer bypass mode is on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /packages/import/{staging_id}:
+    delete:
+      operationId: cancelPackageImport
+      summary: Cancel an unused upload
+      description: 'Cancels a staged upload that is ready and has not been applied, in one step under the staging registry lock that the apply also takes. A ready upload (expired or not) has its folder removed and its slot freed (204). If the folder cannot be removed, the upload is marked cancelled: it can never be applied and holds no slot, and removal is attempted again by the next upload''s clean-up or a repeated cancel (500 staging_cleanup_failed). An upload being received, being applied or kept for clean-up after a failed import is never touched (409 staging_busy). Not audited (no data enters or leaves). Local mode only; refused while developer bypass mode is on.
+
+        '
+      tags:
+      - Settings
+      parameters:
+      - name: staging_id
+        in: path
+        required: true
+        description: The staging_id from the upload's preview.
+        schema:
+          type: string
+      responses:
+        '204':
+          description: The upload was cancelled and its folder removed.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Staging unknown, already used or already cancelled (staging_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed (only DELETE on this path; POST on /apply).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The upload is being received, being applied, or kept for clean-up (staging_busy); nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: The upload is cancelled but its folder could not be removed yet (staging_cleanup_failed); removal is attempted again at a later upload or a repeated cancel.
           content:
             application/json:
               schema:

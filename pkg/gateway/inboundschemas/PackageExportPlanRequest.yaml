@@ -1,0 +1,26 @@
+title: PackageExportPlanRequest
+description: >
+  Request body of POST /api/v1/packages/export/plan (the export review, epic
+  #1094 slice B1). B1 accepts scope "agents" and exactly one agent ID; any
+  other count is refused by the server with 400 export_selection_invalid (not
+  by this schema), so later slices can add several agents and other scopes
+  without breaking this shape.
+type: object
+required:
+  - scope
+  - agent_ids
+additionalProperties: false
+properties:
+  scope:
+    type: string
+    enum:
+      - agents
+    description: What to review. B1 knows only "agents".
+    example: agents
+  agent_ids:
+    type: array
+    description: IDs of the agents to review (exactly one in B1).
+    items:
+      type: string
+    example:
+      - 5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c
