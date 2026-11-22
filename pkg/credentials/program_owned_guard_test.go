@@ -303,22 +303,31 @@ func TestCredentialStore_ProgramOwnedGuard(t *testing.T) {
 		// same-package helpers are part of the rule).
 		dir := filepath.Join(repoRootFromCaller(), "pkg", "credentials")
 
-		// Instrument proof first (F11): planted controls — the checker fires
-		// on a direct outside write and on a helper-reached outside write,
-		// and stays silent on the transact-wrapped write. A verdict from a
-		// checker that cannot fire proves nothing.
+		// Instrument proof first (F11, R08): planted controls — the checker
+		// fires on a direct outside write and on a helper-reached outside
+		// write; it stays silent on the transact-wrapped write AND on the
+		// sanctioned helper-in-transact call, but flags the same helper when
+		// it is also reached outside the literal. A verdict from a checker
+		// that cannot fire proves nothing; one that flags sanctioned helpers
+		// rejects correct code.
 		planted := t.TempDir()
 		writePlantedSource(t, planted, "planted_direct.go", plantedDirectWrite)
 		writePlantedSource(t, planted, "planted_helper.go", plantedHelperWrite)
 		writePlantedSource(t, planted, "planted_clean.go", plantedCleanWrite)
+		writePlantedSource(t, planted, "planted_clean_helper.go", plantedCleanHelperWrite)
+		writePlantedSource(t, planted, "planted_mixed.go", plantedMixedCallWrite)
 		plantedOffenders := transactWriteOffenders(t, planted)
 		require.Contains(t, plantedOffenders, "planted_direct.go::PlantedDirectWrite writes outside s.transact",
 			"instrument: a direct outside write is flagged: %v", plantedOffenders)
 		require.Contains(t, plantedOffenders, "planted_helper.go::PlantedIndirectWrite writes outside s.transact",
 			"instrument: a helper-reached outside write is flagged: %v", plantedOffenders)
+		require.Contains(t, plantedOffenders, "planted_mixed.go::PlantedMixedCallWrite writes outside s.transact",
+			"instrument: a helper also reached OUTSIDE the literal keeps unsanctioned reachability: %v", plantedOffenders)
 		for _, o := range plantedOffenders {
 			require.NotContains(t, o, "planted_clean.go",
 				"instrument: the transact-wrapped write is not flagged: %v", plantedOffenders)
+			require.NotContains(t, o, "planted_clean_helper.go",
+				"instrument: the sanctioned helper-in-transact call is not flagged (CHECK R08): %v", plantedOffenders)
 		}
 
 		// The verdict on the real package (at RED: every mutator writes
@@ -446,6 +455,43 @@ func (s *Store) PlantedCleanWrite() error {
 	})
 }
 `
+	// plantedCleanHelperWrite is the CHECK R08 positive control: the helper
+	// saves outside any transact of its own, but its only caller reaches it
+	// INSIDE a s.transact literal — the sanctioned write path. The scanner
+	// must keep the call-site context on the helper edge and not flag the
+	// exported caller.
+	plantedCleanHelperWrite = `package credentials
+
+func (s *Store) cleanWriteThroughPlanted(sf *storeFile) error {
+	return s.saveFileNoLock(sf)
+}
+
+func (s *Store) PlantedCleanHelperWrite() error {
+	return s.transact(func(sf *storeFile) error {
+		return s.cleanWriteThroughPlanted(sf)
+	})
+}
+`
+	// plantedMixedCallWrite is the CHECK R08 boundary twin: the same helper
+	// reached BOTH outside and inside the literal — the outside call keeps
+	// unsanctioned reachability, so the caller is flagged.
+	plantedMixedCallWrite = `package credentials
+
+func (s *Store) mixedPlantedHelper(sf *storeFile) error {
+	return s.saveFileNoLock(sf)
+}
+
+func (s *Store) PlantedMixedCallWrite() error {
+	sf, err := s.loadFileInternal()
+	if err != nil {
+		return err
+	}
+	_ = s.mixedPlantedHelper(sf)
+	return s.transact(func(x *storeFile) error {
+		return s.mixedPlantedHelper(x)
+	})
+}
+`
 )
 
 func writePlantedSource(t *testing.T, dir, name, src string) {
@@ -453,14 +499,25 @@ func writePlantedSource(t *testing.T, dir, name, src string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600), "write planted source %s", name)
 }
 
+// callSite is one reached callee with its transaction context: a call inside
+// a s.transact function literal is the sanctioned write path — the helper's
+// save runs inside the caller's transaction (CHECK R08: the earlier scanner
+// kept no context on helper edges, so a sanctioned helper-in-transact call
+// tainted its exported caller through the global fixpoint).
+type callSite struct {
+	name       string
+	sanctioned bool
+}
+
 // transactWriteOffenders parses every non-test .go file of one package
 // directory and returns offender descriptions for every EXPORTED Store method
 // that can reach a saveFileNoLock call outside a s.transact function literal —
-// directly or through any chain of same-package helpers (CHECK F11; the
-// reachability is a fixpoint over the call graph). A call to s.transact never
-// taints its caller: the writes inside its literal are the sanctioned write
-// path (FR-049). Name-based call matching is the documented heuristic, same
-// as the caller guard's dot-call match.
+// directly or through any chain of same-package helpers reached OUTSIDE a
+// sanctioned literal (CHECK F11 reachability; CHECK R08 context). A call to
+// s.transact never taints its caller, and a dirty helper reached only inside
+// its literal is sanctioned: the save happens inside the caller's
+// transaction. Name-based call matching is the documented heuristic, same as
+// the caller guard's dot-call match.
 func transactWriteOffenders(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -470,7 +527,7 @@ func transactWriteOffenders(t *testing.T, dir string) []string {
 		exported bool
 		isMethod bool // receiver *Store
 		direct   bool // unsanctioned saveFileNoLock in own body
-		calls    []string
+		calls    []callSite
 	}
 	fns := map[string]*fnInfo{}
 	for _, e := range entries {
@@ -500,8 +557,8 @@ func transactWriteOffenders(t *testing.T, dir string) []string {
 				continue
 			}
 			d := info.direct
-			for _, callee := range info.calls {
-				if callee != "transact" && dirty[callee] {
+			for _, c := range info.calls {
+				if !c.sanctioned && dirty[c.name] {
 					d = true
 					break
 				}
@@ -526,10 +583,11 @@ func transactWriteOffenders(t *testing.T, dir string) []string {
 }
 
 // scanFnBody reports whether the body calls saveFileNoLock outside a
-// s.transact function literal (the sanctioned write path), and collects the
-// names of all called functions for the reachability fixpoint. Calls into
-// s.transact are excluded — its literal is where writes are allowed.
-func scanFnBody(body ast.Node) (directWrite bool, calls []string) {
+// s.transact function literal (the sanctioned write path), and collects every
+// reached callee WITH its call-site context for the reachability fixpoint.
+// Calls into s.transact are excluded — its literal is where writes are
+// allowed.
+func scanFnBody(body ast.Node) (directWrite bool, calls []callSite) {
 	var litRanges []token.Pos // [start, end] pairs flattened
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -568,12 +626,12 @@ func scanFnBody(body ast.Node) (directWrite bool, calls []string) {
 				}
 				return true
 			default:
-				calls = append(calls, sel.Sel.Name)
+				calls = append(calls, callSite{name: sel.Sel.Name, sanctioned: insideSanctioned(call.Pos())})
 			}
 			return true
 		}
 		if id, ok := call.Fun.(*ast.Ident); ok {
-			calls = append(calls, id.Name)
+			calls = append(calls, callSite{name: id.Name, sanctioned: insideSanctioned(call.Pos())})
 		}
 		return true
 	})
