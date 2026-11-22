@@ -180,11 +180,16 @@ func sourceErr(what string, err error) error {
 // readSourceFile reads home/name without following links, as a regular file
 // only, bounded to MaxAgentFileBytes (FR-018). An absent file reports
 // present=false; every other problem refuses with agent_file_unreadable.
+// name is one of the fixed file names (SOUL.md, AGENT.md): a name that is not
+// a plain local path is refused before anything is opened.
 func readSourceFile(home, name string) ([]byte, bool, error) {
-	path := filepath.Join(home, name)
 	unreadable := func(check string) error {
 		return newErr(CodeAgentFileUnreadable, "file", name, "check", check)
 	}
+	if !filepath.IsLocal(name) {
+		return nil, false, unreadable(CheckUnreadable)
+	}
+	path := filepath.Join(home, name)
 	before, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil

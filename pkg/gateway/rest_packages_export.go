@@ -99,7 +99,17 @@ func (s *packageExportSource) AgentRecord(id string) ([]byte, error) {
 	return json.Marshal(agent)
 }
 
+// AgentHomeDir is the agent's folder under the data directory. The ID is
+// checked the same way AgentRecord checks it (which runs first), and must be
+// a single local path element, so it can never name a folder outside
+// agents/.
 func (s *packageExportSource) AgentHomeDir(id string) (string, error) {
+	if err := agentstore.ValidateAgentID(id); err != nil {
+		return "", packageErr(packageCodeAgentNotFound, "agent_id", id)
+	}
+	if !filepath.IsLocal(id) {
+		return "", packageErr(packageCodeAgentNotFound, "agent_id", id)
+	}
 	return filepath.Join(s.a.homePath, "agents", id), nil
 }
 
