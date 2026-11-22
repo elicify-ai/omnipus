@@ -355,10 +355,14 @@ async function portRow(): Promise<HTMLElement> {
  * heading is spec-named, not taken from the implementation; the marker
  * stays where it is in production).
  *
- * The locator (findSpecWitness, CHECK R9-01) binds each phrase by
- * accessible role and EXACT accessible name — or, for rows whose witness is
- * a read-only value or the row's own name line, exact own visible text —
- * perceivable only: hidden text and prefix matches never witness a row.
+ * The locator (findSpecWitness, CHECK R9-01; ownership per CHECK R10-01)
+ * binds each phrase by the row's WITNESS_KIND: a control by accessible role
+ * and EXACT accessible name only; a heading row by its own heading (the
+ * FR-001 section-title h2 is the only match tolerated outside the marked
+ * row); a read-only value or name line by exact own visible text — never
+ * for a control row. Ownership is all-inside: every perceivable element in
+ * the document with that exact name (and role, for a control) must sit
+ * inside the marked row; hidden text and prefix matches never witness.
  */
 const WITNESS_PHRASES: Record<string, string[]> = {
   'model-providers': ['Providers'], // FR-001 names the section "Providers" — the row heading is spec-named (team-lead ruling, part 25)
@@ -413,16 +417,18 @@ const WITNESS_PHRASES: Record<string, string[]> = {
 }
 
 /**
- * The ARIA roles a spec-named control, value or row name can carry. The
- * words are the spec's own control vocabulary, not an inventory of this
- * build: design-notes §2 names switches, radios, Select fields, number and
- * text fields, buttons and link rows; headings carry row names and the
- * ruling-B section heading; a `fieldset`/`group` carries a named radio
- * group ("Sandbox mode"). Testing Library role queries ignore hidden
- * elements by default (`hidden: false`), which is the perceivability rule
- * the witness needs (CHECK R9-01).
+ * The ARIA roles a spec-named CONTROL can carry. The words are the spec's
+ * own control vocabulary, not an inventory of this build: design-notes §2
+ * names switches, radios, Select fields, number and text fields, buttons
+ * and link rows per setting, and spec:544 adds that every control is named
+ * by its visible label, icon buttons name their target and program fields
+ * name the program; a `fieldset`/`group` carries a named radio group
+ * ("Sandbox mode"). Testing Library role queries ignore hidden elements by
+ * default (`hidden: false`), which is the perceivability rule the witness
+ * needs (CHECK R9-01). Row headings witness through the separate heading
+ * leg, never through this set.
  */
-const WITNESS_ROLES = [
+const CONTROL_WITNESS_ROLES = [
   'button',
   'switch',
   'checkbox',
@@ -433,9 +439,80 @@ const WITNESS_ROLES = [
   'slider',
   'searchbox',
   'link',
-  'heading',
   'group',
 ] as const
+
+/**
+ * The witness KIND per indexed row — what the SPEC names as that row's own
+ * witness (never what the build renders):
+ *  - `control` — the spec names an interactive control (design-notes §2's
+ *    switch / radio group / Select / number / text field / button /
+ *    disclosure for that row; spec:544's naming rules). Its witness leg is
+ *    role + exact accessible name ONLY — the own-text leg never applies
+ *    (CHECK R10-01).
+ *  - `heading` — the spec names the row by a heading: ruling B's
+ *    "Providers" section heading for Model providers (FR-001), and the
+ *    protection/network/storage rows the map names by their row heading.
+ *  - `name-line` — the spec names the row by a read-only value or the
+ *    row's/group's own name line; these are the ONLY rows the own-text leg
+ *    may witness, each cited below (CHECK R10-01).
+ */
+type WitnessKind = 'control' | 'heading' | 'name-line'
+
+const WITNESS_KINDS: Record<string, WitnessKind> = {
+  // control rows — design-notes §2 names the control each phrase belongs to
+  'default-model': 'control', // row 1: the "Change (model + effort)" action
+  'active-transcriber': 'control', // row 32 (R30a): "Active transcriber (Select)"
+  'auto-recap': 'control', // row 65: the Auto recap switch
+  'bootstrap-recap': 'control', // row 67: the Bootstrap recap switch
+  judge: 'control', // row 22: Edit; spec:544 icon buttons name their target
+  'plan-supervisor': 'control', // row 22
+  omnipus: 'control', // row 22
+  'claude-code-program-path': 'control', // row 23; spec:544 program fields name the program
+  'codex-program-path': 'control', // row 23
+  'opencode-program-path': 'control', // row 23
+  'max-parallel-agents': 'control', // row 78: number
+  'tries-per-goal': 'control', // row 80: number
+  'idle-reminder-quiet-window': 'control', // row 81: number
+  'stalled-work-check-ins': 'control', // row 82: switch
+  'max-tool-calls-per-turn': 'control', // row 84: number
+  'mcp-tool-result-cap': 'control', // row 14: cap number
+  'default-context-window': 'control', // row 19: number
+  'auto-approve': 'control', // row 36: the Auto-approve switch
+  'audit-log': 'control', // row 48: the "View log" action
+  'sandbox-mode': 'control', // row 42: 3 radios — the named fieldset group
+  'filesystem-model': 'control', // row 43: 2 radios — the named fieldset group
+  'stored-keys': 'control', // row 50: "Add key"
+  'master-key': 'control', // row 49: "Rotate master key"
+  'bind-address': 'control', // row 52: the Bind address select
+  port: 'control', // row 53; D-4 row 6: the Port number field
+  'preview-server': 'control', // row 56: switch
+  'log-level': 'control', // row 57: Select field
+  'remote-access': 'control', // row 60: the disclosure control
+  'keep-chat-history-for': 'control', // row 61: number field
+  'keep-memory-for': 'control', // row 73: number field
+  'clear-all-chat-history': 'control', // row 64 + badge corrections: the button
+  // heading rows — the map/ruling names the row by its heading
+  'model-providers': 'heading', // ruling B, FR-001: the row's own "Providers" heading
+  'security-health': 'heading', // row 34: "Security health"
+  'god-mode': 'heading', // row 59; D-9 row 8: "God Mode" (the action button carries "…")
+  'prompt-injection-defense': 'heading', // row 41: the row's own h3 name
+  'rate-limits': 'heading', // row 47: "Rate limits per agent"
+  'network-proxy-for-shell-commands': 'heading', // row 40: h3
+  storage: 'heading', // §2 read-only displays (line 170): the "Storage" heading
+  // name-line rows — the row's/group's own name line or a read-only value;
+  // the ONLY rows the own-text leg may witness (CHECK R10-01)
+  'shell-workspace-limit': 'name-line', // row 44: the row's own name line
+  'allowed-folders': 'name-line', // row 45: the row's own name line
+  'internal-network-addresses': 'name-line', // row 46: the row's own name line
+  'gateway-token': 'name-line', // rows 54/55: the row's own name line
+  'restart-gateway': 'name-line', // row 58: the row's own name line
+  version: 'name-line', // §2 read-only displays (line 170): system info value
+  'voice-input': 'name-line', // D-9 row 5: the group's own name
+  'recap-limits': 'name-line', // row 71: the collapsed group's own name
+  'summarization-model': 'name-line', // row 69: the row's own name line
+  'how-long-memory-is-kept': 'name-line', // rows 61/72/73; spec:399: the row's own name line
+}
 
 /**
  * Whole-name, case-insensitive accessible-name pattern: the phrase must be
@@ -478,50 +555,117 @@ function ownText(el: Element): string {
 }
 
 /**
- * One locator leg's binding (CHECK R9-01): the matched set must be the ONLY
- * element in the document with that exact name and role — one match, and it
- * must lie on or inside the marked row. When several elements share the
- * name and role (the section heading and the row's own heading, for ruling
- * B's "Providers"), the one inside the marked row must sit on the row that
- * carries the requested `data-settings-row` id — the tie that keeps a
- * duplicated name from witnessing a foreign row.
+ * The exact own-text matches for a phrase, document-wide, perceivable only —
+ * the name-line matcher, shared by the name-line leg and the shared-name
+ * allowance below.
  */
-function legWitness(matches: Element[], row: Element, tiedToRowId?: string): Element | null {
+function exactTextMatches(phrase: string): Element[] {
+  const needle = phrase.replace(/\s+/g, ' ').trim().toLowerCase()
+  return Array.from(document.body.querySelectorAll('*')).filter(
+    (el) => isPerceivable(el) && ownText(el) === needle,
+  )
+}
+
+/**
+ * Genuine duplicate CONTROL names, handled explicitly (CHECK R10-01's
+ * strengthening move) — the DEFAULT is the absolute rule: every perceivable
+ * match with that exact role and name must sit inside the marked row. An
+ * entry names the rare row whose spec-named control shares its exact
+ * accessible name with another rendered surface, and adds a CO-WITNESS the
+ * marked row must also own under the all-inside name-line rule, so a
+ * stand-in carrying only the control still fails:
+ *  - 'default-model': its spec-named "Change" action (design-notes §2 row 1)
+ *    shares the exact name with the Web & Search group's own "Change"
+ *    toggle — a moved-out surface still rendered inside Providers until
+ *    FR-060 lands (web search moves to Skills & Tools; CHECK round 9's
+ *    retained caveat: "Providers is pre-landing state"). The co-witness is
+ *    the card's own "Default model" name line (the search index entry's
+ *    label, spec:544's visible-label rule).
+ */
+const WITNESS_SHARED_CONTROL_NAMES: Record<string, { phrase: string; coWitness: string }> = {
+  'default-model': { phrase: 'Change', coWitness: 'Default model' },
+}
+
+/**
+ * The ownership rule every witness leg answers (CHECK R10-01, replacing the
+ * mutable-id tie): the row OWNS its witness only when every perceivable
+ * element in the document carrying that exact name — and role, for a
+ * control — sits inside the marked row. One match outside the marked row
+ * means the real setting is elsewhere, and the leg yields no witness.
+ */
+function legWitness(matches: Element[], row: Element): Element | null {
   const inside = matches.filter((m) => row.contains(m))
-  if (matches.length === 1) return inside.length === 1 ? inside[0] : null
   if (inside.length === 0) return null
-  if (tiedToRowId) {
-    for (const m of inside) {
-      if (!m.closest(`[data-settings-row="${tiedToRowId}"]`)) return null
-    }
+  return matches.length === inside.length ? inside[0] : null
+}
+
+/**
+ * The heading leg's duplicate handling for ruling B: the row must carry its
+ * own heading match, and an additional match outside the marked row is
+ * acceptable only at SECTION-TITLE level (an h2 — FR-001's eleven section
+ * titles render as h2), never a competing row heading (h3 and below) or any
+ * other stray match.
+ */
+function headingWitness(matches: Element[], row: Element): Element | null {
+  const inside = matches.filter((m) => row.contains(m))
+  if (inside.length === 0) return null
+  for (const m of matches) {
+    if (!row.contains(m) && m.tagName !== 'H2') return null
   }
   return inside[0]
 }
 
 /**
- * Locate the requested setting's own spec-named control or value for the
- * marked row (CHECK R9-01, strengthening R8-01): the witness is bound by
- * accessible ROLE and EXACT accessible name — Testing Library role queries
- * over WITNESS_ROLES with the whole name, never a prefix — or, for the
- * read-only values and row names that carry no control role (the Version
- * span, the row's own name line), the element whose OWN visible text is
- * exactly the phrase. Hidden text witnesses nothing, and a longer word that
- * merely starts with the phrase witnesses nothing. Matching is
- * case-insensitive: the sheet's typographic casing may differ from the
- * spec's ("Remote Access", "View Log", "opencode program path").
+ * Locate the requested setting's own spec-named witness for the marked row
+ * (CHECK R9-01, ownership per CHECK R10-01). The row's WITNESS_KIND decides
+ * the leg, and the leg decides what may witness:
+ *  - control: Testing Library role queries over CONTROL_WITNESS_ROLES with
+ *    the EXACT accessible name (whole name, case-insensitive, never a
+ *    prefix). EVERY perceivable match in the document must sit inside the
+ *    marked row — a copy outside it fails, because the real setting is
+ *    elsewhere (R10-P02, R10-P03). The own-text leg never applies to a
+ *    control row.
+ *  - heading: the heading role with the exact name; the row must carry its
+ *    own heading, and the only tolerated outside match is the section-title
+ *    h2 (ruling B's "Providers" against the FR-001 section title).
+ *  - name-line: the element whose OWN visible text is exactly the phrase —
+ *    again all matches inside the marked row. Restricted to the rows
+ *    WITNESS_KINDS lists as value/name-line rows, each citing its spec
+ *    source.
+ * Hidden text witnesses nothing, and a longer word that merely starts with
+ * the phrase witnesses nothing. Matching is case-insensitive: the sheet's
+ * typographic casing may differ from the spec's ("Remote Access", "View
+ * Log", "opencode program path").
  */
-function findSpecWitness(row: Element, phrases: string[], tiedToRowId?: string): Element | null {
+function findSpecWitness(row: Element, phrases: string[], kind: WitnessKind, entryRowId?: string): Element | null {
   for (const phrase of phrases) {
     const pattern = exactNamePattern(phrase)
-    for (const role of WITNESS_ROLES) {
-      const witness = legWitness(screen.queryAllByRole(role, { name: pattern }), row, tiedToRowId)
+    if (kind === 'heading') {
+      const witness = headingWitness(screen.queryAllByRole('heading', { name: pattern }), row)
       if (witness) return witness
+      continue
     }
-    const needle = phrase.replace(/\s+/g, ' ').trim().toLowerCase()
-    const textMatches = Array.from(document.body.querySelectorAll('*')).filter(
-      (el) => isPerceivable(el) && ownText(el) === needle,
-    )
-    const witness = legWitness(textMatches, row, tiedToRowId)
+    if (kind === 'control') {
+      for (const role of CONTROL_WITNESS_ROLES) {
+        const matches = screen.queryAllByRole(role, { name: pattern })
+        const inside = matches.filter((m) => row.contains(m))
+        if (inside.length === 0) continue
+        if (matches.length === inside.length) return inside[0]
+        // Genuine duplicate, allowed only through the explicit map: the row
+        // keeps an exact-name match inside it AND also owns its co-witness
+        // name line under the all-inside rule — so a stand-in carrying only
+        // the control (the real control elsewhere) still fails.
+        const allowance = entryRowId ? WITNESS_SHARED_CONTROL_NAMES[entryRowId] : undefined
+        if (allowance && allowance.phrase === phrase) {
+          const coMatches = exactTextMatches(allowance.coWitness)
+          const coInside = coMatches.filter((m) => row.contains(m))
+          if (coMatches.length === coInside.length) return inside[0]
+        }
+        return null // a same-named copy outside the marked row: not owned
+      }
+      continue
+    }
+    const witness = legWitness(exactTextMatches(phrase), row)
     if (witness) return witness
   }
   return null
@@ -618,21 +762,25 @@ async function expectGroupOpen(testId: string, headerName: string): Promise<HTML
  *    the identity, only-one-mark and scroll-receiver legs — and, for the
  *    closed-group cases, by the witnessed group header above.
  * 3. The requested setting's own witness (CHECK R8-01/N114, N115; strength-
- *    ened CHECK R9-01/N131–N133): when the caller names the entry's row id,
- *    the marked row must carry the spec-named control or value of THAT
- *    setting (WITNESS_PHRASES, from Dataset D-9's map, never from the
- *    implementation), and must not carry another listed setting's witness
- *    while that setting's own row sits elsewhere — the id, mark and scroll
- *    moving TOGETHER onto a wrong real row (the Log-level row answering a
- *    Bind-address or Port jump) is the fault this leg kills. The witness is
- *    the real, perceivable control or value: found by accessible role and
- *    exact accessible name (role queries skip hidden elements; exact whole
- *    name, never a prefix), or for read-only values and row names by exact
- *    own visible text — unique in the document for its name and role, or
- *    tied to the requested row's id. Hidden text and "Portable charger
- *    status" do not witness a Port jump. A real nested row is not a foreign
- *    mark: the other row genuinely lying inside (or around) the marked one
- *    passes.
+ *    ened R9-01/N131–N133; ownership per R10-01/R10-P02/R10-P03): when the
+ *    caller names the entry's row id, the marked row must carry the
+ *    spec-named control or value of THAT setting (WITNESS_PHRASES +
+ *    WITNESS_KINDS, from Dataset D-9's map, never from the implementation),
+ *    and must not carry another listed setting's witness while that
+ *    setting's own row sits elsewhere — the id, mark and scroll moving
+ *    TOGETHER onto a wrong real row (the Log-level row answering a
+ *    Bind-address or Port jump) is the fault this leg kills. Ownership is
+ *    independent of the mark and of the mutable row id: for a control row
+ *    the witness is the role + exact-accessible-name match, and EVERY
+ *    perceivable element in the document with that exact role and name must
+ *    sit inside the marked row — a copy outside it fails, because the real
+ *    setting is elsewhere; the own-text leg exists only for the rows
+ *    WITNESS_KINDS lists as value/name-line rows, under the same
+ *    all-inside rule; a heading row carries its own heading, with only the
+ *    FR-001 section-title h2 tolerated outside (ruling B). Hidden text and
+ *    "Portable charger status" do not witness a Port jump. A real nested
+ *    row is not a foreign mark: the other row genuinely lying inside (or
+ *    around) the marked one passes.
  */
 async function expectExactlyThisRowMarked(
   row: HTMLElement,
@@ -663,14 +811,15 @@ async function expectExactlyThisRowMarked(
   }
   if (witnesses?.entryRowId) {
     const phrases = WITNESS_PHRASES[witnesses.entryRowId]
-    if (phrases) {
+    const kind = WITNESS_KINDS[witnesses.entryRowId]
+    if (phrases && kind) {
       expect(
-        findSpecWitness(row, phrases, witnesses.entryRowId),
-        `RED (FR-075, CHECK R8-01/R9-01): the marked row must be the requested setting's own row — none of the spec-named controls/values for "${witnesses.entryRowId}" (${phrases.join(' / ')}) lies on or inside it under the role + exact-name + perceivable locator, while the id agrees with the implementation`,
+        findSpecWitness(row, phrases, kind, witnesses.entryRowId),
+        `RED (FR-075, CHECK R8-01/R9-01/R10-01): the marked row must own the requested setting's witness — no ${kind} leg for "${witnesses.entryRowId}" (${phrases.join(' / ')}) holds with every exact-name match inside the marked row, while the id agrees with the implementation`,
       ).not.toBeNull()
       for (const [otherId, otherPhrases] of Object.entries(WITNESS_PHRASES)) {
         if (otherId === witnesses.entryRowId) continue
-        const other = findSpecWitness(row, otherPhrases)
+        const other = findSpecWitness(row, otherPhrases, WITNESS_KINDS[otherId])
         if (!other) continue
         const otherRow = document.querySelector<HTMLElement>(`[data-settings-row="${otherId}"]`)
         if (otherRow && (row === otherRow || row.contains(otherRow) || otherRow.contains(row))) continue
