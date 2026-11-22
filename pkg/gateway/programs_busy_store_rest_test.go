@@ -10,9 +10,10 @@
 // token in use, no check started, and nothing of the paste is written even
 // 2 s after the holder releases; with a 1 s holder the paste succeeds as
 // generation 2. (The busy store's other faces — ErrStoreBusy from the store
-// methods and the CLI stand-in — live in the credentials pack,
-// store_transaction_barrier_test.go; the CLI's real-binary exit code is
-// hands-on H-17.)
+// methods and a lower-level re-exec store child — live in the credentials
+// pack. Actual CLI + running-gateway acceptance remains separately BLOCKED
+// in tests/cli-credentials-s1/real_cli_gateway_test.go; H-17 is additional,
+// never an automated S-136/S-146 substitute.)
 //
 // RED: the save route is not registered, so pgConnectGithub fatal-BLOCKs via
 // routeMissing before the busy face can be exercised.
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/tests/testutil/programstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +56,7 @@ func (r *pgAsyncResult) wait() error { <-r.done; return r.result }
 // never delayed by the seam once the holder is inside. enter receives the
 // hold channel; closing it releases the holder. Returns the hold channel and
 // the holder's cached-result handle.
-func pgBusyHolder(t *testing.T, holder *credentials.Store, enter func(hold chan struct{})) (chan struct{}, *pgAsyncResult) {
+func pgBusyHolder(t *testing.T, holder *credentials.Store, enter func(hold chan struct{})) (func(), *pgAsyncResult) {
 	t.Helper()
 	hold := make(chan struct{})
 	engaged := make(chan struct{}, 1)
@@ -77,15 +79,22 @@ func pgBusyHolder(t *testing.T, holder *credentials.Store, enter func(hold chan 
 		}
 		enter(hold)
 	}
-	t.Cleanup(func() { credentials.TransactHook = nil })
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(hold) }) }
 	done := pgLaunchAsync(func() error { return holder.Set("BUSY_PROBE", "x") })
+	// Register before waiting for the hook: even a failed engagement must join.
+	t.Cleanup(func() {
+		release()
+		pgJoinHolder(t, done, 10*time.Second, "busy holder")
+		credentials.TransactHook = nil
+	})
 	select {
 	case <-engaged:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("BLOCKED: store transactions not implemented — TransactHook never fired (s.transact, FR-049; required by S-146's held writer)")
 	}
-	credentials.TransactHook = func(string) {} // inert: the paste's own transaction must not pause
-	return hold, done
+	// The same hook is now disarmed, so no concurrent global-hook replacement.
+	return release, done
 }
 
 // pgJoinHolder joins the holder's cached-result handle within the grace
@@ -100,22 +109,17 @@ func pgJoinHolder(t *testing.T, holder *pgAsyncResult, grace time.Duration, what
 }
 
 func TestProgramSave_BusyStore(t *testing.T) {
-	f := pgPersonAPI(t)
-	pgConnectGithub(t, f) // BLOCKED (routeMissing) at RED; connected gen 1 octocat at GREEN
-	baselineStarts := f.ghStarted()
-
-	holder := credentials.NewStore(f.api.credentialsStorePath())
-	require.NoError(t, credentials.Unlock(holder),
-		"instrument: the holder store unlocks under the fixture master key")
-	t.Cleanup(holder.Close)
-
 	t.Run("busy_6s_holder_answers_503_after_the_bound", func(t *testing.T) {
-		var releaseOnce sync.Once
-		hold, holderDone := pgBusyHolder(t, holder, func(h chan struct{}) { <-h })
-		t.Cleanup(func() {
-			releaseOnce.Do(func() { close(hold) })
-			pgJoinHolder(t, holderDone, 10*time.Second, "the 6 s holder")
-		})
+		f := pgPersonAPI(t)
+		pgConnectGithub(t, f)
+		baselineStarts := f.ghStarted()
+		holder := credentials.NewStore(f.api.credentialsStorePath())
+		require.NoError(t, credentials.Unlock(holder))
+		t.Cleanup(holder.Close)
+		canary := programstore.SeedCanary(t, f.store)
+		beforeStore := programstore.Snapshot(t, f.store, canary)
+
+		release, holderDone := pgBusyHolder(t, holder, func(h chan struct{}) { <-h })
 
 		// The person pastes while the holder is inside its transaction.
 		start := time.Now()
@@ -138,16 +142,38 @@ func TestProgramSave_BusyStore(t *testing.T) {
 		// Release the holder; 2 s later nothing of the paste is written (the
 		// entry is still connected gen 1; the holder's own unrelated write is
 		// the only new state).
-		releaseOnce.Do(func() { close(hold) })
+		release()
 		require.NoError(t, holderDone.wait(), "the holder completes after release")
 		time.Sleep(2 * time.Second)
 		after := pgConnection(t, pgProgramEntryByID(t, f, "github"))
 		require.Equal(t, "connected", after["state"], "still connected 2 s after release")
 		require.Equal(t, float64(1), after["generation"], "the paste never landed, even late")
 		require.Equal(t, baselineStarts, f.ghStarted(), "no late check started either")
+		afterStore := programstore.Snapshot(t, f.store, canary)
+		require.Equal(t, "x", afterStore.Values["BUSY_PROBE"], "holder's unrelated write survives")
+		delete(afterStore.Values, "BUSY_PROBE")
+		delete(afterStore.Metadata, "BUSY_PROBE")
+		kept := afterStore.Inventory[:0]
+		for _, item := range afterStore.Inventory {
+			if item.Reference != "BUSY_PROBE" {
+				kept = append(kept, item)
+			}
+		}
+		afterStore.Inventory = kept
+		require.Equal(t, beforeStore, afterStore, "failed paste preserves all program/private state and known receipts, not only connection text")
+
 	})
 
 	t.Run("holder_released_after_1s_paste_succeeds_generation_2", func(t *testing.T) {
+		f := pgPersonAPI(t)
+		pgConnectGithub(t, f)
+		baselineStarts := f.ghStarted()
+		holder := credentials.NewStore(f.api.credentialsStorePath())
+		require.NoError(t, credentials.Unlock(holder))
+		t.Cleanup(holder.Close)
+		canary := programstore.SeedCanary(t, f.store)
+		beforeStore := programstore.Snapshot(t, f.store, canary)
+
 		// CHECK R14: the fake accepts BOTH tokens — the Given's
 		// tok_valid_12345 and the pasted tok_new_67890 (the row reused the
 		// octocat-only fake, so a correct paste check ended check_failed,
@@ -155,11 +181,9 @@ func TestProgramSave_BusyStore(t *testing.T) {
 		shBody, cmdBody := pgFakeGhAccounts(map[string]string{
 			"tok_valid_12345": "octocat", "tok_new_67890": "hubot"})
 		pgInstallFakeGh(t, f, shBody, cmdBody)
-		hold2, holderDone2 := pgBusyHolder(t, holder, func(chan struct{}) { time.Sleep(1 * time.Second) })
-		t.Cleanup(func() {
-			close(hold2) // the fixed 1 s holder ignores the hold; closing is a no-op
-			pgJoinHolder(t, holderDone2, 10*time.Second, "the 1 s holder")
-		})
+		_, holderDone2 := pgBusyHolder(t, holder, func(chan struct{}) { time.Sleep(1 * time.Second) })
+		require.NotEmpty(t, beforeStore.Values)
+		require.Positive(t, baselineStarts)
 		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
 			`{"value":"tok_new_67890"}`)
 		require.Equal(t, http.StatusOK, w.Code,

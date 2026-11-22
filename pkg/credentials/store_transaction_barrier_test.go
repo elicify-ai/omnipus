@@ -18,8 +18,10 @@ package credentials
 //
 // The S-135 "read outside the lock" mutant and other planted build-tag mutants
 // are CHECK's mutation probes (FR-045), not run in RED. The real
-// `omnipus credentials set` binary stays hands-on (H-17); its automated
-// stand-in here is a second process writing the same store path.
+// `omnipus credentials set` plus running-gateway path is still MISSING,
+// explicitly BLOCKED in tests/cli-credentials-s1/real_cli_gateway_test.go.
+// The re-exec'd test process below is lower-level store coverage ONLY; H-17
+// does not replace automated Unix S-136/S-146.
 //
 // CHECK R03 repair: every launched writer gets its release-and-join cleanup
 // AT LAUNCH; the completion signal is close-only and the error cached, so the
@@ -67,7 +69,7 @@ func TestCredentialStore_Transactions(t *testing.T) {
 	t.Run("second_store_cannot_write_back_stale_state", s135SecondStoreStaleWriter)
 	t.Run("cross_process_writer_barrier", s136CrossProcessBarrier)
 	t.Run("busy_store_fails_ordinary_writes_within_five_seconds", s146BusyStoreBound)
-	t.Run("cross_process_sidecar_holder_busy_and_cli_exit", s146CrossProcessHolder)
+	t.Run("cross_process_sidecar_holder_busy_store_child_outcome", s146CrossProcessHolder)
 }
 
 // txTestKey is the fixed 32-byte test key for every store this file opens.
@@ -397,7 +399,7 @@ func s135SecondStoreStaleWriter(t *testing.T) {
 // transaction after the in-lock read; the in-process paste must wait, and
 // after release both values are in the file (S-136). The automated suite
 // pauses a re-exec'd test binary as the second process; the real
-// `omnipus credentials set` binary path is hands-on H-17.
+// actual CLI/gateway acceptance is separately loud-BLOCKED (R17).
 func s136CrossProcessBarrier(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	scratch := t.TempDir()
@@ -529,7 +531,8 @@ func s146BusyStoreBound(t *testing.T) {
 // seam needed — the raw lock exists today); the in-process write must end
 // with ErrStoreBusy after the 5 s bound, and a second process attempting the
 // same ordinary write records the busy outcome (the automated stand-in for the
-// CLI `credentials set`; the real CLI binary is hands-on H-17).
+// CLI `credentials set`; its actual nonzero exit is a separately BLOCKED
+// automated row, not proved by this result file or by H-17).
 func s146CrossProcessHolder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	scratch := t.TempDir()
