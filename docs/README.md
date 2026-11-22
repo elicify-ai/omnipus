@@ -27,6 +27,7 @@ Day-to-day pages.
 | [Goals](goals.md) | Judge decides completion |
 | [Chat loops](loops.md) | Recurring chat instructions, status and run limits |
 | [Agents](agents.md) | The built-in roster and your own agents |
+| [Export & Import](export-import.md) | Move one of your agents to another install |
 | [Knowledge base](knowledge.md) | Notes, records, saved views |
 | [Library](library.md) | Files and shared folders |
 | [Mail](mail.md) | Inbox, Sent, Drafts, composing, and mailbox errors |
