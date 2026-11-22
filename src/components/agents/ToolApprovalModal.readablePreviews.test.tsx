@@ -302,8 +302,11 @@ describe('ToolApprovalPanel — reconnect gap, end-to-end (store fix + modal ren
         session_id: 'sess-mount',
         turn_id: 'turn-e2e-known',
         expires_in_ms: 300_000,
-      offered_actions: ['allow_once', 'allow_for', 'deny'],
-      allow_durations: ['1h', '3h', '1d'],
+      // request_mount is exact-action (C-26 point 9 / S-129): the server
+      // computes Approve Once + Deny and no durations for it — the earlier
+      // fixture carried choices this tool cannot be offered.
+      offered_actions: ['allow_once', 'deny'],
+      allow_durations: [],
       })
     })
 
@@ -320,8 +323,9 @@ describe('ToolApprovalPanel — reconnect gap, end-to-end (store fix + modal ren
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
           expires_in_ms: 290_000,
-        offered_actions: ['allow_once', 'allow_for', 'deny'],
-        allow_durations: ['1h', '3h', '1d'],
+        // Exact-action (S-129): no durations on a snapshot entry either.
+        offered_actions: ['allow_once', 'deny'],
+        allow_durations: [],
         },
       ],
       emitted_at: new Date().toISOString(),

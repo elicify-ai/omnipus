@@ -18,8 +18,21 @@ const frame: ToolApprovalRequiredFrame = {
   tool_name: 'set_channel_outbound', agent_id: 'omnipus', session_id: SESSION,
   turn_id: 'q7-turn', expires_in_ms: 300_000,
   args: { id: 'discord', policy: 'agent_may_start', targets: ['222'], expected_revision: 'q7-live-revision' },
-offered_actions: ['allow_once', 'allow_for', 'deny'],
-allow_durations: ['1h', '3h', '1d'],
+// set_channel_outbound is always-ask (C-26 / S-125): the server computes
+// Approve Once + Deny + Cancel and NO durations for it — the earlier fixture
+// carried choices this tool cannot be offered. The ordinary-tool control
+// below overrides both fields for enable_channel.
+offered_actions: ['allow_once', 'deny', 'cancel'],
+allow_durations: [],
+}
+// The ordinary connection tool's choices for the lasting-Allow control:
+// enable_channel is neither exact-action nor always-ask, so its card offers
+// the three time choices (C-26 approval-card row). Cancel presence is
+// per-tool ("where it has it today") and not pinned by this fixture.
+const ORDINARY_FRAME: ToolApprovalRequiredFrame = {
+  ...frame,
+  offered_actions: ['allow_once', 'allow_for', 'deny'],
+  allow_durations: ['1h', '3h', '1d'],
 }
 
 beforeEach(() => {
@@ -30,8 +43,8 @@ afterEach(cleanupApprovalState)
 
 for (const [name, Component] of [['Panel', ToolApprovalPanel], ['Modal', ToolApprovalModal]] as const) {
   describe(`Q7 real ${name} one-request card`, () => {
-    function mount(toolName = 'set_channel_outbound') {
-      act(() => useToolApprovalStore.getState().enqueue({ ...frame, tool_name: toolName }))
+    function mount(frameToMount: ToolApprovalRequiredFrame = frame) {
+      act(() => useToolApprovalStore.getState().enqueue(frameToMount))
       renderWithClient(<Component />)
     }
 
@@ -63,7 +76,7 @@ for (const [name, Component] of [['Panel', ToolApprovalPanel], ['Modal', ToolApp
 
     it('positive control: an ordinary connection tool retains lasting Allow and no special scope notice', async () => {
       setApprovalReply({ approval_id: frame.approval_id, action: 'allow', status: 'ok', grant_recorded: true })
-      mount('enable_channel')
+      mount({ ...ORDINARY_FRAME, tool_name: 'enable_channel' })
       expect(screen.queryByText(NOTICE, { exact: true })).not.toBeInTheDocument()
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Always Allow' })) })
       await waitFor(() => expect(approvalPosts()).toEqual([{ id: frame.approval_id, body: { action: 'allow' } }]))

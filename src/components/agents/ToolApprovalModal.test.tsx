@@ -46,6 +46,9 @@ const SAMPLE_APPROVAL = {
   toolName: 'fetch_url',
   args: { url: 'https://example.com' },
   agentId: 'agent-main',
+  // K7 acting_agent_name: the frame names the acting agent, so the result
+  // line's "<agent>" is a known value in these tests (CHECK round 1 R5–R7).
+  actingAgentName: 'Mia',
   sessionId: 'sess-001',
   turnId: 'turn-001',
   expiresAt: Date.now() + 300_000, // 5 minutes
@@ -237,7 +240,10 @@ describe('ToolApprovalPanel — button dispatch', () => {
       approval_id: 'appr-001',
       action: 'allow_for',
       status: 'ok',
-      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      // The contract records expires_at only when the timed allowance stuck
+      // (CHECK round 1, R3 reconciliation): a reply that did NOT save the
+      // allowance carries no recorded expiry — supplying one here would
+      // teach a wire state the server never sends.
       applied: { call_released: true, timed_allowance: false, trust_approved: false },
       not_applied_reason: 'the approval store is read-only',
     })
@@ -261,16 +267,17 @@ describe('ToolApprovalPanel — button dispatch', () => {
   // Regression row (b7526b2e60) + C-26: a reply that never says the allowance
   // stuck — no ToolApprovalResponse.applied at all — is treated the same as
   // timed_allowance:false: the call was released, the time limit was not
-  // saved, and the partial-failure text is shown (spec approval-card row;
-  // the reason is server-supplied, so the assertion bounds the spec-pinned
-  // prefix instead of inventing one). Replaces the old grant_recorded-omitted
-  // Always Allow case (R2-Q1).
+  // saved, and the partial-failure text is shown (spec approval-card row).
+  // CHECK round 1 R4: the reason is server-supplied, so the test supplies a
+  // fixed one explicitly and asserts the exact sentence — a prefix regex
+  // would also pass an absent reason or trailing garbage.
   it('L1 §1.2 R6 → C-26: toasts when the reply omits applied — treated as allowance-did-not-stick', async () => {
     setApprovalReply({
       approval_id: 'appr-001',
       action: 'allow_for',
       status: 'ok',
-      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      // Recorded-only expiry (CHECK R3): no allowance saved, no expires_at.
+      not_applied_reason: 'the approval store is read-only',
     })
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -280,30 +287,54 @@ describe('ToolApprovalPanel — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
-      expect(toasts()).toContainEqual({
-        message: expect.stringMatching(
-          /^Approved for this request only\. The time limit was not saved/,
-        ),
-        variant: 'warning',
-      })
+      expect(toasts()).toEqual([
+        {
+          message:
+            'Approved for this request only. The time limit was not saved: the approval store is read-only.',
+          variant: 'warning',
+        },
+      ])
     })
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
   })
+
+  // S-126 fixes the clock concretely: a card answered at 13:05 with "Allow
+  // for 1 hour" closes with "Allowed for Mia until 14:05.", and "Allow for
+  // 1 day" with "Allowed for Mia until tomorrow 13:05." (the day shows when
+  // the end is not today). The client formats the server-recorded end, so
+  // the test fixes that clock input in the scripted reply instead of
+  // leaving the displayed time to Date.now() (CHECK round 1 R5/R6/R7).
+  // Known agent: the frame's acting_agent_name names Mia (store field
+  // actingAgentName, K7).
+  function endsTodayAtLocal(hour: number, minute: number): string {
+    const end = new Date()
+    end.setHours(hour, minute, 0, 0)
+    return end.toISOString()
+  }
+  function endsTomorrowAtLocal(hour: number, minute: number): string {
+    const end = new Date()
+    end.setDate(end.getDate() + 1)
+    end.setHours(hour, minute, 0, 0)
+    return end.toISOString()
+  }
 
   // Regression row (b7526b2e60) + C-26 / S-126: after a timed choice sticks
   // (ToolApprovalResponse.applied.timed_allowance = true) the card closes and
   // the toast is the spec's result line "Allowed for <agent> until <time>.",
   // with the server-recorded scope (ToolApprovalResponse.scope) carried on the
   // reply. The old "Always allowed — … for this session." toasts are removed
-  // by R2-Q1, so their text must never reappear. The time is clock-derived
-  // and the agent display name is the store's, so the spec-pinned sentence
-  // shape is asserted, not a rendered timestamp.
+  // by R2-Q1, so their text must never reappear. The displayed time and the
+  // agent display name are both pinned by the fixtures below (the scripted
+  // reply's recorded end; the frame's acting_agent_name), so the exact spec
+  // sentences are asserted (CHECK round 1 R5/R6).
   it('L1 §1.2 R6 → C-26: closes with the result line naming the recorded timed allowance when the server recorded scope "prefix"', async () => {
     setApprovalReply({
       approval_id: 'appr-shell-001',
       action: 'allow_for',
       status: 'ok',
-      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      // S-126's fixed clock: the 1-hour choice answered at 13:05 records
+      // 14:05 today.
+      expires_at: endsTodayAtLocal(14, 5),
       applied: { call_released: true, timed_allowance: true, trust_approved: false },
       scope: 'prefix',
     })
@@ -316,6 +347,7 @@ describe('ToolApprovalPanel — button dispatch', () => {
             toolName: 'bash',
             args: { command: 'npm run build' },
             agentId: 'agent-main',
+            actingAgentName: 'Mia',
             sessionId: 'sess-001',
             turnId: 'turn-001',
             expiresAt: Date.now() + 300_000,
@@ -328,32 +360,28 @@ describe('ToolApprovalPanel — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
-      expect(toasts()).toContainEqual({
-        message: expect.stringMatching(/^Allowed for .+ until .+\.$/),
-        variant: 'success',
-      })
+      // Exact spec sentence (S-126) with the fixed clock and known agent; a
+      // wrong agent name or a wrong/relative time fails. The exact one-item
+      // list also excludes every other toast — including the retired
+      // "Always allowed" wording (R2-Q1), which needs no separate negative.
+      expect(toasts()).toEqual([
+        { message: 'Allowed for Mia until 14:05.', variant: 'success' },
+      ])
     })
-    expect(toasts()).not.toContainEqual(
-      expect.objectContaining({ variant: 'warning' }),
-    )
-    // R2-Q1: the "Always allowed" wording is retired with the control.
-    expect(toasts()).not.toContainEqual(
-      expect.objectContaining({
-        message: expect.stringContaining('Always allowed'),
-      }),
-    )
   })
 
-  // Regression row (b7526b2e60) + C-26 / S-126: same result line when the
-  // server recorded the other narrow bash scope ("exact") — the recorded
-  // scope flows through without changing or dropping the result line, and no
-  // "Always allowed" wording returns (R2-Q1).
+  // Regression row (b7526b2e60) + C-26 / S-126: same exact result line when
+  // the server recorded the other narrow bash scope ("exact") — the recorded
+  // scope flows through without changing or dropping the sentence, and no
+  // "Always allowed" wording returns (R2-Q1). CHECK round 1 R6: the two
+  // scope cases share the same exact-sentence oracle deliberately — what
+  // varies is the recorded scope, not the sentence.
   it('L1 §1.2 R6 → C-26: closes with the result line naming the recorded timed allowance when the server recorded scope "exact"', async () => {
     setApprovalReply({
       approval_id: 'appr-shell-002',
       action: 'allow_for',
       status: 'ok',
-      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      expires_at: endsTodayAtLocal(14, 5),
       applied: { call_released: true, timed_allowance: true, trust_approved: false },
       scope: 'exact',
     })
@@ -366,6 +394,7 @@ describe('ToolApprovalPanel — button dispatch', () => {
             toolName: 'bash',
             args: { command: 'npm run build' },
             agentId: 'agent-main',
+            actingAgentName: 'Mia',
             sessionId: 'sess-001',
             turnId: 'turn-002',
             expiresAt: Date.now() + 300_000,
@@ -378,16 +407,10 @@ describe('ToolApprovalPanel — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
-      expect(toasts()).toContainEqual({
-        message: expect.stringMatching(/^Allowed for .+ until .+\.$/),
-        variant: 'success',
-      })
+      expect(toasts()).toEqual([
+        { message: 'Allowed for Mia until 14:05.', variant: 'success' },
+      ])
     })
-    expect(toasts()).not.toContainEqual(
-      expect.objectContaining({
-        message: expect.stringContaining('Always allowed'),
-      }),
-    )
   })
 
   it('L1 §1.2 R6: removes approval from queue after successful Approve', async () => {
@@ -407,13 +430,18 @@ describe('ToolApprovalPanel — button dispatch', () => {
   // allowance stuck (applied.timed_allowance = true) resolves the card — the
   // queue empties and the result line "Allowed for <agent> until <time>."
   // names the recorded allowance (the C-26 replacement of the old silent
-  // Always Allow success; R2-Q1).
-  it('L1 §1.2 R6 → C-26: removes approval from queue after a successful timed choice', async () => {
+  // Always Allow success; R2-Q1). This leg is S-126's second sentence: the
+  // 1-day choice at 13:05 shows the day because the end is not today.
+  // CHECK round 1 R7/W2: the toast list is asserted exactly — one success
+  // toast, no extra warning/success toast passes.
+  it('L1 §1.2 R6 → C-26: removes approval from queue after a successful timed choice, showing the 1-day result line', async () => {
     setApprovalReply({
       approval_id: 'appr-001',
       action: 'allow_for',
       status: 'ok',
-      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      // S-126's fixed clock: the 1-day choice answered at 13:05 records
+      // tomorrow 13:05.
+      expires_at: endsTomorrowAtLocal(13, 5),
       applied: { call_released: true, timed_allowance: true, trust_approved: false },
     })
     act(() => {
@@ -421,15 +449,14 @@ describe('ToolApprovalPanel — button dispatch', () => {
     })
     render(<ToolApprovalPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
+    fireEvent.click(screen.getByRole('button', { name: /1 day/i }))
 
     await waitFor(() => {
       expect(useToolApprovalStore.getState().queue).toHaveLength(0)
     })
-    expect(toasts()).toContainEqual({
-      message: expect.stringMatching(/^Allowed for .+ until .+\.$/),
-      variant: 'success',
-    })
+    expect(toasts()).toEqual([
+      { message: 'Allowed for Mia until tomorrow 13:05.', variant: 'success' },
+    ])
   })
 })
 
@@ -767,16 +794,14 @@ describe.each(edgeCases)(
   },
 )
 
-// ── C-26 timed choices for request_mount ───────────────────────────────────
+// ── C-26 exact-action tools: request_mount ─────────────────────────────────
 //
-// Regression row (b7526b2e60): the R6 'Always Allow' cases here are rewritten
-// to their C-26 timed-choice equivalents — the card offers Approve Once /
-// Allow for 1 hour / 3 hours / 1 day / Deny for an ordinary tool and for
-// request_mount with args present. The old "hides Always Allow when no folder
-// path is present" case is DELETED: it guarded the per-call grant's scope
-// capture, which R2-Q1 removed entirely — no C-26 equivalent exists (any
-// exact-action tool that offers no time choice is covered by order 64, D17
-// rows 21–25).
+// request_mount is one of the five exact-action tools (C-26 point 9; S-129;
+// Dataset D17 rows 21–25): its card offers Approve Once and Deny only and
+// NEVER a time choice — whether or not a folder path is present. The old
+// "hides Always Allow when no folder path is present" case is retained as
+// the missing-path exact-action case (CHECK round 1 R10/W1): no time
+// choices, and one-time approve/deny remain.
 
 const MOUNT_APPROVAL = {
   approvalId: 'appr-mount',
@@ -789,10 +814,18 @@ const MOUNT_APPROVAL = {
   expiresAt: Date.now() + 300_000,
 }
 
-describe('ToolApprovalPanel — C-26 timed choices for request_mount', () => {
-  // Regression row (b7526b2e60) + C-26 approval-card row: the choices on
-  // every card are Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny —
-  // and no Always Allow anywhere (R2-Q1).
+const MOUNT_APPROVAL_NO_PATH = {
+  ...MOUNT_APPROVAL,
+  approvalId: 'appr-mount-no-path',
+  toolCallId: 'call-mount-no-path',
+  turnId: 'turn-mount-no-path',
+  args: { reason: 'to run the build' },
+}
+
+describe('ToolApprovalPanel — C-26 exact-action request_mount', () => {
+  // Regression row (b7526b2e60) + C-26 approval-card row: the choices on an
+  // ORDINARY card are Approve Once, Allow for 1 hour / 3 hours / 1 day,
+  // Deny — and no Always Allow anywhere (R2-Q1).
   it('L1 §1.2 R6 → C-26: offers the three time choices for an ordinary tool, and never Always Allow', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -804,21 +837,40 @@ describe('ToolApprovalPanel — C-26 timed choices for request_mount', () => {
     expect(screen.queryByRole('button', { name: /Always Allow/i })).not.toBeInTheDocument()
   })
 
-  it('L1 §1.2 R6 → C-26: offers the three time choices for request_mount when args are present', () => {
+  it('L1 §1.2 R6 → C-26/S-129: request_mount is exact-action — no time choice even with a folder path present', () => {
+    // C-26 point 9 / S-129 (CHECK round 1 R9): request_mount never offers a
+    // time choice, args present or not — the earlier draft asserting three
+    // duration buttons here carried the wrong final-spec oracle (it
+    // contradicted order 64 / D17 row 22).
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
-    expect(screen.getByRole('button', { name: /1 hour/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /3 hours/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /1 day/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /1 hour/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /3 hours/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /1 day/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Always Allow/i })).not.toBeInTheDocument()
   })
 
+  it('L1 §1.2 R6 → C-26/S-129: request_mount without a folder path — still no time choice, one-time approve and deny remain', () => {
+    // Restored missing-path case (CHECK round 1 R10/W1): the exact-action
+    // rule strengthens the old per-call negative — no time choice with no
+    // path either, and the one-time approve/deny pair stays.
+    act(() => {
+      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL_NO_PATH] })
+    })
+    render(<ToolApprovalPanel />)
+    expect(screen.queryByRole('button', { name: /1 hour/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /3 hours/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /1 day/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Don't add/i })).toBeInTheDocument()
+  })
+
   it('L1 §1.2 R6: still offers a way to approve and a way to deny request_mount', () => {
-    // C-26 (Regression row, b7526b2e60): the timed choices are offered when
-    // args are present; there is no Always Allow anymore (R2-Q1). Approve
-    // and Deny must still be there either way.
+    // C-26 / S-129: the exact-action card is Approve Once + Deny only — no
+    // time choice (asserted above); the one-time controls remain (CHECK
+    // round 1 R11).
     //
     // request_mount's copy diverges from the generic Approve/Deny labels
     // (operator-approved "Add folder" / "Don't add" — see
