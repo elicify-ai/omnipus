@@ -56,6 +56,15 @@ func TestSFR2_1_UnreadableOwnAncestorKeepsThePermissionCause(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(program, "soffice"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(program, "versionrc"), []byte("ProductVersion=26.8.1.1\n"), 0o600))
 
+	// The startup record for the RS-1 subtest is built BEFORE the lock:
+	// StartupGrantRecord.AddGranted stats the granted paths, and the locked
+	// ancestor must not fail test-side setup — the subject is the production
+	// resolution under the lock, not record construction.
+	rec := &component.StartupGrantRecord{}
+	require.NoError(t, rec.AddGranted(own))
+	require.NoError(t, rec.AddGranted(officeRoot))
+	require.NoError(t, rec.AddGranted(rendererRoot))
+
 	// The lock: OWN's parent becomes non-traversable. Cleanup restores the
 	// permission before the staged world's own removal cleanup runs.
 	share := filepath.Dir(own)
@@ -148,10 +157,7 @@ func TestSFR2_1_UnreadableOwnAncestorKeepsThePermissionCause(t *testing.T) {
 		resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
 		svc, err := New(Config{Home: home, Self: bin, Resolver: resolver})
 		require.NoError(t, err)
-		rec := &component.StartupGrantRecord{}
-		require.NoError(t, rec.AddGranted(own))
-		require.NoError(t, rec.AddGranted(officeRoot))
-		require.NoError(t, rec.AddGranted(rendererRoot))
+		// rec was built before the share lock (AddGranted stats its paths).
 		component.SetStartupGrants(rec)
 		t.Cleanup(func() { component.SetStartupGrants(nil) })
 		officeStarts, rendererStarts := 0, 0
