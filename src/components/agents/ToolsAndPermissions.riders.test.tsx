@@ -11,12 +11,26 @@
 // accessible name is "<Category label><summary pill>" (e.g.
 // "CommunicationAsk", observed in the rendered DOM).
 //
-// RED today: nothing on the tab path consults the runtime God Mode state
-// (fetchGodMode, src/lib/api/security.ts), so the row keeps showing the
-// stored value where S-76 requires "effective Allow … matching what the run
-// does" (God Mode floors the policy to allow — Dataset D12 row 12 traces the
-// God floor to S-76).
-
+// CHECK round 1 findings 9 and 10 (W4):
+//   - S-76 now copies the scenario's exact Given — God Mode on, GLOBAL
+//     send_email Ask, MIA'S OWN value Allow — and expects the effective
+//     Allow (without the God floor, strictest-wins shows Ask). Two negative
+//     controls pin C-0/C-26: the agent's OWN Ask and OWN Deny stay shown
+//     under God Mode, because God floors the global side only. The named
+//     fetch call is no longer an oracle; the effective readout is.
+//   - S-78 keeps the REAL useAutoSave (only the transport is mocked) and ONE
+//     QueryClient across close/reopen (app lifetime). The controlled
+//     transport stores the change ONLY after the exact save payload is
+//     accepted; the acknowledged save is asserted BEFORE the unmount; the
+//     reopen reads the server through fetchAgentTools while the STALE
+//     pre-save props still say Ask, so only a persisted write can make the
+//     reopened row show Allow. The row is the scenario's send_message.
+//
+// RED today: S-76's own-Ask/own-Deny controls show the God-lifted value
+// where the spec preserves the agent's own value (or the tab never consults
+// God Mode at all — the stored value shows where S-76 requires the effective
+// Allow); S-78's save never carries the exact payload through the real
+// autosave path, so the exact-payload/acknowledged assertions fail.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -36,9 +50,8 @@ vi.mock('@/lib/api', () => ({
   isApiError: vi.fn(() => false),
 }))
 
-vi.mock('@/hooks/useAutoSave', () => ({
-  useAutoSave: vi.fn(() => ({ status: 'idle', error: undefined, lastSavedAt: undefined, saveNow: vi.fn() })),
-}))
+// CHECK round 1 finding 10 / W4: the useAutoSave mock is GONE — the real
+// autosave hook runs, and only the transport (updateAgentTools) is doubled.
 
 vi.mock('@/components/ui/AutoSaveIndicator', () => ({
   AutoSaveIndicator: () => null,
@@ -71,20 +84,31 @@ const SEND_EMAIL: RegistryTool = {
   permission_fixed: false,
 }
 
+const SEND_MESSAGE: RegistryTool = {
+  ...SEND_EMAIL,
+  name: 'send_message',
+  description: 'Send a chat message.',
+}
+
 const cfg = (policies: Record<string, 'allow' | 'ask' | 'deny'>): AgentToolsCfg => ({
   builtin: { policies },
 })
 
 const revision = '0'.repeat(64)
 
+// ONE QueryClient per test, shared across close/reopen (S-78's app
+// lifetime). A fresh client per mount would erase the cache the rider
+// guards (CHECK round 1 finding 10).
 function makeQueryClient() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
   })
 }
 
-function wrapper({ children }: { children: React.ReactNode }) {
-  return <QueryClientProvider client={makeQueryClient()}>{children}</QueryClientProvider>
+function wrapperFor(client: QueryClient) {
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  }
 }
 
 // The row's currently-shown value: the PolicyBadge with aria-pressed=true.
@@ -106,8 +130,8 @@ async function openSection(nameMarker: RegExp) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(api.fetchRegistryTools).mockResolvedValue([SEND_EMAIL])
-  vi.mocked(api.fetchBuiltinTools).mockResolvedValue([SEND_EMAIL])
+  vi.mocked(api.fetchRegistryTools).mockResolvedValue([SEND_EMAIL, SEND_MESSAGE])
+  vi.mocked(api.fetchBuiltinTools).mockResolvedValue([SEND_EMAIL, SEND_MESSAGE])
   vi.mocked(api.fetchAgentTools).mockResolvedValue({
     revision,
     override_names: [],
@@ -125,20 +149,97 @@ beforeEach(() => {
 })
 
 describe('Rider #1297 (S-76): the Tools tab shows what the run does under God Mode', () => {
-  it('consults the live God Mode state and shows the effective Allow the run uses', async () => {
+  it('with the exact Given (God on, global Ask, own Allow) the row shows the effective Allow', async () => {
+    // S-76's Given, copied exactly: global send_email Ask, Mia's OWN Allow.
+    // Strictest-wins alone would show Ask; only the God floor of the GLOBAL
+    // side lets the effective value be Allow.
+    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { send_email: 'ask' } })
+    // The editor hydrates from the dedicated GET — it must carry the same
+    // own value the props do (CHECK finding 9: the fixture states the Given).
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision,
+      override_names: [],
+      config: cfg({ send_email: 'allow' }),
+      tools: [],
+      skills: [],
+    })
+    const client = makeQueryClient()
     render(
-      <ToolsAndPermissions agentId="agent-mia" agentType="Main" tools={cfg({ send_email: 'ask' })} onChange={() => {}} />,
-      { wrapper },
+      <ToolsAndPermissions agentId="agent-mia" agentType="Main" tools={cfg({ send_email: 'allow' })} onChange={() => {}} />,
+      { wrapper: wrapperFor(client) },
     )
-    // The section trigger renders once the queries resolve.
     await screen.findByTestId('category-pill-communication')
     await openSection(/communication/i)
     const row = await screen.findByTestId('tool-row-send_email')
-    // A readout that never asks what the runtime does cannot promise
-    // "matching what the run does" (S-76's Then). God Mode is on; the run
-    // allows; the row must show the effective Allow, not the stored Ask.
-    expect(api.fetchGodMode).toHaveBeenCalled()
+    // The effective readout is the oracle (CHECK finding 9: no named-fetch
+    // assertion) — it can only be Allow if the tab consulted the live God
+    // Mode state.
     expect(pressedPolicy(row)).toBe('allow')
+  })
+
+  it('control: the same values with God Mode OFF show Ask — only the floor can show Allow', async () => {
+    // The discriminator for "matching what the run does": identical stored
+    // values, God off. Strictest-wins (global ask × own allow) is Ask. A
+    // readout that never consults the runtime God Mode state shows Allow in
+    // BOTH legs and fails here.
+    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { send_email: 'ask' } })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision,
+      override_names: [],
+      config: cfg({ send_email: 'allow' }),
+      tools: [],
+      skills: [],
+    })
+    vi.mocked(api.fetchGodMode).mockResolvedValue({ enabled: false, persisted: true, available: true, supported: true })
+    const client = makeQueryClient()
+    render(
+      <ToolsAndPermissions agentId="agent-mia" agentType="Main" tools={cfg({ send_email: 'allow' })} onChange={() => {}} />,
+      { wrapper: wrapperFor(client) },
+    )
+    await screen.findByTestId('category-pill-communication')
+    await openSection(/communication/i)
+    const row = await screen.findByTestId('tool-row-send_email')
+    expect(pressedPolicy(row)).toBe('ask')
+  })
+
+  it('control: the agent OWN Ask is preserved under God Mode (God floors the global side only)', async () => {
+    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { send_email: 'ask' } })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision,
+      override_names: [],
+      config: cfg({ send_email: 'ask' }),
+      tools: [],
+      skills: [],
+    })
+    const client = makeQueryClient()
+    render(
+      <ToolsAndPermissions agentId="agent-mia" agentType="Main" tools={cfg({ send_email: 'ask' })} onChange={() => {}} />,
+      { wrapper: wrapperFor(client) },
+    )
+    await screen.findByTestId('category-pill-communication')
+    await openSection(/communication/i)
+    const row = await screen.findByTestId('tool-row-send_email')
+    expect(pressedPolicy(row)).toBe('ask')
+  })
+
+  it('control: the agent OWN Deny is preserved under God Mode', async () => {
+    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { send_email: 'ask' } })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision,
+      override_names: [],
+      config: cfg({ send_email: 'deny' }),
+      tools: [],
+      skills: [],
+    })
+    const client = makeQueryClient()
+    render(
+      <ToolsAndPermissions agentId="agent-mia" agentType="Main" tools={cfg({ send_email: 'deny' })} onChange={() => {}} />,
+      { wrapper: wrapperFor(client) },
+    )
+    await screen.findByTestId('category-pill-communication')
+    await openSection(/communication/i)
+    const row = await screen.findByTestId('tool-row-send_email')
+    expect(pressedPolicy(row)).toBe('deny')
   })
 })
 
@@ -172,9 +273,10 @@ describe('Rider #1298 (S-77): assigned service tools are listed with their value
       skills: [],
     })
 
+    const client = makeQueryClient()
     render(
       <ToolsAndPermissions agentId="agent-mia" agentType="Main" tools={cfg(policies)} onChange={() => {}} />,
-      { wrapper },
+      { wrapper: wrapperFor(client) },
     )
     await screen.findByTestId('tool-policy-editor')
     // MCP tools group under their server's section; open it like a person.
@@ -187,42 +289,61 @@ describe('Rider #1298 (S-77): assigned service tools are listed with their value
 })
 
 describe('Rider #1411 (S-78): reopening the editor shows the saved value without a page reload', () => {
-  it('a reopen shows the saved value, never a stale pre-save cache', async () => {
+  it('a reopen shows the saved value because the autosave carried it, never a stale pre-save cache', async () => {
     const user = userEvent.setup()
-    // Server truth before the change: Ask; the person saves Allow, so the
-    // server afterwards holds Allow (the mock keeps returning saved state).
-    vi.mocked(api.fetchAgentTools)
-      .mockResolvedValueOnce({ revision, override_names: [], config: cfg({ send_email: 'ask' }), tools: [], skills: [] })
-      .mockResolvedValue({ revision, override_names: [], config: cfg({ send_email: 'allow' }), tools: [], skills: [] })
-    vi.mocked(api.updateAgentTools).mockResolvedValue({
+    // Server truth: Ask until the controlled transport ACCEPTS the exact
+    // save payload (CHECK finding 10: only a persisted write moves the
+    // server).
+    let serverPolicies: Record<string, 'allow' | 'ask' | 'deny'> = { send_message: 'ask' }
+    const serverResponse = () => ({
       revision,
       override_names: [],
-      config: cfg({ send_email: 'allow' }),
+      config: cfg(serverPolicies),
       tools: [],
       skills: [],
     })
+    vi.mocked(api.fetchAgentTools).mockImplementation(() => Promise.resolve(serverResponse()))
+    vi.mocked(api.updateAgentTools).mockImplementation(async (_agentId, request) => {
+      expect(request.config?.builtin?.policies).toEqual({ send_message: 'allow' })
+      serverPolicies = { ...request.config?.builtin?.policies }
+      return serverResponse()
+    })
 
-    const { unmount } = render(
-      <ToolsAndPermissions agentId="agent-mia" agentType="Main" tools={cfg({ send_email: 'ask' })} onChange={() => {}} />,
-      { wrapper },
-    )
+    // ONE client for the whole rider — close and reopen share it.
+    const client = makeQueryClient()
+    const wrapper = wrapperFor(client)
+    // STALE props on BOTH mounts: only the fetched server state can show
+    // Allow, so the preordained-props bypass is closed.
+    const staleProps = { agentId: 'agent-mia', agentType: 'Main' as const, tools: cfg({ send_message: 'ask' }), onChange: () => {} }
+
+    const { unmount } = render(<ToolsAndPermissions {...staleProps} />, { wrapper })
     await screen.findByTestId('category-pill-communication')
     await openSection(/communication/i)
-    const row = await screen.findByTestId('tool-row-send_email')
+    const row = await screen.findByTestId('tool-row-send_message')
     expect(pressedPolicy(row)).toBe('ask')
 
-    // The person sets the value to Allow (the local change the save carries).
+    // The person sets the value to Allow; the REAL autosave carries it.
     await user.click(within(row).getByRole('button', { name: /^allow$/i }))
+    // The save request with the EXACT payload happens and is acknowledged
+    // BEFORE the editor closes (CHECK finding 10: no silent unsaved close).
+    await waitFor(() => {
+      expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
+    }, { timeout: 3000 })
+    const [, sentRequest] = vi.mocked(api.updateAgentTools).mock.calls[0]
+    expect(sentRequest.config?.builtin?.policies).toEqual({ send_message: 'allow' })
+    await waitFor(() => {
+      expect(serverPolicies.send_message).toBe('allow')
+    }, { timeout: 3000 })
+
     unmount()
 
-    // Reopen WITHOUT a page reload: the editor shows the saved value.
-    render(
-      <ToolsAndPermissions agentId="agent-mia" agentType="Main" tools={cfg({ send_email: 'allow' })} onChange={() => {}} />,
-      { wrapper },
-    )
+    // Reopen WITHOUT a page reload, on the SAME client, with the STALE
+    // props: the editor hydrates from the server, whose state only moved
+    // because the save was accepted.
+    render(<ToolsAndPermissions {...staleProps} />, { wrapper })
     await screen.findByTestId('category-pill-communication')
     await openSection(/communication/i)
-    const reopened = await screen.findByTestId('tool-row-send_email')
+    const reopened = await screen.findByTestId('tool-row-send_message')
     await waitFor(() => {
       expect(pressedPolicy(reopened)).toBe('allow')
     })
