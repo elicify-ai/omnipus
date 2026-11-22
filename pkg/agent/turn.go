@@ -437,8 +437,13 @@ type turnState struct {
 	//      bottom of runTurn) resolved to the defaultResponse sentinel — but NOT
 	//      when the caller supplied a custom success DefaultResponse (e.g.
 	//      "Background task completed." on the heartbeat/system path).
-	// Threaded into the DoneStats.TurnFailed field on the done frame so
-	// CLI/automation clients can detect failure without parsing message content.
+	// This field records only those engine conditions. The done frame's
+	// DoneStats.TurnFailed is wider: finalizeStreamer also sets it when the
+	// turn's transcript could not be saved (#1178) — a call-accounting save
+	// failure — and the gateway streamer sets it on a late final-transcript
+	// write failure, even when a real answer was delivered. CLI/automation
+	// clients read DoneStats.TurnFailed to detect failure without parsing
+	// message content.
 	turnFailed bool
 
 	// goalNarrowMisses is ADR-088 D3's bounded-escape counter (the D3

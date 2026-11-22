@@ -496,15 +496,16 @@ func (s *wsStreamer) SetTurnReasoningTokens(n *int) {
 
 var _ agent.TurnReasoningStreamer = (*wsStreamer)(nil)
 
-// SetTurnFailed is called by the agent loop's finalizeStreamer when the turn
-// ended via the engine's error/limit fallback rather than a real model response.
-// Conditions that set the flag: (1) LLM returned empty after retries and the
-// engine substituted its defaultResponse sentinel; (2) tool-iteration limit
-// reached; (3) generic empty-content exhaustion resolved to the defaultResponse
-// sentinel (excludes caller-supplied success strings like the heartbeat path).
-// Implements the streamerFailedSetter interface from pkg/agent. The flag is
-// emitted in the done frame as DoneStats.TurnFailed so CLI/automation clients
-// can exit non-zero.
+// SetTurnFailed receives the turn-failed flag from the agent loop's
+// finalizeStreamer before Finalize. The flag is true when the turn ended via
+// the engine's error/limit fallback rather than a real model response (the
+// conditions are listed on pkg/agent's streamerFailedSetter), and also when the
+// turn's transcript could not be saved (#1178) — a call-accounting save
+// failure — even if a real answer was delivered. Finalize additionally reports
+// a late final-transcript write failure (persistFailed, #1178 §4.1) on the same
+// field. Implements the streamerFailedSetter interface from pkg/agent. The flag
+// is emitted in the done frame as DoneStats.TurnFailed so CLI/automation
+// clients can exit non-zero.
 func (s *wsStreamer) SetTurnFailed(failed bool) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
