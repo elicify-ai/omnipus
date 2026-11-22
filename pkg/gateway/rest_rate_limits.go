@@ -122,7 +122,7 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		keyNames = append(keyNames, "sandbox.rate_limits.max_agent_tool_calls_per_minute")
 	}
 	keys := canonicalConfigKeys(keyNames...)
-	writeErr := a.safeUpdateConfigJSONRecordedAs(applyFailedSourceRateLimits, func(m map[string]any) error {
+	ticket, writeErr := a.safeUpdateConfigJSONRecordedAs(applyFailedSourceRateLimits, func(m map[string]any) error {
 		rl := ensureMap(m, "sandbox", "rate_limits")
 		if newLLM != nil {
 			rl["max_agent_llm_calls_per_hour"] = *newLLM
@@ -196,7 +196,9 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
 		// Saved, not in use: listed as apply_failed before the answer (C-6).
-		a.applyFailed.record(applyFailedSourceRateLimits, keys)
+		// Recorded only if no newer rate-limit write or apply has decided
+		// the state since this write (B5, M-8).
+		a.applyFailed.recordAt(applyFailedSourceRateLimits, ticket, keys)
 		slog.Warn("rest: rate limits saved but hot-reload failed; restart required",
 			"reload_error", reloadErr,
 			"max_agent_llm_calls_per_hour", newCfg.MaxAgentLLMCallsPerHour,
@@ -218,7 +220,7 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	a.applyFailed.clearSource(applyFailedSourceRateLimits)
+	a.applyFailed.clearSourceAt(applyFailedSourceRateLimits, ticket)
 	slog.Info("rest: rate limits updated",
 		"max_agent_llm_calls_per_hour", newCfg.MaxAgentLLMCallsPerHour,
 		"max_agent_tool_calls_per_minute", newCfg.MaxAgentToolCallsPerMinute,

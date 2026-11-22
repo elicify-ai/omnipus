@@ -67,7 +67,7 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keys := canonicalConfigKeys("sandbox.prompt_injection_level")
-	writeErr := a.safeUpdateConfigJSONRecordedAs(applyFailedSourcePromptGuard, func(m map[string]any) error {
+	ticket, writeErr := a.safeUpdateConfigJSONRecordedAs(applyFailedSourcePromptGuard, func(m map[string]any) error {
 		ensureMap(m, "sandbox")["prompt_injection_level"] = string(body.Level)
 		return nil
 	}, func() []configKeyPath { return keys })
@@ -102,7 +102,9 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
 		// Saved, not in use: listed as apply_failed before the answer (C-6).
-		a.applyFailed.record(applyFailedSourcePromptGuard, keys)
+		// Recorded only if no newer prompt-guard write or apply has decided
+		// the state since this write (B5, M-8).
+		a.applyFailed.recordAt(applyFailedSourcePromptGuard, ticket, keys)
 		slog.Info("rest: prompt guard level updated (restart required)", "level", string(body.Level))
 		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		jsonOK(w, gen.PromptGuardUpdateResponse{
@@ -119,7 +121,7 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 			"level", string(body.Level))
 	}
 
-	a.applyFailed.clearSource(applyFailedSourcePromptGuard)
+	a.applyFailed.clearSourceAt(applyFailedSourcePromptGuard, ticket)
 	slog.Info("rest: prompt guard level updated", "level", string(body.Level))
 
 	jsonOK(w, gen.PromptGuardUpdateResponse{

@@ -237,7 +237,7 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 	// survive in either order (same field: the later write wins; a list is
 	// one field).
 	written := contextUpdateKeys(&req, clearsDefaultWindow)
-	err := a.safeUpdateConfigJSONRecorded(func(m map[string]any) error {
+	ticket, err := a.safeUpdateConfigJSONRecordedAs(applyFailedSourceRefresh, func(m map[string]any) error {
 		ctxSection := ensureMap(m, "context")
 		next, decodeErr := storedContextSettings(ctxSection)
 		if decodeErr != nil {
@@ -273,7 +273,9 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 	// write lock, so this record is made after it, not inside it.
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("rest: PUT /settings/context: reload failed", "error", err)
-		a.applyFailed.record(applyFailedSourceRefresh, canonicalConfigKeys(written...))
+		// Recorded only if no newer refresh-path write or successful refresh
+		// has decided the state since this write (B5, M-8).
+		a.applyFailed.recordAt(applyFailedSourceRefresh, ticket, canonicalConfigKeys(written...))
 		writeSavedNotRefreshed(w, savedNotRefreshedText, canonicalConfigKeys(written...))
 		return
 	}
