@@ -37,6 +37,25 @@ func (a *restAPI) HandleSecretRequests(w http.ResponseWriter, r *http.Request) {
 	}
 	var raw []byte
 	if submit {
+		// A program card is submitted only from a signed-in person's browser
+		// session (connected-programs FR-028, D-8 rows 10–11), decided from
+		// the stored request kind before the body is read. Any other card,
+		// or a request that cannot be read here, keeps today's order.
+		if reg := a.agentLoop.SecretRequests(); reg != nil {
+			peekOwner := ""
+			if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && user != nil {
+				peekOwner = user.Username
+			}
+			if peek, perr := reg.Get(id, peekOwner); perr == nil {
+				if _, program := secretrequest.ProgramID(peek); program {
+					admitted := false
+					personOnly(func(http.ResponseWriter, *http.Request) { admitted = true })(w, r)
+					if !admitted {
+						return
+					}
+				}
+			}
+		}
 		var err error
 		raw, err = io.ReadAll(http.MaxBytesReader(w, r.Body, secretSubmitBodyLimit))
 		var oversized *http.MaxBytesError
@@ -81,6 +100,7 @@ func (a *restAPI) HandleSecretRequests(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "submit exactly the requested values, or cancel; no extra or null fields")
 		return
 	}
+	reg.SetProgramPublisher(a.publishProgramCard)
 	rec, err = reg.Submit(id, owner, input)
 	if err != nil {
 		writeSecretRequestFailure(w, err)

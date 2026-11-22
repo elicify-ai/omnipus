@@ -395,6 +395,10 @@ type restAPI struct {
 	corsAllowHeadersOnce  sync.Once
 	corsAllowHeadersValue string
 
+	// programs is the connected-programs service (Settings → Programs),
+	// built on first use from homePath and the credential store.
+	programs programsHolder
+
 	// restarter performs the graceful self-restart triggered by
 	// POST /api/v1/gateway/restart (O4-backend). It is an indirection so the
 	// handler can be unit-tested without re-execing the test process — tests
@@ -743,6 +747,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 		rae.a.withAuth(middleware.RequirePersonSession(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate))),
 	)
 	rae.cm.RegisterHTTPHandler("/api/v1/status", rae.a.withAuth(rae.a.HandleStatus))
+	// Settings -> Programs (connected-programs S1): person-session only on
+	// every method (FR-028); see rest_programs.go.
+	rae.cm.RegisterHTTPHandler("/api/v1/programs", rae.a.programsHandler())
+	rae.cm.RegisterHTTPHandler("/api/v1/programs/", rae.a.programsHandler())
 	// GET /api/v1/tasks/occurrences — Calendar Recurrence Redesign occurrence
 	// expansion endpoint (FR-008, contracts/openapi.yaml operationId
 	// listTaskOccurrences). Registered as an EXACT pattern, independent of

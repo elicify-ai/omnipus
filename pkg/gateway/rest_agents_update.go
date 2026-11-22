@@ -90,6 +90,7 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.MemoryEnabled != nil, "memory_enabled")
 	add(req.Voice != nil, "voice")
 	add(req.Executor != nil, "executor")
+	add(req.Programs != nil, "programs")
 	return fields
 }
 
@@ -243,6 +244,9 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 	if err := agentstore.ValidateRevision(uf.ru.req.Revision); err != nil {
 		jsonErr(uf.w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	if uf.ru.req.Programs != nil && uf.refuseProgramsWrite() {
 		return true
 	}
 	var fieldsOK bool
@@ -1026,6 +1030,12 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 		return err
 	}
 	rp.updateExecutorAndSkills(agentRec)
+	if rp.ru.req.Programs != nil {
+		agentRec.Programs = normalizeAgentPrograms(*rp.ru.req.Programs)
+		if len(agentRec.Programs) == 0 {
+			agentRec.Programs = nil
+		}
+	}
 
 	// Refresh the display timestamp with sub-second precision;
 	// the frontend compares it as an ordinal when incorporating autosaves.

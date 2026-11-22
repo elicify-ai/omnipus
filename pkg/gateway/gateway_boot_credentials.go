@@ -741,6 +741,9 @@ func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Sto
 			if errors.As(err, &nf) {
 				continue // already gone — absence is success (FR-010 step 3 posture)
 			}
+			if errors.Is(err, credentials.ErrProgramOwned) {
+				continue // a connected program token is never an orphan (FR-048)
+			}
 			slog.Warn("gateway: credential sweep: could not delete orphaned credential",
 				"credential_ref", name, "error", err)
 			continue
