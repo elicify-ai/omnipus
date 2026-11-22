@@ -22,6 +22,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 )
 
 // retroRecallMaxDayDirs is the bounded read: the most day folders one
@@ -99,6 +101,14 @@ func (ms *MemoryStore) retroRecallWindowOrLegacy() retroRecallWindow {
 // ReadRetrosForRecall returns the private room's reflections inside the
 // recall window, newest first, reading at most retroRecallMaxDayDirs day
 // folders.
+//
+// B4 (SFH-12): a day folder or reflection file that cannot be read does not
+// end the search and is not hidden either. The readable reflections are
+// returned together with a *memrooms.PartialReadError naming every failed
+// read, so the caller keeps the hits and warns that the results are
+// incomplete. A folder or file removed between listing and reading is an
+// expected omission (the memrooms.ScanMemoriesWithErrors rule), not a
+// failure. A missing retros folder is no reflections, not an error.
 func (ms *MemoryStore) ReadRetrosForRecall() ([]Retro, error) {
 	w := ms.retroRecallWindowOrLegacy()
 	retrosBase := filepath.Join(ms.privateRoom.Root, "retros")
@@ -148,12 +158,17 @@ func (ms *MemoryStore) ReadRetrosForRecall() ([]Retro, error) {
 	}
 
 	var retros []Retro
+	var readFailures []error
 	for _, d := range days {
 		dir := filepath.Join(retrosBase, d.name)
 		files, rerr := os.ReadDir(dir)
 		if rerr != nil {
+			if errors.Is(rerr, os.ErrNotExist) {
+				continue // removed after listing: expected omission
+			}
 			logger.WarnCF("agent.memory", "ReadRetrosForRecall: cannot read day dir",
 				map[string]any{"dir": dir, "error": rerr.Error()})
+			readFailures = append(readFailures, fmt.Errorf("reflections of %s: %w", d.name, rerr))
 			continue
 		}
 		for _, f := range files {
@@ -163,8 +178,13 @@ func (ms *MemoryStore) ReadRetrosForRecall() ([]Retro, error) {
 			path := filepath.Join(dir, f.Name())
 			data, ferr := os.ReadFile(path)
 			if ferr != nil {
+				if errors.Is(ferr, os.ErrNotExist) {
+					continue // removed after listing: expected omission
+				}
 				logger.WarnCF("agent.memory", "ReadRetrosForRecall: skipping unreadable retro file",
 					map[string]any{"path": path, "error": ferr.Error()})
+				readFailures = append(readFailures,
+					fmt.Errorf("reflection file %s/%s: %w", d.name, f.Name(), ferr))
 				continue
 			}
 			for _, r := range parseRetroFile(string(data)) {
@@ -180,5 +200,8 @@ func (ms *MemoryStore) ReadRetrosForRecall() ([]Retro, error) {
 	sort.SliceStable(retros, func(i, j int) bool {
 		return retros[i].Timestamp.After(retros[j].Timestamp)
 	})
+	if len(readFailures) > 0 {
+		return retros, &memrooms.PartialReadError{Err: errors.Join(readFailures...)}
+	}
 	return retros, nil
 }
