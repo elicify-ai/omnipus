@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -434,12 +435,27 @@ func (s *Service) renderPages(ctx context.Context, render *protocolProgram, pdf 
 }
 
 func (s *Service) text(ctx context.Context, prog protocolProgram, pdf []byte, first, last int) ([]protocol.TextPage, error) {
-	req := protocol.Request{Op: protocol.OpText, FirstPage: uint32(first), LastPage: uint32(last)}
+	firstPage, lastPage, err := protocolPageRange(first, last)
+	if err != nil {
+		return nil, err
+	}
+	req := protocol.Request{Op: protocol.OpText, FirstPage: firstPage, LastPage: lastPage}
 	resp, _, err := prog.run(ctx, req, pdf, nil)
 	if err != nil {
 		return nil, err
 	}
 	return resp.Text, nil
+}
+
+// protocolPageRange converts a 1-based page range to the protocol's uint32
+// fields. The tools already limit page numbers (preview_document accepts at
+// most 9999), so a number outside int32 is a caller bug: it is refused as a
+// program failure, never wrapped into a different page.
+func protocolPageRange(first, last int) (uint32, uint32, error) {
+	if first < 1 || first > math.MaxInt32 || last < first || last > math.MaxInt32 {
+		return 0, 0, programFailure(fmt.Sprintf("PDF renderer failed (page range %d-%d out of range)", first, last))
+	}
+	return uint32(first), uint32(last), nil
 }
 
 // textByPage extracts first..last one page per run after a page's text
@@ -450,12 +466,16 @@ func (s *Service) textByPage(ctx context.Context, prog protocolProgram, pdf []by
 	var out []protocol.TextPage
 	total := 0
 	for p := first; p <= last && total < protocol.MaxTextTotalBytes; p++ {
+		number, _, err := protocolPageRange(p, p)
+		if err != nil {
+			return nil, err
+		}
 		pages, err := s.text(ctx, prog, pdf, p, p)
 		var f *failure
 		switch {
 		case err == nil:
 		case errors.As(err, &f) && f.Kind == failText:
-			pages = []protocol.TextPage{{Number: uint32(p), Text: "[" + f.Message + "]"}}
+			pages = []protocol.TextPage{{Number: number, Text: "[" + f.Message + "]"}}
 		default:
 			return nil, err
 		}

@@ -422,7 +422,7 @@ func (a *restAPI) runPreviewRetry(svc *preview.Service, adm *preview.Admission, 
 			// the rendered pages together with the unavailable card
 			// ("could not be stored", with Retry), never an unqualified
 			// success.
-			slog.Error("rest: preview retry rendered but not saved to the chat", "session_id", sessionID, "tool_call_id", toolCallID, "error", saveErr)
+			logsafeError("rest: preview retry rendered but not saved to the chat", "session_id", sessionID, "tool_call_id", toolCallID, "error", saveErr)
 			reason := previewRetryReasonNotSaved
 			record.Outcome = tools.PreviewOutcomeUnavailable
 			record.UnavailableReason = &reason
