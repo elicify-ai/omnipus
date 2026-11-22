@@ -77,6 +77,62 @@ func originsKey(p Provenance) string {
 	return fmt.Sprint(sorted)
 }
 
+// canonicalKey is the ORDER- AND DUPLICATION-INSENSITIVE set key (CHECK F12):
+// the spec defines provenance as a SET of origins — the join's result is
+// compared as a set, never as an ordered slice, so an implementation that
+// returns origins in any order (or deduplicates on read) satisfies the
+// algebra while a dropped, converted or duplicated origin still shows.
+func canonicalKey(p Provenance) string {
+	if p.IsUnresolved() {
+		return "unresolved"
+	}
+	set := map[Origin]bool{}
+	for _, o := range p.Origins() {
+		set[o] = true
+	}
+	sorted := make([]Origin, 0, len(set))
+	for o := range set {
+		sorted = append(sorted, o)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return fmt.Sprint(sorted)
+}
+
+// canonicalUnion is the spec's join definition (I-2): the union of the two
+// origin sets, unresolved-absorbing — the checker's independent oracle for
+// the exact-union property.
+func canonicalUnion(a, b Provenance) string {
+	if a.IsUnresolved() || b.IsUnresolved() {
+		return "unresolved"
+	}
+	set := map[Origin]bool{}
+	for _, o := range a.Origins() {
+		set[o] = true
+	}
+	for _, o := range b.Origins() {
+		set[o] = true
+	}
+	sorted := make([]Origin, 0, len(set))
+	for o := range set {
+		sorted = append(sorted, o)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return fmt.Sprint(sorted)
+}
+
+// requireSameOriginSet asserts got holds exactly the wanted origins, in any
+// order (the spec pins the set, never an order).
+func requireSameOriginSet(t *testing.T, want []Origin, got Provenance, msg string) {
+	t.Helper()
+	require.Equal(t, fmt.Sprint(sortedOrigins(want)), canonicalKey(got), msg)
+}
+
+func sortedOrigins(in []Origin) []Origin {
+	out := append([]Origin(nil), in...)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 // eligibleBySpec is the checker's own spec-derived eligibility (FR-010):
 // unresolved is never eligible; otherwise every origin in the set must be
 // allowed. The algebra properties are properties of the JOIN function, so the
@@ -111,11 +167,18 @@ func checkJoinProperties(join func(a, b Provenance) Provenance) []string {
 				}
 				continue // the remaining properties are defined on resolved values
 			}
-			if originsKey(join(y, x)) != originsKey(j) {
+			// The exact union (I-2: "Joining two provenances is the union of
+			// their origin sets") — compared as canonical sets, per pair
+			// (CHECK F12).
+			if canonicalKey(j) != canonicalUnion(x, y) {
+				violations = append(violations, fmt.Sprintf("exact union: join(%s,%s)=%s want %s",
+					originsKey(x), originsKey(y), canonicalKey(j), canonicalUnion(x, y)))
+			}
+			if canonicalKey(join(y, x)) != canonicalKey(j) {
 				violations = append(violations, fmt.Sprintf("commutativity: join(%s,%s) != join(%s,%s)",
 					originsKey(x), originsKey(y), originsKey(y), originsKey(x)))
 			}
-			if originsKey(join(x, j)) != originsKey(j) {
+			if canonicalKey(join(x, j)) != canonicalKey(j) {
 				violations = append(violations, fmt.Sprintf("idempotence: join(%s,join(%s,%s)) != join(%s,%s)",
 					originsKey(x), originsKey(x), originsKey(y), originsKey(x), originsKey(y)))
 			}
@@ -162,43 +225,54 @@ func TestProgramProvenance_JoinAlgebra(t *testing.T) {
 	require.Len(t, props, 16, "spec S-126: 15 non-empty origin sets plus unresolved")
 
 	t.Run("exact_values", func(t *testing.T) {
-		// Exact-value pins (spec I-2 and the round-3 example): union keeps
-		// every origin; unresolved absorbs; join of a set with itself is
-		// itself.
+		// Exact-value pins (spec I-2 and the round-3 example), compared as
+		// SETS — the spec pins the origin set, never an order (CHECK F12).
 		web := resolvedP(OriginWeb)
 		connA := resolvedP(ConnectorOrigin("a"))
 		// NewProvenance must produce exactly the given set (its own pin):
-		require.Equal(t, []Origin{OriginWeb}, NewProvenance(OriginWeb).Origins(),
+		requireSameOriginSet(t, []Origin{OriginWeb}, NewProvenance(OriginWeb),
 			"NewProvenance(web) must be a resolved single-origin set")
 		mixed := Join(web, connA)
 		require.False(t, mixed.IsUnresolved(), "joining two resolved values stays resolved")
-		require.Equal(t, []Origin{OriginWeb, ConnectorOrigin("a")}, mixed.Origins(),
+		requireSameOriginSet(t, []Origin{OriginWeb, ConnectorOrigin("a")}, mixed,
 			"join({web},{connector:a}) must be {web, connector:a} — no origin dropped or converted")
 
 		solo := Join(web, web)
-		require.Equal(t, []Origin{OriginWeb}, solo.Origins(), "join is idempotent on identical sets")
+		requireSameOriginSet(t, []Origin{OriginWeb}, solo, "join is idempotent on identical sets")
 
 		absorbed := Join(web, UnresolvedProvenance())
 		require.True(t, absorbed.IsUnresolved(), "unresolved absorbs (spec I-2)")
 		require.Empty(t, absorbed.Origins())
 
 		three := Join(Join(web, connA), resolvedP(OriginIndependent))
-		require.Equal(t, []Origin{OriginIndependent, OriginWeb, ConnectorOrigin("a")},
-			three.Origins(), "union of three origins keeps all of them")
+		requireSameOriginSet(t, []Origin{OriginIndependent, OriginWeb, ConnectorOrigin("a")}, three,
+			"union of three origins keeps all of them")
 
 		// The spec's round-3 example, with a Telegram connection: web chat
 		// off and Telegram on joins to {web, connector:telegram}, withheld
 		// because web is off — in either order.
 		tg := ConnectorOrigin("telegram")
 		both := Join(resolvedP(OriginWeb), resolvedP(tg))
-		require.Equal(t, []Origin{OriginWeb, tg}, both.Origins())
+		requireSameOriginSet(t, []Origin{OriginWeb, tg}, both, "the example's joined set")
 		bothReversed := Join(resolvedP(tg), resolvedP(OriginWeb))
-		require.Equal(t, both.Origins(), bothReversed.Origins(), "join is commutative here")
+		require.Equal(t, canonicalKey(both), canonicalKey(bothReversed), "join is commutative here")
 		webOff := func(o Origin) bool { return o != OriginWeb }
 		require.False(t, both.Eligible(webOff),
 			"{web, connector:telegram} is withheld when the web-chat setting is off")
 		require.Equal(t, []Origin{OriginWeb}, both.WithheldOrigins(webOff),
 			"the withheld origin is web, not telegram")
+	})
+
+	t.Run("join_with_itself_is_itself_for_every_set", func(t *testing.T) {
+		// CHECK F12: join(x,x)==x for all 15 resolved sets (order-insensitive)
+		// — the identity the dedup rule rests on.
+		for _, x := range allProvenances() {
+			if x.IsUnresolved() {
+				continue
+			}
+			require.Equal(t, canonicalKey(x), canonicalKey(Join(x, x)),
+				"join(x,x)==x for %s", canonicalKey(x))
+		}
 	})
 
 	t.Run("eligibility_per_origin", func(t *testing.T) {
