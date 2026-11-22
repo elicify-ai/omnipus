@@ -185,17 +185,35 @@ export function GatewayRestartModal({ open, onClose, labels, onRestarted }: Gate
       setErrorMsg('The gateway did not come back within 60 seconds. Check that it is running and read its log, then try again.')
       return
     }
-    // The new process answers; done once the restarted keys are no longer listed.
+    // The new process answers; done once a pending-restart read succeeds and
+    // no longer lists the restarted keys. Running out of time without that
+    // read is not a success (FR-063): the change is not confirmed in use.
+    let confirmed = false
+    let lastReadError: unknown
     while (Date.now() < deadline && !abortRef.current) {
       try {
         const now = await fetchPendingRestart()
-        if (!now.some((e) => restartedKeys.includes(e.key) && e.reason === 'restart_required')) break
-      } catch {
-        // keep polling
+        lastReadError = undefined
+        if (!now.some((e) => restartedKeys.includes(e.key) && e.reason === 'restart_required')) {
+          confirmed = true
+          break
+        }
+      } catch (err) {
+        // Kept for the message below; the next poll may still succeed.
+        lastReadError = err
       }
       await sleep(POLL_INTERVAL_MS)
     }
     if (abortRef.current) return
+    if (!confirmed) {
+      setPhase('error')
+      setErrorMsg(
+        lastReadError
+          ? `The gateway restarted, but the list of changes waiting for a restart could not be read within 60 seconds (${getErrorMessage(lastReadError, 'no answer')}), so it is not confirmed that your changes are in use. Try again.`
+          : 'The gateway restarted, but within 60 seconds your changes were still listed as waiting for a restart, so they are not confirmed in use. Read the gateway log, then try again.',
+      )
+      return
+    }
     setPhase('success')
     void refetchPending()
     addToast({ message: 'The gateway restarted.', variant: 'success' })
@@ -265,7 +283,9 @@ export function GatewayRestartModal({ open, onClose, labels, onRestarted }: Gate
           <div className="space-y-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
             <p className="text-[var(--color-secondary)]">This address stopped answering. Open the new address to finish; Settings there confirms the restart.</p>
             <a tabIndex={0}
-              href={`${change.newAddress}/settings?tab=gateway&restarted=1`}
+              // The app routes inside the address's #fragment (hash
+              // history), so Settings and its restart flag go there.
+              href={`${change.newAddress}${window.location.pathname}#/settings?tab=gateway&restarted=1`}
               className="text-[var(--color-accent)] underline-offset-4 hover:underline"
             >
               Open the new address
