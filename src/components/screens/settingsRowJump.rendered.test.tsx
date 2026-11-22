@@ -362,7 +362,10 @@ async function portRow(): Promise<HTMLElement> {
  * row); a read-only value or name line by exact own visible text — never
  * for a control row. Ownership is all-inside: every perceivable element in
  * the document with that exact name (and role, for a control) must sit
- * inside the marked row; hidden text and prefix matches never witness.
+ * inside the marked row; hidden text and prefix matches never witness. A row
+ * whose control is legitimately absent in a spec-recognized state may carry
+ * a state witness instead (WITNESS_STATE_WITNESSES — ruling Q1 A:
+ * active-transcriber's unavailable notice in the zero-voice-services state).
  */
 const WITNESS_PHRASES: Record<string, string[]> = {
   'model-providers': ['Providers'], // FR-001 names the section "Providers" — the row heading is spec-named (team-lead ruling, part 25)
@@ -587,6 +590,35 @@ const WITNESS_SHARED_CONTROL_NAMES: Record<string, { phrase: string; coWitness: 
 }
 
 /**
+ * State-scoped witnesses: rows whose spec-named control is legitimately
+ * ABSENT in a state the spec recognizes, where the state's own notice is
+ * the witness instead — tried only after the row's primary phrases hold
+ * nothing, under the same ownership rules (perceivable, inside the marked
+ * row, no copy outside it). With voice services configured, the
+ * active-transcriber row still needs its "Active transcriber" Select
+ * (design-notes §2 row 32, R30a) and the notice witness never applies.
+ *
+ * 'active-transcriber' — the unavailable notice "No voice providers
+ * available." (the exact rendered line, sentence period included —
+ * IntegrationsSection renders "No voice providers available."; the ruling's
+ * quote elides the full stop), as a name-line witness for the
+ * zero-voice-services state ONLY. Grounding, honestly stated (team-lead
+ * ruling Q1 A, part 27b,
+ * 2026-11-22): this is a RULED witness for a state the spec does not name —
+ * NOT a spec-named line. The state is legitimate per FR-053 (spec line
+ * 1979: "one key row per voice service" — zero services is a valid read)
+ * and the state table's Empty-column meaning (spec line 483); the wording
+ * authority is spec line 1908 ("on-screen wording follows the wireframe
+ * (`app.js`) and `omnipus-voice`"), and neither names a zero-service
+ * wording — the rendered notice is therefore the ruled wording. The spec
+ * gap (the state table lacks the zero-voice-services state) is with
+ * spec-sync via team-lead.
+ */
+const WITNESS_STATE_WITNESSES: Record<string, { phrase: string; kind: WitnessKind }[]> = {
+  'active-transcriber': [{ phrase: 'No voice providers available.', kind: 'name-line' }],
+}
+
+/**
  * The ownership rule every witness leg answers (CHECK R10-01, replacing the
  * mutable-id tie): the row OWNS its witness only when every perceivable
  * element in the document carrying that exact name — and role, for a
@@ -632,6 +664,11 @@ function headingWitness(matches: Element[], row: Element): Element | null {
  *    again all matches inside the marked row. Restricted to the rows
  *    WITNESS_KINDS lists as value/name-line rows, each citing its spec
  *    source.
+ *  - state witnesses (WITNESS_STATE_WITNESSES): for a row whose control is
+ *    legitimately absent in a spec-recognized state, the state's own
+ *    notice — tried only after the primary phrases hold nothing, under the
+ *    same ownership rules (team-lead ruling Q1 A, part 27b:
+ *    active-transcriber's unavailable notice).
  * Hidden text witnesses nothing, and a longer word that merely starts with
  * the phrase witnesses nothing. Matching is case-insensitive: the sheet's
  * typographic casing may differ from the spec's ("Remote Access", "View
@@ -667,6 +704,29 @@ function findSpecWitness(row: Element, phrases: string[], kind: WitnessKind, ent
     }
     const witness = legWitness(exactTextMatches(phrase), row)
     if (witness) return witness
+  }
+  // State-scoped witnesses (WITNESS_STATE_WITNESSES): tried only when the
+  // row's primary spec-named phrases hold nothing — the states where the
+  // primary control is legitimately absent. The same ownership rules apply:
+  // perceivable, inside the marked row, no copy outside it.
+  if (entryRowId) {
+    for (const stateWitness of WITNESS_STATE_WITNESSES[entryRowId] ?? []) {
+      const pattern = exactNamePattern(stateWitness.phrase)
+      if (stateWitness.kind === 'heading') {
+        const witness = headingWitness(screen.queryAllByRole('heading', { name: pattern }), row)
+        if (witness) return witness
+        continue
+      }
+      if (stateWitness.kind === 'control') {
+        for (const role of CONTROL_WITNESS_ROLES) {
+          const witness = legWitness(screen.queryAllByRole(role, { name: pattern }), row)
+          if (witness) return witness
+        }
+        continue
+      }
+      const witness = legWitness(exactTextMatches(stateWitness.phrase), row)
+      if (witness) return witness
+    }
   }
   return null
 }
@@ -813,9 +873,10 @@ async function expectExactlyThisRowMarked(
     const phrases = WITNESS_PHRASES[witnesses.entryRowId]
     const kind = WITNESS_KINDS[witnesses.entryRowId]
     if (phrases && kind) {
+      const statePhrases = (WITNESS_STATE_WITNESSES[witnesses.entryRowId] ?? []).map((w) => w.phrase)
       expect(
         findSpecWitness(row, phrases, kind, witnesses.entryRowId),
-        `RED (FR-075, CHECK R8-01/R9-01/R10-01): the marked row must own the requested setting's witness — no ${kind} leg for "${witnesses.entryRowId}" (${phrases.join(' / ')}) holds with every exact-name match inside the marked row, while the id agrees with the implementation`,
+        `RED (FR-075, CHECK R8-01/R9-01/R10-01): the marked row must own the requested setting's witness — no ${kind} leg for "${witnesses.entryRowId}" (${phrases.join(' / ')}${statePhrases.length > 0 ? `; state witnesses: ${statePhrases.join(' / ')}` : ''}) holds with every exact-name match inside the marked row, while the id agrees with the implementation`,
       ).not.toBeNull()
       for (const [otherId, otherPhrases] of Object.entries(WITNESS_PHRASES)) {
         if (otherId === witnesses.entryRowId) continue
