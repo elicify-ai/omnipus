@@ -85,14 +85,9 @@ func functionalRecordRealOffice() int {
 	return code // In particular, the REAL exit 81 is relayed unchanged.
 }
 
-func functionalCopyTree(t *testing.T, source, target string) {
-	t.Helper()
-	// Test-only fixture preparation on Linux; this never runs inside the
-	// converter and never changes the source install. GNU cp preserves links.
-	cmd := exec.Command("cp", "-a", "--reflink=auto", "--", source, target)
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "copy the real Office fixture: %s", output)
-}
+// functionalCopyTree lives in own_folder_staging_test.go, untagged (D17):
+// the turn-repeat row, darwin || linux, stages its own-folder registrations
+// through it on both GOOS.
 
 func functionalRecordedOffice(t *testing.T, source string) string {
 	t.Helper()
