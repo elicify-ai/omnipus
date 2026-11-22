@@ -94,7 +94,10 @@ func registeredStartupRoot(r *Resolver, kind Kind) (string, string) {
 		return "", fmt.Sprintf("%s registered manifest %s skipped: invalid: %v", kind, manifest, err)
 	}
 	if p := r.registeredOutsideOwn(m.Root); p != nil {
-		return "", fmt.Sprintf("%s registered root %s skipped: outside Omnipus's own folder %s", kind, p.Root, p.Own)
+		if p.Status == StatusOutsideOwn {
+			return "", fmt.Sprintf("%s registered root %s skipped: outside Omnipus's own folder %s", kind, p.Root, p.Own)
+		}
+		return "", fmt.Sprintf("%s registered root %s skipped: %s", kind, m.Root, p.Reason)
 	}
 	root, err := filepath.EvalSymlinks(m.Root)
 	if err != nil {

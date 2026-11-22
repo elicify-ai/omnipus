@@ -31,12 +31,13 @@ func isPDFSource(head []byte) bool {
 // (pkg/agent attachDocumentPreview): the whole PDF for a model that reads PDF
 // natively, pages 1–10 as images for a model that only sees images, the text
 // otherwise. A PDF that cannot be read as a whole again falls back to the
-// text alone, with a log line. nil means "not a readable PDF": the caller
-// keeps today's path for the file (raw text, or the binary-file refusal).
+// text alone, with a log line. A PDF whose text cannot be extracted returns
+// that extraction error: it is parsed once, never handed on to be parsed
+// again, and its raw bytes never come back as text.
 func (t *ReadFileTool) pdfDocumentResult(ctx context.Context, policy fspolicy.FSPolicy, handle *PathHandle, path, sourceIdentity string, length int64, reauthorize func(context.Context) error) *ToolResult {
 	text := t.extractDocument(ctx, handle, path, 0, length)
 	if text.IsError {
-		return nil
+		return text
 	}
 	raw, err := readWholePDF(handle)
 	if err != nil {

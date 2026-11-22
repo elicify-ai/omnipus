@@ -698,9 +698,7 @@ func (t *ReadFileTool) readOpenFile(
 		return result
 	}
 	if !paginationSupplied && isPDFSource(sniff[:sniffN]) {
-		if result := t.pdfDocumentResult(ctx, policy, handle, path, sourceIdentity, length, reauthorize); result != nil {
-			return result
-		}
+		return t.pdfDocumentResult(ctx, policy, handle, path, sourceIdentity, length, reauthorize)
 	}
 	if offset < 0 {
 		return ErrorResult("offset must be >= 0")

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -142,7 +141,7 @@ func (a *restAPI) handlePreviewRetry(w http.ResponseWriter, r *http.Request, ses
 	adm, err := svc.Admit(admitCtx, preview.IsOffice(ext))
 	cancelAdmit()
 	if err != nil {
-		slog.Warn("rest: preview retry not admitted", "session_id", sessionID, "tool_call_id", toolCallID, "error", err)
+		logsafeWarn("rest: preview retry not admitted", "session_id", sessionID, "tool_call_id", toolCallID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "the preview retry could not start: "+err.Error())
 		return
 	}
@@ -189,7 +188,7 @@ func (a *restAPI) previewRetrySession(w http.ResponseWriter, r *http.Request, se
 }
 
 func writePreviewRetryRefusal(w http.ResponseWriter, sessionID, toolCallID string, status int, code string) {
-	slog.Info("rest: preview retry refused", "session_id", sessionID, "tool_call_id", toolCallID, "status", status, "code", code)
+	logsafeInfo("rest: preview retry refused", "session_id", sessionID, "tool_call_id", toolCallID, "status", status, "code", code)
 	switch code {
 	case previewRetryCodeNotInLibrary:
 		jsonErrCode(w, status, previewRetryMsgNotInLibrary, code)
@@ -294,12 +293,12 @@ func (a *restAPI) locatePreviewRetrySource(workspaceID string, rec recordedPrevi
 	// search applies): a protected file is refused like a file outside it.
 	policy, err := fspolicy.EffectiveFSPolicy(context.Background(), workDir, "", true, a.homePath, "", workspaceID)
 	if err != nil {
-		slog.Error("rest: preview retry: library policy could not be built", "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: preview retry: library policy could not be built", "workspace_id", workspaceID, "error", err)
 		return nil, http.StatusInternalServerError, ""
 	}
 	root, err := library.OpenRoot(a.homePath, workspaceID)
 	if err != nil {
-		slog.Error("rest: preview retry: open library root failed", "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: preview retry: open library root failed", "workspace_id", workspaceID, "error", err)
 		return nil, http.StatusInternalServerError, ""
 	}
 	hostPath := root.HostPath(rel)
@@ -323,7 +322,7 @@ func (a *restAPI) locatePreviewRetrySource(workspaceID string, rec recordedPrevi
 func (l *previewRetryLocation) read(rec recordedPreview, ext string) (*previewRetrySource, int, string) {
 	data, err := io.ReadAll(io.LimitReader(l.file, preview.MaxInputBytes+1))
 	if err != nil {
-		slog.Error("rest: preview retry: source read failed", "error", err)
+		logsafeError("rest: preview retry: source read failed", "error", err)
 		return nil, http.StatusInternalServerError, ""
 	}
 	if len(data) > preview.MaxInputBytes || sourceVersion(data) != rec.sourceVersion {
@@ -422,14 +421,14 @@ func (a *restAPI) runPreviewRetry(svc *preview.Service, adm *preview.Admission, 
 			// the rendered pages together with the unavailable card
 			// ("could not be stored", with Retry), never an unqualified
 			// success.
-			slog.Error("rest: preview retry rendered but not saved to the chat", "session_id", sessionID, "tool_call_id", toolCallID, "error", saveErr)
+			logsafeError("rest: preview retry rendered but not saved to the chat", "session_id", sessionID, "tool_call_id", toolCallID, "error", saveErr)
 			reason := previewRetryReasonNotSaved
 			record.Outcome = tools.PreviewOutcomeUnavailable
 			record.UnavailableReason = &reason
 		}
 	}
 	if err != nil {
-		slog.Warn("rest: preview retry failed", "session_id", sessionID, "tool_call_id", toolCallID, "error", err)
+		logsafeWarn("rest: preview retry failed", "session_id", sessionID, "tool_call_id", toolCallID, "error", err)
 		reason := preview.ReasonRendererFailed
 		record = generated.MediaPreview{
 			SourceName: src.rec.sourceName, SourceVersion: src.rec.sourceVersion,
@@ -457,7 +456,7 @@ func (a *restAPI) runPreviewRetry(svc *preview.Service, adm *preview.Admission, 
 	// §4.3): there is no turn whose typing indicator or placeholder the
 	// manager's send path would need to clear.
 	if sendErr := a.sendPreviewRetryFrame(ctx, msg); sendErr != nil {
-		slog.Error("rest: preview retry result not delivered", "session_id", sessionID, "tool_call_id", toolCallID, "error", sendErr)
+		logsafeError("rest: preview retry result not delivered", "session_id", sessionID, "tool_call_id", toolCallID, "error", sendErr)
 	}
 }
 

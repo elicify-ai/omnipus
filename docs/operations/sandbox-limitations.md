@@ -103,12 +103,20 @@ startup sandbox only: the separate sandbox Omnipus builds for each agent shell
 command never includes them, and agents cannot read or run the preview
 programs, with two exceptions:
 
-- Omnipus itself was installed into a folder that agents can already read and
-  run (`/opt`, `/usr/lib`, `/usr/lib64`, `/lib`, `/lib64` or `/usr/bin`), for
-  example with the installer run as `OMNIPUS_INSTALL_DIR=/opt/omnipus/bin`.
-  Agents can then read and run the preview programs through that folder. None
-  of the standard installs (the `.deb` and `.rpm` packages, the installer's
-  default and per-user folders, the Docker image) is this case.
+- The real folder that holds the preview programs, after any links are
+  followed, lies inside a system folder that agents can already read and run,
+  such as `/opt`, `/usr/lib`, `/usr/lib64`, `/lib`, `/lib64` or `/usr/bin`.
+  What counts is where Omnipus's own folder (`<install folder>/../share/omnipus`)
+  or a packaged program folder (`<install folder>/../office`, `…/pdfium`)
+  really is, not where the `omnipus` program file is. This happens, for example, when
+  the installer is run with `OMNIPUS_INSTALL_DIR=/opt/omnipus/bin`, or when
+  `/usr/local/share/omnipus` is a link to a folder under `/opt`. Agents can
+  then read and run the preview programs through that folder. The standard
+  installs, left as installed, are not this case: `/usr/bin/omnipus` with
+  `/usr/share/omnipus` for the `.deb` and `.rpm` packages,
+  `/usr/local/share/omnipus` for the installer's default folder and the
+  Docker image, and `$HOME/.local/share/omnipus` for the per-user folder, as
+  long as no link moves these folders into such a system folder.
 - You give agents that access yourself: a `sandbox.allowed_exec_paths` entry,
   or an approval that lets a command read or run there, gives it to the
   commands it applies to.

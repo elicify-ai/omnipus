@@ -5,7 +5,9 @@
 package component
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -28,19 +30,29 @@ func strictlyInside(p, dir string) bool {
 }
 
 // ownFolderCheck holds Omnipus's own folder as written and with its links
-// resolved; resolved is "" when the folder cannot be resolved (missing), in
-// which case nothing is inside it.
+// resolved; resolved is "" when the folder does not exist, in which case
+// nothing is inside it (OF-3: a missing own folder refuses everything).
 type ownFolderCheck struct {
 	written  string
 	resolved string
 }
 
-func newOwnFolderCheck(own string) ownFolderCheck {
+// newOwnFolderCheck resolves own. A missing own folder is not an error (it
+// is the specified refuse-everything case); any other failure to resolve it
+// (a refused access, a link loop, a path part that is not a folder, an I/O
+// error) is returned, so the caller reports the real cause instead of an
+// "outside the own folder" refusal (gate round 2, SF-R2-1).
+func newOwnFolderCheck(own string) (ownFolderCheck, error) {
 	c := ownFolderCheck{written: own}
-	if resolved, err := filepath.EvalSymlinks(own); err == nil {
-		c.resolved = resolved
+	resolved, err := filepath.EvalSymlinks(own)
+	if errors.Is(err, fs.ErrNotExist) {
+		return c, nil
 	}
-	return c
+	if err != nil {
+		return c, err
+	}
+	c.resolved = resolved
+	return c, nil
 }
 
 // declaredInside reports whether p, cleaned and with its links not
@@ -64,13 +76,19 @@ func (c ownFolderCheck) resolvedInside(p string) bool {
 // StatusOutsideOwn problem. A root whose links cannot be resolved but whose
 // recorded path is inside is left to the caller's own handling (the root is
 // then reported missing or unreadable; nothing in it is used). It reads only
-// path metadata, nothing inside the root.
+// path metadata, nothing inside the root. When the own folder cannot be
+// resolved for a reason other than being missing, the component is damaged
+// with that cause (RS-1 applies to a refused access under an active startup
+// record); no other program is tried.
 func (r *Resolver) registeredOutsideOwn(root string) *ComponentError {
 	own := OwnFolder(r.Executable, r.goos())
 	if own == "" {
 		return nil
 	}
-	check := newOwnFolderCheck(own)
+	check, err := newOwnFolderCheck(own)
+	if err != nil {
+		return damagedBy(err, "component folder unreadable: %v", err)
+	}
 	outside := &ComponentError{
 		Status: StatusOutsideOwn,
 		Reason: fmt.Sprintf("registered root %s is outside Omnipus's own folder %s", root, own),
@@ -109,7 +127,10 @@ func registrationOutsideOwn(kind Kind, folder, program, goos string) error {
 	if err != nil {
 		return err
 	}
-	check := newOwnFolderCheck(own)
+	check, err := newOwnFolderCheck(own)
+	if err != nil {
+		return ownFolderUncheckable(own, err)
+	}
 	// A folder that cannot be resolved (missing) but is declared inside is
 	// left to the registration's own folder checks, which report it.
 	resolved, resolvedOK := linksResolved(given)
@@ -126,7 +147,11 @@ func registeredRootOutsideOwn(kind Kind, folder, root, program, goos string) err
 	if own == "" {
 		return nil
 	}
-	if newOwnFolderCheck(own).resolvedInside(root) {
+	check, err := newOwnFolderCheck(own)
+	if err != nil {
+		return ownFolderUncheckable(own, err)
+	}
+	if check.resolvedInside(root) {
 		return nil
 	}
 	given, err := filepath.Abs(folder)
@@ -135,6 +160,13 @@ func registeredRootOutsideOwn(kind Kind, folder, root, program, goos string) err
 	}
 	resolved, resolvedOK := linksResolved(given)
 	return outsideOwnRegistrationError(kind, given, resolved, resolvedOK, own)
+}
+
+// ownFolderUncheckable is the registration error when Omnipus's own folder
+// cannot be resolved for a reason other than being missing: it names the
+// folder and the real cause, and says what to check (SF-R2-1).
+func ownFolderUncheckable(own string, err error) error {
+	return fmt.Errorf("could not check Omnipus's own folder %s (%w). Check that the account running this command can open every folder on that path, then register again", own, err)
 }
 
 // linksResolved returns p with every link resolved, and false when that is
