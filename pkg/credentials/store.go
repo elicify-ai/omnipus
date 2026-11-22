@@ -721,7 +721,7 @@ func (s *Store) saveFileNoLock(sf *storeFile) error {
 	}
 	// Read-back: the write is the commit point only if the file now holds
 	// exactly what was written (FR-049).
-	got, err := os.ReadFile(filepath.Clean(s.path))
+	got, err := os.ReadFile(s.path) // #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or its fixed ".lock" sidecar, never request or agent input; the store exists to read and write exactly this file.
 	if err != nil {
 		return fmt.Errorf("credentials: read back store file: %w", err)
 	}

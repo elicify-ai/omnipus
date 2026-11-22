@@ -139,14 +139,12 @@ func acquireStoreLock(path string, deadline time.Time) (func() error, error) {
 // 10 ms until deadline. The lock is only kept on the file that is at the path
 // when it is taken (see fileutil.WithFlock).
 func lockSidecarUntil(lockPath string, deadline time.Time) (*os.File, error) {
-	// The path is the store's own configured location plus the fixed sidecar
-	// suffix, never request input.
-	lockPath = filepath.Clean(lockPath)
+	// #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or its fixed ".lock" sidecar, never request or agent input; the store exists to read and write exactly this file.
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return nil, fmt.Errorf("credentials: create store dir: %w", err)
 	}
 	for {
-		f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+		f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600) // #nosec G703 G304 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or its fixed ".lock" sidecar, never request or agent input; the store exists to read and write exactly this file.
 		if err != nil {
 			return nil, fmt.Errorf("credentials: open store lock: %w", err)
 		}
@@ -197,7 +195,7 @@ func sameFileAtPath(f *os.File, path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("credentials: stat store lock: %w", err)
 	}
-	onDisk, err := os.Stat(filepath.Clean(path))
+	onDisk, err := os.Stat(path) // #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or its fixed ".lock" sidecar, never request or agent input; the store exists to read and write exactly this file.
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
