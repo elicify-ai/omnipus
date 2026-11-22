@@ -12,17 +12,25 @@ package tools
 // Oracle: skills-tools-redesign-spec.md S-71 ("install_skill installs
 // weather with category: lifestyle … weather shows in the LIFESTYLE
 // group"), S-72 ("called with category: games … refused naming the allowed
-// categories and nothing is installed"), C-5 (Skill.category) and the
-// generated SkillCategory enum (the 13 R32 values). The file-level carrier
-// of a skill's category is the SKILL.md frontmatter metadata.category
-// (spec §810: "a skill file with metadata.category: research"), so the
-// stored-or-refused contract is pinned on the installed SKILL.md. The group
-// surface itself (list_skills grouping) is the menu work of orders 11/29.
+// categories and nothing is installed"), C-5, and the storage rule:
+//   "The category and the install-time verification result are stored in
+//    Omnipus's own data, OUTSIDE the skill folder (R32: never written into
+//    the skill file)."
+// so the installed SKILL.md must stay byte-identical to the registry's
+// original (the spec's own trip-notes oracle: "contains no category field
+// added by Omnipus"), and the category is read through Omnipus's metadata
+// store, never by grepping the skill file. The group surface itself
+// (list_skills grouping) is the menu work of orders 11/29.
 //
-// install_skill ignores unknown arguments at this commit
-// (pkg/tools/skills_install.go), so a category is silently dropped — the
-// RED reason for S-71; and nothing refuses an unknown category — the RED
-// reason for S-72.
+// CHECK round 1 finding 5: the earlier S-71 half required
+// "category: lifestyle" INSIDE SKILL.md — a write the spec explicitly
+// forbids — which contradicted C-5/C-21 and
+// skill_category_once_red_test.go::TestWriteSkillWorkflow_PublishesCategorisedSkill.
+//
+// RED today: install_skill ignores unknown arguments at this commit
+// (pkg/tools/skills_install.go), so no category store exists — the metadata
+// seam below is nil and S-71 fails loud (BLOCKED); nothing refuses an
+// unknown category — the RED reason for S-72.
 
 import (
 	"context"
@@ -36,10 +44,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// readInstalledSkillCategory is the test-local seam for Omnipus's own
+// category metadata store (C-5: outside the skill folder). It returns the
+// stored category of the named installed skill. GREEN wires it to the real
+// store the listing/grouping reads; nil keeps the RED run loud (BLOCKED),
+// never a skip.
+var readInstalledSkillCategory func(t testing.TB, globalSkillsDir, slug string) (category string, ok bool)
+
+// fakeRegistrySkillMD is the exact SKILL.md fakeSkillRegistry writes — the
+// original bytes the category write must leave untouched.
+const fakeRegistrySkillMD = "---\nname: weather\ndescription: a fake test skill for install_skill's global-dir test\n---\n\nBody.\n"
+
 // TestInstallSkillCategoryParity (order 17).
 // Traces to: BDD S-71, S-72; spec C-5; Dataset D5 rows 5-6.
 func TestInstallSkillCategoryParity(t *testing.T) {
-	t.Run("S-71 a valid category is stored with the installed skill", func(t *testing.T) {
+	t.Run("S-71 a valid category is stored with the installed skill, outside the skill file", func(t *testing.T) {
 		globalSkills := filepath.Join(t.TempDir(), "skills")
 		require.NoError(t, os.MkdirAll(globalSkills, 0o755))
 		registryMgr := skills.NewRegistryManager()
@@ -51,10 +70,22 @@ func TestInstallSkillCategoryParity(t *testing.T) {
 			"category": "lifestyle",
 		})
 		require.False(t, res.IsError, "setup install failed: %s", res.ForLLM)
+
 		raw, err := os.ReadFile(filepath.Join(globalSkills, "weather", "SKILL.md"))
 		require.NoError(t, err, "the installed skill must exist")
-		require.Contains(t, string(raw), "category: lifestyle",
-			"S-71: the operator's category is stored with the skill; SKILL.md: %s", string(raw))
+		require.Equal(t, fakeRegistrySkillMD, string(raw),
+			"C-5/R32: the category is never written into the skill file — the installed "+
+				"SKILL.md stays byte-identical to the registry's original")
+
+		if readInstalledSkillCategory == nil {
+			t.Fatal("BLOCKED: the category metadata store (C-5: Omnipus's own data, " +
+				"outside the skill folder) is not implemented — required by S-71 " +
+				"(weather shows in the LIFESTYLE group)")
+		}
+		category, ok := readInstalledSkillCategory(t, globalSkills, "weather")
+		require.True(t, ok, "S-71: the installed skill carries a stored category")
+		require.Equal(t, "lifestyle", category,
+			"S-71: the operator's category is stored with the installed skill")
 	})
 
 	t.Run("S-72 an unknown category is refused naming the allowed ones", func(t *testing.T) {
