@@ -2902,6 +2902,7 @@ Fixture of S-110. "Stop" means the test build's stop seam ends the process right
 | Grant list is the gate | `TestSkillTool_LoadDeniedAndNotFoundAreDistinct` (ADR-072) | No — must stay green | |
 | Saved-not-applied 503 text | tool-policies handler tests | Yes — moved to `PATCH /security/permissions` tests (the legacy endpoint is retired) | C-2, C-22 |
 | Presets | `toolPolicyPresets.test.ts`, preset cases in `ToolPolicyEditor.test.tsx` | Deleted with the feature (T-Q6 A) | the deletion is the expected change, not a weakened test |
+| Always Allow on approval cards (bash exact/prefix scope, grant-recorded toasts) | the R6 "Always Allow" cases in `src/components/agents/ToolApprovalModal.test.tsx` and `src/components/agents/ToolApprovalPanel.l1.test.tsx` | Yes, rewritten to C-26: each case becomes its timed-choice equivalent (`allow_for` with the chosen duration; a narrow bash card keeps its exact or prefix scope; the toast names the recorded timed allowance). A case with no C-26 equivalent is deleted, citing R2-Q1 | R2-Q1 removed Always Allow from every card; the rewrite is the expected change, not a weakened test (team-lead ruling 2026-11-22, filling a gap in this table) |
 
 #### Regression Dataset: tool behaviour unchanged by this package
 
