@@ -42,6 +42,24 @@ func TestOfficePreview_TextFailureIsNotABlankPage(t *testing.T) {
 	require.Contains(t, text, "text extraction failed", "SF-02: the model text must say extraction failed, not present a blank page")
 	require.Contains(t, text, "page 1")
 	require.NotContains(t, text, "may be scanned", "a failed extraction is not a scanned page (AD-15)")
+	// T5 (gate round 2, CHECK): the text above can carry its own page
+	// literal, so a mutated entry number would hide behind it. The failed
+	// entry must STRUCTURALLY carry the failed page's number, and the
+	// successful one the other requested page — the spec's page numbering is
+	// 1-based and the request asked for pages 1-2 (expected values from the
+	// request, not from the code).
+	var failedNumber, sentinelNumber uint32
+	for _, page := range res.Text {
+		if strings.Contains(page.Text, "text extraction failed") {
+			failedNumber = page.Number
+			continue
+		}
+		if strings.Contains(page.Text, "GATEFIX_PAGE2_SENTINEL") {
+			sentinelNumber = page.Number
+		}
+	}
+	require.Equal(t, uint32(1), failedNumber, "SF-02/T5: the extraction-failed entry is page 1, the first requested page — not a shifted number")
+	require.Equal(t, uint32(2), sentinelNumber, "SF-02/T5: the sentinel entry is page 2, the second requested page")
 }
 
 // G4 / CR F6, SF-03. AD-6 discloses a cut at the 4 MiB text budget. A single
