@@ -439,9 +439,13 @@ func TestExportPlanHandler_CreateAndRead(t *testing.T) {
 	require.Equal(t, uuid.Version(4), parsed.Version(), "plan_id is a UUID v4 (spec field table)")
 	require.Equal(t, "agents", m["scope"], "scope echoes the request")
 
-	createdAt, err := time.Parse(time.RFC3339, m["created_at"].(string))
+	createdRaw, ok := m["created_at"].(string)
+	require.True(t, ok, "created_at is a string; body=%v", m)
+	createdAt, err := time.Parse(time.RFC3339, createdRaw)
 	require.NoError(t, err)
-	expiresAt, err := time.Parse(time.RFC3339, m["expires_at"].(string))
+	expiresRaw, ok := m["expires_at"].(string)
+	require.True(t, ok, "expires_at is a string; body=%v", m)
+	expiresAt, err := time.Parse(time.RFC3339, expiresRaw)
 	require.NoError(t, err)
 	require.Equal(t, 30*time.Minute, expiresAt.Sub(createdAt), "expires_at − created_at = 30 minutes")
 
@@ -459,7 +463,11 @@ func TestExportPlanHandler_CreateAndRead(t *testing.T) {
 	b1PlanFileSizes(t, files)
 	var fileSum int64
 	for _, f := range files {
-		fileSum += int64(f.(map[string]any)["size"].(float64))
+		entry, entryOK := f.(map[string]any)
+		require.True(t, entryOK, "each reviewed file is an object")
+		size, sizeOK := entry["size"].(float64)
+		require.True(t, sizeOK, "each reviewed file carries a numeric size")
+		fileSum += int64(size)
 	}
 	elBytes, ok := el["bytes"].(float64)
 	require.True(t, ok, "element bytes is numeric")
@@ -808,8 +816,11 @@ func TestExportPlanHandler_StoreCap(t *testing.T) {
 		got := callPackagePlanCreate(t, api, body)
 		require.Equal(t, http.StatusCreated, got.Code, "body=%s", got.Body)
 		m := planMap(t, got.Body)
-		id, _ := m["plan_id"].(string)
-		createdAt, err := time.Parse(time.RFC3339, m["created_at"].(string))
+		id, ok := m["plan_id"].(string)
+		require.True(t, ok, "plan_id is a string; body=%v", m)
+		createdRaw, ok := m["created_at"].(string)
+		require.True(t, ok, "created_at is a string; body=%v", m)
+		createdAt, err := time.Parse(time.RFC3339, createdRaw)
 		require.NoError(t, err, "created_at parses; body=%v", m)
 		return id, createdAt
 	}
@@ -1093,10 +1104,17 @@ func TestExportPlanFlow_DecodedBundleCanaries(t *testing.T) {
 // review describes (skills research + Summarize, connector github) is
 // uploaded and imported; the import result carries warning mcp_binding_dropped
 // with item github, and GET /api/v1/agents/{new_id} shows NO connector
-// assignment. RED: apply is a 501 stub, so the row fails at the import — the
-// missing feature, not a harness error.
+// assignment. RED at the plan create (501, the unimplemented review) — the
+// missing feature, not a harness error; apply itself is real existing wire
+// (CHECK 4 W02). The roster-reload seam is installed (the same pair the other
+// import-then-GET tests use, e.g. packages_s1b_policy_seed_test.go): in the
+// unit gateway a publication reload without it is a confirmed no-op, so the
+// stored import would never reach the live roster this GET reads — a 404
+// proving nothing about the row (dispute D-1, verified).
 func TestExportPlanFlow_ImportSideBundleProof(t *testing.T) {
 	api := packageAPI(t)
+	usePackageSeams(t)
+	installRosterReload(t, api, nil)
 	// D1-2: skills research + Summarize and the github connector binding, the
 	// agent whose review wording ("names travel") the decoded-bundle test
 	// already pins on the export side.
@@ -1188,9 +1206,14 @@ func TestExportPlanHandler_BenchmarkFixtureWithin5s(t *testing.T) {
 	files, _ := elements[0].(map[string]any)["files"].([]any)
 	settingsSeen := false
 	for _, f := range files {
-		entry := f.(map[string]any)
-		if strings.HasSuffix(entry["path"].(string), "agent.json") {
-			require.GreaterOrEqual(t, entry["size"].(float64), float64(1<<20),
+		entry, ok := f.(map[string]any)
+		require.True(t, ok, "each reviewed file is an object")
+		path, ok := entry["path"].(string)
+		require.True(t, ok, "each reviewed file carries a string path")
+		if strings.HasSuffix(path, "agent.json") {
+			size, ok := entry["size"].(float64)
+			require.True(t, ok, "the reviewed settings record carries a numeric size")
+			require.GreaterOrEqual(t, size, float64(1<<20),
 				"the reviewed settings record carries the ~1 MiB fixture")
 			settingsSeen = true
 		}

@@ -45,6 +45,48 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   fetchWorkspaces: mockWorkspaces,
 }))
 
+// GREEN CHECK P07 (spec line 473 "Workspace choice | select", FR-028): the
+// Confirm's workspace select is the CATALOGUED select; the same shim as
+// ImportConfirmStep.test.tsx (the repo's Radix-select test precedent,
+// ConnectorsScreen.test.tsx) keeps its accessibility contract drivable in
+// jsdom — combobox trigger, option choice, SelectValue showing the label.
+vi.mock('@/components/ui/select', () => {
+  const labels = new Map<string, string>()
+  type SelectProps = { value?: string; onValueChange?: (v: string) => void; children?: React.ReactNode }
+  type ItemProps = { value: string; children?: React.ReactNode }
+  const SelectCtx = React.createContext<{ value?: string; onValueChange?: (v: string) => void }>({})
+
+  const Select = ({ value, onValueChange, children }: SelectProps) =>
+    React.createElement(SelectCtx.Provider, { value: { value, onValueChange } }, children)
+  const SelectTrigger = ({ children, ...rest }: { children?: React.ReactNode } & Record<string, unknown>) =>
+    React.createElement('button', { type: 'button', role: 'combobox', ...rest }, children)
+  const SelectValue = ({ placeholder }: { placeholder?: string }) => {
+    const { value } = React.useContext(SelectCtx)
+    return React.createElement('span', {}, (value && labels.get(value)) || placeholder)
+  }
+  const SelectContent = ({ children }: { children?: React.ReactNode }) =>
+    React.createElement('div', { role: 'listbox' }, children)
+  const SelectItem = ({ value, children }: ItemProps) => {
+    const { onValueChange } = React.useContext(SelectCtx)
+    React.useEffect(() => {
+      labels.set(value, typeof children === 'string' ? children : value)
+      return () => {
+        labels.delete(value)
+      }
+    }, [value, children])
+    return React.createElement(
+      'div',
+      { role: 'option', 'data-value': value, onClick: () => onValueChange?.(value) },
+      children,
+    )
+  }
+  const SelectLabel = ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children)
+  const SelectGroup = ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children)
+  const SelectSeparator = () => React.createElement('hr', {})
+
+  return { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectLabel, SelectGroup, SelectSeparator }
+})
+
 import { Route } from '@/routes/_app/export-import'
 import { rememberIdentityMode } from '@/lib/api/identityMode'
 import { useUiStore } from '@/store/ui'
@@ -353,6 +395,35 @@ describe('Reload mid-import (US-5, D3 rows 9–10c)', () => {
       },
     },
     {
+      // GREEN CHECK P01: a proxy's readable 200 is an unexpected SUCCESSFUL
+      // answer — it proves nothing and must end in Uncertain with the record
+      // kept, not in the confirmed reload notice.
+      label: 'reload + a 200 readable JSON cancel answer: Uncertain, record kept, one cancel',
+      search: { wizard: 'import', step: 'confirm', staging_id: 'S' },
+      record: previewedRecord(true),
+      cancel: { cancel: () => jsonResponse(200, { done: true }) },
+      cancelCount: 1,
+      assert: async () => {
+        expect(await screen.findByText(UNCERTAIN)).toBeInTheDocument()
+        expect(readRecord()?.staging_id, 'an unproven answer keeps the record').toBe('S')
+        await settle()
+      },
+    },
+    {
+      // GREEN CHECK P01: a 205 reset-content resolves in the transport today
+      // but proves nothing either — the same Uncertain outcome.
+      label: 'reload + a 205 cancel answer: Uncertain, record kept, one cancel',
+      search: { wizard: 'import', step: 'confirm', staging_id: 'S' },
+      record: previewedRecord(true),
+      cancel: { cancel: () => new Response(null, { status: 205 }) },
+      cancelCount: 1,
+      assert: async () => {
+        expect(await screen.findByText(UNCERTAIN)).toBeInTheDocument()
+        expect(readRecord()?.staging_id, 'an unproven answer keeps the record').toBe('S')
+        await settle()
+      },
+    },
+    {
       label: 'result + done record: the stored summary under Import finished, no package request',
       search: { wizard: 'import', step: 'result', staging_id: 'S' },
       record: doneRecord,
@@ -440,10 +511,11 @@ describe('Leaving the wizard cleans up silently (US-7, FR-026)', () => {
       upload: () => jsonResponse(200, validPreviewBody()),
       cancel: () => noContent(),
     })
-    // Choose the workspace on the live Confirm, the way a person would.
-    const select = await screen.findByRole('combobox')
+    // Choose the workspace on the live Confirm, the way a person would —
+    // through the catalogued select's option (GREEN CHECK P07, spec line 473).
+    await screen.findByRole('combobox')
     await act(async () => {
-      fireEvent.change(select, { target: { value: 'ws-general' } })
+      fireEvent.click(screen.getByRole('option', { name: 'General' }))
     })
     expect(readRecord()?.phase, 'the record stays previewed until the apply leaves').toBe('previewed')
     act(() => {
@@ -514,5 +586,155 @@ describe('Expired upload at confirm returns to File (US-5.4/D4-5 — route-level
     expect(await screen.findByRole('button', { name: 'Choose a bundle file' })).toBeInTheDocument()
     expect(counts.apply, 'no second apply').toBe(1)
     expect(readRecord(), 'a rolled-back import clears the record').toBeNull()
+  })
+})
+
+// ── GREEN CHECK P01: what a cancel answer proves, for the explicit Cancel ──
+// The same evidence rule the reload table pins, driven from a LIVE Preview
+// through a fresh upload: only a 204 — or the coded 500
+// staging_cleanup_failed, which names the cleanup failure — confirms; every
+// unexpected successful answer (a proxy's readable 200, an HTML/truncated 200
+// without Content-Length, a 202, a 205) proves nothing and must end on the
+// Uncertain screen with the record kept. The live counter holds each row to
+// exactly one cancel request, never a second, and never an apply.
+
+// Drives a fresh wizard to a live Preview through the real upload path (the
+// explicit Cancel lives on Preview and on Confirm; Preview needs no workspace
+// choice, so the drive stops there).
+async function driveToPreview(fetchRow: Row): Promise<{ counts: Counters }> {
+  const { counts } = installFetch(fetchRow)
+  renderAt({ wizard: 'import' })
+  // File step: the input's availability is asserted BEFORE the change event,
+  // so this row can never fail as "unable to fire a change event".
+  const input = document.querySelector('input[type="file"]') as HTMLInputElement | null
+  expect(input, 'the File step renders a bundle-file input before the change event fires').not.toBeNull()
+  const file = new File([new Uint8Array(64)], 'bundle.omnpkg', { type: 'application/octet-stream' })
+  await act(async () => {
+    fireEvent.change(input!, { target: { files: [file] } })
+  })
+  expect(await screen.findByText('Will be added')).toBeInTheDocument()
+  return { counts }
+}
+
+describe('What a cancel answer proves — explicit Cancel from a live Preview (US-5, FR-025/026, GREEN CHECK P01)', () => {
+  const rows: Array<{ label: string; answer: () => Response; outcome: 'landing' | 'later' | 'uncertain' }> = [
+    { label: 'a 204 confirms: the landing, the record cleared', answer: () => noContent(), outcome: 'landing' },
+    {
+      label: 'a coded 500 staging_cleanup_failed confirms with the later-upload notice',
+      answer: () => jsonResponse(500, { code: 'staging_cleanup_failed' }),
+      outcome: 'later',
+    },
+    {
+      label: 'a 200 with a readable JSON body proves nothing: Uncertain, record kept',
+      answer: () => jsonResponse(200, { done: true }),
+      outcome: 'uncertain',
+    },
+    {
+      label: 'a 200 HTML body without Content-Length proves nothing: Uncertain, record kept',
+      answer: () => new Response('<html>gateway page</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+      outcome: 'uncertain',
+    },
+    { label: 'a 202 proves nothing: Uncertain, record kept', answer: () => new Response(null, { status: 202 }), outcome: 'uncertain' },
+    { label: 'a 205 proves nothing: Uncertain, record kept', answer: () => new Response(null, { status: 205 }), outcome: 'uncertain' },
+  ]
+
+  for (const row of rows) {
+    it(`${row.label}: exactly one cancel request`, async () => {
+      const { counts } = await driveToPreview({
+        upload: () => jsonResponse(200, validPreviewBody()),
+        cancel: row.answer,
+      })
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+      })
+      if (row.outcome === 'landing') {
+        expect(await screen.findByRole('button', { name: 'Start import' })).toBeInTheDocument()
+        expect(readRecord(), 'the confirmed cancel cleared the record').toBeNull()
+      } else if (row.outcome === 'later') {
+        expect(await screen.findByRole('button', { name: 'Start import' })).toBeInTheDocument()
+        expect(screen.getByText(LATER_UPLOAD)).toBeInTheDocument()
+        expect(readRecord(), 'the coded cleanup failure still ends this upload (never applicable)').toBeNull()
+      } else {
+        expect(await screen.findByText(UNCERTAIN)).toBeInTheDocument()
+        expect(readRecord()?.staging_id, 'an unproven answer keeps the record').toBe('S')
+      }
+      await settle()
+      expect(counts.cancel, 'exactly one cancel request, observed live').toBe(1)
+      expect(counts.apply, 'a cancel never applies').toBe(0)
+    })
+  }
+})
+
+// ── GREEN CHECK P02: history navigation after a lost apply answer ───────────
+// ONE wizard instance drives the fresh flow to a dispatched apply whose
+// answer never arrives (the wizard's own record is apply_sent). In-instance
+// history Back to the preview address and Forward to the confirm address must
+// show the Outcome-unknown state both times — never the held preview with a
+// Cancel that could send the forbidden DELETE, and never a Confirm that could
+// offer a second apply for the same upload (FR-024a).
+describe('Browser Back after a lost apply answer (US-5, FR-024a, GREEN CHECK P02)', () => {
+  it('Back to Preview and Forward to Confirm: Outcome-unknown, zero DELETE, exactly one apply', async () => {
+    const { counts, applyDispatched } = installFetch({
+      upload: () => jsonResponse(200, validPreviewBody()),
+      // The apply answer is genuinely lost: the request never settles.
+      apply: () => new Promise<Response>(() => {}),
+    })
+    // The Confirm screen needs an active default workspace to pre-choose.
+    mockWorkspaces.mockResolvedValue([{ id: 'ws-general', name: 'General', is_default: true, pinned: false }])
+    // This row holds its own QueryClient so one wizard instance survives
+    // rerenders (renderAt builds a fresh client per call).
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } },
+    })
+    const Component = (Route as unknown as { component: React.ComponentType }).component
+    const wizard = (
+      <QueryClientProvider client={client}>
+        <Component />
+      </QueryClientProvider>
+    )
+    mockSearch = { wizard: 'import' }
+    const view = render(wizard)
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement | null
+    expect(input, 'the File step renders a bundle-file input').not.toBeNull()
+    const file = new File([new Uint8Array(64)], 'bundle.omnpkg', { type: 'application/octet-stream' })
+    await act(async () => {
+      fireEvent.change(input!, { target: { files: [file] } })
+    })
+    expect(await screen.findByText('Will be added')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(await screen.findByRole('button', { name: 'Import' })).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+    })
+    await applyDispatched
+    await settle()
+    expect(readRecord()?.phase, 'the record is apply_sent while the answer is lost').toBe('apply_sent')
+    expect(counts.apply, 'the apply was dispatched exactly once').toBe(1)
+
+    // History BACK in the same instance: the address says Preview again.
+    mockSearch = { wizard: 'import', step: 'preview', staging_id: 'S' }
+    await act(async () => {
+      view.rerender(wizard)
+    })
+    expect(
+      await screen.findByText(OUTCOME_UNKNOWN),
+      'an upload whose outcome is unknown shows Outcome-unknown — not the held preview with its Cancel',
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Team' }), 'the record names the workspace, so the link is offered').toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel' }), 'no Cancel action for an unknown outcome').toBeNull()
+    expect(screen.queryByRole('button', { name: 'Import' }), 'no Import action for an unknown outcome').toBeNull()
+    expect(counts.cancel, 'zero DELETE for an unknown outcome').toBe(0)
+    expect(counts.apply, 'no second apply').toBe(1)
+
+    // History FORWARD: the confirm address must stay Outcome-unknown too.
+    mockSearch = { wizard: 'import', step: 'confirm', staging_id: 'S' }
+    await act(async () => {
+      view.rerender(wizard)
+    })
+    expect(await screen.findByText(OUTCOME_UNKNOWN)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Import' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+    expect(counts.apply, 'still exactly one apply after Back and Forward').toBe(1)
+    expect(counts.cancel, 'still zero DELETE after Back and Forward').toBe(0)
   })
 })

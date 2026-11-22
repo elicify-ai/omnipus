@@ -184,8 +184,8 @@ func TestStagingRegistry_CancelReadyOnly(t *testing.T) {
 		wantCode(t, reg.BeginApply(id), "staging_not_found")
 		// It does not count as a slot: five more uploads are admitted.
 		for i := 0; i < omnpkg.MaxStagedImports; i++ {
-			_, err := reg.Reserve()
-			require.NoError(t, err, "the cancelled staging holds no slot (reservation %d)", i+1)
+			_, resErr := reg.Reserve()
+			require.NoError(t, resErr, "the cancelled staging holds no slot (reservation %d)", i+1)
 		}
 		// The state is cancelled and the folder is still there.
 		st, err := reg.State(id)
