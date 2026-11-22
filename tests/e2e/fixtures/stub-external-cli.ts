@@ -261,8 +261,13 @@ async function pollDevModeBypass(page: Page, want: boolean): Promise<void> {
  * (workers: 1, one spec per shard gateway) means no concurrent test can
  * observe the intermediate state. A restore failure never masks the body's
  * own error — both are reported.
+ *
+ * Exported (round 12 of #1967) so export-import-b1.spec.ts can bracket its
+ * whole flow the same way: its wizard rides /api/v1/packages/*, which
+ * middleware.RequireNotBypass 503s while bypass is on. Same mechanism, same
+ * restore contract; retention.spec.ts is the original precedent.
  */
-async function runWithBypassOffForPersonSession(page: Page, body: () => Promise<void>): Promise<void> {
+export async function runWithBypassOffForPersonSession(page: Page, body: () => Promise<void>): Promise<void> {
   const configPath = path.join(gatewayHomeDir(), 'config.json')
   let raw: string
   try {
