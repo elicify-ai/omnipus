@@ -144,6 +144,8 @@ func TestProgramCatalog_PresetIsData(t *testing.T) {
 		// covered by the gateway slice.
 		entries, err := CatalogFromFS(presetTestFS())
 		require.NoError(t, err)
+		// FR-001 ships GitHub and Fly; S-37 adds Example in this fixture.
+		require.Len(t, entries, 3, "GitHub, Fly and the added Example must be listed before checking kind")
 		for _, e := range entries {
 			require.Equal(t, "preset", e.Kind, "loaded preset %s must carry kind preset", e.ID)
 		}
