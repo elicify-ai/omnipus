@@ -10,20 +10,18 @@
 //
 // Wire types are the GENERATED contracts (Hard Constraint #8): the import
 // preview/result/apply re-export the existing generated schemas unchanged.
-// PackageExportPlan is the NEW B1 review contract — the schema files are
-// backend-lead's contract-first work; until the generated types land, the
-// interface below is the spec's field table used as test scaffolding ONLY
-// (CHECK F02: no parallel hand-written wire model for anything that already
-// exists in contracts/).
+// PackageExportPlan is the B1 review contract, generated the same way.
 import type {
   PackageImportPreview,
   PackageImportApplyRequest,
   PackageImportResult,
   PackageManifest,
+  components,
 } from './generated/openapi-types'
 import {
   PackageImportPreview as PackageImportPreviewSchema,
   PackageImportResult as PackageImportResultSchema,
+  PackageExportPlan as PackageExportPlanSchema,
 } from './generated/schemas'
 import type { ZodType } from 'zod'
 import { request, requestResponse, type RequestOptions } from './http'
@@ -40,61 +38,14 @@ export type {
 // generated contract (CHECK F02: every successful fixture must parse).
 export { PackageImportPreviewSchema, PackageImportResultSchema }
 
-// ---------------------------------------------------------------------------
-// The NEW B1 review contract (spec "PackageExportPlan fields"). Not yet in
-// the generated types — backend-lead adds the schema and regenerates; this
-// scaffold is then replaced by the generated type (Hard Constraint #8).
-// ---------------------------------------------------------------------------
-
-export interface PackageExportPlanRequest {
-  scope: 'agents'
-  agent_ids: string[]
-}
-
-export interface PackageExportPlanFileEntry {
-  path: string
-  size: number
-}
-
-export interface PackageExportPlanElement {
-  type: 'agent'
-  source_id: string
-  name: string
-  kind: 'main' | 'worker' | 'external_worker'
-  files: PackageExportPlanFileEntry[]
-  bytes: number
-}
-
-export interface PackageExportPlanLeftOutItem {
-  type: string
-  reason: string
-  message: string
-  items?: string[]
-}
-
-export interface PackageExportPlanNeedsSecret {
-  name: string
-  used_by: string
-  kind: string
-}
-
-export interface PackageExportPlanDisclosure {
-  code: string
-  message: string
-}
-
-export interface PackageExportPlan {
-  plan_id: string
-  created_at: string
-  expires_at: string
-  scope: string
-  elements: PackageExportPlanElement[]
-  left_out: PackageExportPlanLeftOutItem[]
-  needs_secrets: PackageExportPlanNeedsSecret[]
-  disclosures: PackageExportPlanDisclosure[]
-  size_bytes: number
-  file_name: string
-}
+// The B1 review contract (spec "PackageExportPlan fields"), generated from
+// contracts/components/schemas/PackageExportPlan*.yaml.
+export type PackageExportPlanRequest = components['schemas']['PackageExportPlanRequest']
+export type PackageExportPlan = components['schemas']['PackageExportPlan']
+export type PackageExportPlanElement = PackageExportPlan['elements'][number]
+export type PackageExportPlanLeftOutItem = PackageExportPlan['left_out'][number]
+export type PackageExportPlanNeedsSecret = PackageExportPlan['needs_secrets'][number]
+export type PackageExportPlanDisclosure = PackageExportPlan['disclosures'][number]
 
 /** The download outcome: the bundle bytes and the server's file name. */
 export interface PackageDownload { // not-wire-format: the in-browser result of the export download (a Blob and its file name)
@@ -290,11 +241,19 @@ export function classifyUploadOutcome(err: unknown): 'known_refusal' | 'unknown'
 const NO_REPLAY: RequestOptions = { csrfRetry: false, plantedCookieToast: false }
 
 export async function createPackageExportPlan(body: PackageExportPlanRequest): Promise<PackageExportPlan> {
-  return request<PackageExportPlan>('/packages/export/plan', { method: 'POST', body: JSON.stringify(body) })
+  return request<PackageExportPlan>(
+    '/packages/export/plan',
+    { method: 'POST', body: JSON.stringify(body) },
+    PackageExportPlanSchema as ZodType<PackageExportPlan>,
+  )
 }
 
 export async function getPackageExportPlan(planId: string): Promise<PackageExportPlan> {
-  return request<PackageExportPlan>(`/packages/export/plan/${encodeURIComponent(planId)}`)
+  return request<PackageExportPlan>(
+    `/packages/export/plan/${encodeURIComponent(planId)}`,
+    undefined,
+    PackageExportPlanSchema as ZodType<PackageExportPlan>,
+  )
 }
 
 export async function cancelPackageImport(stagingId: string): Promise<void> {
