@@ -128,15 +128,31 @@ export async function toWriteResponse(call: () => Promise<unknown>): Promise<Wri
   }
 }
 
-/** Normalises a value for the saved-state comparison. */
+/**
+ * The saved-state comparison. Strings compare exactly: case and spaces can
+ * change meaning (program paths, standard parameters), so they are kept.
+ * Empty, null and missing are the same "not set". A number and the text of a
+ * number field compare by number, so "100" typed matches 100 read back.
+ */
 export function sameValue(a: unknown, b: unknown): boolean {
+  const empty = (v: unknown) => v === undefined || v === null || v === ''
+  if (empty(a) || empty(b)) return empty(a) && empty(b)
+  if (typeof a === 'number' && typeof b === 'string') return numberText(b) === a
+  if (typeof b === 'number' && typeof a === 'string') return numberText(a) === b
   const norm = (v: unknown): string => {
-    if (v === undefined || v === null || v === '') return ''
+    if (typeof v === 'string') return v
     if (typeof v === 'number' || typeof v === 'boolean') return String(v)
-    if (typeof v === 'string') return v.trim().toLowerCase()
     return canonicalJson(v)
   }
   return norm(a) === norm(b)
+}
+
+/** The number a number field's text stands for, or undefined. */
+function numberText(text: string): number | undefined {
+  const t = text.trim()
+  if (t === '') return undefined
+  const n = Number(t)
+  return Number.isFinite(n) ? n : undefined
 }
 
 /** JSON with object keys sorted, so the same value read two ways compares equal. */
