@@ -1128,6 +1128,9 @@ export function ProvidersSection() {
     ? { ...defaultModel, provider: defaultDraft.provider, model: defaultDraft.model, reasoning_effort: defaultDraft.reasoning_effort ?? defaultModel?.reasoning_effort, context_window: undefined, window_source: undefined, window_unknown: undefined } as DefaultModel
     : defaultModel
   const sentDefault = useRef<DefaultModelUpdateRequest | null>(null)
+  // The draft as the Save sent it: only that draft is cleared when the Save
+  // ends saved; a pick made meanwhile stays a draft (CR-04).
+  const submittedDefault = useRef<DefaultModelUpdateRequest | null>(null)
   const sentDefaultBefore = useRef<string | null>(null)
   // CR-05: the saved-state check compares the whole default: provider, model
   // and reasoning effort. An omitted effort keeps the stored one, so the
@@ -1140,6 +1143,7 @@ export function ProvidersSection() {
     invalidCount: 0,
     write: () => {
       const pair = defaultDraft as DefaultModelUpdateRequest
+      submittedDefault.current = pair
       sentDefault.current = { ...pair, reasoning_effort: pair.reasoning_effort ?? defaultModel?.reasoning_effort ?? '' }
       sentDefaultBefore.current = defaultModel
         ? defaultTuple(defaultModel.provider, defaultModel.model, defaultModel.reasoning_effort)
@@ -1166,7 +1170,14 @@ export function ProvidersSection() {
     },
     onOutcome: (outcome) => {
       if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
-      setDefaultDraft(null)
+      const submitted = submittedDefault.current
+      setDefaultDraft((d) =>
+        d &&
+        submitted &&
+        (d.provider !== submitted.provider || d.model !== submitted.model || (d.reasoning_effort ?? '') !== (submitted.reasoning_effort ?? ''))
+          ? d
+          : null,
+      )
       queryClient.invalidateQueries({ queryKey: ['default-model'] })
       // Effort levels: chats and agents riding the default read its effort from the config.
       queryClient.invalidateQueries({ queryKey: ['config'] })
