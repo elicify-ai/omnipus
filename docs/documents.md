@@ -182,7 +182,11 @@ a copy yourself.
   packages install, is refused, for example:
   `office not registered: LibreOffice folder /opt/libreoffice26.8 is outside Omnipus's own folder (/usr/local/share/omnipus); on Linux, Omnipus accepts only a LibreOffice inside that folder. Re-run the Omnipus installer, which puts LibreOffice in /usr/local/share/omnipus/office, or put LibreOffice in a new folder inside /usr/local/share/omnipus and register that folder`.
   A link that leads out of that folder, or into it from elsewhere, is refused
-  too. On macOS and Windows registration is unchanged.
+  too. Run the register command with the same `omnipus` program the service
+  runs: Omnipus's own folder is worked out from the program that runs the
+  command, so a second copy (for example a downloaded `omnipus` in `/tmp`)
+  judges the folder against its own location and refuses it. On macOS and
+  Windows registration is unchanged.
 - A LibreOffice or PDF renderer registered on Linux outside Omnipus's own
   folder before this version is no longer used, even when the installer's copy
   is also installed. An Office preview then says
