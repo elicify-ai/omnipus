@@ -65,10 +65,11 @@ func (al *AgentLoop) drainSteeredTurn(
 		// this drain (the original, or a continuation replaced since) is not
 		// lost when a later turn succeeds or is cancelled: it is announced on
 		// the turn it belongs to and carried in the result, not the error, so
-		// the callers' stop and drain-retry handling is unchanged.
+		// the callers' stop and drain-retry handling is unchanged. It does not
+		// change the turn's status or turnFailed (ruling R1-d): the outcome
+		// stays what it would be without it, and completion adds the warning.
 		if saveErr := al.drainSaveFailures(initialResult.saveFailure, ranTurns); saveErr != nil {
 			finalResult.saveFailure = saveErr
-			finalResult.status, finalResult.turnFailed = TurnEndStatusError, true
 		}
 	}()
 	lastTS, lastResult, lastErr := initialTS, initialResult, initialErr

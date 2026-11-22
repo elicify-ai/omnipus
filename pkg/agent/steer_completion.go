@@ -116,6 +116,11 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 		}
 	}
 
+	// SFH-1 / ruling R1-a, R1-b: a transcript-save failure never changes the
+	// outcome decided above; the parent's message carries the neutral
+	// missing-history warning with it, so it is never a clean success.
+	answer, failureReason = withSaveFailureWarning(result.saveFailure, outcome, answer, failureReason)
+
 	if completeBeforeDeliveryTestHook != nil {
 		completeBeforeDeliveryTestHook(rec.SessionID)
 	}
@@ -719,12 +724,6 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 	// its real cause below, never "exceeded its lifetime limit".
 	switch {
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
-		// SFH-1: a cancelled run is still a Stop, but a save failure on an
-		// earlier turn of it is not hidden behind the cancellation.
-		if result.saveFailure != nil {
-			return steer.OutcomeInterrupted, session.LifecycleStopped,
-				"interrupted: the session was cancelled. " + transcriptSaveFailedNeutral()
-		}
 		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
 	case errors.As(runErr, new(*externalCLIRunError)):
 		// #1857 (§13.8.4 parent completion row): a classified CLI failure
@@ -746,10 +745,6 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 		// stream code with no HTTP facts. Only curated Omnipus text bypasses
 		// translation, through userVisibleTurnError's existing exception.
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + userVisibleTurnError(runErr)
-	case result.saveFailure != nil:
-		// SFH-1: the run's answer arrived, but some of its messages were not
-		// saved; the parent is not handed a clean success.
-		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + transcriptSaveFailedNeutral()
 	case result.finalContent == toolLimitResponse:
 		// The turn hit the tool-iteration ceiling with no final response
 		// (loop_run_turn.go::finalizeTurn sets finalContent to the
@@ -1214,6 +1209,25 @@ func (al *AgentLoop) claimOwnsCurrentRecord(sessionID string, claim executionCla
 		return false
 	}
 	return claim.matches(cur)
+}
+
+// withSaveFailureWarning adds transcript_save_failed's neutral sentence, once,
+// to the parent's completion when a save failure is carried (ruling R1-b): in
+// front of a final answer, separated by a blank line, so the hand-back cap
+// (capHandbackResult, applied later) can never cut it off; or after every
+// other outcome's failure reason. With no save failure it changes nothing.
+func withSaveFailureWarning(saveFailure error, outcome steer.Outcome, answer, failureReason string) (string, string) {
+	if saveFailure == nil {
+		return answer, failureReason
+	}
+	warning := transcriptSaveFailedNeutral()
+	if outcome == steer.OutcomeFinalAnswer {
+		return warning + "\n\n" + answer, failureReason
+	}
+	if failureReason == "" {
+		failureReason = string(outcome) + ": the session did not complete"
+	}
+	return answer, failureReason + ". " + warning
 }
 
 // transcriptSaveFailedNeutral is transcript_save_failed's neutral-voice

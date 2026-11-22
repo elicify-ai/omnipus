@@ -18,6 +18,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -196,51 +197,118 @@ func (al *AgentLoop) settleDeferredExternalLiveDone(ctx context.Context, last *t
 	// other live turn on it), the old turn's done would end that turn's
 	// working state, so it is not sent; the newer run's own live view and
 	// done close the chat. Its stream ownership was already released.
-	if al.otherExecutionOwnsSession(last) {
+	//
+	// SFH-R2-1: when ownership cannot be determined (the record is
+	// unreadable) and no other execution's turn is registered, the done IS
+	// published: holding it would leave the chat working until a reload,
+	// while a replacement that has not registered yet re-opens the working
+	// state with its first frame. The lookup error is logged, not returned:
+	// it is not a failure of the helper's work.
+	o := al.sessionOwnership(last)
+	if o.registeredOther {
+		if o.loadErr != nil {
+			al.logOwnershipUnknown(last, "suppressed_registered_owner", o.loadErr)
+		}
 		return nil
+	}
+	if o.loadErr == nil && o.recordOther {
+		return nil
+	}
+	if o.loadErr != nil {
+		al.logOwnershipUnknown(last, "done_published", o.loadErr)
 	}
 	return al.finishExternalLiveView(ctx, last, nil)
 }
 
-// otherExecutionOwnsSession reports whether an execution other than ts's own
-// now owns ts's session: the lifecycle record names a different execution
-// (a Stop and revival replaced it), or a live turn of a different execution
-// is registered for the same chat session. A turn of ts's own execution (the
-// original turn or a continuation of it) does not count. An unreadable record
-// is not treated as a replacement; the registered-turn check still applies.
-func (al *AgentLoop) otherExecutionOwnsSession(ts *turnState) bool {
+// executionOwnership is what is known about who owns a turn's session.
+// registeredOther is positive evidence: a live turn of a different execution
+// is registered for the same chat session. recordOther means the lifecycle
+// record, read successfully, names a different execution. loadErr is set when
+// the record could not be read, so recordOther is unknown.
+type executionOwnership struct {
+	registeredOther bool
+	recordOther     bool
+	loadErr         error
+}
+
+// sessionOwnership reads both sources of ownership for ts's session. A turn of
+// ts's own execution (the original turn or a continuation of it) never counts
+// as another owner.
+func (al *AgentLoop) sessionOwnership(ts *turnState) executionOwnership {
+	var o executionOwnership
 	claim := al.tsExecutionClaim(ts, "")
-	if store := al.GetSessionLifecycleStore(); store != nil && claim.RunID != "" && claim.SessionID != "" {
-		if rec, err := store.Load(claim.SessionID); err == nil && rec != nil && !claim.matches(rec) {
-			return true
-		}
+	if sessionID := ts.transcriptSessionID; sessionID != "" {
+		al.activeTurnStates.Range(func(_, value any) bool {
+			other, ok := value.(*turnState)
+			if !ok || other == ts || other.transcriptSessionID != sessionID || !other.IsAlive() {
+				return true
+			}
+			if al.tsExecutionClaim(other, "") == claim {
+				return true
+			}
+			o.registeredOther = true
+			return false
+		})
 	}
-	sessionID := ts.transcriptSessionID
-	if sessionID == "" {
-		return false
+	store := al.GetSessionLifecycleStore()
+	if store == nil || claim.RunID == "" || claim.SessionID == "" {
+		return o
 	}
-	found := false
-	al.activeTurnStates.Range(func(_, value any) bool {
-		other, ok := value.(*turnState)
-		if !ok || other == ts || other.transcriptSessionID != sessionID || !other.IsAlive() {
-			return true
-		}
-		if al.tsExecutionClaim(other, "") == claim {
-			return true
-		}
-		found = true
-		return false
+	rec, err := store.Load(claim.SessionID)
+	switch {
+	case err != nil:
+		o.loadErr = fmt.Errorf("load lifecycle record %q: %w", claim.SessionID, err)
+	case rec == nil:
+		o.loadErr = fmt.Errorf("load lifecycle record %q: no readable record", claim.SessionID)
+	default:
+		o.recordOther = !claim.matches(rec)
+	}
+	return o
+}
+
+// otherExecutionOwnsSession reports whether an execution other than ts's own
+// now owns ts's session (SFH-R2-1, three-valued): owned=true when a live turn
+// of a different execution is registered (whatever the record read did) or the
+// record names a different execution; owned=false with a nil error when the
+// record matches and no other turn is live; owned=false with the wrapped read
+// error when the record could not be read and no other turn is live, which
+// means unknown.
+func (al *AgentLoop) otherExecutionOwnsSession(ts *turnState) (owned bool, err error) {
+	o := al.sessionOwnership(ts)
+	switch {
+	case o.registeredOther:
+		return true, nil
+	case o.loadErr != nil:
+		return false, o.loadErr
+	default:
+		return o.recordOther, nil
+	}
+}
+
+// logOwnershipUnknown records, once per decision, that a turn's session
+// ownership could not be read and what was done about it (SFH-R2-1).
+func (al *AgentLoop) logOwnershipUnknown(ts *turnState, decision string, loadErr error) {
+	claim := al.tsExecutionClaim(ts, "")
+	logger.ErrorCF("agent", "external-cli: execution ownership unknown", map[string]any{
+		"session_id": ts.transcriptSessionID,
+		"turn_id":    ts.turnID,
+		"run_id":     claim.RunID,
+		"generation": claim.Generation,
+		"boot_seq":   claim.BootSeq,
+		"decision":   decision,
+		"error":      loadErr.Error(),
 	})
-	return found
 }
 
 // announceExternalSaveFailure makes a transcript-save failure latched on an
 // external-CLI turn visible once (SFH-1): the typed transcript_save_failed
 // notice to the helper's own chat, a saved row where the store accepts it, and
-// an error-level log with the cause. The raw store error stays in the log.
-// While another execution owns the session the live frame is not sent, since
-// the viewers' error handler would end that execution's working state (A4);
-// the saved row shows the notice on the next load.
+// an error-level log with the cause. The raw store error stays in the log. It
+// does not mark the turn failed (ruling R1-d): the turn's answer stands.
+// The live frame is sent only when no other execution owns the session: while
+// one does, the viewers' error handler would end its working state (A4), and
+// when ownership is unknown the notice is saved only (SFH-R2-1). The saved
+// row shows it on the next load either way.
 func (al *AgentLoop) announceExternalSaveFailure(ts *turnState) {
 	saveErr := ts.callAccountingError()
 	if saveErr == nil || !ts.externalSaveFailureAnnounced.CompareAndSwap(false, true) {
@@ -248,9 +316,12 @@ func (al *AgentLoop) announceExternalSaveFailure(ts *turnState) {
 	}
 	logger.ErrorCF("agent", "external-cli: a helper message could not be saved to the transcript",
 		map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "error": saveErr.Error()})
-	ts.markTurnFailed()
 	llm := LLMError{Code: CodeTranscriptSaveFailed, Message: defaultUserMessage(CodeTranscriptSaveFailed)}
-	if !al.otherExecutionOwnsSession(ts) {
+	owned, ownerErr := al.otherExecutionOwnsSession(ts)
+	switch {
+	case ownerErr != nil:
+		al.logOwnershipUnknown(ts, "save_notice_saved_only", ownerErr)
+	case !owned:
 		al.emitExternalErrorFrame(ts, "session_save", llm, "")
 	}
 	ts.appendClassifiedError(EventKindError.String(), "session_save", llm)
