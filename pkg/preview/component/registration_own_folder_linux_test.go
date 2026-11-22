@@ -389,3 +389,46 @@ func TestT130_NonLinuxModelsRegisterAsBefore(t *testing.T) {
 			"T-130(h): the windows registration wrote its manifest")
 	})
 }
+
+// TestT130_FinalRootNormalizationToOwnRefused — OF-3 (b), gate round 2
+// TA-02: a valid LibreOffice staged directly AT Omnipus's own folder and
+// registered through its program folder. The supplied folder is strictly
+// inside OWN, so the first OF-3 check passes; the layout normalization steps
+// from program to its parent, making the FINAL recorded root OWN itself —
+// and a root counts as inside only strictly, so OF-3(b) must refuse it. The
+// control row registers the same program-folder shape with the component one
+// level deeper, which normalizes to a proper descendant and is accepted:
+// only the final-root check can explain the subject's refusal.
+func TestT130_FinalRootNormalizationToOwnRefused(t *testing.T) {
+	own := t130OwnFolder(t)
+
+	// Control: the accepted shape (component one level below OWN, folder
+	// given as its program).
+	controlHome := t.TempDir()
+	control := filepath.Join(own, "libreoffice-controlled")
+	t130OfficeFixture(t, control)
+	manifest, ctrlErr := component.RegisterOffice(component.RegisterOptions{
+		Home: controlHome, Folder: filepath.Join(control, "program"), Operator: "t130-ta02", GOOS: "linux",
+	})
+	require.NoError(t, ctrlErr,
+		"TA-02 control: the program folder of a component one level below OWN normalizes to a descendant root and is accepted")
+	require.NotNil(t, manifest)
+	require.Equal(t, filepath.Clean(control), filepath.Clean(manifest.Root),
+		"TA-02 control: the recorded root is the component folder, not the program folder")
+
+	// Subject: the component sits AT OWN itself. The supplied program folder
+	// is strictly inside OWN (precondition), so the first check passes and
+	// the recorded root would be OWN — which is not strictly inside itself.
+	subjectHome := t.TempDir()
+	t130OfficeFixture(t, own)
+	program := filepath.Join(own, "program")
+	given, absErr := filepath.Abs(program)
+	require.NoError(t, absErr)
+	inside := given == own || (len(given) > len(own) && given[:len(own)] == own && given[len(own)] == filepath.Separator)
+	require.True(t, inside, "TA-02 precondition: the supplied folder %s is strictly inside OWN %s, so only the final-root check can refuse it", given, own)
+	err := t130RegisterOffice(t, subjectHome, program)
+	require.EqualError(t, err, t130OfficeText(given, own),
+		"TA-02: the final root after program normalization is OWN itself and OF-3(b) must refuse it")
+	require.NoFileExists(t, filepath.Join(component.RegisteredDir(subjectHome, component.KindOffice), "manifest.json"),
+		"TA-02: a refused registration writes nothing")
+}
