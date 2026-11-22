@@ -30,9 +30,15 @@
  * vitest's `?raw` returns '' for a .css import): the flash must be a
  * NON-ZERO-duration, ONE-iteration animation whose keyframes change a
  * paintable property between frames (FR-075 "flashes once"), resolved by
- * folding every declaration for the row target in cascade order — a `calc()`
- * duration is EVALUATED, so an expression that resolves to zero counts as
- * zero (CHECK R6-01/N90), and a later `animation` shorthand or
+ * folding every declaration for the row target in cascade order — an
+ * `animation` shorthand is parsed by token TYPE per the CSS grammar (the
+ * components may appear in ANY order: the first time is the duration, the
+ * second the delay, the iteration count is a number or `infinite`, and the
+ * name is whatever remains — so an explicit `infinite` is never the omitted
+ * one-iteration default, CHECK R7-01/N64, and name-last order is valid,
+ * CHECK R7-W01/N104), a `calc()` duration is EVALUATED, so an expression
+ * that resolves to zero counts as zero (CHECK R6-01/N90; leading-decimal
+ * terms like `.3s` parse, CHECK R7-02/N98), a later `animation` shorthand or
  * `animation-duration` longhand overrides an earlier duration within a rule
  * or across rules (CHECK R6-01/N91); under reduced motion the fold runs over
  * ALL matching rules, so the animation the cascade would apply must resolve
@@ -40,11 +46,13 @@
  * (FR-075 "without animation"). The model's own limits are asserted against
  * the shipped sheet, not assumed (expectCascadeModelApplies): no selector
  * variant that would out-rank the fold, no `!important`, and no `@layer` or
- * other conditional block around a row-target rule. What this still cannot
- * see: custom-property VALUES (`--motion-duration-slow` is defined in the
- * imported tokens file, so the shipped calc() duration reads as 'unknown' —
- * accepted as not provably zero, never silently zero) and rendered pixels —
- * the authorized exact-commit browser lane owns those. The DOM side (the
+ * other conditional block around a row-target rule. Custom-property VALUES
+ * resolve too, from the tokens file the sheet imports (the same resolution
+ * the browser's cascade does), so the shipped `calc(var(--motion-duration-slow) * 4)`
+ * evaluates to 1200ms; an expression the reader STILL cannot evaluate fails
+ * the test with a clear message instead of guessing a value (CHECK R7-02).
+ * What this still cannot see: computed styles and rendered pixels — the
+ * authorized exact-commit browser lane owns those. The DOM side (the
  * mark on exactly that row) is asserted rendered: exactly one marked element
  * carrying the search index entry's row id, the jump's scroll receiver on or
  * inside it, and non-empty row content (team-lead rulings on CHECK R6-02,
@@ -73,10 +81,16 @@ import { SETTINGS_SEARCH_INDEX, sectionInfo, type SettingsSectionId } from '@/co
 
 // The REAL stylesheet the SPA ships, read from disk: vitest's `?raw` returns
 // '' for a .css import, and jsdom computes no CSS — the stylesheet-side
-// oracles below need the source text of the mapping. (Path resolution via
-// import.meta.dirname, the pattern the WU-11 guard tests use; import.meta.url
-// is an http: URL under the jsdom environment, not a file: URL.)
+// oracles below need the source text of the mapping. The tokens file it
+// imports comes too: the browser's cascade resolves var() ACROSS both files,
+// so the duration reader may resolve a custom property the same way (CHECK
+// R7-02: an expression it still cannot evaluate must fail the test, not
+// guess — and the shipped sheet's duration calc() must be decidable).
+// (Path resolution via import.meta.dirname, the pattern the WU-11 guard
+// tests use; import.meta.url is an http: URL under the jsdom environment,
+// not a file: URL.)
 const globalsCss = readFileSync(join(import.meta.dirname, '..', '..', 'styles', 'globals.css'), 'utf8')
+const tokensCss = readFileSync(join(import.meta.dirname, '..', '..', 'styles', 'tokens.generated.css'), 'utf8')
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -518,17 +532,71 @@ function shorthandTokens(value: string): string[] {
 }
 
 /**
+ * The tokens file the sheet imports defines the custom properties its
+ * durations reference (`--motion-duration-slow: 300ms`), tracked in git
+ * like the sheet itself. The map is the cascade's last-wins lookup the
+ * browser performs when var() resolves — read once, beside the sheet.
+ */
+const CUSTOM_PROPERTIES = new Map<string, string>()
+for (const m of tokensCss.matchAll(/(--[a-zA-Z0-9-]+)\s*:\s*([^;{}]+)[;]/g)) {
+  CUSTOM_PROPERTIES.set(m[1], m[2].trim())
+}
+
+/**
  * A duration the reader resolved, in milliseconds — or 'unknown' when the
- * sheet only decides the value at run time (a custom property the reader
- * cannot resolve; see expectCascadeModelApplies). 'unknown' is NEVER
- * silently zero: the oracle rejects only what it can PROVE is zero, and
- * only the documented browser lane can vouch for a value the sheet defers
- * to a variable.
+ * expression cannot be evaluated. Since CHECK R7-02 the reader resolves
+ * var() from the tokens file (the same resolution the browser's cascade
+ * does), so an 'unknown' is a real hole in the reader's reach, not a
+ * routine run-time value — and the oracle FAILS the test on it with a
+ * clear message instead of guessing (FR-075 promises a decidable short
+ * flash; an undecidable one proves nothing).
  */
 type DurationMs = number | 'unknown'
 
+/** Depth limit for var() chains, so a self-referencing property terminates. */
+const VAR_DEPTH_LIMIT = 8
+
 /** One evaluated calc operand: a time in ms, a bare number, or unresolved. */
 type TimeOperand = { kind: 'ms' | 'n'; value: number } | { kind: 'unknown' }
+
+/** Index of the first comma outside parentheses (-1 if none) — var(name, fallback). */
+function topLevelComma(s: string): number {
+  let depth = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (c === ',' && depth === 0) return i
+  }
+  return -1
+}
+
+/** One duration operand from a VALUE the cascade supplies (a var's resolved value or fallback). */
+function timeOperandOfValue(value: string, depth: number): TimeOperand {
+  const trimmed = value.trim()
+  const literal = /^((?:\d+(?:\.\d+)?|\.\d+))(ms|s)$/i.exec(trimmed)
+  if (literal) return { kind: 'ms', value: Number(literal[1]) * (literal[2].toLowerCase() === 's' ? 1000 : 1) }
+  if (/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed)) return { kind: 'n', value: Number(trimmed) }
+  const resolved = evalTimeExpr(trimmed, depth)
+  return resolved === 'unknown' ? { kind: 'unknown' } : { kind: 'ms', value: resolved }
+}
+
+/**
+ * Resolve `var(name, fallback?)` the way the cascade does: the custom
+ * property's value if defined (itself evaluated — it may be a time, a
+ * number, a calc() or a further var()), else the fallback, else unresolved.
+ * Depth-limited so a self-referencing property terminates as unresolved.
+ */
+function resolveVarArgs(args: string, depth: number): TimeOperand {
+  if (depth <= 0) return { kind: 'unknown' }
+  const at = topLevelComma(args)
+  const name = (at === -1 ? args : args.slice(0, at)).trim()
+  const custom = CUSTOM_PROPERTIES.get(name)
+  if (custom !== undefined) return timeOperandOfValue(custom, depth - 1)
+  const fallback = at === -1 ? '' : args.slice(at + 1).trim()
+  if (!fallback) return { kind: 'unknown' }
+  return timeOperandOfValue(fallback, depth - 1)
+}
 
 /** Addition/subtraction of like operands; a time plus a bare number is invalid and unresolved. */
 function addSub(a: TimeOperand, b: TimeOperand, op: '+' | '-'): TimeOperand {
@@ -559,21 +627,33 @@ function mulDiv(a: TimeOperand, b: TimeOperand, op: '*' | '/'): TimeOperand {
 
 /**
  * Evaluate a calc()'s expression the way the browser would: a sum of terms
- * over times (`300ms`, `1s`), bare numbers and `var()` references. A `var()`
- * is an unresolved operand — it survives only where it cannot hide a zero
- * (multiplying it by a zero factor annihilates the product, so
- * `calc(var(--x) * 0)` IS zero). A negative result is an invalid duration,
- * which the browser drops — undecidable here.
+ * over times (`300ms`, `1s`, `.3s` — a leading decimal point is part of the
+ * number, CHECK R7-02/N98), bare numbers and `var()` references. A `var()`
+ * resolves from the tokens file's custom properties (or its fallback) — the
+ * same resolution the browser's cascade does — and survives as unresolved
+ * only where it cannot hide a zero (multiplying it by a zero factor
+ * annihilates the product, so `calc(var(--x) * 0)` IS zero). A negative
+ * result is an invalid duration, which the browser drops — unresolved here,
+ * and unresolved FAILS the oracle rather than guessing (see DurationMs).
+ * Depth-limited so var() chains and self-references terminate.
  */
-function evalTimeExpr(src: string): DurationMs {
-  const tokens = src.replace(/var\([^)]*\)/g, ' @var ').match(/@var|\d+(?:\.\d+)?(?:ms|s)?|[()+\-*/]/g)
+function evalTimeExpr(src: string, depth: number = VAR_DEPTH_LIMIT): DurationMs {
+  if (depth <= 0) return 'unknown'
+  const varArgs: string[] = []
+  const replaced = src.replace(/var\(\s*([^)]*)\)/gi, (_all, args: string) => {
+    varArgs.push(args.trim())
+    return ' @var '
+  })
+  const tokens = replaced.match(/@var|(?:\d+(?:\.\d+)?|\.\d+)(?:ms|s)?|[()+\-*/]/gi)
   if (!tokens) return 'unknown'
   const list: string[] = tokens // narrowed alias: TS does not carry the guard into the closures below
   let pos = 0
+  let varIndex = 0 // @var tokens appear in the varArgs capture order
   const peek = (): string | undefined => list[pos]
   function factor(): TimeOperand {
     const token = list[pos++]
-    if (token === undefined || token === '@var') return { kind: 'unknown' }
+    if (token === undefined) return { kind: 'unknown' }
+    if (token === '@var') return resolveVarArgs(varArgs[varIndex++] ?? '', depth)
     if (token === '(') {
       const inner = expr()
       if (list[pos++] !== ')') return { kind: 'unknown' }
@@ -584,10 +664,10 @@ function evalTimeExpr(src: string): DurationMs {
       return operand.kind === 'unknown' ? operand : { kind: operand.kind, value: -operand.value }
     }
     if (token === '+') return factor()
-    const literal = /^(\d+(?:\.\d+)?)(ms|s)?$/.exec(token)
+    const literal = /^((?:\d+(?:\.\d+)?|\.\d+))(ms|s)?$/i.exec(token)
     if (!literal) return { kind: 'unknown' }
     return literal[2]
-      ? { kind: 'ms', value: Number(literal[1]) * (literal[2] === 's' ? 1000 : 1) }
+      ? { kind: 'ms', value: Number(literal[1]) * (literal[2].toLowerCase() === 's' ? 1000 : 1) }
       : { kind: 'n', value: Number(literal[1]) }
   }
   function term(): TimeOperand {
@@ -607,24 +687,33 @@ function evalTimeExpr(src: string): DurationMs {
     return left
   }
   const result = expr()
-  if (pos !== tokens.length) return 'unknown' // unparsed remainder: undecidable
+  if (pos !== list.length) return 'unknown' // unparsed remainder: not evaluated
   if (result.kind === 'unknown' || result.kind === 'n') return 'unknown'
   return result.value < 0 ? 'unknown' : result.value
 }
 
 /**
  * Evaluate one duration token the way the browser would: a literal time
- * (`1s`, `300ms`, `0s`) or a `calc()` over times, numbers and `var()`
- * references. FR-075's flash requires time that is actually non-zero, so
- * every expression that RESOLVES to zero counts as zero — `calc(0s)`,
- * `calc(300ms * 0)` (CHECK R6-01/N90) — not merely a token whose numerals
- * are all zero.
+ * (`1s`, `300ms`, `0s`, `.3s` — CHECK R7-02), a `calc()` over times,
+ * numbers and `var()` references, or a bare `var()` (an
+ * `animation-duration` longhand may carry one). FR-075's flash requires
+ * time that is actually non-zero, so every expression that RESOLVES to
+ * zero counts as zero — `calc(0s)`, `calc(300ms * 0)` (CHECK R6-01/N90),
+ * `calc(.3s - 300ms)` (CHECK R7-02/N98) — and an expression the reader
+ * cannot evaluate returns 'unknown', which the oracle FAILS on instead of
+ * guessing a value (CHECK R7-02; see DurationMs).
  */
 function durationMs(token: string): DurationMs {
-  const literal = /^(\d+(?:\.\d+)?)(ms|s)$/.exec(token)
-  if (literal) return literal[2] === 's' ? Number(literal[1]) * 1000 : Number(literal[1])
-  const calc = /^calc\((.*)\)$/.exec(token)
-  return calc ? evalTimeExpr(calc[1]) : 'unknown' // a bare var(...) or alien token: undecidable
+  const literal = /^((?:\d+(?:\.\d+)?|\.\d+))(ms|s)$/i.exec(token)
+  if (literal) return literal[2].toLowerCase() === 's' ? Number(literal[1]) * 1000 : Number(literal[1])
+  const calc = /^calc\((.*)\)$/i.exec(token)
+  if (calc) return evalTimeExpr(calc[1])
+  const varRef = /^var\(([^)]*)\)$/.exec(token)
+  if (varRef) {
+    const operand = resolveVarArgs(varRef[1], VAR_DEPTH_LIMIT)
+    return operand.kind === 'ms' ? operand.value : 'unknown' // a bare number is no duration
+  }
+  return 'unknown' // an alien token: not evaluated
 }
 
 /** A rule body's declarations, in order (comments stripped; no strings/braces — see rowTargetRules). */
@@ -641,28 +730,74 @@ function parseDeclarations(body: string): Array<{ prop: string; value: string }>
 interface AnimationState {
   name: string
   duration: DurationMs
+  /** The shorthand's SECOND time token (the first is the duration); no oracle reads it yet. */
+  delay: DurationMs
   iteration: string
 }
 
 /**
+ * The `animation` shorthand's reserved keywords, by component: a bare token
+ * matching one of these is its component, NEVER the keyframes name. The
+ * function-valued components (cubic-bezier(), steps()) arrive as function
+ * tokens and are classified by their trailing ')'.
+ */
+const SHORTHAND_KEYWORDS = new Set([
+  'linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', // easing functions
+  'normal', 'reverse', 'alternate', 'alternate-reverse', // direction
+  'forwards', 'backwards', 'both', // fill-mode
+  'running', 'paused', // play-state
+  'infinite', // iteration count
+])
+const TIME_TOKEN = /^(?:\d+(?:\.\d+)?|\.\d+)(?:ms|s)$/i
+const NUMBER_TOKEN = /^(?:\d+(?:\.\d+)?|\.\d+)$/
+
+/**
  * Fold the rules' declarations in cascade order — document order within a
  * rule, rule order across the sheet; the later declaration of the same
- * longhand wins (CHECK R6-01/N91). An `animation` shorthand sets all three
+ * longhand wins (CHECK R6-01/N91). An `animation` shorthand sets all the
  * tracked longhands at once (its omitted components reset to the CSS
  * initials: duration 0s, one iteration), so a later shorthand overrides
  * earlier longhands of any of them, and a later longhand overrides an
  * earlier shorthand's component.
  */
 function effectiveAnimation(rules: RowTargetRule[]): AnimationState {
-  const state: AnimationState = { name: '', duration: 0, iteration: '1' }
+  const state: AnimationState = { name: '', duration: 0, delay: 0, iteration: '1' }
   for (const rule of rules) {
     for (const declaration of parseDeclarations(rule.body)) {
       if (declaration.prop === 'animation') {
-        const tokens = shorthandTokens(declaration.value)
-        state.name = tokens[0] ?? ''
-        const durationToken = tokens.find((t) => /^(?:\d+(?:\.\d+)?(?:s|ms)|calc\()/.test(t))
-        state.duration = durationToken ? durationMs(durationToken) : 0
-        const iteration = [...tokens].reverse().find((t) => /^\d+(?:\.\d+)?$/.test(t))
+        // The shorthand's components may appear in ANY order (css-animations
+        // grammar: each at most once, the two times in appearance order).
+        // Classify each token by TYPE, not position: the first time is the
+        // duration, the second the delay; the iteration count is a number or
+        // the keyword `infinite` (an explicit infinite is never the omitted
+        // one-iteration default, CHECK R7-01/N64); easing, direction,
+        // fill-mode and play-state keywords and function components are
+        // consumed; and whatever remains is the keyframes name — so
+        // name-last order parses like any other (CHECK R7-W01/N104). A bare
+        // `none` names the animation (a second one is a fill-mode).
+        let name: string | null = null
+        let sawNone = false
+        const times: string[] = []
+        let iteration: string | null = null
+        for (const token of shorthandTokens(declaration.value)) {
+          if (TIME_TOKEN.test(token) || /^calc\(/i.test(token)) {
+            times.push(token)
+          } else if (NUMBER_TOKEN.test(token) || token === 'infinite') {
+            iteration = token
+          } else if (SHORTHAND_KEYWORDS.has(token.toLowerCase())) {
+            // its own component; none of them is tracked
+          } else if (token.endsWith(')')) {
+            // cubic-bezier(), steps(): a function component, never the name
+          } else if (token.toLowerCase() === 'none') {
+            if (name === null && !sawNone) name = 'none'
+            sawNone = true
+          } else {
+            name = token
+          }
+        }
+        state.name = name ?? ''
+        state.duration = times[0] ? durationMs(times[0]) : 0
+        state.delay = times[1] ? durationMs(times[1]) : 0
         state.iteration = iteration ?? '1'
       } else if (declaration.prop === 'animation-name') {
         state.name = declaration.value
@@ -695,11 +830,12 @@ function effectiveAnimation(rules: RowTargetRule[]): AnimationState {
  *      no-preference block or any other media query changes which rules
  *      apply per arm, which the two folds do not model.
  * What the reader still cannot model even with this guard, stated plainly:
- * a custom property's VALUE (`--motion-duration-slow` is defined in the
- * imported tokens file, so `calc(var(--motion-duration-slow) * 4)` reads as
- * 'unknown' — accepted as not provably zero, never silently zero), computed
- * styles and rendered pixels — the authorized exact-commit browser lane
- * owns those.
+ * computed styles and rendered pixels — the authorized exact-commit browser
+ * lane owns those. Custom-property VALUES resolve from the imported tokens
+ * file (CUSTOM_PROPERTIES, the cascade's own last-wins lookup), so the
+ * shipped `calc(var(--motion-duration-slow) * 4)` evaluates to 1200ms; an
+ * expression the reader still cannot evaluate fails the test with a clear
+ * message instead of guessing (CHECK R7-02).
  */
 function expectCascadeModelApplies(css: string, rules: RowTargetRule[]): void {
   const occurrences = [...css.matchAll(/\[data-settings-row-target\]/g)]
@@ -837,14 +973,16 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       `FR-075: the animation must name its keyframes, got: ${normal.name}`,
     ).toBe(true)
     expect(
-      normal.duration !== 'unknown' && normal.duration === 0,
-      `FR-075 (CHECK R6-01): the flash must have a non-zero duration — the effective cascade resolves the duration to ${
-        normal.duration === 'unknown' ? 'an expression the reader cannot resolve (a var() the tokens file decides)' : `${String(normal.duration)}ms`
+      normal.duration === 'unknown' || normal.duration === 0,
+      `FR-075 (CHECK R6-01, R7-02): the flash must have a decidable, NON-ZERO duration — the effective cascade resolves the duration to ${
+        normal.duration === 'unknown'
+          ? 'an expression the reader cannot evaluate, which fails here instead of guessing a value'
+          : `${String(normal.duration)}ms`
       }`,
     ).toBe(false)
     expect(
       normal.iteration,
-      `FR-075: the flash must run exactly once (animation iteration count 1), got: ${normal.iteration}`,
+      `FR-075: the flash must run exactly once (animation iteration count 1 — the keyword infinite never flashes once), got: ${normal.iteration}`,
     ).toBe('1')
     const keyframes = keyframesBody(globalsCss, normal.name)
     expect(keyframes, `FR-075: the named keyframes (${normal.name}) must exist in the stylesheet`).toBeTruthy()
