@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
@@ -365,6 +366,26 @@ func t131MarkerUnder(t *testing.T, root string) bool {
 	return found
 }
 
+// t131DumpTree lists every path under root — the controls carry it in their
+// failure message so an absent marker can be diagnosed from the run log
+// alone (what the launch left behind, and where).
+func t131DumpTree(t *testing.T, root string) string {
+	t.Helper()
+	var lines []string
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			lines = append(lines, path+" (error: "+err.Error()+")")
+			return nil
+		}
+		lines = append(lines, path)
+		return nil
+	})
+	if walkErr != nil {
+		return "walk failed: " + walkErr.Error()
+	}
+	return strings.Join(lines, "\n")
+}
+
 // TestT131_LaunchObserverPositiveControl — TA-06 (gate round 2): the
 // refusal rows below assert "no converter start" through the marker; this
 // control proves the marker really appears when a launch happens. The
@@ -382,5 +403,5 @@ func TestT131_LaunchObserverPositiveControl(t *testing.T) {
 	require.Error(t, previewErr, "TA-06 control: the marker stub cannot convert; the call fails after its real launch")
 	require.Nil(t, res)
 	require.True(t, t131MarkerUnder(t, home),
-		"TA-06 control: a real converter start must leave the work-folder marker — without this the refusal rows' no-marker assertions would be vacuous; the call failed with: %v", previewErr)
+		"TA-06 control: a real converter start must leave the work-folder marker — without this the refusal rows' no-marker assertions would be vacuous; the call failed with: %v\nhome tree:\n%s", previewErr, t131DumpTree(t, home))
 }
