@@ -79,6 +79,14 @@ func TestOfficePreview_CountLimitNoteNamesTheCountNotTextOnly(t *testing.T) {
 		"T-133: with stored text, the note is followed by that text")
 	require.Greater(t, strings.Index(tool.Content, "G12 extracted text"), noteStart,
 		"T-133: the stored text follows the exact note")
+	// R2-F1 (gate round 2, CHECK): the count reason never becomes the
+	// text-only sentence. Across the WHOLE model-facing message, nothing may
+	// tell a PDF-capable model it "reads text only" — the drop happened for
+	// the used-up count (AD-6), and a contradictory capability claim would
+	// misreport the model to itself. (Kills the mutant that appends the
+	// wrong sentence to the exact note.)
+	require.NotContains(t, tool.Content, "reads text only",
+		"T-133/R2-F1: a count-exhausted PDF-capable model must never be told it reads text only; got %q", tool.Content)
 }
 
 // G12 companion (AD-6 and the fallback rules): the count-exhausted preview
@@ -101,7 +109,7 @@ func TestOfficePreview_CountLimitNoteNamesTheCountNotTextOnly(t *testing.T) {
 // noBudget, so the count case falls through to the empty-text final branch.
 func TestOfficePreview_CountLimitWithoutStoredTextSendsFallbackText(t *testing.T) {
 	const toolID = "g12-empty-text-preview"
-	toolPDF := officepreview.PDF(1) // known text: "page 1"
+	toolPDF := officepreview.PDF(1)                                                                     // known text: "page 1"
 	carried := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(officepreview.PDF(2)) // known text: "page 1", "page 2"
 
 	previews := &turnDocumentPreviews{}
