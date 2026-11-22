@@ -36,6 +36,13 @@ func OwnRoot(t *testing.T) string {
 	if own == "" {
 		return t.TempDir()
 	}
+	// The own folder of a test binary does not exist yet — the packaged
+	// layout below share/omnipus ships with the product, not with a test
+	// run. Create it (inside the test's own build/scratch tree, including
+	// AtPackagedExecutable's isolated <iso>/Application/Contents tree, whose
+	// own share/omnipus is exactly this calculation), then make per-call
+	// folders inside it.
+	require.NoError(t, os.MkdirAll(own, 0700))
 	root, err := os.MkdirTemp(own, "trusted-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
