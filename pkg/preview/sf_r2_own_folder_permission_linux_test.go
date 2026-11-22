@@ -101,8 +101,8 @@ func TestSFR2_1_UnreadableOwnAncestorKeepsThePermissionCause(t *testing.T) {
 				"SF-R2-1: the %s resolver reason must begin with the folder-unreadable cause; got %q", tc.kind, problem.Reason)
 			require.Contains(t, problem.Reason, "permission denied",
 				"SF-R2-1: the %s cause is the permission failure; got %q", tc.kind, problem.Reason)
-			require.Contains(t, problem.Reason, filepath.Clean(tc.root),
-				"SF-R2-1: the %s cause names the registered root, proving the registered component is what was judged", tc.kind)
+			require.Contains(t, problem.Reason, own,
+				"SF-R2-1: the %s cause names the folder that cannot be resolved — the own folder the locked ancestor hides (the status, refused classification and prefix above are the discriminators)", tc.kind)
 			require.NotContains(t, problem.Reason, "outside Omnipus's own folder",
 				"SF-R2-1: never the OF-4 outside text — the %s root is inside the folder the account cannot traverse", tc.kind)
 		}
