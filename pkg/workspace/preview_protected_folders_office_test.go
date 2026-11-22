@@ -179,10 +179,14 @@ func TestOfficePreviewProtectsEveryProgramFolder(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Run("case_and_unicode_identity", func(t *testing.T) {
 			// §3.9 fixture move (sanctioned class): TrustedOffice stages an
-			// operator-registered manifest and verifies it by resolving it, and
-			// that resolve refuses a registered root outside the own folder —
-			// on darwin too (f1-probe.log). Assertions are untouched; only the
-			// fixture root relocates inside the staged own folder.
+			// operator-registered manifest and verifies it by resolving it. That
+			// resolve enforces the own-folder rule on LINUX only — production
+			// OwnFolder returns "" on every other platform (own_folder.go), so
+			// darwin never refuses here; the f1-probe.log darwin refusal was
+			// produced under the forced Linux formula, not by darwin production
+			// code (gate round-2 ARCHITECT N4). Assertions are untouched; the
+			// fixture root relocates inside the staged own folder for uniformity
+			// with this file's Linux rows, which is harmless on darwin.
 			own := t89OwnFolder(t)
 			for _, names := range [][2]string{{"OfficeCASE", "officecase"}, {"Café", "Café"}} {
 				home := t.TempDir()
