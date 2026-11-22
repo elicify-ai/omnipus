@@ -102,7 +102,10 @@ func t131LockedRoot(t *testing.T, rootDir string, files []string) {
 // manifest whose recorded root is outside OWN resolves to the new refusal
 // status naming OWN, never to a packaged component, and nothing inside the
 // root is opened (the mode-000 root makes any open fail with a permission
-// error, which would surface as the damaged reason instead).
+// error, which would surface as the damaged reason instead). A valid
+// packaged component sits at OWN's slot first (R2-F5, gate round 2: office
+// slot "office", renderer slot "pdfium") and positively resolves ready, so
+// the refusal and the no-fallback assertion bite against something real.
 func TestT131_ResolveRefusesRegisteredRootOutsideOwn(t *testing.T) {
 	for _, tc := range []struct {
 		kind    component.Kind
@@ -117,6 +120,29 @@ func TestT131_ResolveRefusesRegisteredRootOutsideOwn(t *testing.T) {
 			bin, own := t131StageOwn(t, base)
 			home := filepath.Join(base, "home")
 			require.NoError(t, os.MkdirAll(home, 0o700))
+
+			// R2-F5: a valid packaged component at OWN's slot, and the
+			// positive control that it really resolves ready before the
+			// outside registration shadows it.
+			slot := filepath.Join(own, "office")
+			if tc.kind == component.KindOffice {
+				require.NoError(t, os.MkdirAll(filepath.Join(slot, "program"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(slot, "program", "soffice.bin"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(slot, "program", "soffice"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(slot, "program", "versionrc"), []byte("ProductVersion=26.8.1.1\n"), 0o600))
+				require.NoError(t, component.WritePackagedOfficeManifest(slot, component.PackagedOfficeOptions{GOOS: "linux", GOARCH: runtime.GOARCH}))
+			} else {
+				slot = filepath.Join(own, "pdfium")
+				t131gRendererFixture(t, slot)
+			}
+			resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
+			packaged, packagedProblem := resolver.Resolve(tc.kind)
+			require.Nil(t, packagedProblem,
+				"R2-F5 precondition: the packaged %s at OWN must resolve ready before the outside registration shadows it", tc.kind)
+			require.NotNil(t, packaged)
+			require.Contains(t, packaged.Source, "packaged:",
+				"R2-F5 precondition: the ready component is the packaged one")
+
 			// The pre-§3.9 root lives OUTSIDE OWN by construction (assert it).
 			root := filepath.Join(base, "elsewhere", string(tc.kind))
 			require.NoError(t, os.MkdirAll(root, 0o700))
@@ -128,22 +154,22 @@ func TestT131_ResolveRefusesRegisteredRootOutsideOwn(t *testing.T) {
 			t131PlantedOperatorManifest(t, home, tc.kind, root, tc.exeName, tc.files)
 			t131LockedRoot(t, root, tc.files)
 
-			resolver := &component.Resolver{Home: home, Executable: bin, GOOS: "linux"}
 			got, problem := resolver.Resolve(tc.kind)
 			require.Nil(t, got, "T-131(a): the outside-own registration must not resolve to a component")
 			require.NotNil(t, problem, "T-131(a): the refusal must be reported")
 			require.NotEqual(t, component.StatusMissing, problem.Status, "T-131(a): the pre-§3.9 registration exists — not missing")
 			require.NotEqual(t, component.StatusDamaged, problem.Status, "T-131(a): the root is refused for its location, not damaged — the mode-000 root proves nothing inside was opened")
-			require.Contains(t, problem.Reason, own, "T-131(a): the refusal names Omnipus's own folder")
-			require.Contains(t, problem.Reason, root, "T-131(a): the refusal names the recorded root")
+			// R2-F5: the SPECIFIC outside-own refusal — the exact OF-4 reason,
+			// naming both the recorded root and Omnipus's own folder.
+			require.Equal(t, "registered root "+filepath.Clean(root)+" is outside Omnipus's own folder "+own, problem.Reason,
+				"T-131(a)/R2-F5: the refusal must be the exact OF-4 outside reason; got %q", problem.Reason)
 
-			// The packaged slots at OWN are valid and present; the refusal
-			// must never fall back to them (AD-4).
-			packaged := filepath.Join(own, string(tc.kind))
-			require.NoError(t, os.MkdirAll(packaged, 0o755))
+			// The packaged slot is still valid and present; the refusal must
+			// never fall back to it (AD-4).
 			got2, problem2 := resolver.Resolve(tc.kind)
 			require.Nil(t, got2, "T-131(a): no fallback to the packaged slot after an outside-own registration (AD-4)")
 			require.NotNil(t, problem2)
+			require.Equal(t, problem.Reason, problem2.Reason, "T-131(a): the same refusal again")
 		})
 	}
 }
