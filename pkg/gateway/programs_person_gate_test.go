@@ -39,6 +39,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +105,20 @@ type pgGateFixture struct {
 	cliToken string
 	ghStarts string
 	store    *credentials.Store // the fixture's real unlocked credential store
+	// restartCalls counts HandleGatewayRestart's injected restart action —
+	// the sweep probes the real restart route through this process-edge seam
+	// (restAPI.restarter, production falls back to re-exec) instead of
+	// skipping the route.
+	restartCalls *atomic.Int32
+}
+
+// restartRequests reports how many times the sweep's restart-route probes
+// reached the (injected) restart action.
+func (f *pgGateFixture) restartRequests() int32 {
+	if f.restartCalls == nil {
+		return 0
+	}
+	return f.restartCalls.Load()
 }
 
 func pgPersonAPI(t *testing.T) *pgGateFixture {
@@ -163,6 +178,12 @@ func pgNewGateway(t *testing.T, recordRoutes bool) (*pgGateFixture, []string) {
 		taskStore:     task.New(tmpDir + "/tasks"),
 		taskLock:      task.TaskFileLock,
 	}
+	// S-113's sweep probes the real restart route; the process edge is the
+	// injectable restarter seam (rest_gateway_restart.go::HandleGatewayRestart
+	// falls back to re-exec in production). The stub counts invocations and
+	// never re-execs the test binary.
+	restarts := &atomic.Int32{}
+	api.restarter = func() { restarts.Add(1) }
 	mux := http.NewServeMux()
 	var routes []string
 	if recordRoutes {
@@ -172,7 +193,7 @@ func pgNewGateway(t *testing.T, recordRoutes bool) (*pgGateFixture, []string) {
 	} else {
 		api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
 	}
-	f := &pgGateFixture{t: t, api: api, handler: buildProductionMiddlewareChain(api, mux), store: store}
+	f := &pgGateFixture{t: t, api: api, handler: buildProductionMiddlewareChain(api, mux), store: store, restartCalls: restarts}
 
 	login := httptest.NewRecorder()
 	api.HandleLogin(login, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
@@ -259,9 +280,29 @@ func pgMintUserToken(t *testing.T, api *restAPI) string {
 func (f *pgGateFixture) ghStarted() int {
 	b, err := os.ReadFile(f.ghStarts)
 	if err != nil {
+		// Only a not-yet-created marker reads as zero. Any other read error is
+		// an instrument fault, not evidence nothing started (F18).
+		if !os.IsNotExist(err) {
+			require.Failf(f.t, "instrument: cannot read the gh start marker",
+				"path=%q error=%v — a zero here would hide real starts", f.ghStarts, err)
+		}
 		return 0
 	}
 	return strings.Count(string(b), "started")
+}
+
+// ghStartedAtLeast is the positive control for the start marker: it proves the
+// marker file is readable and being appended to before a zero-start claim is
+// trusted (CHECK F18: a marker that cannot be seen must fail loudly, not read
+// as zero).
+func (f *pgGateFixture) ghMarkerReadable() {
+	f.t.Helper()
+	if _, err := os.Stat(f.ghStarts); os.IsNotExist(err) {
+		return // no starts recorded yet — legitimate zero state
+	} else if err != nil {
+		require.Failf(f.t, "instrument: cannot stat the gh start marker",
+			"path=%q error=%v", f.ghStarts, err)
+	}
 }
 
 // pgCountingBody counts how many bytes the SERVER consumed from the request

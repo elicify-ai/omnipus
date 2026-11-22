@@ -11,95 +11,146 @@
 // {"key":"R","value":"tok_evil_999999"} elsewhere, for GET, POST, PUT and
 // DELETE.
 //
-// Instrument: the routes come from a recording registrar over the REAL
-// production registration (registerAdditionalEndpoints), never a hand
-// list — a route that reaches a credential-store mutator (I-3's inventory:
-// /api/v1/credentials, /api/v1/credentials/{key}, the secret-request submit,
-// the Programs routes) without a payload row fails the test. The test runs
-// once in local (core) and once in platform (hosted) edition mode.
+// Route accounting (CHECK F03): every registered route is probed — including
+// the restart routes. POST /api/v1/gateway/restart runs through the injected
+// restAPI.restarter seam (production falls back to the real re-exec), so the
+// sweep counts the restart instead of re-exec'ing the test binary and asserts
+// the route was reached exactly once.
 //
-// RED expectation: the generic credentials route has no program-owned guard
-// yet, so the sweep's POST/DELETE really overwrite and delete R — the store
-// assertion fails with the corruption in hand. The Programs rows are
-// recorded-BLOCKED (no /programs routes registered yet).
+// Instrument: the routes come from a recording registrar over the REAL
+// production registration (registerAdditionalEndpoints), never a hand list —
+// a route that reaches a credential-store mutator (I-3's inventory:
+// /api/v1/credentials, /api/v1/credentials/{key}, the secret-request submit,
+// the Programs routes) without a payload row fails the test, and the
+// completeness checker itself is proven with a planted missing row (F04
+// negative control). A probe whose handler does not answer within 5 s fails
+// the sweep and the handler goroutine is joined before any store read (F05).
+// The test runs once in local (core) and once in platform (hosted) edition
+// mode.
+//
+// Program-owned Given (CHECK F06): the fixture commits R through I-3's one
+// writer (Store.CommitProgramCredential) and then VERIFIES the committed
+// state — the value, generation 1 and the receipt referencing R. At RED the
+// store methods are no-op stubs, so the verification fails loudly with a
+// BLOCKED fatal naming the missing implementation; the sweep never runs
+// against a target that is not actually program-owned.
+//
+// RED expectation: the BLOCKED fatal above fires first. (The pre-repair RED,
+// on the pre-fix sweep, showed the store-corruption verdict: the generic
+// credentials POST overwrote R because no program-owned guard existed.)
 
 package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/stretchr/testify/require"
 )
 
-// pgCommitProgramReference prepares the sweep's target: a real temp store
-// where reference R holds tok_valid_12345 and is committed as program-owned
-// through I-3's one writer (S-113's Given).
+// pgCommitProgramReference prepares the sweep's target: the real store where
+// reference R holds tok_valid_12345 committed as program-owned through I-3's
+// one writer (S-113's Given: "a real temp store where GitHub is connected
+// with tok_valid_12345 under reference R, generation 1"). The committed state
+// is verified before any route is probed (CHECK F06): the value, the
+// generation metadata and the receipt referencing R must all be readable
+// back. At RED CommitProgramCredential is a no-op stub, so this fatal-BLOCKs
+// naming it — never a skip.
 func pgCommitProgramReference(t *testing.T, f *pgGateFixture) *credentials.Store {
 	t.Helper()
-	require.NoError(t, f.store.Set("R", "tok_valid_12345"), "instrument: the reference exists")
+	const receiptID = "req-s113"
 	_, err := f.store.CommitProgramCredential("R", "tok_valid_12345",
-		&credentials.CardReceipt{RequestID: "req-s113", SessionID: "sess-s113",
+		&credentials.CardReceipt{RequestID: receiptID, SessionID: "sess-s113",
 			References: []string{"R"}, SubmittedAt: time.Now()})
-	require.NoError(t, err, "instrument: the reference is committed as program-owned (I-3's one writer)")
+	if err != nil {
+		t.Fatalf("BLOCKED: Store.CommitProgramCredential refused the commit — required by invariant I-3/S-113's Given (error: %v)", err)
+	}
+	// What GREEN must have written (the stub's own documented contract: the
+	// value, the optional CardReceipt and the program metadata with a new
+	// generation, in one s.transact write; spec FR-043: a per-entry
+	// generation, 1 on first connect).
+	value, gerr := f.store.Get("R")
+	if gerr != nil || value != "tok_valid_12345" {
+		t.Fatalf("BLOCKED: the program-owned value is not in the store after CommitProgramCredential (get error: %v, value read back: %q) — the RED stub writes nothing; required by invariant I-3/S-113's Given", gerr, value)
+	}
+	gen1, ok := f.store.ProgramEntryGeneration("R")
+	if !ok || gen1 != 1 {
+		t.Fatalf("BLOCKED: Store.ProgramEntryGeneration(\"R\") returned (%d, %v) after the commit — no program metadata persisted (the RED stub always reports absent); required by FR-043/S-113's Given (generation 1)", gen1, ok)
+	}
+	receipt, found, rerr := f.store.CardReceipt(receiptID)
+	if rerr != nil || !found {
+		t.Fatalf("BLOCKED: the commit receipt %q is not readable back (found: %v, error: %v) — required by I-3's one-writer contract (the receipt is published in the SAME write as its values)", receiptID, found, rerr)
+	}
+	if len(receipt.References) != 1 || receipt.References[0] != "R" {
+		t.Fatalf("BLOCKED: the commit receipt does not reference R (references: %v) — the sweep's target must be the committed program credential", receipt.References)
+	}
 	return f.store
 }
 
-// pgReauthTokenFor mints a fresh local re-auth consent token (S-113: "a
-// valid local re-auth token minted before each call"). In the platform
-// edition there is no local re-auth; it returns "" and the sweep proceeds —
-// the sweep's assertion is about the store, whatever the gate answers.
+// pgReauthTokenFor mints a fresh local re-auth consent token (S-113: "a valid
+// local re-auth token minted before each call") and asserts the mint
+// succeeded (CHECK F04: a silently-empty token would turn the re-auth probe
+// into a no-credential probe). The mint endpoint works in both editions;
+// only its enforcement is skipped in platform mode
+// (rest_integrations_auth.go::requireReAuth).
 func pgReauthTokenFor(t *testing.T, f *pgGateFixture) string {
 	t.Helper()
-	user := &f.api.agentLoop.GetConfig().Gateway.Users[0]
-	rw := doReAuth(f.api, user, "pg-person-password")
-	if rw.Code != http.StatusOK {
-		return ""
-	}
-	var out map[string]any
-	require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &out))
-	token, _ := out["token"].(string)
-	return token
+	users := f.api.agentLoop.GetConfig().Gateway.Users
+	require.NotEmpty(t, users, "instrument: the fixture has a user to re-authenticate")
+	rw := doReAuth(f.api, &users[0], "pg-person-password")
+	require.Equal(t, http.StatusOK, rw.Code, "the re-auth mint must succeed: %s", rw.Body.String())
+	var out gen.ReAuthResponse
+	require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &out), "the re-auth mint body parses")
+	require.NotEmpty(t, out.Token, "the mint returned a consent token")
+	return out.Token
 }
 
 // pgSweepPath maps a registered pattern to the concrete probe path for the
-// sweep table's Programs rows (their schemas).
+// sweep table's Programs rows (the rev-8 new-path table): entry routes
+// /programs/{id}, the credential routes /programs/{id}/credential (save and
+// disconnect), the check route, the settings route and the channel setting.
 func pgSweepPath(pattern, method string) string {
+	subtree := strings.HasSuffix(pattern, "/")
+	base := strings.TrimSuffix(pattern, "/")
 	switch {
-	case method == http.MethodGet:
-		if strings.Contains(pattern, "/channels/") {
-			return "/channels/telegram/programs"
-		}
-		return "/programs"
-	case method == http.MethodPost && strings.Contains(pattern, "/check"):
+	case strings.Contains(pattern, "/channels/"):
+		return "/channels/telegram/programs"
+	case strings.Contains(pattern, "/check"):
 		return "/programs/github/check"
-	case method == http.MethodPost:
-		return "/programs"
-	case method == http.MethodDelete:
-		return "/programs/github"
 	case strings.Contains(pattern, "/credential"):
 		return "/programs/github/credential"
 	case strings.Contains(pattern, "/settings"):
 		return "/programs/settings"
-	case strings.Contains(pattern, "/channels/"):
-		return "/channels/telegram/programs"
+	case strings.Contains(pattern, "programs"):
+		if subtree {
+			return base + "/github" // an {id} subtree pattern probes the github entry
+		}
+		return "/programs"
 	default:
-		return "/programs/github"
+		if subtree {
+			return base + "/sweep-probe"
+		}
+		return base
 	}
 }
 
 // pgSweepBody is the route-specific valid payload for a Programs route and
-// method (the S1 contract table's schemas).
+// method (the rev-8 contract table): ProgramCredentialRequest is
+// { value, expected_generation? } (8–16,384 bytes); the entry edit carries a
+// revision; the settings and channel PUTs carry their boolean and revision.
 func pgSweepBody(method, path string) string {
 	switch {
-	case path == "/programs/github/credential":
+	case path == "/programs/github/credential" && method == http.MethodPut:
 		return `{"value":"tok_evil_999999"}`
 	case path == "/programs/github/check":
 		return `{}`
@@ -123,15 +174,35 @@ func pgSweepBody(method, path string) string {
 // pgKnownMutatorRoute reports whether a registered route can reach a
 // credential-store mutator from I-3's inventory — such a route MUST have a
 // payload row, so a forgotten path fails the sweep (S-113's last And-clause).
+// The restart routes change no credential state and are not in the inventory;
+// they are still probed (F03), just without a payload row.
 func pgKnownMutatorRoute(pattern string) bool {
 	return strings.HasPrefix(pattern, "/api/v1/credentials") ||
 		strings.Contains(pattern, "secret-requests") ||
 		strings.Contains(pattern, "programs")
 }
 
-// pgSweepServe fires one sweep probe with a hard 5-second deadline: a probe
-// whose handler does not answer is recorded and the sweep moves on (the
-// sweep's verdict is about the store, not about any single route's latency).
+// pgMissingSweepRows returns the registered mutator routes without a payload
+// row (S-113's last And-clause, as a gap function so its negative control can
+// call it — CHECK F04). Rows in excused are acknowledged separately (fatal
+// BLOCKED after the verdict) and do not double-report.
+func pgMissingSweepRows(routes []string, handled map[string]bool, excused map[string]string) []string {
+	var missing []string
+	for _, p := range routes {
+		if pgKnownMutatorRoute(p) && !handled[p] && excused[p] == "" {
+			missing = append(missing, p)
+		}
+	}
+	return missing
+}
+
+// pgSweepServe fires one sweep probe with a hard 5-second deadline. A probe
+// whose handler does not answer FAILS the sweep — a hanging credential-route
+// handler is itself a defect, not a latency note — and the handler goroutine
+// is joined before returning, so the final store reads never race a live
+// handler (CHECK F05). If the goroutine cannot be joined even after the
+// grace period the test fatals: nothing may be asserted about a store a
+// handler may still be writing.
 func pgSweepServe(t *testing.T, f *pgGateFixture, method, path, body, bearer, reauth string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -150,7 +221,12 @@ func pgSweepServe(t *testing.T, f *pgGateFixture, method, path, body, bearer, re
 	case <-done:
 		return w
 	case <-time.After(5 * time.Second):
-		t.Logf("sweep probe %s %s did not answer within 5s (recorded, sweep continues)", method, path)
+		t.Errorf("sweep probe %s %s did not answer within 5s (S-113) — the sweep fails and joins the handler before any store read", method, path)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("sweep probe %s %s handler still running 15s after the probe — the store verdict cannot be taken", method, path)
+		}
 		return w
 	}
 }
@@ -169,48 +245,64 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 			require.Equal(t, "tok_valid_12345", before, "instrument: the baseline value is in place")
 			cfgBefore := pgProgramsSection(t, f)
 
+			// A valid local re-auth token is minted before EACH mutator call
+			// (S-113's Given); every mint is asserted (F04).
 			reauth := pgReauthTokenFor(t, f)
 
 			t.Logf("sweep: %d registered route patterns, edition %s", len(routes), edition)
 			probes := 0
 			handledMutator := map[string]bool{}
+			// blockedPayloadRows records mutator routes whose payload row
+			// could not be established (at RED the program card cannot be
+			// raised). They are excused from the completeness verdict and
+			// fatal-BLOCK after the sweep's own verdict (CHECK F04: never
+			// marked handled before the row really exists, never a silent
+			// skip).
+			blockedPayloadRows := map[string]string{}
 			for _, pattern := range routes {
-				if strings.Contains(pattern, "restart") {
-					// Instrument guard: POST /api/v1/gateway/restart re-execs
-					// the process — in the test binary that restarts this very
-					// test forever. Not in I-3's mutator inventory, so the
-					// sweep table needs no row for it; the skip is recorded.
-					t.Logf("sweep: skipping %q — the route re-execs the process (recorded, sweep continues)", pattern)
-					continue
-				}
 				subtree := strings.HasSuffix(pattern, "/")
 				base := strings.TrimSuffix(pattern, "/")
 				for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 					var path, body string
 					probeReauth := false
 					switch {
-					case strings.HasPrefix(pattern, "/api/v1/credentials") && method == http.MethodPost:
+					case strings.HasPrefix(pattern, "/api/v1/credentials") && method == http.MethodPost && !subtree:
 						// Sweep table: set with the program-owned key.
 						handledMutator[pattern] = true
 						path, body, probeReauth = "/api/v1/credentials", `{"key":"R","value":"tok_evil_999999"}`, true
+					case strings.HasPrefix(pattern, "/api/v1/credentials") && method == http.MethodPost && subtree:
+						// The subtree pattern covers /credentials/rotate — a
+						// registered route with its own payload row
+						// (re-encrypt-only in I-3's classification table;
+						// values unchanged are asserted by the final verdict).
+						handledMutator[pattern] = true
+						path, body, probeReauth = "/api/v1/credentials/rotate", `{}`, true
 					case strings.HasPrefix(pattern, "/api/v1/credentials") && method == http.MethodDelete:
 						// Sweep table: delete the program-owned key.
 						handledMutator[pattern] = true
-						path, probeReauth = "/api/v1/credentials/R", true
+						path, body, probeReauth = "/api/v1/credentials/R", "", true
 					case strings.HasPrefix(pattern, "/api/v1/credentials"):
 						continue // GET/PUT carry no mutator on this route
 					case strings.Contains(pattern, "secret-requests") && method == http.MethodPost:
 						// Submit with a pending program card where one can be
-						// raised (S-112 covers the card rows in depth; at RED
-						// no program card exists, and the sweep records it).
-						handledMutator[pattern] = true // the payload row exists
-						cardID, _, cardErr := pgRaiseProgramCard(t, f, "dev", map[string]any{"program": "github"})
+						// raised (S-112 covers the card rows in depth). The
+						// row exists only when the card really exists — never
+						// marked handled before the raise succeeds (F04). The
+						// body uses the card's DECLARED field key and the
+						// generated Values shape, never a guessed one.
+						cardID, sid, cardErr := pgRaiseProgramCard(t, f, "dev", map[string]any{"program": "github"})
 						if cardErr != nil {
-							t.Logf("BLOCKED (recorded, sweep continues): the program card cannot be raised — required by S-113's submit payload row (tool said: %v)", cardErr)
+							blockedPayloadRows[pattern] = fmt.Sprintf("the program card cannot be raised — required by S-113's submit payload row (tool said: %v)", cardErr)
 							continue
 						}
+						handledMutator[pattern] = true
+						fieldKey := pgCardFieldKey(t, f, "pg-person", sid, cardID)
+						submitBody, merr := json.Marshal(gen.SecretSubmitRequest{
+							Values: &map[string]string{fieldKey: "tok_evil_999999"},
+						})
+						require.NoError(t, merr, "the submit body marshals")
 						path = "/api/v1/secret-requests/" + cardID + "/submit"
-						body = pgSweepBody(http.MethodPost, "")
+						body = string(submitBody)
 					case strings.Contains(pattern, "programs"):
 						// The Programs routes and the channel setting: their
 						// schemas (at RED no such route is registered).
@@ -218,8 +310,11 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 						path = pgSweepPath(pattern, method)
 						body = pgSweepBody(method, path)
 					default:
-						// Every other registered route: GET, POST, PUT and
-						// DELETE with the generic payload.
+						// Every other registered route — the restart routes
+						// included (F03): the POST probe of
+						// /api/v1/gateway/restart runs through the fixture's
+						// injected restarter seam instead of re-exec'ing the
+						// test binary.
 						path = base
 						if subtree {
 							path = base + "/sweep-probe"
@@ -234,8 +329,9 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 						continue
 					}
 					callReauth := ""
-					if probeReauth && reauth != "" {
-						// A fresh consent token per call (S-113's Given).
+					if probeReauth {
+						// A fresh consent token per call (S-113's Given), the
+						// mint asserted successful (F04).
 						reauth = pgReauthTokenFor(t, f)
 						callReauth = reauth
 					}
@@ -246,16 +342,27 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 
 			// The sweep-table completeness check (S-113's last And-clause):
 			// a registered route that can reach a credential-store mutator
-			// (I-3's inventory: the generic credentials routes, the
-			// secret-request submit, the Programs routes) without a payload
-			// row fails the sweep.
-			for _, pattern := range routes {
-				if pgKnownMutatorRoute(pattern) && !handledMutator[pattern] {
-					t.Errorf("sweep table is missing a payload row for registered mutator route %q", pattern)
-				}
-			}
+			// without a payload row fails the sweep. Blocked rows are excused
+			// here and fatal-BLOCK after the verdict below.
+			missing := pgMissingSweepRows(routes, handledMutator, blockedPayloadRows)
+			require.Empty(t, missing, "sweep table is missing payload rows for registered mutator routes: %v", missing)
+
+			// Instrument proof (F04 negative control): the completeness
+			// checker fires on a PLANTED route that has no row — a checker
+			// that can never fire proves nothing.
+			const plantedRow = "/api/v1/credentials/planted-sweep-row"
+			planted := append(append([]string(nil), routes...), plantedRow)
+			require.Contains(t, pgMissingSweepRows(planted, handledMutator, blockedPayloadRows), plantedRow,
+				"instrument: the completeness check catches a planted missing payload row")
 
 			require.Greater(t, probes, 0, "instrument: the sweep actually fired requests")
+
+			// F03 route accounting: the restart route was probed through the
+			// process-edge seam and the injected restart action ran exactly
+			// once (the POST probe; GET/PUT/DELETE answer 405 before it).
+			// Zero would mean the sweep never reached the real route.
+			require.Equal(t, int32(1), f.restartRequests(),
+				"POST /api/v1/gateway/restart reached the restart action exactly once")
 
 			// The sweep's verdict (S-113 Then): the decrypted store still
 			// holds tok_valid_12345 under R, and the fake program started 0
@@ -266,6 +373,19 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 				"S-113: no route may change a program credential — the sweep must leave R untouched")
 			require.Equal(t, 0, f.ghStarted(), "the fake program started 0 times")
 			require.Equal(t, cfgBefore, pgProgramsSection(t, f), "program metadata unchanged")
+
+			// Blocked payload rows are loud, never silent (F04): after the
+			// sweep's own verdict, an unestablishable row fails the test with
+			// its reason.
+			if len(blockedPayloadRows) > 0 {
+				names := make([]string, 0, len(blockedPayloadRows))
+				for p, reason := range blockedPayloadRows {
+					names = append(names, p+": "+reason)
+				}
+				sort.Strings(names)
+				t.Fatalf("BLOCKED: %d sweep payload row(s) could not be established — required by S-113's payload table:\n%s",
+					len(blockedPayloadRows), strings.Join(names, "\n"))
+			}
 		})
 	}
 }
