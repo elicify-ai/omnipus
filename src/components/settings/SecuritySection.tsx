@@ -69,6 +69,7 @@ import {
   getErrorMessage,
 } from '@/lib/api'
 import type { PromptInjectionLevel } from '@/lib/api'
+import type { RateLimitsUpdateRequest } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { DiagnosticsSection } from './DiagnosticsSection'
 import { SandboxSection } from './SandboxSection'
@@ -317,6 +318,18 @@ export interface SecuritySectionProps { // not-wire-format: React props
   godMode?: React.ReactNode
 }
 
+/**
+ * FR-015/019: a rate-limit Save sends only the limits the person changed, so
+ * a value another tab saved meanwhile is not overwritten with this tab's old
+ * copy. The endpoint is a partial update.
+ */
+function changedRateLimits(body: Record<string, unknown>): RateLimitsUpdateRequest {
+  const update: RateLimitsUpdateRequest = {}
+  if ('max_agent_llm_calls_per_hour' in body) update.max_agent_llm_calls_per_hour = Number(body.max_agent_llm_calls_per_hour) || 0
+  if ('max_agent_tool_calls_per_minute' in body) update.max_agent_tool_calls_per_minute = Number(body.max_agent_tool_calls_per_minute) || 0
+  return update
+}
+
 export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   // FR-069: focus returns to the control that opened the dialog.
   const rotateFocus = useReturnFocus()
@@ -429,12 +442,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
         ? toWriteResponse(() => updateSandboxConfig({ auto_approve: body.auto_approve === true }, ctx.reauthToken))
         : ctx.target === 'prompt-guard'
         ? toWriteResponse(() => updatePromptGuardLevel(body[PROMPT_GUARD_KEY] as PromptInjectionLevel))
-        : toWriteResponse(() =>
-        updateRateLimits({
-          max_agent_llm_calls_per_hour: Number(body.max_agent_llm_calls_per_hour ?? rateLimits?.max_agent_llm_calls_per_hour ?? 0) || 0,
-          max_agent_tool_calls_per_minute: Number(body.max_agent_tool_calls_per_minute ?? rateLimits?.max_agent_tool_calls_per_minute ?? 0) || 0,
-        }),
-      ),
+        : toWriteResponse(() => updateRateLimits(changedRateLimits(body))),
     readBack: async (key) => {
       if (key === 'auto_approve') return (await fetchSandboxConfig()).auto_approve === true
       if (key === PROMPT_GUARD_KEY) return (await fetchPromptGuardLevel()).level
