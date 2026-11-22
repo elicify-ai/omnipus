@@ -10425,6 +10425,10 @@ export interface components {
             details?: {
                 [key: string]: unknown;
             };
+            /** @description Event-specific data of a structured audit record (pkg/audit.Record, written by audit.Emit: for example turn.cancel.*, askuser.auto_default, tool.policy.* and browser events). Those records carry their data here instead of in details; the values are redacted like details. Structure varies by event type. May be absent. */
+            fields?: {
+                [key: string]: unknown;
+            };
             /**
              * @description Authenticated username that performed the change. Present on security_setting_change records (see pkg/audit.SecurityChangeRecord); may be absent for other event types.
              * @example admin

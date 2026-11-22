@@ -1949,6 +1949,7 @@ type AuditEntry = {
   parameters?: {} | undefined;
   policy_rule?: string | undefined;
   details?: {} | undefined;
+  fields?: {} | undefined;
   actor?: string | undefined;
   resource?: string | undefined;
   old_value?: {} | undefined;
@@ -5356,6 +5357,7 @@ export const AuditEntry: z.ZodType<AuditEntry> = z
     parameters: z.object({}).partial().passthrough().optional(),
     policy_rule: z.string().optional(),
     details: z.object({}).partial().passthrough().optional(),
+    fields: z.object({}).partial().passthrough().optional(),
     actor: z.string().optional(),
     resource: z.string().optional(),
     old_value: z.object({}).partial().passthrough().optional(),

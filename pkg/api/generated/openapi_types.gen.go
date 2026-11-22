@@ -16131,6 +16131,9 @@ type AuditEntry struct {
 	// The dot is REQUIRED here and must not be removed (issue #667). Over 50 dot-separated names are declared in pkg/audit (audit.go, events.go) and emitted from production handlers, and more are registered as bare literals in pkg/audit.IsValidEventName for back-compat with audit files written before the project→workspace and milestone→task renames. Audit logs are append-only history that cannot be rewritten — the HMAC chain (pkg/audit/hmac.go) is computed over each entry's canonical JSON INCLUDING this field, so renaming events on disk would invalidate every chain link. A pattern that rejects dots therefore does not "validate" anything; it makes AuditLogResponse's `entries` array fail as a whole (src/lib/api.ts::request throws ApiSchemaError on the response, it does not drop single rows), blanking Settings → Security → Audit Log on any real install. Regression guard: pkg/audit/event_name_contract_test.go checks every declared event name against this very pattern, read from this file.
 	Event string `json:"event"`
 
+	// Fields Event-specific data of a structured audit record (pkg/audit.Record, written by audit.Emit: for example turn.cancel.*, askuser.auto_default, tool.policy.* and browser events). Those records carry their data here instead of in details; the values are redacted like details. Structure varies by event type. May be absent.
+	Fields *map[string]interface{} `json:"fields,omitempty"`
+
 	// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
 	NewValue *map[string]interface{} `json:"new_value,omitempty"`
 
@@ -16190,6 +16193,9 @@ type AuditLogResponse struct {
 		// Event Event type identifier. Two naming families coexist and BOTH are legal: the original flat names (tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown) and the dot-separated hierarchical names that every newer event uses (skill.call, onboarding.admin_created, turn.cancel.attempt, browser.webrtc.stream_started, workspace.create, …). Custom values are permitted for extensibility — must match ^[a-z_.]+$ (lowercase letters, underscores and dots only).
 		// The dot is REQUIRED here and must not be removed (issue #667). Over 50 dot-separated names are declared in pkg/audit (audit.go, events.go) and emitted from production handlers, and more are registered as bare literals in pkg/audit.IsValidEventName for back-compat with audit files written before the project→workspace and milestone→task renames. Audit logs are append-only history that cannot be rewritten — the HMAC chain (pkg/audit/hmac.go) is computed over each entry's canonical JSON INCLUDING this field, so renaming events on disk would invalidate every chain link. A pattern that rejects dots therefore does not "validate" anything; it makes AuditLogResponse's `entries` array fail as a whole (src/lib/api.ts::request throws ApiSchemaError on the response, it does not drop single rows), blanking Settings → Security → Audit Log on any real install. Regression guard: pkg/audit/event_name_contract_test.go checks every declared event name against this very pattern, read from this file.
 		Event string `json:"event"`
+
+		// Fields Event-specific data of a structured audit record (pkg/audit.Record, written by audit.Emit: for example turn.cancel.*, askuser.auto_default, tool.policy.* and browser events). Those records carry their data here instead of in details; the values are redacted like details. Structure varies by event type. May be absent.
+		Fields *map[string]interface{} `json:"fields,omitempty"`
 
 		// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
 		NewValue *map[string]interface{} `json:"new_value,omitempty"`
