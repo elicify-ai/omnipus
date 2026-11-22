@@ -16,6 +16,7 @@ package omnpkg_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
 	"github.com/stretchr/testify/require"
 )
@@ -458,12 +460,14 @@ func TestPlanExport_WordingMatchesDecodedBundle(t *testing.T) {
 	require.True(t, hasSkill, "the review lists the skill row")
 	require.True(t, hasConnector, "the review lists the connector row with reason not_restored")
 
-	// Import-side coverage note (CHECK W02, spec row 3a's "matches the real
-	// bundle" promise covers the export side; the import side reading this
-	// same record shape is pinned where the import lives, and is NOT
-	// duplicated here): element validation of the uploaded agent.json —
-	// element_agent_test.go::TestAgentElement_S1aRefusals and the happy
-	// mapping path field_mapping_import_test.go::TestFieldMapping_Import.
+	// Import-side coverage note (CHECK W02, closed round 2): row 3a's full
+	// executed proof — the SAME bundle uploaded, imported (result warning
+	// mcp_binding_dropped with item github) and the new agent fetched with NO
+	// connector assignment — is TestExportPlanFlow_ImportSideBundleProof in
+	// pkg/gateway/packages_exportplan_test.go. This unit test pins the export
+	// side of the same promise; the S-1a element validation and the field
+	// mapping stay pinned by element_agent_test.go and
+	// field_mapping_import_test.go.
 }
 
 // b1D6Canaries are the Dataset D6 values that must never appear in any review
@@ -481,12 +485,25 @@ var b1D6Canaries = []string{
 	"CANARY_ENV",                   // D6-9 environment override value
 }
 
+// b1CanariesIn returns every D6-1…9 canary found in a serialised review body.
+// One scanner for both directions (CHECK F08 round 2): b1ScanBody asserts a
+// real review is clean, and the control asserts the SAME scanner sees a
+// planted value — the instrument is proven on the exact function the
+// assertion uses.
+func b1CanariesIn(body []byte) []string {
+	var found []string
+	for _, c := range b1D6Canaries {
+		if strings.Contains(string(body), c) {
+			found = append(found, c)
+		}
+	}
+	return found
+}
+
 // b1ScanBody fails when any D6-1…9 canary appears in a serialised review body.
 func b1ScanBody(t *testing.T, where string, body []byte) {
 	t.Helper()
-	for _, c := range b1D6Canaries {
-		require.NotContains(t, string(body), c, "%s must not carry the D6 canary %s", where, c)
-	}
+	require.Empty(t, b1CanariesIn(body), "%s must not carry any D6 canary", where)
 }
 
 // TestPlanExport_NoValuesInPlan — spec order 4 (FR-004, FR-005; Dataset D6):
@@ -505,32 +522,69 @@ func TestPlanExport_NoValuesInPlan(t *testing.T) {
 			"env_overrides": map[string]string{"API_TOKEN": "CANARY_ENV", "REGION": "eu"},
 		}},
 	})
-	home := src.withAgent(t, testSourceID, rec, nil, []byte(testAgentBody))
-	// Plant the file-shaped canaries at their real store locations (D6-1…4,
-	// with D6-5/6 riding inside credentials.json as the store's entries) so a
-	// leak would have a source. Each seed is asserted present BEFORE the
-	// review runs — an unseeded source proves nothing (CHECK F08).
-	d6Seeds := []struct {
-		name    string
-		canary  string
-		content []byte
-	}{
-		{"credentials.json", "CANARY_CRED_VAULT", []byte(`{"entries":{"inst":{"value":"CANARY_CRED_VAULT"}},` +
-			`"providers":{"p1":{"api_key":"CANARY_PROVIDER_KEY"}},` +
-			`"channels":{"c1":{"token":"CANARY_CHANNEL_TOKEN"}}}`)},
-		{"master.key", "CANARY_MASTER_KEY", []byte("CANARY_MASTER_KEY")},
-		{"cli.token", "CANARY_CLI_TOKEN", []byte("CANARY_CLI_TOKEN")},
-		{"auth.json", "CANARY_AUTH_JSON", []byte(`"CANARY_AUTH_JSON"`)},
+	src.withAgent(t, testSourceID, rec, nil, []byte(testAgentBody))
+	// Plant D6-1…6 at their REAL installation-store locations in a dedicated
+	// install-home directory (NOT the agent's own folder — the real store
+	// lives at the install level, CHECK F08 round 2), each fixture in its real
+	// format and each verified INDIVIDUALLY before the review runs:
+	//
+	//	D6-1 CANARY_CRED_VAULT / D6-3 CANARY_CLI_TOKEN /
+	//	D6-6 CANARY_CHANNEL_TOKEN — entries in the REAL encrypted credential
+	//	store, written and read back through pkg/credentials
+	//	D6-2 CANARY_MASTER_KEY — the default key file "n" (hex key bytes, 0600,
+	//	pkg/credentials keymgr format; the key IS the canary)
+	//	D6-4 CANARY_AUTH_JSON — auth.json
+	//	D6-5 CANARY_PROVIDER_KEY — the provider key in config.json (spec D6-5)
+	//
+	// The review under test is built from the SOURCE only; an unseeded or
+	// unverified install store proves nothing.
+	installHome := t.TempDir()
+	key := append([]byte("CANARY_MASTER_KEY"), bytes.Repeat([]byte{0x4b}, 15)...)
+	require.Len(t, key, 32, "the master key is a full AES-256 key")
+	keyPath := filepath.Join(installHome, "n")
+	require.NoError(t, os.WriteFile(keyPath, []byte(hex.EncodeToString(key)), 0o600))
+	store := credentials.NewStore(filepath.Join(installHome, "credentials.json"))
+	require.NoError(t, store.UnlockWithKey(key), "the store opens with the key file's key")
+	t.Cleanup(store.Close)
+	entries := map[string]string{
+		"vault-canary":  "CANARY_CRED_VAULT",
+		"cli-token":     "CANARY_CLI_TOKEN",
+		"channel-token": "CANARY_CHANNEL_TOKEN",
 	}
-	for _, seed := range d6Seeds {
-		require.NoError(t, os.WriteFile(filepath.Join(home, seed.name), seed.content, 0o600))
+	for name, value := range entries {
+		require.NoError(t, store.Set(name, value), "storing the D6 seed %s", name)
 	}
-	for _, seed := range d6Seeds {
-		seeded, err := os.ReadFile(filepath.Join(home, seed.name))
-		require.NoError(t, err, "the D6 seed %s must exist before the review runs", seed.name)
-		require.Contains(t, string(seeded), seed.canary,
-			"the seed %s must carry its canary before the review runs", seed.name)
+	for name, want := range entries {
+		got, err := store.Get(name)
+		require.NoError(t, err, "the store seed %s must round-trip through the real store before the review runs", name)
+		require.Equal(t, want, got, "the store seed %s carries its canary before the review runs", name)
 	}
+	configPath := filepath.Join(installHome, "config.json")
+	require.NoError(t, os.WriteFile(configPath,
+		[]byte(`{"providers":[{"provider":"openrouter","model":"m-1","api_key":"CANARY_PROVIDER_KEY"}]}`), 0o600))
+	authPath := filepath.Join(installHome, "auth.json")
+	require.NoError(t, os.WriteFile(authPath, []byte(`{"token":"CANARY_AUTH_JSON"}`), 0o600))
+	// Verify every file-shaped seed individually.
+	rawKey, err := os.ReadFile(keyPath)
+	require.NoError(t, err, "the D6-2 key file must exist before the review runs")
+	decoded, derr := hex.DecodeString(strings.TrimSpace(string(rawKey)))
+	require.NoError(t, derr, "the D6-2 key file holds a hex key (keymgr format)")
+	require.Contains(t, string(decoded), "CANARY_MASTER_KEY", "the D6-2 key bytes carry their canary")
+	info, serr := os.Stat(keyPath)
+	require.NoError(t, serr)
+	require.Zero(t, info.Mode().Perm()&0o077, "the D6-2 key file is 0600 (keymgr mode)")
+	var configSeed struct {
+		Providers []map[string]any `json:"providers"`
+	}
+	rawConfig, cerr := os.ReadFile(configPath)
+	require.NoError(t, cerr, "the D6-5 config.json must exist before the review runs")
+	require.NoError(t, json.Unmarshal(rawConfig, &configSeed), "the D6-5 config.json parses")
+	require.Len(t, configSeed.Providers, 1, "the D6-5 config.json carries its provider entry")
+	require.Equal(t, "CANARY_PROVIDER_KEY", configSeed.Providers[0]["api_key"],
+		"the D6-5 provider key carries its canary in config.json")
+	rawAuth, aerr := os.ReadFile(authPath)
+	require.NoError(t, aerr, "the D6-4 auth.json must exist before the review runs")
+	require.Contains(t, string(rawAuth), "CANARY_AUTH_JSON", "the D6-4 auth.json carries its canary")
 
 	plan := planAt(t, src, testSourceID, now)
 	marshalled, err := json.Marshal(plan)
@@ -544,24 +598,15 @@ func TestPlanExport_NoValuesInPlan(t *testing.T) {
 	require.NotContains(t, string(marshalled), "CANARY_ENV")
 
 	// Control (spec: a planted value makes this scanner fail): build a
-	// spec-shaped plan in the test, plant D6-9's value, and assert the same
-	// scanner flags it. This pins the instrument, not the implementation.
-	var planted bytes.Buffer
+	// spec-shaped plan in the test, plant D6-9's value, and assert the SAME
+	// scanner function b1ScanBody asserts with flags it (CHECK F08 round 2 —
+	// the control goes through the instrument, not around it). This pins the
+	// instrument, not the implementation.
 	plantedPlan := *plan
 	plantedPlan.Elements = append([]omnpkg.ExportPlanElement{}, plan.Elements...)
 	plantedPlan.Elements[0].Name = "Coder CANARY_ENV"
 	rawPlanted, err := json.Marshal(&plantedPlan)
 	require.NoError(t, err)
-	planted.WriteString("plan review body: ")
-	planted.Write(rawPlanted)
-	require.True(t, strings.Contains(planted.String(), "CANARY_ENV"),
-		"the control body must actually carry the planted canary")
-	for _, c := range b1D6Canaries {
-		if c == "CANARY_ENV" {
-			require.Contains(t, planted.String(), c,
-				"the scanner's target canary is planted in the control body")
-			continue
-		}
-		require.NotContains(t, planted.String(), c)
-	}
+	require.Equal(t, []string{"CANARY_ENV"}, b1CanariesIn(rawPlanted),
+		"the exact rejecting scanner must see the planted value — and only it")
 }

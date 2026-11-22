@@ -6,6 +6,8 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { shouldRetryMutation, mutationRetryDelay } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api-error'
 import type { PackageExportPlan } from '@/lib/api/packages'
 
@@ -73,13 +75,15 @@ const leftOut = [
 ]
 
 // Plan validity windows derive from the real clock (CHECK F07): a fresh plan
-// was created one minute ago and is valid for 30 minutes; the expired variant
-// was created two hours ago. No wall-clock-pinned fixtures.
+// was created one minute ago and is valid for EXACTLY the spec's 30-minute
+// lifetime from creation (round 2: the interval was 31 minutes — expires_at
+// now = created_at + 30 min exactly); the expired variant was created two
+// hours ago. No wall-clock-pinned fixtures.
 export function writerPlan(): PackageExportPlan {
   return {
     plan_id: 'P1',
     created_at: new Date(Date.now() - 60_000).toISOString(),
-    expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+    expires_at: new Date(Date.now() - 60_000 + 30 * 60_000).toISOString(),
     scope: 'agents',
     elements: [
       {
@@ -120,22 +124,40 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // The single render handle is released, so no view outlives its test
+  // (CHECK F07 round 2).
+  active?.unmount()
+  active = null
   sessionStorage.clear()
 })
 
+// ONE render handle (CHECK F07 round 2): the previous view is unmounted
+// before the next one mounts, exactly as an address-driven wizard does.
+// Round 1's goTo only re-rendered on top of the old view, so the preselect
+// row had two Writer radios mounted and the second getByRole could not
+// uniquely identify the intended one.
+let active: ReturnType<typeof render> | null = null
+
 function renderPage() {
+  active?.unmount()
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } },
+  })
   const Component = (Route as unknown as { component: React.ComponentType }).component
-  return render(<Component />)
+  active = render(
+    <QueryClientProvider client={client}>
+      <Component />
+    </QueryClientProvider>,
+  )
+  return active
 }
 
 // The wizard is address-driven: arriving at an address (a link, a reload)
 // UNMOUNTS the previous view and mounts the route at the new search. goTo
-// models exactly that — one helper instead of stacked raw renderPage calls
-// (CHECK F07/W02).
+// models exactly that through the same single handle (CHECK F07).
 function goTo(search: Record<string, string | undefined>) {
   mockSearch = search
-  const Component = (Route as unknown as { component: React.ComponentType }).component
-  return render(<Component />)
+  return renderPage()
 }
 
 async function reviewWriter() {

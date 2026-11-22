@@ -5,6 +5,8 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { shouldRetryMutation, mutationRetryDelay } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api-error'
 import type { PackageImportPreview } from '@/lib/api/packages'
 
@@ -80,9 +82,20 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
+// The wizard mounts under the PRODUCTION mutation defaults (CHECK F04 round
+// 2): every row observes the real upload-mutation configuration, so a GREEN
+// wizard that omits retry:false on the upload fails the never-resend row
+// below (the api-level control proves those defaults resend four times).
 function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } },
+  })
   const Component = (Route as unknown as { component: React.ComponentType }).component
-  return render(<Component />)
+  return render(
+    <QueryClientProvider client={client}>
+      <Component />
+    </QueryClientProvider>,
+  )
 }
 
 async function chooseFile(bytes = 128, name = 'bundle.omnpkg') {
@@ -150,6 +163,23 @@ describe('Import File step (US-4.1)', () => {
         expect(screen.queryByText('Will be added')).toBeNull()
       })
     }
+  })
+
+  // CHECK F04 round 2: the upload call site's never-resend oracle through the
+  // PRODUCTION mutation configuration (an uncoded 503 is retryable, so the
+  // production defaults would dispatch four times if GREEN omits retry:false
+  // on the wizard's upload mutation — the api-level control pins that).
+  describe('the upload is never resent through the production retryer (US-5, D2-14; CHECK F04)', () => {
+    const DID_NOT_CONFIRM =
+      'Omnipus did not confirm the upload. Choose the file again. If the upload did arrive, it can no longer be used after 30 minutes, and Omnipus will try to remove its temporary files at a later upload.'
+
+    it('an uncoded 503 upload answer: the did-not-confirm text and exactly one upload request', async () => {
+      mockUpload.mockRejectedValue(new ApiError(503, 'service unavailable'))
+      renderPage()
+      await chooseFile()
+      expect(await screen.findByText(DID_NOT_CONFIRM)).toBeInTheDocument()
+      expect(mockUpload, 'exactly one upload request, never resent through the production defaults').toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('Size check before upload (US-5.3, D2-10/11)', () => {

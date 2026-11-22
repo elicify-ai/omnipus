@@ -9,14 +9,16 @@
  * Traceability" row 29; CHECK W03).
  *
  * Shared gateway (pre-authenticated global storageState), seeded through the
- * API like agent-picker-freshness. The seeded agent is created with a known
- * id and DELETED in the finally block (together with the "(imported)" copy
- * the flow makes), so re-runs on the same gateway start clean.
+ * API like agent-picker-freshness. Every agent THIS run creates (the seed and
+ * the import's own "(imported)" copy, discovered by id) is DELETED by id in
+ * the finally block, and each deletion's outcome is collected — a failed
+ * cleanup is reported after the finally, never swallowed, and never masks the
+ * flow's own failure (CHECK 2 W03).
  *
  * RED: the /#/export-import route does not exist yet — the test fails at the
  * first missing surface, which is the right reason. Collection-verified in
- * this environment (no gateway runs here); the live row runs on the agreed
- * exact-version instance at the cut.
+ * this environment (no gateway runs here; still true after round 2); the
+ * live row runs on the agreed exact-version instance at the cut.
  */
 import { test, expect } from '@playwright/test';
 import { expectA11yClean } from './fixtures/a11y';
@@ -29,9 +31,31 @@ test.describe.configure({ retries: 0 });
 test.setTimeout(180_000);
 
 test('B1 end to end: export a custom agent, import it back, and reach it from the sheets', async ({ page }) => {
-  let seededAgentId = '';
   let savedPath: string | null = null;
+  // Isolation bookkeeping (CHECK 2 W03): the ids this run CREATED (seeded +
+  // imported), the "(imported)" ids that already existed before the run (a
+  // previous run's leftovers — never ours to delete), and every cleanup
+  // problem. Problems are thrown AFTER the finally — which only runs when the
+  // flow itself completed, so cleanup can never mask the flow's own failure.
+  const createdIds = new Set<string>();
+  const preExistingImportedIds = new Set<string>();
+  const problems: string[] = [];
   try {
+    // Snapshot the "(imported)" agents that already exist BEFORE the run, so
+    // a rerun on a shared gateway deletes only what it created (a leftover
+    // suffixed copy like "Writer B1 (imported 2)" belongs to the earlier run).
+    const before = await page.request.get(`${baseURL}/api/v1/agents`);
+    if (before.ok()) {
+      const agents = (await before.json()) as Array<{ id: string; name: string }>;
+      for (const a of Array.isArray(agents) ? agents : []) {
+        if (new RegExp(`^${AGENT_NAME} \\(imported( \\d+)?\\)$`).test(a.name)) {
+          preExistingImportedIds.add(a.id);
+        }
+      }
+    } else {
+      problems.push(`pre-run agents list failed: ${before.status()}`);
+    }
+
     // ── Seed one exportable custom agent through the API (storageState auth). ──
     const soulText =
       'You are the B1 bundle writer. You turn short outlines into polished text and nothing else. '.repeat(40);
@@ -44,8 +68,9 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
       },
     });
     expect(created.status(), await created.text()).toBe(201);
-    seededAgentId = ((await created.json()) as { id: string }).id;
+    const seededAgentId = ((await created.json()) as { id: string }).id;
     expect(seededAgentId, 'the seeded agent id is retained for the cleanup').toBeTruthy();
+    createdIds.add(seededAgentId);
 
     // ── The app loads with the workspace chrome. ──
     await page.goto('/');
@@ -74,9 +99,12 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     expect(download.suggestedFilename()).toBe(`${AGENT_NAME}.omnpkg`);
     await expect(page.getByText(new RegExp(`Saved ${AGENT_NAME}\\.omnpkg \\(`))).toBeVisible();
     await expectA11yClean(page); // the Download step (row 29: each step)
-    // The real bytes arrived through the browser download event: a bundle
-    // carries the manifest and payload, so it is not an empty stub.
-    expect(statSync(savedPath!).size, 'the downloaded bundle is non-trivial').toBeGreaterThan(1024);
+    // The real bytes arrived through the browser download event. The spec
+    // defines no compressed minimum (the seeded prompt is highly repetitive
+    // and compresses small — CHECK 2 W03), so the floor is only "not empty";
+    // the CONTENT proof is the re-import below: a corrupt or empty bundle is
+    // refused as not_a_package before any preview renders.
+    expect(statSync(savedPath!).size, 'the downloaded bundle is not empty').toBeGreaterThan(0);
 
     // ── US-4: import the same bundle back (a name clash is expected). ──
     await page.getByRole('button', { name: 'Done' }).click();
@@ -94,6 +122,20 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     await expect(page.getByText(new RegExp(`${AGENT_NAME} \\(imported\\) was added to`))).toBeVisible({ timeout: 30_000 });
     await expectA11yClean(page);
 
+    // Retain the import's own product (CHECK 2 W03): the new agent's id is
+    // discovered by exact created name (including the spec's suffix rule,
+    // e.g. "(imported 2)" when a rerun inherited a copy) and cleaned up by
+    // id below — never by a shared constant name.
+    const afterImport = await page.request.get(`${baseURL}/api/v1/agents`);
+    expect(afterImport.ok(), 'the agents list answers after the import').toBeTruthy();
+    const listed = (await afterImport.json()) as Array<{ id: string; name: string }>;
+    for (const a of Array.isArray(listed) ? listed : []) {
+      if (new RegExp(`^${AGENT_NAME} \\(imported( \\d+)?\\)$`).test(a.name) && !preExistingImportedIds.has(a.id)) {
+        createdIds.add(a.id);
+      }
+    }
+    expect(createdIds.size, 'the import created exactly one new agent this run').toBe(2);
+
     // ── The imported agent is reachable in the workspace Team. ──
     await page.getByRole('button', { name: 'Open Team' }).click();
     await expect(page.getByText(new RegExp(`${AGENT_NAME} \\(imported\\)`))).toBeVisible({ timeout: 20_000 });
@@ -107,34 +149,41 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     await expect(miaSheet.getByRole('button', { name: 'Export' })).toHaveCount(0);
     await page.keyboard.press('Escape');
 
-    await page.getByText(AGENT_NAME).first().click();
+    // Exact created-agent selection (CHECK 2 W03): after the import, both
+    // "Writer B1" and "Writer B1 (imported)" exist — a substring locator
+    // would match either. The seeded agent's row is matched by its exact
+    // name.
+    await page.getByText(AGENT_NAME, { exact: true }).click();
     const writerSheet = page.getByRole('dialog');
     await expect(writerSheet, 'the seeded agent sheet is open').toBeVisible();
     await writerSheet.getByRole('button', { name: 'Export' }).click();
     await expect(page).toHaveURL(/export-import/);
-    await expect(page.getByRole('radio', { name: new RegExp(AGENT_NAME) })).toBeChecked();
+    // The Choose step landed with THE SEEDED agent ticked — the imported copy
+    // must not satisfy this assertion, so the radio is matched exactly too.
+    await expect(page.getByRole('radio', { name: AGENT_NAME, exact: true })).toBeChecked();
   } finally {
-    // Isolation (CHECK W03): the seeded agent is deleted by its id; the
-    // "(imported)" copy the flow created is deleted by name lookup, so
-    // repeated runs on the same gateway start clean.
-    if (seededAgentId) {
-      await page.request.delete(`${baseURL}/api/v1/agents/${seededAgentId}`);
-    }
-    const listed = await page.request.get(`${baseURL}/api/v1/agents`);
-    if (listed.ok()) {
-      const agents = (await listed.json()) as Array<{ id: string; name: string }>;
-      for (const a of Array.isArray(agents) ? agents : []) {
-        if (a.name === `${AGENT_NAME} (imported)`) {
-          await page.request.delete(`${baseURL}/api/v1/agents/${a.id}`);
-        }
+    // Isolation (CHECK W03/2): every agent THIS run created is deleted by id,
+    // and each deletion's outcome is asserted — a failed cleanup is a
+    // problem, never a silent pass. Agents that only matched the imported
+    // name before the run are left alone (they belong to an earlier run).
+    for (const id of createdIds) {
+      const del = await page.request.delete(`${baseURL}/api/v1/agents/${id}`);
+      if (!del.ok() && del.status() !== 404) {
+        problems.push(`delete ${id} failed: ${del.status()}`);
       }
     }
     if (savedPath) {
       try {
         unlinkSync(savedPath);
-      } catch {
-        // best-effort temp cleanup; the download dir is the harness's
+      } catch (e) {
+        problems.push(`download temp cleanup failed: ${String(e)}`);
       }
     }
+  }
+  // Reached only when the flow itself completed: report every cleanup
+  // problem loudly instead of ending on a silent partial cleanup (CHECK 2
+  // W03 — no swallowed unlink, no ignored DELETE outcome).
+  if (problems.length > 0) {
+    throw new Error(`cleanup problems on a completed run: ${problems.join('; ')}`);
   }
 });

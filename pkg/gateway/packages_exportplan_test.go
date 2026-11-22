@@ -11,6 +11,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -224,35 +226,90 @@ var b1D6Canaries = []string{
 	"--token=CANARY_ARG --verbose", "CANARY_ENV",
 }
 
-// b1SeedD6Sources plants the file-shaped D6-1…6 canaries at their REAL store
-// locations under the gateway home (D6-5/6 ride inside credentials.json as
-// the store's provider/channel entries) and asserts every seed exists with
-// its canary BEFORE the feature runs — an unseeded source proves nothing
-// (CHECK F08). Test-owned fixtures only; the handlers under test must never
-// read these files.
-func b1SeedD6Sources(t *testing.T, api *restAPI) {
+// b1SeedD6Sources plants the D6-1…6 canaries at their REAL store locations
+// under the gateway home (spec Dataset D6) and verifies every seed
+// INDIVIDUALLY before the feature runs — an unseeded or unverified source
+// proves nothing (CHECK F08 round 2):
+//
+//	D6-1 CANARY_CRED_VAULT     an entry in the REAL encrypted credential store
+//	                           (credentials.json written and read back through
+//	                           pkg/credentials — the real version/salt/
+//	                           nonce/ciphertext format, not an invented
+//	                           plaintext shape)
+//	D6-2 CANARY_MASTER_KEY     the default key file $OMNIPUS_HOME/n — hex key
+//	                           bytes at 0600, exactly pkg/credentials keymgr's
+//	                           format (the key IS the canary)
+//	D6-3 CANARY_CLI_TOKEN      a credential-store entry (CLI tokens are stored
+//	                           credentials)
+//	D6-4 CANARY_AUTH_JSON      the auth.json file in the home
+//	D6-5 CANARY_PROVIDER_KEY   the provider key in config.json — spec D6-5's
+//	                           explicit location, never seeded in round 1
+//	D6-6 CANARY_CHANNEL_TOKEN  a credential-store entry (channel tokens are
+//	                           stored credentials)
+//
+// The encrypted store entries catch leaks that travel through a decrypted
+// read; config.json, auth.json and the key file catch leaks that travel
+// through a raw file read. Test-owned fixtures only; the handlers under test
+// must never read any of them.
+func b1SeedD6Sources(t *testing.T, home string) {
 	t.Helper()
-	seeds := []struct {
-		name    string
-		canary  string
-		content []byte
-	}{
-		{"credentials.json", "CANARY_CRED_VAULT", []byte(`{"entries":{"inst":{"value":"CANARY_CRED_VAULT"}},` +
-			`"providers":{"p1":{"api_key":"CANARY_PROVIDER_KEY"}},` +
-			`"channels":{"c1":{"token":"CANARY_CHANNEL_TOKEN"}}}`)},
-		{"master.key", "CANARY_MASTER_KEY", []byte("CANARY_MASTER_KEY")},
-		{"cli.token", "CANARY_CLI_TOKEN", []byte("CANARY_CLI_TOKEN")},
-		{"auth.json", "CANARY_AUTH_JSON", []byte(`"CANARY_AUTH_JSON"`)},
+
+	// D6-2: the master key IS the canary — 32 bytes whose content embeds
+	// CANARY_MASTER_KEY, persisted hex-encoded in the real default key file.
+	key := append([]byte("CANARY_MASTER_KEY"), bytes.Repeat([]byte{0x4b}, 15)...) //nolint:gocritic // the canary must stay at offset 0
+	require.Len(t, key, 32, "the master key is a full AES-256 key")
+	keyPath := filepath.Join(home, "n")
+	require.NoError(t, os.WriteFile(keyPath, []byte(hex.EncodeToString(key)), 0o600))
+
+	// D6-1/3/6: the real encrypted store, unlocked with the key file's own key.
+	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
+	require.NoError(t, store.UnlockWithKey(key), "the store opens with the key file's key")
+	t.Cleanup(store.Close)
+	entries := map[string]string{
+		"vault-canary":  "CANARY_CRED_VAULT",
+		"cli-token":     "CANARY_CLI_TOKEN",
+		"channel-token": "CANARY_CHANNEL_TOKEN",
 	}
-	for _, seed := range seeds {
-		require.NoError(t, os.WriteFile(filepath.Join(api.homePath, seed.name), seed.content, 0o600))
+	for name, value := range entries {
+		require.NoError(t, store.Set(name, value), "storing the D6 seed %s", name)
 	}
-	for _, seed := range seeds {
-		seeded, err := os.ReadFile(filepath.Join(api.homePath, seed.name))
-		require.NoError(t, err, "the D6 seed %s must exist before the feature runs", seed.name)
-		require.Contains(t, string(seeded), seed.canary,
-			"the seed %s must carry its canary before the feature runs", seed.name)
+	for name, want := range entries {
+		got, err := store.Get(name)
+		require.NoError(t, err, "the store seed %s must round-trip through the real store before the feature runs", name)
+		require.Equal(t, want, got, "the store seed %s carries its canary before the feature runs", name)
 	}
+
+	// D6-5: the provider key rides in config.json (spec D6-5's location).
+	configPath := filepath.Join(home, "config.json")
+	require.NoError(t, os.WriteFile(configPath,
+		[]byte(`{"providers":[{"provider":"openrouter","model":"m-1","api_key":"CANARY_PROVIDER_KEY"}]}`), 0o600))
+
+	// D6-4: auth.json in the home.
+	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"token":"CANARY_AUTH_JSON"}`), 0o600))
+
+	// Verify every file-shaped seed individually — each in its real format.
+	rawKey, err := os.ReadFile(keyPath)
+	require.NoError(t, err, "the D6-2 key file must exist before the feature runs")
+	decoded, derr := hex.DecodeString(strings.TrimSpace(string(rawKey)))
+	require.NoError(t, derr, "the D6-2 key file holds a hex key (keymgr format)")
+	require.Contains(t, string(decoded), "CANARY_MASTER_KEY", "the D6-2 key bytes carry their canary")
+	info, serr := os.Stat(keyPath)
+	require.NoError(t, serr)
+	require.Zero(t, info.Mode().Perm()&0o077, "the D6-2 key file is 0600 (keymgr mode)")
+
+	rawConfig, cerr := os.ReadFile(configPath)
+	require.NoError(t, cerr, "the D6-5 config.json must exist before the feature runs")
+	var configSeed struct {
+		Providers []map[string]any `json:"providers"`
+	}
+	require.NoError(t, json.Unmarshal(rawConfig, &configSeed), "the D6-5 config.json parses")
+	require.Len(t, configSeed.Providers, 1, "the D6-5 config.json carries its provider entry")
+	require.Equal(t, "CANARY_PROVIDER_KEY", configSeed.Providers[0]["api_key"],
+		"the D6-5 provider key carries its canary in config.json")
+
+	rawAuth, aerr := os.ReadFile(filepath.Join(home, "auth.json"))
+	require.NoError(t, aerr, "the D6-4 auth.json must exist before the feature runs")
+	require.Contains(t, string(rawAuth), "CANARY_AUTH_JSON", "the D6-4 auth.json carries its canary")
 }
 
 // b1CanariesIn returns every D6 canary found in one scanned surface (a body,
@@ -810,7 +867,7 @@ func TestExportPlanHandler_Canaries(t *testing.T) {
 	b1SeedExternalWorker(t, api, "ext-canary")
 	// All file-shaped D6 sources are seeded and verified BEFORE the feature
 	// runs (CHECK F08) — D6-7…9 ride in the external worker's executor.
-	b1SeedD6Sources(t, api)
+	b1SeedD6Sources(t, api.homePath)
 
 	var logBuf bytes.Buffer
 	prevLog := slog.Default()
@@ -892,7 +949,7 @@ func TestExportPlanFlow_DecodedBundleCanaries(t *testing.T) {
 	b1SeedExternalWorker(t, api, "ext-canary")
 	// The file-shaped D6 sources are seeded and verified too (CHECK F08): a
 	// bundle path that wrongly reads them must trip the same scan below.
-	b1SeedD6Sources(t, api)
+	b1SeedD6Sources(t, api.homePath)
 
 	// The Main positive-control agent: D6-10/11 in its free text.
 	seedListedAgent(t, api, config.AgentConfig{
@@ -958,6 +1015,73 @@ func TestExportPlanFlow_DecodedBundleCanaries(t *testing.T) {
 		map[string]any{"name": "API_TOKEN", "used_by": "ext-canary", "kind": "executor_env"},
 		map[string]any{"name": "REGION", "used_by": "ext-canary", "kind": "executor_env"},
 	}, secrets, "the manifest carries the removed environment names, never their values")
+}
+
+// ---------------------------------------------------------------------------
+// Order 11b — TestExportPlanFlow_ImportSideBundleProof (CHECK 2 W02, row 3a).
+// ---------------------------------------------------------------------------
+
+// TestExportPlanFlow_ImportSideBundleProof — spec "Review wording matches the
+// real bundle", final clause (spec lines 1148–1155): the SAME D1-2 bundle the
+// review describes (skills research + Summarize, connector github) is
+// uploaded and imported; the import result carries warning mcp_binding_dropped
+// with item github, and GET /api/v1/agents/{new_id} shows NO connector
+// assignment. RED: apply is a 501 stub, so the row fails at the import — the
+// missing feature, not a harness error.
+func TestExportPlanFlow_ImportSideBundleProof(t *testing.T) {
+	api := packageAPI(t)
+	// D1-2: skills research + Summarize and the github connector binding, the
+	// agent whose review wording ("names travel") the decoded-bundle test
+	// already pins on the export side.
+	seedListedAgent(t, api, config.AgentConfig{
+		ID: "d1-two", Name: "Writer", Type: "custom", Description: "Drafts and edits prose",
+		Model:  &config.AgentModelConfig{Primary: "m-1", Provider: "openrouter"},
+		Skills: []string{"research", "Summarize"},
+		Tools: &config.AgentToolsCfg{MCP: config.AgentMCPToolsCfg{
+			Servers: []config.AgentMCPServerBinding{{ID: "github"}},
+		}},
+	})
+	home := filepath.Join(api.homePath, "agents", "d1-two")
+	require.NoError(t, os.WriteFile(filepath.Join(home, "SOUL.md"), d1Body(2000), 0o600))
+
+	plan := callPackagePlanCreate(t, api, `{"scope":"agents","agent_ids":["d1-two"]}`)
+	require.Equal(t, http.StatusCreated, plan.Code, "body=%s", plan.Body)
+	got := callPackageExport(t, api, `{"agent_ids":["d1-two"]}`)
+	require.Equal(t, http.StatusOK, got.Code, "body=%s", got.Body)
+
+	// Import the SAME bundle bytes the export produced.
+	preview := stageUpload(t, api, got.Body)
+	workspace := createWorkspaceViaAPI(t, api, "Import Proof", "row 3a import-side workspace")
+	applied := callPackageApply(t, api, preview.StagingId, applyBody("new", workspace))
+	require.Equal(t, http.StatusOK, applied.Code, "the import must succeed; body=%s", applied.Body)
+	res := decodeResult(t, applied.Body)
+
+	// The result carries warning mcp_binding_dropped with item github
+	// (generated wire shape: Code string, Items *[]string).
+	require.Contains(t, resultWarningCodes(res), "mcp_binding_dropped", "warnings=%v", res.Warnings)
+	for _, w := range res.Warnings {
+		if w.Code == "mcp_binding_dropped" {
+			require.NotNil(t, w.Items, "the dropped-binding warning names its items")
+			require.Contains(t, *w.Items, "github", "the dropped binding names the connector")
+		}
+	}
+
+	// GET /api/v1/agents/{new_id} shows NO connector assignment.
+	require.Len(t, res.Created, 1, "one agent was created; result=%v", res)
+	newID := res.Created[0].NewId
+	require.NotEmpty(t, newID)
+	getW := httptest.NewRecorder()
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+newID, nil)
+	api.HandleAgents(getW, getR)
+	require.Equal(t, http.StatusOK, getW.Code, "agent body=%s", getW.Body.String())
+	imported := decodeAgentResp(t, getW.Body.Bytes())
+	// The GET projection of a connector assignment is tools_cfg.mcp.servers
+	// (generated Agent type): no assignment means absent or empty.
+	noAssignment := imported.ToolsCfg == nil || imported.ToolsCfg.Mcp == nil ||
+		imported.ToolsCfg.Mcp.Servers == nil || len(*imported.ToolsCfg.Mcp.Servers) == 0
+	require.True(t, noAssignment,
+		"the imported agent carries NO connector assignment — github was dropped with a warning (row 3a); tools_cfg=%v",
+		imported.ToolsCfg)
 }
 
 // ---------------------------------------------------------------------------

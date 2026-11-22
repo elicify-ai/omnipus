@@ -19,6 +19,8 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { shouldRetryMutation, mutationRetryDelay } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api-error'
 import {
   PackageImportPreviewSchema,
@@ -109,9 +111,20 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
+// The wizard mounts under the PRODUCTION mutation defaults (CHECK F04 round
+// 2): the cancel rows observe the real cancel-mutation configuration, so a
+// GREEN wizard that omits retry:false on the cancel fails the never-resend
+// row below (the api-level control proves those defaults resend four times).
 function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } },
+  })
   const Component = (Route as unknown as { component: React.ComponentType }).component
-  return render(<Component />)
+  return render(
+    <QueryClientProvider client={client}>
+      <Component />
+    </QueryClientProvider>,
+  )
 }
 
 async function chooseBundle() {
@@ -252,8 +265,13 @@ describe('Cancel from the wizard (US-7, FR-026)', () => {
     expect(readRecord()).toBeNull()
   })
 
-  it('404 staging_not_found: the Uncertain screen with Open Team for the recorded workspace and Start over', async () => {
+  it('404 staging_not_found with a recorded workspace: the Uncertain screen with Open Team and Start over', async () => {
     await openCancellablePreview()
+    // The Uncertain screen offers Open Team only when the record names a
+    // workspace (CHECK 2 N02: the spec's Uncertain-screen rule, spec line
+    // 282) — this row records the chosen workspace first, as the real
+    // Preview → Confirm → Back flow does.
+    recordWorkspaceChosen()
     mockCancel.mockRejectedValue(new ApiError(404, 'gone', { code: 'staging_not_found' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(
@@ -263,6 +281,44 @@ describe('Cancel from the wizard (US-7, FR-026)', () => {
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Open Team' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Start over' })).toBeInTheDocument()
+  })
+
+  it('404 staging_not_found with NO recorded workspace: the workspace hint, never an Open Team link', async () => {
+    await openCancellablePreview()
+    // No workspace has been chosen yet (the record stays the wizard's own
+    // previewed write), so the screen names the rule instead of linking
+    // (spec Uncertain-screen rule: Open Team only "when the record names a
+    // workspace").
+    mockCancel.mockRejectedValue(new ApiError(404, 'gone', { code: 'staging_not_found' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(
+      await screen.findByText(
+        'Omnipus could not confirm what happened to this upload. It may have been imported, for example from another tab. Check the workspace Team before importing again.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText('check the Team of the workspace you chose')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open Team' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Start over' })).toBeInTheDocument()
+  })
+
+  // CHECK F04 round 2: the cancel call site's never-resend oracle through the
+  // PRODUCTION mutation configuration (an uncoded 503 is retryable, so the
+  // production defaults would dispatch four times if GREEN omits retry:false
+  // on the wizard's cancel mutation — the api-level control pins that).
+  it('an uncoded 503 cancel answer: the Uncertain screen and exactly one cancel, never resent', async () => {
+    await openCancellablePreview()
+    recordWorkspaceChosen()
+    mockCancel.mockRejectedValue(new ApiError(503, 'service unavailable'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(
+      await screen.findByText(
+        'Omnipus could not confirm what happened to this upload. It may have been imported, for example from another tab. Check the workspace Team before importing again.',
+      ),
+    ).toBeInTheDocument()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(mockCancel, 'exactly one cancel, never resent through the production defaults').toHaveBeenCalledTimes(1)
   })
 
   it('409 staging_busy: the same Uncertain screen', async () => {

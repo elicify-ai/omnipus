@@ -7,9 +7,12 @@
 // Content-Disposition name on export, apply body {mode, workspace_id},
 // DELETE cancel), the no-automatic-resend rule across ALL THREE replay
 // layers — transport switches AND the production QueryClient mutation
-// defaults (retry:false per call; CHECK F04) — and "Local execution" (the
-// real request()/requestOnce() run over a mocked global fetch — the
-// transport itself is never mocked).
+// defaults (this file proves the production retryer is LIVE with a
+// 4-dispatch control; the wizard-level never-resend oracles for the four
+// real call sites live in the step/wizard test files that own those
+// mutations, under a production-defaults provider — CHECK F04 round 2) —
+// and "Local execution" (the real request()/requestOnce() run over a mocked
+// global fetch — the transport itself is never mocked).
 //
 // Successful fixtures are validated against the REAL generated schemas
 // (Schemas.PackageImportPreview / PackageImportResult, CHECK F02); wrong
@@ -43,7 +46,11 @@ import { useUiStore } from '@/store/ui'
 beforeEach(() => {
   document.cookie = 'csrf=packages-api-test; path=/'
   // A fresh toast spy per test: http.ts reads the store through
-  // getState().addToast, so replacing the action observes the raise.
+  // getState().addToast, so replacing the action observes the raise. The
+  // spy's CALL HISTORY is cleared too — a toast raised by an earlier row
+  // must never satisfy (or convict) a later row's no-toast assertion
+  // (CHECK 2 W02: order independence).
+  addToastSpy.mockClear()
   useUiStore.setState({ addToast: addToastSpy as unknown as () => void })
   // The transport's planted-toast dedup is module state: advance the clock
   // past the 5 s window between tests so no row depends on order (W02).
@@ -361,54 +368,64 @@ describe('package calls never resend (real transport over a mocked fetch)', () =
   })
 })
 
-// ── The production mutation path never resends (CHECK F04: the third
-//    replay layer). Each package mutation is built through the production
-//    QueryClient defaults with retry:false per call; the control row proves
-//    the SAME client's retryer is live by omitting the override.
+// ── The production mutation retryer, through the REAL defaults (CHECK F04,
+//    round 2 + N01). The helper returns the mutation's own promise, so a
+//    failed mutation is asserted ONCE — no rejection is left unhandled
+//    (round 1 discarded observer.mutate()'s promise and Vitest reported five
+//    unhandled errors).
+//
+//    The per-call-site never-resend oracles live with the mutation owners:
+//    upload in ImportFileStep(.unknownUpload).test.tsx, cancel in
+//    ImportPreviewStep.test.tsx, export in ExportDownloadStep.test.tsx and
+//    apply in ImportConfirmStep.test.tsx (whose outcome-unknown rows already
+//    run under a production-defaults provider and assert exactly one apply).
+//    Each of those rows fails if GREEN omits the site's retry:false, because
+//    THIS control proves the same defaults really do resend a retryable
+//    failure four times. Round 1 installed retry:false here itself — the
+//    test then verified its own override, not the wizard's configuration.
 
-describe('package mutations never retry through the production query defaults', () => {
-  function runMutation(
-    client: QueryClient,
-    mutationFn: () => Promise<unknown>,
-    opts?: { retry?: boolean },
-  ): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const observer = new MutationObserver(client, {
-        mutationFn,
-        ...(opts?.retry === false ? { retry: false } : {}),
-        onError: (err) => reject(err),
-        onSuccess: (data) => resolve(data),
-      })
-      observer.mutate()
-    })
+describe('the production query defaults really retry a retryable package mutation (control)', () => {
+  function runMutation(client: QueryClient, mutationFn: () => Promise<unknown>): Promise<unknown> {
+    const observer = new MutationObserver(client, { mutationFn })
+    // The observer's own promise is the mutation: it resolves with the
+    // outcome and rejects with the error, with nothing left unhandled (N01).
+    return observer.mutate()
   }
 
-  const networkDown = () => {
-    throw new TypeError('network down')
-  }
-
-  it.each([
-    ['apply', () => applyPackageImport('S', { mode: 'new' })],
-    ['upload', () => uploadPackageImport(bundleFile())],
-    ['cancel', () => cancelPackageImport('S')],
-    ['export', () => exportPackage(['a-1'])],
-  ])('%s with retry:false dispatches exactly once through the production defaults', async (_name, fn) => {
-    mockFetch(networkDown)
-    await expect(runMutation(makeProductionQueryClient(), fn as () => Promise<unknown>, { retry: false })).rejects.toMatchObject({ status: 0 })
-    expect(totalPackageCalls(), 'the mutation layer adds no second dispatch').toHaveLength(1)
-  })
-
-  it('control: the production default retryer IS live for a caller without retry:false', async () => {
+  // A PASSING positive control (CHECK 2 F04: round 1's control stayed red on
+  // the API stub, so it never demonstrated the retryer). The counted
+  // mutationFn is transport-agnostic — the control exercises exactly the
+  // production defaults the wizard tests mount under (the real exported
+  // predicates through makeProductionQueryClient), so a green that removes
+  // the retry configuration fails it at the dispatch count. A retryable
+  // failure is an uncoded network-class error (the predicates never retry an
+  // ApiSchemaError or a 4xx ApiError).
+  it('an uncoded network failure is dispatched four times (initial + 1s/2s/4s backoff) and then rejects', async () => {
     vi.useFakeTimers()
     try {
-      mockFetch(networkDown)
-      const client = makeProductionQueryClient()
-      const pending = runMutation(client, () => applyPackageImport('S', { mode: 'new' }))
-      pending.catch(() => {})
+      let dispatches = 0
+      const failure = async () => {
+        dispatches += 1
+        throw new TypeError('network down')
+      }
+      const pending = runMutation(makeProductionQueryClient(), failure)
+      // The settlement handler is attached synchronously — a rejection that
+      // fires inside the timer drain with no handler attached is exactly the
+      // unhandled rejection round 1 taught us to avoid (N01).
+      let captured: unknown
+      const settled = pending.then(
+        (value) => {
+          captured = value
+        },
+        (error: unknown) => {
+          captured = error
+        },
+      )
       // Drain the production backoff (1s + 2s + 4s) under controlled time.
       await vi.advanceTimersByTimeAsync(9_000)
-      await expect(pending).rejects.toMatchObject({ status: 0 })
-      expect(totalPackageCalls(), 'initial + three production retries').toHaveLength(4)
+      await settled
+      expect(dispatches, 'initial + three production retries — the retryer is live').toBe(4)
+      expect(captured, 'the exhausted failure surfaces to the caller').toBeInstanceOf(Error)
     } finally {
       vi.useRealTimers()
     }
@@ -481,14 +498,24 @@ describe('package call wire shapes', () => {
     expect(totalPackageCalls()).toHaveLength(1)
   })
 
-  it('a 200 that fails schema parsing rejects, sends one request and classifies as unknown', async () => {
+  it('a 200 that fails schema parsing rejects with the specific schema error, sends one request and classifies as unknown', async () => {
     mockFetch(() => jsonResponse(200, { unexpected: true }))
-    let caught: unknown
-    await applyPackageImport('S', { mode: 'new' }).catch((e: unknown) => {
-      caught = e
-    })
+    // The rejection itself is the requirement (CHECK 2 A01): a defective
+    // client that RESOLVES this 200 must fail the row here, before the
+    // classifier is consulted.
+    const err: unknown = await applyPackageImport('S', { mode: 'new' }).then(
+      () => {
+        throw new Error('a schema-invalid 200 must reject, not resolve')
+      },
+      (e: unknown) => e,
+    )
+    expect(err, 'the schema-invalid 200 rejected').toBeInstanceOf(ApiSchemaError)
+    const schemaErr = err as ApiSchemaError
+    expect(schemaErr.endpoint, 'the schema error names the apply endpoint').toContain('/api/v1/packages/import/S/apply')
+    expect(schemaErr.zodIssues.length, 'the specific schema failures are reported').toBeGreaterThan(0)
+    expect(schemaErr.zodIssues[0]?.message, 'the first zod issue carries a message').toBeTruthy()
     expect(packageCalls('POST'), 'never resent').toHaveLength(1)
-    expect(classifyApplyOutcome(caught)).toBe('unknown')
+    expect(classifyApplyOutcome(schemaErr), 'a schema mismatch sorts as unknown').toBe('unknown')
   })
 })
 

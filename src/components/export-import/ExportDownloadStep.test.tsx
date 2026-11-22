@@ -5,7 +5,9 @@
 // request). Package API module mocked.
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { shouldRetryMutation, mutationRetryDelay } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api-error'
 
 let mockSearch: Record<string, string | undefined> = {}
@@ -44,11 +46,13 @@ import { rememberIdentityMode } from '@/lib/api/identityMode'
 import { useUiStore } from '@/store/ui'
 
 // Plan validity derives from the real clock (CHECK F07): created one minute
-// ago, valid for 30 minutes. No wall-clock-pinned fixture.
+// ago and valid for EXACTLY the spec's 30-minute lifetime from creation
+// (round 2: the interval was 31 minutes — expires_at now = created_at +
+// 30 min exactly). No wall-clock-pinned fixture.
 const plan = {
   plan_id: 'P1',
   created_at: new Date(Date.now() - 60_000).toISOString(),
-  expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+  expires_at: new Date(Date.now() - 60_000 + 30 * 60_000).toISOString(),
   scope: 'agents',
   elements: [
     {
@@ -85,9 +89,20 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
+// The wizard mounts under the PRODUCTION mutation defaults (CHECK F04 round
+// 2): the export rows observe the real export-mutation configuration, so a
+// GREEN wizard that omits retry:false on the export fails the never-resend
+// row below (the api-level control proves those defaults resend four times).
 function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } },
+  })
   const Component = (Route as unknown as { component: React.ComponentType }).component
-  return render(<Component />)
+  return render(
+    <QueryClientProvider client={client}>
+      <Component />
+    </QueryClientProvider>,
+  )
 }
 
 describe('Export Download (US-2.4)', () => {
@@ -119,6 +134,24 @@ describe('Export Download (US-2.4)', () => {
         'The export was stopped because the audit log could not be written. Nothing was downloaded.',
       ),
     ).toBeInTheDocument()
+  })
+
+  // CHECK F04 round 2: the export call site's never-resend oracle through the
+  // PRODUCTION mutation configuration (an uncoded 503 is retryable, so the
+  // production defaults would dispatch four times if GREEN omits retry:false
+  // on the wizard's export mutation — the api-level control pins that). The
+  // screen shows the refusal state with the Back-to-review action; the
+  // never-resend count is the oracle here.
+  it('an uncoded 503 export answer: the refusal screen with Back to review and exactly one export request', async () => {
+    mockExport.mockRejectedValue(new ApiError(503, 'service unavailable'))
+    renderPage()
+    expect(await screen.findByRole('button', { name: 'Back to review' })).toBeInTheDocument()
+    expect(mockExport, 'exactly one export request, never resent through the production defaults').toHaveBeenCalledTimes(1)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(mockExport, 'still exactly one export after the settlement window').toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/Saved /)).toBeNull()
   })
 
   it('re-read just before the download answers 404: Choose with the expired notice and NO export request', async () => {

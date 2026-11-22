@@ -4,9 +4,13 @@
 // and the did-not-confirm text; the step stays. Real transport over a mocked
 // fetch (the packages module stays real; this is a lost-answer row, not a
 // replay row, but the real pipeline costs nothing and pins the counting).
+// The wizard rides the production QueryClient mutation defaults (CHECK F04
+// round 2): this row is the upload call site's never-resend oracle.
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { shouldRetryMutation, mutationRetryDelay } from '@/lib/queryClient'
 
 let mockSearch: Record<string, string | undefined> = {}
 
@@ -55,6 +59,23 @@ afterEach(() => {
 })
 
 describe('Unknown upload answer is not resent (US-5, D2-14)', () => {
+  // The wizard mounts under the PRODUCTION mutation defaults (CHECK F04
+  // round 2): this row's single-dispatch assertion is the upload call site's
+  // never-resend oracle, so a GREEN wizard that omits retry:false on the
+  // upload mutation fails it — the api-level control proves those same
+  // defaults resend a retryable failure four times.
+  function renderWizard() {
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } },
+    })
+    const Component = (Route as unknown as { component: React.ComponentType }).component
+    return render(
+      <QueryClientProvider client={client}>
+        <Component />
+      </QueryClientProvider>,
+    )
+  }
+
   it('a cut upload connection: exactly one upload request and the did-not-confirm text', async () => {
     const uploadCalls: Array<unknown> = []
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
@@ -65,8 +86,7 @@ describe('Unknown upload answer is not resent (US-5, D2-14)', () => {
       }
       throw new Error(`unexpected fetch in test: ${u}`)
     })
-    const Component = (Route as unknown as { component: React.ComponentType }).component
-    render(<Component />)
+    renderWizard()
     // 26a right-reason RED (CHECK): the input's availability is asserted
     // BEFORE dispatch, so this row can never fail as "Unable to fire a change
     // event" — its only sanctioned failure is the missing behaviour itself.

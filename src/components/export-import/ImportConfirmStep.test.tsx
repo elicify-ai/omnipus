@@ -373,16 +373,20 @@ describe('Record after a known refusal (US-5, D4-5…11c)', () => {
     expect(JSON.parse(applyBodies[1]).workspace_id).toBe('ws-marketing')
   })
 
-  it('404 staging_not_found: record cleared; the File step opens with the expired-or-used notice', async () => {
-    installFetch(() => jsonResponse(404, { code: 'staging_not_found' }))
+  it('404 staging_not_found: record cleared, exactly one apply; the step hands control back to the File step', async () => {
+    const { applyBodies } = installFetch(() => jsonResponse(404, { code: 'staging_not_found' }))
     renderConfirm()
     await act(async () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Import' }))
     })
     await act(async () => {})
     expect(readRecord(), 'the record is cleared').toBeNull()
-    // The step hands control back to the File step (the notice is the File
-    // step's; the navigation is the observable boundary here).
+    expect(applyBodies, 'exactly one apply was sent for the expired staging id').toHaveLength(1)
+    // The step hands control back to the File step (the navigation is the
+    // observable boundary here). The File step's own notice and action are
+    // asserted at the route level in ExportImportWizard.reload.test.tsx
+    // ("Expired upload at confirm returns to File") — the only level where
+    // the File step renders (CHECK N03 round 2).
     expect(navigateSpy).toHaveBeenCalledTimes(1)
     const arg = JSON.stringify(navigateSpy.mock.calls[0])
     expect(arg).toContain('file')
