@@ -586,15 +586,18 @@ func (t *DelegateTool) Description() string {
 		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
 		"them. action=\"steer\" injects an instruction into the child: at its next tool boundary for a " +
 		"native worker, or — for a worker running on an external CLI (subagent_3p: claude-code/codex/opencode) " +
-		"— by interrupting the subprocess and continuing the same CLI conversation. It needs " +
+		"— into its CLI conversation: when the CLI session is ready it interrupts the run and " +
+		"continues the same conversation; while the session is still starting up the instruction is " +
+		"queued and reaches that conversation after the current run ends. It needs " +
 		"a CLI run in flight: for a child with none (stopped, finished, not yet started, or after a " +
 		"gateway restart) the external steer is refused as not_steerable. It never revives the child " +
 		"and never starts a fresh conversation; use resume for that. " +
 		"action=\"respond\" answers one open question of the child, identified by its correlation_id " +
 		"(an unknown or already-answered id is refused). A native child receives the answer as an " +
-		"ordinary message. For a live external CLI child (subagent_3p) the answer is delivered into its " +
-		"running CLI conversation by interrupting the subprocess; for a stopped or finished one it goes " +
-		"through the same revival as resume, with the same conditions. An external CLI child cannot call message_parent, so it " +
+		"ordinary message. For a live external CLI child (subagent_3p) the answer is delivered into its CLI " +
+		"conversation the same way as steer: it interrupts the run when the CLI session is ready, and is " +
+		"queued until the current run ends while the session is still starting up; for a stopped or finished " +
+		"one it goes through the same revival as resume, with the same conditions. An external CLI child cannot call message_parent, so it " +
 		"cannot raise a question that way. " +
 		"action=\"stop_all\" stops that child and every helper under it. action=\"redirect\" stops the helper's current turn, " +
 		"then resumes it with the new instruction; this does not mark the helper failed or end its goal. " +

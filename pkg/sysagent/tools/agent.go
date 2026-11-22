@@ -141,7 +141,9 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			"cli_args": map[string]any{
 				"type": "string",
 				"description": "subagent_3p only. Extra command-line flags for the CLI as one string (at most 4,096 characters), " +
-					"stored as typed. The result lists the tokens as argv and, in dropped_at_run, any flag the safety filter removes at run time.",
+					"stored as typed. The result lists the tokens as argv and, in dropped_at_run, any flag the run " +
+					"filter removes at run time; the run filter is the safety filter plus any model option, which " +
+					"is dropped because the agent's model field sets the model.",
 			},
 			"provider": map[string]any{
 				"type":        "string",
