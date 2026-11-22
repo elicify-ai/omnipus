@@ -2,7 +2,12 @@
 
 package tools
 
-// Order 55 — TestInstallSkill_OneCard (S-118; C-12 rows 6–8). Oracle:
+// Order 55 — preparer/pin COMPONENT tests, not a one-card acceptance claim.
+// The actual loop/card/HTTP/trust chain is now exercised by the S-118 rows in
+// pkg/gateway/skill_approval_actions_red_test.go. CHECK F18: traversal errors
+// propagate, and the successful publish compares complete literal bytes.
+// GREEN and mutation proof remain deferred to independent CHECK.
+// TestInstallSkill_OneCard (S-118; C-12 rows 6–8). Oracle:
 // skills-tools-redesign-spec.md —
 //   C-12 row 6 / S-118: install_skill by an agent, effective Ask, unverified
 //        skill, trust Ask → ONE install card naming the skill as unverified
@@ -115,7 +120,10 @@ func TestInstallSkill_OneCard(t *testing.T) {
 		require.DirExists(t, stagingRoot, "rows 6-8: the skill is staged into the existing staging area")
 		staged := false
 		require.NoError(t, filepath.Walk(stagingRoot, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() && info.Name() == "SKILL.md" {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() && info.Name() == "SKILL.md" {
 				staged = true
 			}
 			return nil
@@ -143,8 +151,8 @@ func TestInstallSkill_OneCard(t *testing.T) {
 
 		raw, err := os.ReadFile(filepath.Join(globalSkills, "weather", "SKILL.md"))
 		require.NoError(t, err, "the approved install installed weather")
-		require.Contains(t, string(raw), "the reviewed revision",
-			"S-118: the publish is exactly the staged revision, not the changed registry payload")
+		require.Equal(t, "---\nname: weather\ndescription: the reviewed revision\n---\n\nBody.\n", string(raw),
+			"S-118: complete literal reviewed bytes, not a substring or a re-download of R2")
 		installed, revErr := skills.NewSkillWriter(globalSkills).SkillRevision("weather")
 		require.NoError(t, revErr, "the installed skill carries its revision")
 		require.Equal(t, stagedRevision, installed,
@@ -170,7 +178,10 @@ func TestInstallSkill_OneCard(t *testing.T) {
 		staged := false
 		stagingRoot := filepath.Join(globalSkills, ".staging")
 		require.NoError(t, filepath.Walk(stagingRoot, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() && info.Name() == "SKILL.md" {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() && info.Name() == "SKILL.md" {
 				staged = true
 			}
 			return nil
