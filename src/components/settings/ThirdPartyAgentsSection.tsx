@@ -22,7 +22,7 @@ import { Card } from '@/components/ui/card'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { QueryErrorState } from '@/components/ui/query-error-state'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import {
   fetchCliValidate,
   getErrorMessage,
@@ -121,7 +121,7 @@ export function ThirdPartyAgentsSection() {
   const [checkingCli, setCheckingCli] = useState<CliKey | null>(null)
   const inputRefs = useRef(new Map<string, HTMLInputElement>())
 
-  const { data, isPending, isError, error, refetch } = useQuery({
+  const { data, isPending, isError, error, refetch, isFetching } = useQuery({
     queryKey: THIRD_PARTY_AGENTS_QUERY_KEY,
     queryFn: getThirdPartyAgentSettings,
   })
@@ -287,11 +287,12 @@ export function ThirdPartyAgentsSection() {
 
   if (isError) {
     return (
-      <QueryErrorState
-        layout="fill"
-        testId="third-party-agents-error"
-        message={`Could not load third-party agent settings: ${getErrorMessage(error, 'unknown error')}`}
+      <ReadErrorCallout
+        title="The third-party agent settings could not be loaded"
+        error={error}
         onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="third-party-agents-error"
       />
     )
   }

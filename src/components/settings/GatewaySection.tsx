@@ -37,6 +37,7 @@ import { useSaveBar, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { GatewayRestartModal } from './GatewayRestartModal'
 import { settingsRow } from './settingsSections'
 import { SectionLoading } from './SectionLoading'
+import { ReadErrorCallout } from './ReadErrorCallout'
 
 // ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
 
@@ -107,7 +108,7 @@ export function GatewaySection() {
   const bindResolver = useRef<((ok: boolean) => void) | null>(null)
   const { entries: pendingEntries } = usePendingRestart()
 
-  const { data: config, isLoading, isError: isConfigError, refetch: refetchConfig } = useQuery({
+  const { data: config, isLoading, isError: isConfigError, error: configError, refetch: refetchConfig, isFetching: configFetching } = useQuery({
     queryKey: ['config'],
     queryFn: fetchConfig,
   })
@@ -220,15 +221,13 @@ export function GatewaySection() {
 
   if (isConfigError || !config) {
     return (
-      <Card className="border-[var(--color-error)]/40 p-[var(--space-3)] space-y-[var(--space-2-5)]">
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">The gateway settings could not be loaded.</p>
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-          Nothing can be saved here until they load, so no setting is overwritten with a default.
-        </p>
-        <Button size="sm" variant="outline" onClick={() => refetchConfig()}>
-          Retry
-        </Button>
-      </Card>
+      <ReadErrorCallout
+        title="The gateway settings could not be loaded"
+        error={configError}
+        onRetry={() => void refetchConfig()}
+        retrying={configFetching}
+        data-testid="gateway-error"
+      />
     )
   }
 
@@ -406,7 +405,9 @@ export function GatewaySection() {
         emphasis="cancel"
         onConfirm={() => settleBind(true)}
       />
-      <GatewayRestartModal open={restartModalOpen} onClose={() => setRestartModalOpen(false)} />
+      {/* Mounted only while open: a closed window does not read the waiting
+          changes again when the section's settings load (FR-066). */}
+      {restartModalOpen && <GatewayRestartModal open onClose={() => setRestartModalOpen(false)} />}
     </div>
   )
 }

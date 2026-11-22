@@ -6,8 +6,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
-import { Button } from '@/components/ui/button'
-import { fetchRetentionSettings, updateRetentionSettings, getErrorMessage } from '@/lib/api'
+import { fetchRetentionSettings, updateRetentionSettings } from '@/lib/api'
 import type { RetentionSettingsUpdate } from '@/lib/api'
 import { SaveBar } from './SaveBar'
 import { toWriteResponse } from './saveOutcome'
@@ -47,13 +46,13 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
     retention = <SectionLoading label="Data & retention" />
   } else if (!data) {
     retention = (
-      <Callout variant="error" data-testid="retention-error">
-        <CalloutTitle>The retention settings could not be loaded</CalloutTitle>
-        <CalloutDescription>{getErrorMessage(error, 'The gateway did not answer.')}</CalloutDescription>
-        <Button variant="outline" size="sm" onClick={() => void refetch()}>
-          Retry
-        </Button>
-      </Callout>
+      <ReadErrorCallout
+        title="The retention settings could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="retention-error"
+      />
     )
   } else {
     // FR-048: the config-file switch keeps everything; the fields stay editable.

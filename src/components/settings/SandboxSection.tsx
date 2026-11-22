@@ -914,7 +914,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
   }
 
   // FR-065: the section's loading frame until both of its reads answer.
-  if (statusLoading && configLoading) return <SectionLoading label="Sandbox & network" />
+  if (statusLoading || configLoading) return <SectionLoading label="Sandbox & network" />
 
   return (
     <section className="space-y-[var(--space-2-5)]">

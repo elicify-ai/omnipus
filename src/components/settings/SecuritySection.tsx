@@ -213,9 +213,12 @@ export interface AutoApproveDraft { // not-wire-format: React props from Protect
  * password once for the whole Save.
  */
 export function AutoApproveControl({ draft }: { draft: AutoApproveDraft }) {
-  const { isLoading, isError } = useQuery({
+  const { isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
+    // The section already sent this read; a failed one is read again only
+    // by Retry, not each time this card mounts.
+    retryOnMount: false,
   })
   const { data: sandboxStatus } = useQuery({
     queryKey: ['sandbox-status'],
@@ -235,11 +238,13 @@ export function AutoApproveControl({ draft }: { draft: AutoApproveDraft }) {
 
   if (isError) {
     return (
-      <Card className="p-[var(--space-3)]">
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-          Failed to load the Auto-approve setting. Please try again.
-        </p>
-      </Card>
+      <ReadErrorCallout
+        title="The Approvals settings could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="auto-approve-load-error"
+      />
     )
   }
 
@@ -355,7 +360,14 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
     queryFn: fetchConfig,
   })
 
-  const { data: credentials = [], isError: credentialsError, isLoading: credentialsLoading } = useQuery({
+  const {
+    data: credentials = [],
+    isError: credentialsError,
+    isLoading: credentialsLoading,
+    error: credentialsReadError,
+    refetch: refetchCredentials,
+    isFetching: credentialsFetching,
+  } = useQuery({
     queryKey: ['credentials'],
     queryFn: fetchCredentials,
     retry: false,
@@ -378,7 +390,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
   // Auto-approve is a draft on the same Save bar (FR-010, FR-025): Save sends
   // it with PUT /security/sandbox-config after the Save's one password prompt.
-  const { data: sandboxConfig } = useQuery({
+  const { data: sandboxConfig, isLoading: sandboxConfigLoading, errorUpdateCount: sandboxConfigFailures } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
     // Read here only on Protection; elsewhere the control's own read fills
@@ -582,7 +594,10 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
   // FR-065: each view shows its section's loading frame until its reads answer.
   const sectionLabel = view === 'keys' ? 'Keys & secrets' : 'Protection'
-  if (isLoading || (view === 'keys' ? credentialsLoading : rateLimitsLoading)) {
+  // The Approvals read joins the frame only on its first load: after it
+  // failed, its Retry shows in the Approvals group and the rest stays put.
+  const approvalsFirstLoad = sandboxConfigLoading && sandboxConfigFailures === 0
+  if (isLoading || (view === 'keys' ? credentialsLoading : rateLimitsLoading || approvalsFirstLoad)) {
     return <SectionLoading label={sectionLabel} />
   }
 
@@ -834,7 +849,16 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
         <Card className="divide-y divide-[var(--color-border)]">
           {credentialsError && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load credentials. Please try again.</div>
+            <div className="p-[var(--space-3)]">
+              <ReadErrorCallout
+                title="The saved keys could not be loaded"
+                error={credentialsReadError}
+                onRetry={() => void refetchCredentials()}
+                retrying={credentialsFetching}
+                blocksSaving={false}
+                data-testid="credentials-load-error"
+              />
+            </div>
           )}
           {!credentialsError && credentials.length === 0 && (
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] flex items-center gap-[var(--space-2)]">
