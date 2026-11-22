@@ -86,9 +86,7 @@ type Config struct {
 	// precedence over these global values. No token/money fields (NFR-1).
 	Planning PlanningConfig `json:"planning,omitempty" yaml:"-"`
 
-	// Programs holds the connected command-line programs settings (custom
-	// entries and the web-chat switch); tokens live in the credential store.
-	Programs ProgramsConfig `json:"programs,omitempty" yaml:"-"`
+	Programs ProgramsConfig `json:"programs,omitempty" yaml:"-"` // connected programs (pkg/config/programs.go)
 
 	// SessionMessaging holds the ADR-053 §8 session-control-plane operability
 	// config (FR-195's 21 keys): the global kill switch (enabled), the wake
@@ -700,11 +698,8 @@ type AgentConfig struct {
 	// impartial (same evidence -> same verdict) rather than drifting with
 	// accumulated episodic memory across adjudications. Every other agent
 	// defaults to true (unchanged behavior). See MemoryEnabledEffective.
-	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
-	// Programs lists the ids of the connected programs switched on for this
-	// agent (connected-programs spec FR-042). Absent = none: a new agent
-	// starts with every program off. Only a signed-in person changes it.
-	Programs []string `json:"programs,omitempty"`
+	MemoryEnabled *bool    `json:"memory_enabled,omitempty"`
+	Programs      []string `json:"programs,omitempty"` // connected programs switched on (FR-042); absent = none
 	// ContextWindowOverride is the per-agent context-window override
 	// (tokens), rung 1 of the ADR-066 D2 resolution ladder. nil = unset.
 	// Like every override it can only LOWER the window: the resolver clamps
@@ -1149,11 +1144,8 @@ type ChannelInstanceConfig struct {
 	// FR-010). Absent = reply_only. Only the dedicated outbound writer may
 	// change it; set_config refuses channels.*.outbound (FR-024).
 	Outbound *ChannelOutboundConfig `json:"outbound,omitempty"`
-	// ProgramsAllowed lets turns that come from this connection use
-	// connected programs (connected-programs spec FR-010). Absent = false.
-	// Only PUT /channels/{id}/programs sets it; rebinding the connection to
-	// another workspace resets it to false in the same write; set_config
-	// refuses channels.*.programs_allowed.
+	// ProgramsAllowed lets work from this connection use connected programs
+	// (FR-010); only PUT /channels/{id}/programs writes it, a rebind clears it.
 	ProgramsAllowed bool `json:"programs_allowed,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
