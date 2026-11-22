@@ -17,6 +17,7 @@
 // The packages module stays REAL: the step's calls run through the production
 // transport over a mocked fetch (state + apply URLs), and mutations run under
 // a production-defaults QueryClient (CHECK F04).
+import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -27,6 +28,71 @@ import {
   type PackageImportPreview,
   type PackageImportResult,
 } from '@/lib/api/packages'
+
+// GREEN CHECK P07 (spec "UI Screens and States" design-system table, line 473:
+// "Workspace choice | select"; FR-028 catalogued components): the Confirm's
+// workspace choice is the CATALOGUED select, driven through its real
+// accessibility contract — a combobox trigger showing the chosen label, a
+// choice made by selecting an option — never native <select> change events.
+// The shim follows the repo's Radix-select test precedent
+// (ConnectorsScreen.test.tsx) and mirrors SelectValue's selected-label display
+// so the trigger's shown text stays observable.
+//
+// D-3 (round 8): the label map is filled by the SELECT itself, from its own
+// children, DURING the Select's render — before SelectTrigger/SelectValue
+// render in the same pass. The previous shim filled the map in SelectItem's
+// effect, which runs after SelectValue has already rendered, so a value
+// pre-choosen on the first render showed the placeholder. The walk descends
+// through wrappers (fragments, arrays, SelectGroup), so the map is complete
+// on the very first render with no extra pass.
+vi.mock('@/components/ui/select', () => {
+  const labels = new Map<string, string>()
+  type SelectProps = { value?: string; onValueChange?: (v: string) => void; children?: React.ReactNode }
+  type ItemProps = { value: string; children?: React.ReactNode }
+  const SelectCtx = React.createContext<{ value?: string; onValueChange?: (v: string) => void }>({})
+
+  const SelectItem = ({ value, children }: ItemProps) => {
+    const { onValueChange } = React.useContext(SelectCtx)
+    return React.createElement(
+      'div',
+      { role: 'option', 'data-value': value, onClick: () => onValueChange?.(value) },
+      children,
+    )
+  }
+
+  function collectItemLabels(node: React.ReactNode, into: Map<string, string>): void {
+    React.Children.forEach(node, (child) => {
+      if (!React.isValidElement(child)) return
+      const props = child.props as { value?: unknown; children?: unknown }
+      if (child.type === SelectItem) {
+        if (typeof props.value === 'string') {
+          into.set(props.value, typeof props.children === 'string' ? props.children : props.value)
+        }
+        return
+      }
+      if (props.children != null) collectItemLabels(props.children as React.ReactNode, into)
+    })
+  }
+
+  const Select = ({ value, onValueChange, children }: SelectProps) => {
+    labels.clear()
+    collectItemLabels(children, labels)
+    return React.createElement(SelectCtx.Provider, { value: { value, onValueChange } }, children)
+  }
+  const SelectTrigger = ({ children, ...rest }: { children?: React.ReactNode } & Record<string, unknown>) =>
+    React.createElement('button', { type: 'button', role: 'combobox', ...rest }, children)
+  const SelectValue = ({ placeholder }: { placeholder?: string }) => {
+    const { value } = React.useContext(SelectCtx)
+    return React.createElement('span', {}, (value && labels.get(value)) || placeholder)
+  }
+  const SelectContent = ({ children }: { children?: React.ReactNode }) =>
+    React.createElement('div', { role: 'listbox' }, children)
+  const SelectLabel = ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children)
+  const SelectGroup = ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children)
+  const SelectSeparator = () => React.createElement('hr', {})
+
+  return { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectLabel, SelectGroup, SelectSeparator }
+})
 
 const RECORD_KEY = 'omnipus.exportImport.import'
 
@@ -187,8 +253,10 @@ describe('Import Confirm (US-4.3)', () => {
     installFetch(() => jsonResponse(200, okResult()))
     renderConfirm()
     expect(await screen.findByText('Added as new. Existing agents are never changed.')).toBeInTheDocument()
-    const select = await screen.findByRole('combobox')
-    expect((select as HTMLSelectElement).value).toBe('ws-general')
+    // GREEN CHECK P07: the catalogued select shows the CHOSEN WORKSPACE'S
+    // LABEL in its trigger (SelectValue) — the observable form of the
+    // pre-choice; the combobox is the trigger button, not a native select.
+    expect(await screen.findByRole('combobox')).toHaveTextContent('General')
   })
 
   it('without a default workspace nothing is pre-chosen and Import is disabled until one is chosen', async () => {
@@ -198,11 +266,13 @@ describe('Import Confirm (US-4.3)', () => {
     ])
     installFetch(() => jsonResponse(200, okResult()))
     renderConfirm(false)
-    const select = await screen.findByRole('combobox')
-    expect((select as HTMLSelectElement).value).toBe('')
+    // GREEN CHECK P07: with no choice the trigger shows the placeholder, and
+    // the choice is made by selecting the option — the catalogued select's
+    // contract (spec line 473), not a native change event.
+    expect(await screen.findByRole('combobox')).toHaveTextContent('Choose a workspace')
     expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled()
     await act(async () => {
-      fireEvent.change(select, { target: { value: 'ws-b' } })
+      fireEvent.click(screen.getByRole('option', { name: 'B' }))
     })
     expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled()
   })
@@ -218,9 +288,11 @@ describe('Import Confirm (US-4.3)', () => {
   it('Import sends the exact {mode, workspace_id} body with the record at apply_sent before the request', async () => {
     const { applyBodies, recordAtApply } = installFetch(() => jsonResponse(200, okResult()))
     renderConfirm()
-    const select = await screen.findByRole('combobox')
+    // GREEN CHECK P07: the choice goes through the catalogued select's option
+    // (trigger → option), and the exact body assertion below is unchanged.
+    await screen.findByRole('combobox')
     await act(async () => {
-      fireEvent.change(select, { target: { value: 'ws-marketing' } })
+      fireEvent.click(screen.getByRole('option', { name: 'Marketing' }))
     })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Import' }))
@@ -360,9 +432,11 @@ describe('Record after a known refusal (US-5, D4-5…11c)', () => {
     const listCallsAfterRefusal = mockWorkspaces.mock.calls.length
     expect(listCallsAfterRefusal, 'the workspace list is refreshed').toBeGreaterThan(1)
 
-    const select = screen.getByRole('combobox')
+    // GREEN CHECK P07: the new choice after the refusal is an option
+    // selection on the catalogued select; the apply-once assertion below is
+    // unchanged.
     await act(async () => {
-      fireEvent.change(select, { target: { value: 'ws-marketing' } })
+      fireEvent.click(screen.getByRole('option', { name: 'Marketing' }))
     })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Import' }))

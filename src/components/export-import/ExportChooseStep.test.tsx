@@ -162,22 +162,32 @@ describe('Export Choose — the own-agent list (US-2.1)', () => {
 })
 
 describe('Export Choose — the filter field (FR-016, D3)', () => {
+  // GREEN CHECK P07 (spec "UI Screens and States" design-system table, line
+  // 470: "Agent choice | radio-group (+ search-field for the filter)";
+  // FR-028 catalogued components): the filter is the CATALOGUED search-field,
+  // not a bare input — role searchbox (type=search), a "Clear search" button
+  // while text is present, and Escape-to-clear. The narrowing, no-match and
+  // restore oracles are unchanged.
   async function openList() {
     renderPage()
     await screen.findByRole('radio', { name: /Writer/ })
   }
 
   function filterField(): HTMLInputElement {
-    const fields = screen.getAllByRole('textbox')
+    const fields = screen.getAllByRole('searchbox')
     expect(fields, 'the Choose step has exactly one filter field').toHaveLength(1)
     return fields[0] as HTMLInputElement
   }
 
+  async function filterTo(query: string) {
+    await act(async () => {
+      fireEvent.change(filterField(), { target: { value: query } })
+    })
+  }
+
   it('a matching query narrows the list to the matching agent', async () => {
     await openList()
-    await act(async () => {
-      fireEvent.change(filterField(), { target: { value: 'wri' } })
-    })
+    await filterTo('wri')
     expect(screen.getByRole('radio', { name: /Writer/ })).toBeInTheDocument()
     expect(screen.queryByRole('radio', { name: /Coder/ })).toBeNull()
     expect(screen.queryByRole('radio', { name: /Helper/ })).toBeNull()
@@ -185,22 +195,34 @@ describe('Export Choose — the filter field (FR-016, D3)', () => {
 
   it('a query with no match shows "No agent matches." and no rows', async () => {
     await openList()
-    await act(async () => {
-      fireEvent.change(filterField(), { target: { value: 'zzz' } })
-    })
+    await filterTo('zzz')
     expect(screen.getByText('No agent matches.')).toBeInTheDocument()
     expect(screen.queryByRole('radio')).toBeNull()
   })
 
-  it('clearing the filter restores the full list', async () => {
+  it('the search-field offers its Clear button while text is present, and clicking it restores the full list', async () => {
     await openList()
-    const field = filterField()
+    await filterTo('zzz')
+    expect(screen.getByText('No agent matches.')).toBeInTheDocument()
+    // The kit contract: the clear action exists exactly while text is present.
+    expect(screen.getByRole('button', { name: 'Clear search' })).toBeInTheDocument()
     await act(async () => {
-      fireEvent.change(field, { target: { value: 'zzz' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
     })
+    expect(screen.queryByText('No agent matches.')).toBeNull()
+    expect(screen.getByRole('radio', { name: /Coder/ })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Helper/ })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Writer/ })).toBeInTheDocument()
+    // And the clear action goes away again once the field is empty.
+    expect(screen.queryByRole('button', { name: 'Clear search' })).toBeNull()
+  })
+
+  it('Escape clears the filter and restores the full list', async () => {
+    await openList()
+    await filterTo('zzz')
     expect(screen.getByText('No agent matches.')).toBeInTheDocument()
     await act(async () => {
-      fireEvent.change(field, { target: { value: '' } })
+      fireEvent.keyDown(filterField(), { key: 'Escape' })
     })
     expect(screen.queryByText('No agent matches.')).toBeNull()
     expect(screen.getByRole('radio', { name: /Coder/ })).toBeInTheDocument()
