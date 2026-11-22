@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -70,24 +69,11 @@ func (a *restAPI) handlePackageExport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// packageFileName is a safe download name for an agent (FR-010): letters,
-// digits, space, dot, dash and underscore are kept, anything else becomes an
-// underscore; an empty result is "agent".
+// packageFileName is a safe download name for an agent (FR-010). The rule
+// lives in omnpkg.DownloadFileName so the export and the B1 review's
+// file_name can never disagree.
 func packageFileName(name string) string {
-	var b strings.Builder
-	for _, r := range strings.TrimSpace(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == ' ', r == '.', r == '-', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	base := strings.Trim(b.String(), ". ")
-	if base == "" {
-		base = "agent"
-	}
-	return base + ".omnpkg"
+	return omnpkg.DownloadFileName(name)
 }
 
 // packageExportSource is the engine's store edge for export: the stored
@@ -113,7 +99,17 @@ func (s *packageExportSource) AgentRecord(id string) ([]byte, error) {
 	return json.Marshal(agent)
 }
 
+// AgentHomeDir is the agent's folder under the data directory. The ID is
+// checked the same way AgentRecord checks it (which runs first), and must be
+// a single local path element, so it can never name a folder outside
+// agents/.
 func (s *packageExportSource) AgentHomeDir(id string) (string, error) {
+	if err := agentstore.ValidateAgentID(id); err != nil {
+		return "", packageErr(packageCodeAgentNotFound, "agent_id", id)
+	}
+	if !filepath.IsLocal(id) {
+		return "", packageErr(packageCodeAgentNotFound, "agent_id", id)
+	}
 	return filepath.Join(s.a.homePath, "agents", id), nil
 }
 

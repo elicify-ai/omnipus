@@ -19,6 +19,7 @@ import {
   UserCircle,
   Files,
   FolderOpen,
+  Package,
 } from '@phosphor-icons/react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, isSidebarOverlayOpen, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
@@ -29,6 +30,7 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
+import { currentIdentityMode } from '@/lib/api/identityMode'
 import { logError } from '@/lib/telemetry'
 import type { Workspace } from '@/lib/api'
 import { WorkspaceAgentList } from './sidebar/WorkspaceAgentList'
@@ -59,6 +61,9 @@ import { GodModeSidebarPill } from './GodModeIndicators'
 const ASSET_ITEMS = [
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
   { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
+  // Export & Import (#1967 B1): self-hosted edition only, hidden while the
+  // edition is not yet known (fail closed).
+  { to: '/export-import', label: 'Export & Import', Icon: Package, localOnly: true },
 ] as const
 
 const PROJECT_COLLAPSE_THRESHOLD = 5
@@ -670,7 +675,7 @@ export function Sidebar() {
             Assets
           </span>
         </div>
-        {ASSET_ITEMS.map(({ to, label, Icon }) => {
+        {ASSET_ITEMS.filter((item) => !('localOnly' in item) || currentIdentityMode() === 'local').map(({ to, label, Icon }) => {
           const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`)
           return (
             <Link

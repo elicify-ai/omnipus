@@ -117,7 +117,10 @@ Omnipus can create three kinds of agent:
 | Subagent | The Omnipus engine | Other agents, through delegation | No |
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
-**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. The same scripts can export, preview and import one custom agent through `POST /api/v1/packages/export`, `POST /api/v1/packages/import` and `POST /api/v1/packages/import/{staging_id}/apply` — see [How to move an agent to another install](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). Export and apply answer 200. The upload that returns the preview answers 201. A committed apply is 200 even when activation is pending or the warning is `publish_not_durable`. It is an API only, with no screen in the app.
+**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. The same scripts can export, preview and import one custom agent through `POST /api/v1/packages/export`, `POST /api/v1/packages/import` and `POST /api/v1/packages/import/{staging_id}/apply` — see [How to move an agent to another install](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). Export and apply answer 200. The upload that returns the preview answers 201. A committed apply is 200 even when activation is pending or the warning is `publish_not_durable`. Two more calls serve the app's Export & Import page and scripts alike:
+
+- `POST /api/v1/packages/export/plan` with `{"scope":"agents","agent_ids":["<id>"]}` returns a review (201): the files and sizes the bundle would hold, what is left out and why, the secrets to enter again (names only, never values), the notice that prompt and instructions text is copied as it is, the bundle size and the download file name. It refuses an agent exactly as the export would, writes nothing and is not audited. Read it back with `GET /api/v1/packages/export/plan/{plan_id}` for 30 minutes; after that, or after a gateway restart, the answer is 404 `plan_not_found`. The export itself is not tied to the review: it packs the agent as it is when you export.
+- `DELETE /api/v1/packages/import/{staging_id}` cancels an upload you have not imported: 204 when it is gone, so it no longer counts towards the five waiting uploads. An upload being received, being imported or kept after a failed import is never touched (409 `staging_busy`). If its temporary files cannot be removed, it is still cancelled and frees its place (500 `staging_cleanup_failed`); the next upload, or cancelling again, tries the removal again. A 404 `staging_not_found` does not tell you whether the upload was imported, so check the Team before importing again.
 
 For scripts that change or remove an agent, update with `PUT /api/v1/agents/{id}` and delete with `DELETE /api/v1/agents/{id}` — never add a sub-path. An unknown sub-path returns `404`; a known one (`sessions`, `activity-runs`, `runner/test`, `tools`, `mailboxes/{workspaceId}`, `dependencies`) used with a method it does not serve returns `405` and an `Allow` header listing the methods it does serve. Neither refusal changes or deletes the agent. The gateway answers `OPTIONS` itself, before the agents handler runs; browsers send it as the preflight request.
 
@@ -125,7 +128,12 @@ To change an agent, open its card on the workspace's **Team**, or its row menu i
 
 ## How to move an agent to another install
 
-You can copy one custom agent to another Omnipus you run yourself. The command line packs it into one file and, on the other install, adds it as a **new** agent. The commands, the preview, the confirm step and the exit codes are in [Using the Omnipus command line](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). There is no screen for it, and asking an agent does not do it.
+You can copy one custom agent to another Omnipus you run yourself. It is packed into one file, a bundle (`.omnpkg`), and on the other install it is added as a **new** agent.
+
+- **In the app:** the [Export & Import](export-import.md) page in the sidebar (self-hosted edition). **Export** in an agent's edit sheet opens the export with that agent already chosen.
+- **On the command line:** the commands, the preview, the confirm step and the exit codes are in [Using the Omnipus command line](using-omnipus-cli.md#how-to-move-an-agent-to-another-install).
+
+Asking an agent does not do it.
 
 **Built-in agents never go into a package.** That is Mia, Jim, Omnipus, the shipped workers Planner, Researcher and General Purpose, and the internal agents Judge and Plan Supervisor. Export refuses them, and the message says they cannot be exported. Import never changes a built-in agent. A custom agent that only shares a built-in's name, such as a custom agent named Mia, can be exported. On an install that already has Mia, it arrives as a new custom agent named Mia (imported), with a new id. The built-in Mia's record, prompt and memory are unchanged.
 
