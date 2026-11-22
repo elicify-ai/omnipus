@@ -34,11 +34,30 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 const redSentinel = "sentinel_9f3c2a7e5b1d" // D-9: L = 21
+
+// recordingSink records every byte the masking writer emits — the S-103
+// instrument sink that sits BEFORE the capture cap.
+type recordingSink struct{ b bytes.Buffer }
+
+func (r *recordingSink) Write(p []byte) (int, error) { return r.b.Write(p) }
+
+// recorded returns the first n bytes the sink received (the cap window).
+func (r *recordingSink) recorded(n int) string {
+	s := r.b.String()
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+
+// all returns everything the sink ever received.
+func (r *recordingSink) all() string { return r.b.String() }
 
 // longestLeak returns the longest substring of at least 8 bytes of token that
 // appears in out — the oracle for "no part of 8 or more characters appears".
@@ -142,23 +161,104 @@ func TestProgramMaskingWriter_Fragmentation(t *testing.T) {
 		requireNoLeak(t, out, redSentinel)
 	})
 
-	t.Run("S104_split_writes_with_a_read_between", func(t *testing.T) {
-		// S-104: the first 10 bytes are written and read while the stream is
-		// open, the rest after; neither read nor the completion may contain
-		// an 8-or-more-byte fragment, and the completion shows [FILTERED].
-		buf, w := newMasked(redSentinel)
-		_, err := w.Write([]byte(redSentinel[:10]))
+	t.Run("S104_timely_emission_through_a_pipe_while_open", func(t *testing.T) {
+		// S-104/CHECK F13: the read happens WHILE the stream is open, through
+		// a real pipe (a bytes.Buffer read can never prove timeliness — it is
+		// filled synchronously). The innocent prefix before a partial token
+		// must flow to the reader while the writer is still open; the token
+		// bytes the stream released raw total at most 7; the completion shows
+		// [FILTERED] and no 8-or-more-byte fragment.
+		pr, pw := io.Pipe()
+		firstChunk := make(chan string, 1)
+		restCh := make(chan []byte, 1)
+		go func() {
+			// One reader goroutine: it takes the first emitted chunk (the
+			// timeliness proof) and then drains to EOF so no later write of
+			// the masking writer can block on the pipe.
+			chunk := make([]byte, 128)
+			n, _ := pr.Read(chunk) // blocks until the masking writer emits
+			firstChunk <- string(chunk[:n])
+			rest, _ := io.ReadAll(pr)
+			restCh <- rest
+		}()
+		w := NewMaskingWriter(pw, []string{redSentinel})
+		_, err := w.Write([]byte("run ok: " + redSentinel[:10]))
 		require.NoError(t, err)
-		firstRead := buf.String() // the "read after 1 s"
-		requireNoLeak(t, firstRead, redSentinel)
-		require.LessOrEqual(t, len(firstRead), 10+11, // raw held ≤ 7 or a [FILTERED] marker
-			"hold-back must emit or mask; at most 7 bytes stay hidden")
+		var first string
+		select {
+		case first = <-firstChunk:
+		case <-time.After(5 * time.Second):
+			t.Fatal("S-104: the writer released nothing while the stream was open — innocent output must flow, not queue behind a partial token")
+		}
+		require.True(t, strings.HasPrefix(first, "run ok: "),
+			"the innocent prefix is emitted while the stream is open (got %q)", first)
 		_, err = w.Write([]byte(redSentinel[10:]))
 		require.NoError(t, err)
 		require.NoError(t, w.Close())
-		completion := buf.String()
-		require.Contains(t, completion, "[FILTERED]", "the completion masks the token")
-		requireNoLeak(t, completion, redSentinel)
+		require.NoError(t, pw.Close(), "the test closes the pipe's write side after the writer closed")
+		rest := <-restCh
+		full := first + string(rest)
+		require.Contains(t, full, "[FILTERED]", "the completion masks the token")
+		requireNoLeak(t, full, redSentinel)
+		emittedRaw := len(full) - len("run ok: ") - len("[FILTERED]")
+		require.LessOrEqual(t, emittedRaw, 7,
+			"hold-back: at most 7 token bytes are ever released raw (got %d)", emittedRaw)
+	})
+
+	t.Run("S103_cap_window_records_no_fragment", func(t *testing.T) {
+		// S-103's writer-level face (R4-N1/R3-N1): the recording sink sits
+		// BEFORE the 80-byte capture cap, so the cap window's bytes are
+		// exactly what the masking writer emitted first. The first 10 sentinel
+		// bytes fall inside the cap; masking must already have applied there —
+		// no 8-or-more-byte fragment may appear in the window. (The
+		// instrument check of the spec — the writer removed from
+		// programs.Attach in a test build — is CHECK's mutation probe.)
+		sink := &recordingSink{}
+		w := NewMaskingWriter(sink, []string{redSentinel})
+		_, err := w.Write([]byte(strings.Repeat("a", 70) + redSentinel[:10]))
+		require.NoError(t, err)
+		// Every byte that entered the 80-byte capture cap window is clean.
+		requireNoLeak(t, sink.recorded(80), redSentinel)
+		_, err = w.Write([]byte(redSentinel[10:]))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		require.Contains(t, sink.all(), "[FILTERED]", "the completion masks the token")
+		requireNoLeak(t, sink.all(), redSentinel)
+	})
+
+	t.Run("exhaustive_splits_and_prefix_overlap", func(t *testing.T) {
+		// CHECK F13: every split point of the token across two writes, plus a
+		// prefix-overlapping token pair (one token a prefix of the other).
+		// For each split: no 8-or-more-byte fragment is ever readable, at
+		// most 7 raw token bytes are emitted mid-stream, and the completion
+		// shows [FILTERED].
+		for i := 0; i <= len(redSentinel); i++ {
+			buf, w := newMasked(redSentinel)
+			_, err := w.Write([]byte(redSentinel[:i]))
+			require.NoError(t, err)
+			mid := buf.String()
+			requireNoLeak(t, mid, redSentinel)
+			require.LessOrEqual(t, len(mid), 7+len("[FILTERED]"),
+				"split at %d: at most 7 raw bytes or one [FILTERED] are visible mid-stream", i)
+			_, err = w.Write([]byte(redSentinel[i:]))
+			require.NoError(t, err)
+			require.NoError(t, w.Close())
+			out := buf.String()
+			require.Contains(t, out, "[FILTERED]", "split at %d: the completion masks the token", i)
+			requireNoLeak(t, out, redSentinel)
+		}
+		// Prefix overlap: tokenB starts with tokenA; writing tokenB must mask
+		// it whole and leak neither.
+		tokenA := "tok_ab_123456"
+		tokenB := tokenA + "XYZ"
+		buf, w := newMasked(tokenA, tokenB)
+		_, err := w.Write([]byte(tokenB))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		out := buf.String()
+		require.Equal(t, "[FILTERED]", out, "a token that extends another is masked whole")
+		requireNoLeak(t, out, tokenA)
+		requireNoLeak(t, out, tokenB)
 	})
 
 	t.Run("S102_quote_and_backslash_token", func(t *testing.T) {
