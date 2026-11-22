@@ -50,14 +50,44 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 // ImportConfirmStep.test.tsx (the repo's Radix-select test precedent,
 // ConnectorsScreen.test.tsx) keeps its accessibility contract drivable in
 // jsdom — combobox trigger, option choice, SelectValue showing the label.
+// D-3 (round 8): the label map is filled by the SELECT itself, from its own
+// children, DURING the Select's render — before SelectValue renders in the
+// same pass — so a value pre-choosen on the first render shows its label
+// with no extra pass (the old effect-based fill rendered the placeholder).
 vi.mock('@/components/ui/select', () => {
   const labels = new Map<string, string>()
   type SelectProps = { value?: string; onValueChange?: (v: string) => void; children?: React.ReactNode }
   type ItemProps = { value: string; children?: React.ReactNode }
   const SelectCtx = React.createContext<{ value?: string; onValueChange?: (v: string) => void }>({})
 
-  const Select = ({ value, onValueChange, children }: SelectProps) =>
-    React.createElement(SelectCtx.Provider, { value: { value, onValueChange } }, children)
+  const SelectItem = ({ value, children }: ItemProps) => {
+    const { onValueChange } = React.useContext(SelectCtx)
+    return React.createElement(
+      'div',
+      { role: 'option', 'data-value': value, onClick: () => onValueChange?.(value) },
+      children,
+    )
+  }
+
+  function collectItemLabels(node: React.ReactNode, into: Map<string, string>): void {
+    React.Children.forEach(node, (child) => {
+      if (!React.isValidElement(child)) return
+      const props = child.props as { value?: unknown; children?: unknown }
+      if (child.type === SelectItem) {
+        if (typeof props.value === 'string') {
+          into.set(props.value, typeof props.children === 'string' ? props.children : props.value)
+        }
+        return
+      }
+      if (props.children != null) collectItemLabels(props.children as React.ReactNode, into)
+    })
+  }
+
+  const Select = ({ value, onValueChange, children }: SelectProps) => {
+    labels.clear()
+    collectItemLabels(children, labels)
+    return React.createElement(SelectCtx.Provider, { value: { value, onValueChange } }, children)
+  }
   const SelectTrigger = ({ children, ...rest }: { children?: React.ReactNode } & Record<string, unknown>) =>
     React.createElement('button', { type: 'button', role: 'combobox', ...rest }, children)
   const SelectValue = ({ placeholder }: { placeholder?: string }) => {
@@ -66,20 +96,6 @@ vi.mock('@/components/ui/select', () => {
   }
   const SelectContent = ({ children }: { children?: React.ReactNode }) =>
     React.createElement('div', { role: 'listbox' }, children)
-  const SelectItem = ({ value, children }: ItemProps) => {
-    const { onValueChange } = React.useContext(SelectCtx)
-    React.useEffect(() => {
-      labels.set(value, typeof children === 'string' ? children : value)
-      return () => {
-        labels.delete(value)
-      }
-    }, [value, children])
-    return React.createElement(
-      'div',
-      { role: 'option', 'data-value': value, onClick: () => onValueChange?.(value) },
-      children,
-    )
-  }
   const SelectLabel = ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children)
   const SelectGroup = ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children)
   const SelectSeparator = () => React.createElement('hr', {})
@@ -682,18 +698,22 @@ describe('Browser Back after a lost apply answer (US-5, FR-024a, GREEN CHECK P02
     // The Confirm screen needs an active default workspace to pre-choose.
     mockWorkspaces.mockResolvedValue([{ id: 'ws-general', name: 'General', is_default: true, pinned: false }])
     // This row holds its own QueryClient so one wizard instance survives
-    // rerenders (renderAt builds a fresh client per call).
+    // rerenders (renderAt builds a fresh client per call). D-4 (round 8):
+    // EVERY render and rerender passes a FRESH element — rerender with the
+    // identical element object lets React skip the whole tree, so the new
+    // address would never be read; the app's router re-renders useSearch on
+    // navigation, and a fresh element models exactly that.
     const client = new QueryClient({
       defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } },
     })
     const Component = (Route as unknown as { component: React.ComponentType }).component
-    const wizard = (
+    const wizardAt = () => (
       <QueryClientProvider client={client}>
         <Component />
       </QueryClientProvider>
     )
     mockSearch = { wizard: 'import' }
-    const view = render(wizard)
+    const view = render(wizardAt())
     const input = document.querySelector('input[type="file"]') as HTMLInputElement | null
     expect(input, 'the File step renders a bundle-file input').not.toBeNull()
     const file = new File([new Uint8Array(64)], 'bundle.omnpkg', { type: 'application/octet-stream' })
@@ -714,7 +734,7 @@ describe('Browser Back after a lost apply answer (US-5, FR-024a, GREEN CHECK P02
     // History BACK in the same instance: the address says Preview again.
     mockSearch = { wizard: 'import', step: 'preview', staging_id: 'S' }
     await act(async () => {
-      view.rerender(wizard)
+      view.rerender(wizardAt())
     })
     expect(
       await screen.findByText(OUTCOME_UNKNOWN),
@@ -729,7 +749,7 @@ describe('Browser Back after a lost apply answer (US-5, FR-024a, GREEN CHECK P02
     // History FORWARD: the confirm address must stay Outcome-unknown too.
     mockSearch = { wizard: 'import', step: 'confirm', staging_id: 'S' }
     await act(async () => {
-      view.rerender(wizard)
+      view.rerender(wizardAt())
     })
     expect(await screen.findByText(OUTCOME_UNKNOWN)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Import' })).toBeNull()
