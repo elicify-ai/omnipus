@@ -40,17 +40,6 @@ func storedProvenance(origins []string) bus.Provenance {
 	return bus.NewProvenance(conv...)
 }
 
-// stampLineageProvenance writes provenance_mode lineage and the stored
-// provenance on a lifecycle record being created (FR-041, FR-050). The mode is
-// written once, at creation.
-func stampLineageProvenance(rec *session.LifecycleRecord, p bus.Provenance) {
-	if rec == nil {
-		return
-	}
-	rec.ProvenanceMode = session.ProvenanceModeLineage
-	rec.Provenance = provenanceOrigins(p)
-}
-
 // sessionLineageProvenance returns the stored provenance a turn of sessionID
 // must join (I-2 "a turn's provenance"): lineage is true for a lineage
 // session, whose stored provenance is joined into every turn; false for a

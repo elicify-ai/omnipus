@@ -6,10 +6,10 @@ package tools
 
 import (
 	"context"
-
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"strings"
 	"sync"
+
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // TurnOrigin is the set of inputs a turn has consumed (omnipus-system-agent

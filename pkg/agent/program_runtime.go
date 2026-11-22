@@ -34,19 +34,21 @@ func (al *AgentLoop) programsForTurn(ctx context.Context, privateNames []string)
 	if store != nil {
 		src = store
 	}
-	if storeErr != nil {
-		logger.WarnCF("agent", "connected programs not loaded: credential store unavailable",
-			map[string]any{"agent_id": agentID, "error": storeErr.Error()})
-	}
 	resolved, err := programs.Resolve(cfg, src, storeErr, programs.TurnRequest{
 		AgentID:          agentID,
 		Provenance:       tools.ToolTurnProvenance(ctx),
 		PrivateVariables: privateNames,
 	})
 	if err != nil {
-		logger.WarnCF("agent", "connected programs not loaded: catalog unreadable",
+		// The command still runs without program variables (FR-027); the
+		// person sees the value-free notice, the operator this log line.
+		logger.WarnCF("agent", "connected programs not loaded for this command",
 			map[string]any{"agent_id": agentID, "error": err.Error()})
-		return &programs.TurnPrograms{Tokens: resolved.Tokens, Notices: []string{programs.MsgStoreUnavailable}}
+		notices := resolved.Notices
+		if len(notices) == 0 {
+			notices = []string{programs.MsgStoreUnavailable}
+		}
+		return &programs.TurnPrograms{Tokens: resolved.Tokens, Notices: notices}
 	}
 	if len(resolved.Tokens) > 0 {
 		cfg.EnsureSensitiveValues(resolved.Tokens)

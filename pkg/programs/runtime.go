@@ -249,6 +249,11 @@ func switchedOn(cfg *config.Config, agentID string) ([]ProgramEntry, error) {
 // FR-024, FR-027). storeErr is the error of opening the credential store;
 // a nil store with a nil error means no store exists yet (nothing saved).
 // The result is order-independent: conflicts drop every party.
+//
+// The result is never nil. A non-nil error (catalog unreadable, store
+// unavailable, a token unreadable) comes with a result that carries no
+// variables and, for store failures, the FR-027 notice: the command still
+// runs, and the caller logs the error.
 func Resolve(cfg *config.Config, store TokenSource, storeErr error, req TurnRequest) (*TurnPrograms, error) {
 	out := &TurnPrograms{Tokens: knownTokens()}
 	if cfg == nil || req.AgentID == "" {
@@ -267,8 +272,9 @@ func Resolve(cfg *config.Config, store TokenSource, storeErr error, req TurnRequ
 		return out, nil
 	}
 	if storeErr != nil {
+		// FR-027: the command runs without tokens; the caller logs the cause.
 		out.Notices = []string{MsgStoreUnavailable}
-		return out, nil
+		return out, fmt.Errorf("programs: credential store unavailable: %w", storeErr)
 	}
 	if store == nil {
 		return out, nil
@@ -283,7 +289,7 @@ func Resolve(cfg *config.Config, store TokenSource, storeErr error, req TurnRequ
 		case gerr != nil:
 			out.Notices = []string{MsgStoreUnavailable}
 			out.Entries, out.Env, out.gitLogins = nil, nil, nil
-			return out, nil
+			return out, fmt.Errorf("programs: reading the token of %q: %w", e.ID, gerr)
 		}
 		rememberToken(v)
 		tokens[e.ID] = v
