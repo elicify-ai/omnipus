@@ -359,19 +359,64 @@ func pgServe(t *testing.T, f *pgGateFixture, method, path string, body []byte,
 
 // pgAgentPUT prepares a revisioned PUT /api/v1/agents/dev (the shared agent
 // route refuses a stale revision), with the caller identity attached, and
-// returns the recorder plus the number of body bytes the server consumed
-// (CHECK F18: body-read counting on the shared helper, same instrument as
-// pgServe).
+// returns the recorder plus the number of body bytes the server consumed.
+// CHECK R04: the revision is injected FIRST (the fixture helper reads and
+// re-marshals the body — counting that read measured request construction,
+// never the server); the helper's finished request is then re-wrapped with a
+// fresh counter, so the count is exactly the bytes the SERVER consumed.
 func pgAgentPUT(t *testing.T, f *pgGateFixture, body string, bearer string, withSession, csrf bool) (*httptest.ResponseRecorder, int64) {
 	t.Helper()
+	req := revisionedAgentMutationRequest(t, f.api, pgAgentsRoute, strings.NewReader(body))
 	var read int64
-	req := revisionedAgentMutationRequest(t, f.api, pgAgentsRoute,
-		&pgCountingBody{r: strings.NewReader(body), n: &read})
+	raw, err := io.ReadAll(req.Body)
+	require.NoError(t, err, "instrument: the prepared fixture body re-reads")
+	req.Body = io.NopCloser(&pgCountingBody{r: bytes.NewReader(raw), n: &read})
 	req.Header.Set("Content-Type", "application/json")
 	pgAttach(f, req, bearer, withSession, csrf)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
 	return w, read
+}
+
+// TestProgramsREST_AgentBodyCounter_Instrument proves the shared-agent body
+// counter on known handlers (CHECK R04): a KNOWN NO-READ refusal reports
+// zero through the same wrapper — the instrument can see a server that never
+// decoded — and a bounded oversized-body probe shows the counter reports the
+// SERVER's bounded read, never the sender's payload size.
+func TestProgramsREST_AgentBodyCounter_Instrument(t *testing.T) {
+	t.Run("no_read_handler_counts_zero", func(t *testing.T) {
+		noRead := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden) // refuses without touching the body
+		})
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/agents/dev", nil)
+		var read int64
+		req.Body = io.NopCloser(&pgCountingBody{r: strings.NewReader(`{"description":"x"}`), n: &read})
+		w := httptest.NewRecorder()
+		noRead.ServeHTTP(w, req)
+		require.Equal(t, http.StatusForbidden, w.Code)
+		require.Equal(t, int64(0), read, "instrument: a refusal that never reads reports zero")
+	})
+
+	t.Run("bounded_oversized_body_probe_reports_the_server_read", func(t *testing.T) {
+		const bound = 64
+		bounded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			dec := json.NewDecoder(io.LimitReader(r.Body, bound))
+			var m map[string]any
+			_ = dec.Decode(&m) // the bounded decode the D-8 row 4 column describes
+			w.WriteHeader(http.StatusOK)
+		})
+		big := strings.Repeat("a", 10000)
+		payload := `{"description":"` + big + `"}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/agents/dev", nil)
+		var read int64
+		req.Body = io.NopCloser(&pgCountingBody{r: strings.NewReader(payload), n: &read})
+		w := httptest.NewRecorder()
+		bounded.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Greater(t, read, int64(0), "the bounded handler did read")
+		require.LessOrEqual(t, read, int64(bound),
+			"instrument: the counter reports the server's bounded read, never the fixture's payload size (%d bytes sent)", len(payload))
+	})
 }
 
 // pgAgentRecord reads the persisted dev record and decodes it to a
