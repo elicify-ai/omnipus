@@ -91,7 +91,10 @@ func (ts *turnState) liveViewContext() context.Context {
 // failed when the run failed), with every text row already saved so the
 // streamer writes nothing. A Stop or a steer interrupt (context.Canceled) is
 // not a failure and gets no error frame, as on the native path. It returns
-// the streamer's own finalize error, if any.
+// the streamer's own finalize error, if any, but never the turn's latched
+// transcript-save failure: that one is announced here and collected by the
+// drain into turnResult.saveFailure, so it warns without failing the run
+// (ARCHITECT-RULING-R2 R1-a, R1-d).
 func (al *AgentLoop) finishExternalLiveView(ctx context.Context, ts *turnState, runErr error) error {
 	failed := runErr != nil && !errors.Is(runErr, context.Canceled)
 	if failed && !ts.externalErrorAnnounced.Load() {
@@ -116,7 +119,37 @@ func (al *AgentLoop) finishExternalLiveView(ctx context.Context, ts *turnState, 
 		}
 	}
 	ts.markLastStreamerTranscriptPersisted()
-	return ts.finalizeStreamer(ctx)
+	err := ts.finalizeStreamer(ctx)
+	// finalizeStreamer can latch a save failure of its own (the pending call
+	// accounting flush), so read the latch after it and announce once more;
+	// the announcement is once-only per turn.
+	if saveErr := ts.callAccountingError(); saveErr != nil {
+		al.announceExternalSaveFailure(ts)
+		err = withoutSaveFailure(err, saveErr)
+	}
+	return err
+}
+
+// withoutSaveFailure returns err with every occurrence of the turn's latched
+// transcript-save failure removed: nil when that was all err held, otherwise
+// the remaining errors. Other finalize errors (the streamer's own write) stay.
+func withoutSaveFailure(err, saveErr error) error {
+	if err == nil || saveErr == nil {
+		return err
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var rest []error
+		for _, e := range joined.Unwrap() {
+			if e = withoutSaveFailure(e, saveErr); e != nil {
+				rest = append(rest, e)
+			}
+		}
+		return errors.Join(rest...)
+	}
+	if errors.Is(err, saveErr) {
+		return nil
+	}
+	return err
 }
 
 // emitExternalErrorFrame emits the typed error frame for an external-CLI exit
