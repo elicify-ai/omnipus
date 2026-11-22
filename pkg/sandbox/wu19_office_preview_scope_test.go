@@ -40,6 +40,11 @@ func TestWU19_OfficePreviewPinScope(t *testing.T) {
 		{"hidden_dispatch", "pkg/app/app.go", "return launcher.Main(args[2:]), true", `return launcher.Main(append(args[2:], "changed")), true`, "runHiddenMode"},
 		{"main_entry", "cmd/omnipus/main.go", "app.Main()", "app.Main(); app.Main()", "main"},
 		{"seatbelt_wrapper", "pkg/sandbox/backend_darwin_seatbelt.go", "cmd.Path = seatbeltExecPath", `cmd.Path = seatbeltExecPath; cmd.Env = append(cmd.Env, "W3_EXTRA=x")`, "SeatbeltBackend.wrapUnderSandboxExec"},
+		// R4-PIN (security-lead condition, founder Q10 A): the renderer start
+		// hook is on the closed-environment spawn path exactly like its
+		// converter twin — changing its initializer must produce
+		// declaration-specific drift naming testHookRendererStart.
+		{"renderer_start_hook", "pkg/preview/confine.go", "var testHookRendererStart func(converterStart)", "var testHookRendererStart func(converterStart) = func(converterStart) {}", "testHookRendererStart"},
 	} {
 		t.Run("pinned_declaration/"+tc.name, func(t *testing.T) {
 			p := wu19OfficeFixture(t, base, tc.file, tc.old, tc.replacement)

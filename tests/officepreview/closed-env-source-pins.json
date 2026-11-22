@@ -1,6 +1,6 @@
 {
   "algorithm": "office-preview-env-pins/go-tokens-v1",
-  "reviewed_source": "376c40e2d94043fb129319553233c6e26bad77dd",
+  "reviewed_source": "410e6c0c39b998088f077a08b570dcced9dcbeda",
   "files": {
     "cmd/omnipus/main.go": {
       "declarations": {
@@ -21,7 +21,8 @@
         "realRulePath": "5f22b617b72c8b5cadb9457d0ba14fad186df702aa4db0996c85516ca5babcb4",
         "spawnHooks": "3f35229a40c2851c2f00b8ce6f732d45b508388683548f10395f86efa4ea4f50",
         "spawnHooks.observedBy": "9c4dc211a63713e8453890522ea7a05f78c2203732beebbcf378c09bf621ea26",
-        "testHookConverterStart": "98ec2993e7625450f1b23a73a096c526afd82b6175cce895eb474b1123c8dc52"
+        "testHookConverterStart": "98ec2993e7625450f1b23a73a096c526afd82b6175cce895eb474b1123c8dc52",
+        "testHookRendererStart": "2e31b0c4ef066b72ed31ff4aaeb60f65ba8395259583941dd44175f50aaa3405"
       }
     },
     "pkg/preview/confine_darwin.go": {
@@ -165,9 +166,9 @@
         "officeConversion.run": "aeca6c577c90d27e57666a8ae0346081b6b63d3ed78f2711b268abe772c423e4",
         "officeConversion.startOnce": "6c2ed50cebc8971f240fb1b95582eb31602bed03e4e9544a94119a566d324074",
         "officeStartHooks": "31ccca225a029c38719de1377ce7ffdf9ccb89388efd6bed16467355b5093844",
-        "protocolProgram": "1c576a59a35ea9cf9092e02bdab699d25d9f162309e91f91aa29e6a7a7cd3b4d",
+        "protocolProgram": "7b9a059befd166dd292c4fafee2243afb2b2557b3f7f1017cdf1e363ccc810af",
         "protocolProgram.publishAndGo": "eeaf4f2f6beb3597ea6444f04499fb4be22c264f36a60d9e3d528766ff94bbe8",
-        "protocolProgram.run": "01e20b5b3b818432931f8cb3ce81ec5448e6410a0ee524e05210547c7b5c632e"
+        "protocolProgram.run": "b32fb5a9164ec55ce9cc5d8f73015de253c2256c3c19d6381dc9141b0de5f829"
       }
     },
     "pkg/sandbox/backend_darwin_seatbelt.go": {

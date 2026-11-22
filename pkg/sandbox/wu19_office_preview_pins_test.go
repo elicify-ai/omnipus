@@ -44,7 +44,7 @@ func wu19OfficePinScope() map[string][]string {
 		"pkg/preview/launcher/watchdog_darwin.go": nil,
 		"pkg/preview/launcher/watchdog_other.go":  nil,
 		"pkg/preview/programs.go":                 {"protocolProgram", "protocolProgram.run", "protocolProgram.publishAndGo", "officeConversion", "officeConversion.run", "officeConversion.startOnce", "officeStartHooks", "existingFolders", "fileURL"},
-		"pkg/preview/confine.go":                  {"confinement", "spawnHooks", "converterStart", "testHookConverterStart", "spawnHooks.observedBy", "foldersAbove", "realRulePath"},
+		"pkg/preview/confine.go":                  {"confinement", "spawnHooks", "converterStart", "testHookConverterStart", "testHookRendererStart", "spawnHooks.observedBy", "foldersAbove", "realRulePath"},
 		"pkg/preview/confine_unix.go":             {"confinement.policy"},
 		"pkg/preview/confine_darwin.go":           {"officeFontFolders", "hooksFor"},
 		"pkg/preview/confine_linux.go":            {"linuxSystemReadExec", "officeFontFolders", "hooksFor"},
