@@ -21,18 +21,16 @@ package session
 // complete-table positive control (the earlier instrument demanded a positive
 // count of REAL missing kinds, so a correct table failed it forever), a
 // dropped-kind negative control naming the kind, and a dropped-path control;
-// the turn-start path population is enumerated from an independent
-// TurnStartPath registration (declaredTurnStartPaths), and its absence at RED
-// is a loud BLOCKED — rows read back from ProvenanceModeRows are
-// self-consistency, never completeness.
+// real turn-start-path completeness remains explicitly BLOCKED until an
+// independent registration inventory is wired. The spec does not require a
+// particular registration type. Rows read back from ProvenanceModeRows prove
+// self-consistency only, never completeness.
 
 import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -73,9 +71,15 @@ func TestProgramProvenance_DriftTable(t *testing.T) {
 	t.Run("every_origin_kind_has_exactly_one_row", func(t *testing.T) {
 		kinds := declaredOriginKindsForDrift(t)
 		require.GreaterOrEqual(t, len(kinds), 10, "instrument check: the ten known origin kinds must be found")
+		if len(rows) == 0 {
+			t.Fatal("BLOCKED: provenance-mode table not implemented — required by FR-050/S-83")
+		}
+		require.Empty(t, missingKindRows(rows, kinds), "exactly one non-path row per declared kind (S-83)")
 		byOrigin := map[OriginKind][]ProvenanceModeRow{}
 		for _, r := range rows {
-			byOrigin[r.Origin] = append(byOrigin[r.Origin], r)
+			if r.TurnStartPath == "" {
+				byOrigin[r.Origin] = append(byOrigin[r.Origin], r)
+			}
 		}
 		for _, k := range kinds {
 			rowsForKind, ok := byOrigin[k]
@@ -112,9 +116,12 @@ func TestProgramProvenance_DriftTable(t *testing.T) {
 	t.Run("every_session_type_has_exactly_one_row", func(t *testing.T) {
 		types := declaredSessionTypes(t)
 		require.GreaterOrEqual(t, len(types), 8, "instrument check: the eight known session types must be found")
+		if len(rows) == 0 {
+			t.Fatal("BLOCKED: provenance-mode table not implemented — required by FR-050/S-83")
+		}
 		byType := map[UnifiedSessionType][]ProvenanceModeRow{}
 		for _, r := range rows {
-			if r.SessionType == "" {
+			if r.TurnStartPath != "" || r.SessionType == "" {
 				continue
 			}
 			byType[r.SessionType] = append(byType[r.SessionType], r)
@@ -182,23 +189,16 @@ func TestProgramProvenance_DriftTable(t *testing.T) {
 				continue
 			}
 			seen[r.TurnStartPath] = string(r.Origin)
-			require.Equal(t, ProvenanceModeLineage, r.Mode,
-				"turn-start path %q is fed work: it is lineage (FR-050)", r.TurnStartPath)
+			require.Contains(t, []ProvenanceMode{ProvenanceModeRoot, ProvenanceModeLineage}, r.Mode,
+				"each path names its mode; FR-050 does not make every start path lineage")
 			require.NotEmpty(t, r.Producer,
-				"turn-start path %q must name where its stored provenance comes from", r.TurnStartPath)
+				"turn-start path %q must name its provenance producer (S-83)", r.TurnStartPath)
 		}
-		registered, found := declaredTurnStartPaths(t)
-		if !found {
-			t.Fatalf("BLOCKED: the registered turn-start paths are not enumerable — no TurnStartPath "+
-				"registration exists in pkg/session (S-83 enumerates the registered turn-start paths; "+
-				"the classification table itself has %d rows and %d of them are path rows). GREEN exposes "+
-				"the registration — a TurnStartPath named type with one constant per registered turn-start "+
-				"path, mirroring OriginKind — and the same test author reconciles", len(rows), pathRows)
-		}
-		require.NotEmpty(t, registered, "instrument: the registration enumeration found the registered paths")
-		for _, p := range missingPathRows(rows, registered) {
-			t.Fatalf("BLOCKED: registered turn-start path %q has no provenance-mode row (S-83)", p)
-		}
+		// No independent path inventory is connected yet. Do not prescribe a
+		// new production type just for the test, or infer coverage from rows.
+		t.Fatalf("BLOCKED: independent registered-turn-start-path inventory is not connected — "+
+			"required by S-83 (table has %d rows, %d paths); registration naming needs "+
+			"same-author reconciliation, not an invented TurnStartPath API", len(rows), pathRows)
 	})
 
 	t.Run("instrument_detector_passes_a_complete_table", func(t *testing.T) {
@@ -233,6 +233,13 @@ func TestProgramProvenance_DriftTable(t *testing.T) {
 		require.Equal(t, []OriginKind{probeKind},
 			missingKindRows(syntheticDriftTableFullRows(), append([]OriginKind{}, probeKind)),
 			"instrument: an added kind without a row is detected")
+	})
+
+	t.Run("instrument_duplicate_kind_and_path_are_caught", func(t *testing.T) {
+		rows, kinds, paths := syntheticDriftTable()
+		rows = append(rows, rows[0], rows[len(rows)-1])
+		require.Equal(t, []OriginKind{"syn-chat"}, missingKindRows(rows, kinds))
+		require.Equal(t, []string{"syn-background"}, missingPathRows(rows, paths))
 	})
 
 	t.Run("instrument_missing_path_row_is_caught", func(t *testing.T) {
@@ -312,49 +319,6 @@ func missingPathRows(rows []ProvenanceModeRow, paths []string) []string {
 		}
 	}
 	return out
-}
-
-// declaredTurnStartPaths enumerates the registered turn-start paths
-// INDEPENDENTLY of the classification table (CHECK R05): a `TurnStartPath`
-// named string type with one constant per registered path — the same
-// source-of-truth technique the origin kinds use on lifecycle_edge.go.
-// found=false means no such registration exists (RED): the table's own rows
-// are then self-consistency only, never completeness.
-func declaredTurnStartPaths(t *testing.T) (paths []string, found bool) {
-	t.Helper()
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
-	require.NoError(t, err, "parse the session package")
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, decl := range f.Decls {
-				gd, ok := decl.(*ast.GenDecl)
-				if !ok || gd.Tok != token.CONST {
-					continue
-				}
-				for _, spec := range gd.Specs {
-					vs, ok := spec.(*ast.ValueSpec)
-					if !ok {
-						continue
-					}
-					id, ok := vs.Type.(*ast.Ident)
-					if !ok || id.Name != "TurnStartPath" || len(vs.Values) != 1 {
-						continue
-					}
-					lit, ok := vs.Values[0].(*ast.BasicLit)
-					if !ok {
-						continue
-					}
-					v, err := strconv.Unquote(lit.Value)
-					require.NoError(t, err, "unquote %s", lit.Value)
-					paths = append(paths, v)
-				}
-			}
-		}
-	}
-	return paths, len(paths) > 0
 }
 
 // declaredOriginKindsForDrift enumerates the OriginKind constants by parsing
