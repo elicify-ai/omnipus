@@ -545,6 +545,9 @@ func TestProgramEntryDeleteRows(t *testing.T) {
 		w := pgSwitchProgramOn(t, f, id)
 		require.Equal(t, http.StatusOK, w.Code,
 			"the Given: Acme is on for Dev: got %d %s", w.Code, w.Body.String())
+		// R14: snapshot after switch-on, BEFORE the refused DELETE. Two
+		// post-delete reads cannot detect mutation by the refused request.
+		before := pgProgramEntryByID(t, f, id)
 
 		del := pgProgramsSessionCall(t, f, http.MethodDelete, "/programs/"+id, "")
 		if del.Code == http.StatusNotFound {
@@ -554,11 +557,6 @@ func TestProgramEntryDeleteRows(t *testing.T) {
 			"the delete is refused while the entry is on: got %d %s", del.Code, del.Body.String())
 		require.Contains(t, del.Body.String(), "Dev", "the refusal names the agent (S-35)")
 
-		// CHECK R14: the unchanged baseline is taken IMMEDIATELY BEFORE the
-		// delete — after the switch-on, whose enabled_agent_ids the refusal
-		// legitimately keeps (comparing to the create-time entry would fail
-		// a correct refusal that merely preserved the enabled state).
-		before := pgProgramEntryByID(t, f, id)
 		still := pgProgramEntryByID(t, f, id)
 		require.Equal(t, pgEntryJSON(before), pgEntryJSON(still),
 			"S-35: Acme is still listed, unchanged")
