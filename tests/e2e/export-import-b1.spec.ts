@@ -26,11 +26,53 @@
  * this environment (no gateway runs here); the live row runs on the agreed
  * exact-version instance at the cut.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { expectA11yClean } from './fixtures/a11y';
-import { statSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
 
 const baseURL = process.env.OMNIPUS_URL || 'http://localhost:6060';
+
+// ── Auth helpers (same pattern as agent-grep.spec.ts, no shared export) ─────
+// The seeding, verification and cleanup calls ride page.request on the shared
+// gateway with the global storageState; the gateway's CSRF middleware still
+// requires the X-CSRF-Token header on its requests (CI PR #1971, job
+// "E2E - ui-4": the seeding POST answered 403 "csrf header missing"). The
+// token comes from the SAME storageState file the Playwright config mounts
+// (playwright.config.ts storageState = OMNIPUS_AUTH_FILE or
+// fixtures/.auth/admin.json), so cookie, token and page share one identity.
+const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
+  ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+  : path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures/.auth/admin.json');
+
+function getStoredAuthToken(): string | null {
+  if (!existsSync(AUTH_FILE)) return null;
+  try {
+    const raw = readFileSync(AUTH_FILE, 'utf-8');
+    const state = JSON.parse(raw) as {
+      origins?: Array<{ origin: string; localStorage?: Array<{ name: string; value: string }> }>;
+    };
+    for (const origin of state.origins ?? []) {
+      for (const item of origin.localStorage ?? []) {
+        if (item.name === 'omnipus_auth_token') return item.value;
+      }
+    }
+  } catch {
+    // Auth file may not exist on first run
+  }
+  return null;
+}
+
+async function apiHeaders(page: Page): Promise<Record<string, string>> {
+  const token = getStoredAuthToken();
+  const cookies = await page.context().cookies();
+  const csrf = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')?.value ?? null;
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
+  };
+}
 
 test.describe.configure({ retries: 0 });
 test.setTimeout(180_000);
@@ -60,6 +102,7 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     const soulText =
       'You are the B1 bundle writer. You turn short outlines into polished text and nothing else. '.repeat(40);
     const created = await page.request.post(`${baseURL}/api/v1/agents`, {
+      headers: await apiHeaders(page),
       data: {
         type: 'Main',
         name: AGENT_NAME,
@@ -146,7 +189,9 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     // N06: the response's identity is the one this run observes downstream —
     // the created agent is fetched BY ID, tying the following UI
     // observations to the apply response's new_id, not merely to a name.
-    const importedFetch = await page.request.get(`${baseURL}/api/v1/agents/${importedId}`);
+    const importedFetch = await page.request.get(`${baseURL}/api/v1/agents/${importedId}`, {
+      headers: await apiHeaders(page),
+    });
     expect(importedFetch.status(), await importedFetch.text()).toBe(200);
 
     await expect(page.getByText(new RegExp(`${AGENT_NAME} \\(imported( \\d+)?\\) was added to`))).toBeVisible({
@@ -189,7 +234,9 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     // cleanup or replace the flow's own failure.
     for (const id of createdIds) {
       try {
-        const del = await page.request.delete(`${baseURL}/api/v1/agents/${id}`);
+        const del = await page.request.delete(`${baseURL}/api/v1/agents/${id}`, {
+          headers: await apiHeaders(page),
+        });
         if (!del.ok() && del.status() !== 404) {
           problems.push(`delete ${id} failed: ${del.status()}`);
         }
