@@ -8,14 +8,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { Switch } from '@/components/ui/switch'
-import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
+import { fetchMemorySettings, updateMemorySettings, fetchProviders } from '@/lib/api'
 import type { MemorySettings, FallbackModel } from '@/lib/api'
 import { useModelToProvider, resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { useUiStore } from '@/store/ui'
 import type { EffortPair } from '@/lib/effort/useEffortSwitch'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
-import { SaveStatus, useSaveStatus } from './SaveStatus'
 import { RecapModelSlot } from './RecapModelSlot'
 import { RecapLimitsArea } from './RecapLimitsArea'
 import {
@@ -25,7 +24,9 @@ import {
   recapLimitError,
   type RecapLimitDrafts,
 } from './recapLimits'
-import { usePrimaryVariant } from './SaveBar'
+import { SaveBarPanel, SaveOutcomeLine } from './SaveBar'
+import { checkFormPart, toWriteResponse, type PartCheck } from './saveOutcome'
+import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 import { settingsRow } from './settingsSections'
 import { SectionLoading } from './SectionLoading'
 import { ReadErrorCallout } from './ReadErrorCallout'
@@ -183,12 +184,6 @@ const SCALAR_KEYS: ScalarKey[] = [
   'recap_fallback_models',
 ]
 
-/** The dirty/save state: the drafts compared with the latest acknowledged baseline (FR-054). */
-function isDirty(form: FormState, baseline: FormState): boolean {
-  if (SCALAR_KEYS.some((key) => !sameValue(key, form, baseline))) return true
-  return RECAP_LIMIT_FIELDS.some((field) => form.limits[field.key].trim() !== baseline.limits[field.key])
-}
-
 /**
  * Explicit-Save reconciliation (FR-054, r7): a field takes the response value
  * only where its draft still equals what was submitted; a field edited while
@@ -203,6 +198,25 @@ function reconcileAfterSave(current: FormState, submitted: FormState, acknowledg
     if (current.limits[field.key] === submitted.limits[field.key]) next.limits[field.key] = acknowledged.limits[field.key]
   }
   return next
+}
+
+const MEMORY_LABELS: Record<ScalarKey, string> = {
+  auto_recap_enabled: 'Auto recap',
+  idle_timeout_minutes: 'Idle timeout',
+  bootstrap_recap_enabled: 'Bootstrap recap',
+  bootstrap_recap_max_per_minute: 'Bootstrap recaps per minute',
+  recap_model: 'Recap model',
+  recap_provider: 'Recap model provider',
+  recap_reasoning_effort: 'Recap effort',
+  recap_fallback_models: 'Fallback models',
+}
+
+/** One memory value in a form that compares equal however it was read. */
+function canonicalMemoryValue(key: ScalarKey, form: FormState): unknown {
+  if (key === 'recap_fallback_models') {
+    return form.recap_fallback_models.map((f) => [f.model, f.provider ?? '', f.reasoning_effort ?? ''])
+  }
+  return form[key]
 }
 
 /** One recap fallback entry for a committed slot: effort '' rides the Off default and is not stored. */
@@ -221,7 +235,6 @@ function replaceFallback(list: FallbackModel[], model: string, entry: FallbackMo
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function MemorySection(): React.ReactElement {
-  const primaryVariant = usePrimaryVariant()
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
@@ -251,22 +264,14 @@ export function MemorySection(): React.ReactElement {
 
   const [form, setForm] = useState<FormState>(DEFAULT_SETTINGS)
   // The latest acknowledged server document (FR-054): hydrated once from the
-  // first read, then replaced by every completed write's response. Every
-  // fallback replacement array is built from it, never from an older snapshot.
+  // first read, then replaced by every completed Save's response.
   const [baseline, setBaseline] = useState<MemorySettings | null>(null)
   const baselineRef = useRef<MemorySettings | null>(null)
-  // One writer (FR-054, r6): at most one PUT in flight from this screen.
-  const [writing, setWriting] = useState(false)
-  const writingRef = useRef(false)
   // The mapping note of each recap slot's last switch (primary, and per fallback model).
   const [primaryNote, setPrimaryNote] = useState<string | null>(null)
   const [fallbackNotes, setFallbackNotes] = useState<Record<string, string>>({})
   const primaryChipRef = useRef<HTMLButtonElement | null>(null)
   const fallbackChipRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map())
-  // The chip that takes focus once a failed slot autosave has been restored (S-57).
-  const [focusAfterFailure, setFocusAfterFailure] = useState<(() => HTMLElement | null) | null>(null)
-
-  const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
 
   useEffect(() => {
     if (!data || baselineRef.current !== null) return
@@ -275,114 +280,119 @@ export function MemorySection(): React.ReactElement {
     setForm(formFromSettings(data))
   }, [data])
 
-  useEffect(() => {
-    if (writing || focusAfterFailure === null) return
-    // Runs after the restored chip is enabled again; the next tick lets any
-    // closing popover finish its own focus return first.
-    const target = focusAfterFailure
-    setFocusAfterFailure(null)
-    const timer = setTimeout(() => target()?.focus(), 0)
-    return () => clearTimeout(timer)
-  }, [writing, focusAfterFailure])
-
-  /**
-   * Sends one write. `apply` takes the acknowledged response into the form;
-   * `rollback` restores what the failed write changed. The baseline is
-   * updated in the same render that re-enables the disabled controls.
-   */
-  async function runWrite(body: MemorySettings, apply: (resp: MemorySettings) => void, rollback: () => void) {
-    writingRef.current = true
-    setWriting(true)
-    setSaveState('saving')
-    try {
-      const resp = await updateMemorySettings(body)
-      baselineRef.current = resp
-      setBaseline(resp)
-      queryClient.setQueryData(['memory-settings'], resp)
-      apply(resp)
-      setSaveState('saved')
-    } catch (err) {
-      rollback()
-      setSaveState('error')
-      const msg = getErrorMessage(err, 'Save failed')
-      setErrorMessage(msg)
-      addToast({ message: msg, variant: 'error' })
-    } finally {
-      writingRef.current = false
-      setWriting(false)
-    }
-  }
-
-  const invalidLimit = RECAP_LIMIT_FIELDS.some((field) => recapLimitError(field, form.limits[field.key]) !== null)
+  const invalidCount = RECAP_LIMIT_FIELDS.filter((field) => recapLimitError(field, form.limits[field.key]) !== null).length
   const baselineForm = baseline ? formFromSettings(baseline) : null
-  const dirty = baselineForm !== null && isDirty(form, baselineForm)
-  // SaveStatus shows the save state against the baseline; unsaved drafts are
-  // never presented as saved (FR-054 "Two independent comparisons").
-  const shownSaveState = dirty && (saveState === 'idle' || saveState === 'saved') ? 'unsaved' : saveState
+  const changedKeys = baselineForm ? SCALAR_KEYS.filter((key) => !sameValue(key, form, baselineForm)) : []
+  const changedLimits = baselineForm
+    ? RECAP_LIMIT_FIELDS.filter((field) => form.limits[field.key].trim() !== baselineForm.limits[field.key])
+    : []
+  // The recap model, its provider and its effort are one setting on screen.
+  const modelKeys: ScalarKey[] = ['recap_model', 'recap_provider', 'recap_reasoning_effort']
+  const changedCount =
+    changedKeys.filter((k) => !modelKeys.includes(k)).length +
+    (changedKeys.some((k) => modelKeys.includes(k)) ? 1 : 0) +
+    changedLimits.length
 
-  function handleSave() {
-    if (writingRef.current || invalidLimit) return
-    const submitted = form
-    const limitValues: Partial<MemorySettings> = {}
-    for (const field of RECAP_LIMIT_FIELDS) limitValues[field.key] = Number(submitted.limits[field.key].trim())
-    const payload: MemorySettings = {
-      auto_recap_enabled: submitted.auto_recap_enabled,
-      idle_timeout_minutes: submitted.idle_timeout_minutes,
-      bootstrap_recap_enabled: submitted.bootstrap_recap_enabled,
-      bootstrap_recap_max_per_minute: submitted.bootstrap_recap_max_per_minute,
-      // Only include recap_model when non-empty (server-side "" = "use default")
-      recap_model: submitted.recap_model !== '' ? submitted.recap_model : undefined,
-      recap_provider: submitted.recap_model !== '' && submitted.recap_provider !== '' ? submitted.recap_provider : undefined,
-      recap_reasoning_effort: submitted.recap_reasoning_effort !== '' ? submitted.recap_reasoning_effort : undefined,
-      // Only include fallbacks when non-empty
-      recap_fallback_models: submitted.recap_fallback_models.length > 0 ? submitted.recap_fallback_models : undefined,
-      ...limitValues,
+  // CR-01 / FR-010, FR-011, FR-014, FR-020: every value here is a draft on
+  // the section's one Save bar. Picking a recap model or changing a fallback
+  // only changes the draft; Save sends the changed values in one PUT
+  // /settings/memory (a partial update: a missing member stays as stored).
+  const sent = useRef<{ form: FormState; before: FormState; body: MemorySettings } | null>(null)
+  const lastResponse = useRef<MemorySettings | null>(null)
+  const readFailed = useRef(false)
+  readFailed.current = isError
+
+  function changedBody(current: FormState, saved: FormState): MemorySettings {
+    const body: MemorySettings = {}
+    for (const key of SCALAR_KEYS) {
+      if (sameValue(key, current, saved)) continue
+      Object.assign(body, { [key]: current[key] })
     }
-    void runWrite(
-      payload,
-      (resp) => setForm((current) => reconcileAfterSave(current, submitted, formFromSettings(resp))),
-      // A failed Save restores nothing: every draft stays (FR-054).
-      () => {},
-    )
+    for (const field of RECAP_LIMIT_FIELDS) {
+      if (current.limits[field.key].trim() !== saved.limits[field.key]) body[field.key] = Number(current.limits[field.key].trim())
+    }
+    return body
   }
 
-  /** The recap model slot changed (model and effort together): autosave that slot only (FR-054). */
+  /** Takes an acknowledged server document as the saved values; newer drafts stay. */
+  function acknowledge(resp: MemorySettings, submitted: FormState | null) {
+    baselineRef.current = resp
+    setBaseline(resp)
+    queryClient.setQueryData(['memory-settings'], resp)
+    if (submitted) setForm((current) => reconcileAfterSave(current, submitted, formFromSettings(resp)))
+  }
+
+  const part: FormSavePart = {
+    id: 'memory',
+    count: changedCount,
+    invalidCount,
+    blocked: () => readFailed.current,
+    write: () => {
+      const before = baselineForm ?? DEFAULT_SETTINGS
+      const body = changedBody(form, before)
+      sent.current = { form, before, body }
+      lastResponse.current = null
+      return toWriteResponse(async () => {
+        const resp = await updateMemorySettings(body)
+        lastResponse.current = resp
+        return resp
+      })
+    },
+    // C-6: PUT /settings/memory does not record failed applies, so a read
+    // equal to the old value never proves "not saved"; it stays unknown.
+    check: async (): Promise<PartCheck> => {
+      const s = sent.current
+      if (!s) return { kind: 'unknown' }
+      // A holder, not a `let`: TypeScript does not see the closure assign it.
+      const got: { doc: MemorySettings | null } = { doc: null }
+      const read = async () => (got.doc ??= await fetchMemorySettings())
+      const keys = Object.keys(s.body)
+      const result = await checkFormPart(
+        keys.map((key) => {
+          const limit = RECAP_LIMIT_FIELDS.find((f) => f.key === key)
+          return {
+            key: `memory.${key}`,
+            label: limit ? limit.label : MEMORY_LABELS[key as ScalarKey] ?? key,
+            draft: limit ? Number(s.form.limits[limit.key].trim()) : canonicalMemoryValue(key as ScalarKey, s.form),
+            before: limit ? Number(s.before.limits[limit.key]) : canonicalMemoryValue(key as ScalarKey, s.before),
+            recorded: false,
+          }
+        }),
+        async (configKey) => {
+          const doc = formFromSettings(await read())
+          const key = configKey.slice('memory.'.length)
+          const limit = RECAP_LIMIT_FIELDS.find((f) => f.key === key)
+          return limit ? Number(doc.limits[limit.key]) : canonicalMemoryValue(key as ScalarKey, doc)
+        },
+      )
+      if (got.doc && (result.kind === 'saved' || result.kind === 'changed-elsewhere')) {
+        // Saved: the read is the saved document. Changed elsewhere: the read
+        // values become the saved values and the drafts stay.
+        acknowledge(got.doc, result.kind === 'saved' ? s.form : null)
+      }
+      return result
+    },
+    onOutcome: (outcome) => {
+      if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
+      const resp = lastResponse.current
+      if (resp) acknowledge(resp, sent.current?.form ?? null)
+    },
+    discard: () => {
+      if (baselineRef.current) setForm(formFromSettings(baselineRef.current))
+      setPrimaryNote(null)
+      setFallbackNotes({})
+    },
+  }
+  const { bar, message } = useFormSaveBar([part])
+
+  /** The recap model slot changed (model and effort together): a draft until Save. */
   function commitPrimarySlot(pair: EffortPair, effort: string, note: string | null) {
-    if (writingRef.current) return
-    const acknowledged = baselineRef.current ? formFromSettings(baselineRef.current) : DEFAULT_SETTINGS
     setForm((current) => ({ ...current, recap_model: pair.model, recap_provider: pair.provider, recap_reasoning_effort: effort }))
     setPrimaryNote(note)
-    void runWrite(
-      { recap_model: pair.model, recap_provider: pair.provider, recap_reasoning_effort: effort },
-      (resp) => {
-        const saved = formFromSettings(resp)
-        setForm((current) => ({
-          ...current,
-          recap_model: saved.recap_model,
-          recap_provider: saved.recap_provider,
-          recap_reasoning_effort: saved.recap_reasoning_effort,
-        }))
-      },
-      () => {
-        setForm((current) => ({
-          ...current,
-          recap_model: acknowledged.recap_model,
-          recap_provider: acknowledged.recap_provider,
-          recap_reasoning_effort: acknowledged.recap_reasoning_effort,
-        }))
-        setPrimaryNote(null)
-        setFocusAfterFailure(() => () => primaryChipRef.current)
-      },
-    )
   }
 
-  /**
-   * A recap fallback slot changed. A saved row autosaves the last successful
-   * baseline array with only that entry replaced (FR-054, r6); a row that
-   * exists only as an unsaved draft just updates the draft.
-   */
+  /** A recap fallback slot changed: a draft until Save. */
   function commitFallbackSlot(previousModel: string, pair: EffortPair, effort: string, note: string | null) {
-    if (writingRef.current) return
     if (pair.model !== previousModel && form.recap_fallback_models.some((f) => f.model === pair.model)) {
       addToast({ message: `"${pair.model}" is already in the fallback list.`, variant: 'warning' })
       return
@@ -395,26 +405,6 @@ export function MemorySection(): React.ReactElement {
       if (note) next[pair.model] = note
       return next
     })
-    const savedList = baselineRef.current?.recap_fallback_models ?? []
-    const savedIndex = savedList.findIndex((f) => f.model === previousModel)
-    if (savedIndex < 0) return
-    const savedEntry = savedList[savedIndex]
-    void runWrite(
-      { recap_fallback_models: savedList.map((f, i) => (i === savedIndex ? entry : f)) },
-      (resp) => {
-        const acknowledgedEntry = (resp.recap_fallback_models ?? []).find((f) => f.model === pair.model) ?? entry
-        setForm((current) => ({ ...current, recap_fallback_models: replaceFallback(current.recap_fallback_models, pair.model, acknowledgedEntry) }))
-      },
-      () => {
-        setForm((current) => ({ ...current, recap_fallback_models: replaceFallback(current.recap_fallback_models, pair.model, savedEntry) }))
-        setFallbackNotes((current) => {
-          const next = { ...current }
-          delete next[pair.model]
-          return next
-        })
-        setFocusAfterFailure(() => () => fallbackChipRefs.current.get(savedEntry.model) ?? null)
-      },
-    )
   }
 
   function setField<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -569,7 +559,6 @@ export function MemorySection(): React.ReactElement {
           <Brain size={14} className="text-[var(--color-muted)]" />
           Memory &amp; Recap
         </h3>
-        <SaveStatus state={shownSaveState} errorMessage={errorMessage} />
       </div>
 
       <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
@@ -646,7 +635,6 @@ export function MemorySection(): React.ReactElement {
               scope="recap-model"
               value={{ provider: form.recap_provider, model: form.recap_model, effort: form.recap_reasoning_effort }}
               contextName={`Effort for the recap model, ${form.recap_model}`}
-              disabled={writing}
               note={primaryNote}
               chipRef={primaryChipRef}
               modelTrigger={() => document.querySelector<HTMLElement>('[data-testid="recap-model-trigger"]')}
@@ -666,8 +654,7 @@ export function MemorySection(): React.ReactElement {
                     placeholder="Default model"
                     providerGroups={providerGroups}
                     triggerTestId="recap-model-trigger"
-                    disabled={writing}
-                    allowFreeTextWhenEmpty={!!providersError}
+                          allowFreeTextWhenEmpty={!!providersError}
                     emptyCatalogHint="Connect a provider in Settings to pick a model"
                   />
                   {chip}
@@ -715,8 +702,7 @@ export function MemorySection(): React.ReactElement {
                         scope="recap-fallback"
                         value={{ provider: entry.provider ?? '', model: entry.model, effort: entry.reasoning_effort ?? '' }}
                         contextName={`Effort for recap fallback ${idx + 1}, ${entry.model}`}
-                        disabled={writing}
-                        note={fallbackNotes[entry.model] ?? null}
+                                  note={fallbackNotes[entry.model] ?? null}
                         chipRef={(el) => {
                           fallbackChipRefs.current.set(entry.model, el)
                         }}
@@ -741,8 +727,7 @@ export function MemorySection(): React.ReactElement {
                                 triggerTestId={`recap-fallback-model-${entry.model}`}
                                 variant="ghost"
                                 constrainToCatalog
-                                disabled={writing}
-                                allowFreeTextWhenEmpty={!!providersError}
+                                                  allowFreeTextWhenEmpty={!!providersError}
                                 emptyCatalogHint="Connect a provider to change fallbacks"
                               />
                             </div>
@@ -767,7 +752,7 @@ export function MemorySection(): React.ReactElement {
                         type="button"
                         data-testid={`recap-fallback-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
-                        disabled={writing || idx === 0}
+                        disabled={idx === 0}
                         onClick={() => handleMoveFallback(entry.model, -1)}
                         className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
@@ -779,7 +764,7 @@ export function MemorySection(): React.ReactElement {
                         type="button"
                         data-testid={`recap-fallback-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
-                        disabled={writing || idx === form.recap_fallback_models.length - 1}
+                        disabled={idx === form.recap_fallback_models.length - 1}
                         onClick={() => handleMoveFallback(entry.model, 1)}
                         className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
@@ -791,8 +776,7 @@ export function MemorySection(): React.ReactElement {
                         type="button"
                         data-testid={`recap-fallback-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
-                        disabled={writing}
-                        onClick={() => handleRemoveFallback(entry.model)}
+                                  onClick={() => handleRemoveFallback(entry.model)}
                         className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                       >
                         <X size={12} />
@@ -814,8 +798,7 @@ export function MemorySection(): React.ReactElement {
                 placeholder="Add fallback model…"
                 providerGroups={providerGroups}
                 triggerTestId="recap-fallback-add-trigger"
-                disabled={writing}
-                constrainToCatalog
+                  constrainToCatalog
                 allowFreeTextWhenEmpty={!!providersError}
                 emptyCatalogHint="Connect a provider to add fallbacks"
               />
@@ -849,18 +832,9 @@ export function MemorySection(): React.ReactElement {
           </Button>
         </div>
 
-        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] flex justify-end">
-          <Button
-            variant={primaryVariant}
-            size="sm"
-            onClick={handleSave}
-            disabled={writing || invalidLimit}
-            aria-label="Save memory settings"
-          >
-            {writing ? 'Saving...' : 'Save'}
-          </Button>
-        </div>
+        <SaveOutcomeLine message={message('memory')} />
       </Card>
+      <SaveBarPanel {...bar} />
     </section>
   )
 }
