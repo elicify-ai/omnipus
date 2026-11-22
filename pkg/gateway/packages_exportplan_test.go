@@ -990,9 +990,10 @@ func TestExportPlanHandler_Canaries(t *testing.T) {
 
 // TestExportPlanFlow_DecodedBundleCanaries — spec order 11a: decode the
 // payload and manifest of bundles exported through the B1 flow after a
-// review; no D6-1…9 canary anywhere; the free-text controls ride in the
-// payload and appear in neither review answer; the manifest lists
-// needs_secrets names only.
+// review; no D6-1…9 canary — plaintext or the master key's persisted
+// hex/base64 encodings (CHECK 4 F08) — anywhere in the decoded surfaces; the
+// free-text controls ride in the payload and appear in neither review answer;
+// the manifest lists needs_secrets names only.
 func TestExportPlanFlow_DecodedBundleCanaries(t *testing.T) {
 	api := packageAPI(t)
 	b1SeedExternalWorker(t, api, "ext-canary")
@@ -1026,12 +1027,29 @@ func TestExportPlanFlow_DecodedBundleCanaries(t *testing.T) {
 		manifest, files := decodePackageBytes(t, got.Body)
 		manifestRaw, err := json.Marshal(manifest)
 		require.NoError(t, err)
-		for _, canary := range b1D6Canaries {
-			require.NotContains(t, string(manifestRaw), canary, "bundle %d manifest carries the D6 canary %q", i, canary)
-			for path, body := range files {
-				require.NotContains(t, string(body), canary, "bundle %d payload entry %s carries the D6 canary %q", i, path, canary)
-			}
+		// CHECK 4 F08: the decoded manifest AND every decoded payload entry
+		// are scanned with the WHOLE repaired scanner b1CanariesIn — plaintext
+		// canaries AND the master key's persisted hex/base64 encodings — not
+		// only review responses. The seed persists master.key as 64 hex
+		// characters, so a raw key-file disclosure travels encoded; the
+		// previous b1D6Canaries-only loop accepted exactly that leak (CHECK 4
+		// M4 survivor).
+		found := b1CanariesIn(string(manifestRaw))
+		require.Empty(t, found, "bundle %d manifest carries D6 canaries %v", i, found)
+		for path, body := range files {
+			found := b1CanariesIn(string(body))
+			require.Empty(t, found, "bundle %d payload entry %s carries D6 canaries %v", i, path, found)
 		}
+	}
+
+	// Encoded-key positive control AT THIS EXACT BOUNDARY (CHECK 4 F08): the
+	// seeded master.key's persisted forms must trip the SAME scanning
+	// function the decoded-bundle loop above calls — a leak that carries the
+	// hex/base64 key into any decoded surface fails here exactly as a
+	// plaintext leak would.
+	for i, encoded := range b1EncodedKeyCanaries {
+		require.Equal(t, []string{encoded}, b1CanariesIn(encoded),
+			"the encoded D6-2 key canary (form %d) must trip the SAME decoded-bundle scanner", i)
 	}
 
 	// Positive controls: the free-text canaries ride in the Main bundle's

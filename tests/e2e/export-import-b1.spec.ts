@@ -31,20 +31,27 @@ import { expectA11yClean } from './fixtures/a11y';
 import { statSync, unlinkSync } from 'node:fs';
 
 const baseURL = process.env.OMNIPUS_URL || 'http://localhost:6060';
-const AGENT_NAME = 'Writer B1';
-// The spec's name-suffix rule: a name clash proposes "<name> (imported)", and
-// a rerun that inherits a copy gets "(imported 2)", "(imported 3)", …
-const IMPORTED_NAME = new RegExp(`${AGENT_NAME} \\(imported( \\d+)?\\)`);
 
 test.describe.configure({ retries: 0 });
 test.setTimeout(180_000);
 
 test('B1 end to end: export a custom agent, import it back, and reach it from the sheets', async ({ page }) => {
+  // W03 (CHECK 4 warning): the fixture name carries a run-unique token, so
+  // an EARLIER run's "Writer B1 …(imported)" leftovers on the shared gateway
+  // can never match this run's chooser or Team observations — every
+  // predicate below is anchored on this run's exact seeded identity, and a
+  // foreign agent is never picked (and never cleaned up).
+  const AGENT_NAME = `Writer B1 ${Date.now().toString(36)}`;
+  // The spec's name-suffix rule: a name clash proposes "<name> (imported)",
+  // and a rerun that inherits a copy gets "(imported 2)", "(imported 3)", …
+  // — anchored on THIS run's unique token, so only this run's import matches.
+  const IMPORTED_NAME = new RegExp(`${AGENT_NAME} \\(imported( \\d+)?\\)`);
   let savedPath: string | null = null;
-  // Ownership bookkeeping (CHECK 3 W03/N05): ONLY ids this run provably
-  // created — the seeded agent and the import's apply-response new_id.
-  // Nothing is inferred from names or before/after list differences, so this
-  // run can never delete another run's agent on the shared gateway.
+  // Ownership bookkeeping (CHECK 3 W03/N05; CHECK 4 N06): ONLY ids this run
+  // provably created — the seeded agent and EVERY id the apply response
+  // returns. Nothing is inferred from names or before/after list
+  // differences, so this run can never delete another run's agent on the
+  // shared gateway.
   const createdIds = new Set<string>();
   const problems: string[] = [];
   let flowError: unknown = null;
@@ -112,11 +119,14 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     await expect(page.getByText('Added as new. Existing agents are never changed.')).toBeVisible();
     await expectA11yClean(page);
 
-    // Ownership at the request/response boundary (CHECK 3 W03/N05): the
-    // apply listener is armed BEFORE the click, and the created agent's id
-    // is recorded the moment the response arrives — BEFORE the result
-    // screen's assertions — so if apply commits and any later check fails,
-    // the finally block still owns and deletes the import.
+    // Ownership at the request/response boundary (CHECK 3 W03/N05; CHECK 4
+    // N06): the apply listener is armed BEFORE the click, and EVERY agent id
+    // the response returns is recorded the moment it arrives — BEFORE the
+    // result screen's assertions — so if apply commits and any later check
+    // fails, the finally block still owns and deletes everything this run
+    // created. B1's one-agent scope means the response creates EXACTLY ONE
+    // agent; that cardinality assertion runs AFTER ownership is recorded, so
+    // a wrong response shape still cleans up after itself.
     const applyResponsePromise = page.waitForResponse(
       (r) => r.request().method() === 'POST' && r.url().endsWith('/apply'),
       { timeout: 30_000 },
@@ -125,9 +135,19 @@ test('B1 end to end: export a custom agent, import it back, and reach it from th
     const applyResponse = await applyResponsePromise;
     expect(applyResponse.status(), await applyResponse.text()).toBe(200);
     const applyBody = (await applyResponse.json()) as { created?: Array<{ new_id?: string }> };
-    const importedId = applyBody.created?.[0]?.new_id;
-    expect(importedId, 'the apply response names the created agent for the cleanup').toBeTruthy();
-    createdIds.add(importedId as string);
+    const returnedIds = (applyBody.created ?? [])
+      .map((entry) => entry?.new_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    for (const id of returnedIds) {
+      createdIds.add(id);
+    }
+    expect(returnedIds, 'the apply response creates exactly one new agent (B1 is one agent per bundle)').toHaveLength(1);
+    const importedId = returnedIds[0];
+    // N06: the response's identity is the one this run observes downstream —
+    // the created agent is fetched BY ID, tying the following UI
+    // observations to the apply response's new_id, not merely to a name.
+    const importedFetch = await page.request.get(`${baseURL}/api/v1/agents/${importedId}`);
+    expect(importedFetch.status(), await importedFetch.text()).toBe(200);
 
     await expect(page.getByText(new RegExp(`${AGENT_NAME} \\(imported( \\d+)?\\) was added to`))).toBeVisible({
       timeout: 30_000,
