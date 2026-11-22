@@ -716,6 +716,23 @@ Three named exceptions:
 - **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
 - **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk: God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
 
+## How program tokens are hidden
+
+A connected program's token (see [Settings → Programs](settings.md#programs) and [tools](tools.md#connected-programs)) reaches the agent's command, so the command's output could print it, for example `gh auth token` or `env`. Omnipus hides it where the output is produced, before anything else sees it:
+
+- **At the source.** Each output stream (standard output and standard error) of every program that receives program tokens is filtered as it is written: `bash` in the foreground, in the background and in God Mode, `environment_setup`, the token check in Settings → Programs, and the `git --version` check. The filter runs before output is shortened, saved, read back by the agent, shown in the chat or written to logs, so no later step ever holds the token.
+- **Parts count too.** Any run of 8 or more characters that equals part of a current program token, or of a token that was replaced or disconnected since Omnipus started, is replaced by one `[FILTERED]`. A whole token, a token cut short, the end of a token and repeated copies each become a single `[FILTERED]`. Output split across many small writes is handled the same way: the filter holds back at most the last 7 characters until it knows whether they start a token.
+- **Always on.** This filter works regardless of the general secret-filter switch and its minimum length setting, and in God Mode too. The general filter still runs later as a second layer.
+- **Separate from the credentials page.** A program token is managed only under Settings → Programs or through a program card in the chat. The general credentials page, its API and the agents' secret tools cannot change or remove it.
+
+Limits of the filter:
+
+- **Changed forms are not recognised.** A token that the command changes before printing it (encoded in base64, reversed, split with spaces, hashed) is not hidden.
+- **Files are not filtered.** A command that writes a token into a file puts the real token in that file; a later read of the file is covered only by the general secret filter.
+- **Pieces shorter than 8 characters are not hidden.** For example, a program that prints only the first 4 characters of a token shows them.
+- **Rare false matches.** An ordinary run of 8 or more characters that happens to equal part of a token is hidden too. For tokens made of random characters this practically never happens. A token with little variety (for example `aaaaaaaa1`) can hide matching ordinary output, such as a line of `a`s.
+- **Replaced tokens are remembered until restart.** After a restart, a token you replaced or disconnected before the restart is no longer filtered by this layer.
+
 ## Chat links and opening the Library for you
 
 Agents can point you at files in two ways. Both open a viewer only: they never give an agent, or you, access to a file you could not already open.
