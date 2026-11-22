@@ -15,13 +15,14 @@ package agent
 //        agent id); a helper of another agent, or a delegation to another
 //        agent, is not covered and asks as usual.
 //
-// RED today: inheritSessionPermissions still copies every grant through
-// ApprovalGrantStore.InheritFrom (pkg/agent/loop_policy.go), so leg 1 fails
-// on the copy it must stop making — a real behavioural red. Leg 2 is the
-// control C-26 keeps (the Auto-approve modifier inheritance is unchanged).
-// Leg 3 rides order 52's controlled-clock seams (timed_allowance_scheduled_
-// red_test.go) for the store halves; nil keeps the RED run loud (BLOCKED),
-// never a skip.
+// RED today: the store keys grants by SESSION, so a fresh Mia session
+// misses the allowance her parent chat recorded (leg 2 — CHECK round 1
+// finding 8's corrected oracle: the same agent shares one allowance, no
+// copy at spawn). Leg 1 drives the real spawn path and stays green today
+// through the very copy C-26 removes; leg 3 is the control C-26 keeps (the
+// Auto-approve modifier inheritance is unchanged). Leg 4 rides order 52's
+// controlled-clock seams (timed_allowance_scheduled_red_test.go) for the
+// store halves; nil keeps the RED run loud (BLOCKED), never a skip.
 //
 // GREEN reconciliation note: C-26 re-keys ApprovalGrantStore and may drop
 // the session parameter from Record/IsAllowed; leg 1's calls pin the
@@ -55,7 +56,14 @@ func TestTimedAllowance_HelpersAndOtherAgents(t *testing.T) {
 		return mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &capturingProvider{})
 	}
 
-	t.Run("C-26: the helper spawn copies no grants", func(t *testing.T) {
+	// CHECK round 1 finding 8: "no copy at spawn" is a storage/operation
+	// truth, not a negative lookup — C-26's key is the agent, so Mia's
+	// self-helper and every other Mia session see the SAME allowance with no
+	// copy, and the corrected red is the fresh-session lookup (today's
+	// session-keyed store needs the spawn copy to cover anyone). The real
+	// spawn path stays driven below (leg 1a), and the Covers rule
+	// (self-helper covered, another agent's helper asks) stays in leg 3.
+	t.Run("C-26: a self-helper spawn drives the real spawn path and the child is covered", func(t *testing.T) {
 		al := newLoop(t)
 		store := al.ApprovalGrants()
 		args := map[string]any{"task_id": "t1"}
@@ -64,10 +72,27 @@ func TestTimedAllowance_HelpersAndOtherAgents(t *testing.T) {
 
 		al.inheritSessionPermissions("parent-sess", "mia", "child-sess", "mia")
 
-		require.False(t, store.IsAllowed("child-sess", "mia", "delete_task", args),
-			"C-26: inheritSessionPermissions copies no grants — a self-helper looks up the "+
-				"same agent-keyed allowances with no copy at spawn (nothing was recorded under "+
-				"the child session)")
+		require.True(t, store.IsAllowed("child-sess", "mia", "delete_task", args),
+			"C-26 Covers: helpers the agent starts for itself are covered — Mia's helper "+
+				"runs with no card")
+	})
+
+	t.Run("C-26: the same agent shares one allowance — a fresh Mia session sees it with no copy", func(t *testing.T) {
+		al := newLoop(t)
+		store := al.ApprovalGrants()
+		args := map[string]any{"task_id": "t1"}
+		require.True(t, store.Record("parent-sess", "mia", "delete_task", args),
+			"setup: Mia's chat holds a grant")
+
+		// No spawn, no inheritance, no copy: a second Mia session looks up
+		// the same agent-keyed allowance directly (C-26 "because the key is
+		// the agent, not the session"). Today's session-keyed store misses
+		// here — that miss is the red, and GREEN's agent-keyed store covers
+		// it without any per-session record.
+		require.True(t, store.IsAllowed("fresh-mia-sess", "mia", "delete_task", args),
+			"C-26: the allowance key is the agent — every Mia session shares it with no "+
+				"copy at spawn; today's session-keyed store hides it from any session that "+
+				"did not inherit")
 	})
 
 	t.Run("control: the per-chat Auto-approve modifier is still inherited", func(t *testing.T) {

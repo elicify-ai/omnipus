@@ -33,9 +33,13 @@ package gateway
 // RED today: nothing seeds a running allowance (the C-26 store does not
 // exist) and no writer ends one — every leg is BLOCKED at its first seam.
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 
 	"github.com/stretchr/testify/require"
 )
@@ -43,26 +47,69 @@ import (
 // The seams GREEN wires: patchPermissionSettings drives the real C-2 PATCH
 // /security/permissions route with the given PermissionSettingsPatch body;
 // the allowance trio drives the C-26 store (seed answers a card with
-// "Allow for 3 hours" per S-128's Given). Declared after the test so the
-// RED failure names the missing behaviour first.
+// "Allow for 3 hours" per S-128's Given); applyConfigReload drives the
+// fourth writer — a config reload that changes a stored value (C-26's
+// writer list) — with the mutation applied through the real config
+// persistence, not a map edit. Declared before the test so the RED failure
+// names the missing behaviour first.
 var (
 	patchPermissionSettings func(t testing.TB, api *restAPI, body string) *httptest.ResponseRecorder
 	seedRunningAllowance    func(t testing.TB, api *restAPI, agentID, subject string)
 	agentAllowanceActive    func(t testing.TB, api *restAPI, agentID, subject string) bool
 	agentEgressTokenRevoked func(t testing.TB, api *restAPI, agentID string) bool
+	applyConfigReload       func(t testing.TB, api *restAPI, mutate func(cfg *config.Config))
 )
 
-func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
-	allowanceEndedEntries := func(t *testing.T, auditDir string) []map[string]any {
-		t.Helper()
-		var out []map[string]any
-		for _, e := range readAllAuditEntries(t, auditDir) {
-			if e["event"] == "approval.allowance_ended" {
-				out = append(out, e)
-			}
-		}
-		return out
+// putAgentToolValue PUTs the agent's tools with ONE explicit tool override
+// through the real PUT /agents/{id}/tools writer (CHECK round 1 finding 16:
+// the earlier leg sent the inherited echo only, which may not change the
+// stored value at all). The catalog stays ceiling-complete; the override is
+// the deliberate stored change.
+func putAgentToolValue(t *testing.T, api *restAPI, agentID, tool, policy string) *httptest.ResponseRecorder {
+	t.Helper()
+	full := map[string]string{}
+	for name := range buildKnownBuiltinToolNames() {
+		full[name] = api.agentLoop.GetConfig().Sandbox.ToolPolicies[name]
 	}
+	full[tool] = policy
+	policies, err := json.Marshal(full)
+	require.NoError(t, err)
+	body := `{"override_names":[],"builtin":{"policies":` + string(policies) + `}}`
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+	w := httptest.NewRecorder()
+	api.updateAgentTools(w, r, agentID)
+	return w
+}
+
+// permissionChangeAudit asserts the ONE entry a change must write, with the
+// exact changed key, old and new values and the actor (CHECK round 1
+// finding 16: reason-and-actor-only passed a wrong-keyed entry).
+func permissionChangeAudit(t *testing.T, auditDir, key, oldV, newV string) {
+	t.Helper()
+	entries := allowanceEndedEntriesFor(t, auditDir)
+	require.Len(t, entries, 1, "exactly one approval.allowance_ended entry for the change")
+	if len(entries) == 1 {
+		require.Equal(t, key, entries[0]["key"], "the entry names the changed key")
+		require.Equal(t, oldV, entries[0]["old"], "the entry names the old value")
+		require.Equal(t, newV, entries[0]["new"], "the entry names the new value")
+		require.NotEmpty(t, entries[0]["actor"], "the entry names the actor of the change")
+	}
+}
+
+func allowanceEndedEntriesFor(t *testing.T, auditDir string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, e := range readAllAuditEntries(t, auditDir) {
+		if e["event"] == "approval.allowance_ended" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 
 	t.Run("D17#10: a global Deny ends Mia's allowance, once audited", func(t *testing.T) {
 		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
@@ -74,20 +121,20 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 		auditDir := attachTestAuditor(t, api)
 		seedRunningAllowance(t, api, "mia", "delete_task")
 
-		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"deny"}}`)
+		// Pin the floor the Deny changes: the stored global is Ask first, so
+		// the audit entry's old/new are exact fixture values, not assumptions
+		// about the test install's ceiling (CHECK round 1 finding 16).
+		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
+		require.Equal(t, http.StatusOK, w.Code,
+			"setup: the floor stores as Ask, got %d, body: %s", w.Code, w.Body.String())
+
+		w = patchPermissionSettings(t, api, `{"policies":{"delete_task":"deny"}}`)
 		require.Equal(t, http.StatusOK, w.Code,
 			"setup: the C-2 PATCH writer stores the Deny, got %d, body: %s", w.Code, w.Body.String())
 
 		require.False(t, agentAllowanceActive(t, api, "mia", "delete_task"),
 			"D17#10: the Deny ended the allowance — the next call is refused naming the global Deny, no card")
-		ended := allowanceEndedEntries(t, auditDir)
-		require.Len(t, ended, 1,
-			"D17#10: exactly one approval.allowance_ended entry per ended allowance, got %d", len(ended))
-		if len(ended) == 1 {
-			require.Contains(t, ended[0]["reason"], "permission_changed",
-				"D17#10: the entry names its reason")
-			require.NotEmpty(t, ended[0]["actor"], "S-128: the entry names the actor of the change")
-		}
+		permissionChangeAudit(t, auditDir, "delete_task", "ask", "deny")
 	})
 
 	t.Run("D17#11: after the Deny ends it, setting Ask back does not revive it", func(t *testing.T) {
@@ -122,7 +169,7 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 			"D17#14: Mia's allowance ended (the calls run anyway under Allow)")
 		require.False(t, agentAllowanceActive(t, api, "jim", "delete_task"),
 			"D17#14: Jim's allowance ended too")
-		require.Len(t, allowanceEndedEntries(t, auditDir), 2,
+		require.Len(t, allowanceEndedEntriesFor(t, auditDir), 2,
 			"D17#14: one audit entry per ended allowance — two agents, two entries")
 
 		w = patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
@@ -142,10 +189,11 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 		seedRunningAllowance(t, api, "mia", "delete_task")
 		seedRunningAllowance(t, api, "jim", "delete_task")
 
-		// The real PUT /agents/{id}/tools writer: Mia's own value for
-		// delete_task becomes an explicit ask (the inherited echo map makes
-		// the request complete; the stored change is Mia's unset → ask).
-		w := putAgentSkills(t, api, "mia", "")
+		// The real PUT /agents/{id}/tools writer with ONE explicit override:
+		// Mia's own value for delete_task becomes an explicit ask (CHECK
+		// round 1 finding 16 — the earlier leg sent only the inherited
+		// echo, which changes nothing on the C-4 envelope).
+		w := putAgentToolValue(t, api, "mia", "delete_task", "ask")
 		require.Equal(t, http.StatusOK, w.Code,
 			"setup: the agent's own PUT stores, got %d, body: %s", w.Code, w.Body.String())
 
@@ -153,8 +201,15 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 			"D17#16: Mia gets a card — her own value changed")
 		require.True(t, agentAllowanceActive(t, api, "jim", "delete_task"),
 			"D17#16: Jim runs with no card — his allowance is kept")
-		require.Len(t, allowanceEndedEntries(t, auditDir), 1,
+		ended := allowanceEndedEntriesFor(t, auditDir)
+		require.Len(t, ended, 1,
 			"D17#16: exactly one audit entry — Jim's allowance did not end")
+		if len(ended) == 1 {
+			require.Equal(t, "delete_task", ended[0]["key"], "D17#16: the entry names the changed key")
+			require.Contains(t, ended[0], "old", "D17#16: the entry names the old value (unset → present)")
+			require.Equal(t, "ask", ended[0]["new"], "D17#16: the entry names the new value")
+			require.NotEmpty(t, ended[0]["actor"], "D17#16: the entry names the actor")
+		}
 	})
 
 	t.Run("D17#17: the sysagent writer ends a skill allowance, and clearing keeps it ended", func(t *testing.T) {
@@ -167,7 +222,7 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 		seedRunningAllowance(t, api, "mia", "plan")
 
 		deps := sysDepsFor(t, api)
-		res := sysSetAgentPermissions(t, deps, "mia", map[string]any{"plan": "deny"})
+		res := sysSetAgentPermissions(t, deps, "mia", map[string]any{"set": map[string]any{"plan": "deny"}})
 		require.False(t, res.IsError, "setup: the Deny stores: %s", res.ForLLM)
 		require.False(t, agentAllowanceActive(t, api, "mia", "plan"),
 			"D17#17: the Deny ended the skill allowance — the next load is refused")
@@ -191,7 +246,7 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 			"D17#18: the same-value request is valid — 200, got %d, body: %s", w.Code, w.Body.String())
 		require.True(t, agentAllowanceActive(t, api, "mia", "delete_task"),
 			"D17#18: setting the same value again is not a change and ends nothing")
-		require.Empty(t, allowanceEndedEntries(t, auditDir),
+		require.Empty(t, allowanceEndedEntriesFor(t, auditDir),
 			"D17#18: no audit entry for a same-value write")
 	})
 
@@ -235,5 +290,67 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 			"setup: the trust change stores, got %d, body: %s", w.Code, w.Body.String())
 		require.True(t, agentAllowanceActive(t, api, "mia", "plan"),
 			"D17#20: trust (sandbox.skill_trust) is not a permission — the allowance is kept")
+	})
+
+	// CHECK round 1 finding 16: the fourth writer and the non-permission
+	// controls. A config reload that changes a stored PERMISSION value ends
+	// the allowances it affects; a level change, the Auto-approve switch and
+	// God Mode are not permissions and end nothing.
+	t.Run("D17: a config reload that changes the stored value ends the allowance (C-26 writer 4)", func(t *testing.T) {
+		if applyConfigReload == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+			t.Fatal("BLOCKED: the config-reload writer's permission-change ending (C-26 writer list: " +
+				"a config reload that changes a stored value) is not implemented — required by the D17 writer rows")
+		}
+		api := buildExecutorTestAPI(t)
+		auditDir := attachTestAuditor(t, api)
+		seedRunningAllowance(t, api, "mia", "delete_task")
+
+		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
+		require.Equal(t, http.StatusOK, w.Code, "setup: the floor stores as Ask, body: %s", w.Body.String())
+
+		applyConfigReload(t, api, func(cfg *config.Config) {
+			cfg.Sandbox.ToolPolicies["delete_task"] = "deny"
+		})
+
+		require.False(t, agentAllowanceActive(t, api, "mia", "delete_task"),
+			"C-26: the reload that changed the stored permission ends the allowance like any writer")
+		permissionChangeAudit(t, auditDir, "delete_task", "ask", "deny")
+	})
+
+	t.Run("D17 control: a level change is not a permission and ends nothing", func(t *testing.T) {
+		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+			t.Fatal("BLOCKED: the C-26 store and ending are not implemented — required by the level control")
+		}
+		api := buildExecutorTestAPI(t)
+		auditDir := attachTestAuditor(t, api)
+		seedRunningAllowance(t, api, "mia", "serve_web")
+
+		w := patchPermissionSettings(t, api, `{"visibility":{"serve_web":"hidden"}}`)
+		require.Equal(t, http.StatusOK, w.Code,
+			"setup: the level change stores, got %d, body: %s", w.Code, w.Body.String())
+		require.True(t, agentAllowanceActive(t, api, "mia", "serve_web"),
+			"C-26: a level (visibility) is not a permission — the allowance is kept")
+		require.Empty(t, allowanceEndedEntriesFor(t, auditDir),
+			"C-26: no audit entry for a non-permission change")
+	})
+
+	t.Run("D17 control: the Auto-approve switch and God Mode end nothing", func(t *testing.T) {
+		if applyConfigReload == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+			t.Fatal("BLOCKED: the config-reload writer and the C-26 store are not implemented — " +
+				"required by the Auto/God non-permission controls")
+		}
+		api := buildExecutorTestAPI(t)
+		auditDir := attachTestAuditor(t, api)
+		seedRunningAllowance(t, api, "mia", "delete_task")
+
+		applyConfigReload(t, api, func(cfg *config.Config) {
+			cfg.Sandbox.AutoApprove = true
+			cfg.Sandbox.GodMode = true
+		})
+
+		require.True(t, agentAllowanceActive(t, api, "mia", "delete_task"),
+			"C-26: Auto-approve and God Mode are not permissions — the allowance is kept")
+		require.Empty(t, allowanceEndedEntriesFor(t, auditDir),
+			"C-26: no audit entry for the Auto/God switches")
 	})
 }
