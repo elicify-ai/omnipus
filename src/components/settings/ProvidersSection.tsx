@@ -1144,8 +1144,9 @@ export function ProvidersSection() {
   // CR-05: the saved-state check compares the whole default: provider, model
   // and reasoning effort. An omitted effort keeps the stored one, so the
   // write's effort is the draft's or, when omitted, the one before.
+  // The text also shows in "changed somewhere else": an unset effort is left out.
   const defaultTuple = (provider: string, model: string, effort: string | undefined) =>
-    `${provider}/${model}, effort ${effort || 'not set'}`
+    effort ? `${provider}/${model}, effort ${effort}` : `${provider}/${model}`
   const defaultPart: FormSavePart = {
     id: 'default-model',
     count: defaultChanged ? 1 : 0,
