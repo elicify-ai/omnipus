@@ -14,7 +14,13 @@
 // unchanged), S-53 (disconnect via DELETE /programs/{id}/credential:
 // generation +1, switch stays on); and the REST face of the channel setting
 // (S-45's PUT/GET contract — S-45's one-writer clauses live in order 26's
-// TestProgramTurnEligibility pack).
+// TestProgramTurnEligibility pack). Also the missing-clause rows (CHECK F17):
+// S-93's second data-only recipe executing (the generic create route's
+// identity_check running the fake acme), D-1 rows 10 and 12 on the save
+// route (413 over the body cap; 409 stale expected_generation), S-35 and
+// S-38 on the entry-delete face (TestProgramEntryDeleteRows), and S-30/S-86
+// as BLOCKED rows pending the env integration slice
+// (TestProgramRunTimeConflicts).
 //
 // Every row drives the REAL production mux (pgPersonAPI): the person's
 // browser session is the only caller (FR-028's person gate), the save route
@@ -324,6 +330,82 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 			"the no-check reason: %s", pgEntryJSON(entry))
 		require.Equal(t, 0, f.ghStarted(), "no check ran (Acme defines none)")
 	})
+
+	t.Run("S93_second_data_recipe_executes", func(t *testing.T) {
+		// S-93: the SECOND recipe the engine executes (S-01 ran gh's). The
+		// recipe is defined only in data — an identity_check created through
+		// the generic create route — and no Go code is specific to the entry
+		// (S-37's catalog test pins the data-file half of that; this row pins
+		// the execution half): the fake `acme` prints `ex-user`, so a saved
+		// token must end connected with the account label ex-user. gh never
+		// runs.
+		bin := t.TempDir()
+		fake := filepath.Join(bin, "acme")
+		require.NoError(t, os.WriteFile(fake, []byte("#!/bin/sh\necho ex-user\n"), 0o755),
+			"instrument: the fake acme is installed")
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		created := pgCreateProgramEntry(t, f,
+			`{"display_name":"Acme","program_words":["acme"],"token_variables":["ACME_TOKEN"],`+
+				`"network_sites":["api.acme.example"],`+
+				`"identity_check":{"program_word":"acme","args":["whoami"],"timeout_seconds":20}}`)
+		id, _ := created["id"].(string)
+
+		save := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/"+id+"/credential",
+			`{"value":"acme_tok_123456"}`)
+		require.Equal(t, http.StatusOK, save.Code, "the save is processed: %s", save.Body.String())
+		entry := pgPollEntryState(t, f, id, "connected", 15*time.Second)
+		require.Equal(t, "ex-user", entry["account_label"],
+			"S-93: connected with the data recipe's output: %s", pgEntryJSON(entry))
+		require.Equal(t, 0, f.ghStarted(), "the gh recipe did not run for Acme's check")
+	})
+
+	t.Run("D1_row10_body_over_the_cap_answered_413", func(t *testing.T) {
+		// D-1 row 10: a request body over 65,536 bytes is answered 413 —
+		// before any value rule runs. The boundary control is D-1 row 4's
+		// REST face: a value of exactly 16,384 bytes (the value max, body
+		// under the cap) is processed, not size-refused.
+		before := pgProgramEntryByID(t, f, "github")
+		huge := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+			`{"value":"`+strings.Repeat("a", 65537)+`"}`)
+		require.Equal(t, http.StatusRequestEntityTooLarge, huge.Code,
+			"a body over 65,536 bytes is answered 413: got %d", huge.Code)
+		after := pgProgramEntryByID(t, f, "github")
+		require.Equal(t, pgEntryJSON(before), pgEntryJSON(after),
+			"the size-refused save wrote nothing")
+
+		control := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+			`{"value":"`+strings.Repeat("a", 16384)+`"}`)
+		if control.Code == http.StatusNotFound {
+			routeMissing(t, control, "PUT /programs/github/credential (16,384-byte value)", "S1 contract table / D-1 row 4")
+		}
+		require.Equal(t, http.StatusOK, control.Code,
+			"D-1 row 4's REST face: the 16,384-byte value is processed: got %d %s", control.Code, control.Body.String())
+	})
+
+	t.Run("D1_row12_stale_expected_generation_conflict", func(t *testing.T) {
+		// D-1 row 12: a save whose expected_generation does not match the
+		// current generation is refused 409 with the stale-generation
+		// message, and nothing changes. The stale generation is constructed
+		// from the entry's CURRENT generation (current + 5 is never
+		// current), so the row cannot depend on the sequence state above.
+		before := pgProgramEntryByID(t, f, "github")
+		curGen, ok := before["generation"].(float64)
+		require.True(t, ok, "the entry carries its generation: %s", pgEntryJSON(before))
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+			fmt.Sprintf(`{"value":"tok_stale_111111","expected_generation":%v}`, curGen+5))
+		if w.Code == http.StatusNotFound {
+			routeMissing(t, w, "PUT /programs/github/credential (stale expected_generation)", "S1 contract table / D-1 row 12")
+		}
+		require.Equal(t, http.StatusConflict, w.Code,
+			"the stale save is refused: got %d %s", w.Code, w.Body.String())
+		require.Contains(t, w.Body.String(),
+			"The token changed since this page was loaded. Check the current state before saving again.",
+			"the stale-generation message (message table)")
+		after := pgProgramEntryByID(t, f, "github")
+		require.Equal(t, pgEntryJSON(before), pgEntryJSON(after),
+			"the refused save changed nothing")
+	})
 }
 
 func TestProgramReplaceCheckDisconnect(t *testing.T) {
@@ -422,5 +504,68 @@ func TestProgramError_PassThrough(t *testing.T) {
 		// env integration slice's harness (FR-011); at RED the agent env
 		// builder cannot hand program variables to the shell harness at all.
 		t.Fatalf("BLOCKED: the agent environment builder cannot attach program variables to the bash harness (FR-011 runtime) — required by S-32's `gh api repos/o/r` run (expect: exactly `HTTP 403: Resource not accessible by integration` and exit code 1, nothing rewritten)")
+	})
+}
+
+// TestProgramEntryDeleteRows pins the entry-delete refusals on the real
+// mux: S-35 (a custom entry that is on for an agent cannot be deleted —
+// 409 naming the agent, still listed) and S-38 (presets are read-only —
+// 422 on both the edit and the delete face, still listed). Each row builds
+// its own fixture, so no Given leaks between rows.
+func TestProgramEntryDeleteRows(t *testing.T) {
+	t.Run("S35_delete_refused_while_on", func(t *testing.T) {
+		f := pgPersonAPI(t)
+		created := pgCreateProgramEntry(t, f,
+			`{"display_name":"Acme","program_words":["acme"],"token_variables":["ACME_TOKEN"],`+
+				`"network_sites":["api.acme.example"]}`)
+		id, _ := created["id"].(string)
+		w := pgSwitchProgramOn(t, f, id)
+		require.Equal(t, http.StatusOK, w.Code,
+			"the Given: Acme is on for Dev: got %d %s", w.Code, w.Body.String())
+
+		del := pgProgramsSessionCall(t, f, http.MethodDelete, "/programs/"+id, "")
+		if del.Code == http.StatusNotFound {
+			routeMissing(t, del, "DELETE /programs/{id} (delete Acme while on)", "S1 contract table / S-35")
+		}
+		require.Equal(t, http.StatusConflict, del.Code,
+			"the delete is refused while the entry is on: got %d %s", del.Code, del.Body.String())
+		require.Contains(t, del.Body.String(), "Dev", "the refusal names the agent (S-35)")
+
+		still := pgProgramEntryByID(t, f, id)
+		require.Equal(t, pgEntryJSON(created), pgEntryJSON(still),
+			"S-35: Acme is still listed, unchanged")
+	})
+
+	t.Run("S38_presets_are_read_only_422", func(t *testing.T) {
+		f := pgPersonAPI(t)
+		del := pgProgramsSessionCall(t, f, http.MethodDelete, "/programs/github", "")
+		if del.Code == http.StatusNotFound {
+			routeMissing(t, del, "DELETE /programs/github (delete a preset)", "S1 contract table / S-38")
+		}
+		require.Equal(t, http.StatusUnprocessableEntity, del.Code,
+			"deleting a preset is refused 422: got %d %s", del.Code, del.Body.String())
+		put := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github",
+			`{"revision":1,"display_name":"GitHub Renamed"}`)
+		require.Equal(t, http.StatusUnprocessableEntity, put.Code,
+			"editing a preset is refused 422 too (contract row: PUT / DELETE, 422 preset): got %d %s",
+			put.Code, put.Body.String())
+		// Still listed.
+		gh := pgProgramEntryByID(t, f, "github")
+		require.Equal(t, "GitHub", gh["display_name"], "the preset is still listed, unchanged")
+	})
+}
+
+// TestProgramRunTimeConflicts pins the run-time conflict rows of US-3
+// (order 21's S-30/S-86 clauses). Both need the env integration slice's
+// harness (FR-011: the agent environment builder attaching program variables
+// and the managed git helper to the child) — missing at RED, so each row is
+// a loud BLOCKED naming the seam and the exact oracle, never a skip.
+func TestProgramRunTimeConflicts(t *testing.T) {
+	t.Run("S30_runtime_variable_conflict_fails_closed", func(t *testing.T) {
+		t.Fatalf("BLOCKED: the agent environment builder cannot attach program variables to the bash harness (FR-011 runtime) — required by S-30 (hand-edited config: GitHub on for Dev AND a selected private GH_TOKEN; Dev runs `printenv GH_TOKEN | wc -c`; expect output `0` plus the run-time conflict notice `GH_TOKEN was not set for this command: two sources set it. A person can fix this in Settings → Programs.`)")
+	})
+
+	t.Run("S86_runtime_git_host_conflict_no_helper", func(t *testing.T) {
+		t.Fatalf("BLOCKED: the agent environment builder cannot attach the managed git helper to the bash harness (FR-011 runtime) — required by S-86 (hand-edited config: GitHub and \"GitLab Mirror\" with host github.com both on for Dev, in BOTH entry orders; Dev runs `git credential fill` for github.com; expect no managed helper answers, the notice `The connected git login for github.com was not used: two programs supply it. A person can fix this in Settings → Programs.`, and the same result in both orders)")
 	})
 }

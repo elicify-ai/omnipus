@@ -147,9 +147,14 @@ func TestProgramNetwork_AutoAsk(t *testing.T) {
 	})
 
 	t.Run("S26_program_word_spellings", func(t *testing.T) {
-		// GREEN asserts here (spec S-26, dataset D-3): every row's command
-		// spelling that names the program word gets the token; spellings
-		// that do not, do not.
+		// GREEN asserts here (spec S-26, dataset D-3): each row's command
+		// spelling decides the SITE GRANT — spellings that name the program
+		// word grant the entry's network sites for the run (rows 1–5, 9),
+		// spellings that do not, do not (rows 6, 7, 8, 10). CORRECTED (CHECK
+		// F17): the grant is never about token availability — GH_TOKEN is in
+		// the command's environment regardless of a word match (S-28's
+		// `aws s3 ls` carries it; S-89's script does too); only the
+		// auto-approval is gated on the matcher.
 		t.Fatalf("BLOCKED: %s (and the program-word matcher) — required by S-26's D-3 rows", s1EnvSeam)
 	})
 

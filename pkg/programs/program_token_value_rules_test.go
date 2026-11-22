@@ -17,10 +17,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// d1Rows is dataset D-1 [S1] (rows 1–9 and 13; rows 10–12 are asserted on
-// their own surfaces: the 413 body limit and 409 stale generation are REST
-// behaviour covered by TestProgramCredential_SaveCheckStates / the route
-// sweep; row 11's chat-card minimum is covered with the card tests).
+// d1Rows is dataset D-1 [S1] (rows 1–9 and 13; rows 10 and 12 are REST
+// faces of the save route and have their own rows there —
+// TestProgramCredential_SaveCheckStates' D1_row10_body_over_the_cap_
+// answered_413 and D1_row12_stale_expected_generation_conflict (CHECK F17
+// added them after this comment wrongly claimed they were already covered);
+// row 11's chat-card minimum is covered with the card tests).
 var d1Rows = []struct {
 	name    string
 	input   string
