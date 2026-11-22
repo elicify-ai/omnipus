@@ -95,9 +95,13 @@ export function writerPlan(): PackageExportPlan {
         name: 'Writer',
         kind: 'main',
         files: [
-          { path: 'agent.json', size: 1200 },
-          { path: 'SOUL.md', size: 2000 },
-          { path: 'AGENT.md', size: 500 },
+          // GREEN CHECK P03: the REAL wire paths, exactly as the backend's plan
+          // builder emits them (pkg/omnpkg/format.go::AgentsPrefix +
+          // agentRecordPath/agentSoulPath/agentInstructionsPath — the bundle
+          // layout `omnipus/agents/<id>/<file>`), not bare names.
+          { path: 'omnipus/agents/a-writer/agent.json', size: 1200 },
+          { path: 'omnipus/agents/a-writer/SOUL.md', size: 2000 },
+          { path: 'omnipus/agents/a-writer/AGENT.md', size: 500 },
         ],
         bytes: 3700,
       },
@@ -173,18 +177,23 @@ async function reviewWriter() {
 }
 
 describe('Export Review — the server review is shown (US-2.3, US-6.1)', () => {
-  it('labels the files with sizes and shows the About size', async () => {
+  it('labels the real full-path files with the plain labels, their path and size, and shows the About size (GREEN CHECK P03)', async () => {
     const nav = await reviewWriter()
     expect(nav.search?.step).toBe('review')
     expect(nav.search?.plan_id).toBe('P1')
     goTo({ wizard: 'export', step: 'review', plan_id: 'P1' })
+    // GREEN CHECK P03 (spec "Export · Review" table row, line 417: Settings
+    // agent.json, Prompt SOUL.md, Instructions AGENT.md with sizes; FR-018):
+    // the labels must survive the real full-path carrier — each plain label
+    // next to its own full path and size, the path shown once (the file cell).
     expect(await screen.findByText('Settings')).toBeInTheDocument()
-    expect(screen.getByText('agent.json')).toBeInTheDocument()
+    expect(screen.getByText('omnipus/agents/a-writer/agent.json')).toBeInTheDocument()
+    expect(screen.getByText('1.2 KB')).toBeInTheDocument()
     expect(screen.getByText('Prompt')).toBeInTheDocument()
-    expect(screen.getByText('SOUL.md')).toBeInTheDocument()
+    expect(screen.getByText('omnipus/agents/a-writer/SOUL.md')).toBeInTheDocument()
     expect(screen.getByText('2.0 KB')).toBeInTheDocument()
     expect(screen.getByText('Instructions')).toBeInTheDocument()
-    expect(screen.getByText('AGENT.md')).toBeInTheDocument()
+    expect(screen.getByText('omnipus/agents/a-writer/AGENT.md')).toBeInTheDocument()
     expect(screen.getByText('500 B')).toBeInTheDocument()
     expect(screen.getByText(/About/)).toBeInTheDocument()
   })

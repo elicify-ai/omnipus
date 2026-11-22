@@ -178,6 +178,21 @@ func TestStagingCancelHandler_ReadyBusyAndGone(t *testing.T) {
 		require.Equal(t, http.StatusMethodNotAllowed, got.Code, "PUT is not a cancel; body=%s", got.Body)
 	})
 
+	// GREEN CHECK P05 (FR-010: "other methods → 405"): the bare cancel
+	// resource /api/v1/packages/import/{id} has exactly one apply route,
+	// POST …/{id}/apply — a POST WITHOUT that suffix is another method
+	// on the cancel resource and answers 405, never the apply handler's 404
+	// staging_not_found for a missing suffix.
+	t.Run("POST without the apply suffix on the cancel resource answers 405", func(t *testing.T) {
+		api := packageAPI(t)
+		id := b1StageReady(t, api)
+		req := packageAuthRequest(t, http.MethodPost, "/api/v1/packages/import/"+id, strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		req.URL.Path = "/api/v1/packages/import/" + id
+		got := serveRegisteredPackage(t, api, req)
+		require.Equal(t, http.StatusMethodNotAllowed, got.Code, "POST without /apply is neither a cancel nor an apply; body=%s", got.Body)
+	})
+
 	t.Run("a failed folder removal: 500 staging_cleanup_failed, never applicable, not a slot", func(t *testing.T) {
 		api := packageAPI(t)
 		reg := api.packageRegistry()

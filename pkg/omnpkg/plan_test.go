@@ -425,9 +425,13 @@ func TestPlanExport_WordingMatchesDecodedBundle(t *testing.T) {
 	// Skills names travel (the review's skill row says so).
 	skillsRaw, ok := stored["skills"]
 	require.True(t, ok, "the decoded record still lists the agent's skills")
-	var skills []string
-	for _, s := range skillsRaw.([]any) {
-		skills = append(skills, s.(string))
+	skillsAny, ok := skillsRaw.([]any)
+	require.True(t, ok, "the decoded record stores skills as a list")
+	skills := make([]string, 0, len(skillsAny))
+	for _, s := range skillsAny {
+		name, nameOK := s.(string)
+		require.True(t, nameOK, "each stored skill is a string")
+		skills = append(skills, name)
 	}
 	require.Equal(t, []string{"research", "Summarize"}, skills)
 
