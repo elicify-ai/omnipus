@@ -45,9 +45,14 @@
  * imported tokens file, so the shipped calc() duration reads as 'unknown' —
  * accepted as not provably zero, never silently zero) and rendered pixels —
  * the authorized exact-commit browser lane owns those. The DOM side (the
- * mark on exactly that row) is asserted rendered. The browser-run witness
- * for the same legs is the e2e suite's FR-075 tests (typecheck-only here;
- * the authorized exact-commit lane executes them).
+ * mark on exactly that row) is asserted rendered: exactly one marked element
+ * carrying the search index entry's row id, the jump's scroll receiver on or
+ * inside it, and non-empty row content (team-lead rulings on CHECK R6-02,
+ * 2026-11-22: the index label is a search name, not a row heading, and a
+ * read-only row carries no control — FR-075 requires neither, so neither is
+ * asserted). The browser-run witness for the same
+ * legs is the e2e suite's FR-075 tests (typecheck-only here; the authorized
+ * exact-commit lane executes them).
  *
  * RED note: the production build landed (a94f859e3a merged e717a2e3e7)
  * before this part, so these cases have no pre-change red to show — the
@@ -362,9 +367,28 @@ async function expectGroupOpen(testId: string, headerName: string): Promise<void
 }
 
 /**
- * Wait for the mark, then pin its whole shape: the row carries the target
- * mark and aria-current, and it is the ONLY marked row on the page —
- * FR-075 "marks" names that one row, not a class of them.
+ * Wait for the mark, then pin its whole shape — FR-075 "marks" names that
+ * one setting row, not a class of them, so the marked element must BE the
+ * row the person asked for (team-lead rulings on CHECK R6-02, 2026-11-22):
+ *
+ * 1. Identity: exactly one element carries the mark (`data-settings-row-target`
+ *    / `aria-current`), and it is the element carrying the requested
+ *    `data-settings-row` id — the search index entry's row id, including the
+ *    overrides the index declares (rowFor resolved it; marked[0] === row).
+ *    CHECK R6-02 (N77): the id alone moved WITH the mark onto an unrelated
+ *    empty element and satisfied the old oracle.
+ * 2. The row itself, not a stand-in:
+ *    - the jump's `scrollIntoView` receiver is the marked element or a
+ *      descendant of it (FR-075: "the row scrolls into view"), and
+ *    - the element is not empty: it carries non-empty visible text, so an
+ *      empty or unrelated sibling fails both legs.
+ *    Two legs the rulings dropped, with their reasons: the search index's
+ *    label is a search name, not a row heading (FR-075 does not require the
+ *    row to repeat it), so the row is NOT required to contain its search
+ *    label; and a read-only row legitimately carries no heading, label or
+ *    interactive control (FR-075 does not require one), so no such
+ *    furniture is required either. A text-only stand-in stays bounded by
+ *    the identity, only-one-mark and scroll-receiver legs.
  */
 async function expectExactlyThisRowMarked(row: HTMLElement): Promise<void> {
   await waitFor(() => {
@@ -374,6 +398,16 @@ async function expectExactlyThisRowMarked(row: HTMLElement): Promise<void> {
   const marked = document.querySelectorAll('[data-settings-row-target]')
   expect(marked.length, 'FR-075: exactly that row — one marked row on the page').toBe(1)
   expect(marked[0], 'FR-075: the one marked row is the reached row itself').toBe(row)
+  const scrolled = (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock
+    .contexts as HTMLElement[]
+  expect(
+    scrolled.some((el) => el === row || row.contains(el)),
+    'RED (FR-075): the jump must scroll the reached row into view — the scroll ran on an element that is neither the marked row nor inside it',
+  ).toBe(true)
+  expect(
+    (row.textContent ?? '').trim().length,
+    'FR-075: the marked row must carry its own content — it must not be empty',
+  ).toBeGreaterThan(0)
 }
 
 // ── Stylesheet-side oracle (jsdom loads no stylesheet; see the header) ────────
@@ -769,7 +803,8 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
     const row = await portRow()
     await expectExactlyThisRowMarked(row)
-    // "the row scrolls into view": the scroll ran on THIS row.
+    // "the row scrolls into view": the scroll ran on THIS row — the exact
+    // receiver (stricter than the oracle's on-or-inside leg above).
     const scrolled = (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock
       .contexts as HTMLElement[]
     expect(
@@ -944,7 +979,8 @@ describe('FR-075 reach — every setting the search index names is reachable and
       await screen.findByRole('heading', { name: sectionInfo(entry.section).label, level: 2 }),
       `FR-075: the search result for "${entry.label}" must open its own section (${sectionInfo(entry.section).label})`,
     ).toBeInTheDocument()
-    // "marks exactly that row" — the whole mark shape, scoped to this entry.
+    // "marks exactly that row" — the whole mark shape (identity, the row
+    // itself scrolled into view, its own content), scoped to this entry.
     await expectExactlyThisRowMarked(
       await rowFor(
         entry.row,
