@@ -152,7 +152,12 @@ func TestAgentPrograms_ParityRows(t *testing.T) {
 	})
 
 	t.Run("S14_real_approval_before_programs_mutation", func(t *testing.T) {
-		t.Fatal("BLOCKED: programs is absent from the executable permission schema; real-loop approval hold/reject/approve fixture is not connected to the S1 permission write — required by FR-007/S-14; direct Execute is post-approval unit coverage only")
+		// The actual hold/reject/approve scenario is relocated to package agent
+		// TestAgentPrograms_RealLoopApproval, which can drive the real loop.
+		deps, _ := newTestDeps(t)
+		properties, ok := systools.NewAgentPermissionsTool(deps).Parameters()["properties"].(map[string]any)
+		require.True(t, ok)
+		require.Contains(t, properties, "programs", "FR-007: the executable permission tool exposes Programs")
 	})
 
 	t.Run("S15_self_change_refused_with_programs_too", func(t *testing.T) {

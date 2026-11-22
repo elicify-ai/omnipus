@@ -785,7 +785,7 @@ func aliasedExec(set *programs.ProgramVariables) {
 		t.Fatalf("BLOCKED: %s; the environment_setup runner has no program-variable seam yet", s106Seam)
 	})
 	t.Run("b_account_check_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; the account check (I-3/FR-005) is not implemented yet", s106Seam)
+		assertAccountCheckSinks(t)
 	})
 	t.Run("b_git_version_probe_sentinel_reaches_no_sink", func(t *testing.T) {
 		t.Fatalf("BLOCKED: %s; the git version probe (FR-014) is not implemented yet", s106Seam)
