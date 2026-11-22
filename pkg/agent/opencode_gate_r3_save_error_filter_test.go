@@ -9,9 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Silent-failure round-3 steer: filtering a latched save error must discard
-// NOTHING else, even when a single wrapper encloses a join. The error-membership
-// oracle comes from that promise, not from the current filter implementation.
+// SFH-R4-1 corrects the round-3 oracle: remove only the exposed latched save
+// value, recursively through Join nodes. Keep every other wrapper WHOLE,
+// including its nested save cause. The oracle is the agreed team-lead rule,
+// not the current filter implementation.
 func TestOpenCodeGateR3_SaveErrorFilterPreservesWrappedIndependentFailure(t *testing.T) {
 	saveErr := errors.New("latched save")
 	otherErr := errors.New("independent finalize")
@@ -21,11 +22,13 @@ func TestOpenCodeGateR3_SaveErrorFilterPreservesWrappedIndependentFailure(t *tes
 		err         error
 		saveErr     error
 		wantOther   bool
+		keepWrapper bool
 		passthrough bool
 	}{
-		{name: "wrapped_join_keeps_independent_failure", err: errors.Join(saveErr, wrapped), saveErr: saveErr, wantOther: true},
+		{name: "wrapped_join_keeps_independent_failure", err: errors.Join(saveErr, wrapped), saveErr: saveErr, wantOther: true, keepWrapper: true},
 		{name: "bare_save_only_is_removed", err: saveErr, saveErr: saveErr},
 		{name: "flat_join_keeps_independent_failure", err: errors.Join(saveErr, otherErr), saveErr: saveErr, wantOther: true},
+		{name: "nested_joins_remove_every_exposed_save", err: errors.Join(errors.Join(saveErr, saveErr), otherErr), saveErr: saveErr, wantOther: true},
 		{name: "nil_error_with_save_latch", saveErr: saveErr},
 		{name: "nil_error_and_nil_latch"},
 		{name: "nil_latch_preserves_wrapped_error", err: wrapped, wantOther: true, passthrough: true},
@@ -42,8 +45,14 @@ func TestOpenCodeGateR3_SaveErrorFilterPreservesWrappedIndependentFailure(t *tes
 			} else {
 				assert.NoError(t, got, "there is no remaining cause after removing the lone save error")
 			}
-			if tc.saveErr != nil {
-				assert.False(t, errors.Is(got, saveErr), "the latched save cause itself is removed, not just hidden behind a new join")
+			if tc.keepWrapper {
+				assert.ErrorIs(t, got, wrapped, "the exact original non-save wrapper is retained, not rebuilt")
+				assert.ErrorIs(t, got, saveErr, "a kept wrapper retains its nested save cause as well as the independent cause")
+			} else if tc.saveErr != nil {
+				assert.False(t, errors.Is(got, saveErr), "every exposed save occurrence is removed recursively through Join nodes")
+				if tc.wantOther {
+					assert.Equal(t, otherErr.Error(), got.Error(), "the exposed-only flat or nested Join contains only the independent failure afterward")
+				}
 			}
 		})
 	}
