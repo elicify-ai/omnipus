@@ -7,7 +7,7 @@ const meta = {
   args: { steps: ['Choose file', 'Preview', 'Confirm', 'Result'], current: 1, label: 'Import steps' },
   parameters: {
     designSystem: {
-      forcedColors: { boundaries: ['[data-slot="stepper"] li'] },
+      forcedColors: { boundaries: ['[data-slot="stepper"] li[aria-current]'] },
       reflowExemptions: [],
       browserAssertions: [{ selector: '[data-slot="stepper"] li[aria-current]', attribute: 'aria-current', value: 'step' }],
     },

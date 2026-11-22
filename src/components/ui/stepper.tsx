@@ -4,6 +4,9 @@ import { cn } from '@/lib/utils'
 // Components": an ordered list of step labels, `aria-current="step"` on the
 // current step, and a visually hidden "Step n of m" next to the list).
 // Presentational only: labels and the current index, no navigation logic.
+// The accent gold is not remapped in forced colors (library.css remaps only
+// the neutral tokens), so the current step's text follows CanvasText there,
+// as the Calendar's today marker does.
 // The onboarding wizard's hand-built indicator is not migrated here (B1 scope).
 
 export interface StepperProps {
@@ -34,7 +37,7 @@ export function Stepper({ steps, current, label, className }: StepperProps) {
               className={cn(
                 'rounded-full border px-[var(--space-2-5)] py-[var(--space-0-5)] forced-colors:border-[CanvasText]',
                 isCurrent
-                  ? 'border-[var(--color-accent)] font-semibold text-[var(--color-accent)]'
+                  ? 'border-[var(--color-accent)] font-semibold text-[var(--color-accent)] forced-colors:text-[CanvasText]'
                   : isDone
                     ? 'border-[var(--color-border)] text-[var(--color-secondary)]'
                     : 'border-[var(--color-border)] text-[var(--color-muted)]',
