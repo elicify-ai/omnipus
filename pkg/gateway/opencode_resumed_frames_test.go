@@ -93,6 +93,7 @@ func TestOpenCodeFix1895_HumanInterruptResumedAnswerStreamsBeforeDoneToBothViewe
 	for i, viewer := range viewers {
 		observed[i].drain(t, viewer, child.SessionID)
 		opencode1895AssertSavedResumedAnswer(t, &observed[i], entries)
+		assert.Len(t, observed[i].done, 1, "TEST-ANALYSIS #3: the entire interrupt/resume stream has only the resumed final done, never an old held completion")
 	}
 	assert.Equal(t, observed[0].raw, observed[1].raw, "both subscribers receive identical gap-free session frames")
 	t.Log("#1895: both subscribers received resumed tokens while the CLI was paused; saved row/turn ids, token-before-done and session sequences checked")
