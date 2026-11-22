@@ -148,15 +148,21 @@ it.each([
   expect(useToolApprovalStore.getState().resolvedIds).toEqual(['appr-l1'])
 })
 
-it.each(['exact', 'prefix'] as const)('R6 / ADR-092 D4: Always Allow sends only the deliberately chosen bash %s scope', async scope => {
+// Regression row "Always Allow on approval cards" (skills-tools-redesign-spec,
+// Regression Test Requirements, commit b7526b2e60): this case is rewritten to
+// its C-26 timed-choice equivalent — a timed choice sends allow_for with the
+// chosen duration (ToolApprovalActionRequest.duration), and the narrow bash
+// card keeps its deliberately chosen exact or prefix scope. There is no
+// Always Allow action on the wire anymore (R2-Q1).
+it.each(['exact', 'prefix'] as const)('R6 → C-26: "Allow for 1 hour" sends allow_for with duration and keeps the deliberately chosen bash %s scope', async scope => {
   mount()
   enqueue()
   expect(screen.getByTestId('scope-exact')).toHaveAttribute('aria-checked', 'true')
   fireEvent.click(screen.getByTestId(`scope-${scope}`))
   expect(screen.getByTestId(`scope-${scope}`)).toHaveAttribute('aria-checked', 'true')
-  fireEvent.click(screen.getByRole('button', { name: /^Always Allow$/i }))
+  fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
   await waitFor(() => expect(useToolApprovalStore.getState().queue).toEqual([]))
-  expect(approvalPosts()).toEqual([{ id: 'appr-l1', body: { action: 'allow', scope } }])
+  expect(approvalPosts()).toEqual([{ id: 'appr-l1', body: { action: 'allow_for', duration: '1h', scope } }])
 })
 
 it('R6 multi-tab floor: rapid clicks cannot resolve twice; confirmed resolution rejects late duplicate frame', async () => {

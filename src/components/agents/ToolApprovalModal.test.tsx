@@ -8,7 +8,9 @@
 //  3. Approve button calls POST /api/v1/tool-approvals/{id} with action:"allow_once"
 //  4. Deny button calls POST with action:"deny"
 //  5. Cancel button calls POST with action:"cancel"
-//  5b. Always Allow button calls POST with action:"allow" (ADR-036 §3.4 gap closure)
+//  5b. C-26 timed choice: "Allow for 1 hour" POSTs action:"allow_for" with
+//      duration:"1h" (spec Regression row, commit b7526b2e60; R2-Q1 removed
+//      action:"allow" from the wire, so there is no Always Allow case anymore)
 //  6. On 410 response, modal entry is dismissed without a toast
 //  7. On 403 response, shows admin-required toast
 //  8. On 401 response, shows re-auth toast
@@ -68,7 +70,9 @@ describe('ToolApprovalPanel — rendering', () => {
     expect(screen.getByText('Tool Approval Required')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Always Allow/i })).toBeInTheDocument()
+    // Regression row (b7526b2e60) + C-26: the card offers a time limit, not
+    // Always Allow (R2-Q1 removed it from every card).
+    expect(screen.getByRole('button', { name: /1 hour/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument()
   })
 
@@ -199,77 +203,108 @@ describe('ToolApprovalPanel — button dispatch', () => {
     })
   })
 
-  // ADR-036 §3.4 gap closure: the retired ExecApprovalBlock's 3-way decision
-  // (Allow / Deny / "Always Allow") is now fully reachable from the generic
-  // modal for every tool, not just bash.
-  it('L1 §1.2 R6: Always Allow button calls submitToolApproval with action:"allow"', async () => {
+  // Regression row "Always Allow on approval cards" (skills-tools-redesign-spec,
+  // Regression Test Requirements, added in commit b7526b2e60): the R6 'Always
+  // Allow' cases are rewritten to their C-26 timed-choice equivalents. C-26
+  // replaced Always Allow with Approve Once / Allow for 1 hour / 3 hours /
+  // 1 day / Deny, and R2-Q1 removed action:"allow" from the wire — so the
+  // wiring case now dispatches the timed choice: allow_for with duration.
+  it('L1 §1.2 R6 → C-26: the "Allow for 1 hour" choice calls submitToolApproval with action:"allow_for", duration:"1h"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
-      expect(approvalPosts()).toContainEqual({ id: 'appr-001', body: { action: 'allow' } })
+      expect(approvalPosts()).toContainEqual({
+        id: 'appr-001',
+        body: { action: 'allow_for', duration: '1h' },
+      })
     })
   })
 
-  it('L1 §1.2 R6: toasts when Always Allow approved this call but the grant did not stick', async () => {
+  // Regression row (b7526b2e60) + C-26 / spec approval-card row: when the
+  // timed choice released this call but the allowance was NOT saved
+  // (ToolApprovalResponse.applied.timed_allowance = false with
+  // not_applied_reason), the card closes and the toast is the spec's
+  // partial-failure text "Approved for this request only. The time limit was
+  // not saved: <reason>." — the C-26 replacement of the old Always Allow
+  // did-not-stick toast (R2-Q1).
+  it('L1 §1.2 R6 → C-26: toasts when the timed choice released this call but the allowance did not stick', async () => {
     setApprovalReply({
       approval_id: 'appr-001',
-      action: 'allow',
+      action: 'allow_for',
       status: 'ok',
-      grant_recorded: false,
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      applied: { call_released: true, timed_allowance: false, trust_approved: false },
+      not_applied_reason: 'the approval store is read-only',
     })
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
       expect(toasts()).toContainEqual({
-        message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
+        message:
+          'Approved for this request only. The time limit was not saved: the approval store is read-only.',
         variant: 'warning',
       })
     })
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
   })
 
-  it('L1 §1.2 R6: toasts when Always Allow omits grant_recorded — treated as did-not-stick', async () => {
+  // Regression row (b7526b2e60) + C-26: a reply that never says the allowance
+  // stuck — no ToolApprovalResponse.applied at all — is treated the same as
+  // timed_allowance:false: the call was released, the time limit was not
+  // saved, and the partial-failure text is shown (spec approval-card row;
+  // the reason is server-supplied, so the assertion bounds the spec-pinned
+  // prefix instead of inventing one). Replaces the old grant_recorded-omitted
+  // Always Allow case (R2-Q1).
+  it('L1 §1.2 R6 → C-26: toasts when the reply omits applied — treated as allowance-did-not-stick', async () => {
     setApprovalReply({
       approval_id: 'appr-001',
-      action: 'allow',
+      action: 'allow_for',
       status: 'ok',
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
     })
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
       expect(toasts()).toContainEqual({
-        message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
+        message: expect.stringMatching(
+          /^Approved for this request only\. The time limit was not saved/,
+        ),
         variant: 'warning',
       })
     })
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
   })
 
-  // Item 4 (ADR-092 D4/FR-024): show the scope the server actually
-  // RECORDED (ToolApprovalResponse.scope), not the client's own request —
-  // this is the SPA's only confirmation of what stuck, since the card
-  // closes immediately after a successful allow.
-  it('L1 §1.2 R6: toasts the actually-recorded scope ("prefix") after a successful Always Allow, distinct from the did-not-stick warning', async () => {
+  // Regression row (b7526b2e60) + C-26 / S-126: after a timed choice sticks
+  // (ToolApprovalResponse.applied.timed_allowance = true) the card closes and
+  // the toast is the spec's result line "Allowed for <agent> until <time>.",
+  // with the server-recorded scope (ToolApprovalResponse.scope) carried on the
+  // reply. The old "Always allowed — … for this session." toasts are removed
+  // by R2-Q1, so their text must never reappear. The time is clock-derived
+  // and the agent display name is the store's, so the spec-pinned sentence
+  // shape is asserted, not a rendered timestamp.
+  it('L1 §1.2 R6 → C-26: closes with the result line naming the recorded timed allowance when the server recorded scope "prefix"', async () => {
     setApprovalReply({
       approval_id: 'appr-shell-001',
-      action: 'allow',
+      action: 'allow_for',
       status: 'ok',
-      grant_recorded: true,
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      applied: { call_released: true, timed_allowance: true, trust_approved: false },
       scope: 'prefix',
     })
     act(() => {
@@ -290,25 +325,36 @@ describe('ToolApprovalPanel — button dispatch', () => {
     })
     render(<ToolApprovalPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
       expect(toasts()).toContainEqual({
-        message: 'Always allowed — every command starting with that prefix is now allowed for this session.',
+        message: expect.stringMatching(/^Allowed for .+ until .+\.$/),
         variant: 'success',
       })
     })
     expect(toasts()).not.toContainEqual(
       expect.objectContaining({ variant: 'warning' }),
     )
+    // R2-Q1: the "Always allowed" wording is retired with the control.
+    expect(toasts()).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('Always allowed'),
+      }),
+    )
   })
 
-  it('L1 §1.2 R6: toasts the actually-recorded "exact" scope, not a prefix, when the server recorded exact even though a prefix was offered', async () => {
+  // Regression row (b7526b2e60) + C-26 / S-126: same result line when the
+  // server recorded the other narrow bash scope ("exact") — the recorded
+  // scope flows through without changing or dropping the result line, and no
+  // "Always allowed" wording returns (R2-Q1).
+  it('L1 §1.2 R6 → C-26: closes with the result line naming the recorded timed allowance when the server recorded scope "exact"', async () => {
     setApprovalReply({
       approval_id: 'appr-shell-002',
-      action: 'allow',
+      action: 'allow_for',
       status: 'ok',
-      grant_recorded: true,
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      applied: { call_released: true, timed_allowance: true, trust_approved: false },
       scope: 'exact',
     })
     act(() => {
@@ -329,14 +375,19 @@ describe('ToolApprovalPanel — button dispatch', () => {
     })
     render(<ToolApprovalPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
       expect(toasts()).toContainEqual({
-        message: 'Always allowed — this exact command is now allowed for this session.',
+        message: expect.stringMatching(/^Allowed for .+ until .+\.$/),
         variant: 'success',
       })
     })
+    expect(toasts()).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('Always allowed'),
+      }),
+    )
   })
 
   it('L1 §1.2 R6: removes approval from queue after successful Approve', async () => {
@@ -352,24 +403,33 @@ describe('ToolApprovalPanel — button dispatch', () => {
     })
   })
 
-  it('L1 §1.2 R6: removes approval from queue after successful Always Allow', async () => {
+  // Regression row (b7526b2e60) + C-26 / S-126: a timed choice whose
+  // allowance stuck (applied.timed_allowance = true) resolves the card — the
+  // queue empties and the result line "Allowed for <agent> until <time>."
+  // names the recorded allowance (the C-26 replacement of the old silent
+  // Always Allow success; R2-Q1).
+  it('L1 §1.2 R6 → C-26: removes approval from queue after a successful timed choice', async () => {
     setApprovalReply({
       approval_id: 'appr-001',
-      action: 'allow',
+      action: 'allow_for',
       status: 'ok',
-      grant_recorded: true,
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      applied: { call_released: true, timed_allowance: true, trust_approved: false },
     })
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /1 hour/i }))
 
     await waitFor(() => {
       expect(useToolApprovalStore.getState().queue).toHaveLength(0)
     })
-    expect(toasts()).toEqual([])
+    expect(toasts()).toContainEqual({
+      message: expect.stringMatching(/^Allowed for .+ until .+\.$/),
+      variant: 'success',
+    })
   })
 })
 
@@ -707,12 +767,16 @@ describe.each(edgeCases)(
   },
 )
 
-// ── "Always Allow" for request_mount ────────────────────────────────────────
+// ── C-26 timed choices for request_mount ───────────────────────────────────
 //
-// Grants remember the whole arguments object, so Always Allow on Add folder
-// means "this folder, this session" — not "any folder". The button is shown
-// when a folder path is present. It stays hidden on reconnect stubs and when
-// request_mount arrives with no host_path/path.
+// Regression row (b7526b2e60): the R6 'Always Allow' cases here are rewritten
+// to their C-26 timed-choice equivalents — the card offers Approve Once /
+// Allow for 1 hour / 3 hours / 1 day / Deny for an ordinary tool and for
+// request_mount with args present. The old "hides Always Allow when no folder
+// path is present" case is DELETED: it guarded the per-call grant's scope
+// capture, which R2-Q1 removed entirely — no C-26 equivalent exists (any
+// exact-action tool that offers no time choice is covered by order 64, D17
+// rows 21–25).
 
 const MOUNT_APPROVAL = {
   approvalId: 'appr-mount',
@@ -725,37 +789,36 @@ const MOUNT_APPROVAL = {
   expiresAt: Date.now() + 300_000,
 }
 
-describe('ToolApprovalPanel — Always Allow for request_mount', () => {
-  it('L1 §1.2 R6: offers Always Allow for an ordinary tool', () => {
+describe('ToolApprovalPanel — C-26 timed choices for request_mount', () => {
+  // Regression row (b7526b2e60) + C-26 approval-card row: the choices on
+  // every card are Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny —
+  // and no Always Allow anywhere (R2-Q1).
+  it('L1 §1.2 R6 → C-26: offers the three time choices for an ordinary tool, and never Always Allow', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
-    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /1 hour/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /3 hours/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /1 day/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Always Allow/i })).not.toBeInTheDocument()
   })
 
-  it('L1 §1.2 R6: offers Always Allow for request_mount when args are present', () => {
+  it('L1 §1.2 R6 → C-26: offers the three time choices for request_mount when args are present', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
-    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
-  })
-
-  it('L1 §1.2 R6: hides Always Allow for request_mount when no folder path is present', () => {
-    act(() => {
-      useToolApprovalStore.setState({
-        queue: [{ ...MOUNT_APPROVAL, args: { reason: 'UAT folder A' } }],
-      })
-    })
-    render(<ToolApprovalPanel />)
-    expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Add folder|Approve/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /1 hour/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /3 hours/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /1 day/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Always Allow/i })).not.toBeInTheDocument()
   })
 
   it('L1 §1.2 R6: still offers a way to approve and a way to deny request_mount', () => {
-    // Always Allow is offered when args are present (a grant is this folder,
-    // this session). Approve and Deny must still be there either way.
+    // C-26 (Regression row, b7526b2e60): the timed choices are offered when
+    // args are present; there is no Always Allow anymore (R2-Q1). Approve
+    // and Deny must still be there either way.
     //
     // request_mount's copy diverges from the generic Approve/Deny labels
     // (operator-approved "Add folder" / "Don't add" — see
