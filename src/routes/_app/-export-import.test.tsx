@@ -25,10 +25,16 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   }
 })
 
-const { mockAgents } = vi.hoisted(() => ({ mockAgents: vi.fn() }))
-vi.mock('@/lib/api', () => ({
+const { mockAgents, mockWorkspaces } = vi.hoisted(() => ({ mockAgents: vi.fn(), mockWorkspaces: vi.fn() }))
+// The REAL '@/lib/api' module stays loaded under the spread: workspaceQueries
+// (the shared activeWorkspacesQueryOptions the Confirm step now uses) reads
+// workspacesQueryKeys from this module at import time, so a replacement
+// factory here breaks the import before any test runs (CI PR #1971,
+// Vitest - lib-store, head d5c7a0427).
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   fetchAgents: mockAgents,
-  fetchWorkspaces: vi.fn().mockResolvedValue([]),
+  fetchWorkspaces: mockWorkspaces,
 }))
 
 import { Route } from './export-import'
@@ -54,6 +60,7 @@ const ownAgents = [
 beforeEach(() => {
   mockSearch = {}
   mockAgents.mockResolvedValue(ownAgents)
+  mockWorkspaces.mockReset().mockResolvedValue([])
   rememberIdentityMode('local')
 })
 
