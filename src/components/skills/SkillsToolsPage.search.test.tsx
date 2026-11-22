@@ -1,18 +1,223 @@
 // SkillsToolsPage.search.test.tsx — order 27 (S-45 to S-50; FR-002, FR-004,
-// FR-005). RED guard: the page does not exist yet. Oracles for its GREEN
-// tests: one search field and two flat filters above one grouped list with
-// collapsed groups; a search opens groups with matches; Escape and the
-// clear button empty it; an empty result shows
-// "No <items> match "<text>"" with "Clear search and filters"; a row whose
-// saved value no longer matches the active filter leaves the list.
-import { describe, it, expect } from 'vitest'
+// FR-005). Search, filters and their effect on the list, driven through the
+// imported page with the network edge doubled (CHECK round 1 finding 2: the
+// earlier file held only a file-existence guard):
+//   S-46: groups start collapsed; typing "browser" opens only the matching
+//         group and only matching rows show;
+//   S-47: Escape empties the field and all groups collapse again;
+//   S-49: no match shows "No tools match "zzzz"" with "Clear search and
+//         filters";
+//   S-50: a row whose saved value no longer matches the filter leaves the
+//         list, and clearing the filter shows it again;
+//   S-48: the Set all control over a filtered list is named
+//         "Set 1 of 1 matching…" and changes exactly the visible row.
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, within, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { RegistryTool } from '@/lib/api'
+// The pack's BLOCKED seam (support.tsx::requireModule convention): the
+// missing module is a named, loud failure — the acceptance oracles are the
+// interaction tests below.
+import type { ComponentType } from 'react'
+
+const pageModules = import.meta.glob<Record<string, unknown>>(['/src/components/skills/SkillsToolsPage.tsx'])
+async function requireSkillsToolsPage(): Promise<ComponentType> {
+  expect(
+    Object.keys(pageModules),
+    'BLOCKED: SkillsToolsPage is not implemented — required by skills-tools-redesign-spec FR-002, FR-004, FR-005, S-45 to S-50',
+  ).toContain('/src/components/skills/SkillsToolsPage.tsx')
+  const mod = (await pageModules['/src/components/skills/SkillsToolsPage.tsx']()) as Record<string, unknown>
+  expect(typeof mod.SkillsToolsPage, 'BLOCKED: SkillsToolsPage public export').toBe('function')
+  return mod.SkillsToolsPage as ComponentType
+}
+
+let SkillsToolsPage: ComponentType
+
+beforeEach(async () => {
+  SkillsToolsPage = await requireSkillsToolsPage()
+})
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchSkills: vi.fn(),
+    fetchRegistryTools: vi.fn(),
+    fetchBuiltinTools: vi.fn(),
+    fetchGlobalToolPolicies: vi.fn(),
+    updateGlobalToolPolicies: vi.fn(),
+    fetchSkillTrust: vi.fn(),
+    fetchProviders: vi.fn(),
+    fetchSkillMarketplaceStatus: vi.fn(),
+    searchSkills: vi.fn(),
+    fetchMcpServers: vi.fn(),
+  }
+})
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return { ...actual, useNavigate: () => vi.fn(), useParams: () => ({}) }
+})
+vi.mock('@/store/ui', () => ({
+  useUiStore: () => ({ addToast: vi.fn() }),
+}))
+
+import * as api from '@/lib/api'
+
+function tool(name: string, category: string): RegistryTool {
+  return {
+    name,
+    description: `${name} description`,
+    scope: 'general',
+    category,
+    source: 'builtin',
+    visibility: 'full',
+    visibility_locked: false,
+    permission_fixed: false,
+  }
+}
+
+const TOOLS = [
+  tool('browser_navigate', 'browser'),
+  tool('browser_click', 'browser'),
+  tool('fetch_url', 'web'),
+]
+const BROWSER_NAVIGATE = TOOLS[0]
+
+function pageWrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      {children}
+    </QueryClientProvider>
+  )
+}
+
+async function openToolsTab() {
+  render(<SkillsToolsPage />, { wrapper: pageWrapper })
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('tab', { name: /omnipus tools/i }))
+  return user
+}
+
+async function typeSearch(text: string) {
+  const user = await openToolsTab()
+  await user.type(screen.getByRole('textbox', { name: /search/i }), text)
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(api.fetchSkills).mockResolvedValue([])
+  vi.mocked(api.fetchRegistryTools).mockResolvedValue(TOOLS)
+  vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
+  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
+  vi.mocked(api.updateGlobalToolPolicies).mockResolvedValue({ policies: {} })
+  vi.mocked(api.fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' } as never)
+  vi.mocked(api.fetchProviders).mockResolvedValue([])
+  vi.mocked(api.fetchSkillMarketplaceStatus).mockResolvedValue({} as never)
+  vi.mocked(api.searchSkills).mockResolvedValue([])
+  vi.mocked(api.fetchMcpServers).mockResolvedValue([])
+})
 
 describe('SkillsToolsPage — search and filters (order 27)', () => {
-  it('BLOCKED until the component exists', () => {
+  it('BLOCKED diagnostic: the page component exists', () => {
+    // CHECK round 1 finding 2: existence is a diagnostic, never the
+    // acceptance oracle — the interaction tests below are. Observed
+    // 2026-11-22: this file's static import of the missing './SkillsToolsPage'
+    // resolved silently under vitest's transform (five locator failures, no
+    // resolution error), so the diagnostic keeps the named-missing RED
+    // reason even then.
     const mod = import.meta.glob('/src/components/skills/SkillsToolsPage.tsx', { eager: false })
     expect(
       Object.keys(mod),
       'BLOCKED: SkillsToolsPage is not implemented — required by skills-tools-redesign-spec FR-002, FR-004, FR-005, S-45 to S-50',
-    ).toHaveLength(1)
+    ).toContain('/src/components/skills/SkillsToolsPage.tsx')
+  })
+
+  it('S-46: groups start collapsed; a search opens only the matching group and rows', async () => {
+    const user = await openToolsTab()
+    expect(screen.queryByTestId('tool-row-browser_navigate')).not.toBeInTheDocument() // collapsed
+
+    await user.type(screen.getByRole('textbox', { name: /search/i }), 'browser')
+
+    expect(screen.getByTestId('tool-row-browser_navigate')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-row-browser_click')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-row-fetch_url')).not.toBeInTheDocument()
+  })
+
+  it('S-47: Escape empties the search and all groups collapse again', async () => {
+    const user = await openToolsTab()
+    const field = screen.getByRole('textbox', { name: /search/i })
+    await user.type(field, 'browser')
+    expect(screen.getByTestId('tool-row-browser_navigate')).toBeInTheDocument()
+
+    field.focus()
+    await user.keyboard('{Escape}')
+
+    expect(field).toHaveValue('')
+    expect(screen.queryByTestId('tool-row-browser_navigate')).not.toBeInTheDocument()
+  })
+
+  it('S-49: no match shows the empty state with its clear control', async () => {
+    await typeSearch('zzzz')
+
+    expect(screen.getByText('No tools match "zzzz"')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Clear search and filters' })).toBeInTheDocument()
+  })
+
+  it('S-50: a row whose new value no longer matches the filter leaves the list; clearing shows it', async () => {
+    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { browser_navigate: 'ask' } })
+    const user = await openToolsTab()
+    await user.click(screen.getByRole('button', { name: /permission filter/i }))
+    await user.click(screen.getByRole('menuitem', { name: /^ask$/i }))
+
+    const row = screen.getByTestId('tool-row-browser_navigate')
+    await user.click(within(row).getByRole('button', { name: /^deny$/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('tool-row-browser_navigate')).not.toBeInTheDocument()
+    })
+    await user.click(screen.getByRole('button', { name: /permission filter/i }))
+    await user.click(screen.getByRole('menuitem', { name: /all/i }))
+    expect(screen.getByTestId('tool-row-browser_navigate')).toBeInTheDocument()
+    expect(
+      within(screen.getByTestId('tool-row-browser_navigate')).getByRole('button', { name: /^deny$/i }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    void BROWSER_NAVIGATE
+  })
+
+  it('S-48: Set all over a filter names "<k> of <n> matching" and changes exactly the visible row', async () => {
+    // Skills tab, Permission filter = Deny, 1 of 1 skill at Deny (S-48's
+    // shape, with the fixture's single skill).
+    vi.mocked(api.fetchSkills).mockResolvedValue([
+      {
+        id: 'notes-helper',
+        name: 'notes-helper',
+        version: '1.0.0',
+        category: 'tools',
+        verified: true,
+        status: 'active',
+        has_local_changes: false,
+        trust_approved: true,
+        revision: '0'.repeat(64),
+      } as never,
+    ])
+    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { 'notes-helper': 'deny' } })
+    const user = userEvent.setup()
+    render(<SkillsToolsPage />, { wrapper: pageWrapper })
+    await user.click(screen.getByRole('tab', { name: /^skills/i }))
+    await user.click(screen.getByRole('button', { name: /permission filter/i }))
+    await user.click(screen.getByRole('menuitem', { name: /^deny$/i }))
+
+    const setAll = screen.getByRole('button', { name: /^set 1 of 1 matching/i })
+    await user.click(setAll)
+    await user.click(screen.getByRole('menuitem', { name: /^allow$/i }))
+
+    await waitFor(() => {
+      expect(api.updateGlobalToolPolicies).toHaveBeenCalledTimes(1)
+    })
+    const saved = vi.mocked(api.updateGlobalToolPolicies).mock.calls[0][0] as { policies: Record<string, string> }
+    expect(saved.policies['notes-helper']).toBe('allow')
   })
 })
