@@ -367,8 +367,14 @@ async function jumpViaEntry(label: string): Promise<void> {
  * (the overrides group's Add-override action), and an unnamed locator
  * cannot say which button it means (the part-22 reconciliation at
  * c12cbeffe0: round 16's opening made that locator ambiguous).
+ *
+ * Returns that toggle: it is the group WITNESS — located independently of
+ * any mark, by the name FR-058 gives the group — which the mark-shape
+ * oracle binds the marked row to (CHECK R7-03: a wrong-but-real group
+ * opening elsewhere while another node agrees with the implementation's id
+ * is not enough).
  */
-async function expectGroupOpen(testId: string, headerName: string): Promise<void> {
+async function expectGroupOpen(testId: string, headerName: string): Promise<HTMLElement> {
   const toggle = within(screen.getByTestId(testId)).getByRole('button', { name: headerName })
   await waitFor(
     () =>
@@ -378,6 +384,7 @@ async function expectGroupOpen(testId: string, headerName: string): Promise<void
       ).toHaveAttribute('aria-expanded', 'true'),
     { timeout: 5_000 },
   )
+  return toggle
 }
 
 /**
@@ -390,21 +397,35 @@ async function expectGroupOpen(testId: string, headerName: string): Promise<void
  *    `data-settings-row` id — the search index entry's row id, including the
  *    overrides the index declares (rowFor resolved it; marked[0] === row).
  *    CHECK R6-02 (N77): the id alone moved WITH the mark onto an unrelated
- *    empty element and satisfied the old oracle.
+ *    empty element and satisfied the old oracle. The id element is located
+ *    independently of the mark — the index declares it, rowFor queries the
+ *    document for it — and the mark must sit on it (and on nothing else:
+ *    exactly one marked element), so the mark never sits on any element
+ *    outside it, and the scroll receiver is on or inside it.
  * 2. The row itself, not a stand-in:
  *    - the jump's `scrollIntoView` receiver is the marked element or a
  *      descendant of it (FR-075: "the row scrolls into view"), and
  *    - the element is not empty: it carries non-empty visible text, so an
- *      empty or unrelated sibling fails both legs.
+ *      empty or unrelated sibling fails both legs, and
+ *    - when the caller hands in a group WITNESS (a closed-group case:
+ *      expectGroupOpen located the named group's own header toggle by
+ *      accessible name — FR-058's group, independently of any mark), that
+ *      witnessed header must lie ON or INSIDE the marked row. A
+ *      wrong-but-real group marked and scrolled while the requested group
+ *      opens elsewhere (CHECK R7-03/N100), or a non-empty unrelated
+ *      sibling carrying the id (CHECK R7-03/N99), puts the mark where the
+ *      witnessed header is not — the id moving WITH the mark no longer
+ *      satisfies the oracle.
  *    Two legs the rulings dropped, with their reasons: the search index's
  *    label is a search name, not a row heading (FR-075 does not require the
  *    row to repeat it), so the row is NOT required to contain its search
  *    label; and a read-only row legitimately carries no heading, label or
  *    interactive control (FR-075 does not require one), so no such
  *    furniture is required either. A text-only stand-in stays bounded by
- *    the identity, only-one-mark and scroll-receiver legs.
+ *    the identity, only-one-mark and scroll-receiver legs — and, for the
+ *    closed-group cases, by the witnessed group header above.
  */
-async function expectExactlyThisRowMarked(row: HTMLElement): Promise<void> {
+async function expectExactlyThisRowMarked(row: HTMLElement, groupWitness?: HTMLElement): Promise<void> {
   await waitFor(() => {
     expect(row, 'RED (FR-075): the reached row must be marked').toHaveAttribute('data-settings-row-target')
     expect(row, 'RED (FR-075): the reached row must be marked to assistive tech').toHaveAttribute('aria-current', 'true')
@@ -422,6 +443,12 @@ async function expectExactlyThisRowMarked(row: HTMLElement): Promise<void> {
     (row.textContent ?? '').trim().length,
     'FR-075: the marked row must carry its own content — it must not be empty',
   ).toBeGreaterThan(0)
+  if (groupWitness) {
+    expect(
+      row === groupWitness || row.contains(groupWitness),
+      'RED (FR-075, CHECK R7-03): the marked row must be the reached group setting\'s own row — the group header witnessed by name must lie on or inside the marked row, not elsewhere while the id agrees with the implementation',
+    ).toBe(true)
+  }
 }
 
 // ── Stylesheet-side oracle (jsdom loads no stylesheet; see the header) ────────
@@ -1059,20 +1086,23 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     await jumpViaEntry('Model overrides')
     // "the section opens": the row's own section.
     expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
-    // "a row inside a group that is closed opens that group first."
-    await expectGroupOpen('limits-group-overrides', 'Model overrides')
+    // "a row inside a group that is closed opens that group first." The
+    // named header is the group WITNESS (FR-058), bound to the mark below.
+    const groupToggle = await expectGroupOpen('limits-group-overrides', 'Model overrides')
     // And the marked row is that one row, with its aria-current identity.
     await expectExactlyThisRowMarked(
       await rowFor('model-overrides', 'RED (FR-075): the indexed Model-overrides row must render — its group opened and its identity reached the DOM'),
+      groupToggle,
     )
   })
 
   it('a deep link to a row inside a closed group opens that group and marks exactly that row', async () => {
     await openSettings('?tab=limits&row=model-overrides')
     expect(await screen.findByRole('heading', { name: 'Limits', level: 2 })).toBeInTheDocument()
-    await expectGroupOpen('limits-group-overrides', 'Model overrides')
+    const groupToggle = await expectGroupOpen('limits-group-overrides', 'Model overrides')
     await expectExactlyThisRowMarked(
       await rowFor('model-overrides', 'RED (FR-075): the indexed Model-overrides row must render — its group opened and its identity reached the DOM'),
+      groupToggle,
     )
   })
 
