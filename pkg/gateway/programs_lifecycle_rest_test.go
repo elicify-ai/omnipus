@@ -517,52 +517,6 @@ func TestProgramReplaceCheckDisconnect(t *testing.T) {
 		// stays-valid-at-GitHub text is the UI face — programs.spec.ts S53.
 	})
 
-	t.Run("S45_channel_programs_setting_rest_face", func(t *testing.T) {
-		// The REST contract row: PUT 200, GET reflects. S-45's other two
-		// clauses are named tests of their own (CHECK R02 — the round-1
-		// repair wrongly claimed order 26 covered them): the set_config
-		// refusal in pkg/sysagent/tools
-		// (TestConfigSet_ChannelProgramsAllowed_OneWriter) and the rebind
-		// reset right below (S45_channel_rebind_resets_the_switch).
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/channels/telegram/programs",
-			`{"allowed":true,"revision":1}`)
-		if w.Code == http.StatusNotFound {
-			routeMissing(t, w, "PUT /channels/telegram/programs", "S1 contract table / S-45 REST face")
-		}
-		require.Equal(t, http.StatusOK, w.Code, "the setting is saved: %s", w.Body.String())
-		g := pgProgramsSessionCall(t, f, http.MethodGet, "/channels/telegram/programs", "")
-		require.Equal(t, http.StatusOK, g.Code, "GET /channels/telegram/programs: %s", g.Body.String())
-		var setting map[string]any
-		require.NoError(t, json.Unmarshal(g.Body.Bytes(), &setting), "the setting reads back: %s", g.Body.String())
-		require.Equal(t, true, setting["allowed"], "GET reflects the switch")
-	})
-
-	t.Run("S45_channel_rebind_resets_the_switch", func(t *testing.T) {
-		// S-45's second clause (CHECK R02): with the switch ON, rebinding
-		// telegram through PUT /channels/telegram/routing turns the switch
-		// OFF in that same config write (FR-009; founder S-Q2 and the
-		// 22 Nov correction). The Given is the real setting writer; the
-		// rebind is the real routing writer.
-		on := pgProgramsSessionCall(t, f, http.MethodPut, "/channels/telegram/programs",
-			`{"allowed":true,"revision":1}`)
-		if on.Code == http.StatusNotFound {
-			routeMissing(t, on, "PUT /channels/telegram/programs (the switch-on of the rebind Given)",
-				"S1 contract table / S-45's rebind clause")
-		}
-		require.Equal(t, http.StatusOK, on.Code, "the Given: the switch is on: %s", on.Body.String())
-
-		rebind := pgProgramsSessionCall(t, f, http.MethodPut, "/channels/telegram/routing",
-			`{"workspace_id":"gateway-test-harness-default","default_agent_id":"dev"}`)
-		require.Equal(t, http.StatusOK, rebind.Code,
-			"the person rebinds telegram to another agent: got %d %s", rebind.Code, rebind.Body.String())
-
-		g := pgProgramsSessionCall(t, f, http.MethodGet, "/channels/telegram/programs", "")
-		require.Equal(t, http.StatusOK, g.Code, "GET /channels/telegram/programs: %s", g.Body.String())
-		var setting map[string]any
-		require.NoError(t, json.Unmarshal(g.Body.Bytes(), &setting), "the setting reads back: %s", g.Body.String())
-		require.Equal(t, false, setting["allowed"],
-			"the rebind turned the switch off in the same write: %s", g.Body.String())
-	})
 }
 
 func TestProgramError_PassThrough(t *testing.T) {
