@@ -341,21 +341,22 @@ describe('EffortControl — blocked step and keyboard', () => {
     expect(low).toHaveAttribute('aria-checked', 'false')
   })
 
-  // Traces to: effort-levels-spec-r10.md S-10 ("picking High completes the
-  // switch with High"); the commit is the save — no confirm step (P-Q4, S-57
-  // save-on-commit semantics).
-  it('S-10: picking High completes the switch — onChange fires at once with high and the popover closes', async () => {
+  // S-10 still completes the switch without an internal confirm. F1 /
+  // Settings FR-010 supersedes the caller's autosave: completion is a draft
+  // until Memory's shared Save changes, which sends only changed fields.
+  it('S-10 / F1: picking High closes the popover as a draft; Save writes the selected model and effort', async () => {
     const { onChange } = await openBlockedStep()
     const popover = screen.getByRole('dialog')
     // No confirmation inside the switch UI; Memory's separate Save is valid.
     expect(within(popover).queryByRole('button', { name: /confirm|save/i })).toBeNull()
     await user.click(within(popover).getByRole('radio', { name: 'High' }))
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1))
-    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'high'})
+    expect(onChange).not.toHaveBeenCalled()
     expect(screen.queryAllByRole('radio')).toHaveLength(0)
     await waitFor(() => expect(popover).not.toBeInTheDocument())
     expect(screen.queryByRole('dialog')).toBeNull()
-    expect(screen.getByRole('button', { name: /save memory settings/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1))
+    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_reasoning_effort:'high'})
   })
 
   // Traces to: effort-levels-spec-r10.md S-10 ("Escape instead keeps the
@@ -380,9 +381,11 @@ describe('EffortControl — blocked step and keyboard', () => {
     await user.keyboard('{ArrowDown}')
     expect(screen.getByRole('radio', { name: 'Medium' })).toHaveFocus()
     await user.keyboard('{Enter}')
-    expect(onChange).toHaveBeenCalled()
-    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'medium'})
+    expect(onChange).not.toHaveBeenCalled()
     await waitFor(()=>expect(screen.getByRole('button',{name:/^Effort/i})).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1))
+    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_reasoning_effort:'medium'})
   })
 
   // Traces to: effort-levels-spec-r10.md S-11 (the same step works with Space
@@ -391,8 +394,10 @@ describe('EffortControl — blocked step and keyboard', () => {
     const { onChange } = await openBlockedStep()
     await user.keyboard('{ArrowDown}')
     await user.keyboard(' ')
-    expect(onChange).toHaveBeenCalled()
-    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_provider:'openrouter',recap_reasoning_effort:'medium'})
+    expect(onChange).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1))
+    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'openai/gpt-6.1-sol',recap_reasoning_effort:'medium'})
   })
 
   // Traces to: effort-levels-spec-r10.md S-73 (Off to a model with nothing
@@ -401,9 +406,11 @@ describe('EffortControl — blocked step and keyboard', () => {
   it('S-73: Off into nothing sendable offers Let the provider decide and Cancel; deciding stores provider_default', async () => {
     const {onChange} = await switchFromSaved('deepseek/deepseek-v4.1-flash','off','budget-only-model')
     await user.click(screen.getByRole('button', { name: 'Let the provider decide' }))
-    expect(onChange).toHaveBeenCalled()
-    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'budget-only-model',recap_provider:'openrouter',recap_reasoning_effort:'provider_default'})
+    expect(onChange).not.toHaveBeenCalled()
     expect(screen.queryAllByRole('radio')).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1))
+    expect(onChange.mock.calls[0][0]).toEqual({recap_model:'budget-only-model',recap_reasoning_effort:'provider_default'})
   })
 
   // Traces to: effort-levels-spec-r10.md S-73 ("Cancel or Escape keeps the
@@ -428,18 +435,16 @@ describe('EffortControl — remapped stored value shows the note with a Change l
     vi.mocked(fetchProvidersCatalog).mockResolvedValue(CATALOG)
   })
 
-  // Traces to: effort-levels-spec-r10.md S-74 (a switch that remaps saves at
-  // once with the note and a Change link, and the link opens the effort
-  // popover); S-57 (the picker carries no internal confirm step — the commit is
-  // the save request; the server's value renders again when the parent passes
-  // it back after a failed save).
+  // S-74 still shows the mapping note and Change opens the effort popover.
+  // F1 / Settings FR-010 and FR-020 replace Memory's save-at-once/rollback:
+  // the new pair stays a draft until Save and is retained on an unknown result.
   it('S-74: a stored Medium on a no-Medium model shows the exact note with a Change link that reopens the popover', async () => {
     await switchFromSaved('openai/gpt-6.1-sol','medium','deepseek/deepseek-v4.1-flash')
-    await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
     expect(
       screen.getByText("Effort set to Low. deepseek/deepseek-v4.1-flash doesn't offer Medium."),
     ).toBeInTheDocument()
-    const memorySave = screen.getByRole('button', { name: /save memory settings/i })
+    const memorySave = screen.getByRole('button', { name: /save changes/i })
     await user.click(screen.getByRole('button', { name: 'Change' }))
     const popover = await screen.findByRole('dialog')
     expect(within(popover).getByRole('radio', { name: 'Low' })).toBeInTheDocument()
@@ -449,14 +454,17 @@ describe('EffortControl — remapped stored value shows the note with a Change l
     // The modal hides background controls from role queries, not from the DOM.
     expect(memorySave).toBeInTheDocument()
   })
-  it('S-57: failed mapped autosave restores the acknowledged old pair and Medium, focus and FormError', async()=>{
+  it('S-57 / F1: an unknown mapped Save keeps the new model and Low draft with Retry, never restores the old pair', async()=>{
     await switchFromSaved('openai/gpt-6.1-sol','medium','deepseek/deepseek-v4.1-flash',true)
-    await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
-    await waitFor(()=>expect(screen.getByRole('alert')).toBeInTheDocument())
-    expect(screen.getByTestId('recap-model-trigger')).toHaveTextContent('openai/gpt-6.1-sol')
-    const chip=screen.getByRole('button',{name:/^Effort.*Medium/i})
-    expect(chip).toHaveFocus()
-    expect(screen.getByRole('alert')).toHaveTextContent(/SAVE-FAILED-7731|save.*failed/i)
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(()=>expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledExactlyOnceWith({recap_model:'deepseek/deepseek-v4.1-flash',recap_reasoning_effort:'low'}))
+    // Settings FR-020 replaces the old autosave rollback/error contract.
+    expect(await screen.findByText('1 change may not have been saved')).toBeInTheDocument()
+    expect(screen.getByTestId('recap-model-trigger')).toHaveTextContent('deepseek/deepseek-v4.1-flash')
+    expect(screen.getByRole('button',{name:/^Effort.*Low/i})).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
   })
 
 })

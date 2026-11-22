@@ -491,7 +491,14 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByText(/failed to load the auto-approve setting/i)).toBeInTheDocument()
+      // F12 / FR-066, team-lead's ninth-file ruling: name the failed read,
+      // retain its injected cause and expose Retry in the actual Callout.
+      const callout = screen.getByRole('alert')
+      expect(callout).toHaveAttribute('data-slot', 'callout')
+      expect(callout).toHaveAttribute('data-variant', 'error')
+      expect(callout).toHaveTextContent(/approvals/i)
+      expect(callout).toHaveTextContent('network error')
+      expect(within(callout).getByRole('button', { name: 'Retry' })).toBeEnabled()
     })
     expect(screen.queryByTestId('auto-approve-global-switch')).not.toBeInTheDocument()
   })
