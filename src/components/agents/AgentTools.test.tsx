@@ -68,6 +68,9 @@ const SYSTEM_TOOL: RegistryTool = {
   category: 'system',   // category==='system' → goes in Advanced disclosure
   description: 'Set system config',
   source: 'builtin',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 const FILESYSTEM_TOOL: RegistryTool = {
@@ -76,6 +79,9 @@ const FILESYSTEM_TOOL: RegistryTool = {
   category: 'filesystem',
   description: 'Read file contents',
   source: 'builtin',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 const MCP_TOOL: RegistryTool = {
@@ -84,6 +90,9 @@ const MCP_TOOL: RegistryTool = {
   category: 'web' as string,
   description: 'Search GitHub via MCP',
   source: 'mcp',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 const DEFAULT_TOOLS_CFG: AgentToolsCfg = {
@@ -118,6 +127,7 @@ beforeEach(() => {
     override_names: [],
     config: DEFAULT_TOOLS_CFG,
     tools: [],
+    skills: [],
   })
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
@@ -154,9 +164,9 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([
       SYSTEM_TOOL,
       FILESYSTEM_TOOL,
-      { name: 'system.exec.run', scope: 'core', category: 'system', description: 'Run exec', source: 'builtin' as const },
+      { name: 'system.exec.run', scope: 'core', category: 'system', description: 'Run exec', source: 'builtin' as const, visibility: 'full', visibility_locked: false, permission_fixed: false },
     ])
-    vi.mocked(api.fetchAgentTools).mockResolvedValue({ revision: '0'.repeat(64), override_names: [], config: DEFAULT_TOOLS_CFG, tools: [] })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({ revision: '0'.repeat(64), override_names: [], config: DEFAULT_TOOLS_CFG, tools: [], skills: [] })
 
     render(
       <ToolsAndPermissions
@@ -187,6 +197,9 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
       category: undefined as unknown as string, // unset category — real-world edge case
       description: 'Some MCP action',
       source: 'mcp',
+      visibility: 'full',
+      visibility_locked: false,
+      permission_fixed: false,
     }
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([mcpToolNoCategory])
 

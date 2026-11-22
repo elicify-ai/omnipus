@@ -37,6 +37,8 @@ describe('chat handleFrame — tool_approval_resolved', () => {
         session_id: SID,
         turn_id: 'turn-x',
         expires_in_ms: 300_000,
+      offered_actions: ['allow_once', 'allow_for', 'deny'],
+      allow_durations: ['1h', '3h', '1d'],
       })
     })
     expect(useToolApprovalStore.getState().queue.map((a) => a.approvalId)).toEqual(['appr-x'])
@@ -58,7 +60,7 @@ describe('chat handleFrame — tool_approval_resolved', () => {
         user_id: 'user-1',
         emitted_at: new Date().toISOString(),
         pending_approvals: [
-          { approval_id: 'appr-x', tool_call_id: 'call-appr-x', turn_id: 'turn-appr-x', args: {}, session_id: SID, tool_name: 'write_file', agent_id: 'agent-x', expires_in_ms: 1_000 },
+          { approval_id: 'appr-x', tool_call_id: 'call-appr-x', turn_id: 'turn-appr-x', args: {}, session_id: SID, tool_name: 'write_file', agent_id: 'agent-x', expires_in_ms: 1_000, offered_actions: ['allow_once', 'allow_for', 'deny'], allow_durations: ['1h', '3h', '1d'] },
         ],
       })
     })

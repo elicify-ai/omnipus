@@ -631,7 +631,7 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
 
 describe('AgentProfile — ordinary built-in skill assignments', () => {
   const mockSkills: Skill[] = [
-    { has_local_changes: false, revision: '0'.repeat(64), id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
+    { has_local_changes: false, revision: '0'.repeat(64), id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active', category: 'tools', trust_approved: false },
   ]
 
   beforeEach(() => {

@@ -191,6 +191,8 @@ describe('API contract: agent and supporting resource shapes', () => {
     const mock = {
       has_local_changes: false,
       revision: '0'.repeat(64),
+      category: 'tools',
+      trust_approved: false,
       id: 'my-skill',
       name: 'My Skill',
       version: '1.0.0',
@@ -202,6 +204,7 @@ describe('API contract: agent and supporting resource shapes', () => {
 
     expect(mock.verified).toBe(false)
     expect(mock.status).toBe('active')
+    expect(mock.trust_approved).toBe(false)
   })
 
   // ── Tool ──────────────────────────────────────────────────────────────────
@@ -213,9 +216,13 @@ describe('API contract: agent and supporting resource shapes', () => {
       category: 'agents',
       description: 'Read agent metadata',
       source: 'builtin' as const,
+      visibility: 'full',
+      visibility_locked: false,
+      permission_fixed: false,
     } satisfies Tool
 
     expect(mock.category).toBe('agents')
+    expect(mock.visibility_locked).toBe(false)
   })
 
   // ── Channel ───────────────────────────────────────────────────────────────

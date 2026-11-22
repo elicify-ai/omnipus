@@ -39,6 +39,9 @@ const READ_FILE: RegistryTool = {
   category: 'filesystem',
   description: 'Read file contents',
   source: 'builtin',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 const TOOL_SEARCH: RegistryTool = {
   name: 'ToolSearch',
@@ -46,6 +49,9 @@ const TOOL_SEARCH: RegistryTool = {
   category: 'system',
   description: 'Discover deferred tools',
   source: 'builtin',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 const REVISION = '2'.repeat(64)
 const SERVER: McpServer = {
@@ -71,6 +77,7 @@ beforeEach(() => {
     override_names: ['read_file'],
     config: { builtin: { policies: { read_file: 'deny', ToolSearch: 'allow' } }, mcp: { servers: [] } },
     tools: [],
+    skills: [],
   })
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { read_file: 'allow', ToolSearch: 'allow' } })
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([SERVER])
@@ -79,6 +86,7 @@ beforeEach(() => {
     override_names: cfg.override_names,
     config: cfg.config ?? { builtin: { policies: {} } },
     tools: [],
+    skills: [],
   }))
 })
 
@@ -167,6 +175,9 @@ const MCP_SEARCH: RegistryTool = {
   description: 'Search docs',
   source: 'mcp',
   server_id: 'docs',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 const MCP_FETCH: RegistryTool = {
   name: 'fetch',
@@ -175,6 +186,9 @@ const MCP_FETCH: RegistryTool = {
   description: 'Fetch a document',
   source: 'mcp',
   server_id: 'docs',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 function lastToolsConfig() {
@@ -196,6 +210,7 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         mcp: { servers: [{ id: 'docs' }] },
       },
       tools: [],
+      skills: [],
     })
     renderWithQuery(
       <ToolsAndPermissions
@@ -224,6 +239,7 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
       override_names: ['read_file'],
       config: { builtin: { policies: { read_file: 'deny', ToolSearch: 'allow' } } },
       tools: [],
+      skills: [],
     })
     renderWithQuery(
       <ToolsAndPermissions
@@ -255,6 +271,7 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         mcp: { servers: [{ id: 'docs' }] },
       },
       tools: [],
+      skills: [],
     })
     renderWithQuery(
       <ToolsAndPermissions
@@ -283,6 +300,7 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         mcp: { servers: [{ id: 'docs', tools: ['search', 'fetch'] }] },
       },
       tools: [],
+      skills: [],
     })
     renderWithQuery(
       <ToolsAndPermissions
@@ -313,6 +331,7 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         mcp: { servers: [{ id: 'docs' }] },
       },
       tools: [],
+      skills: [],
     })
     renderWithQuery(
       <ToolsAndPermissions
@@ -341,6 +360,7 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         override_names: ['read_file'],
         config: { builtin: { policies: { read_file: 'deny', ToolSearch: 'allow' } }, mcp: { servers: [] } },
         tools: [],
+        skills: [],
       })
     renderWithQuery(
       <ToolsAndPermissions
@@ -414,6 +434,7 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         mcp: { servers: [{ id: 'docs' }] },
       },
       tools: [],
+      skills: [],
     })
     vi.mocked(api.fetchMcpServersForAgent)
       .mockRejectedValueOnce(new Error('offline'))
@@ -445,6 +466,7 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
       override_names: ['read_file'],
       config: { builtin: { policies: { read_file: 'deny', ToolSearch: 'allow' } }, mcp: { servers: [] } },
       tools: [],
+      skills: [],
     })
     renderWithQuery(
       <ToolsAndPermissions

@@ -39,6 +39,8 @@ describe('reconcileWithSessionState — reconnect-gap full restore (bundle B3)',
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
           expires_in_ms: 200_000,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
         },
       ],
       emitted_at: new Date().toISOString(),
@@ -84,6 +86,8 @@ describe('reconcileWithSessionState — reconnect-gap full restore (bundle B3)',
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
           expires_in_ms: 100_000,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
         },
         {
           approval_id: 'appr-b',
@@ -94,6 +98,8 @@ describe('reconcileWithSessionState — reconnect-gap full restore (bundle B3)',
           tool_name: 'bash',
           agent_id: 'agent-main',
           expires_in_ms: 150_000,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
         },
       ],
       emitted_at: new Date().toISOString(),
@@ -126,6 +132,8 @@ describe('reconcileWithSessionState — reconnect-gap full restore (bundle B3)',
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
           expires_in_ms: 0,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
         },
       ],
       emitted_at: new Date().toISOString(),
@@ -177,6 +185,8 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
           expires_in_ms: 250_000,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
         },
       ],
       emitted_at: new Date().toISOString(),
@@ -236,6 +246,8 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
           expires_in_ms: 180_000,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
         },
         {
           approval_id: 'appr-unseen',
@@ -246,6 +258,8 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
           expires_in_ms: 200_000,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
         },
       ],
       emitted_at: new Date().toISOString(),
@@ -322,6 +336,8 @@ describe('enqueue — carries segments through (ADR-092 D4)', () => {
         { segment_index: 0, command_text: 'npm run build', resolved_binary: 'npm' },
         { segment_index: 1, command_text: 'git push', resolved_binary: 'git' },
       ],
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     }
 
     act(() => {
@@ -343,6 +359,8 @@ describe('enqueue — carries segments through (ADR-092 D4)', () => {
       session_id: 'sess-1',
       turn_id: 'turn-2',
       expires_in_ms: 120_000,
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     }
 
     act(() => {
@@ -363,6 +381,8 @@ describe('enqueue — carries segments through (ADR-092 D4)', () => {
       session_id: 'sess-1',
       turn_id: 'turn-3',
       expires_in_ms: 120_000,
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     }
     act(() => {
       useToolApprovalStore.getState().enqueue(base)
@@ -394,6 +414,8 @@ describe('L1 K7 / amendment §1.2 R6 — root/acting/origin metadata', () => {
       acting_agent_name: 'Setup helper', origin_label: 'for group Sales',
       room_ref: { room_id: 'room-sales', room_name: 'Sales', request_id: 'delivery-1', role: 'request' },
       turn_id: 'turn-root', expires_in_ms: 600_000,
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     }
     act(() => useToolApprovalStore.getState().enqueue(frame))
     expect(useToolApprovalStore.getState().queue).toHaveLength(1)
@@ -414,6 +436,8 @@ describe('L1 K7 / amendment §1.2 R6 — root/acting/origin metadata', () => {
         // pre-B3 "thin snapshot" literal is a contract violation now.
         tool_call_id: 'call-root-stub', turn_id: 'turn-root-stub', args: { command: 'npm run build' },
         expires_in_ms: 600_000,
+      offered_actions: ['allow_once', 'allow_for', 'deny'],
+      allow_durations: ['1h', '3h', '1d'],
       }],
     }
     act(() => useToolApprovalStore.getState().reconcileWithSessionState(frame))
@@ -430,6 +454,8 @@ describe('L1 K7 / amendment §1.2 R6 — root/acting/origin metadata', () => {
       tool_name: 'bash', args: { command: 'npm run build' }, agent_id: 'helper',
       session_id: 'helper-session', root_session_id: 'omnipus-main', acting_agent_name: 'Setup helper',
       turn_id: 'turn-root', expires_in_ms: 600_000,
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     }
     act(() => {
       useToolApprovalStore.getState().enqueue(frame)

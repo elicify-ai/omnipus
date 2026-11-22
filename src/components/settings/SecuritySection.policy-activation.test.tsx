@@ -53,7 +53,7 @@ beforeEach(() => {
   document.cookie = 'csrf=rr1-policy-proof; Path=/'
   vi.mocked(api.fetchConfig).mockResolvedValue({ security: { rate_limits: {} }, gateway: {}, agents: { defaults: {} } } as never)
   vi.mocked(api.fetchCredentials).mockResolvedValue([])
-  vi.mocked(api.fetchBuiltinTools).mockResolvedValue([{ name: 'bash', description: 'Run a shell command', category: 'code', scope: 'core', source: 'builtin' }])
+  vi.mocked(api.fetchBuiltinTools).mockResolvedValue([{ name: 'bash', description: 'Run a shell command', category: 'code', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false }])
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue(structuredClone(A))
   vi.mocked(api.fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
   vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)

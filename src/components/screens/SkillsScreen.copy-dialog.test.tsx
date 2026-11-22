@@ -40,6 +40,8 @@ const planSkill: Skill = {
   verified: true,
   version: '0.0.0',
   revision: 'a'.repeat(64), // REST Skill carrier requires revision, including built-ins.
+  category: 'tools',
+  trust_approved: false,
 }
 
 let client: QueryClient

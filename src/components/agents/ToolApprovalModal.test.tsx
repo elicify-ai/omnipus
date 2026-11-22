@@ -515,6 +515,8 @@ describe('ToolApprovalPanel — expires_in_ms countdown (FR-082)', () => {
         session_id: 's',
         turn_id: 't',
         expires_in_ms: EXPIRES_IN_MS,
+      offered_actions: ['allow_once', 'allow_for', 'deny'],
+      allow_durations: ['1h', '3h', '1d'],
       })
     })
 
@@ -552,6 +554,8 @@ describe('ToolApprovalPanel — session_state reset handler (FR-052, FR-073, FR-
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
           expires_in_ms: 299_000,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
         },
       ],
       emitted_at: new Date().toISOString(),
@@ -592,6 +596,8 @@ describe('ToolApprovalPanel — session_state reset handler (FR-052, FR-073, FR-
             tool_name: 'fetch_url',
             agent_id: 'agent-main',
             expires_in_ms: newExpiresInMs,
+          offered_actions: ['allow_once', 'allow_for', 'deny'],
+          allow_durations: ['1h', '3h', '1d'],
           },
         ],
         emitted_at: new Date().toISOString(),
@@ -649,6 +655,8 @@ const baseFrame: ToolApprovalRequiredFrame = {
   session_id: 'sess-edge',
   turn_id: 'turn-edge',
   expires_in_ms: 300_000,
+offered_actions: ['allow_once', 'allow_for', 'deny'],
+allow_durations: ['1h', '3h', '1d'],
 }
 
 // Edge cases: [label, partial override of ToolApprovalRequiredFrame]

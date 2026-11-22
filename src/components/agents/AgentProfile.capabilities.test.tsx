@@ -85,6 +85,7 @@ beforeEach(() => {
     override_names: [],
     config: { builtin: { policies: {} }, mcp: { servers: [] } },
     tools: [],
+    skills: [],
   })
   vi.mocked(fetchGlobalToolPolicies).mockReset().mockResolvedValue({ policies: {} })
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])

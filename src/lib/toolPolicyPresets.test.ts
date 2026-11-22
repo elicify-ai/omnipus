@@ -20,7 +20,7 @@ import type { AgentToolsCfg, RegistryTool } from '@/lib/api'
 import { ALWAYS_ASK_TOOLS } from './alwaysAskTools'
 
 function makeTool(name: string): RegistryTool {
-  return { name, description: `${name} description`, scope: 'general', category: 'core', source: 'builtin' }
+  return { name, description: `${name} description`, scope: 'general', category: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false }
 }
 
 const SOME_TOOLS: RegistryTool[] = [

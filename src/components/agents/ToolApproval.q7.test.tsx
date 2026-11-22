@@ -18,6 +18,8 @@ const frame: ToolApprovalRequiredFrame = {
   tool_name: 'set_channel_outbound', agent_id: 'omnipus', session_id: SESSION,
   turn_id: 'q7-turn', expires_in_ms: 300_000,
   args: { id: 'discord', policy: 'agent_may_start', targets: ['222'], expected_revision: 'q7-live-revision' },
+offered_actions: ['allow_once', 'allow_for', 'deny'],
+allow_durations: ['1h', '3h', '1d'],
 }
 
 beforeEach(() => {

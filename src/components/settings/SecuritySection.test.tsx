@@ -117,9 +117,9 @@ const MINIMAL_CONFIG = {
 }
 
 const BUILTIN_TOOLS: RegistryTool[] = [
-  { name: 'exec', description: 'Execute shell commands', category: 'code', scope: 'core', source: 'builtin' },
-  { name: 'read_file', description: 'Read file content', category: 'file', scope: 'core', source: 'builtin' },
-  { name: 'system.status', description: 'System status', category: 'system', scope: 'core', source: 'builtin' },
+  { name: 'exec', description: 'Execute shell commands', category: 'code', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+  { name: 'read_file', description: 'Read file content', category: 'file', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+  { name: 'system.status', description: 'System status', category: 'system', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
 ]
 
 /**
@@ -128,8 +128,8 @@ const BUILTIN_TOOLS: RegistryTool[] = [
  */
 const BUILTIN_AND_MCP_TOOLS: RegistryTool[] = [
   ...BUILTIN_TOOLS,
-  { name: 'mcp_testsvr_list', description: 'List resources', category: 'search', scope: 'general', source: 'mcp' },
-  { name: 'mcp_testsvr_read', description: 'Read a resource', category: 'web', scope: 'general', source: 'mcp' },
+  { name: 'mcp_testsvr_list', description: 'List resources', category: 'search', scope: 'general', source: 'mcp', visibility: 'full', visibility_locked: false, permission_fixed: false },
+  { name: 'mcp_testsvr_read', description: 'Read a resource', category: 'web', scope: 'general', source: 'mcp', visibility: 'full', visibility_locked: false, permission_fixed: false },
 ]
 
 const GLOBAL_POLICIES = {

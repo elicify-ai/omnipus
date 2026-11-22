@@ -111,10 +111,14 @@ export class Stage1Network extends Network {
     }
     const tools: ToolRegistryEntry[] = [{
       name: 'write_file', description: 'Write a file', scope: 'general', category: 'filesystem', source: 'builtin',
+      visibility: 'full',
+      visibility_locked: false,
+      permission_fixed: false,
     }]
     const agentTools: AgentToolsResponse = {
       revision: '0'.repeat(64), override_names: [], config: { builtin: { policies: {} } },
       tools: [], agent_type: 'core',
+      skills: [],
     }
     const globalPolicies: GlobalToolPolicies = { policies: { write_file: 'ask' } }
     this.respond('GET', '/api/v1/tools', () => json(tools))
@@ -243,6 +247,8 @@ export function approval(overrides: Partial<ToolApprovalRequiredFrame> = {}): To
     agent_id: 'mia', session_id: MAIN_ID, turn_id: 'stage1-turn',
     // Fixture: five-minute live request, safely away from expiry; no timing oracle.
     expires_in_ms: 300_000, workspace_id: WS, ...overrides,
+  offered_actions: ['allow_once', 'allow_for', 'deny'],
+  allow_durations: ['1h', '3h', '1d'],
   }
 }
 

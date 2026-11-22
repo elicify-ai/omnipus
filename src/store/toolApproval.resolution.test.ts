@@ -30,6 +30,8 @@ function requiredFrame(
     turn_id: 'turn-x',
     expires_in_ms: 300_000,
     ...extra,
+  offered_actions: ['allow_once', 'allow_for', 'deny'],
+  allow_durations: ['1h', '3h', '1d'],
   }
 }
 
@@ -52,6 +54,8 @@ function snapshot(
       agent_id: 'agent-x',
       expires_in_ms: 300_000,
       ...(e.workspace_id ? { workspace_id: e.workspace_id } : {}),
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     })),
   }
 }

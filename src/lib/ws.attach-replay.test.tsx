@@ -303,7 +303,7 @@ describe('attach replay is one visible transaction', () => {
     const replayDone: ServerFrame = { type: 'done', session_id: SID, stats: { frames_emitted: 0 } }
     attach()
     receive(snapshot)
-    receive({ type: 'tool_approval_required', session_id: SID, approval_id: 'approval-1', tool_call_id: 'call-1', tool_name: 'bash', args: { command: 'pwd' }, agent_id: 'mia', turn_id: 'live', expires_in_ms: 60000 })
+    receive({ type: 'tool_approval_required', session_id: SID, approval_id: 'approval-1', tool_call_id: 'call-1', tool_name: 'bash', args: { command: 'pwd' }, agent_id: 'mia', turn_id: 'live', expires_in_ms: 60000, offered_actions: ['allow_once', 'allow_for', 'deny'], allow_durations: ['1h', '3h', '1d'] })
     receive({ type: 'secret_request', session_id: SID, request_id: 'secret-1', acting_agent_id: 'mia', acting_agent_name: 'Mia', purpose: 'Connect calendar', recipient: { kind: 'provider_key', lines: ['Calendar'] }, fields: [{ key: 'key', label: 'API key' }] })
     expect(useToolApprovalStore.getState().queue).toEqual([])
     expect(useSecretRequestStore.getState().byId).toEqual({})
@@ -325,7 +325,7 @@ describe('attach replay is one visible transaction', () => {
     renderWithClient(<ToolApprovalModal />)
     attach()
     receive(snapshot)
-    receive({ type: 'session_state', session_id: SID, user_id: 'user', emitted_at: new Date().toISOString(), history_state: { status: 'available' }, pending_approvals: [{ approval_id: 'approval-restored', session_id: SID, tool_name: 'read_file', agent_id: 'mia', tool_call_id: 'call-restored', turn_id: 'live', args: { path: 'note.txt' }, expires_in_ms: 60000 }] })
+    receive({ type: 'session_state', session_id: SID, user_id: 'user', emitted_at: new Date().toISOString(), history_state: { status: 'available' }, pending_approvals: [{ approval_id: 'approval-restored', session_id: SID, tool_name: 'read_file', agent_id: 'mia', tool_call_id: 'call-restored', turn_id: 'live', args: { path: 'note.txt' }, expires_in_ms: 60000, offered_actions: ['allow_once', 'allow_for', 'deny'], allow_durations: ['1h', '3h', '1d'] }] })
     expect(screen.queryByRole('dialog')).toBeNull()
     receive(replayDone)
     receive(complete)

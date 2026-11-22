@@ -40,6 +40,9 @@ function makeTool(overrides: Partial<RegistryTool> & { name: string }): Registry
     category: 'file',
     source: 'builtin',
     ...overrides,
+    visibility: 'full',
+    visibility_locked: false,
+    permission_fixed: false,
   }
 }
 

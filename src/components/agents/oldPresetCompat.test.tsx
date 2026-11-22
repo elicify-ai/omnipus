@@ -52,9 +52,9 @@ import { ToolsAndPermissions } from './ToolsAndPermissions'
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
 const SOME_TOOLS: RegistryTool[] = [
-  { name: 'read_file', scope: 'general', category: 'filesystem', description: 'Read file', source: 'builtin' },
-  { name: 'exec', scope: 'general', category: 'exec', description: 'Execute command', source: 'builtin' },
-  { name: 'web_search', scope: 'general', category: 'web', description: 'Search web', source: 'builtin' },
+  { name: 'read_file', scope: 'general', category: 'filesystem', description: 'Read file', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+  { name: 'exec', scope: 'general', category: 'exec', description: 'Execute command', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+  { name: 'web_search', scope: 'general', category: 'web', description: 'Search web', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
 ]
 
 function makeQueryClient() {
@@ -103,6 +103,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       override_names: Object.keys(allAllowCfg.builtin?.policies ?? {}),
       config: allAllowCfg,
       tools: [],
+      skills: [],
     })
 
     const onChange = vi.fn()
@@ -146,6 +147,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       revision: '0'.repeat(64), override_names: Object.keys(mixedCfg.builtin?.policies ?? {}),
       config: mixedCfg,
       tools: [],
+      skills: [],
     })
 
     const onChange = vi.fn()
@@ -187,6 +189,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       revision: '0'.repeat(64), override_names: Object.keys(mostlyDenyCfg.builtin?.policies ?? {}),
       config: mostlyDenyCfg,
       tools: [],
+      skills: [],
     })
 
     const onChange = vi.fn()
@@ -227,6 +230,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       revision: '0'.repeat(64), override_names: Object.keys(customCfg.builtin?.policies ?? {}),
       config: customCfg,
       tools: [],
+      skills: [],
     })
 
     const onChange = vi.fn()
@@ -271,6 +275,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       revision: '0'.repeat(64), override_names: Object.keys(incompleteCfg.builtin?.policies ?? {}),
       config: incompleteCfg,
       tools: [],
+      skills: [],
     })
 
     const onChange = vi.fn()

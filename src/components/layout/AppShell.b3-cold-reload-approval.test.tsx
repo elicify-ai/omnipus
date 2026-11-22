@@ -88,6 +88,8 @@ function coldSnapshot(): SessionStateFrame {
       root_session_id: MAIN_ID,
       acting_agent_name: 'Jim',
       origin_label: 'asked by Mia',
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     }],
   }
 }

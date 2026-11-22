@@ -30,6 +30,9 @@ const MCP_GITHUB_TOOL: RegistryTool = {
   category: 'web',
   description: 'Search GitHub repos via MCP',
   source: 'mcp',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 /** A second tool from the same server */
@@ -39,6 +42,9 @@ const MCP_GITHUB_TOOL_2: RegistryTool = {
   category: 'vcs',
   description: 'Create PR via MCP',
   source: 'mcp',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 /** A regular builtin tool (should NOT be in the MCP section) */
@@ -48,6 +54,9 @@ const BUILTIN_TOOL: RegistryTool = {
   category: 'filesystem',
   description: 'Read file contents',
   source: 'builtin',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 const EMPTY_POLICY: ToolPolicyValue = { policies: {} }

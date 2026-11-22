@@ -34,6 +34,8 @@ const skill: Skill = {
   source: 'global',
   status: 'active',
   verified: false,
+  category: 'tools',
+  trust_approved: false,
 }
 
 function renderScreen() {

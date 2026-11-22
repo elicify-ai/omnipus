@@ -58,6 +58,8 @@ beforeEach(() => {
       status: 'active',
       verified: true,
       agent_assignment: 'general-assistant',
+      category: 'tools',
+      trust_approved: false,
     },
     {
       has_local_changes: false,
@@ -69,6 +71,8 @@ beforeEach(() => {
       author: 'community',
       status: 'error',
       verified: false,
+      category: 'tools',
+      trust_approved: false,
     },
   ])
   vi.mocked(fetchMcpServers).mockResolvedValue([
@@ -76,9 +80,9 @@ beforeEach(() => {
     { id: 'mcp-2', name: 'github', transport: 'stdio', status: 'disconnected', tool_count: 0 },
   ])
   vi.mocked(fetchTools).mockResolvedValue([
-    { name: 'exec', scope: 'general', category: 'shell', description: 'Execute shell commands', source: 'builtin' },
-    { name: 'web_search', scope: 'general', category: 'web', description: 'Search the web', source: 'builtin' },
-    { name: 'file.read', scope: 'general', category: 'fs', description: 'Read a file', source: 'builtin' },
+    { name: 'exec', scope: 'general', category: 'shell', description: 'Execute shell commands', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+    { name: 'web_search', scope: 'general', category: 'web', description: 'Search the web', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+    { name: 'file.read', scope: 'general', category: 'fs', description: 'Read a file', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
   ])
 })
 

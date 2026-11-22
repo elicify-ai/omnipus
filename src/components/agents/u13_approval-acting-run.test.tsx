@@ -30,7 +30,9 @@ const HELPER_APPROVAL: ToolApprovalRequiredFrame = {
   session_id: 'sess-helper-run-7',
   root_session_id: ROOT_CHAT,
   turn_id: 'turn-001',
-  expires_in_ms: 300_000, // same five-minute fixture window as the legacy case
+  expires_in_ms: 300_000, // same five-minute fixture window as the legacy case,
+offered_actions: ['allow_once', 'allow_for', 'deny'],
+allow_durations: ['1h', '3h', '1d'],
 }
 let ToolApprovalPanel: ComponentType
 

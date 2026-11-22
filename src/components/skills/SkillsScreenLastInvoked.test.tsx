@@ -66,6 +66,8 @@ const grantedNeverInvoked: Skill = {
   source: 'global',
   status: 'active',
   verified: true,
+  category: 'tools',
+  trust_approved: false,
 }
 
 const invokedRecently: Skill = {
@@ -79,6 +81,8 @@ const invokedRecently: Skill = {
   source: 'builtin',
   status: 'active',
   verified: true,
+  category: 'tools',
+  trust_approved: false,
 }
 
 beforeEach(() => {

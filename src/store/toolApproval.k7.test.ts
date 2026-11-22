@@ -16,6 +16,8 @@ function live(over: Partial<ToolApprovalRequiredFrame> = {}): ToolApprovalRequir
     type: 'tool_approval_required', approval_id: 'ap-1', tool_call_id: 'tc-1', tool_name: 'bash',
     args: { command: 'ls' }, agent_id: 'omnipus', session_id: 'helper-1', turn_id: 'turn-1', expires_in_ms: 60_000,
     root_session_id: 'omnipus-main', acting_agent_name: 'Omnipus helper', origin_label: 'asked by Omnipus', ...over,
+  offered_actions: ['allow_once', 'allow_for', 'deny'],
+  allow_durations: ['1h', '3h', '1d'],
   }
 }
 function snapshot(pending: SessionStateFrame['pending_approvals']): SessionStateFrame {
@@ -42,6 +44,8 @@ describe('tool approval store — K7', () => {
     useToolApprovalStore.getState().reconcileWithSessionState(snapshot([{
       approval_id: 'ap-2', session_id: 'helper-1', tool_name: 'bash', agent_id: 'omnipus', expires_in_ms: 30_000,
       tool_call_id: 'tc-2', turn_id: 'turn-2', args: { command: 'pwd' }, root_session_id: 'omnipus-main',
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     }]))
     const [entry] = useToolApprovalStore.getState().queue
     expect(entry.toolCallId).toBe('tc-2')
@@ -67,6 +71,10 @@ describe('tool approval store — K7', () => {
       pending_approvals: [{
         ...base.pending_approvals[0],
         tool_call_id: 'tc-3', turn_id: 'turn-3', args: { command: 'pwd' },
+        // The generated boundary requires these too (Skills & Tools C-24/C-26
+        // contract commit): a bash ask card offers the permission-open set.
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
       }],
     }
     // Positive control: the contract-complete frame parses.
@@ -79,6 +87,8 @@ describe('tool approval store — K7', () => {
     useToolApprovalStore.getState().reconcileWithSessionState(snapshot([{
       approval_id: 'ap-1', session_id: 'helper-1', tool_name: 'bash', agent_id: 'omnipus', expires_in_ms: 30_000,
       tool_call_id: 'tc-1', turn_id: 'turn-1', args: { command: 'pwd' }, root_session_id: 'omnipus-main',
+    offered_actions: ['allow_once', 'allow_for', 'deny'],
+    allow_durations: ['1h', '3h', '1d'],
     }]))
     useToolApprovalStore.getState().enqueue(live())
     const queue = useToolApprovalStore.getState().queue

@@ -25,6 +25,8 @@ const longRequest: ToolApprovalRequiredFrame = {
   tool_name: 'bash', args: { command: longScript, cwd: 'work' },
   agent_id: 'mia', session_id: 'omnipus-main', workspace_id: 'ws-sales',
   turn_id: 'turn-long', expires_in_ms: 600_000, segments,
+offered_actions: ['allow_once', 'allow_for', 'deny'],
+allow_durations: ['1h', '3h', '1d'],
 }
 
 let Panel: ComponentType

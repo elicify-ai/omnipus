@@ -11,7 +11,7 @@ import * as skills from './skills'
 const revision = 'fdd9b7afa7635d0f8028957f85c713170c8083e2aebf37ee45677f2e05881eda'
 const state = { revision, activation_status: 'active', persistence_status: 'complete', changed_fields: ['skills'], message: 'saved' }
 const failure = { revision, activation_status: 'not_attempted', persistence_status: 'none', changed_fields: [], error_stage: 'manifest_write', message: 'not saved' }
-const copied: Skill = { has_local_changes: true, id: 'plan-copy', name: 'plan-copy', description: 'own copy', source: 'global', status: 'active', verified: false, version: '0.0.0', revision }
+const copied: Skill = { has_local_changes: true, id: 'plan-copy', name: 'plan-copy', description: 'own copy', source: 'global', status: 'active', verified: false, version: '0.0.0', revision, category: 'tools', trust_approved: false }
 
 beforeEach(() => {
   document.cookie = 'csrf=skills-test-token; path=/'

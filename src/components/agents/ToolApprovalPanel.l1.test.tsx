@@ -21,6 +21,8 @@ const request: ToolApprovalRequiredFrame = {
     { segment_index: 0, command_text: 'npm run build', resolved_binary: 'npm', classification: 'write', suggested_prefix: 'npm run build', prefix_available: true, network_required: false },
     { segment_index: 1, command_text: 'git push', resolved_binary: 'git', classification: 'none', suggested_prefix: 'git push', prefix_available: true, network_required: true },
   ],
+offered_actions: ['allow_once', 'allow_for', 'deny'],
+allow_durations: ['1h', '3h', '1d'],
 }
 let Panel: ComponentType
 function mount() {

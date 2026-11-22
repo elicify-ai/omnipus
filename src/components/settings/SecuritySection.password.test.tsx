@@ -95,7 +95,7 @@ const MINIMAL_CONFIG = {
 }
 
 const BUILTIN_TOOLS: RegistryTool[] = [
-  { name: 'exec', description: 'Execute shell commands', category: 'code', scope: 'core', source: 'builtin' },
+  { name: 'exec', description: 'Execute shell commands', category: 'code', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
 ]
 
 const GLOBAL_POLICIES = { policies: {} }

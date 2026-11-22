@@ -34,6 +34,7 @@ function installed(slug: string, changed: boolean) {
   return {
     id: slug, name: slug, source: 'global' as const, version: '1.0.0',
     status: 'active' as const, verified: false, revision, has_local_changes: changed,
+    category: 'tools' as const, trust_approved: false, // C-5/C-24 required
   }
 }
 

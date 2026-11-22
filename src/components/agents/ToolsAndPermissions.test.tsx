@@ -107,6 +107,9 @@ const BUILTIN_TOOL: RegistryTool = {
   category: 'filesystem',
   description: 'Read file contents',
   source: 'builtin',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 const MCP_TOOL: RegistryTool = {
@@ -115,6 +118,9 @@ const MCP_TOOL: RegistryTool = {
   category: 'web',
   description: 'Search via MCP',
   source: 'mcp',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 const ADMIN_TOOL: RegistryTool = {
@@ -123,6 +129,9 @@ const ADMIN_TOOL: RegistryTool = {
   category: 'system',
   description: 'Set system configuration',
   source: 'builtin',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 
 const DEFAULT_TOOLS_CFG: AgentToolsCfg = {
@@ -136,6 +145,7 @@ const toolsResponse = (config: AgentToolsCfg = DEFAULT_TOOLS_CFG, revision = TOO
   override_names: [],
   config,
   tools: [],
+  skills: [], // C-4: AgentToolsResponse.skills is required
 })
 
 const NOOP_CHANGE = () => {}
@@ -345,11 +355,14 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
     category: 'shell',
     description: 'Run a shell command in the workspace',
     source: 'builtin',
+    visibility: 'full',
+    visibility_locked: false,
+    permission_fixed: false,
   }
   const FS_TOOLS: RegistryTool[] = [
-    { name: 'write_file', scope: 'general', category: 'filesystem', description: 'Write file', source: 'builtin' },
-    { name: 'read_file', scope: 'general', category: 'filesystem', description: 'Read file', source: 'builtin' },
-    { name: 'list_directory', scope: 'general', category: 'filesystem', description: 'List directory', source: 'builtin' },
+    { name: 'write_file', scope: 'general', category: 'filesystem', description: 'Write file', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+    { name: 'read_file', scope: 'general', category: 'filesystem', description: 'Read file', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+    { name: 'list_directory', scope: 'general', category: 'filesystem', description: 'List directory', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
   ]
 
   beforeEach(() => {
@@ -909,6 +922,9 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // tell "C won" from "B won" from the PUT payload alone.
     const WRITE_FILE_TOOL: RegistryTool = {
       name: 'write_file', scope: 'general', category: 'filesystem', description: 'Write file', source: 'builtin',
+      visibility: 'full',
+      visibility_locked: false,
+      permission_fixed: false,
     }
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL, WRITE_FILE_TOOL])
     vi.mocked(api.fetchBuiltinTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL, WRITE_FILE_TOOL])

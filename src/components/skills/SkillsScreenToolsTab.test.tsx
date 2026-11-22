@@ -44,6 +44,8 @@ const builtinSkill: Skill = {
   source: 'builtin',
   verified: true,
   status: 'active',
+  category: 'tools',
+  trust_approved: false,
 }
 
 const communitySkill: Skill = {
@@ -57,6 +59,8 @@ const communitySkill: Skill = {
   source: 'global',
   verified: false,
   status: 'active',
+  category: 'tools',
+  trust_approved: false,
 }
 
 function makeClient() {
@@ -73,11 +77,11 @@ function renderScreen() {
 
 beforeEach(() => {
   vi.mocked(fetchTools).mockResolvedValue([
-    { name: 'get_config', scope: 'core', category: 'platform', description: 'Get config', source: 'builtin' },
-    { name: 'web_search', scope: 'general', category: 'web', description: 'Search the web', source: 'builtin' },
-    { name: 'file.read', scope: 'general', category: 'fs', description: 'Read a file', source: 'builtin' },
-    { name: 'file.write', scope: 'general', category: 'fs', description: 'Write a file', source: 'builtin' },
-    { name: 'browser.navigate', scope: 'general', category: 'browser', description: 'Navigate to URL', source: 'builtin' },
+    { name: 'get_config', scope: 'core', category: 'platform', description: 'Get config', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+    { name: 'web_search', scope: 'general', category: 'web', description: 'Search the web', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+    { name: 'file.read', scope: 'general', category: 'fs', description: 'Read a file', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+    { name: 'file.write', scope: 'general', category: 'fs', description: 'Write a file', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+    { name: 'browser.navigate', scope: 'general', category: 'browser', description: 'Navigate to URL', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
   ])
 })
 
@@ -164,8 +168,8 @@ describe('SkillsScreen — Built-in Tools tab overview (US-E2, #338)', () => {
     // "Mcp" instead of the correct all-caps initialism "MCP". The fix imports
     // the same CATEGORY_LABELS map ToolPolicyEditor already uses correctly.
     vi.mocked(fetchTools).mockResolvedValueOnce([
-      { name: 'mcp_github_search', scope: 'general', category: 'mcp', description: 'Search GitHub via MCP', source: 'builtin' },
-      { name: 'tool_search', scope: 'general', category: 'tool_discovery', description: 'Discover tools', source: 'builtin' },
+      { name: 'mcp_github_search', scope: 'general', category: 'mcp', description: 'Search GitHub via MCP', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
+      { name: 'tool_search', scope: 'general', category: 'tool_discovery', description: 'Discover tools', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
     ])
     const user = userEvent.setup()
     renderScreen()

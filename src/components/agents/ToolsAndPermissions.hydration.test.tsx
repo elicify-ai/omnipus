@@ -39,6 +39,9 @@ const READ_FILE: RegistryTool = {
   category: 'filesystem',
   description: 'Read file contents',
   source: 'builtin',
+  visibility: 'full',
+  visibility_locked: false,
+  permission_fixed: false,
 }
 const REVISION = '2'.repeat(64)
 const SERVER: McpServer = {
@@ -66,6 +69,7 @@ beforeEach(() => {
     override_names: cfg.override_names,
     config: cfg.config ?? { builtin: { policies: {} } },
     tools: [],
+    skills: [],
   }))
 })
 
@@ -106,6 +110,7 @@ describe('ToolsAndPermissions - pre-hydration edit window', () => {
       override_names: [],
       config: { builtin: { policies: { read_file: 'allow' } }, mcp: { servers: [] } },
       tools: [],
+      skills: [],
     })
     await waitFor(() => expect(screen.getByLabelText('Assign Docs')).toBeEnabled())
     fireEvent.click(screen.getByLabelText('Assign Docs'))

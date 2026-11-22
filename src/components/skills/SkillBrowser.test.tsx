@@ -134,6 +134,8 @@ function installedSkill(id: string, skillRevision = 'a'.repeat(64)) {
     version: '1.0.0',
     status: 'active' as const,
     verified: false,
+    category: 'tools' as const, // C-5 required
+    trust_approved: false, // C-24 required
   }
 }
 
@@ -157,6 +159,8 @@ beforeEach(() => {
     version: '1.4.0',
     status: 'active',
     verified: false,
+    category: 'tools',
+    trust_approved: false,
   })
   vi.mocked(fetchSkills).mockResolvedValue([])
   vi.mocked(searchSkills).mockResolvedValue(RESULTS)
@@ -214,6 +218,8 @@ describe('SkillBrowser — ClawHub search', () => {
       has_local_changes: false,
       revision: 'a'.repeat(64), id: 'web-search', name: 'Web Search', version: '1.3.0',
       status: 'active', verified: true,
+      category: 'tools',
+      trust_approved: false,
     }])
     renderBrowser()
     await userEvent.type(await screen.findByTestId('skill-search-input'), 'web')

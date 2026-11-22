@@ -43,6 +43,8 @@ const SKILLS: Skill[] = [
     description: 'Web search and extraction',
     verified: true,
     status: 'active',
+    category: 'tools',
+    trust_approved: false,
   },
   {
     has_local_changes: false,
@@ -53,6 +55,8 @@ const SKILLS: Skill[] = [
     description: 'Text summarization',
     verified: true,
     status: 'active',
+    category: 'tools',
+    trust_approved: false,
   },
 ]
 
@@ -160,7 +164,7 @@ describe('renderSkillAwareContent — builtin precedence (F7)', () => {
     // "clear" CAN produce a chip. This is acceptable — the gate only applies
     // when commands are known.
     const skillsWithClear: Skill[] = [
-      { has_local_changes: false, revision: '0'.repeat(64), id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active' },
+      { has_local_changes: false, revision: '0'.repeat(64), id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active', category: 'tools', trust_approved: false },
     ]
     renderContent('/clear', skillsWithClear, [])
     expect(screen.getByText('Clear Skill')).toBeInTheDocument()
@@ -196,7 +200,7 @@ describe('commandLabelsWithAliases — expands hidden aliases into the flat gate
     // Reproduces the exact post-rename shape: /clear is NOT a commandLabel on
     // its own — it only appears via alias expansion.
     const skillsWithClear: Skill[] = [
-      { has_local_changes: false, revision: '0'.repeat(64), id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active' },
+      { has_local_changes: false, revision: '0'.repeat(64), id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active', category: 'tools', trust_approved: false },
     ]
     const fallback = () => <p data-testid="plain-text">clear</p>
     const el = renderSkillAwareContent('/clear', skillsWithClear, commandLabelsWithAliases(COMMANDS), fallback)
