@@ -69,6 +69,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/childenv"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 )
 
 // restrictAuditHook is the package-level audit emitter for B1.2(d)
@@ -287,6 +288,13 @@ type Limits struct {
 	// operator-configured cfg.Sandbox.EgressAllowList, exactly as before
 	// this fix.
 	EgressProxyToken string
+
+	// Programs is the connected-programs set for the child Run builds
+	// (connected programs I-1): Run calls programs.Attach on it after its own
+	// environment merge and output capture are set, before the launch, so
+	// program variables reach the child and the masking writers sit in front
+	// of the capture cap. Nil = no programs.
+	Programs *programs.ResolvedPrograms
 
 	// KernelPolicy is the PER-TURN kernel-enforcement policy for this child,
 	// typically produced by sandbox.DeriveKernelPolicy from the turn's
@@ -545,6 +553,9 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 	// access to /dev, and an empty reader yields the same EOF semantics as
 	// /dev/null without traversing the device tree.
 	cmd.Stdin = bytes.NewReader(nil)
+	if lim.Programs != nil {
+		programs.Attach(cmd, *lim.Programs)
+	}
 
 	// Apply platform-specific hardening (Setpgid+Pdeathsig+prlimit on
 	// Linux, rlimit on darwin, Job Object on windows). Failure to apply

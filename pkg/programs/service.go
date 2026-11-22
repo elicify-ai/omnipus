@@ -42,6 +42,7 @@ const (
 // Programs service is bound (FR-048: program-scoped store writes stay in this
 // package). It starts no account check and returns the new generation.
 func CommitCardToken(store *credentials.Store, id, value string, receipt *credentials.CardReceipt) (int64, error) {
+	RememberToken(value) // masking first (FR-020 step 1)
 	return store.CommitProgramCredential(TokenReference(id), value, receipt)
 }
 
@@ -171,6 +172,9 @@ func (s *Service) Publish(id, value string, expectedGeneration *int64, receipt *
 	if expectedGeneration != nil && *expectedGeneration != cur.Generation {
 		return Connection{}, ErrStaleGeneration
 	}
+	// FR-020 step 1: masking for the new value is registered before the
+	// value can reach any child.
+	RememberToken(value)
 	gen, err := store.CommitProgramCredential(TokenReference(id), value, receipt)
 	if err != nil {
 		if errors.Is(err, credentials.ErrStoreBusy) {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -66,6 +67,7 @@ func (t *ExecTool) runBackground(
 	timeoutSeconds int32,
 	lim sandbox.Limits,
 	execEnv []string,
+	set programs.ResolvedPrograms,
 	ownerSessionID string,
 	cb AsyncCallback,
 ) *ToolResult {
@@ -102,13 +104,18 @@ func (t *ExecTool) runBackground(
 		}
 	}
 
-	stdoutReader, err := cmd.StdoutPipe()
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err))
-	}
-	stderrReader, err := cmd.StderrPipe()
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err))
+	// The child writes into in-process pipes whose read ends feed
+	// appendOutput. programs.Attach (I-1) wraps the write ends in the masking
+	// writers, so a program token is masked before the bytes reach the
+	// session buffer, a draining read, JSON encoding or the cap. The write
+	// ends are closed once cmd.Wait has drained the child's output.
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
+	programs.Attach(cmd, set)
+	closePipes := func() {
+		_ = stdoutWriter.Close() // io.PipeWriter.Close always returns nil
+		_ = stderrWriter.Close()
 	}
 
 	session.outputBuffer = &bytes.Buffer{}
@@ -118,6 +125,7 @@ func (t *ExecTool) runBackground(
 		var startAbort *ToolResult
 		startAbort, startErr = startGodFloorChild(cmd, lim)
 		if startAbort != nil {
+			closePipes()
 			return startAbort
 		}
 	} else {
@@ -129,6 +137,7 @@ func (t *ExecTool) runBackground(
 		startErr = sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
 	}
 	if startErr != nil {
+		closePipes()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", startErr))
 	}
 
@@ -224,8 +233,9 @@ func (t *ExecTool) runBackground(
 	// explicitly; a missed case previously let "canceled" fall through to a
 	// misleading generic-failure summary, see that function's doc comment).
 	go func() {
+		waitErr := cmd.Wait() // returns once the child's output is copied through
+		closePipes()
 		pipeWG.Wait()
-		waitErr := cmd.Wait()
 
 		session.mu.Lock()
 		if session.Status == StatusRunning {

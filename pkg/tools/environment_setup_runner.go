@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -46,6 +47,8 @@ type startPlan struct {
 	timeoutSeconds int32
 	lim            sandbox.Limits
 	env            []string
+	// programs is the connected-programs set Attach adds (FR-011).
+	programs       programs.ResolvedPrograms
 	ownerSessionID string
 	agentID        string
 	cb             AsyncCallback
@@ -304,13 +307,16 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		}
 	}
 
-	stdoutReader, err := cmd.StdoutPipe()
-	if err != nil {
-		return setupStartAbortResult(plan.area, fmt.Sprintf("failed to create stdout pipe: %v", err))
-	}
-	stderrReader, err := cmd.StderrPipe()
-	if err != nil {
-		return setupStartAbortResult(plan.area, fmt.Sprintf("failed to create stderr pipe: %v", err))
+	// In-process pipes feed appendOutput; programs.Attach (I-1) wraps their
+	// write ends in the masking writers, so program tokens are masked before
+	// any byte reaches the session buffer. Closed once cmd.Wait has drained.
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
+	programs.Attach(cmd, plan.programs)
+	closePipes := func() {
+		_ = stdoutWriter.Close() // io.PipeWriter.Close always returns nil
+		_ = stderrWriter.Close()
 	}
 
 	var startErr error
@@ -323,6 +329,7 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		// nogodmode build) reproduces the pre-floor god path exactly.
 		if plan.lim.KernelPolicy != nil {
 			if err := sandbox.ApplyChildKernelPolicy(cmd, plan.lim.KernelPolicy); err != nil {
+				closePipes()
 				return setupStartAbortResult(plan.area, fmt.Sprintf("sandbox floor failed: %v", err))
 			}
 		}
@@ -335,6 +342,7 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		startErr = sandbox.StartLockedWithPolicy(cmd, plan.lim.KernelPolicy)
 	}
 	if startErr != nil {
+		closePipes()
 		return setupStartAbortResult(plan.area, fmt.Sprintf("failed to start command: %v", startErr))
 	}
 	if !t.godMode {
@@ -346,6 +354,7 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 				_ = cmd.Process.Kill()
 			}
 			_ = cmd.Wait()
+			closePipes()
 			return setupPostStartAbortResult(plan.area, fmt.Sprintf("sandbox post-start hardening failed: %v", err))
 		}
 	}
@@ -395,8 +404,9 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 	// (explicit kill, timeout, RequestCancel cascade) already claimed a
 	// terminal status — same race-free relabel discipline as runBackground.
 	go func() {
+		waitErr := cmd.Wait() // returns once the child's output is copied through
+		closePipes()
 		pipeWG.Wait()
-		waitErr := cmd.Wait()
 
 		// Capture the natural exit WITHOUT claiming the terminal status: the
 		// session stays "running" (truthfully) until publication completes —

@@ -54,6 +54,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
@@ -77,6 +78,11 @@ type ExecToolDeps struct {
 	// PrivateEnv supplies the turn's agent-private variables (FR-076). They
 	// are appended after every managed environment layer. Nil = none.
 	PrivateEnv PrivateEnvSource
+
+	// Programs supplies the turn's connected programs (FR-011): variables,
+	// git logins and per-run site grants, attached only through
+	// programs.Attach. Nil = none.
+	Programs ProgramSource
 
 	// GodMode reflects agent.GodModeActive(cfg), resolved ONCE at wiring time.
 	// When true, ApplyChildHardening/sandbox.Run are skipped entirely and the
@@ -216,6 +222,8 @@ type ExecTool struct {
 
 	// privateEnv: see ExecToolDeps.PrivateEnv.
 	privateEnv PrivateEnvSource
+	// programs: see ExecToolDeps.Programs.
+	programs ProgramSource
 }
 
 // SetDocumentRuntime makes the versioned document toolchain reachable from
@@ -288,6 +296,7 @@ func NewExecToolWithDeps(
 	tool.approvalGrants = deps.ApprovalGrants
 	tool.commandRules = deps.CommandRules
 	tool.privateEnv = deps.PrivateEnv
+	tool.programs = deps.Programs
 	return tool, nil
 }
 
@@ -515,10 +524,19 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// newly-approved grant. This is the fix for the B-1 reachability defect:
 	// grant consultation now runs from the real execution path, not only
 	// from the classic "ask" tool-policy branch upstream of Execute.
+	// FR-076: the owner pair's selected private variables, and (FR-011) the
+	// turn's connected programs, resolved once per call before the
+	// pre-flight: Auto grants the sites of a visible program word (FR-015).
+	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
+	var turnPrograms *programs.TurnPrograms
+	if !isDocumentProbe {
+		turnPrograms = resolveTurnPrograms(ctx, t.programs, privateVars)
+	}
+
 	var perm *shellPermissionResult
 	if !isDocumentProbe {
 		var permErr *ToolResult
-		perm, permErr = t.enforceShellPermissionMode(ctx, command)
+		perm, permErr = t.enforceShellPermissionMode(withTurnPrograms(ctx, turnPrograms), command)
 		if permErr != nil {
 			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 			return permErr
@@ -606,6 +624,14 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// recognised. perm is nil for the document probe and for Ask/God Mode
 	// (never Auto), so egressToken is "" there — unaffected, exactly as
 	// before this fix.
+	if perm != nil && perm.mode == ShellModeAsk {
+		// FR-016: in Ask the person already permitted this command; the
+		// sites of its visible program words are granted for this run only.
+		if sites, _ := programSiteSplit(turnPrograms, command); len(sites) > 0 && t.proxy != nil {
+			perm.egressToken = newOnceEgressToken()
+			t.proxy.GrantRunHosts(perm.egressToken, sites)
+		}
+	}
 	if perm != nil {
 		lim.EgressProxyToken = perm.egressToken
 		if !runInBackground && strings.HasPrefix(perm.egressToken, onceEgressTokenPrefix) {
@@ -665,22 +691,27 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	// FR-076: the owner pair's selected private variables reach this child
 	// only, appended after every managed layer; never the gateway env.
-	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
 	for _, private := range privateVars {
 		execEnv = withPrivateVariable(execEnv, private.Name, private.Value)
 	}
 	turnNotice = joinNotice(turnNotice, privateNotice)
 
+	// FR-011/FR-013/FR-014: the connected programs' variables and git logins
+	// reach the child only through programs.Attach at its launch site.
+	programSet, execEnv, programNotice := programAttachment(ctx, turnPrograms, command, cwd, execEnv, lim)
+	turnNotice = joinNotice(turnNotice, programNotices(turnPrograms))
+	turnNotice = joinNotice(turnNotice, programNotice)
+
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)
-		startedResult := t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, execEnv, ownerSessionID, cb)
+		startedResult := t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, execEnv, programSet, ownerSessionID, cb)
 		// The background START result carries the same truthful notice as the
 		// foreground path: a broken optional runtime never blocks the command,
 		// but it is never silent either.
 		return appendRuntimeNotice(startedResult, turnNotice)
 	}
 	started := time.Now()
-	result := t.runForeground(ctx, command, lim, timeoutSeconds, execEnv)
+	result := t.runForeground(ctx, command, lim, timeoutSeconds, execEnv, programSet)
 	result = t.sweepAfterRun(ctx, command, cwd, baseDir, started, result)
 	return appendRuntimeNotice(result, turnNotice)
 }
@@ -1027,13 +1058,17 @@ func (t *ExecTool) runForeground(
 	lim sandbox.Limits,
 	timeoutSeconds int32,
 	execEnv []string,
+	set programs.ResolvedPrograms,
 ) *ToolResult {
 	argv := buildShellArgv(command)
 
 	if t.godMode {
-		return t.runUnconstrained(ctx, argv, lim, timeoutSeconds, execEnv)
+		return t.runUnconstrained(ctx, argv, lim, timeoutSeconds, execEnv, set)
 	}
 
+	// The sandboxed spawner attaches set (programs.Attach) to the child it
+	// builds, after its own environment merge and before the capture cap.
+	lim.Programs = &set
 	res, err := sandbox.Run(ctx, argv, execEnv, lim)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("sandbox.Run failed: %v", err))
@@ -1129,6 +1164,7 @@ func (t *ExecTool) runUnconstrained(
 	lim sandbox.Limits,
 	timeoutSeconds int32,
 	execEnv []string,
+	set programs.ResolvedPrograms,
 ) *ToolResult {
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -1142,6 +1178,8 @@ func (t *ExecTool) runUnconstrained(
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
+	// I-1: program variables and the masking writers, before the launch.
+	programs.Attach(cmd, set)
 
 	// The floor: profile first (macOS), then the locked-thread spawn that
 	// carries the policy to the child on Linux. A nil policy — sandbox off,

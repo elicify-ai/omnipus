@@ -115,6 +115,8 @@ type EnvironmentSetupToolDeps struct {
 	// PrivateEnv supplies the turn's agent-private variables (FR-076),
 	// appended after the setup layer. Nil = none.
 	PrivateEnv PrivateEnvSource
+	// Programs supplies the turn's connected programs (FR-011). Nil = none.
+	Programs ProgramSource
 }
 
 // EnvironmentSetupTool implements the `environment_setup` builtin tool.
@@ -130,6 +132,7 @@ type EnvironmentSetupTool struct {
 	store EnvironmentSetupStore
 
 	privateEnv PrivateEnvSource
+	programs   ProgramSource
 
 	sessionManager *SessionManager
 
@@ -153,6 +156,7 @@ func NewEnvironmentSetupTool(deps EnvironmentSetupToolDeps) *EnvironmentSetupToo
 		proxy:           deps.Proxy,
 		store:           deps.Store,
 		privateEnv:      deps.PrivateEnv,
+		programs:        deps.Programs,
 		sessionManager:  getSessionManager(),
 		auditFailClosed: deps.AuditFailClosed,
 	}
@@ -487,7 +491,12 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 	for _, private := range privateVars {
 		env = withPrivateVariable(env, private.Name, private.Value)
 	}
+	// FR-011: the agent's connected programs reach this child only through
+	// programs.Attach in startSession; the notices ride the start result.
+	turnPrograms := resolveTurnPrograms(ctx, t.programs, privateVars)
+	privateNotice = joinNotice(privateNotice, programNotices(turnPrograms))
 	return appendRuntimeNotice(t.startSession(ctx, startPlan{
+		programs:       turnPrograms.Attachment(nil),
 		command:        command,
 		purpose:        purpose,
 		scope:          scope,
