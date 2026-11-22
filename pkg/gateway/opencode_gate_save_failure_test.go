@@ -2,11 +2,13 @@ package gateway
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +17,9 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,8 +28,10 @@ import (
 const opencodeGateSaveChat = "This turn finished, but I couldn't save its final state. Recent messages may be missing from your history; check the answer above before repeating anything."
 const opencodeGateSaveParent = "The run finished, but its final state could not be saved. Recent messages may be missing from the history; check the result before repeating any part of the task."
 
-// SILENT-FAILURE SFH-1: a later successful answer cannot repair a segment lost
-// from the original turn's archive. Keep the whole process/queue/drain/hub real.
+// CHANGED REQUIREMENT, not test weakening: ARCHITECT-RULING-R2.md section 1
+// (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/opencode-fixes/gate-20261121/ARCHITECT-RULING-R2.md).
+// The answer must survive alongside the warning: Completed, not Failed. Keep
+// every unaffected process/queue/drain/hub, notice, archive and privacy check.
 func TestOpenCodeGateSFH1_SaveFailureSurvivesSuccessfulQueuedContinuation(t *testing.T) {
 	resumeAddress, awaitResume := opencodeFix1895Gate(t)
 	var messages *bus.MessageBus
@@ -38,6 +44,16 @@ func TestOpenCodeGateSFH1_SaveFailureSurvivesSuccessfulQueuedContinuation(t *tes
 		}
 	})
 	t.Cleanup(al.Close)
+	owner, ok := al.GetRegistry().GetAgent("mia")
+	require.True(t, ok, "capture the real registered reader before the harness shuts down")
+	reader, ok := owner.Tools.Get("delegate")
+	require.True(t, ok)
+	logPath := filepath.Join(t.TempDir(), "save-failure.jsonl")
+	level := logger.GetLevel()
+	logger.SetLevel(logger.ERROR)
+	require.NoError(t, logger.EnableFileLogging(logPath))
+	t.Cleanup(func() { logger.DisableFileLogging(); logger.SetLevel(level) })
+	logger.ErrorCF("agent", "gate-r2-save-log-control", map[string]any{"session_id": child.SessionID})
 	var observed [2]opencode1895LiveObservation
 	for i, viewer := range viewers {
 		o := &observed[i]
@@ -93,14 +109,18 @@ func TestOpenCodeGateSFH1_SaveFailureSurvivesSuccessfulQueuedContinuation(t *tes
 	opencode1895ProbePaused(t, resumed)
 	opencodeFix1895Finish(t, al, child, resumed)
 	entries := opencodeGateReopen(t, store, child.SessionID)
-	var answers []string
+	var answers, savedWarnings []string
 	for _, entry := range entries {
+		if entry.ErrorCode == "transcript_save_failed" {
+			savedWarnings = append(savedWarnings, entry.Content)
+		}
 		if entry.Role == "assistant" && entry.Content == opencode1895LiveAnswer {
 			answers = append(answers, entry.Content)
 		}
 		assert.NotContains(t, entry.Content, failedPath, "filesystem cause never belongs in saved chat")
 	}
 	require.Equal(t, []string{opencode1895LiveAnswer}, answers, "control: the continuation itself succeeded and saved its new answer")
+	assert.Equal(t, []string{opencodeGateSaveChat}, savedWarnings, "the original turn's classified notice survives reopening exactly once")
 	for i, viewer := range viewers {
 		o := &observed[i]
 		o.drain(t, viewer, child.SessionID)
@@ -118,24 +138,77 @@ func TestOpenCodeGateSFH1_SaveFailureSurvivesSuccessfulQueuedContinuation(t *tes
 		if assert.Len(t, saveNotices, 1, "SFH-1: both helper viewers must see the original save failure despite the successful follow-up") {
 			assert.Equal(t, opencodeGateSaveChat, saveNotices[0].Message)
 		}
+		if assert.Len(t, o.done, 1, "only the continuation's final done closes the helper") {
+			if stats := o.done[0].Stats; stats != nil && stats.TurnFailed != nil {
+				assert.False(t, *stats.TurnFailed, "R1-d: incomplete history must not label a real answer as engine failure")
+			}
+		}
 	}
-	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
+	opencodeGateAssertR2ParentAnswer(t, al, reader, child.SessionID, failedPath)
+	opencodeGateAssertSaveFailureLog(t, logPath, child.SessionID, failedPath)
+	assert.Equal(t, observed[0].raw, observed[1].raw)
+}
+
+func opencodeGateAssertR2ParentAnswer(t *testing.T, al *agent.AgentLoop, reader tools.Tool, sid, failedPath string) {
+	t.Helper()
+	rec, err := al.GetSessionLifecycleStore().Load(sid)
 	require.NoError(t, err)
-	assert.Equal(t, session.LifecycleFailed, rec.State, "SFH-1: a later successful answer must not erase the outer execution's missing-history failure")
-	inbox, _, more, err := al.GetMessageInboxStore().Drain(rec.SteeringSessionID(), child.SessionID, "", 10)
+	assert.Equal(t, session.LifecycleCompleted, rec.State, "CHANGED REQUIREMENT R1-a: save failure does not discard a successful answer")
+	if assert.NotNil(t, rec.FinalDelivery, "a final result is committed independently of the history rows") {
+		assert.Equal(t, "final_answer", rec.FinalDelivery.Outcome)
+	}
+	inbox, _, more, err := al.GetMessageInboxStore().Drain(rec.SteeringSessionID(), sid, "", 10)
 	require.NoError(t, err)
 	require.False(t, more)
 	require.Len(t, inbox, 1)
 	kind, err := inbox[0].Discriminator()
 	require.NoError(t, err)
-	if assert.Equal(t, "error", kind, "parent must receive a failure, not a successful handback") {
-		failure, err := inbox[0].AsSessionMessageError()
-		require.NoError(t, err)
-		assert.True(t, failure.Fatal)
-		assert.Contains(t, failure.Text, opencodeGateSaveParent, "parent must receive W17's neutral missing-history notice")
-		assert.NotContains(t, failure.Text, failedPath)
+	want := opencodeGateSaveParent + "\n\n" + opencode1895LiveAnswer
+	if assert.Equal(t, "handback", kind, "CHANGED REQUIREMENT R1-b: warning plus answer, not a fatal error that discards it") {
+		final, decodeErr := inbox[0].AsSessionMessageHandback()
+		require.NoError(t, decodeErr)
+		assert.Equal(t, gen.SessionMessageHandbackModeFinal, final.Mode)
+		assert.Equal(t, want, final.ResultSoFar, "neutral warning comes first, verbatim and exactly once")
+		assert.NotContains(t, final.ResultSoFar, failedPath)
 	}
-	assert.Equal(t, observed[0].raw, observed[1].raw)
+	result := reader.Execute(tools.WithTranscriptSessionID(context.Background(), rec.SteeringSessionID()), map[string]any{
+		"action": "result", "session_id": sid,
+	})
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "%s", result.ForLLM)
+	assert.True(t, strings.HasSuffix(result.ForLLM, want), "delegate result must expose the exact same warning plus answer: %s", result.ForLLM)
+	assert.Equal(t, 1, strings.Count(result.ForLLM, opencodeGateSaveParent))
+	assert.NotContains(t, result.ForLLM, failedPath)
+}
+
+func opencodeGateAssertSaveFailureLog(t *testing.T, path, sid, cause string) {
+	t.Helper()
+	file, err := os.Open(path)
+	require.NoError(t, err)
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	var failures []map[string]any
+	control := 0
+	for scanner.Scan() {
+		var row map[string]any // not-wire-format: structured test log observation
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &row))
+		if row["session_id"] != sid {
+			continue
+		}
+		if row["message"] == "gate-r2-save-log-control" {
+			control++
+		}
+		if row["message"] == "external-cli: a helper message could not be saved to the transcript" {
+			failures = append(failures, row)
+		}
+	}
+	require.NoError(t, scanner.Err())
+	require.Equal(t, 1, control, "instrument: the real structured error logger reaches this file")
+	if assert.Len(t, failures, 1, "one error log per affected turn") {
+		assert.Equal(t, "error", failures[0]["level"])
+		assert.NotEmpty(t, failures[0]["turn_id"])
+		assert.Contains(t, failures[0]["error"], cause)
+	}
 }
 
 func opencodeGateProbeStarting(t *testing.T, process net.Conn) {
