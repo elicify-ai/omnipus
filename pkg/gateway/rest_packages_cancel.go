@@ -10,7 +10,6 @@
 package gateway
 
 import (
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -47,7 +46,7 @@ func (a *restAPI) handlePackageImportCancel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if omnpkg.CodeOf(err) == omnpkg.CodeStagingCleanupFailed {
-		slog.Warn("packages: upload cancelled but its folder could not be removed; the next upload retries",
+		logsafeWarn("packages: upload cancelled but its folder could not be removed; the next upload retries",
 			"staging_id", rest, "error", err)
 	}
 	writePackageErr(w, "cancel", err)

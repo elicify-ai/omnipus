@@ -319,7 +319,7 @@ func writePackageErr(w http.ResponseWriter, op string, err error) {
 		jsonErr(w, http.StatusRequestEntityTooLarge, "request body too large")
 		return
 	}
-	slog.Error("packages: request failed", "operation", op, "error", err)
+	logsafeError("packages: request failed", "operation", op, "error", err)
 	jsonErr(w, http.StatusInternalServerError, "internal server error")
 }
 

@@ -85,6 +85,20 @@ func (r *StagingRegistry) Dir(id string) (string, error) {
 	if _, ok := r.entries[id]; !ok {
 		return "", newErr(CodeStagingNotFound)
 	}
+	return r.stagingPath(id)
+}
+
+// stagingPath is the folder of staging id under the staging root. Only a
+// canonical staging UUID (the form Reserve issues) names a folder, so an ID
+// can never point outside the root; anything else is staging_not_found.
+func (r *StagingRegistry) stagingPath(id string) (string, error) {
+	u, err := uuid.Parse(id)
+	if err != nil || u.String() != id {
+		return "", newErr(CodeStagingNotFound)
+	}
+	if !filepath.IsLocal(id) {
+		return "", newErr(CodeStagingNotFound)
+	}
 	return filepath.Join(r.base, id), nil
 }
 
@@ -250,7 +264,10 @@ func (r *StagingRegistry) Cancel(id string) error {
 // removeDirLocked removes a cancelled or cancelling staging's folder through
 // the RemoveDir seam when a test set it, else os.RemoveAll.
 func (r *StagingRegistry) removeDirLocked(id string) error {
-	dir := filepath.Join(r.base, id)
+	dir, err := r.stagingPath(id)
+	if err != nil {
+		return err
+	}
 	if r.RemoveDir != nil {
 		return r.RemoveDir(dir)
 	}
@@ -270,7 +287,11 @@ func (r *StagingRegistry) FinishApply(id string) error {
 	if err := r.transition(id, StagingApplying, func(e *stagingEntry) { e.state = StagingDone }); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(filepath.Join(r.base, id)); err != nil {
+	dir, err := r.stagingPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("omnpkg: delete finished staging folder: %w", err)
 	}
 	return nil
@@ -299,7 +320,11 @@ func (r *StagingRegistry) Release(id string) error {
 		return newErr(CodeStagingNotFound)
 	}
 	delete(r.entries, id)
-	if err := os.RemoveAll(filepath.Join(r.base, id)); err != nil {
+	dir, err := r.stagingPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("omnpkg: delete released staging folder: %w", err)
 	}
 	return nil
@@ -340,7 +365,7 @@ func (r *StagingRegistry) Sweep() []UnfinishedImport {
 				delete(r.entries, id)
 			}
 		case r.expiredLocked(e):
-			if os.RemoveAll(filepath.Join(r.base, id)) == nil {
+			if dir, err := r.stagingPath(id); err == nil && os.RemoveAll(dir) == nil {
 				delete(r.entries, id)
 			}
 		}
@@ -387,6 +412,10 @@ func (r *StagingRegistry) scanOrphansLocked() map[string]UnfinishedImport {
 }
 
 func (r *StagingRegistry) folderExists(id string) bool {
-	info, err := os.Stat(filepath.Join(r.base, id))
+	dir, err := r.stagingPath(id)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(dir)
 	return err == nil && info.IsDir()
 }
