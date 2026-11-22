@@ -26,12 +26,14 @@ import {
   fetchWorkspace,
   isWorker,
   isApiError,
+  programsQueryKeys,
 } from '@/lib/api'
 import { getChannelFields, splitIdListText, type ChannelField } from '@/lib/channel-fields'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
+import { ChannelProgramsSection } from './ChannelProgramsSection'
 import { ChannelOutboundSection } from '@/components/connectors/ChannelOutboundSection'
 import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
@@ -551,6 +553,9 @@ export function ChannelConfigPanel({
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
+      // Rebinding turns the channel's program switch off in the same write
+      // (spec cli-credentials FR-009): read it again.
+      queryClient.invalidateQueries({ queryKey: programsQueryKeys.channel(channelId) })
       addToast({ message: 'Routing saved', variant: 'success' })
     },
     onError: (err: unknown) => {
@@ -1218,6 +1223,19 @@ export function ChannelConfigPanel({
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Programs — spec cli-credentials FR-009 / S-148: the channel's
+                program switch, beside the binding it applies to. Hidden for
+                webchat, whose setting lives in Settings → Programs. */}
+            {!isWebchat && (
+              <ChannelProgramsSection
+                channelId={channelId}
+                open={open}
+                routing={routingError ? undefined : routing}
+                workspaces={workspaces}
+                agents={agents}
+              />
             )}
 
             {/* Actions */}
