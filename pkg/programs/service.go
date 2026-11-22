@@ -38,6 +38,13 @@ const (
 	MsgNotConnected    = "Connect a token first."
 )
 
+// CommitCardToken stores a program card's token with its receipt when no
+// Programs service is bound (FR-048: program-scoped store writes stay in this
+// package). It starts no account check and returns the new generation.
+func CommitCardToken(store *credentials.Store, id, value string, receipt *credentials.CardReceipt) (int64, error) {
+	return store.CommitProgramCredential(TokenReference(id), value, receipt)
+}
+
 // Service errors. The REST layer maps them (errors.Is) to the spec's statuses
 // and the Msg texts above.
 var (

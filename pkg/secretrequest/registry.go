@@ -357,7 +357,7 @@ func (r *Registry) submitProgramLocked(rec Record, programID, raw string) (Recor
 	if r.opts.PublishProgram != nil {
 		_, err = r.opts.PublishProgram(programID, value, receipt)
 	} else {
-		_, err = store.CommitProgramCredential(programs.TokenReference(programID), value, receipt)
+		_, err = programs.CommitCardToken(store, programID, value, receipt)
 	}
 	switch {
 	case err == nil, errors.Is(err, credentials.ErrCardAlreadySubmitted):
