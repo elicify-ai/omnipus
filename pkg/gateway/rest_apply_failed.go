@@ -167,13 +167,23 @@ func writeSavedNotRefreshed(w http.ResponseWriter, text string, keys []configKey
 func (a *restAPI) safeUpdateConfigJSONRecorded(
 	mutate func(m map[string]any) error, changedKeys func() []configKeyPath,
 ) error {
+	return a.safeUpdateConfigJSONRecordedAs(applyFailedSourceRefresh, mutate, changedKeys)
+}
+
+// safeUpdateConfigJSONRecordedAs is safeUpdateConfigJSONRecorded with the
+// apply path named: a writer whose change is applied by its own reload
+// (prompt guard, rate limits) records under its own source, so only its own
+// later successful apply clears the entry (B3, SFH-03).
+func (a *restAPI) safeUpdateConfigJSONRecordedAs(
+	source applyFailedSource, mutate func(m map[string]any) error, changedKeys func() []configKeyPath,
+) error {
 	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
 	err := a.orderedConfigJSONLocked(store, nil, nil, mutate)
 	var refreshErr *configRefreshError
 	if errors.As(err, &refreshErr) {
-		a.applyFailed.record(applyFailedSourceRefresh, changedKeys())
+		a.applyFailed.record(source, changedKeys())
 	}
 	return err
 }

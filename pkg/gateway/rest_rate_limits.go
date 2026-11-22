@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -113,7 +114,15 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	// right before the call closes that TOCTOU window.
 	oldCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
 
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	var keyNames []string
+	if newLLM != nil {
+		keyNames = append(keyNames, "sandbox.rate_limits.max_agent_llm_calls_per_hour")
+	}
+	if newTool != nil {
+		keyNames = append(keyNames, "sandbox.rate_limits.max_agent_tool_calls_per_minute")
+	}
+	keys := canonicalConfigKeys(keyNames...)
+	writeErr := a.safeUpdateConfigJSONRecordedAs(applyFailedSourceRateLimits, func(m map[string]any) error {
 		rl := ensureMap(m, "sandbox", "rate_limits")
 		if newLLM != nil {
 			rl["max_agent_llm_calls_per_hour"] = *newLLM
@@ -122,13 +131,25 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 			rl["max_agent_tool_calls_per_minute"] = *newTool
 		}
 		return nil
-	}); err != nil {
-		slog.Error("rest: update rate limits", "error", err)
+	}, func() []configKeyPath { return keys })
+	var refreshErr *configRefreshError
+	if writeErr != nil && !errors.As(writeErr, &refreshErr) {
+		slog.Error("rest: update rate limits", "error", writeErr)
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return
 	}
 
 	newCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
+	if refreshErr != nil {
+		// The running config was not refreshed, so it still holds the old
+		// values: the audit's new side is the values written to config.json.
+		if newLLM != nil {
+			newCfg.MaxAgentLLMCallsPerHour = int(*newLLM)
+		}
+		if newTool != nil {
+			newCfg.MaxAgentToolCallsPerMinute = int(*newTool)
+		}
+	}
 
 	// Audit the config write itself, unconditionally — mirrors
 	// rest_prompt_guard.go's putPromptGuard (emit-then-reload, not gated
@@ -157,17 +178,25 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if refreshErr != nil {
+		// B3 (SFH-03): config.json holds the new limits but the live refresh
+		// failed before the reload stage. The keys were recorded as
+		// apply_failed inside the write lock; the answer is the C-6
+		// saved-but-not-applied 200.
+		logsafeError("rest: rate limits saved but the live refresh failed", "error", writeErr)
+		warnMsg := "config saved to disk but the live refresh failed; restart the gateway to apply"
+		jsonOK(w, gen.RateLimitsUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			Warning:         &warnMsg,
+		})
+		return
+	}
+
 	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
 		// Saved, not in use: listed as apply_failed before the answer (C-6).
-		var keys []string
-		if newLLM != nil {
-			keys = append(keys, "sandbox.rate_limits.max_agent_llm_calls_per_hour")
-		}
-		if newTool != nil {
-			keys = append(keys, "sandbox.rate_limits.max_agent_tool_calls_per_minute")
-		}
-		a.applyFailed.record(applyFailedSourceRateLimits, canonicalConfigKeys(keys...))
+		a.applyFailed.record(applyFailedSourceRateLimits, keys)
 		slog.Warn("rest: rate limits saved but hot-reload failed; restart required",
 			"reload_error", reloadErr,
 			"max_agent_llm_calls_per_hour", newCfg.MaxAgentLLMCallsPerHour,
