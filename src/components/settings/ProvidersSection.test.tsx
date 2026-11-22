@@ -826,7 +826,8 @@ describe('ProvidersSection — save confirmation (ADR-0008 ruling 6)', () => {
     vi.mocked(api.fetchProviders).mockRejectedValue(new Error('boom'))
     renderSection()
     await waitFor(() => {
-      expect(screen.getByText(/failed to load providers/i)).toBeInTheDocument()
+      // F12 / FR-066: the failed provider read is named by the error Callout.
+      expect(screen.getByText(/providers could not be loaded/i)).toBeInTheDocument()
     })
   })
 

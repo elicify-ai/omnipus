@@ -226,7 +226,8 @@ describe('FR-063 — a changed port names the new address and the proxy instruct
     // FR-063: the derived address is the page's own host with the SAVED port,
     // landing on the gateway tab with restarted=1.
     const link = screen.getByRole('link', { name: /open the new address/i })
-    expect(link).toHaveAttribute('href', expect.stringContaining('localhost:8081/settings?tab=gateway&restarted=1'))
+    // F9 / FR-063: include the app's hash route so this reaches Settings.
+    expect(link).toHaveAttribute('href', 'http://localhost:8081/#/settings?tab=gateway&restarted=1')
   })
 
   it('behind a proxy (page port differs from the running port) no address is offered, only the instruction', async () => {

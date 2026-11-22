@@ -224,9 +224,9 @@ describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) throug
   it('clearing "LLM calls / hour" PUTs max_agent_llm_calls_per_hour: 0 and keeps the tool value', async () => {
     renderSection()
     const { llm, tool } = await openAdvanced()
-    // Both fields must show the route's stored values BEFORE the edit, so
-    // the "keeps the other field's value" half of the oracle is grounded:
-    // the 9 in the PUT body can only come from the GET hydration.
+    // Both fields show the route's stored values before the edit. F3 /
+    // FR-015: keeping the tool limit means leaving it OUT of this partial
+    // update, never echoing the tab's possibly stale cached 9.
     await settleTo(llm, String(ROUTE_LLM))
     await settleTo(tool, String(ROUTE_TOOL))
     fireEvent.change(llm, { target: { value: '' } })
@@ -245,11 +245,9 @@ describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) throug
     if (puts.length === 1) {
       expect(
         JSON.parse(puts[0].body ?? 'null'),
-        `#1882 F-PTA-1: the cleared LLM field must save 0 (the route's spelling of Unlimited, docs/settings.md) and the untouched tool field must keep the route value ${ROUTE_TOOL}; saw body ${puts[0].body}`,
-      ).toEqual({
-        max_agent_llm_calls_per_hour: 0,
-        max_agent_tool_calls_per_minute: ROUTE_TOOL,
-      })
+        `#1882 F-PTA-1 / F3 / FR-015: the cleared LLM field must save 0 (Unlimited); the untouched tool limit must be absent; saw body ${puts[0].body}`,
+      ).toEqual({ max_agent_llm_calls_per_hour: 0 })
+      expect(tool).toHaveValue(ROUTE_TOOL)
     }
   })
 
@@ -273,11 +271,9 @@ describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) throug
     if (puts.length === 1) {
       expect(
         JSON.parse(puts[0].body ?? 'null'),
-        `#1882 F-PTA-1: the cleared tool field must save 0 (the route's spelling of Unlimited, docs/settings.md) and the untouched LLM field must keep the route value ${ROUTE_LLM}; saw body ${puts[0].body}`,
-      ).toEqual({
-        max_agent_llm_calls_per_hour: ROUTE_LLM,
-        max_agent_tool_calls_per_minute: 0,
-      })
+        `#1882 F-PTA-1 / F3 / FR-015: the cleared tool field must save 0 (Unlimited); the untouched model limit must be absent; saw body ${puts[0].body}`,
+      ).toEqual({ max_agent_tool_calls_per_minute: 0 })
+      expect(llm).toHaveValue(ROUTE_LLM)
     }
   })
 })

@@ -33,12 +33,17 @@
  * not exist, so the assertions fail naming FR/D-9.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
+import { cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter, createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from '@/routeTree.gen'
 import { rotateGatewayToken } from '@/lib/api'
+import userEvent from '@testing-library/user-event'
+import { appG1, jsonG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
+import { useUiStore } from '@/store/ui'
+import { makeAgent } from '@/test/factories'
+import type { Workspace } from '@/lib/api/generated/openapi-types'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -170,6 +175,11 @@ async function openSettings(search: string) {
     </QueryClientProvider>,
   )
 }
+
+// The registry lazy-loads this REAL panel. Cold transpilation is not the
+// overlay behavior: load its actual chunk before the interaction, following
+// the existing panel-shell real-route tests, rather than widening a timeout.
+beforeAll(async () => { await import('@/components/workspaces/team/TeamPanel') })
 
 beforeEach(() => {
   window.localStorage.setItem('omnipus_auth_username', 'map-tester')
@@ -317,6 +327,104 @@ describe('FR-057 — rotating the gateway token asks first', () => {
     fireEvent.click(within(confirm).getByRole('button', { name: /cancel/i }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(rotateGatewayToken, 'FR-057: Cancel keeps the token — no rotate call').not.toHaveBeenCalled()
+  })
+})
+
+// PTA-03 must not inherit this file's older API-function stubs: forward each
+// mocked export to the actual implementation for this one test, then restore
+// it. Only transportG1's fetch replacement supplies data to the guard.
+async function withRealG1API(run: () => Promise<void>) {
+  const api = await import('@/lib/api')
+  const actual = await vi.importActual<typeof api>('@/lib/api')
+  const restore: (() => void)[] = []
+  for (const [name, fn] of Object.entries(api)) {
+    if (!vi.isMockFunction(fn)) continue
+    const previous = fn.getMockImplementation()
+    fn.mockImplementation(Reflect.get(actual, name))
+    restore.push(() => { if (previous) fn.mockImplementation(previous); else fn.mockReset() })
+  }
+  try { await run() } finally {
+    cleanup()
+    for (const reset of restore) reset()
+    vi.unstubAllGlobals()
+    useUiStore.getState().closeEditAgentSlideOver()
+    useUiStore.getState().closePanel()
+    for (const toast of useUiStore.getState().toasts) useUiStore.getState().removeToast(toast.id)
+  }
+}
+
+it('PTA-03 FR-109 — following the real worker Runtime link removes the shared editor and overlays from Settings', async () => {
+  await withRealG1API(async () => {
+    const t = transportG1()
+    // Explicit desktop viewport: AgentProfile exposes Runtime as tabs above
+    // 40rem and as an accordion below it; do not query an aria-hidden tab.
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(min-width: 40rem)', media: query, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false }))
+    vi.stubGlobal('scrollTo', () => {})
+    // This path mounts Chat to reach its real Team panel, but sends no chat
+    // frame. Keep the unrelated socket at the transport edge unconnected;
+    // any unexpected send/parse request is loud, not silently accepted.
+    vi.stubGlobal('WebSocket', class {
+      static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3
+      readyState = 0
+      send() { throw new Error('PTA-03 must not send a chat frame') }
+      close() { this.readyState = 3 }
+    })
+    vi.stubGlobal('Worker', class {
+      postMessage() { throw new Error('PTA-03 must not parse a chat frame') }
+      terminate() {}
+    })
+    const worker = makeAgent({
+      id: 'g1-overlay-worker', name: 'G1 overlay worker', type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'codex', effective_cli_path: '/opt/bin/Codex', effective_preset_args: '--profile Work' },
+    })
+    const workspace: Workspace = {
+      id: 'ws-g1', name: 'G1 workspace', revision: '0'.repeat(64),
+      status: 'active', pinned: false, pin_order: 0, task_count: 0,
+      created_at: '2026-11-22T00:00:00Z', updated_at: '2026-11-22T00:00:00Z',
+      core_team: [worker.id], is_default: true,
+    }
+    t.on('GET', '/agents', () => jsonG1([worker]))
+    t.on('GET', `/agents/${worker.id}`, () => jsonG1(worker))
+    t.on('GET', '/workspaces', () => jsonG1([workspace]))
+    t.on('GET', `/workspaces/${workspace.id}`, () => jsonG1(workspace))
+    t.on('GET', '/activity', () => jsonG1({ events: [] }))
+    t.on('GET', '/skills', () => jsonG1([]))
+    t.on('GET', '/sessions', () => jsonG1({ sessions: [] }))
+    t.on('GET', `/workspaces/${workspace.id}/delegation`, () => jsonG1({ revision: workspace.revision, workspace_id: workspace.id, edges: [], team: [worker.id], default_depth: 3 }))
+    // Preview computes argv but stores nothing. It may run while Runtime is
+    // open, so serve its real contract rather than racing its 400ms debounce.
+    t.on('POST', '/agents/executor-preview', () => jsonG1({ binary: '/opt/bin/Codex', argv: ['--profile', 'Work'], command_line: '/opt/bin/Codex --profile Work', prompt_delivery: 'stdin', dropped_args: [] }))
+    // This is a genuine external worker, not a native System agent relabelled
+    // to expose a link. The same reachable editor path is used by the existing
+    // FR-109 browser guard; native editors currently contain no section link.
+    const { router } = await appG1(`/workspaces/${workspace.id}/team`)
+    await waitFor(() => {
+      expect(router.state.location.pathname, 'PTA-03 instrument: the real Team bookmark redirects to workspace chat').toBe(`/workspaces/${workspace.id}/chat`)
+      expect(useUiStore.getState().activePanel, `PTA-03 instrument: the Team link must open its panel; reads ${JSON.stringify(t.calls.map(({ method, path }) => ({ method, path })))}`).toMatchObject({ id: 'team', context: { workspaceId: workspace.id } })
+    })
+    const teamPanel = await screen.findByTestId('side-panel')
+    await userEvent.click(await within(teamPanel).findByRole('button', { name: `Actions for ${worker.name}` }))
+    await userEvent.click(await screen.findByRole('button', { name: `Edit ${worker.name}` }))
+    await userEvent.click(await screen.findByRole('tab', { name: 'Runtime' }))
+    const link = await screen.findByRole('link', { name: 'Change in Settings' })
+    expect(screen.getAllByRole('dialog'), 'PTA-03 instrument: the real editor must be open before navigation').toHaveLength(1)
+    expect(screen.getByTestId('sheet-overlay'), 'PTA-03 instrument: an overlay must exist before the link is followed').toBeInTheDocument()
+    await userEvent.click(link)
+    expect(await screen.findByRole('heading', { name: 'Third-party agents', level: 2 })).toBeVisible()
+    expect(router.state.location.pathname).toBe('/settings')
+    expect(router.state.location.search).toMatchObject({ tab: 'third-party-agents' })
+    await waitFor(() => {
+      expect(screen.queryAllByRole('dialog')).toHaveLength(0)
+      expect(screen.queryAllByRole('alertdialog')).toHaveLength(0)
+      expect(document.querySelectorAll('[data-testid="sheet-overlay"], [data-testid="dialog-overlay"], [data-radix-popper-content-wrapper]'), 'PTA-03: no modal overlay or floating editor wrapper may survive the handoff').toHaveLength(0)
+    })
+    const path = await screen.findByRole('textbox', { name: 'Codex program path' })
+    await userEvent.clear(path)
+    await userEvent.type(path, '/opt/bin/g1-clicked')
+    expect(path).toHaveValue('/opt/bin/g1-clicked')
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(path).toHaveValue('/opt/bin/Codex')
+    expect(t.writes().filter(({ path }) => path !== '/agents/executor-preview'), 'PTA-03: following the link, editing and Discard may not persist anything').toEqual([])
   })
 })
 

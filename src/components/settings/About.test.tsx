@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -186,7 +186,14 @@ describe('AboutSection — error state', () => {
       </QueryClientProvider>
     )
     await waitFor(() => {
-      expect(screen.getByText(/could not fetch system info/i)).toBeInTheDocument()
+      // F12 / FR-066, team-lead Q1 A: check the failed read and injected
+      // cause in the actual Callout, not an unrequired full sentence.
+      const callout = screen.getByRole('alert')
+      expect(callout).toHaveAttribute('data-slot', 'callout')
+      expect(callout).toHaveAttribute('data-variant', 'error')
+      expect(callout).toHaveTextContent(/system information/i)
+      expect(callout).toHaveTextContent('Network error')
+      expect(within(callout).getByRole('button', { name: 'Retry' })).toBeEnabled()
     }, { timeout: 3000 })
   })
 })

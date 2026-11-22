@@ -75,6 +75,10 @@ function renderSection() {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+// F1 reconciliation adds exact no-write/count checks. Calls from a previous
+// test must not become evidence of an autosave in the next test.
+beforeEach(() => { vi.clearAllMocks() })
+
 describe('MemorySection', () => {
   beforeEach(() => {
     vi.mocked(fetchMemorySettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
@@ -176,7 +180,7 @@ describe('MemorySection', () => {
     fireEvent.click(autoRecapToggle)
 
     // Click save
-    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
     await act(async () => { fireEvent.click(saveBtn) })
 
     await waitFor(() => {
@@ -186,33 +190,37 @@ describe('MemorySection', () => {
     })
   })
 
-  it('sends recap_model and recap_fallback_models in the save payload when set', async () => {
+  it('F1 / FR-015: leaves unchanged recap slots out when another Memory value is saved', async () => {
     const saved: Record<string, unknown> = {}
-    vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
-      Object.assign(saved, body)
-      return body
-    })
-
-    // Seed with a pre-configured recap_model and one fallback
-    vi.mocked(fetchMemorySettings).mockResolvedValue({
+    // Seed with a pre-configured recap_model and one fallback. A partial PUT
+    // returns the merged document, including the unchanged saved slots.
+    const initial = {
       ...DEFAULT_SETTINGS,
       recap_model: 'google/gemini-2.5-flash',
       recap_fallback_models: [{ model: 'anthropic/claude-3.5-haiku', provider: 'openrouter' }],
+    }
+    vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
+      Object.assign(saved, body)
+      return { ...initial, ...body }
     })
+    vi.mocked(fetchMemorySettings).mockResolvedValue(initial)
 
     renderSection()
     await screen.findByText('Memory & Recap')
 
-    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    expect(screen.getByTestId('recap-model-trigger')).toHaveTextContent('google/gemini-2.5-flash')
+    expect(screen.getByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('switch', { name: /auto recap/i }))
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
     await act(async () => { fireEvent.click(saveBtn) })
 
-    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
-
-    expect(saved).toHaveProperty('recap_model', 'google/gemini-2.5-flash')
-    expect(saved).toHaveProperty('recap_fallback_models')
-    const fallbacks = saved['recap_fallback_models'] as Array<{ model: string; provider?: string }>
-    expect(fallbacks).toHaveLength(1)
-    expect(fallbacks[0]).toMatchObject({ model: 'anthropic/claude-3.5-haiku' })
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
+    // F1 / FR-015: saved slots remain visible but are not echoed into a
+    // different field's partial update. The picker tests below cover edits.
+    expect(saved).toEqual({ auto_recap_enabled: true })
+    expect(screen.getByTestId('recap-model-trigger')).toHaveTextContent('google/gemini-2.5-flash')
+    expect(screen.getByTestId('recap-fallback-row-anthropic/claude-3.5-haiku')).toBeInTheDocument()
 
     // Removed fields must NOT appear in the payload
     expect(saved).not.toHaveProperty('bootstrap_recap_daily_budget_usd')
@@ -223,13 +231,15 @@ describe('MemorySection', () => {
     const saved: Record<string, unknown> = {}
     vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
       Object.assign(saved, body)
-      return body
+      return { ...DEFAULT_SETTINGS, ...body }
     })
 
     renderSection()
     await screen.findByText('Memory & Recap')
 
-    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    // F1 / FR-011/015: a clean form has no Save; make a real scalar draft.
+    fireEvent.click(screen.getByRole('switch', { name: /auto recap/i }))
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
     await act(async () => { fireEvent.click(saveBtn) })
 
     await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
@@ -238,26 +248,31 @@ describe('MemorySection', () => {
     expect(saved['recap_model']).toBeUndefined()
   })
 
-  it('persists the core fields in the save payload (round-trip)', async () => {
+  it('F1 / FR-015: persists each changed core field in the partial save payload (round-trip)', async () => {
     const saved: Record<string, unknown> = {}
     vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
       Object.assign(saved, body)
-      return body
+      return { ...DEFAULT_SETTINGS, ...body }
     })
 
     renderSection()
     await screen.findByText('Memory & Recap')
 
-    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    fireEvent.click(screen.getByRole('switch', { name: /auto recap/i }))
+    fireEvent.change(screen.getByLabelText('Idle timeout'), { target: { value: '45' } })
+    fireEvent.click(screen.getByRole('switch', { name: /bootstrap recap/i }))
+    fireEvent.change(screen.getByLabelText('Bootstrap recap rate limit'), { target: { value: '10' } })
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
     await act(async () => { fireEvent.click(saveBtn) })
 
-    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
-
-    // Core fields are always present
-    expect(saved).toHaveProperty('auto_recap_enabled')
-    expect(saved).toHaveProperty('idle_timeout_minutes')
-    expect(saved).toHaveProperty('bootstrap_recap_enabled')
-    expect(saved).toHaveProperty('bootstrap_recap_max_per_minute')
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
+    expect(saved).toEqual({
+      auto_recap_enabled: true,
+      idle_timeout_minutes: 45,
+      bootstrap_recap_enabled: true,
+      bootstrap_recap_max_per_minute: 10,
+    })
 
     // FR-045: the retired retention fields must not ride along — PUT
     // /settings/memory carrying either must be refused with 400, so the
@@ -322,7 +337,7 @@ describe('MemorySection', () => {
 
     // The popover should close and the trigger should now display the selection.
     // Save and confirm the PUT body carries recap_model.
-    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
     await act(async () => { fireEvent.click(saveBtn) })
 
     await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
@@ -354,7 +369,7 @@ describe('MemorySection', () => {
     })
 
     // Save and confirm the fallback appears in the PUT body
-    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
     await act(async () => { fireEvent.click(saveBtn) })
 
     await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
@@ -370,7 +385,8 @@ describe('MemorySection', () => {
 
     renderSection()
 
-    await screen.findByText(/failed to load memory settings/i)
+    // F12 / FR-066: the shared error Callout names the failed read.
+    await screen.findByText(/memory settings could not be loaded/i)
   })
 
   it('populates fields from the fetched settings', async () => {
@@ -450,23 +466,32 @@ describe('MemorySection — H6 R2 duplicate-provider picks', () => {
     const rows = await vi.waitFor(() => optionRowsFor('gpt-6.1-sol'))
     expect(rows).toHaveLength(2)
     fireEvent.click(rows[1])
+    // F1 / FR-010: the clicked provider stays a draft until the shared Save.
+    expect(vi.mocked(updateMemorySettings)).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save changes/i })) })
     await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
     const body = vi.mocked(updateMemorySettings).mock.calls[0][0]
     expect(body).toMatchObject({ recap_model: 'gpt-6.1-sol', recap_provider: 'openai-chatgpt' })
 
-    // FR-054: reopening during the slot autosave is forbidden. This guard
-    // now covers provider identity across ACKNOWLEDGED autosave, not a draft.
+    // F1/F4 / FR-011/020: a later pick is a draft, not a second autosave.
+    // The old autosave-only picker lock is deliberately not the new oracle.
     const primaryPicker = screen.getByTestId('recap-model-trigger')
-    expect(primaryPicker).toBeDisabled()
-    expect(screen.getByRole('button', { name: /save memory settings/i })).toBeDisabled()
     fireEvent.click(primaryPicker)
-    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    fireEvent.click(await screen.findByRole('option', { name: /grok-4/ }))
+    expect(primaryPicker).toHaveTextContent('grok-4')
+    expect(screen.getByText('1 unsaved change')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
     await act(async () => { acknowledge({ ...DEFAULT_SETTINGS, ...body }) })
-    await waitFor(() => expect(primaryPicker).toBeEnabled())
+    expect(primaryPicker, 'F1/F4: the first Save answer must preserve the newer model draft').toHaveTextContent('grok-4')
+    expect(screen.getByText('1 unsaved change')).toBeInTheDocument()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
 
-    // The acknowledged pair must choose openai-chatgpt's row, NOT the first
-    // provider that happens to serve the same slug (the original H6 intent).
+    // Discard returns to the FIRST acknowledged pair, preserving the original
+    // H6 provider-identity check rather than replacing it with draft identity.
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(primaryPicker).toHaveTextContent('gpt-6.1-sol')
     fireEvent.click(primaryPicker)
     await vi.waitFor(() => optionRowsFor('gpt-6.1-sol'))
     const reopened = optionRowsFor('gpt-6.1-sol')
@@ -501,7 +526,7 @@ describe('MemorySection — H6 R2 duplicate-provider picks', () => {
       expect(screen.getByTestId('recap-fallback-row-gpt-6.1-sol')).toBeInTheDocument()
     })
 
-    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
     await act(async () => { fireEvent.click(saveBtn) })
     await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
 

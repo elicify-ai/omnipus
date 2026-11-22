@@ -1,142 +1,82 @@
 /**
- * ExecProxyStatusCard.test.tsx — targeted coverage for a security-relevant
- * settings control (the bash-tool SSRF proxy enable/disable toggle) that had
- * ZERO test coverage before this file.
- *
- * Wave 2 converted this component's mutation `onError` handler from a
- * hand-rolled ternary to the shared `getErrorMessage()` helper
- * (`src/lib/api-error.ts`). These tests pin that conversion: a rejected
- * `updateConfig` save must surface `ApiError.userMessage` (or `Error.message`
- * as the fallback) via `addToast`, prefixed by the component's own
- * "Failed to save proxy setting:" text — not a crash, not a generic
- * "isError" flag, and not the status-prefixed legacy `Error.message` string.
- *
- * Traces to: Wave 2 findings-fix (task #149, gap 1) — pr-test-analyzer,
- * hotfix/v0.1.1.
+ * ExecProxyStatusCard — F2 reconciliation, Settings FR-010 and FR-020.
+ * The proxy is now a draft on the common Save bar, not an independent
+ * confirmation/toast mutation. Preserve the three original failure inputs,
+ * but assert their specified outcomes and retained drafts at the new boundary.
  */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-
-// ── Module mocks ──────────────────────────────────────────────────────────────
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return {
-    ...actual,
-    fetchExecProxyStatus: vi.fn(),
-    updateConfig: vi.fn(),
-  }
+  return { ...actual, fetchExecProxyStatus: vi.fn(), updateConfig: vi.fn() }
 })
-
 const mockAddToast = vi.fn()
-vi.mock('@/store/ui', () => ({
-  useUiStore: vi.fn(() => ({ addToast: mockAddToast })),
-}))
+vi.mock('@/store/ui', () => ({ useUiStore: vi.fn(() => ({ addToast: mockAddToast })) }))
 
-import { fetchExecProxyStatus, updateConfig, ApiError } from '@/lib/api'
-import { ExecProxyStatusCard } from './ExecProxyStatusCard'
+import { ApiError, fetchExecProxyStatus, updateConfig } from '@/lib/api'
 import type { ExecProxyStatus } from '@/lib/api'
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function makeClient() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  })
-}
+import { ExecProxyStatusCard } from './ExecProxyStatusCard'
 
 function renderCard() {
-  return render(
-    <QueryClientProvider client={makeClient()}>
-      <ExecProxyStatusCard />
-    </QueryClientProvider>,
-  )
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return render(<QueryClientProvider client={client}><ExecProxyStatusCard /></QueryClientProvider>)
 }
-
 const baseStatus: ExecProxyStatus = { enabled: false, running: false }
 
-/** Toggle the switch and confirm the resulting RestartConfirmDialog. */
-async function toggleAndConfirm() {
-  // The switch renders immediately (before fetchExecProxyStatus resolves) but
-  // stays disabled={isLoading || isSaving} until the query settles — wait for
-  // it to become enabled, not just present, or the click below is a no-op.
-  //
-  // Explicit timeout (not testing-library's 1000ms default): this file's
-  // first test pays the same one-time cold-start transform cost vitest.config.ts
-  // documents for -app-auth/ConnectorsScreen (issue #616) — the mocked query
-  // itself resolves instantly, but the FIRST render in the file can still miss
-  // a 1s window under load, while later tests in the same file (already
-  // warmed up) never do. testTimeout/hookTimeout absorb that cost for whole
-  // tests/hooks; testing-library's own waitFor default is not covered by
-  // either, so it needs its own margin here.
-  await waitFor(
-    () => {
-      expect(screen.getByRole('switch')).not.toBeDisabled()
-    },
-    { timeout: 5000 },
-  )
+async function toggleAndSave() {
+  await waitFor(() => expect(screen.getByRole('switch')).toBeEnabled(), { timeout: 5000 })
   fireEvent.click(screen.getByRole('switch'))
-
-  await waitFor(() => {
-    expect(screen.getByRole('button', { name: /save & restart later/i })).toBeInTheDocument()
-  })
-  fireEvent.click(screen.getByRole('button', { name: /save & restart later/i }))
+  expect(screen.queryByRole('dialog'), 'F2 / FR-010: no separate proxy confirmation').not.toBeInTheDocument()
+  expect(updateConfig, 'F2 / FR-010: the switch alone never writes').not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() => expect(updateConfig).toHaveBeenCalledExactlyOnceWith({ tools: { exec: { enable_proxy: true } } }))
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(fetchExecProxyStatus).mockResolvedValue(baseStatus)
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), window.location.origin).pathname
+    if (path !== '/api/v1/config/pending-restart') throw new Error(`Unexpected proxy reconciliation read: ${path}`)
+    return new Response('[]', { headers: { 'Content-Type': 'application/json' } })
+  }))
 })
+afterEach(() => { vi.unstubAllGlobals() })
 
-// ── describe: rejected save renders getErrorMessage() text ──────────────────
-
-describe('ExecProxyStatusCard — rejected save shows getErrorMessage() text', () => {
-  it('shows ApiError.userMessage prefixed by "Failed to save proxy setting:" (not a crash, not just isError)', async () => {
+describe('ExecProxyStatusCard — common Save failure outcomes (F2 / FR-020)', () => {
+  it('a 500 with unreadable saved state stays unknown with Retry and keeps the checked draft', async () => {
     vi.mocked(updateConfig).mockRejectedValue(new ApiError(500, undefined))
     renderCard()
-
-    await toggleAndConfirm()
-
-    await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledWith({
-        message: 'Failed to save proxy setting: The server is unavailable. Please try again in a moment.',
-        variant: 'error',
-      })
-    })
-    // The optimistic toggle intent is cleared on error — the switch reverts
-    // to the last-known server value (false) rather than lying about success.
-    await waitFor(() => {
-      expect(screen.getByRole('switch')).not.toBeChecked()
-    })
+    await waitFor(() => expect(screen.getByRole('switch')).toBeEnabled())
+    vi.mocked(fetchExecProxyStatus).mockRejectedValue(new Error('proxy saved-state read unavailable'))
+    await toggleAndSave()
+    expect(await screen.findByText('1 change may not have been saved')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+    expect(screen.getByRole('switch')).toBeChecked()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+    expect(mockAddToast).not.toHaveBeenCalled()
   })
 
-  it('shows a DIFFERENT ApiError.userMessage for a 403 rejection (proves the message is read from the error, not hardcoded)', async () => {
+  it('a 403 refusal shows ApiError.userMessage under the setting and retains the draft', async () => {
     vi.mocked(updateConfig).mockRejectedValue(new ApiError(403, undefined))
     renderCard()
-
-    await toggleAndConfirm()
-
-    await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledWith({
-        message: "Failed to save proxy setting: You don't have permission to perform this action.",
-        variant: 'error',
-      })
-    })
+    await toggleAndSave()
+    expect(await screen.findByText("You don't have permission to perform this action.")).toBeInTheDocument()
+    expect(screen.getByText('1 change could not be saved')).toBeInTheDocument()
+    expect(screen.getByRole('switch')).toBeChecked()
+    expect(mockAddToast).not.toHaveBeenCalled()
   })
 
-  it('falls back to Error.message when the rejection is a plain Error (not an ApiError) — getErrorMessage() priority chain', async () => {
+  it('a plain Error is reconciled against saved state, never a false success or a reset draft', async () => {
     vi.mocked(updateConfig).mockRejectedValue(new Error('proxy bind failed: address already in use'))
     renderCard()
-
-    await toggleAndConfirm()
-
-    await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledWith({
-        message: 'Failed to save proxy setting: proxy bind failed: address already in use',
-        variant: 'error',
-      })
-    })
+    await toggleAndSave()
+    expect(await screen.findByText('These changes were not saved. Save them again.')).toBeInTheDocument()
+    expect(screen.getByText('1 change could not be saved')).toBeInTheDocument()
+    expect(screen.getByRole('switch')).toBeChecked()
+    expect(screen.queryByText(/Saved at/)).not.toBeInTheDocument()
+    expect(mockAddToast).not.toHaveBeenCalled()
   })
 })
