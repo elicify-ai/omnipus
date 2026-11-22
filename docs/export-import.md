@@ -61,15 +61,14 @@ flowchart LR
 
 ## Cancel
 
-**Cancel** on Preview or Confirm, before you select Import, sends one cancel for the upload. Leaving the wizard before you select Import sends that one cancel silently. The answer to the cancel decides what you see:
+What Cancel does depends on where the upload stands, not on whether you ever selected Import. An upload is cancellable when it has not been used yet, or when Omnipus refused the import before changing anything (for example a session refresh, or a workspace that no longer exists). Then **Cancel** on Preview or Confirm sends one cancel attempt for the upload, and leaving the wizard sends that one attempt silently. The answer to the cancel decides what you see:
 
 - The cancel ran: you return to the page.
-
 - The cancel ran but the temporary files could not be removed: you return to the page, which says "The upload was cancelled. Omnipus will try to remove its temporary files at a later upload."
 - Any other answer, or no answer, proves nothing. The page says "Omnipus could not confirm what happened to this upload. It may have been imported, for example from another tab. Check the workspace Team before importing again." Check the Team of the workspace you chose before you import the file again.
 - "Your session needed refreshing. Select Cancel again." means the cancel did not run. Select **Cancel** again.
 
-After you select Import, the wizard sends no cancel. If the import's outcome is unknown, check the Team of the workspace you chose.
+While the answer to an import is still awaited, or never arrived, the wizard sends no cancel and does not send the import again. Check the Team of the workspace you chose.
 
 ## When the connection drops
 
@@ -83,8 +82,8 @@ The app never sends an import, an upload, a cancel or a download a second time b
 
 The wizard keeps a small note in this browser tab (never the bundle, a password or secret names) so that a reload can tell what happened:
 
-- Reload on Preview or Confirm before you selected Import: the wizard sends one cancel attempt for the upload, and its answer decides the screen. If the cancel ran, the page asks you to choose the file again ("The page was reloaded. Choose the file again."). Any other answer, or no answer, shows "Omnipus could not confirm what happened to this upload…": check the Team before importing again.
-- Reload, Back or Forward after you selected Import, while the answer is still awaited or unknown: no cancel is sent and Import is not sent again; the page says the import may have finished. Check the Team of the workspace you chose.
+- Reload on Preview or Confirm while the upload is cancellable (not used yet, or the import was refused before anything changed): the wizard sends one cancel attempt for the upload, and its answer decides the screen. If the cancel ran, the page asks you to choose the file again ("The page was reloaded. Choose the file again."). Any other answer, or no answer, shows "Omnipus could not confirm what happened to this upload…": check the Team before importing again.
+- Reload, Back or Forward while the answer to an import is still awaited or unknown: no cancel is sent and Import is not sent again; the page says the import may have finished. Check the Team of the workspace you chose.
 - Reload on the Result when this tab stored the completed import: the summary is shown again under "Import finished".
 - A Result address without this tab's note (for example opened in another tab): the export and import page is shown.
 - Reload on Review: the review is read again from Omnipus. A review older than 30 minutes, or one lost when Omnipus restarted, returns you to Choose with "The review expired. Check your choice and review again."
