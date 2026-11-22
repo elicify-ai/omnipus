@@ -70,7 +70,7 @@ func editableDescriptors(a config.AgentConfig) []map[string]any {
 		// field the tool would refuse is never advertised as editable here.
 		if editable && slices.Contains(permissionFieldNames, descriptor.Name) {
 			editable = false
-			reason = descriptor.Name + " cannot be changed with update_agent; per-agent tool policies and connector assignments change only through set_agent_permissions"
+			reason = descriptor.Name + " cannot be changed with update_agent; per-agent tool policies, connector assignments and programs change only through set_agent_permissions"
 		}
 		d := map[string]any{"name": descriptor.Name, "editable": editable}
 		if reason != "" {
