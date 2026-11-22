@@ -14,6 +14,8 @@ import { SaveBar } from './SaveBar'
 import { toWriteResponse } from './saveOutcome'
 import type { SaveBarField, SaveBarValue } from './useSaveBar'
 import { DataSection } from './DataSection'
+import { ReadErrorCallout } from './ReadErrorCallout'
+import { useSettingsShell } from './SettingsShellContext'
 
 const RETENTION_QUERY_KEY = ['settings', 'retention'] as const
 
@@ -27,7 +29,8 @@ function dayRange(min: number, max: number) {
 
 export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?: boolean }) {
   const queryClient = useQueryClient()
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const shell = useSettingsShell()
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: RETENTION_QUERY_KEY,
     queryFn: fetchRetentionSettings,
   })
@@ -47,7 +50,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
         Loading Data & retention…
       </div>
     )
-  } else if (isError || !data) {
+  } else if (!data) {
     retention = (
       <Callout variant="error" data-testid="retention-error">
         <CalloutTitle>The retention settings could not be loaded</CalloutTitle>
@@ -88,8 +91,21 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
         disabledWhen: { key: 'memory_retros_forever', equals: true },
       },
     ]
+    // SFH-06 / FR-066: a failed background read keeps the form (and its
+    // drafts) mounted. The error shows above it, and Save is blocked until
+    // the read succeeds again.
     retention = (
       <>
+        {isError && (
+          <ReadErrorCallout
+            title="The retention settings could not be loaded"
+            error={error}
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+            data-testid="retention-error"
+            action="Your changes are kept. Press Retry to load the settings again, then save."
+          />
+        )}
         {locked && (
           <Callout variant="info" className="mb-[var(--space-3)]">
             <CalloutTitle>Nothing is deleted at the moment</CalloutTitle>
@@ -101,6 +117,11 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
         <SaveBar
           section="data"
           fields={fields}
+          preSave={async () => {
+            if (!isError) return true
+            shell.announce('Nothing was saved. The retention settings could not be loaded; press Retry first.')
+            return false
+          }}
           onSave={(body) =>
             toWriteResponse(() => updateRetentionSettings(body as RetentionSettingsUpdate))
           }
