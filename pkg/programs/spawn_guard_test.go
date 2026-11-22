@@ -7,16 +7,20 @@
 // no child gets program variables without masking.
 //
 // Part (a) is a source guard over the packages that compose agent
-// environments, mirroring the S-111 producer-guard instrument: it scans the
-// production tree (non-test Go files) for child-start sites
-// (exec.Command/exec.CommandContext), classifies each against the spawn-site
-// table (S1 mandatory / non-program / S2-later), and fails on any unlisted
-// site. An S1 mandatory site must compose the child environment through
-// programs.Attach in its enclosing function — at RED no site does, so the
-// guard fails naming each file. The negative control feeds an in-memory
-// test-only file that adds GH_TOKEN to an exec.Cmd environment without
-// Attach; the guard must fail naming that file (spec S-106's planted-file
-// run, in-memory so the repository is never modified).
+// environments, mirroring the S-111 producer-guard instrument. It scans the
+// production tree (non-test Go files, recursively under every scoped root —
+// CHECK F10) for child-start sites (exec.Command/exec.CommandContext,
+// resolved through the file's own import table so an aliased os/exec is
+// caught), and reports EVERY site regardless of violations: the classification
+// (S1 mandatory / non-program / unlisted) runs on the full enumeration, so a
+// clean site in an unlisted file still fails the guard. An S1 mandatory
+// site's violation is per command (CHECK F10): the enclosing function must
+// call programs.Attach BEFORE the launch position — one late or absent Attach
+// per function is not compliance. The negative controls feed in-memory
+// test-only files (the repository is never modified): a literal GH_TOKEN
+// composition without Attach, an INDIRECT composition (the variable name not
+// a literal), and a clean exec.Command in an unlisted file — each must fail
+// naming its file.
 //
 // Part (b) runs every child kind of the current slice's mandatory inventory
 // (bash foreground, bash background, God Mode, environment_setup, account
@@ -36,6 +40,7 @@
 package programs
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -85,11 +90,11 @@ var spawnSiteTable = []spawnSiteRow{
 	{"pkg/channels/weixin/media.go", "non-program", "channel media decoder"},
 }
 
-// scopedSpawnPackages are the packages that compose agent environments (the
-// guard's scan roots, repo-relative).
-var scopedSpawnPackages = []string{
-	"pkg/agent", "pkg/agent/runner", "pkg/tools", "pkg/tools/browser",
-	"pkg/tools/browser/cdppipe", "pkg/programs", "pkg/channels/weixin",
+// scopedSpawnRoots are the packages that compose agent environments (the
+// guard's scan roots, repo-relative; walked RECURSIVELY — every subpackage
+// under a root is scanned, so a site cannot hide in a subdirectory).
+var scopedSpawnRoots = []string{
+	"pkg/agent", "pkg/tools", "pkg/programs", "pkg/channels/weixin",
 }
 
 // programTokenVarNames are the program-owned variable names the guard
@@ -98,174 +103,246 @@ var scopedSpawnPackages = []string{
 // prefix. GREEN reads the same names from the loaded catalog.
 var programTokenVarNames = []string{"GH_TOKEN", "GITHUB_TOKEN", "sentinel_9f3c2a7e5b1d"}
 
-// spawnScan walks the scoped packages and reports, for every child-start
-// site found, the repo-relative file, whether the enclosing function calls
-// programs.Attach, and whether the env composition mentions a program-owned
-// name. extraSource is an optional in-memory file injected as
-// <test-only>/planted.go (the negative control's instrument).
-type spawnSiteFinding struct {
-	File       string
-	AttachCall bool
-	PlantedEnv bool
+// spawnSite is one discovered child-start site, whether or not it violates
+// the table or the Attach rule (CHECK F10: the enumeration is complete —
+// classification happens on the full list, never on violations alone).
+type spawnSite struct {
+	File               string // repo-relative, forward slashes
+	Line               int    // the launch call's line
+	Func               string // the enclosing function's name
+	AttachBeforeLaunch bool   // a programs.Attach call precedes this launch in the same function
+	EnvProgramNameLit  bool   // a literal program-token name appears in the function
+	Mandatory          bool   // the file is an S1 mandatory row of the table
 }
 
-func spawnScan(t *testing.T, root string, extraSource string) []spawnSiteFinding {
-	t.Helper()
-	var findings []spawnSiteFinding
-	fset := token.NewFileSet()
-	for _, dir := range scopedSpawnPackages {
-		pkgDir := filepath.Join(root, filepath.FromSlash(dir))
-		entries, err := os.ReadDir(pkgDir)
-		if err != nil {
-			continue // package absent from this checkout
+// omnipusImportPrefix is the module's import-path prefix.
+const spawnOmnipusPrefix = "github.com/elicify-ai/omnipus"
+
+// spawnImportAliases maps a file's local qualifier to the omnipus or std
+// package dir suffix it imports (e.g. `bb` → /pkg/bus, `sh` → /os/exec).
+// Only these two trees matter to the guard.
+func spawnImportAliases(f *ast.File) map[string]string {
+	aliases := map[string]string{}
+	for _, imp := range f.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		var suffix string
+		if i := strings.Index(path, spawnOmnipusPrefix+"/pkg/"); i >= 0 {
+			suffix = path[i+len(spawnOmnipusPrefix):] // "/pkg/programs"
+		} else if path == "os/exec" || strings.HasSuffix(path, "/os/exec") {
+			suffix = "/os/exec"
+		} else {
+			continue
 		}
-		for _, e := range entries {
-			name := e.Name()
-			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
+		name := ""
+		if imp.Name != nil {
+			name = imp.Name.Name
+		} else {
+			name = path[strings.LastIndex(path, "/")+1:]
+		}
+		aliases[name] = suffix
+	}
+	return aliases
+}
+
+// spawnScan walks every scoped root recursively (skipping test files and the
+// repository's non-Go trees) and returns every child-start site found.
+// extraFiles (label, source pairs) are scanned as additional files labelled
+// by their label.
+func spawnScan(t *testing.T, root string, extraFiles [][2]string) []spawnSite {
+	t.Helper()
+	var sites []spawnSite
+	fset := token.NewFileSet()
+	scanOne := func(label, src string) {
+		fileSites := scanFileForSpawnSites(t, fset, label, src)
+		sites = append(sites, fileSites...)
+	}
+	for _, dir := range scopedSpawnRoots {
+		pkgDir := filepath.Join(root, filepath.FromSlash(dir))
+		if _, err := os.Stat(pkgDir); err != nil {
+			continue // root absent from this checkout
+		}
+		requireWalk := filepath.WalkDir(pkgDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
-			path := filepath.Join(pkgDir, name)
+			if d.IsDir() {
+				switch d.Name() {
+				case ".git", "node_modules", "dist", "spa", "testdata":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
 			src, rerr := os.ReadFile(path)
 			if rerr != nil {
-				t.Fatalf("instrument: read %s: %v", path, rerr)
+				return fmt.Errorf("instrument: read %s: %w", path, rerr)
 			}
-			file := dir + "/" + name
-			fileFindings := scanFileForSpawnSites(t, fset, file, string(src))
-			findings = append(findings, fileFindings...)
+			rel, rerr := filepath.Rel(root, path)
+			if rerr != nil {
+				rel = path
+			}
+			scanOne(filepath.ToSlash(rel), string(src))
+			return nil
+		})
+		if requireWalk != nil {
+			t.Fatalf("instrument: walk %s: %v", dir, requireWalk)
 		}
 	}
-	if extraSource != "" {
-		fileFindings := scanFileForSpawnSites(t, fset, "<test-only>/planted.go", extraSource)
-		findings = append(findings, fileFindings...)
+	for _, pair := range extraFiles {
+		scanOne(pair[0], pair[1])
 	}
-	return findings
+	return sites
 }
 
-// scanFileForSpawnSites parses one file and reports one finding per
-// child-start call whose enclosing function composes an environment with a
-// program-owned name without programs.Attach, plus a finding per
-// child-start call in a mandatory file that does not call programs.Attach
-// at all.
-func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) []spawnSiteFinding {
+// scanFileForSpawnSites parses one file and returns EVERY child-start site:
+// one per exec.Command/exec.CommandContext call whose qualifier resolves to
+// os/exec through the file's import table. Attach-before-launch is judged
+// per site: a programs.Attach call in the same enclosing function at an
+// earlier position.
+func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) []spawnSite {
 	t.Helper()
-	var findings []spawnSiteFinding
 	f, perr := parser.ParseFile(fset, file, src, 0)
 	if perr != nil {
-		if strings.HasPrefix(file, "<test-only>") {
-			return []spawnSiteFinding{{File: file, PlantedEnv: true}}
-		}
 		t.Fatalf("instrument: parse %s: %v", file, perr)
 	}
+	aliases := spawnImportAliases(f)
+
+	qualifierSuffix := func(x ast.Expr) string {
+		if id, ok := x.(*ast.Ident); ok {
+			return aliases[id.Name]
+		}
+		return ""
+	}
+	isExecStart := func(call *ast.CallExpr) bool {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		if sel.Sel.Name != "Command" && sel.Sel.Name != "CommandContext" {
+			return false
+		}
+		return qualifierSuffix(sel.X) == "/os/exec"
+	}
+	isAttach := func(call *ast.CallExpr) bool {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		if sel.Sel.Name != "Attach" {
+			return false
+		}
+		return qualifierSuffix(sel.X) == "/pkg/programs"
+	}
+	mandatory := func() bool {
+		for _, row := range spawnSiteTable {
+			if row.File == file && row.Kind == "mandatory-s1" {
+				return true
+			}
+		}
+		return false
+	}()
+
+	var sites []spawnSite
 	ast.Inspect(f, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
 			return true
 		}
-		attach := false
-		envProgramNames := false
-		starts := 0
+		var attachPositions []token.Pos
+		envProgramNameLit := false
 		ast.Inspect(fn.Body, func(m ast.Node) bool {
-			switch call := m.(type) {
+			switch node := m.(type) {
 			case *ast.CallExpr:
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Attach" {
-					if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "programs" {
-						attach = true
-					}
-				}
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok &&
-					(sel.Sel.Name == "Command" || sel.Sel.Name == "CommandContext") {
-					if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "exec" {
-						starts++
-					}
+				if isAttach(node) {
+					attachPositions = append(attachPositions, node.Pos())
 				}
 			case *ast.BasicLit:
-				if call.Kind == token.STRING {
+				if node.Kind == token.STRING {
 					for _, name := range programTokenVarNames {
-						if strings.Contains(call.Value, name) {
-							envProgramNames = true
+						if strings.Contains(node.Value, name) {
+							envProgramNameLit = true
 						}
 					}
 				}
 			}
 			return true
 		})
-		if starts == 0 {
-			return true
-		}
-		mandatory := false
-		for _, row := range spawnSiteTable {
-			if row.File == file && row.Kind == "mandatory-s1" {
-				mandatory = true
+		ast.Inspect(fn.Body, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok || !isExecStart(call) {
+				return true
 			}
-		}
-		if envProgramNames && !attach {
-			findings = append(findings, spawnSiteFinding{File: file, PlantedEnv: true})
+			before := false
+			for _, p := range attachPositions {
+				if p < call.Pos() {
+					before = true
+					break
+				}
+			}
+			sites = append(sites, spawnSite{
+				File:               file,
+				Line:               fset.Position(call.Pos()).Line,
+				Func:               fn.Name.Name,
+				AttachBeforeLaunch: before,
+				EnvProgramNameLit:  envProgramNameLit,
+				Mandatory:          mandatory,
+			})
 			return true
-		}
-		if mandatory && !attach {
-			findings = append(findings, spawnSiteFinding{File: file})
-		}
+		})
 		return true
 	})
-	return findings
+	return sites
+}
+
+// spawnClassify returns the guard's violations for a full site enumeration:
+// unlisted files, mandatory sites without a preceding programs.Attach, and
+// any site whose function composes a literal program-token name without a
+// preceding Attach (I-1: Attach is the only way program variables reach a
+// child).
+func spawnClassify(sites []spawnSite) []string {
+	var violations []string
+	listed := map[string]bool{}
+	for _, row := range spawnSiteTable {
+		listed[row.File] = true
+	}
+	seenUnlisted := map[string]bool{}
+	for _, s := range sites {
+		if !listed[s.File] && !seenUnlisted[s.File] {
+			seenUnlisted[s.File] = true
+			violations = append(violations,
+				fmt.Sprintf("unlisted child-start site %s (%s) — add it to the spawn-site table (S-106)", s.File, s.Func))
+			continue
+		}
+		if s.EnvProgramNameLit && !s.AttachBeforeLaunch {
+			violations = append(violations,
+				fmt.Sprintf("%s:%d (%s) composes a program variable into a child environment without a preceding programs.Attach", s.File, s.Line, s.Func))
+			continue
+		}
+		if s.Mandatory && !s.AttachBeforeLaunch {
+			violations = append(violations,
+				fmt.Sprintf("%s:%d (%s) does not attach program variables through a preceding programs.Attach", s.File, s.Line, s.Func))
+		}
+	}
+	return violations
 }
 
 func TestProgramSpawnGuard(t *testing.T) {
 	t.Run("a_every_mandatory_site_attaches_through_programs_Attach", func(t *testing.T) {
 		root := repoRootForSpawnGuard(t)
-		findings := spawnScan(t, root, "")
-		// Classify: every scanned site must be in the table.
-		for _, dir := range scopedSpawnPackages {
-			pkgDir := filepath.Join(root, filepath.FromSlash(dir))
-			entries, err := os.ReadDir(pkgDir)
-			if err != nil {
-				continue
-			}
-			for _, e := range entries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
-					continue
-				}
-				file := dir + "/" + e.Name()
-				hasStart := false
-				for _, f := range findings {
-					if f.File == file {
-						hasStart = true
-					}
-				}
-				if !hasStart {
-					continue // no child-start site in this file
-				}
-				listed := false
-				for _, row := range spawnSiteTable {
-					if row.File == file {
-						listed = true
-					}
-				}
-				if !listed {
-					t.Errorf("unlisted child-start site %q — add it to the spawn-site table (S-106)", file)
-				}
-			}
-		}
-		// The S1 mandatory sites must compose their environment through
-		// programs.Attach (I-1). RED: none does.
-		var violations []string
-		for _, f := range findings {
-			if f.PlantedEnv {
-				violations = append(violations, f.File+" composes a program variable into a child environment without programs.Attach")
-				continue
-			}
-			violations = append(violations, f.File+" does not attach program variables through programs.Attach")
-		}
+		sites := spawnScan(t, root, nil)
+		requireSitesScanned(t, sites)
+		violations := spawnClassify(sites)
 		if len(violations) > 0 {
-			t.Fatalf("S-106/I-1: every S1 mandatory child kind must add program variables only via programs.Attach (and install the masking writers in the same call); violating sites: %v", violations)
+			t.Fatalf("S-106/I-1: every S1 mandatory child kind must add program variables only via a preceding programs.Attach (and install the masking writers in the same call); violating sites: %v", violations)
 		}
 	})
 
 	t.Run("a_planted_env_without_attach_fails_naming_the_file", func(t *testing.T) {
 		// Instrument check (S-106): the same guard run over the tree PLUS a
 		// test-only file that adds GH_TOKEN to an exec.Cmd environment
-		// without programs.Attach must fail naming that file. In-memory; the
-		// repository is never modified.
+		// without programs.Attach must fail naming that file.
 		testOnly := `package main
 
 import (
@@ -280,16 +357,54 @@ func plant() {
 }
 `
 		root := repoRootForSpawnGuard(t)
-		findings := spawnScan(t, root, testOnly)
-		found := false
-		for _, f := range findings {
-			if f.File == "<test-only>/planted.go" && f.PlantedEnv {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("instrument check: the planted exec.Cmd environment with GH_TOKEN and no programs.Attach must fail the guard naming <test-only>/planted.go; findings: %v", findings)
-		}
+		violations := spawnClassify(spawnScan(t, root, [][2]string{{"<test-only>/planted.go", testOnly}}))
+		requireViolationNaming(t, violations, "<test-only>/planted.go",
+			"the planted exec.Cmd environment with GH_TOKEN and no programs.Attach")
+	})
+
+	t.Run("a_planted_indirect_env_fails_naming_the_file", func(t *testing.T) {
+		// Instrument check (CHECK F10): the token variable name is NOT a
+		// literal (it arrives through a variable), so the literal scan cannot
+		// see it — the guard must still fail, naming the file, through the
+		// unlisted-site rule.
+		testOnly := `package main
+
+import (
+	"os"
+	"os/exec"
+)
+
+var tokenVarName = os.Getenv("TOKEN_VAR_NAME")
+
+func plantIndirect() {
+	cmd := exec.Command("gh", "api", "user")
+	cmd.Env = append(os.Environ(), tokenVarName+"=value")
+	_ = cmd.Run()
+}
+`
+		root := repoRootForSpawnGuard(t)
+		violations := spawnClassify(spawnScan(t, root, [][2]string{{"<test-only>/indirect.go", testOnly}}))
+		requireViolationNaming(t, violations, "<test-only>/indirect.go",
+			"the planted indirect env composition (unlisted site)")
+	})
+
+	t.Run("a_planted_clean_unlisted_site_fails_naming_the_file", func(t *testing.T) {
+		// Instrument check (CHECK F10): the enumeration is complete — a CLEAN
+		// exec.Command (no program names, no violations) in a file that is
+		// not in the table still fails the guard: the classification runs on
+		// the full enumeration, never on violations alone.
+		testOnly := `package main
+
+import "os/exec"
+
+func plantClean() error {
+	return exec.Command("go", "version").Run()
+}
+`
+		root := repoRootForSpawnGuard(t)
+		violations := spawnClassify(spawnScan(t, root, [][2]string{{"<test-only>/clean.go", testOnly}}))
+		requireViolationNaming(t, violations, "<test-only>/clean.go",
+			"the planted clean exec.Command in an unlisted file")
 	})
 
 	// Part (b): every child kind of the current slice's mandatory inventory
@@ -316,6 +431,26 @@ func plant() {
 	t.Run("b_git_version_probe_sentinel_reaches_no_sink", func(t *testing.T) {
 		t.Fatalf("BLOCKED: %s; the git version probe (FR-014) is not implemented yet", s106Seam)
 	})
+}
+
+// requireSitesScanned proves the enumeration is not trivially empty (a guard
+// that scans nothing passes nothing).
+func requireSitesScanned(t *testing.T, sites []spawnSite) {
+	t.Helper()
+	if len(sites) == 0 {
+		t.Fatal("instrument: the scan found no child-start sites — the scoped roots are wrong or the walk failed")
+	}
+}
+
+// requireViolationNaming asserts the violations name the wanted file.
+func requireViolationNaming(t *testing.T, violations []string, want, what string) {
+	t.Helper()
+	for _, v := range violations {
+		if strings.Contains(v, want) {
+			return
+		}
+	}
+	t.Fatalf("instrument check: %s must fail the guard naming %s; violations: %v", what, want, violations)
 }
 
 // repoRootForSpawnGuard locates the repository root from this test file's
