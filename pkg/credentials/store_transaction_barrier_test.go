@@ -159,9 +159,12 @@ func startPausedWriter(store *Store, name, value string) (entered, hold chan str
 	return entered, hold, done
 }
 
-// s135SecondStoreStaleWriter: while B is paused inside its transaction (after
-// its in-lock read), A cannot commit; after release both writes exist and the
-// program credential, receipt and generation survive the unrelated write.
+// s135SecondStoreStaleWriter: the Given is connected-first — GitHub connected
+// through A at generation 1 with its card receipt BEFORE B is paused (spec
+// S-135's Given; publishing after pausing would deadlock the setup against a
+// real lock). While B is paused inside its transaction (after its in-lock
+// read), A cannot commit; after release both writes exist and the program
+// credential, receipt and generation survive the unrelated write.
 func s135SecondStoreStaleWriter(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	key := txTestKey()
@@ -169,11 +172,23 @@ func s135SecondStoreStaleWriter(t *testing.T) {
 	storeB := openUnlockedTxStore(t, path)
 	t.Cleanup(func() { TransactHook = nil })
 
-	entered, hold, bDone := startPausedWriter(storeB, "UNRELATED", "x")
-	waitHookEntered(t, entered, 2*time.Second) // BLOCKED in RED: no s.transact yet
-
+	// Given: GitHub connected through A, generation 1, receipt CR.
 	publishProgramForTx(t, storeA, "prog_github_token")
 
+	// When: B's Set pauses inside its transaction, after its in-lock read.
+	entered, hold, bDone := startPausedWriter(storeB, "UNRELATED", "x")
+	waitHookEntered(t, entered, 2*time.Second) // BLOCKED in RED: no s.transact yet
+	// Idempotent cleanup (CHECK F08): a failure anywhere below still releases
+	// the holder and drains its goroutine — a leaked paused writer would hold
+	// the lock forever and deadlock the sibling subtests.
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(hold) })
+		<-bDone
+	})
+
+	// A starts replacing the token; after 200 ms A has not returned and the
+	// file still holds tok_valid_12345 (A cannot enter while B holds).
 	aDone := make(chan error, 1)
 	go func() {
 		_, err := storeA.CommitProgramCredential("prog_github_token", "tok_new_67890", nil)
@@ -192,7 +207,7 @@ func s135SecondStoreStaleWriter(t *testing.T) {
 		"the file must still hold the old token while B holds the transaction")
 	reader.Close()
 
-	close(hold)
+	releaseOnce.Do(func() { close(hold) })
 	require.NoError(t, <-bDone, "B completes after release")
 	require.NoError(t, <-aDone, "A completes after release")
 
@@ -215,6 +230,11 @@ func s135SecondStoreStaleWriter(t *testing.T) {
 	// Disconnect variant: A removes the program credential while B is paused.
 	entered2, hold2, bDone2 := startPausedWriter(storeB, "UNRELATED2", "z")
 	waitHookEntered(t, entered2, 2*time.Second)
+	var releaseOnce2 sync.Once
+	t.Cleanup(func() {
+		releaseOnce2.Do(func() { close(hold2) })
+		<-bDone2
+	})
 	rmDone := make(chan error, 1)
 	go func() { rmDone <- storeA.RemoveProgramCredential("prog_github_token") }()
 	time.Sleep(200 * time.Millisecond)
@@ -223,7 +243,7 @@ func s135SecondStoreStaleWriter(t *testing.T) {
 		t.Fatalf("RemoveProgramCredential committed while B held the transaction (err=%v)", err)
 	default:
 	}
-	close(hold2)
+	releaseOnce2.Do(func() { close(hold2) })
 	require.NoError(t, <-bDone2)
 	require.NoError(t, <-rmDone)
 
@@ -361,6 +381,8 @@ func s146BusyStoreBound(t *testing.T) {
 	elapsed2 := time.Since(pasteStart2)
 	require.NoError(t, pasteErr2, "the paste succeeds when the holder releases within the bound")
 	require.Greater(t, elapsed2, time.Second, "the paste waited for the 1 s holder")
+	require.LessOrEqual(t, elapsed2, 5500*time.Millisecond,
+		"the admission bound is 5 s ± 0.5 s (FR-049/S-146)")
 	require.EqualValues(t, 2, gen2, "the successful paste is generation 2")
 	require.NoError(t, <-holder2Done)
 	TransactHook = nil
@@ -403,8 +425,8 @@ func s146CrossProcessHolder(t *testing.T) {
 		"an ordinary write against a 6 s cross-process holder fails busy (FR-049)")
 	require.GreaterOrEqual(t, elapsed, 4500*time.Millisecond,
 		"admission waits the 5 s bound")
-	require.LessOrEqual(t, elapsed, 6500*time.Millisecond,
-		"the 5 s bound still ends the write (slack for process scheduling)")
+	require.LessOrEqual(t, elapsed, 5500*time.Millisecond,
+		"the admission bound is 5 s ± 0.5 s (FR-049/S-146)")
 
 	waitForFile(t, cliResult, 8*time.Second, "the CLI stand-in did not record its outcome")
 	var res s136ChildResult
