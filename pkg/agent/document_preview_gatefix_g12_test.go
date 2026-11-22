@@ -90,12 +90,19 @@ func TestOfficePreview_CountLimitNoteNamesTheCountNotTextOnly(t *testing.T) {
 // count case must not end the note at "[model received: extracted text …]"
 // with nothing after it: the model would receive no content at all.
 //
+// TA-03 (gate round 2): the body is asserted, not just its envelope. The
+// carried document and the preview carry DIFFERENT independently known page
+// text (the officepreview.PDF fixture draws "(page N)" per page), so the
+// assertions tell the preview's own extraction from the carried document's
+// and from an extraction failure — without ever calling the production
+// extractor to compute the expectation.
+//
 // RED on 56cd9ca03: the recovery condition tests only pdfRejected and
 // noBudget, so the count case falls through to the empty-text final branch.
 func TestOfficePreview_CountLimitWithoutStoredTextSendsFallbackText(t *testing.T) {
 	const toolID = "g12-empty-text-preview"
-	toolPDF := officepreview.PDF(1)
-	carried := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(officepreview.PDF(1))
+	toolPDF := officepreview.PDF(1) // known text: "page 1"
+	carried := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(officepreview.PDF(2)) // known text: "page 1", "page 2"
 
 	previews := &turnDocumentPreviews{}
 	previews.add(toolID, &tools.DocumentPreview{
@@ -123,6 +130,16 @@ func TestOfficePreview_CountLimitWithoutStoredTextSendsFallbackText(t *testing.T
 		"AD-6: the count-exhausted preview with no stored text must send the fallback extraction of its own bytes, not an empty result")
 	require.Greater(t, strings.Index(tool.Content, "[Attached file"), noteStart,
 		"T-133: the fallback extraction of the preview's own bytes follows the exact note")
+	// TA-03: the body is the preview document's own text — the fixture's
+	// independently known page text after the note, never the carried
+	// document's text and never an extraction-failure notice for this valid
+	// fixture.
+	require.Greater(t, strings.Index(tool.Content, "page 1"), noteStart,
+		"T-133/TA-03: the preview's known page text follows the exact note; got %q", tool.Content)
+	require.NotContains(t, tool.Content, "page 2",
+		"T-133/TA-03: the carried document's distinguishing page text must never appear — the fallback body is the preview's own bytes, not the wrong document")
+	require.NotContains(t, tool.Content, "content could not be extracted",
+		"T-133/TA-03: an extractable fixture must not receive the extraction-failure notice")
 }
 
 // T-133 (c): a ModelOnly preview (today's read_file path) under the same
