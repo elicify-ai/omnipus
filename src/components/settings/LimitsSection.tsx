@@ -101,11 +101,12 @@ export function LimitsSection({ prefillOverride }: LimitsSectionProps) {
 
   const toggle = (g: GroupId) => (expanded: boolean) => setOpen((o) => ({ ...o, [g]: expanded }))
 
-  // FR-065: until either group read answers, the section shows its loading frame.
-  if (context.loading && performance.loading) return <SectionLoading label="Limits" />
 
   return (
     <div className="space-y-[var(--space-3)]">
+      {/* FR-065: the section's loading frame while both group reads are
+          pending. The group headers stay, so a group can be opened early. */}
+      {context.loading && performance.loading && <SectionLoading label="Limits" />}
       <ListGroup label="Context and tool results" expanded={open.context} onExpandedChange={toggle('context')} data-testid="limits-group-context">
         <div className="pt-[var(--space-2)]">{context.fieldsView}</div>
       </ListGroup>
