@@ -36,6 +36,7 @@ func TestOpenCodeGateA1_RespondContractDescribesQueuedStartupWithoutAddingFields
 	assert.Contains(t, description, "resume", "the underway-run route must remain described")
 	assert.Contains(t, description, "queu", "A1: acknowledge queued delivery as an alternative to interruption")
 	assert.Contains(t, description, "start", "A1: identify startup as the queued case")
+	assert.Contains(t, description, "current run ends", "ruling R2 section 3: startup delivery waits for the original run to end, not an immediate resume")
 }
 
 // The delivery interface here reports successful acceptance and a correlation
