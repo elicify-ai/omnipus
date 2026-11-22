@@ -436,11 +436,10 @@ func pgAgentRecord(t *testing.T, f *pgGateFixture) map[string]any {
 }
 
 func TestProgramsREST_PersonSessionOnly(t *testing.T) {
-	f := pgPersonAPI(t)
-	loginToken := f.token
 	saveBody := []byte(`{"value":"tok_evil_999999"}`)
 
 	t.Run("D8_row1_browser_session_is_processed", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		w, read := pgServe(t, f, http.MethodPut, pgSaveRoute, saveBody, "", true, true)
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential", "S1 contract table / S-81 D-8 row 1")
@@ -450,10 +449,11 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 	})
 
 	t.Run("D8_row2_cli_token_refused_before_body", func(t *testing.T) {
-		// Per-row delta (CHECK F18): row 1's positive control started the
-		// fake gh, so "not started" is measured as a zero DELTA, and the
-		// marker mechanism is proven working first (ghMarkerReadable) — a
-		// zero against a marker that cannot be seen is vacuous.
+		f := pgPersonAPI(t)
+		// Own positive control, awaited through check completion before baseline.
+		pgConnectGithub(t, f)
+		canary := programstore.SeedCanary(t, f.store)
+		before := programstore.Snapshot(t, f.store, canary)
 		starts := f.ghStarted()
 		w, read := pgServe(t, f, http.MethodPut, pgSaveRoute, saveBody, f.cliToken, false, true)
 		if w.Code == http.StatusNotFound {
@@ -464,23 +464,32 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.Equal(t, int64(0), read, "refused before the body")
 		f.ghMarkerReadable()
 		require.Greater(t, starts, 0,
-			"instrument: row 1's processed save started the fake gh — the start marker counts, so the zero delta below is a real zero")
+			"instrument: this row's completed save started the fake gh — the start marker counts, so the zero delta below is a real zero")
 		require.Equal(t, starts, f.ghStarted(), "the fake gh was not started by this refused row")
+		require.Equal(t, before, programstore.Snapshot(t, f.store, canary))
 	})
 
 	t.Run("D8_row3_person_api_bearer_refused", func(t *testing.T) {
+		f := pgPersonAPI(t)
+		pgConnectGithub(t, f)
+		canary := programstore.SeedCanary(t, f.store)
+		before := programstore.Snapshot(t, f.store, canary)
+		starts := f.ghStarted()
 		// The person's OWN API bearer is still not a signed-in person
 		// (requireSessionCookieAuth answers with the same refusal).
-		w, read := pgServe(t, f, http.MethodPut, pgSaveRoute, saveBody, loginToken, false, true)
+		w, read := pgServe(t, f, http.MethodPut, pgSaveRoute, saveBody, f.token, false, true)
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential", "S1 contract table / S-81 D-8 row 3")
 		}
 		require.Equal(t, http.StatusForbidden, w.Code, "the person's own API bearer is refused: %s", w.Body.String())
 		require.Contains(t, w.Body.String(), pgPersonRefusal, "same refusal text")
 		require.Equal(t, int64(0), read, "refused before the body")
+		require.Equal(t, starts, f.ghStarted(), "no check starts")
+		require.Equal(t, before, programstore.Snapshot(t, f.store, canary))
 	})
 
 	t.Run("D8_row4_agent_tool_bearer_on_shared_agent_route_refused", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// D-8 row 4's caller is the agent/tool bearer class. The machine
 		// credential slot holds exactly one entry, so the row mints a
 		// SECOND, distinct, valid machine credential (row 2's value was
@@ -496,6 +505,8 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.NoError(t, f.api.agentLoop.GetConfig().Gateway.VerifyCLIToken(agentToken),
 			"instrument: the row presents a valid machine credential")
 
+		canary := programstore.SeedCanary(t, f.store)
+		storeBefore := programstore.Snapshot(t, f.store, canary)
 		before := pgAgentRecord(t, f)
 		w, read := pgAgentPUT(t, f, `{"description":"x","programs":["github"]}`, agentToken, false, true)
 		require.Equal(t, http.StatusForbidden, w.Code,
@@ -505,9 +516,11 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.Greater(t, read, int64(0), "the shared route bounded-decodes the body (D-8 row 4)")
 		require.Equal(t, before, pgAgentRecord(t, f),
 			"unchanged — the full persisted record, not one field (CHECK F18)")
+		require.Equal(t, storeBefore, programstore.Snapshot(t, f.store, canary))
 	})
 
 	t.Run("D8_row6_no_identity_401", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		w, _ := pgServe(t, f, http.MethodGet, pgListRoute, nil, "", false, false)
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "GET /programs", "S1 contract table / S-81 D-8 row 6")
@@ -517,6 +530,7 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 	})
 
 	t.Run("D8_row8_browser_cookie_without_csrf_refused_by_csrf_middleware", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// Instrument controls on an EXISTING write route: the same chain
 		// accepts the CSRF-bearing write and refuses the one without the
 		// header, so the row's refusal can only be the CSRF middleware's.
@@ -529,7 +543,9 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.NotEqual(t, http.StatusOK, withoutCSRF.Code,
 			"instrument: the control write without the CSRF header is refused")
 
-		w, _ := pgServe(t, f, http.MethodPut, pgSettingsRoute,
+		canary := programstore.SeedCanary(t, f.store)
+		before := programstore.Snapshot(t, f.store, canary)
+		w, read := pgServe(t, f, http.MethodPut, pgSettingsRoute,
 			[]byte(`{"web_chat_allowed":true,"revision":1}`), "", true, false)
 		require.Equal(t, withoutCSRF.Code, w.Code,
 			"refused by the existing CSRF middleware with its own status: got %d %s", w.Code, w.Body.String())
@@ -537,26 +553,33 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 			"refused with the CSRF middleware's own text")
 		require.NotContains(t, w.Body.String(), pgPersonRefusal,
 			"the refusal is the CSRF middleware's, not the person gate's")
+		require.Zero(t, read, "CSRF refuses before body read")
+		require.Equal(t, before, programstore.Snapshot(t, f.store, canary))
 	})
 
 	t.Run("D8_row12_person_bearer_on_shared_agent_route_refused_before_mutation", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// S-134 first clause: bounded decode, refusal BEFORE any mutation.
+		canary := programstore.SeedCanary(t, f.store)
+		storeBefore := programstore.Snapshot(t, f.store, canary)
 		before := pgAgentRecord(t, f)
-		w, read := pgAgentPUT(t, f, `{"description":"x","programs":["github"]}`, loginToken, false, true)
+		w, read := pgAgentPUT(t, f, `{"description":"x","programs":["github"]}`, f.token, false, true)
 		require.Equal(t, http.StatusForbidden, w.Code,
 			"the person's own API bearer carrying programs is refused: got %d %s", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), pgPersonRefusal, "same refusal text")
 		require.Greater(t, read, int64(0), "the shared route bounded-decodes the body")
 		require.Equal(t, before, pgAgentRecord(t, f),
 			"description and programs both unchanged — the full persisted record (CHECK F18)")
+		require.Equal(t, storeBefore, programstore.Snapshot(t, f.store, canary))
 	})
 
 	t.Run("D8_row13_person_bearer_without_programs_still_works", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// S-134 second clause: regression — exactly as today. The description
 		// change lands; nothing else in the record moves (in particular no
 		// programs field appears).
 		before := pgAgentRecord(t, f)
-		w, read := pgAgentPUT(t, f, `{"description":"x"}`, loginToken, false, true)
+		w, read := pgAgentPUT(t, f, `{"description":"x"}`, f.token, false, true)
 		require.Equal(t, http.StatusOK, w.Code, "processed as today: %s", w.Body.String())
 		require.Greater(t, read, int64(0), "a processed row reads the body")
 		after := pgAgentRecord(t, f)
@@ -575,6 +598,7 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 	})
 
 	t.Run("D8_row14_program_owned_key_refused_by_store_guard", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// S-128 / D-8 row 14: the generic credentials route cannot overwrite
 		// (or delete) a program-owned key. The reference is committed as
 		// program-owned through I-3's one writer, then attacked through the
@@ -623,6 +647,33 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.NoError(t, gerr)
 		require.Equal(t, "tok_valid_12345", got, "the stored value is unchanged")
 		require.Equal(t, before, programstore.Snapshot(t, store, "req-s128"), "both generic attacks preserve value/kind/generation/metadata/receipt")
+	})
+}
+
+// The shared route keeps its existing 1 MiB read bound (readAgentWriteBody).
+// These are real mux requests, separate from the synthetic counter controls.
+func TestProgramsREST_SharedRouteControls(t *testing.T) {
+	t.Run("browser_programs_positive", func(t *testing.T) {
+		f := pgPersonAPI(t)
+		pgGithubPresetPresent(t, f)
+		w, read := pgAgentPUT(t, f, `{"programs":["github"]}`, "", true, true)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.Positive(t, read)
+		require.Equal(t, []any{"github"}, pgDevPrograms(t, f))
+	})
+	t.Run("oversized_shared_route_read_is_bounded", func(t *testing.T) {
+		f := pgPersonAPI(t)
+		canary := programstore.SeedCanary(t, f.store)
+		before := programstore.Snapshot(t, f.store, canary)
+		agentBefore := pgAgentRecord(t, f)
+		const bound = 1 << 20 // existing route bound, not the program-save cap
+		payload := `{"programs":["github"],"description":"` + strings.Repeat("a", 2*bound) + `"}`
+		w, read := pgAgentPUT(t, f, payload, f.token, false, true)
+		require.Equal(t, http.StatusRequestEntityTooLarge, w.Code, w.Body.String())
+		require.Positive(t, read)
+		require.LessOrEqual(t, read, int64(bound+1), "one overflow byte, not an unbounded decode")
+		require.Equal(t, agentBefore, pgAgentRecord(t, f))
+		require.Equal(t, before, programstore.Snapshot(t, f.store, canary))
 	})
 }
 
@@ -685,10 +736,20 @@ func pgStandaloneAPI(t *testing.T, bypass bool) (http.Handler, *restAPI, func() 
 func TestProgramsREST_BypassAndLegacyEnvRefused(t *testing.T) {
 	t.Run("D8_row5_development_bypass_refused", func(t *testing.T) {
 		handler, _, starts := pgStandaloneAPI(t, true)
+		attachCSRF := func(r *http.Request) {
+			r.AddCookie(&http.Cookie{Name: middleware.CSRFCookieNameHTTP, Value: "pg-bypass-csrf"})
+			r.Header.Set(middleware.CSRFHeaderName, "pg-bypass-csrf")
+		}
+		control := httptest.NewRequest(http.MethodPost, "/api/v1/settings/memory", nil)
+		attachCSRF(control)
+		cw := httptest.NewRecorder()
+		handler.ServeHTTP(cw, control)
+		require.Equal(t, http.StatusMethodNotAllowed, cw.Code, "CSRF-matched bypass reaches existing GET-only handler: %s", cw.Body.String())
 		if path, err := exec.LookPath("gh"); err != nil || path == "" {
 			t.Fatalf("instrument: the fake gh is not on PATH (%v) — the nothing-started claim below would be vacuous", err)
 		}
 		req := httptest.NewRequest(http.MethodPost, "/programs/github/check", nil)
+		attachCSRF(req)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		if w.Code == http.StatusNotFound {

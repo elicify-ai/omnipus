@@ -38,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/tests/testutil/programstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -246,8 +247,8 @@ func TestRequestSecret_ProgramRecipient(t *testing.T) {
 		require.Equal(t, "pending", rec.Card.State)
 		require.NotEmpty(t, rec.Card.Fields, "the card declares its field (K1)")
 
-		namesBefore, lerr := f.store.List()
-		require.NoError(t, lerr, "instrument: the store lists")
+		canary := programstore.SeedCanary(t, f.store)
+		before := programstore.Snapshot(t, f.store, canary, rec.Card.RequestId)
 
 		_, submitErr := f.reg.Submit(rec.Card.RequestId, matrixOwner,
 			valuesInput(map[string]string{rec.Card.Fields[0].Key: "abc123"}))
@@ -262,9 +263,7 @@ func TestRequestSecret_ProgramRecipient(t *testing.T) {
 		after, gerr := f.reg.Get(rec.Card.RequestId, matrixOwner)
 		require.NoError(t, gerr, "the request is still readable")
 		require.Equal(t, "pending", after.Card.State, "the request stays pending")
-		namesAfter, aerr := f.store.List()
-		require.NoError(t, aerr)
-		require.Equal(t, namesBefore, namesAfter, "nothing is stored")
+		require.Equal(t, before, programstore.Snapshot(t, f.store, canary, rec.Card.RequestId), "same too-short submission preserves value/kind/selection/generation/metadata/known receipts")
 	})
 
 	t.Run("S55_channel_turn_refused_existing_text", func(t *testing.T) {

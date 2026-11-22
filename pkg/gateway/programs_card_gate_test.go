@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -32,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/tests/testutil/programstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,33 +115,18 @@ func pgSubmitCard(t *testing.T, f *pgGateFixture, requestID, fieldKey, value, be
 	return w, read
 }
 
-// pgProgramStoreSnapshot reads every stored reference with its value and its
-// generation — the card submission's write surface (value, metadata,
-// generation) as one comparable snapshot (CHECK F18: value/generation, not
-// names alone). The receipt half of the write face has no enumeration on the
-// store; it is pinned by the sweep's receipt readback
-// (pgCommitProgramReference).
-func pgProgramStoreSnapshot(t *testing.T, f *pgGateFixture) map[string]string {
+// All fixture-created receipt IDs, including the pending card's absent receipt,
+// travel with the same attack's value/kind/selection/generation snapshot.
+func pgProgramStoreSnapshot(t *testing.T, f *pgGateFixture, receiptIDs ...string) programstore.State {
 	t.Helper()
-	names, err := f.store.List()
-	require.NoError(t, err, "instrument: the store lists")
-	snap := make(map[string]string, len(names))
-	for _, n := range names {
-		v, gerr := f.store.Get(n)
-		require.NoError(t, gerr, "instrument: %s reads", n)
-		snap[n] = v
-		if gen, ok := f.store.ProgramEntryGeneration(n); ok {
-			snap[n+"#generation"] = strconv.FormatInt(gen, 10)
-		}
-	}
-	return snap
+	return programstore.Snapshot(t, f.store, receiptIDs...)
 }
 
 func TestProgramCard_PersonGate(t *testing.T) {
-	f := pgPersonAPI(t)
 	const owner = "pg-person"
 
 	t.Run("S112_program_card_is_raisable", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		_, _, err := pgRaiseProgramCard(t, f, "dev", map[string]any{"program": "github"})
 		if err != nil {
 			t.Fatalf("BLOCKED: the request_secret tool has no program recipient — required by FR-051/S-112 (tool said: %v)", err)
@@ -149,27 +134,30 @@ func TestProgramCard_PersonGate(t *testing.T) {
 	})
 
 	t.Run("D8_row10_bearer_submit_refused_before_body", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		cardID, sid, err := pgRaiseProgramCard(t, f, "dev", map[string]any{"program": "github"})
 		if err != nil {
 			t.Fatalf("BLOCKED: the request_secret tool has no program recipient — required by FR-051/S-112 (tool said: %v)", err)
 		}
-		snapBefore := pgProgramStoreSnapshot(t, f)
+		canary := programstore.SeedCanary(t, f.store)
+		snapBefore := pgProgramStoreSnapshot(t, f, canary, cardID)
 		starts := f.ghStarted()
 
 		// The person's OWN API bearer: decided from the stored request kind
 		// before the body is read.
-		w, read := pgSubmitCard(t, f, cardID, "token", "tok_valid_12345", f.token, false, true)
+		w, read := pgSubmitCard(t, f, cardID, pgCardFieldKey(t, f, owner, sid, cardID), "tok_valid_12345", f.token, false, true)
 		require.Equal(t, http.StatusForbidden, w.Code,
 			"a program card refuses the person's own API bearer: got %d %s", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), pgPersonRefusal, "the person-session refusal text")
 		require.Equal(t, int64(0), read, "decided before the body is read")
 		require.Equal(t, starts, f.ghStarted(), "no check runs (per-row delta, CHECK F18)")
 		require.Equal(t, "pending", pgCardState(t, f, owner, sid, cardID), "the card stays pending")
-		require.Equal(t, snapBefore, pgProgramStoreSnapshot(t, f),
-			"nothing is stored — values and generations, not names alone (CHECK F18)")
+		require.Equal(t, snapBefore, pgProgramStoreSnapshot(t, f, canary, cardID),
+			"same attack preserves values, kind, selections, metadata, generation and known receipts")
 	})
 
 	t.Run("D8_row11_browser_session_submit_processed", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		cardID, sid, err := pgRaiseProgramCard(t, f, "dev", map[string]any{"program": "github"})
 		if err != nil {
 			t.Fatalf("BLOCKED: the request_secret tool has no program recipient — required by FR-051/S-112 (tool said: %v)", err)
@@ -182,6 +170,7 @@ func TestProgramCard_PersonGate(t *testing.T) {
 	})
 
 	t.Run("S112_regression_non_program_card_bearer_is_today", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// A pending NON-program card submitted with the same bearer behaves
 		// exactly as today (policy unchanged).
 		cardID, sid, err := pgRaiseProgramCard(t, f, "dev",

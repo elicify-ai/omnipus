@@ -3,6 +3,7 @@ package programstore
 
 import (
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/stretchr/testify/require"
@@ -46,6 +47,29 @@ func Snapshot(t testing.TB, s *credentials.Store, receiptIDs ...string) State {
 		}
 	}
 	return out
+}
+
+// SeedCanary makes unchanged-state assertions watch a real selected private
+// value, recipient metadata and historical receipt, not an empty store.
+func SeedCanary(t testing.TB, s *credentials.Store) string {
+	t.Helper()
+	const id = "req-program-gate-canary"
+	r, err := s.CommitCard(id, "sess-program-gate-canary", []credentials.CardValue{{
+		BaseName: "PG_CANARY",
+		Recipient: credentials.CardRecipient{Kind: credentials.KindAgentPrivate,
+			WorkspaceID: "sales", AgentID: "dev", Field: "PG_CANARY"},
+		Value: "canary_not_a_program_token",
+	}}, time.Now())
+	require.NoError(t, err)
+	require.Len(t, r.References, 1)
+	state := Snapshot(t, s, id)
+	require.Equal(t, "canary_not_a_program_token", state.Values[r.References[0]])
+	require.Equal(t, credentials.KindAgentPrivate, state.Metadata[r.References[0]].Recipient.Kind)
+	require.NotNil(t, state.Receipts[id])
+	selected, err := s.PrivateEnvironment("sales", "dev", false)
+	require.NoError(t, err)
+	require.Contains(t, selected, credentials.PrivateValue{Name: "PG_CANARY", Value: "canary_not_a_program_token"})
+	return id
 }
 
 // RequireOwned refuses a no-op CommitProgramCredential as a valid Given.

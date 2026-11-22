@@ -57,6 +57,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/tests/testutil/programstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,6 +97,7 @@ func pgCommitProgramReference(t *testing.T, f *pgGateFixture) *credentials.Store
 	if len(receipt.References) != 1 || receipt.References[0] != "R" {
 		t.Fatalf("BLOCKED: the commit receipt does not reference R (references: %v) — the sweep's target must be the committed program credential", receipt.References)
 	}
+	programstore.RequireOwned(t, f.store, "R", "tok_valid_12345", receiptID, "sess-s113")
 	return f.store
 }
 
@@ -328,6 +330,9 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "tok_valid_12345", before, "instrument: the baseline value is in place")
 			cfgBefore := pgProgramsSection(t, f)
+			canary := programstore.SeedCanary(t, store)
+			stateBefore := programstore.Snapshot(t, store, "req-s113", canary)
+			var pendingCardIDs []string
 
 			// A valid local re-auth token is minted before EACH mutator call
 			// (S-113's Given); every mint is asserted (F04).
@@ -389,6 +394,7 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 							blockedPayloadRows[pattern] = fmt.Sprintf("the program card cannot be raised — required by S-113's submit payload row (tool said: %v)", cardErr)
 							continue
 						}
+						pendingCardIDs = append(pendingCardIDs, cardID)
 						fieldKey := pgCardFieldKey(t, f, "pg-person", sid, cardID)
 						submitBody, merr := json.Marshal(gen.SecretSubmitRequest{
 							Values: &map[string]string{fieldKey: "tok_evil_999999"},
@@ -477,6 +483,12 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 				"S-113: no route may change a program credential — the sweep must leave R untouched")
 			require.Equal(t, 0, f.ghStarted(), "the fake program started 0 times")
 			require.Equal(t, cfgBefore, pgProgramsSection(t, f), "program metadata unchanged")
+			require.Equal(t, stateBefore, programstore.Snapshot(t, store, "req-s113", canary), "sweep preserves values/kinds/selections/generations/metadata/bound receipt")
+			for _, id := range pendingCardIDs {
+				_, found, err := store.CardReceipt(id)
+				require.NoError(t, err)
+				require.False(t, found, "forbidden submit cannot publish receipt %s", id)
+			}
 
 			// Blocked payload rows are loud, never silent (F04): after the
 			// sweep's own verdict, an unestablishable row fails the test with
