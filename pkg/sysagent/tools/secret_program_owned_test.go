@@ -34,6 +34,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/tests/testutil/programstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,6 +59,7 @@ func TestSecretTools_ProgramOwned(t *testing.T) {
 			&credentials.CardReceipt{RequestID: "req-s129", SessionID: "sess-s129",
 				References: []string{"R"}, SubmittedAt: time.Now()})
 		require.NoError(t, err, "instrument: the reference is committed as program-owned")
+		before := programstore.RequireOwned(t, store, "R", "tok_valid_12345", "req-s129", "sess-s129")
 
 		// When: Omnipus calls remove_secret with reference R.
 		result := tool.Execute(context.Background(), map[string]any{"reference_name": "R"})
@@ -73,18 +75,38 @@ func TestSecretTools_ProgramOwned(t *testing.T) {
 		gen, ok := store.ProgramEntryGeneration("R")
 		require.True(t, ok, "the generation metadata survives")
 		require.Equal(t, int64(1), gen, "no new generation was written")
+		require.Equal(t, before, programstore.Snapshot(t, store, "req-s129"), "value, kind, private selections, generation, metadata and receipt survive the same attack")
 	})
 
 	t.Run("S129_private_variable_reference_still_removable", func(t *testing.T) {
 		store, tool := s129RemoveTool(t)
-		require.NoError(t, store.Set("SVC_TOKEN", "svc_private_12345678"),
-			"instrument: the private variable exists")
+		receipt, err := store.CommitCard("req-private-s129", "sess-private-s129", []credentials.CardValue{{
+			BaseName: "SVC_TOKEN", Recipient: credentials.CardRecipient{Kind: credentials.KindAgentPrivate, WorkspaceID: "home", AgentID: "dev", Field: "SVC_TOKEN"}, Value: "svc_private_12345678",
+		}}, time.Now())
+		require.NoError(t, err)
+		require.Len(t, receipt.References, 1)
+		ref := receipt.References[0]
+		inventory, err := store.CardInventory()
+		require.NoError(t, err)
+		require.Len(t, inventory, 1)
+		require.Equal(t, credentials.KindAgentPrivate, inventory[0].Secret.Recipient.Kind)
+		require.True(t, inventory[0].Selected, "the regression is a selected agent-private variable, not an ordinary Set")
+		env, err := store.PrivateEnvironment("home", "dev", false)
+		require.NoError(t, err)
+		require.Equal(t, []credentials.PrivateValue{{Name: "SVC_TOKEN", Value: "svc_private_12345678"}}, env)
 
-		result := tool.Execute(context.Background(), map[string]any{"reference_name": "SVC_TOKEN"})
+		result := tool.Execute(context.Background(), map[string]any{"reference_name": ref})
 		require.False(t, result.IsError,
 			"a private-variable reference is still removable as today: %s", result.ForLLM)
 		names, lerr := store.List()
 		require.NoError(t, lerr)
-		require.NotContains(t, names, "SVC_TOKEN", "the private variable is removed")
+		require.NotContains(t, names, ref, "the private variable is removed")
+		env, err = store.PrivateEnvironment("home", "dev", false)
+		require.NoError(t, err)
+		require.Empty(t, env, "the removed selection no longer injects the private variable")
+		afterReceipt, found, err := store.CardReceipt("req-private-s129")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, receipt, afterReceipt, "removing the value preserves its historical receipt")
 	})
 }

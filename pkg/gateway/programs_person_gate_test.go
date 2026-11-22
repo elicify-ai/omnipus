@@ -54,6 +54,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/tests/testutil/programstore"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -582,11 +583,11 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		store := credentials.NewStore(filepath.Join(f.api.homePath, "credentials.json"))
 		require.NoError(t, credentials.Unlock(store), "instrument: the store unlocks under the fixture master key")
 		t.Cleanup(func() { store.Close() })
-		require.NoError(t, store.Set("R", "tok_valid_12345"), "instrument: the reference exists")
 		_, err := store.CommitProgramCredential("R", "tok_valid_12345",
 			&credentials.CardReceipt{RequestID: "req-s128", SessionID: "sess-s128",
 				References: []string{"R"}, SubmittedAt: time.Now()})
 		require.NoError(t, err, "instrument: the reference is committed as program-owned (I-3's one writer)")
+		before := programstore.RequireOwned(t, store, "R", "tok_valid_12345", "req-s128", "sess-s128")
 
 		user := &f.api.agentLoop.GetConfig().Gateway.Users[0]
 		rw := doReAuth(f.api, user, "pg-person-password")
@@ -611,7 +612,7 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 			"the refusal is the spec message")
 
 		delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/credentials/R", nil)
-		delReq.Header.Set(reAuthHeader, rtok)
+		delReq.Header.Set(reAuthHeader, pgReauthTokenFor(t, f))
 		pgAttach(f, delReq, "", true, true)
 		dw := httptest.NewRecorder()
 		f.handler.ServeHTTP(dw, delReq)
@@ -621,6 +622,7 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		got, gerr := store.Get("R")
 		require.NoError(t, gerr)
 		require.Equal(t, "tok_valid_12345", got, "the stored value is unchanged")
+		require.Equal(t, before, programstore.Snapshot(t, store, "req-s128"), "both generic attacks preserve value/kind/generation/metadata/receipt")
 	})
 }
 
