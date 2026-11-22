@@ -14,7 +14,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { fetchWorkspaces } from '@/lib/api'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 import { isApiError } from '@/lib/api-error'
 import {
   applyPackageImport,
@@ -69,10 +69,7 @@ export function ImportConfirmStep({
   cancelling,
 }: ImportConfirmStepProps) {
   const navigate = useNavigate()
-  const workspacesQuery = useQuery({
-    queryKey: ['workspaces', { status: 'active' }],
-    queryFn: ({ signal }) => fetchWorkspaces({ status: 'active', signal }),
-  })
+  const workspacesQuery = useQuery(activeWorkspacesQueryOptions)
   const workspaces = useMemo(() => workspacesQuery.data ?? [], [workspacesQuery.data])
   const [chosen, setChosen] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
