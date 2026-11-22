@@ -239,7 +239,11 @@ func TestT131_UnregisterFallsBackToPackagedSlot(t *testing.T) {
 	// The pre-§3.9 registration outside OWN shadows it.
 	root := filepath.Join(base, "elsewhere", "office")
 	require.NoError(t, os.MkdirAll(root, 0o755))
-	files := []string{"manifest-fixture.bin", "dependency.dat"}
+	// D13 class (this site missed in the D13 round; the Fly run of the row
+	// caught it): the planted manifest names soffice.bin, so soffice.bin
+	// must be among the fingerprinted files or the manifest fails to parse
+	// before the own-folder check.
+	files := []string{"soffice.bin", "manifest-fixture.bin", "dependency.dat"}
 	for _, name := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte("t131f fixture"), 0o600))
 	}
