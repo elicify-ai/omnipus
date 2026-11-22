@@ -20,6 +20,13 @@ package credentials
 // are CHECK's mutation probes (FR-045), not run in RED. The real
 // `omnipus credentials set` binary stays hands-on (H-17); its automated
 // stand-in here is a second process writing the same store path.
+//
+// CHECK R03 repair: every launched writer gets its release-and-join cleanup
+// AT LAUNCH; the completion signal is close-only and the error cached, so the
+// body and cleanup can both join without consuming a one-shot channel twice;
+// A and the remove writer are joined on every path; and "A cannot finish" is
+// asserted only after an explicit A-admission handshake, never on a bare
+// scheduler delay.
 
 import (
 	"encoding/hex"
@@ -27,7 +34,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,17 +155,136 @@ func pausedWriteHook(enter func()) (hook func(stage string), engaged chan struct
 	return hook, engaged
 }
 
-// startPausedWriter starts store.Set(name, value) paused INSIDE its
-// transaction: the hook reports entry on `entered` and blocks until `hold` is
-// closed (R5-N1: the pause is after the in-lock read).
-func startPausedWriter(store *Store, name, value string) (entered, hold chan struct{}, done chan error) {
-	hold = make(chan struct{})
-	var hook func(stage string)
-	hook, entered = pausedWriteHook(func() { <-hold })
-	TransactHook = hook
-	done = make(chan error, 1)
-	go func() { done <- store.Set(name, value) }()
-	return entered, hold, done
+// pausedWriter is one launched writer paused inside its transaction (R5-N1:
+// the pause is after the in-lock read). `finished` is a close-only completion
+// signal and the error is cached, so the body and cleanup can both join
+// through wait() without consuming a one-shot channel twice (CHECK R03: the
+// previous `done` channel was received by the body and again by cleanup, and
+// the second receive hung a correct green in cleanup).
+type pausedWriter struct {
+	entered  chan struct{} // the pause seam engaged (buffered, one signal)
+	admitted chan struct{} // another transaction's milestones while the pause is engaged
+	hold     chan struct{} // closed to release the pause
+	finished chan struct{} // closed exactly once when the writer returns
+	released sync.Once
+	paused   atomic.Bool // true while the pause is engaged (between armed and hold)
+	result   error
+}
+
+// launchPausedWriter starts store.Set(name, value) paused INSIDE its
+// transaction: the hook reports entry on w.entered and blocks until
+// w.release() (R5-N1). Every LATER hook engagement of any stage is another
+// transaction reaching a milestone while the pause is still engaged — the
+// waiting A's admission signal (CHECK R03 handshake); it never pauses.
+func launchPausedWriter(store *Store, name, value string) *pausedWriter {
+	w := &pausedWriter{
+		entered:  make(chan struct{}, 1),
+		admitted: make(chan struct{}, 8),
+		hold:     make(chan struct{}),
+		finished: make(chan struct{}),
+	}
+	var mu sync.Mutex
+	engaged := false
+	TransactHook = func(stage string) {
+		mu.Lock()
+		if !engaged {
+			if stage != "after-read" {
+				mu.Unlock()
+				return
+			}
+			engaged = true
+			w.paused.Store(true)
+			mu.Unlock()
+			select {
+			case w.entered <- struct{}{}:
+			default:
+			}
+			<-w.hold
+			w.paused.Store(false)
+			return
+		}
+		midPause := w.paused.Load()
+		mu.Unlock()
+		if midPause {
+			select {
+			case w.admitted <- struct{}{}:
+			default:
+			}
+		}
+	}
+	go func() {
+		w.result = store.Set(name, value)
+		close(w.finished)
+	}()
+	return w
+}
+
+// release unblocks the paused writer (idempotent — the body and every
+// cleanup path call it; exactly the first call closes hold).
+func (w *pausedWriter) release() { w.released.Do(func() { close(w.hold) }) }
+
+// wait joins the writer and returns its cached error — callable any number
+// of times (body and cleanup both join through it).
+func (w *pausedWriter) wait() error {
+	<-w.finished
+	return w.result
+}
+
+// asyncResult joins a launched operation and caches its error, so the body
+// and cleanup can both join it (CHECK R03: join every launched writer on
+// every path).
+type asyncResult struct {
+	done   chan struct{}
+	result error
+}
+
+func launchAsync(op func() error) *asyncResult {
+	r := &asyncResult{done: make(chan struct{})}
+	go func() {
+		r.result = op()
+		close(r.done)
+	}()
+	return r
+}
+
+func (r *asyncResult) wait() error { <-r.done; return r.result }
+
+// joinWithin joins a close-only completion channel within the grace period;
+// past it the goroutine is reported as leaked — bounded, never an unbounded
+// cleanup hang (CHECK R03).
+func joinWithin(t *testing.T, done <-chan struct{}, grace time.Duration, what string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(grace):
+		t.Errorf("%s did not finish within %s of release (leaked goroutine)", what, grace)
+	}
+}
+
+// s135WaitAdmitted is the explicit A-admission handshake (CHECK R03): the
+// "A cannot finish" window starts only once A's own transaction milestones
+// are observable — never on a bare scheduler delay, where a stale-read
+// implementation can look like a correctly waiting one. If A finishes before
+// any milestone, the barrier itself is missing; if no milestone is observable
+// within the bound, the seam cannot prove admission and the test says so
+// loudly (BLOCKED), never silently samples an unadmitted writer.
+func s135WaitAdmitted(t *testing.T, admitted chan struct{}, a *asyncResult, what string) {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-admitted:
+	case <-a.done:
+		t.Fatalf("%s completed while B held the transaction (err=%v) — "+
+			"stale-writer barrier FR-049 missing", what, a.wait())
+	case <-timer.C:
+		t.Fatalf("BLOCKED: cannot observe %s admission — TransactHook fired no stage for the "+
+			"waiting transaction while B held the lock (S-135 needs an admission-observable "+
+			"hook stage, e.g. a lock-wait milestone; FR-049)", what)
+	}
+	// Give A the processor before sampling the window, so a launched but
+	// never-scheduled goroutine is not mistaken for a correctly waiting one.
+	runtime.Gosched()
 }
 
 // s135SecondStoreStaleWriter: the Given is connected-first — GitHub connected
@@ -176,29 +304,34 @@ func s135SecondStoreStaleWriter(t *testing.T) {
 	publishProgramForTx(t, storeA, "prog_github_token")
 
 	// When: B's Set pauses inside its transaction, after its in-lock read.
-	entered, hold, bDone := startPausedWriter(storeB, "UNRELATED", "x")
-	waitHookEntered(t, entered, 2*time.Second) // BLOCKED in RED: no s.transact yet
-	// Idempotent cleanup (CHECK F08): a failure anywhere below still releases
-	// the holder and drains its goroutine — a leaked paused writer would hold
-	// the lock forever and deadlock the sibling subtests.
-	var releaseOnce sync.Once
+	// Release-and-join cleanup is installed AT LAUNCH (CHECK R03): a failure
+	// anywhere below still releases the holder and joins its goroutine — a
+	// leaked paused writer would hold the lock forever and deadlock the
+	// sibling subtests.
+	b := launchPausedWriter(storeB, "UNRELATED", "x")
 	t.Cleanup(func() {
-		releaseOnce.Do(func() { close(hold) })
-		<-bDone
+		b.release()
+		joinWithin(t, b.finished, 10*time.Second, "the paused writer B")
 	})
+	waitHookEntered(t, b.entered, 2*time.Second) // BLOCKED in RED: no s.transact yet
 
-	// A starts replacing the token; after 200 ms A has not returned and the
-	// file still holds tok_valid_12345 (A cannot enter while B holds).
-	aDone := make(chan error, 1)
-	go func() {
+	// A starts replacing the token. The admission handshake (CHECK R03)
+	// proves A reached the transaction machinery before any "it waited"
+	// assertion; then A must still be unfinished after 200 ms, and the file
+	// still holds tok_valid_12345 (A cannot enter while B holds).
+	a := launchAsync(func() error {
 		_, err := storeA.CommitProgramCredential("prog_github_token", "tok_new_67890", nil)
-		aDone <- err
-	}()
-	time.Sleep(200 * time.Millisecond)
+		return err
+	})
+	t.Cleanup(func() {
+		b.release() // A can only finish after B releases (idempotent)
+		joinWithin(t, a.done, 10*time.Second, "A's program replace")
+	})
+	s135WaitAdmitted(t, b.admitted, a, "A's replace")
 	select {
-	case err := <-aDone:
-		t.Fatalf("A committed while B held the transaction (err=%v) — stale-writer barrier FR-049 missing", err)
-	default:
+	case <-a.done:
+		t.Fatalf("A committed while B held the transaction (err=%v) — stale-writer barrier FR-049 missing", a.wait())
+	case <-time.After(200 * time.Millisecond):
 	}
 	reader := reopenStoreForRead(t, path, key)
 	v, err := reader.Get("prog_github_token")
@@ -207,9 +340,9 @@ func s135SecondStoreStaleWriter(t *testing.T) {
 		"the file must still hold the old token while B holds the transaction")
 	reader.Close()
 
-	releaseOnce.Do(func() { close(hold) })
-	require.NoError(t, <-bDone, "B completes after release")
-	require.NoError(t, <-aDone, "A completes after release")
+	b.release()
+	require.NoError(t, b.wait(), "B completes after release")
+	require.NoError(t, a.wait(), "A completes after release")
 
 	final := reopenStoreForRead(t, path, key)
 	defer final.Close()
@@ -228,24 +361,28 @@ func s135SecondStoreStaleWriter(t *testing.T) {
 	require.Equal(t, []string{"prog_github_token"}, rec.References)
 
 	// Disconnect variant: A removes the program credential while B is paused.
-	entered2, hold2, bDone2 := startPausedWriter(storeB, "UNRELATED2", "z")
-	waitHookEntered(t, entered2, 2*time.Second)
-	var releaseOnce2 sync.Once
+	// Same release-at-launch cleanup, cached-result joins and admission
+	// handshake as the replace variant (CHECK R03).
+	b2 := launchPausedWriter(storeB, "UNRELATED2", "z")
 	t.Cleanup(func() {
-		releaseOnce2.Do(func() { close(hold2) })
-		<-bDone2
+		b2.release()
+		joinWithin(t, b2.finished, 10*time.Second, "the paused writer B (disconnect variant)")
 	})
-	rmDone := make(chan error, 1)
-	go func() { rmDone <- storeA.RemoveProgramCredential("prog_github_token") }()
-	time.Sleep(200 * time.Millisecond)
+	waitHookEntered(t, b2.entered, 2*time.Second)
+	rm := launchAsync(func() error { return storeA.RemoveProgramCredential("prog_github_token") })
+	t.Cleanup(func() {
+		b2.release()
+		joinWithin(t, rm.done, 10*time.Second, "A's disconnect")
+	})
+	s135WaitAdmitted(t, b2.admitted, rm, "A's disconnect")
 	select {
-	case err := <-rmDone:
-		t.Fatalf("RemoveProgramCredential committed while B held the transaction (err=%v)", err)
-	default:
+	case <-rm.done:
+		t.Fatalf("RemoveProgramCredential committed while B held the transaction (err=%v)", rm.wait())
+	case <-time.After(200 * time.Millisecond):
 	}
-	releaseOnce2.Do(func() { close(hold2) })
-	require.NoError(t, <-bDone2)
-	require.NoError(t, <-rmDone)
+	b2.release()
+	require.NoError(t, b2.wait(), "B completes after release")
+	require.NoError(t, rm.wait(), "A completes after release")
 
 	final2 := reopenStoreForRead(t, path, key)
 	defer final2.Close()
@@ -341,8 +478,8 @@ func s146BusyStoreBound(t *testing.T) {
 	// transaction is never delayed by the seam.
 	holderHook, engaged := pausedWriteHook(func() { time.Sleep(6 * time.Second) })
 	TransactHook = holderHook
-	holderDone := make(chan error, 1)
-	go func() { holderDone <- holder.Set("OTHER", "x") }()
+	holderWrite := launchAsync(func() error { return holder.Set("OTHER", "x") })
+	t.Cleanup(func() { joinWithin(t, holderWrite.done, 10*time.Second, "the 6 s holder") })
 	waitHookEntered(t, engaged, 2*time.Second)
 
 	// The paste runs with an inert hook (the holder is already inside its
@@ -355,7 +492,7 @@ func s146BusyStoreBound(t *testing.T) {
 	require.GreaterOrEqual(t, elapsed, 4500*time.Millisecond, "admission waits the full 5 s bound")
 	require.LessOrEqual(t, elapsed, 5500*time.Millisecond, "the admission bound is 5 s ± 0.5 s")
 
-	require.NoError(t, <-holderDone, "the holder's own write completes when it releases")
+	require.NoError(t, holderWrite.wait(), "the holder's own write completes when it releases")
 	TransactHook = nil
 	time.Sleep(2 * time.Second) // spec: file unchanged 2 s after the holder releases
 	after := reopenStoreForRead(t, path, txTestKey())
@@ -372,8 +509,8 @@ func s146BusyStoreBound(t *testing.T) {
 	// 1 s holder: the paste succeeds as generation 2.
 	holderHook2, engaged2 := pausedWriteHook(func() { time.Sleep(1 * time.Second) })
 	TransactHook = holderHook2
-	holder2Done := make(chan error, 1)
-	go func() { holder2Done <- holder.Set("OTHER2", "y") }()
+	holder2Write := launchAsync(func() error { return holder.Set("OTHER2", "y") })
+	t.Cleanup(func() { joinWithin(t, holder2Write.done, 10*time.Second, "the 1 s holder") })
 	waitHookEntered(t, engaged2, 2*time.Second)
 	TransactHook = func(stage string) {}
 	pasteStart2 := time.Now()
@@ -384,7 +521,7 @@ func s146BusyStoreBound(t *testing.T) {
 	require.LessOrEqual(t, elapsed2, 5500*time.Millisecond,
 		"the admission bound is 5 s ± 0.5 s (FR-049/S-146)")
 	require.EqualValues(t, 2, gen2, "the successful paste is generation 2")
-	require.NoError(t, <-holder2Done)
+	require.NoError(t, holder2Write.wait())
 	TransactHook = nil
 }
 
