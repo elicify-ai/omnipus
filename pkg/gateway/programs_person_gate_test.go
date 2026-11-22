@@ -604,16 +604,18 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		// S-128 / D-8 row 14: the generic credentials route cannot overwrite
 		// (or delete) a program-owned key. The reference is committed as
 		// program-owned through I-3's one writer, then attacked through the
-		// existing generic route with a real re-auth consent token.
+		// existing generic route with a real re-auth consent token. S-128's R
+		// denotes GitHub's actual credential reference, not an unrelated name.
+		const reference = "program.github"
 		t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
 		store := credentials.NewStore(filepath.Join(f.api.homePath, "credentials.json"))
 		require.NoError(t, credentials.Unlock(store), "instrument: the store unlocks under the fixture master key")
 		t.Cleanup(func() { store.Close() })
-		_, err := store.CommitProgramCredential("R", "tok_valid_12345",
+		_, err := store.CommitProgramCredential(reference, "tok_valid_12345",
 			&credentials.CardReceipt{RequestID: "req-s128", SessionID: "sess-s128",
-				References: []string{"R"}, SubmittedAt: time.Now()})
+				References: []string{reference}, SubmittedAt: time.Now()})
 		require.NoError(t, err, "instrument: the reference is committed as program-owned (I-3's one writer)")
-		before := programstore.RequireOwned(t, store, "R", "tok_valid_12345", "req-s128", "sess-s128")
+		before := programstore.RequireOwned(t, store, reference, "tok_valid_12345", "req-s128", "sess-s128")
 
 		user := &f.api.agentLoop.GetConfig().Gateway.Users[0]
 		rw := doReAuth(f.api, user, "pg-person-password")
@@ -623,7 +625,7 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		rtok, _ := reauth["token"].(string)
 		require.NotEmpty(t, rtok, "instrument: the consent token is a string")
 
-		setBody, err := json.Marshal(gen.CredentialSetRequest{Key: "R", Value: "tok_evil_999999"})
+		setBody, err := json.Marshal(gen.CredentialSetRequest{Key: reference, Value: "tok_evil_999999"})
 		require.NoError(t, err)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/credentials", bytes.NewReader(setBody))
 		req.Header.Set("Content-Type", "application/json")
@@ -634,10 +636,10 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.Equal(t, http.StatusConflict, w.Code,
 			"a program-owned key is refused with 409 (S-128): got %d %s", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(),
-			`R belongs to the program GitHub. Change it in Settings → Programs.`,
+			reference+` belongs to the program GitHub. Change it in Settings → Programs.`,
 			"the refusal is the spec message")
 
-		delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/credentials/R", nil)
+		delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/credentials/"+reference, nil)
 		delReq.Header.Set(reAuthHeader, pgReauthTokenFor(t, f))
 		pgAttach(f, delReq, "", true, true)
 		dw := httptest.NewRecorder()
@@ -645,7 +647,7 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.Equal(t, http.StatusConflict, dw.Code,
 			"DELETE of a program-owned key is refused with 409 too: got %d %s", dw.Code, dw.Body.String())
 
-		got, gerr := store.Get("R")
+		got, gerr := store.Get(reference)
 		require.NoError(t, gerr)
 		require.Equal(t, "tok_valid_12345", got, "the stored value is unchanged")
 		require.Equal(t, before, programstore.Snapshot(t, store, "req-s128"), "both generic attacks preserve value/kind/generation/metadata/receipt")
