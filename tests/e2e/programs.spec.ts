@@ -1,119 +1,142 @@
 /**
- * programs.spec.ts — connected command-line programs, Settings → Programs.
- *
- * Spec: docs/internal/specs/cli-credentials-s1-s2-spec.md rev 8.
- * Traces to: E2E row 36 of the Test Implementation Order — S-01 (valid token
- * connects), S-12 (switch-on refused by a private variable), S-33 (custom
- * program create), S-53 (disconnect), S-81 (person-session only).
- *
- * Every test drives the real SPA against the shard's gateway (login via the
- * shared setup helpers, hash route to Settings, real clicks/fills) and makes
- * spec-derived assertions. At RED the Programs screen does not exist, so the
- * tab/panel assertions fail loudly — these bodies cannot pass without the
- * feature. The fake `gh` the states depend on (octocat / hubot / 401) is
- * provisioned by the shard gateway's PATH fixture (docs/internal/ci-rules
- * e2e-model; the gateway process fixture sets it before boot).
- *
- * CLAUDE.md — "E2E tests always target the embedded SPA (Go binary)".
+ * S1 rev 8, order 36: S01/S12/S33/S53/S81 browser surfaces.
+ * Each test/retry imports an owned gateway, fake gh, account and clean home.
+ * S12's selected-private publication is explicitly BLOCKED, not assumed seeded.
+ * This file complements (does not replace) the complete D8/body/store Go rows.
  */
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { Agent } from '../../src/lib/api/generated/schemas';
+import { test, expect } from './fixtures/programs-s1';
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
-
-/** Log in as the person and land on Settings → Programs. */
-async function openProgramsTab(page: Page): Promise<void> {
-  await page.goto(`${BASE_URL}/#/settings`);
-  await expect(page).toHaveURL(/settings/, { timeout: 15_000 });
-  const programsTab = page.locator('button[role="tab"]', { hasText: 'Programs' });
-  await expect(programsTab).toBeVisible({ timeout: 15_000 });
-  await programsTab.click();
-  const activePanel = page.locator('[role="tabpanel"][data-state="active"]').first();
-  await expect(activePanel).toBeVisible({ timeout: 15_000 });
-  return;
+async function openProgramsTab(page: Page, origin: string): Promise<void> {
+  await page.goto(`${origin}/#/settings`);
+  const tab = page.getByRole('tab', { name: 'Programs', exact: true });
+  await expect(tab).toBeVisible(); await tab.click();
+  await expect(page.getByRole('tabpanel').filter({ visible: true })).toBeVisible();
 }
 
-test.describe('Settings → Programs', () => {
-  test('S01: saving a valid token shows checking, then connected as octocat', async ({ page }) => {
-    await openProgramsTab(page);
-    // Given GitHub is not_connected.
-    const githubRow = page.getByRole('row', { name: /github/i }).or(page.getByTestId('program-github'));
-    await expect(githubRow).toBeVisible({ timeout: 15_000 });
-    await expect(githubRow.getByText(/not connected/i)).toBeVisible({ timeout: 10_000 });
-    // When the person saves tok_valid_12345 (the token never appears in the DOM).
-    await githubRow.getByRole('button', { name: /connect|add token|save/i }).first().click();
-    const tokenField = page.getByLabel(/token/i).or(page.getByPlaceholder(/token/i)).first();
-    await expect(tokenField).toBeVisible({ timeout: 10_000 });
-    await tokenField.fill('tok_valid_12345');
-    await tokenField.press('Enter');
-    // Then the state is checking with generation 1, later connected as octocat.
-    await expect(githubRow.getByText(/checking/i)).toBeVisible({ timeout: 15_000 });
-    await expect(githubRow.getByText(/connected/i)).toBeVisible({ timeout: 30_000 });
-    await expect(githubRow.getByText(/octocat/i)).toBeVisible({ timeout: 10_000 });
-    // And the token value is never rendered anywhere on the page.
-    const body = await page.locator('body').innerText();
-    expect(body).not.toContain('tok_valid_12345');
+async function openProfile(page: Page, origin: string, workspaceId: string, devId: string) {
+  await page.goto(`${origin}/#/workspaces/${workspaceId}/chat?panel=team`);
+  const team = page.getByTestId('workspace-team-tab');
+  await expect(team).toBeVisible();
+  await team.getByTestId(`team-card-actions-${devId}`).click();
+  await page.getByRole('button', { name: 'Edit Dev', exact: true }).click();
+  const profile = page.getByTestId('agent-profile-sheet');
+  await expect(profile).toBeVisible();
+  return profile;
+}
+
+async function githubConnection(gateway: import('./fixtures/gateway-process').GatewayProcess) {
+  const result = await gateway.apiFetch('GET', '/programs');
+  expect(result.status, result.raw).toBe(200);
+  const entries = (result.body as Record<string, unknown>).entries as Array<Record<string, unknown>>;
+  const github = entries.find((entry) => entry.id === 'github');
+  expect(github, 'real catalog contains GitHub').toBeDefined();
+  return github!.connection as Record<string, unknown>;
+}
+
+test.describe('Programs — private real gateway', () => {
+  test('S01: held check shows checking generation 1 then connected as octocat', async ({ page, programsS1: f }) => {
+    f.holdCheck();
+    await openProgramsTab(page, f.gateway.baseURL);
+    const row = page.getByRole('row', { name: /github/i }).or(page.getByTestId('program-github'));
+    await expect(row.getByText('Not connected', { exact: true })).toBeVisible();
+    await row.getByRole('button', { name: /paste a token/i }).click();
+    const field = page.getByLabel(/token/i).filter({ visible: true }).first();
+    await field.fill('tok_valid_12345');
+    const saved = page.waitForResponse((r) => r.url().endsWith('/programs/github/credential') && r.request().method() === 'PUT');
+    await field.press('Enter');
+    const response = await saved;
+    expect(response.status()).toBe(200);
+    expect(await response.text()).not.toContain('tok_valid_12345');
+    await expect.poll(f.starts).toBe(1);
+    expect(await githubConnection(f.gateway)).toMatchObject({ state: 'checking', generation: 1 });
+    await expect(row.getByText('Checking the account…', { exact: true })).toBeVisible();
+    f.releaseCheck();
+    await expect.poll(async () => (await githubConnection(f.gateway)).state).toBe('connected');
+    expect(await githubConnection(f.gateway)).toMatchObject({ generation: 1, account_label: 'octocat' });
+    await expect(row.getByText('Connected as octocat', { exact: true })).toBeVisible();
+    expect(await page.locator('body').innerText()).not.toContain('tok_valid_12345');
   });
 
-  test('S12: switching GitHub on for an agent holding a private GH_TOKEN is refused 409', async ({ page }) => {
-    await openProgramsTab(page);
-    // Given Dev already holds a selected private variable GH_TOKEN (seeded by
-    // the shard fixture); When GitHub is switched on for Dev; Then the
-    // variable-conflict refusal is shown and the switch stays off.
-    const devSwitch = page.getByRole('switch', { name: /dev.*github|github.*dev/i })
-      .or(page.getByTestId('program-switch-dev-github'));
-    await expect(devSwitch).toBeVisible({ timeout: 15_000 });
-    await devSwitch.click();
-    await expect(page.getByText(
-      'GitHub cannot be switched on for Dev: Dev already has a private variable GH_TOKEN. Remove that variable, or leave GitHub off.',
-      { exact: false },
-    )).toBeVisible({ timeout: 10_000 });
-    await expect(devSwitch).not.toBeChecked();
+  test('S12: real selected private GH_TOKEN refuses switch-on in Dev profile', async ({ page, programsS1: f }) => {
+    await f.seedPrivateGH_TOKEN(); // loud BLOCKED until real selected metadata exists
+    const profile = await openProfile(page, f.gateway.baseURL, f.workspaceId, f.devId);
+    const toggle = profile.getByRole('switch', { name: /github/i });
+    await expect(toggle).not.toBeChecked();
+    const refusal = page.waitForResponse((r) => r.url().endsWith(`/agents/${f.devId}`) && r.request().method() === 'PUT');
+    await toggle.click();
+    expect((await refusal).status()).toBe(409);
+    await expect(profile.getByText('GitHub cannot be switched on for Dev: Dev already has a private variable GH_TOKEN. Remove that variable, or leave GitHub off.', { exact: true })).toBeVisible();
+    await expect(toggle).not.toBeChecked();
+    const dev = await f.gateway.apiFetch('GET', `/api/v1/agents/${f.devId}`);
+    expect(dev.status).toBe(200);
+    expect((dev.body as Record<string, unknown>).programs).toEqual([]);
   });
 
-  test('S33: creating a custom program (Acme) lists it not_connected', async ({ page }) => {
-    await openProgramsTab(page);
-    // Given no custom entries; create Acme with word acme, variable
-    // ACME_TOKEN, site api.acme.example; Then 201 semantics in the UI: the
-    // entry is listed as not_connected.
+  test('S33: clean catalog creates Acme once and reloads it not_connected', async ({ page, programsS1: f }) => {
+    await openProgramsTab(page, f.gateway.baseURL);
     await page.getByRole('button', { name: /add (custom )?program|new program/i }).click();
-    await expect(page.getByLabel(/display name/i)).toBeVisible({ timeout: 10_000 });
     await page.getByLabel(/display name/i).fill('Acme');
     await page.getByLabel(/program words?/i).fill('acme');
     await page.getByLabel(/token variables?/i).fill('ACME_TOKEN');
     await page.getByLabel(/network sites?/i).fill('api.acme.example');
+    const created = page.waitForResponse((r) => r.url().endsWith('/programs') && r.request().method() === 'POST');
     await page.getByRole('button', { name: /^create$|^save$/i }).click();
-    const acmeRow = page.getByRole('row', { name: /acme/i }).or(page.getByTestId('program-acme'));
-    await expect(acmeRow).toBeVisible({ timeout: 15_000 });
-    await expect(acmeRow.getByText(/not connected/i)).toBeVisible({ timeout: 10_000 });
+    expect((await created).status()).toBe(201);
+    await page.reload();
+    await page.getByRole('tab', { name: 'Programs', exact: true }).click();
+    const acme = page.getByRole('row', { name: /acme/i }).or(page.getByTestId('program-acme'));
+    await expect(acme.getByText('Not connected', { exact: true })).toBeVisible();
+    expect(f.starts()).toBe(0);
   });
 
-  test('S53: disconnect returns not_connected and the switch stays on', async ({ page }) => {
-    await openProgramsTab(page);
-    // Given GitHub connected and on for Dev (shard fixture); When the person
-    // confirms Disconnect; Then not_connected, and the dialog states the
-    // token stays valid at GitHub until revoked there, and Dev's switch
-    // remains on.
-    const githubRow = page.getByRole('row', { name: /github/i }).or(page.getByTestId('program-github'));
-    await expect(githubRow.getByText(/connected/i)).toBeVisible({ timeout: 15_000 });
-    await githubRow.getByRole('button', { name: /disconnect/i }).click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByRole('dialog').getByText(/stays valid at github|until revoked/i, { exact: false }))
-      .toBeVisible({ timeout: 10_000 });
-    await page.getByRole('dialog').getByRole('button', { name: /disconnect|confirm/i }).click();
-    await expect(githubRow.getByText(/not connected/i)).toBeVisible({ timeout: 15_000 });
-    const devSwitch = page.getByRole('switch', { name: /dev.*github|github.*dev/i })
-      .or(page.getByTestId('program-switch-dev-github'));
-    await expect(devSwitch).toBeChecked();
+  test('S53: independently connect and enable Dev, disconnect leaves profile switch on', async ({ page, programsS1: f }) => {
+    const saved = await f.gateway.apiFetch('PUT', '/programs/github/credential', { value: 'tok_valid_12345' });
+    expect(saved.status, saved.raw).toBe(200);
+    await expect.poll(async () => (await githubConnection(f.gateway)).state).toBe('connected');
+    const before = await githubConnection(f.gateway);
+    const dev = await f.gateway.apiFetch('GET', `/api/v1/agents/${f.devId}`);
+    expect(dev.status).toBe(200);
+    const revision = Agent.parse(dev.body).revision;
+    const enabled = await f.gateway.apiFetch('PUT', `/api/v1/agents/${f.devId}`, { revision, programs: ['github'] });
+    expect(enabled.status, enabled.raw).toBe(200);
+    const readback = await f.gateway.apiFetch('GET', `/api/v1/agents/${f.devId}`);
+    expect((readback.body as Record<string, unknown>).programs).toEqual(['github']);
+    await openProgramsTab(page, f.gateway.baseURL);
+    const row = page.getByRole('row', { name: /github/i }).or(page.getByTestId('program-github'));
+    await expect(row.getByText('Connected as octocat', { exact: true })).toBeVisible();
+    await row.getByRole('button', { name: /^disconnect$/i }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/stays valid at GitHub.*revok/i)).toBeVisible();
+    await dialog.getByRole('button', { name: /^disconnect$/i }).click();
+    await expect(row.getByText('Not connected', { exact: true })).toBeVisible();
+    expect(await githubConnection(f.gateway)).toMatchObject({ state: 'not_connected', generation: Number(before.generation) + 1 });
+    const profile = await openProfile(page, f.gateway.baseURL, f.workspaceId, f.devId);
+    await expect(profile.getByRole('switch', { name: /github/i })).toBeChecked();
+    // Next-command no-token is a separate named runtime BLOCKED row (R19).
   });
 
-  test('S81: the Programs API answers 403 person_session_required for an API bearer', async ({ page }) => {
-    // The D-8 caller rule at the UI edge: a non-person bearer (the shard
-    // fixture's CLI token) is refused before anything else happens.
-    const res = await page.request.get(`${BASE_URL}/programs`, {
-      headers: { Authorization: 'Bearer omnipus_' + 'c'.repeat(64) },
-    });
-    expect(res.status()).toBe(403);
-    const payload = (await res.json()) as { error?: string; code?: string };
-    expect(payload.code ?? payload.error).toContain('person_session_required');
+  test('S81: configured own bearer, no cookie, exact person refusal and unchanged state', async ({ programsS1: f }) => {
+    const before = await f.gateway.apiFetch('GET', '/programs');
+    const agentBefore = await f.gateway.apiFetch('GET', `/api/v1/agents/${f.devId}`);
+    const starts = f.starts();
+    // Node fetch has no browser cookie jar and keeps the ephemeral bearer out
+    // of Playwright traces (GatewayProcess.reloadBearer's documented contract).
+    const headers = { Authorization: `Bearer ${f.gateway.reloadBearer()}` };
+    const ordinary = new Request(`${f.gateway.baseURL}/api/v1/agents/${f.devId}`, { headers });
+    expect(ordinary.headers.has('Cookie')).toBe(false);
+    expect((await fetch(ordinary)).status, 'known existing route accepts this exact configured bearer').toBe(200);
+    const attack = new Request(`${f.gateway.baseURL}/programs/github/credential`, { method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'tok_valid_12345' }) });
+    expect(attack.headers.has('Cookie')).toBe(false);
+    const denied = await fetch(attack);
+    expect(denied.status).toBe(403);
+    expect(await denied.text()).toContain('this action requires a signed-in person');
+    expect((await f.gateway.apiFetch('GET', '/programs')).body).toEqual(before.body);
+    expect((await f.gateway.apiFetch('GET', `/api/v1/agents/${f.devId}`)).body).toEqual(agentBefore.body);
+    expect(f.starts()).toBe(starts);
+    // This UI-edge test does not inspect encrypted-store metadata/body reads;
+    // D8 row 3 has those same-request Go oracles. H20 records that boundary.
   });
 });

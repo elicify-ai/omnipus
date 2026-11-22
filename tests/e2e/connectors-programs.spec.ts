@@ -25,6 +25,7 @@
  */
 
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
+import type { Agent, Workspace, ChannelEntry, ChannelRouting } from '../../src/lib/api/generated/openapi-types';
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 void BASE_URL; // the playwright config's baseURL serves the app; goto is relative
@@ -71,7 +72,7 @@ const AGENT_REQUIRED = {
 
 const STUB_AGENTS = [
   { id: BOUND_AGENT_ID, name: BOUND_AGENT_NAME, type: 'core', locked: true, ...AGENT_REQUIRED },
-] satisfies unknown[];
+] satisfies Agent[];
 
 const WS_REQUIRED = {
   pinned: false,
@@ -90,7 +91,7 @@ const STUB_WORKSPACES = [
     task_count: 0,
     ...WS_REQUIRED,
   },
-] satisfies unknown[];
+] satisfies Workspace[];
 
 // instance_id marks a CONFIGURED instance — the ConnectorsScreen renders
 // channel-card rows (with Configure) only for configured instances.
@@ -113,16 +114,16 @@ const STUB_CHANNELS = [
     enabled: true,
     description: 'Telegram EU integration',
   },
-] satisfies unknown[];
+] satisfies ChannelEntry[];
 
 // GET /channels/{id}/routing — the binding the Programs section displays
 // (spec line 561: the bound line is read from the existing routing GET).
-const BOUND_ROUTING = {
+const BOUND_ROUTING: ChannelRouting = {
   workspace_id: BOUND_WORKSPACE_ID,
   default_agent_id: BOUND_AGENT_ID,
   bound: true,
 };
-const UNBOUND_ROUTING = { workspace_id: '', default_agent_id: '', bound: false };
+const UNBOUND_ROUTING: ChannelRouting = { workspace_id: '', default_agent_id: '', bound: false };
 
 // ── The stateful stub backend ───────────────────────────────────────────────
 
@@ -139,10 +140,14 @@ function createBackend() {
     [BOUND_CHANNEL]: false,
     [UNBOUND_CHANNEL]: false,
   };
+  const revisions: Record<string, string> = { [BOUND_CHANNEL]: STUB_REVISION, [UNBOUND_CHANNEL]: STUB_REVISION };
+  let saves = 0;
   let faultArmed = false;
   let telegramPutAttempts = 0;
   return {
     allowed,
+    revisions,
+    saved: () => { saves += 1; return saves.toString(16).padStart(64, '0'); },
     noteTelegramPut: () => {
       telegramPutAttempts += 1;
     },
@@ -208,18 +213,25 @@ async function registerStubRoutes(page: Page, backend: Backend): Promise<void> {
     await page.route(`**/api/v1/channels/${id}/programs`, async (route: Route) => {
       const method = route.request().method();
       if (method === 'GET') {
-        await fulfillJson(route, 200, { allowed: backend.allowed[id] });
+        await fulfillJson(route, 200, { allowed: backend.allowed[id], revision: backend.revisions[id] });
         return;
       }
       if (method === 'PUT') {
+        // S1 contract: save the submitted value, never toggle on occurrence.
+        // A missing/wrong body must fail instead of receiving a fake success.
+        const body: unknown = route.request().postDataJSON();
+        expect(body).toEqual({ allowed: expect.any(Boolean), revision: backend.revisions[id] });
+        const allowed = (body as Record<string, unknown>).allowed;
+        expect(typeof allowed).toBe('boolean');
         if (backend.faultArmed && id === BOUND_CHANNEL) {
           backend.noteTelegramPut();
           await fulfillJson(route, 500, { error: 'store busy' });
           return;
         }
-        backend.allowed[id] = !backend.allowed[id];
+        backend.allowed[id] = allowed as boolean;
+        backend.revisions[id] = backend.saved();
         if (id === BOUND_CHANNEL) backend.noteTelegramPut();
-        await fulfillJson(route, 200, { allowed: backend.allowed[id] });
+        await fulfillJson(route, 200, { allowed: backend.allowed[id], revision: backend.revisions[id] });
         return;
       }
       await route.continue();
@@ -300,7 +312,10 @@ test.describe('Connectors page — program switch (S-148)', () => {
     await expect(telegramSwitch).toBeChecked({ timeout: 10_000 });
     await expect(telegramSwitch).toHaveAttribute('aria-checked', 'true');
 
-    // A reload shows the same (the write persisted).
+    expect(backend.allowed[BOUND_CHANNEL]).toBe(true);
+    expect(backend.telegramPutAttempts).toBe(1);
+
+    // A reload shows the same (the stub write persisted, not gateway disk).
     await page.reload();
     const reloaded = await openChannelPanel(page, BOUND_CHANNEL);
     await expect(programsSwitch(reloaded, BOUND_AGENT_NAME)).toBeChecked({ timeout: 15_000 });
@@ -336,13 +351,15 @@ test.describe('Connectors page — program switch (S-148)', () => {
     await expect(retry).toBeVisible();
 
     // The failed write really left the backend: the attempt was issued.
-    expect(backend.telegramPutAttempts).toBeGreaterThan(attemptsAtArm);
+    await expect.poll(() => backend.telegramPutAttempts).toBe(attemptsAtArm + 1);
+    expect(backend.allowed[BOUND_CHANNEL]).toBe(false);
 
     // Working Retry: clicking it re-issues the same failed write.
     const attemptsBeforeRetry = backend.telegramPutAttempts;
     await retry.click();
     await expect(failure.getByText(NOT_CONFIRMED, { exact: true })).toBeVisible({ timeout: 10_000 });
-    expect(backend.telegramPutAttempts).toBeGreaterThan(attemptsBeforeRetry);
+    await expect.poll(() => backend.telegramPutAttempts).toBe(attemptsBeforeRetry + 1);
+    expect(backend.allowed[BOUND_CHANNEL]).toBe(false);
     await expect(failingSwitch).not.toBeChecked();
 
     // With the fault cleared, Retry completes the save (the UI row's Saved
@@ -351,5 +368,7 @@ test.describe('Connectors page — program switch (S-148)', () => {
     await retry.click();
     await expect(failingSwitch).toBeChecked({ timeout: 15_000 });
     await expect(failure.getByText(NOT_CONFIRMED, { exact: true })).toBeHidden({ timeout: 10_000 });
+    expect(backend.allowed[BOUND_CHANNEL]).toBe(true);
+    await expect.poll(() => backend.telegramPutAttempts).toBe(attemptsBeforeRetry + 2);
   });
 });
