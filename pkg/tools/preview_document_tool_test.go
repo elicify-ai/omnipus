@@ -126,12 +126,15 @@ func TestPreviewDocument_ReadAuthorizationAndAudit(t *testing.T) {
 		t.Fatalf("preview read-denial = %q, want read_file's refusal %q", result.ForLLM, want.ForLLM)
 	}
 	// Positive control: the same policy still reads inside the workspace.
-	inside := filepath.Join(ws, "inside.pdf")
-	if err := os.WriteFile(inside, []byte("%PDF-inside-control"), 0o600); err != nil {
+	// The control is a TEXT file: since release #1959 a .pdf never returns
+	// raw bytes from read_file (the PDF goes through the preview path), so
+	// raw-byte expectations for a pdf would assert a removed behaviour.
+	inside := filepath.Join(ws, "inside.txt")
+	if err := os.WriteFile(inside, []byte("inside-control"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	allowed := readTool.Execute(ctx, map[string]any{"path": inside})
-	if allowed.IsError || !strings.Contains(allowed.ForLLM, "%PDF-inside-control") {
+	if allowed.IsError || !strings.Contains(allowed.ForLLM, "inside-control") {
 		t.Fatalf("workspace positive control failed: %+v", allowed)
 	}
 	rows := readAuditRows(t, log, auditDir)
