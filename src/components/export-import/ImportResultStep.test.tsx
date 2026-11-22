@@ -98,6 +98,14 @@ function renderResult(result: PackageImportResult) {
 
 const SUMMARY = 'Writer (imported) was added to Marketing.'
 
+// GREEN CHECK P04: the exact text the BACKEND attaches for an active
+// non-chat worker (pkg/gateway/rest_packages_publish.go::
+// packageWorkerDelegationMessage — afterCommit sets it when the plan's agent
+// is not a chat target and stays active). D4 row 2 (spec line 1511): the
+// result, the activation message, and no Open chat.
+const ACTIVE_WORKER_MESSAGE =
+  'This agent is a worker: it is not a chat partner. It is reached by delegation once you draw a delegation line to it from a Main agent in the Team graph.'
+
 beforeEach(() => {
   mockFetchAgent.mockReset().mockRejectedValue(new Error('lookup not seeded for this row'))
   mockInvalidate.mockReset()
@@ -172,6 +180,21 @@ describe('Chat action decided by the agent lookup (FR-023, D4-1…4)', () => {
     expect(screen.getByText(SUMMARY)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Open chat' })).toBeNull()
     expect(screen.queryByText('Open it from the Team.')).toBeNull()
+  })
+
+  it('active + subagent_3p: the server\'s worker message shows and "Open chat" stays absent (GREEN CHECK P04, D4 row 2)', async () => {
+    mockFetchAgent.mockResolvedValue(agentFixture('subagent_3p'))
+    // The backend attaches this top-level message for an active worker
+    // (rest_packages_publish.go::packageWorkerDelegationMessage); the Result
+    // must show it — not swallow it behind `!active` — and never offer Open
+    // chat for a delegation-only agent.
+    renderResult(validResult({ activation: 'active', activation_message: ACTIVE_WORKER_MESSAGE }))
+    await waitFor(() => expect(mockFetchAgent).toHaveBeenCalled())
+    expect(screen.getByText(ACTIVE_WORKER_MESSAGE), 'the server\'s explanation of how to use the worker').toBeInTheDocument()
+    expect(screen.getByText(SUMMARY)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open chat' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open Team' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Import another' })).toBeInTheDocument()
   })
 
   it('pending: the top-level activation_message shows in a notice, "Open chat" absent, agent never looked up', () => {

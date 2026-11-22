@@ -296,6 +296,33 @@ describe('package calls never resend (real transport over a mocked fetch)', () =
       mockFetch(() => new Response('gateway timeout', { status: 504 }))
       await expectOneRequestOnly(() => cancelPackageImport('S'), 'DELETE', { status: 504 })
     })
+
+    // GREEN CHECK P01 — "What a cancel answer proves" (FR-025/026): ONLY a
+    // 204 (or a coded 500 staging_cleanup_failed, rejected above) proves the
+    // cancel ran. The transport must NOT resolve an unexpected successful
+    // answer into confirmed cancellation: a proxy's 200 (readable JSON, or an
+    // HTML/truncated body with no Content-Length that the schema-less read
+    // swallows), a 202 or a 205 prove nothing and must reject so the wizard
+    // shows Uncertain. Regression rows for the real-transport defect where
+    // any resolved promise counted as "cancelled".
+    const malformedSuccesses: Array<[string, () => Response]> = [
+      ['a 200 with a readable JSON body', () => jsonResponse(200, { done: true })],
+      [
+        'a 200 with an HTML body and no Content-Length',
+        () => new Response('<html>gateway page</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+      ],
+      ['a 202 with an empty body', () => new Response(null, { status: 202 })],
+      ['a 205 reset content', () => new Response(null, { status: 205 })],
+    ]
+    for (const [label, answer] of malformedSuccesses) {
+      it(`${label}: the client rejects it — only a 204 confirms (one request, no extra)`, async () => {
+        mockFetch(answer)
+        await expect(cancelPackageImport('S'), 'an unexpected 2xx proves nothing and must not resolve').rejects.toThrow()
+        expect(packageCalls('DELETE'), 'exactly one cancel request').toHaveLength(1)
+        expect(totalPackageCalls(), 'no extra package request for the rejected answer').toHaveLength(1)
+        expect(stateReads(), 'no recovery read for the rejected answer').toHaveLength(0)
+      })
+    }
   })
 
   describe('export POST /packages/export', () => {
