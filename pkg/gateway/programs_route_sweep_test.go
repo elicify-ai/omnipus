@@ -17,13 +17,12 @@
 // sweep counts the restart instead of re-exec'ing the test binary and asserts
 // the route was reached exactly once.
 //
-// Instrument: the routes come from a recording registrar over the REAL
-// production registration (registerAdditionalEndpoints), never a hand list —
-// a route that reaches a credential-store mutator (I-3's inventory:
-// /api/v1/credentials, /api/v1/credentials/{key}, the secret-request submit,
-// the Programs routes) without a payload row fails the test, and the
-// completeness checker itself is proven with a planted missing row (F04
-// negative control). A probe whose handler does not answer within 5 s fails
+// Route patterns come from the REAL production registrar. Writer discovery
+// is NAMED only, not independent reachability (R09's loud boundary rows).
+// The named inventory includes:
+// /api/v1/credentials, /api/v1/credentials/{key}, secret-request submit and
+// Programs. Each required method needs a row; a planted special-payload
+// writer tests method accounting, not all-route completeness. A probe whose handler does not answer within 5 s fails
 // the sweep and the handler goroutine is joined before any store read (F05).
 // The test runs once in local (core) and once in platform (hosted) edition
 // mode.
@@ -134,7 +133,7 @@ func pgGenericBody() string { return `{"key":"R","value":"tok_evil_999999"}` }
 // valid payload from the rev-8 contract, whose execution must be marked
 // handled — never marked before the probe really fired). The Programs
 // subtree pattern maps BY METHOD so its leaves are each exercised: the
-// credential save, the check, the entry disconnect — never collapsed to one
+// credential save, the check, the credential disconnect — never collapsed to one
 // entry path (CHECK R09).
 func pgSweepTarget(pattern, method string) (path, body string, isRow bool) {
 	subtree := strings.HasSuffix(pattern, "/")
@@ -169,7 +168,7 @@ func pgSweepTarget(pattern, method string) (path, body string, isRow bool) {
 			// the check row
 			return "/programs/github/check", `{}`, true
 		default: // DELETE: the disconnect row
-			return "/programs/github", "", true
+			return "/programs/github/credential", "", true
 		}
 	case strings.Contains(pattern, "/channels/") && strings.Contains(pattern, "programs"):
 		switch method {
@@ -195,47 +194,55 @@ func pgSweepTarget(pattern, method string) (path, body string, isRow bool) {
 	}
 }
 
-// pgKnownMutatorRoute is I-3's NAMED inventory — the routes the spec itself
-// lists as credential-store mutators (the credentials API, the secret-request
-// submit, the Programs routes). It is the base half of the completeness net
-// only: the other half is OBSERVED writer reachability (pgSweepReached, the
-// transaction instrument), so an arbitrarily named route that delegates to a
-// store mutator is required to have a row too (CHECK R09). The restart
-// routes change no credential state and are in neither half; they are still
-// probed (F03), just without a payload row.
-func pgKnownMutatorRoute(pattern string) bool {
-	return strings.HasPrefix(pattern, "/api/v1/credentials") ||
-		strings.Contains(pattern, "secret-requests") ||
-		strings.Contains(pattern, "programs")
-}
-
-// pgRowHandled reports whether a route has ANY method's row marked — a row
-// is marked only after its probe really fired with its route-specific
-// payload (CHECK R09: coverage is the executed method/path/payload, never
-// the pattern name).
-func pgRowHandled(handled map[string]bool, pattern string) bool {
-	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
-		if handled[pattern+"|"+m] {
-			return true
+// pgRequiredSweepMethods is the NAMED inventory only. It is not independent
+// route-to-writer reachability; the missing inventory/schema boundary is loud
+// in TestProgramCredential_RouteSweep_MissingBoundaries (R09).
+func pgRequiredSweepMethods(pattern string) []string {
+	switch {
+	case strings.HasPrefix(pattern, "/api/v1/credentials"):
+		if strings.HasSuffix(pattern, "/") {
+			return []string{http.MethodPost, http.MethodDelete}
 		}
+		// Code is POST, spec names PUT: neither is silently exempted.
+		return []string{http.MethodPost, http.MethodPut}
+	case strings.Contains(pattern, "secret-requests"):
+		return []string{http.MethodPost}
+	case strings.Contains(pattern, "programs"):
+		if strings.Contains(pattern, "/channels/") || strings.Contains(pattern, "settings") {
+			return []string{http.MethodPut}
+		}
+		if strings.HasSuffix(pattern, "/") {
+			return []string{http.MethodPut, http.MethodPost, http.MethodDelete}
+		}
+		return []string{http.MethodPost}
 	}
-	return false
+	return nil
 }
 
-// pgMissingSweepRows returns the registered routes that need a payload row
-// but have none: a route needs one when it is in I-3's named inventory OR
-// the sweep's transaction instrument observed it reaching the store's
-// transaction (the observed net catches arbitrary-name indirect writers).
-// Rows in excused are acknowledged separately (fatal BLOCKED after the
-// verdict) and do not double-report; a route that only READS through a
-// transaction is excused with that reason at GREEN, loudly (CHECK R09).
+// pgMissingSweepRows requires each method, not ANY method on the pattern.
+// reached keys are pattern|method, obtained only from a joined synchronous
+// probe. A method row still needs valid concrete schema/path reconciliation;
+// it is not proof of every writer path. Missing card rows stay fatal separately.
 func pgMissingSweepRows(routes []string, handled map[string]bool, excused map[string]string, reached map[string]bool) []string {
 	var missing []string
 	for _, p := range routes {
-		if (pgKnownMutatorRoute(p) || reached[p]) && !pgRowHandled(handled, p) && excused[p] == "" {
-			missing = append(missing, p)
+		methods := map[string]bool{}
+		for _, m := range pgRequiredSweepMethods(p) {
+			methods[m] = true
+		}
+		for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
+			if reached[p+"|"+m] {
+				methods[m] = true
+			}
+		}
+		for m := range methods {
+			key := p + "|" + m
+			if !handled[key] && excused[p] == "" {
+				missing = append(missing, key)
+			}
 		}
 	}
+	sort.Strings(missing)
 	return missing
 }
 
@@ -251,9 +258,9 @@ type pgProbeOutcome struct {
 // pgServeProbe fires one probe with a hard deadline on the given handler. It
 // never fails the test — the outcome returns to the caller (the sweep turns
 // a timeout into t.Errorf; the planted instrument asserts detection). A
-// timed-out probe has its REQUEST WORK CANCELLED first and its handler
-// goroutine JOINED before returning, so a still-live probe can neither keep
-// modifying state nor outlive the fixture (CHECK F05 + CHECK R10).
+// timed-out probe cancels REQUEST WORK, then attempts a bounded handler join.
+// An uncooperative handler is reported handlerDone=false; that is a fatal
+// fixture-isolation failure, never a successful state verdict (R10).
 func pgServeProbe(h http.Handler, prepared *http.Request, deadline time.Duration) (*httptest.ResponseRecorder, *pgProbeOutcome) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // cancels any still-running probe work when we return
@@ -314,7 +321,21 @@ func pgSweepServeOn(t *testing.T, f *pgGateFixture, h http.Handler, method, path
 	if !out.handlerDone {
 		t.Fatalf("sweep probe %s %s handler still running 15s after the probe — the store verdict cannot be taken", method, path)
 	}
+	if method == http.MethodPost && path == "/api/v1/gateway/restart" && w.Code == http.StatusAccepted {
+		// Register before later sweep assertions can fail. Handler completion
+		// alone is not asynchronous restart completion.
+		t.Cleanup(func() { pgAwaitRestart(t, f) })
+	}
 	return w
+}
+
+func pgAwaitRestart(t *testing.T, f *pgGateFixture) {
+	t.Helper()
+	select {
+	case <-f.restartDone:
+	case <-time.After(10 * time.Second):
+		t.Error("accepted restart callback did not complete within 10s; no joined restart verdict (R10)")
+	}
 }
 
 func TestProgramCredential_RouteSweep(t *testing.T) {
@@ -341,18 +362,11 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 			t.Logf("sweep: %d registered route patterns, edition %s", len(routes), edition)
 			probes := 0
 			handledMutator := map[string]bool{} // keyed pattern|method, set only AFTER the probe fired
-			// The OBSERVED reachability net (CHECK R09): the transaction
-			// instrument attributes every store-transaction engagement to the
-			// route being probed, so a route the named inventory missed but
-			// that demonstrably reaches the store still needs a payload row.
+			// No request-context-aware independent reachability inventory is
+			// connected. A process-global hook cannot safely attribute async
+			// writes to the current request. Do not present generic probes as
+			// completeness; the dedicated missing-boundary tests remain red.
 			reached := map[string]bool{}
-			var currentRoute string
-			credentials.TransactHook = func(string) {
-				if currentRoute != "" {
-					reached[currentRoute] = true
-				}
-			}
-			t.Cleanup(func() { credentials.TransactHook = nil })
 			// blockedPayloadRows records mutator routes whose payload row
 			// could not be established (at RED the program card cannot be
 			// raised). They are excused from the completeness verdict and
@@ -367,7 +381,7 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 					isRow := false
 					probeReauth := false
 					switch {
-					case strings.HasPrefix(pattern, "/api/v1/credentials") && method == http.MethodPost && !subtree:
+					case strings.HasPrefix(pattern, "/api/v1/credentials") && (method == http.MethodPost || method == http.MethodPut) && !subtree:
 						// Sweep table: set with the program-owned key.
 						path, body, probeReauth = "/api/v1/credentials", pgGenericBody(), true
 						isRow = true
@@ -378,7 +392,7 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 						// values unchanged are asserted by the final verdict).
 						path, body, probeReauth = "/api/v1/credentials/rotate", `{}`, true
 						isRow = true
-					case strings.HasPrefix(pattern, "/api/v1/credentials") && method == http.MethodDelete && !subtree:
+					case strings.HasPrefix(pattern, "/api/v1/credentials") && method == http.MethodDelete && subtree:
 						// Sweep table: delete the program-owned key.
 						path, body, probeReauth = "/api/v1/credentials/R", "", true
 						isRow = true
@@ -425,9 +439,7 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 						reauth = pgReauthTokenFor(t, f)
 						callReauth = reauth
 					}
-					currentRoute = pattern
 					pgSweepServe(t, f, method, path, body, f.token, callReauth)
-					currentRoute = ""
 					probes++
 					// The row is covered only now — after its probe really
 					// executed its route-specific method/path/payload.
@@ -438,10 +450,9 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 			}
 
 			// The sweep-table completeness check (S-113's last And-clause):
-			// a registered route that can reach a credential-store mutator —
-			// by I-3's named inventory OR by observed store-transaction
-			// engagement — without a payload row fails the sweep. Blocked
-			// rows are excused here and fatal-BLOCK after the verdict below.
+			// Named method inventory only. Independent writer reachability
+			// and valid concrete schema coverage remain separately BLOCKED.
+			// Missing card rows fatal-BLOCK after the state verdict below.
 			missing := pgMissingSweepRows(routes, handledMutator, blockedPayloadRows, reached)
 			require.Empty(t, missing, "sweep table is missing payload rows for registered mutator routes: %v", missing)
 
@@ -450,8 +461,8 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 			// that can never fire proves nothing.
 			const plantedRow = "/api/v1/credentials/planted-sweep-row"
 			planted := append(append([]string(nil), routes...), plantedRow)
-			plantedReached := map[string]bool{plantedRow: true}
-			require.Contains(t, pgMissingSweepRows(planted, handledMutator, blockedPayloadRows, plantedReached), plantedRow,
+			plantedReached := map[string]bool{plantedRow + "|" + http.MethodPost: true}
+			require.Contains(t, pgMissingSweepRows(planted, handledMutator, blockedPayloadRows, plantedReached), plantedRow+"|"+http.MethodPost,
 				"instrument: the completeness check catches a planted missing payload row")
 
 			require.Greater(t, probes, 0, "instrument: the sweep actually fired requests")
@@ -464,13 +475,7 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 			// AWAITS the callback through the seam before accounting, never
 			// samples it once. Zero after the await means the sweep never
 			// reached the real route.
-			awaitDeadline := time.Now().Add(10 * time.Second)
-			for f.restartRequests() == 0 {
-				if time.Now().After(awaitDeadline) {
-					t.Fatalf("POST /api/v1/gateway/restart never reached the restart action within 10s of the sweep — the asynchronous restart callback was not awaited/joined (CHECK R10)")
-				}
-				time.Sleep(50 * time.Millisecond)
-			}
+			pgAwaitRestart(t, f)
 			require.Equal(t, int32(1), f.restartRequests(),
 				"POST /api/v1/gateway/restart reached the restart action exactly once")
 
@@ -544,59 +549,46 @@ func TestProgramCredential_SweepProbe_Instrument(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "instrument: the planted handler answered after the cancellation")
 }
 
-// TestProgramCredential_RouteSweep_PlantedIndirectWriter is CHECK R09's
-// plant: a TRULY REGISTERED route with an arbitrary name outside every name
-// predicate, whose handler delegates DIRECTLY to the credential store's
-// mutator (the failure scenario's indirect writer). The sweep's observed
-// reachability net must catch it: the transaction instrument shows the probe
-// really wrote through the store, and the completeness check requires a
-// payload row for the route despite its name — and stops requiring one once
-// its row is attempted. At RED the store mutator is a no-op stub and fires
-// no transaction, so the plant fatal-BLOCKs naming the instrument.
+// The arbitrary-name registered writer requires its OWN payload. A generic
+// key/value probe is rejected before Store.Set; a valid probe must reach it.
+// This proves observed-method accounting only, not discovery of all writers.
 func TestProgramCredential_RouteSweep_PlantedIndirectWriter(t *testing.T) {
-	f, routes := pgNewGateway(t, true)
-
-	// The plant: an arbitrary name (no credentials/secret-requests/programs
-	// substring) on a wrapper mux over the production table; its handler is
-	// an indirect store writer whose route-specific payload is its own
-	// declared schema.
+	f, _ := pgNewGateway(t, true)
 	const plant = "/api/v1/rename-me-sweep-writer-7f3a"
 	wrapper := http.NewServeMux()
+	write := func(ref, value string) error { return f.store.Set(ref, value) }
 	wrapper.HandleFunc(http.MethodPost+" "+plant, func(w http.ResponseWriter, r *http.Request) {
-		if err := f.store.Set("PLANT_RW", "x"); err != nil {
+		var body map[string]string
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body["plant_operation"] != "overwrite" || body["reference"] != "PLANT_RW" || body["value"] != "x" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := write(body["reference"], body["value"]); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	})
 	wrapper.Handle("/", f.handler)
-
-	reached := map[string]bool{}
-	credentials.TransactHook = func(string) { reached[plant] = true }
+	var engaged atomic.Bool
+	credentials.TransactHook = func(string) { engaged.Store(true) }
 	t.Cleanup(func() { credentials.TransactHook = nil })
 
+	rejected := pgSweepServeOn(t, f, wrapper, http.MethodPost, plant, pgGenericBody(), f.token, "")
+	require.Equal(t, http.StatusBadRequest, rejected.Code, "generic probe cannot exercise this route-specific writer")
+	require.False(t, engaged.Load(), "rejected payload never reaches store transaction")
 	w := pgSweepServeOn(t, f, wrapper, http.MethodPost, plant,
-		`{"reference":"R","value":"tok_evil_999999"}`, f.token, "")
-	require.Equal(t, http.StatusOK, w.Code,
-		"the planted writer's probe succeeded through the wrapper mux: %s", w.Body.String())
-	if !reached[plant] {
-		t.Fatalf("BLOCKED: the transaction instrument did not observe the planted writer — " +
-			"the store mutator ran no s.transact stage (Store.Set), so writer reachability " +
-			"cannot be observed; S-113's completeness net needs the transaction instrument " +
-			"(credentials.TransactHook firing inside s.transact) to catch arbitrary-name writers")
+		`{"plant_operation":"overwrite","reference":"PLANT_RW","value":"x"}`, f.token, "")
+	require.Equal(t, http.StatusOK, w.Code, "valid declared payload reaches indirect writer")
+	value, err := f.store.Get("PLANT_RW")
+	require.NoError(t, err)
+	require.Equal(t, "x", value, "positive: the valid route really writes")
+	if !engaged.Load() {
+		t.Fatal("BLOCKED: Store.Set transaction instrument not implemented — required by S-113/R09; valid planted writer reached Store.Set but emitted no TransactHook stage")
 	}
-
-	// Unit: with the observed engagement and no row, the out-of-predicate
-	// route is REQUIRED to have a payload row — the name predicate alone
-	// would have called it covered.
-	handled := map[string]bool{}
-	withPlant := append(append([]string(nil), routes...), plant)
-	require.Contains(t, pgMissingSweepRows(withPlant, handled, map[string]string{}, reached), plant,
-		"the arbitrary-name indirect writer needs a payload row despite its name (CHECK R09)")
-
-	// Negative: with the row ATTEMPTED (marked only after a probe, as the
-	// sweep marks rows), the route is no longer missing.
+	reached := map[string]bool{plant + "|" + http.MethodPost: true}
+	handled := map[string]bool{plant + "|" + http.MethodGet: true}
+	require.Equal(t, []string{plant + "|" + http.MethodPost}, pgMissingSweepRows([]string{plant}, handled, nil, reached), "GET cannot cover POST")
 	handled[plant+"|"+http.MethodPost] = true
-	require.NotContains(t, pgMissingSweepRows(withPlant, handled, map[string]string{}, reached), plant,
-		"an attempted row covers the planted writer")
+	require.Empty(t, pgMissingSweepRows([]string{plant}, handled, nil, reached), "the attempted valid POST covers this observed method")
 }

@@ -112,6 +112,7 @@ type pgGateFixture struct {
 	// (restAPI.restarter, production falls back to re-exec) instead of
 	// skipping the route.
 	restartCalls *atomic.Int32
+	restartDone  chan struct{}
 }
 
 // restartRequests reports how many times the sweep's restart-route probes
@@ -185,7 +186,9 @@ func pgNewGateway(t *testing.T, recordRoutes bool) (*pgGateFixture, []string) {
 	// falls back to re-exec in production). The stub counts invocations and
 	// never re-execs the test binary.
 	restarts := &atomic.Int32{}
-	api.restarter = func() { restarts.Add(1) }
+	restartDone := make(chan struct{})
+	var restartSignalOnce sync.Once
+	api.restarter = func() { defer restartSignalOnce.Do(func() { close(restartDone) }); restarts.Add(1) }
 	mux := http.NewServeMux()
 	var routes []string
 	if recordRoutes {
@@ -195,7 +198,7 @@ func pgNewGateway(t *testing.T, recordRoutes bool) (*pgGateFixture, []string) {
 	} else {
 		api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
 	}
-	f := &pgGateFixture{t: t, api: api, handler: buildProductionMiddlewareChain(api, mux), store: store, restartCalls: restarts}
+	f := &pgGateFixture{t: t, api: api, handler: buildProductionMiddlewareChain(api, mux), store: store, restartCalls: restarts, restartDone: restartDone}
 
 	login := httptest.NewRecorder()
 	api.HandleLogin(login, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
