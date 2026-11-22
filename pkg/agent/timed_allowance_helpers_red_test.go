@@ -20,9 +20,10 @@ package agent
 // finding 8's corrected oracle: the same agent shares one allowance, no
 // copy at spawn). Leg 1 drives the real spawn path and stays green today
 // through the very copy C-26 removes; leg 3 is the control C-26 keeps (the
-// Auto-approve modifier inheritance is unchanged). Leg 4 rides order 52's
-// controlled-clock seams (timed_allowance_scheduled_red_test.go) for the
-// store halves; nil keeps the RED run loud (BLOCKED), never a skip.
+// Auto-approve modifier inheritance is unchanged). F17 reconciliation moves
+// order 52 to the gateway package and removes its whole-store callbacks.
+// Leg 4 now uses real inheritance/store effects for same/other agents; its
+// missing duration/clock acceptance remains a separate loud BLOCKED leg.
 //
 // GREEN reconciliation note: C-26 re-keys ApprovalGrantStore and may drop
 // the session parameter from Record/IsAllowed; leg 1's calls pin the
@@ -30,7 +31,6 @@ package agent
 // never deleted.
 import (
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -106,19 +106,17 @@ func TestTimedAllowance_HelpersAndOtherAgents(t *testing.T) {
 		require.True(t, v, "C-26: the copied modifier is the parent's on value")
 	})
 
-	t.Run("C-26: the self-helper shares the timed allowance; another agent's helper asks", func(t *testing.T) {
-		if grantTimedAllowance == nil || allowanceActiveFor == nil {
-			t.Fatal("BLOCKED: the C-26 timed-allowance store is not implemented — required " +
-				"by the C-26 helper rule (Covers: helpers the agent starts for itself are " +
-				"covered; a helper of another agent, or a delegation to another agent, is " +
-				"not covered and asks as usual)")
-		}
-		home := t.TempDir()
-		grantTimedAllowance(t, home, "mia", "delete_task", "1h")
-
-		require.True(t, allowanceActiveFor(t, home, "mia", "delete_task", time.Now()),
-			"C-26: Mia's own helper runs with no card — same agent id, no copy at spawn")
-		require.False(t, allowanceActiveFor(t, home, "jim", "delete_task", time.Now()),
-			"C-26: a helper Mia delegates to Jim runs as Jim and asks as usual")
+	t.Run("C-26: real inheritance never gives Mia's grant to Jim", func(t *testing.T) {
+		al := newLoop(t)
+		store := al.ApprovalGrants()
+		args := map[string]any{"task_id": "mia-task"}
+		require.True(t, store.Record("source-mia", "mia", "delete_task", args), "legacy scope control, not a timed answer")
+		require.True(t, store.IsAllowed("source-mia", "mia", "delete_task", args), "actual source grant exists")
+		al.inheritSessionPermissions("source-mia", "mia", "child-jim", "jim")
+		require.False(t, store.IsAllowed("child-jim", "jim", "delete_task", args), "C-26: actual other-agent inheritance must not copy a consent Mia received")
+		require.True(t, store.IsAllowed("source-mia", "mia", "delete_task", args), "the source agent keeps its own record")
+	})
+	t.Run("C-26 actual timed self-helper lifetime", func(t *testing.T) {
+		t.Fatal("BLOCKED: C-26 duration recording and controlled clock are not implemented — required by S-120; real inheritance/scope probes above are not a timed answer or before/at/after expiry acceptance")
 	})
 }
