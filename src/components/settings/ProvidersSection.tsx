@@ -1129,14 +1129,21 @@ export function ProvidersSection() {
     : defaultModel
   const sentDefault = useRef<DefaultModelUpdateRequest | null>(null)
   const sentDefaultBefore = useRef<string | null>(null)
+  // CR-05: the saved-state check compares the whole default: provider, model
+  // and reasoning effort. An omitted effort keeps the stored one, so the
+  // write's effort is the draft's or, when omitted, the one before.
+  const defaultTuple = (provider: string, model: string, effort: string | undefined) =>
+    `${provider}/${model}, effort ${effort || 'not set'}`
   const defaultPart: FormSavePart = {
     id: 'default-model',
     count: defaultChanged ? 1 : 0,
     invalidCount: 0,
     write: () => {
       const pair = defaultDraft as DefaultModelUpdateRequest
-      sentDefault.current = pair
-      sentDefaultBefore.current = defaultModel ? `${defaultModel.provider}/${defaultModel.model}` : null
+      sentDefault.current = { ...pair, reasoning_effort: pair.reasoning_effort ?? defaultModel?.reasoning_effort ?? '' }
+      sentDefaultBefore.current = defaultModel
+        ? defaultTuple(defaultModel.provider, defaultModel.model, defaultModel.reasoning_effort)
+        : null
       return toWriteResponse(() => putDefaultModel(pair))
     },
     // C-6: this writer does not record failed applies, so a read equal to
@@ -1146,11 +1153,11 @@ export function ProvidersSection() {
       if (!sent) return { kind: 'unknown' }
       let fresh: DefaultModel | null = null
       const result = await checkFormPart(
-        [{ key: 'providers.default_model', label: 'Default model', draft: `${sent.provider}/${sent.model}`, before: sentDefaultBefore.current, recorded: false }],
+        [{ key: 'providers.default_model', label: 'Default model', draft: defaultTuple(sent.provider, sent.model, sent.reasoning_effort), before: sentDefaultBefore.current, recorded: false }],
         async () => {
           const read = await getDefaultModel()
           fresh = read
-          return `${read.provider}/${read.model}`
+          return defaultTuple(read.provider, read.model, read.reasoning_effort)
         },
       )
       // Changed elsewhere: the read pair becomes the saved pair; the draft stays.
