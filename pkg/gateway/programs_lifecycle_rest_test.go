@@ -55,7 +55,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sys/unix"
 )
 
 // pgProgramsSessionCall sends one person-session call to the production
@@ -322,19 +321,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		entry := pgPollEntryState(t, f, "github", "check_failed", 25*time.Second)
 		require.Equal(t, "The account check did not finish in 20 s.", pgConnection(t, entry)["message"],
 			"S-06's verbatim timeout message: %s", pgEntryJSON(entry))
-		if runtime.GOOS == "windows" {
-			t.Log("Windows: the pgid-gone read is Unix semantics (spec H-17); the state, message and 25 s bound above are asserted")
-			return
-		}
-		raw, err := os.ReadFile(pidFile)
-		require.NoError(t, err, "the fake recorded its pid")
-		pid := 0
-		_, ferr := fmt.Sscanf(strings.TrimSpace(string(raw)), "%d", &pid)
-		require.NoError(t, ferr, "the pid file holds an integer: %q", string(raw))
-		require.NotZero(t, pid, "the fake recorded a real pid")
-		err = unix.Kill(-pid, 0) // signal 0: existence probe of the whole group
-		require.ErrorIs(t, err, unix.ESRCH,
-			"the check's process group is gone after the timeout (probe of -%d)", pid)
+		pgAssertCheckProcessGone(t, pidFile)
 	})
 
 	t.Run("S36_no_check_defined_token_still_available", func(t *testing.T) {
@@ -366,20 +353,17 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		require.Equal(t, 0, f.ghStarted(), "no check ran (Acme defines none)")
 	})
 
-	t.Run("S93_second_data_recipe_executes", func(t *testing.T) {
+	t.Run("custom_identity_recipe_executes_separately_from_S93", func(t *testing.T) {
 		f := pgPersonAPI(t)
-		// S-93: the SECOND recipe the engine executes (S-01 ran gh's). The
-		// recipe is defined only in data — an identity_check created through
-		// the generic create route — and no Go code is specific to the entry
-		// (S-37's catalog test pins the data-file half of that; this row pins
-		// the execution half): the fake `acme` prints `ex-user`, so a saved
-		// token must end connected with the account label ex-user. gh never
-		// runs. Own fixture: the Acme name never collides with S-36's
-		// (CHECK R07).
+		// Custom REST recipe coverage, NOT the embedded preset S-93 path.
 		bin := t.TempDir()
-		fake := filepath.Join(bin, "acme")
-		require.NoError(t, os.WriteFile(fake, []byte("#!/bin/sh\necho ex-user\n"), 0o755),
-			"instrument: the fake acme is installed")
+		name := "acme"
+		body := "#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = whoami ] && [ \"$ACME_TOKEN\" = acme_tok_123456 ] || exit 9\necho ex-user\n"
+		if runtime.GOOS == "windows" {
+			name += ".cmd"
+			body = "@echo off\r\nif not \"%~1\"==\"whoami\" exit /b 9\r\nif not \"%~2\"==\"\" exit /b 9\r\nif not \"%ACME_TOKEN%\"==\"acme_tok_123456\" exit /b 9\r\necho ex-user\r\n"
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755))
 		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 		created := pgCreateProgramEntry(t, f,
@@ -393,8 +377,12 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		require.Equal(t, http.StatusOK, save.Code, "the save is processed: %s", save.Body.String())
 		entry := pgPollEntryState(t, f, id, "connected", 15*time.Second)
 		require.Equal(t, "ex-user", pgConnection(t, entry)["account_label"],
-			"S-93: connected with the data recipe's output: %s", pgEntryJSON(entry))
+			"custom recipe connected with its validated argv/env output: %s", pgEntryJSON(entry))
 		require.Equal(t, 0, f.ghStarted(), "the gh recipe did not run for Acme's check")
+	})
+
+	t.Run("S93_data_only_preset_GET_and_literal_recipe", func(t *testing.T) {
+		t.Fatal("BLOCKED: no production embedded catalog or gateway catalog injection exists; CatalogFromFS is a RED stub — required by FR-001/S-37/S-93: add only tests/fixtures/cli-credentials-s1/presets/example.json through the real preset build path, GET /programs, then execute exampletool [whoami] validating EXAMPLE_TOKEN and connected/ex-user; custom REST creation is not this evidence")
 	})
 
 	t.Run("D1_row10_body_over_the_cap_answered_413", func(t *testing.T) {

@@ -134,6 +134,10 @@ func TestProgramCatalog_PresetIsData(t *testing.T) {
 		require.Equal(t, []string{"whoami"}, ex.IdentityCheck.Args)
 	})
 
+	t.Run("S37_actual_embedded_catalog_lists_added_data_file", func(t *testing.T) {
+		t.Fatal("BLOCKED: no production preset embedding/catalog load path exists beyond CatalogFromFS RED stub — required by FR-001/S-37/S-93; MapFS parsing alone does not prove that an added example.json ships and lists through GET /programs")
+	})
+
 	t.Run("S38_presets_carry_the_read_only_kind", func(t *testing.T) {
 		// The catalog half of S-38 (presets are read-only): every loaded
 		// preset is kind "preset"; the 422 refusal of DELETE on a preset is

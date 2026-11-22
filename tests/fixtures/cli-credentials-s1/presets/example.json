@@ -1,0 +1,14 @@
+{
+  "id": "example",
+  "kind": "preset",
+  "display_name": "Example",
+  "program_words": ["exampletool"],
+  "token_variables": ["EXAMPLE_TOKEN"],
+  "network_sites": ["api.example.invalid"],
+  "identity_check": {
+    "program_word": "exampletool",
+    "args": ["whoami"],
+    "timeout_seconds": 20,
+    "max_output_bytes": 4096
+  }
+}
