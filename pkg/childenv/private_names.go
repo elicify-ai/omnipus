@@ -31,6 +31,14 @@ var setupLayerNames = map[string]struct{}{
 	"TMPDIR": {}, "NPM_CONFIG_CACHE": {}, "PIP_CACHE_DIR": {},
 }
 
+// gitLoginNames are the git environment-configuration names Omnipus sets for
+// connected git logins (connected-programs spec FR-013): a private variable or
+// a program token variable must never set them.
+var gitLoginNames = map[string]struct{}{"GIT_CONFIG_COUNT": {}, "GIT_CONFIG_PARAMETERS": {}}
+
+// gitLoginPrefixes are the indexed git environment-configuration families.
+var gitLoginPrefixes = []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
+
 // protectedPrivatePrefixes are whole families no private variable may use.
 var protectedPrivatePrefixes = []string{"OMNIPUS_", "LD_", "DYLD_"}
 
@@ -54,6 +62,14 @@ func CheckPrivateVariableName(name string) error {
 	}
 	if _, ok := setupLayerNames[name]; ok {
 		return privateNameError(name + " is a protected name: environment_setup sets it")
+	}
+	if _, ok := gitLoginNames[name]; ok {
+		return privateNameError(name + " is a protected name: Omnipus sets it for connected git logins")
+	}
+	for _, prefix := range gitLoginPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return privateNameError(name + " is a protected name: Omnipus sets it for connected git logins")
+		}
 	}
 	for _, prefix := range append(append([]string(nil), allowedEnvPrefixes...), protectedPrivatePrefixes...) {
 		if strings.HasPrefix(name, prefix) {
