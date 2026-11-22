@@ -70,14 +70,28 @@ func TestProgramAccountLabel(t *testing.T) {
 	})
 
 	t.Run("FR046_embedded_marker_and_fragment_in_longer_line", func(t *testing.T) {
-		// The [FILTERED] marker EMBEDDED in a longer line refuses the label,
-		// and a token fragment embedded in innocent text refuses too.
+		// The [FILTERED] marker EMBEDDED in a longer line refuses the label;
+		// a token fragment of THRESHOLD OR MORE bytes embedded in innocent
+		// text refuses too; the 7-byte neighbour embedded the same way is a
+		// valid label (CHECK R12: the earlier case fed a 7-byte substring
+		// ("tok_val") and called it an 8-byte refusal — a correct FR-046
+		// would have failed that assertion).
 		current := "tok_valid_12345"
 		_, err := AccountLabel("github", "octocat [FILTERED] rest", nil)
 		require.Error(t, err, "a line containing [FILTERED] is refused")
-		label, err := AccountLabel("github", "user tok_val done", []string{current})
-		require.Error(t, err, "a line embedding an 8-byte fragment (tok_val..) is refused")
+		frag8 := current[:8] // "tok_vali" — exactly 8 bytes, at the threshold
+		require.Len(t, frag8, 8, "instrument: the refusal input is a real 8-byte fragment")
+		label, err := AccountLabel("github", "user "+frag8+" done", []string{current})
+		require.Error(t, err, "a line embedding an 8-byte fragment (%q) is refused", frag8)
 		require.Empty(t, label, "no label is stored")
+		frag9 := current[:9] // "tok_valid" — 9 bytes, above the threshold
+		_, err = AccountLabel("github", "user "+frag9+" done", []string{current})
+		require.Error(t, err, "a line embedding a 9-byte fragment (%q) is refused", frag9)
+		// Acceptance twin (CHECK R12): the 7-byte fragment embedded in the
+		// same innocent line is BELOW the threshold — a valid label.
+		label, err = AccountLabel("github", "user tok_val done", []string{current})
+		require.NoError(t, err, "a line embedding only a 7-byte fragment is below the threshold")
+		require.Equal(t, "user tok_val done", label, "the whole printable line is the label")
 	})
 
 	t.Run("short_overlap_below_8_bytes_is_a_valid_label", func(t *testing.T) {
