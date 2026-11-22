@@ -42,6 +42,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -49,6 +50,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,39 +198,75 @@ func pgMissingSweepRows(routes []string, handled map[string]bool, excused map[st
 	return missing
 }
 
-// pgSweepServe fires one sweep probe with a hard 5-second deadline. A probe
-// whose handler does not answer FAILS the sweep — a hanging credential-route
-// handler is itself a defect, not a latency note — and the handler goroutine
-// is joined before returning, so the final store reads never race a live
-// handler (CHECK F05). If the goroutine cannot be joined even after the
-// grace period the test fatals: nothing may be asserted about a store a
-// handler may still be writing.
-func pgSweepServe(t *testing.T, f *pgGateFixture, method, path, body, bearer, reauth string) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	if reauth != "" {
-		req.Header.Set(reAuthHeader, reauth)
-	}
-	pgAttach(f, req, bearer, false, false)
+// pgProbeOutcome is one probe's result for the caller's verdicts: the
+// deadline fired before the handler answered, and whether the handler
+// goroutine was joined (after its request work was cancelled) before the
+// probe returned (CHECK R10).
+type pgProbeOutcome struct {
+	timedOut    bool
+	handlerDone bool
+}
+
+// pgServeProbe fires one probe with a hard deadline on the given handler. It
+// never fails the test — the outcome returns to the caller (the sweep turns
+// a timeout into t.Errorf; the planted instrument asserts detection). A
+// timed-out probe has its REQUEST WORK CANCELLED first and its handler
+// goroutine JOINED before returning, so a still-live probe can neither keep
+// modifying state nor outlive the fixture (CHECK F05 + CHECK R10).
+func pgServeProbe(h http.Handler, prepared *http.Request, deadline time.Duration) (*httptest.ResponseRecorder, *pgProbeOutcome) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // cancels any still-running probe work when we return
+	prepared.Header.Set("Content-Type", "application/json")
+	req := prepared.WithContext(ctx)
 	w := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		f.handler.ServeHTTP(w, req)
+		h.ServeHTTP(w, req)
 	}()
+	out := &pgProbeOutcome{}
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
 	select {
 	case <-done:
-		return w
-	case <-time.After(5 * time.Second):
-		t.Errorf("sweep probe %s %s did not answer within 5s (S-113) — the sweep fails and joins the handler before any store read", method, path)
+		out.handlerDone = true
+		return w, out
+	case <-timer.C:
+		out.timedOut = true
+		cancel() // cancel the probe's request work before joining it
 		select {
 		case <-done:
+			out.handlerDone = true
 		case <-time.After(10 * time.Second):
-			t.Fatalf("sweep probe %s %s handler still running 15s after the probe — the store verdict cannot be taken", method, path)
+			out.handlerDone = false
 		}
-		return w
+		return w, out
 	}
+}
+
+// pgSweepServe fires one sweep probe with a hard 5-second deadline. A probe
+// whose handler does not answer FAILS the sweep — a hanging credential-route
+// handler is itself a defect, not a latency note — and the handler goroutine
+// is joined (request work cancelled first) before returning, so the final
+// store reads never race a live handler (CHECK F05; CHECK R10 adds the
+// cancellation). If the goroutine cannot be joined even after the grace
+// period the test fatals: nothing may be asserted about a store a handler
+// may still be writing.
+func pgSweepServe(t *testing.T, f *pgGateFixture, method, path, body, bearer, reauth string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if reauth != "" {
+		req.Header.Set(reAuthHeader, reauth)
+	}
+	pgAttach(f, req, bearer, false, false)
+	w, out := pgServeProbe(f.handler, req, 5*time.Second)
+	if out.timedOut {
+		t.Errorf("sweep probe %s %s did not answer within 5s (S-113) — the sweep fails and joins the handler before any store read", method, path)
+	}
+	if !out.handlerDone {
+		t.Fatalf("sweep probe %s %s handler still running 15s after the probe — the store verdict cannot be taken", method, path)
+	}
+	return w
 }
 
 func TestProgramCredential_RouteSweep(t *testing.T) {
@@ -357,10 +395,21 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 
 			require.Greater(t, probes, 0, "instrument: the sweep actually fired requests")
 
-			// F03 route accounting: the restart route was probed through the
-			// process-edge seam and the injected restart action ran exactly
-			// once (the POST probe; GET/PUT/DELETE answer 405 before it).
-			// Zero would mean the sweep never reached the real route.
+			// F03 route accounting (CHECK R10): the restart route was probed
+			// through the process-edge seam and the injected restart action
+			// ran exactly once. The seam is ASYNCHRONOUS —
+			// HandleGatewayRestart acknowledges, returns, and a goroutine
+			// invokes the restart action after its drain delay — so the sweep
+			// AWAITS the callback through the seam before accounting, never
+			// samples it once. Zero after the await means the sweep never
+			// reached the real route.
+			awaitDeadline := time.Now().Add(10 * time.Second)
+			for f.restartRequests() == 0 {
+				if time.Now().After(awaitDeadline) {
+					t.Fatalf("POST /api/v1/gateway/restart never reached the restart action within 10s of the sweep — the asynchronous restart callback was not awaited/joined (CHECK R10)")
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
 			require.Equal(t, int32(1), f.restartRequests(),
 				"POST /api/v1/gateway/restart reached the restart action exactly once")
 
@@ -399,4 +448,31 @@ func pgProgramsSection(t *testing.T, f *pgGateFixture) any {
 	var cfg map[string]any
 	require.NoError(t, json.Unmarshal(raw, &cfg), "config.json parses")
 	return cfg["programs"]
+}
+
+// TestProgramCredential_SweepProbe_Instrument proves the probe deadline
+// machinery on a PLANTED delayed handler (CHECK R10): the timeout is
+// detected, the timed-out probe's request work is CANCELLED before the join,
+// and the handler goroutine is JOINED before the probe returns — the exact
+// path the sweep's 5 s deadline takes, exercised in milliseconds instead of
+// seconds.
+func TestProgramCredential_SweepProbe_Instrument(t *testing.T) {
+	var cancelled atomic.Bool
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The handler answers only after its 300 ms delay — past the probe's
+		// 100 ms deadline — unless its request work is cancelled first.
+		select {
+		case <-r.Context().Done():
+			cancelled.Store(true)
+		case <-time.After(300 * time.Millisecond):
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	w, out := pgServeProbe(h, httptest.NewRequest(http.MethodPost, "/planted-slow-probe", nil), 100*time.Millisecond)
+	require.True(t, out.timedOut, "instrument: a delayed handler is detected at the deadline")
+	require.True(t, out.handlerDone,
+		"instrument: the delayed handler's goroutine is joined before the probe returns (request work cancelled first)")
+	require.True(t, cancelled.Load(),
+		"instrument: the timed-out probe's request work was cancelled before the join")
+	require.Equal(t, http.StatusOK, w.Code, "instrument: the planted handler answered after the cancellation")
 }
