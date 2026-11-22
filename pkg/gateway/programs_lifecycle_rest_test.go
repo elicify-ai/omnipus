@@ -54,6 +54,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/tests/testutil/programstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -392,13 +393,17 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		// REST face: a value of exactly 16,384 bytes (the value max, body
 		// under the cap) is processed, not size-refused.
 		before := pgProgramEntryByID(t, f, "github")
-		huge := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
-			`{"value":"`+strings.Repeat("a", 65537)+`"}`)
+		canary := programstore.SeedCanary(t, f.store)
+		storeBefore := programstore.Snapshot(t, f.store, canary)
+		body := `{"value":"` + strings.Repeat("a", 65537-len(`{"value":""}`)) + `"}`
+		require.Len(t, body, 65537, "D-1 row 10 is body bytes, not value bytes")
+		huge := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential", body)
 		require.Equal(t, http.StatusRequestEntityTooLarge, huge.Code,
 			"a body over 65,536 bytes is answered 413: got %d", huge.Code)
 		after := pgProgramEntryByID(t, f, "github")
 		require.Equal(t, pgEntryJSON(before), pgEntryJSON(after),
 			"the size-refused save wrote nothing")
+		require.Equal(t, storeBefore, programstore.Snapshot(t, f.store, canary))
 
 		control := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
 			`{"value":"`+strings.Repeat("a", 16384)+`"}`)

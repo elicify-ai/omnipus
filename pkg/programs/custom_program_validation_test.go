@@ -71,7 +71,7 @@ var d2ValidationRows = []struct {
 	{name: "D2_row16_thirty_three_sites", mut: func(r *CustomRequest) {
 		r.NetworkSites = make([]string, 33)
 		for i := range r.NetworkSites {
-			r.NetworkSites[i] = "host.example"
+			r.NetworkSites[i] = fmt.Sprintf("host%d.example", i)
 		}
 	}},
 	{name: "D2_row17_site_with_scheme", mut: func(r *CustomRequest) { r.NetworkSites = []string{"https://api.acme.example"} }},
@@ -125,8 +125,9 @@ func TestCustomProgram_Validation(t *testing.T) {
 		req := acmeBase()
 		full := make([]ProgramEntry, 32)
 		for i := range full {
-			full[i] = ProgramEntry{ID: strings.Repeat("e", 1) + string(rune('a'+i%26)), Kind: "custom",
-				DisplayName: strings.Repeat("x", i), ProgramWords: []string{strings.Repeat("w", i+1)}}
+			full[i] = ProgramEntry{ID: fmt.Sprintf("entry-%02d", i), Kind: "custom",
+				DisplayName: fmt.Sprintf("Entry %02d", i), ProgramWords: []string{fmt.Sprintf("w%d", i)},
+				TokenVariables: []string{fmt.Sprintf("TOKEN_%d", i)}, NetworkSites: []string{fmt.Sprintf("host%d.example", i)}}
 		}
 		err := ValidateCustomRequest(req, full)
 		require.Error(t, err)
@@ -203,4 +204,58 @@ func TestCustomProgram_Validation(t *testing.T) {
 		_, err = ValidateGit(ProgramGit{Host: "gitlab.example", Username: strings.Repeat("a", 65)})
 		require.Error(t, err, "65 characters exceed the 64 cap")
 	})
+}
+
+// Each ladder mutates exactly one otherwise-valid field. D-2 pins the HTTP
+// class, not a Go error name or verbatim message for these fields (H19).
+func TestCustomProgram_IndependentBoundaries(t *testing.T) {
+	for _, field := range []struct {
+		name     string
+		min, max int
+		set      func(*CustomRequest, int)
+	}{
+		{"display_name", 1, 64, func(r *CustomRequest, n int) { r.DisplayName = strings.Repeat("a", n) }},
+		{"program_words", 1, 8, func(r *CustomRequest, n int) { r.ProgramWords = uniqueProgramStrings("word", n) }},
+		{"token_variables", 1, 4, func(r *CustomRequest, n int) { r.TokenVariables = uniqueProgramStrings("TOKEN_", n) }},
+		{"network_sites", 0, 32, func(r *CustomRequest, n int) {
+			r.NetworkSites = nil
+			for i := 0; i < n; i++ {
+				r.NetworkSites = append(r.NetworkSites, fmt.Sprintf("host%d.example", i))
+			}
+		}},
+		{"check_args", 0, 16, func(r *CustomRequest, n int) {
+			r.IdentityCheck = &ProgramIdentityCheck{ProgramWord: "acme", Args: uniqueProgramStrings("arg", n), TimeoutSeconds: 20}
+		}},
+		{"check_arg_length", 0, 256, func(r *CustomRequest, n int) {
+			r.IdentityCheck = &ProgramIdentityCheck{ProgramWord: "acme", Args: []string{strings.Repeat("a", n)}, TimeoutSeconds: 20}
+		}},
+		{"check_timeout", 1, 30, func(r *CustomRequest, n int) {
+			r.IdentityCheck = &ProgramIdentityCheck{ProgramWord: "acme", TimeoutSeconds: n}
+		}},
+	} {
+		counts := []int{field.min, field.min + 1, field.max - 1, field.max, field.max + 1}
+		if field.min > 0 {
+			counts = append(counts, field.min-1)
+		} // negative slice/string lengths have no input representation
+		for _, n := range counts {
+			t.Run(fmt.Sprintf("%s_%d", field.name, n), func(t *testing.T) {
+				r := acmeBase()
+				field.set(&r, n)
+				err := ValidateCustomRequest(r, []ProgramEntry{githubPreset()})
+				if n < field.min || n > field.max {
+					require.Error(t, err, "only %s violates its bound", field.name)
+				} else {
+					require.NoError(t, err, "%s at its independent bound", field.name)
+				}
+			})
+		}
+	}
+}
+
+func uniqueProgramStrings(prefix string, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s%d", prefix, i)
+	}
+	return out
 }

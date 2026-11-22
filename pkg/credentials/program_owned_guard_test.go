@@ -151,14 +151,11 @@ func TestCredentialStore_ProgramOwnedGuard(t *testing.T) {
 		// classification table … an unclassified method fails the test".
 		typ := reflect.TypeFor[*Store]()
 		seen := map[string]bool{}
+		require.Empty(t, unclassifiedStoreMethods(typ), "every exported Store method needs an I-3 row")
 		for i := 0; i < typ.NumMethod(); i++ {
 			name := typ.Method(i).Name
 			seen[name] = true
-			class, ok := guardMethodClass[name]
-			require.True(t, ok,
-				"exported method Store.%s has no row in the I-3 classification table; "+
-					"if it mutates credentials it MUST be classified (FR-048)", name)
-			require.NotEmpty(t, class, "Store.%s classified with empty class", name)
+			require.NotEmpty(t, guardMethodClass[name], "Store.%s classified with empty class", name)
 		}
 		// Every table row must still name a real method, so the table cannot
 		// rot silently.
@@ -336,6 +333,29 @@ func TestCredentialStore_ProgramOwnedGuard(t *testing.T) {
 		require.Empty(t, offenders,
 			"exported Store methods must write the store file only inside s.transact (FR-049): %v", offenders)
 	})
+}
+
+// This test-only type promotes the real Store method set and adds one exported
+// mutator. The SAME classifier must flag it without changing the table.
+type addedStoreMutator struct{ *Store }
+
+func (*addedStoreMutator) PlantedUnclassifiedMutation() {}
+
+func unclassifiedStoreMethods(typ reflect.Type) []string {
+	var missing []string
+	for i := 0; i < typ.NumMethod(); i++ {
+		name := typ.Method(i).Name
+		if guardMethodClass[name] == "" {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+func TestCredentialStore_AddedExportedMutatorInstrument(t *testing.T) {
+	require.Empty(t, unclassifiedStoreMethods(reflect.TypeFor[*Store]()), "positive: current classified set")
+	require.Equal(t, []string{"PlantedUnclassifiedMutation"}, unclassifiedStoreMethods(reflect.TypeFor[*addedStoreMutator]()), "negative: added exported mutator cannot disappear")
 }
 
 // --- helpers ----------------------------------------------------------------

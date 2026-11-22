@@ -124,6 +124,37 @@ func TestAgentPrograms_ParityRows(t *testing.T) {
 			"get_agent's revision is the record's current revision")
 	})
 
+	t.Run("S10_tool_create_starts_with_programs_off", func(t *testing.T) {
+		deps, _ := newTestDeps(t)
+		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), createNativeArgs("Programs off"))
+		require.False(t, result.IsError, result.ForLLM)
+		id := extractID(t, result.ForLLM)
+		got := s16GetAgentPrograms(t, deps, id)
+		programs, ok := got["programs"].([]any)
+		require.True(t, ok, "reader exposes the empty list, not an absent field")
+		require.Empty(t, programs)
+	})
+
+	t.Run("create_cannot_enable_programs", func(t *testing.T) {
+		deps, _ := newTestDeps(t)
+		store := agentstore.New(deps.Home)
+		before, skipped, err := store.List()
+		require.NoError(t, err)
+		require.Empty(t, skipped)
+		args := createNativeArgs("Must not enable programs")
+		args["programs"] = []any{"github"}
+		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+		require.True(t, result.IsError, "Agent tool field table: programs is not settable on create")
+		after, skipped, err := store.List()
+		require.NoError(t, err)
+		require.Empty(t, skipped)
+		require.Equal(t, before, after, "refused create writes no agent")
+	})
+
+	t.Run("S14_real_approval_before_programs_mutation", func(t *testing.T) {
+		t.Fatal("BLOCKED: programs is absent from the executable permission schema; real-loop approval hold/reject/approve fixture is not connected to the S1 permission write — required by FR-007/S-14; direct Execute is post-approval unit coverage only")
+	})
+
 	t.Run("S15_self_change_refused_with_programs_too", func(t *testing.T) {
 		deps, _ := newTestDeps(t)
 		store := agentstore.New(deps.Home)
@@ -172,8 +203,13 @@ func TestAgentPrograms_ParityRows(t *testing.T) {
 		// happen to refuse today.
 		mapped := false
 		for _, row := range agentmutation.MappingRows() {
+			if row.RESTPath == "programs" {
+				require.Equal(t, "set_agent_permissions", row.Tool)
+				require.Equal(t, "programs", row.ToolPath)
+				require.Equal(t, agentmutation.OpUpdate, row.Ops, "no create or OpBoth mapping may enable programs")
+			}
 			if row.RESTPath == "programs" && row.Tool == "set_agent_permissions" &&
-				row.ToolPath == "programs" && (row.Ops == agentmutation.OpUpdate || row.Ops == agentmutation.OpBoth) {
+				row.ToolPath == "programs" && row.Ops == agentmutation.OpUpdate {
 				mapped = true
 			}
 		}
@@ -182,12 +218,19 @@ func TestAgentPrograms_ParityRows(t *testing.T) {
 		excluded := false
 		for _, row := range agentmutation.ExcludedRows() {
 			if row.Side == "REST" && row.Path == "programs" &&
-				(row.Ops == agentmutation.OpUpdate || row.Ops == agentmutation.OpBoth) &&
+				row.Ops == agentmutation.OpUpdate &&
 				strings.Contains(row.Reason, s16ProgramsRefusal) {
 				excluded = true
 			}
 		}
 		require.True(t, excluded,
 			"ExcludedRows excludes REST programs from update_agent with the AG-07 set_agent_permissions reason")
+		createExcluded := false
+		for _, row := range agentmutation.ExcludedRows() {
+			if row.Side == "REST" && row.Path == "programs" && row.Ops == agentmutation.OpCreate {
+				createExcluded = true
+			}
+		}
+		require.True(t, createExcluded, "Agent field table: separate create exclusion, never OpBoth")
 	})
 }

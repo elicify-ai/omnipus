@@ -32,6 +32,7 @@ var d1Rows = []struct {
 	{name: "D1_row1_empty", input: "", wantErr: "Enter a token."},
 	{name: "D1_row2_min_minus_1", input: "abc1234", wantErr: "The token is too short. A token has at least 8 characters."},
 	{name: "D1_row3_min_8_bytes", input: "abcd1234", wantVal: "abcd1234"},
+	{name: "min_plus_1_9_bytes", input: "abcd12345", wantVal: "abcd12345"},
 	{name: "D1_row6_surrounding_whitespace_trimmed", input: "  tok_valid_12345\n", wantVal: "tok_valid_12345"},
 	{name: "D1_row7_inner_break", input: "tok_a\ntok_b_123", wantErr: "The token contains a line break. Paste the token on one line."},
 	{name: "D1_row8_nul", input: "tok\x00valid123", wantErr: "The token contains a character that cannot be stored."},
@@ -59,6 +60,13 @@ func TestProgramToken_ValueRules(t *testing.T) {
 	t.Run("D1_row4_max_16384_bytes_accepted", func(t *testing.T) {
 		// D-1 row 4: a token of exactly 16,384 bytes is saved.
 		token := strings.Repeat("a", 16384)
+		got, err := ValidateTokenValue(token)
+		require.NoError(t, err)
+		require.Equal(t, token, got)
+	})
+
+	t.Run("max_minus_1_16383_bytes_accepted", func(t *testing.T) {
+		token := strings.Repeat("a", 16383)
 		got, err := ValidateTokenValue(token)
 		require.NoError(t, err)
 		require.Equal(t, token, got)
