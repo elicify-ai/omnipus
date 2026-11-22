@@ -38,7 +38,11 @@ func TestOpenCodeGateR2_ContinuationOwnSaveFailureIsCollectedOnce(t *testing.T) 
 				require.ErrorIs(t, joined, carried, "a distinct earlier error must also survive")
 			}
 			assert.Equal(t, 1, strings.Count(joined.Error(), ownErr.Error()), "an already-carried identical error is not joined again")
-			if carried != nil && carried != ownErr {
+			// errorlint requires errors.Is for error comparison. The fixture
+			// errors are unwrapped errors.New values, so errors.Is is
+			// behaviorally identical to pointer identity here; the asserted
+			// joined-message counts are unchanged.
+			if carried != nil && !errors.Is(carried, ownErr) {
 				assert.Equal(t, 1, strings.Count(joined.Error(), carried.Error()))
 			}
 			repeated := f.al.drainSaveFailures(joined, turns)
