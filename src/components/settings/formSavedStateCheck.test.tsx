@@ -385,7 +385,7 @@ async function waitForWrite(fn: unknown) {
   await waitFor(() => expect((fn as { mock: { calls: unknown[] } }).mock.calls.length).toBe(1))
 }
 
-describe('F01 — after a lost write answer, the real forms run the C-6 saved-state check (FR-020 outcome 4, spec :1924; C-6, spec :246)', () => {
+describe('F01 — Performance after a lost write answer (FR-020 outcome 4; C-6)', () => {
   it('Performance, case A — pending-restart lists the key with the draft as its persisted value while the running read still holds the old value: the form says Saved, but not in use yet', async () => {
     const wireCalls = stubPendingRestartWire()
     // Case A's premise (C-6, spec :246): the key IS listed, and its
@@ -504,7 +504,9 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     expect(screen.queryByText(/These changes were not saved/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/changed somewhere else/i)).not.toBeInTheDocument()
   })
+})
 
+describe('F01 — Context, third-party agents and Providers after a lost write answer (FR-020 outcome 4; C-6)', () => {
   it('Context, case A — pending-restart lists context.mcp_result_cap with the draft as its persisted value: the section says Saved, but not in use yet', async () => {
     stubPendingRestartWire()
     pendingRestart.entries = [pendingEntry('context.mcp_result_cap', 50, 20)]
@@ -653,7 +655,9 @@ describe('F01 — after a lost write answer, the real forms run the C-6 saved-st
     await waitFor(() => expect(screen.getByTestId('active-transcriber')).toHaveValue('deepgram'))
     expect(screen.queryByText(/1 unsaved change/)).not.toBeInTheDocument()
   })
+})
 
+describe('F01 — Sandbox after a lost write answer (FR-020 outcome 4; C-6)', () => {
   it('Sandbox allowed folders, case C — before [/a], draft [/b], the read holds the third list [/c]: the section names the change with the exact list and keeps the draft (R2-02)', async () => {
     stubPendingRestartWire()
     renderWith(<SandboxSection />)

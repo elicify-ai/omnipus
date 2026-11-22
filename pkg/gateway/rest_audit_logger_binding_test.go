@@ -141,9 +141,10 @@ func TestAuditViewer_BindsRecordsAndChainToActiveLogger(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit-log", nil)
 		var csrf *http.Cookie
 		for _, c := range cookies {
-			if c.Name == middleware.CSRFCookieName || c.Name == middleware.CSRFCookieNameHTTP {
+			switch c.Name {
+			case middleware.CSRFCookieName, middleware.CSRFCookieNameHTTP:
 				csrf = c
-			} else if c.Name == middleware.SessionCookieName {
+			case middleware.SessionCookieName:
 				req.AddCookie(c)
 			}
 		}

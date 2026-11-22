@@ -112,10 +112,10 @@ func s4DeleteCredential(t *testing.T, api *restAPI, handler http.Handler, cookie
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/credentials/"+s4DoomedKey, nil)
 	var csrf *http.Cookie
 	for _, c := range cookies {
-		switch {
-		case c.Name == middleware.CSRFCookieName || c.Name == middleware.CSRFCookieNameHTTP:
+		switch c.Name {
+		case middleware.CSRFCookieName, middleware.CSRFCookieNameHTTP:
 			csrf = c
-		case c.Name == middleware.SessionCookieName:
+		case middleware.SessionCookieName:
 			req.AddCookie(c)
 		}
 	}
