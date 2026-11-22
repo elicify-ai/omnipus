@@ -358,5 +358,5 @@ func TestT132_LaunchObserverPositiveControl(t *testing.T) {
 	require.Error(t, previewErr, "TA-06 control: the marker stub cannot convert; the call fails after its real launch")
 	require.Nil(t, res)
 	require.True(t, t131MarkerUnder(t, home),
-		"TA-06 control: a real converter start must leave the work-folder marker — without this the refusal rows' no-marker assertions would be vacuous")
+		"TA-06 control: a real converter start must leave the work-folder marker — without this the refusal rows' no-marker assertions would be vacuous; the call failed with: %v", previewErr)
 }
