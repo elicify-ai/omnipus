@@ -14,6 +14,16 @@
 // Every function is an EMPTY stub: Provenance is always the zero value
 // (unresolved), so the S1 tests fail with real expected-vs-actual instead of
 // not compiling. GREEN implements the real algebra in place.
+//
+// What is real vs stub (CHECK F20's qualification): the VALUE SCAFFOLDING is
+// real code — Origin and its constants, ConnectorOrigin, IsConnectorOrigin,
+// the Provenance field carrier, IsUnresolved and Origins (the zero-value
+// definition and the field's own reader). The FEATURE functions are empty:
+// NewProvenance returns unresolved, Join returns unresolved (never the
+// union), Eligible is constant false, WithheldOrigins constant nil. A test
+// that passes here passes on scaffolding alone; every algebra assertion that
+// matters rides the feature functions and is red until GREEN implements
+// them.
 
 package bus
 

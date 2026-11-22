@@ -14,10 +14,13 @@
 // "<ref> belongs to the program <program>. Change it in Settings →
 // Programs."). Expected values come from the spec, never from the tool.
 //
-// RED expectation: the tool's removal path reaches the store before the
-// store guard exists, so remove_secret DELETES the program-owned reference R
-// — the assertions fail with the deletion in hand (the exact corruption
-// S-129 refuses).
+// RED expectation (CORRECTED, CHECK F19 — the original header wrongly said
+// remove_secret "DELETES the program-owned reference R ... with the deletion
+// in hand"): at RED CommitProgramCredential is the no-op stub, so R never
+// exists and the tool answers NOT_FOUND ("no stored reference R; nothing was
+// removed") — the row fails on the missing program-owned refusal, not on an
+// observed deletion. The corrected receipt is the saved log
+// /workspace/logs/1960/s1-red/fix1/f19-s129-receipt.log.
 
 package systools_test
 
