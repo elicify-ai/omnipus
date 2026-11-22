@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -114,6 +115,28 @@ func pgSubmitCard(t *testing.T, f *pgGateFixture, requestID, fieldKey, value, be
 	return w, read
 }
 
+// pgProgramStoreSnapshot reads every stored reference with its value and its
+// generation — the card submission's write surface (value, metadata,
+// generation) as one comparable snapshot (CHECK F18: value/generation, not
+// names alone). The receipt half of the write face has no enumeration on the
+// store; it is pinned by the sweep's receipt readback
+// (pgCommitProgramReference).
+func pgProgramStoreSnapshot(t *testing.T, f *pgGateFixture) map[string]string {
+	t.Helper()
+	names, err := f.store.List()
+	require.NoError(t, err, "instrument: the store lists")
+	snap := make(map[string]string, len(names))
+	for _, n := range names {
+		v, gerr := f.store.Get(n)
+		require.NoError(t, gerr, "instrument: %s reads", n)
+		snap[n] = v
+		if gen, ok := f.store.ProgramEntryGeneration(n); ok {
+			snap[n+"#generation"] = strconv.FormatInt(gen, 10)
+		}
+	}
+	return snap
+}
+
 func TestProgramCard_PersonGate(t *testing.T) {
 	f := pgPersonAPI(t)
 	const owner = "pg-person"
@@ -130,8 +153,8 @@ func TestProgramCard_PersonGate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BLOCKED: the request_secret tool has no program recipient — required by FR-051/S-112 (tool said: %v)", err)
 		}
-		refsBefore, lerr := f.store.List()
-		require.NoError(t, lerr, "instrument: the store lists")
+		snapBefore := pgProgramStoreSnapshot(t, f)
+		starts := f.ghStarted()
 
 		// The person's OWN API bearer: decided from the stored request kind
 		// before the body is read.
@@ -140,11 +163,10 @@ func TestProgramCard_PersonGate(t *testing.T) {
 			"a program card refuses the person's own API bearer: got %d %s", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), pgPersonRefusal, "the person-session refusal text")
 		require.Equal(t, int64(0), read, "decided before the body is read")
-		require.Equal(t, 0, f.ghStarted(), "no check runs")
+		require.Equal(t, starts, f.ghStarted(), "no check runs (per-row delta, CHECK F18)")
 		require.Equal(t, "pending", pgCardState(t, f, owner, sid, cardID), "the card stays pending")
-		refsAfter, aerr := f.store.List()
-		require.NoError(t, aerr)
-		require.Equal(t, refsBefore, refsAfter, "nothing is stored")
+		require.Equal(t, snapBefore, pgProgramStoreSnapshot(t, f),
+			"nothing is stored — values and generations, not names alone (CHECK F18)")
 	})
 
 	t.Run("D8_row11_browser_session_submit_processed", func(t *testing.T) {

@@ -35,6 +35,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -357,24 +358,35 @@ func pgServe(t *testing.T, f *pgGateFixture, method, path string, body []byte,
 }
 
 // pgAgentPUT prepares a revisioned PUT /api/v1/agents/dev (the shared agent
-// route refuses a stale revision), with the caller identity attached.
-func pgAgentPUT(t *testing.T, f *pgGateFixture, body string, bearer string, withSession, csrf bool) *httptest.ResponseRecorder {
+// route refuses a stale revision), with the caller identity attached, and
+// returns the recorder plus the number of body bytes the server consumed
+// (CHECK F18: body-read counting on the shared helper, same instrument as
+// pgServe).
+func pgAgentPUT(t *testing.T, f *pgGateFixture, body string, bearer string, withSession, csrf bool) (*httptest.ResponseRecorder, int64) {
 	t.Helper()
-	req := revisionedAgentMutationRequest(t, f.api, pgAgentsRoute, strings.NewReader(body))
+	var read int64
+	req := revisionedAgentMutationRequest(t, f.api, pgAgentsRoute,
+		&pgCountingBody{r: strings.NewReader(body), n: &read})
 	req.Header.Set("Content-Type", "application/json")
 	pgAttach(f, req, bearer, withSession, csrf)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
-	return w
+	return w, read
 }
 
-// pgAgentDescription reads the persisted description of the seeded dev agent
-// from the agent store (the record the shared route persists through).
-func pgAgentDescription(t *testing.T, f *pgGateFixture) string {
+// pgAgentRecord reads the persisted dev record and decodes it to a
+// field-agnostic JSON map — the before/after full-state oracle for the
+// shared-route rows (CHECK F18: both-field/full-state compares, not one
+// field).
+func pgAgentRecord(t *testing.T, f *pgGateFixture) map[string]any {
 	t.Helper()
 	rec, err := agentstore.New(f.api.homePath).Get("dev")
 	require.NoError(t, err, "instrument: the seeded dev record is readable")
-	return rec.Description
+	raw, merr := json.Marshal(rec)
+	require.NoError(t, merr, "instrument: the record marshals")
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m), "instrument: the record decodes to a map")
+	return m
 }
 
 func TestProgramsREST_PersonSessionOnly(t *testing.T) {
@@ -392,6 +404,11 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 	})
 
 	t.Run("D8_row2_cli_token_refused_before_body", func(t *testing.T) {
+		// Per-row delta (CHECK F18): row 1's positive control started the
+		// fake gh, so "not started" is measured as a zero DELTA, and the
+		// marker mechanism is proven working first (ghMarkerReadable) — a
+		// zero against a marker that cannot be seen is vacuous.
+		starts := f.ghStarted()
 		w, read := pgServe(t, f, http.MethodPut, pgSaveRoute, saveBody, f.cliToken, false, true)
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential", "S1 contract table / S-81 D-8 row 2")
@@ -399,7 +416,10 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.Equal(t, http.StatusForbidden, w.Code, "a CLI token is not a person: %s", w.Body.String())
 		require.Contains(t, w.Body.String(), pgPersonRefusal, "the refusal is the person-session text")
 		require.Equal(t, int64(0), read, "refused before the body")
-		require.Equal(t, 0, f.ghStarted(), "the fake gh was not started")
+		f.ghMarkerReadable()
+		require.Greater(t, starts, 0,
+			"instrument: row 1's processed save started the fake gh — the start marker counts, so the zero delta below is a real zero")
+		require.Equal(t, starts, f.ghStarted(), "the fake gh was not started by this refused row")
 	})
 
 	t.Run("D8_row3_person_api_bearer_refused", func(t *testing.T) {
@@ -414,14 +434,31 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 		require.Equal(t, int64(0), read, "refused before the body")
 	})
 
-	t.Run("D8_row4_cli_token_on_shared_agent_route_refused", func(t *testing.T) {
-		before := pgAgentDescription(t, f)
-		w := pgAgentPUT(t, f, `{"description":"x","programs":["github"]}`, f.cliToken, false, true)
+	t.Run("D8_row4_agent_tool_bearer_on_shared_agent_route_refused", func(t *testing.T) {
+		// D-8 row 4's caller is the agent/tool bearer class. The machine
+		// credential slot holds exactly one entry, so the row mints a
+		// SECOND, distinct, valid machine credential (row 2's value was
+		// already refused): the refusal must follow the caller CLASS, never
+		// the specific token value (CHECK F18). The shared route's body-read
+		// column is "yes: bounded decode, no mutation" — the read is counted.
+		agentToken := "omnipus_" + strings.Repeat("a", 64)
+		require.NotEqual(t, agentToken, f.cliToken, "instrument: the row's credential is distinct from row 2's")
+		require.NoError(t, f.api.agentLoop.MutateConfig(func(c *config.Config) error {
+			c.Gateway.CLIToken = &config.TokenEntry{Hash: mustBcryptHash(t, agentToken)}
+			return config.SaveConfig(f.api.configPath(), c)
+		}), "instrument: the second machine credential is configured")
+		require.NoError(t, f.api.agentLoop.GetConfig().Gateway.VerifyCLIToken(agentToken),
+			"instrument: the row presents a valid machine credential")
+
+		before := pgAgentRecord(t, f)
+		w, read := pgAgentPUT(t, f, `{"description":"x","programs":["github"]}`, agentToken, false, true)
 		require.Equal(t, http.StatusForbidden, w.Code,
 			"an agent/tool bearer carrying programs is refused on the shared route (FR-028): got %d %s",
 			w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), pgPersonRefusal, "same refusal text")
-		require.Equal(t, before, pgAgentDescription(t, f), "no mutation")
+		require.Greater(t, read, int64(0), "the shared route bounded-decodes the body (D-8 row 4)")
+		require.Equal(t, before, pgAgentRecord(t, f),
+			"unchanged — the full persisted record, not one field (CHECK F18)")
 	})
 
 	t.Run("D8_row6_no_identity_401", func(t *testing.T) {
@@ -458,20 +495,37 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 
 	t.Run("D8_row12_person_bearer_on_shared_agent_route_refused_before_mutation", func(t *testing.T) {
 		// S-134 first clause: bounded decode, refusal BEFORE any mutation.
-		before := pgAgentDescription(t, f)
-		w := pgAgentPUT(t, f, `{"description":"x","programs":["github"]}`, loginToken, false, true)
+		before := pgAgentRecord(t, f)
+		w, read := pgAgentPUT(t, f, `{"description":"x","programs":["github"]}`, loginToken, false, true)
 		require.Equal(t, http.StatusForbidden, w.Code,
 			"the person's own API bearer carrying programs is refused: got %d %s", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), pgPersonRefusal, "same refusal text")
-		require.Equal(t, before, pgAgentDescription(t, f),
-			"description and programs both unchanged (no mutation)")
+		require.Greater(t, read, int64(0), "the shared route bounded-decodes the body")
+		require.Equal(t, before, pgAgentRecord(t, f),
+			"description and programs both unchanged — the full persisted record (CHECK F18)")
 	})
 
 	t.Run("D8_row13_person_bearer_without_programs_still_works", func(t *testing.T) {
-		// S-134 second clause: regression — exactly as today.
-		w := pgAgentPUT(t, f, `{"description":"x"}`, loginToken, false, true)
+		// S-134 second clause: regression — exactly as today. The description
+		// change lands; nothing else in the record moves (in particular no
+		// programs field appears).
+		before := pgAgentRecord(t, f)
+		w, read := pgAgentPUT(t, f, `{"description":"x"}`, loginToken, false, true)
 		require.Equal(t, http.StatusOK, w.Code, "processed as today: %s", w.Body.String())
-		require.Equal(t, "x", pgAgentDescription(t, f), "the description change is applied")
+		require.Greater(t, read, int64(0), "a processed row reads the body")
+		after := pgAgentRecord(t, f)
+		require.Equal(t, "x", after["description"], "the description change is applied")
+		// The route's own concurrency bookkeeping (the revision and
+		// updated_at bumps) and the requested description are the only
+		// allowed differences; in particular no programs field may appear.
+		delete(before, "description")
+		delete(after, "description")
+		delete(before, "revision")
+		delete(after, "revision")
+		delete(before, "updated_at")
+		delete(after, "updated_at")
+		require.Equal(t, before, after,
+			"nothing outside the description (and the route's own bookkeeping) changed — no programs field appeared")
 	})
 
 	t.Run("D8_row14_program_owned_key_refused_by_store_guard", func(t *testing.T) {
@@ -527,8 +581,11 @@ func TestProgramsREST_PersonSessionOnly(t *testing.T) {
 
 // pgStandaloneAPI builds a gateway over the real route table with no
 // configured accounts, for the D-8 callers that only exist without one
-// (development bypass, legacy env token).
-func pgStandaloneAPI(t *testing.T, bypass bool) (http.Handler, *restAPI) {
+// (development bypass, legacy env token). It also puts the start-marker fake
+// gh first on PATH and returns the start counter, so a "nothing started"
+// claim is countable (CHECK F18): without a fake on PATH the claim would be
+// vacuous — nothing COULD have started.
+func pgStandaloneAPI(t *testing.T, bypass bool) (http.Handler, *restAPI, func() int) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmp := t.TempDir()
@@ -549,7 +606,29 @@ func pgStandaloneAPI(t *testing.T, bypass bool) (http.Handler, *restAPI) {
 	api := &restAPI{agentLoop: al, homePath: config.OmnipusHomeDir(), allowedOrigin: "http://localhost:3000"}
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
-	return buildProductionMiddlewareChain(api, mux), api
+
+	// The start-marker fake gh (same instrument as pgNewGateway's fixture).
+	marker := filepath.Join(t.TempDir(), "gh-starts")
+	bin := t.TempDir()
+	name := "gh"
+	script := "#!/bin/sh\necho started >> " + marker + "\n"
+	if runtime.GOOS == "windows" {
+		name += ".cmd"
+		script = "@echo started >> " + marker + "\r\n"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	starts := func() int {
+		b, err := os.ReadFile(marker)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return 0
+			}
+			t.Fatalf("instrument: cannot read the gh start marker %q: %v", marker, err)
+		}
+		return strings.Count(string(b), "started")
+	}
+	return buildProductionMiddlewareChain(api, mux), api, starts
 }
 
 // TestProgramsREST_BypassAndLegacyEnvRefused covers D-8 rows 5 and 7 (S-81):
@@ -558,7 +637,10 @@ func pgStandaloneAPI(t *testing.T, bypass bool) (http.Handler, *restAPI) {
 // from the wrapped Programs routes.
 func TestProgramsREST_BypassAndLegacyEnvRefused(t *testing.T) {
 	t.Run("D8_row5_development_bypass_refused", func(t *testing.T) {
-		handler, _ := pgStandaloneAPI(t, true)
+		handler, _, starts := pgStandaloneAPI(t, true)
+		if path, err := exec.LookPath("gh"); err != nil || path == "" {
+			t.Fatalf("instrument: the fake gh is not on PATH (%v) — the nothing-started claim below would be vacuous", err)
+		}
 		req := httptest.NewRequest(http.MethodPost, "/programs/github/check", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -568,10 +650,12 @@ func TestProgramsREST_BypassAndLegacyEnvRefused(t *testing.T) {
 		require.Equal(t, http.StatusForbidden, w.Code,
 			"bypass mode is refused before anything starts: %s", w.Body.String())
 		require.Contains(t, w.Body.String(), pgPersonRefusal, "same refusal text")
+		require.Equal(t, 0, starts(),
+			"D-8 row 5: nothing started (the fake gh is on PATH, so a start would have been counted)")
 	})
 
 	t.Run("D8_row7_legacy_env_token_refused", func(t *testing.T) {
-		handler, _ := pgStandaloneAPI(t, false)
+		handler, _, _ := pgStandaloneAPI(t, false)
 		t.Setenv("OMNIPUS_BEARER_TOKEN", "legacy-machine-secret")
 		req := httptest.NewRequest(http.MethodPut, "/channels/telegram/programs",
 			strings.NewReader(`{"allowed":true,"revision":1}`))
