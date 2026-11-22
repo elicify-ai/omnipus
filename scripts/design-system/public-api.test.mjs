@@ -102,6 +102,9 @@ const reviewedControls = new Set([
   'filter-menu', 'view-switch', 'hover-card', 'word-boundary-text',
   // W2-1 shared kit (kit-contract.md §2): exact files, never a ui-folder admission.
   'search-field', 'list-group', 'page-header', 'empty', 'callout', 'spinner', 'copy-button',
+  // #1967 B1 (spec Design-System Components; chief-approved option A): the
+  // published wizard Stepper is a pure presentational kit composite.
+  'stepper',
 ].map((name) => `src/components/ui/${name}.tsx`))
 const reviewedFoundations = new Set([
   'src/index.ts', 'src/lib/utils.ts', 'src/lib/formatTokens.ts',
