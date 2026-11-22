@@ -62,12 +62,10 @@ const (
 // "/apply"; it must be a staging UUID, so a traversal ID never reaches the disk.
 func (a *restAPI) handlePackageImportApply(w http.ResponseWriter, r *http.Request) {
 	// B1 cancel dispatch (spec FR-010): DELETE /api/v1/packages/import/{id}
-	// cancels an unused upload. RED STUB: answers 501; GREEN replaces this
-	// branch with the cancel handler over the registry's Cancel. Every other
-	// method keeps today's outcome exactly (POST /apply below, the catch-all
-	// 405 above it).
+	// cancels an unused upload. Every other method keeps today's outcome
+	// exactly (POST /apply below, 405 for anything else).
 	if r.Method == http.MethodDelete {
-		jsonErr(w, http.StatusNotImplemented, "not implemented")
+		a.handlePackageImportCancel(w, r)
 		return
 	}
 	if r.Method != http.MethodPost {
