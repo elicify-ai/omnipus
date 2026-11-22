@@ -121,5 +121,7 @@ export { Callout, CalloutTitle, CalloutDescription, CalloutActions, calloutVaria
 export type { CalloutProps } from './components/ui/callout'
 export { Spinner } from './components/ui/spinner'
 export type { SpinnerProps } from './components/ui/spinner'
+export { Stepper } from './components/ui/stepper'
+export type { StepperProps } from './components/ui/stepper'
 export { CopyButton, COPY_FEEDBACK_MS } from './components/ui/copy-button'
 export type { CopyButtonProps } from './components/ui/copy-button'

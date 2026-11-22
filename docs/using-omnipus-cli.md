@@ -180,7 +180,7 @@ Run `omnipus doctor` after any big configuration change, and before exposing the
 
 You can pack **one custom agent** into a single file, copy that file to another Omnipus you run yourself, look inside it, and add the agent there. The file is a package (`.omnpkg`). The agent on the new install is a new agent: it gets a new id, and it does not replace anyone who is already there.
 
-There is no screen for this, and no agent can do it for you. You use the commands below, or the three endpoints named on the [Agents](agents.md#how-to-create-your-own-agent) page. What is inside the file, and what changes on the way in, is on [Agents](agents.md#how-to-move-an-agent-to-another-install).
+The same can be done from [Export & Import](export-import.md) in the app (self-hosted edition); the app's bundle is the same package file. No agent can do it for you. You use the commands below, the page, or the endpoints named on the [Agents](agents.md#how-to-create-your-own-agent) page. What is inside the file, and what changes on the way in, is on [Agents](agents.md#how-to-move-an-agent-to-another-install).
 
 These commands work only when you run Omnipus yourself, the same limit as Backup and Restore. A hosted or desktop install does not offer them.
 
@@ -396,7 +396,7 @@ Most jobs can be done from either place.
 | Manage API keys | `omnipus credentials …` | Settings → Providers |
 | Review the audit log | `omnipus audit` | Settings → Protection |
 | Create and edit agents | — | Ask Omnipus (**Add agent** in the sidebar or **Team → Add agent**); edit from the workspace's **Team** |
-| Move one custom agent to another install | `omnipus export`, `omnipus import`, `omnipus package inspect`, `omnipus package verify` | No separate screen. After a confirmed import the agent shows on the workspace **Team** |
+| Move one custom agent to another install | `omnipus export`, `omnipus import`, `omnipus package inspect`, `omnipus package verify` | Export & Import page. After a confirmed import the agent shows on the workspace **Team** |
 | Connect Telegram, Discord, Slack and more | — | The Connectors screen, Configure |
 | Add MCP servers | — | The Skills screen |
 | Follow task work | — | A workspace's Board and Calendar |

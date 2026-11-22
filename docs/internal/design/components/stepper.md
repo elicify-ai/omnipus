@@ -1,0 +1,3 @@
+# Stepper
+
+`Stepper` is the wizard step indicator (Export & Import slice B1, issue #1967). It is presentational only: it takes the ordered step labels and the zero-based index of the current step, and owns no navigation. It renders an ordered list (`<ol>`, named by `label`) with one item per step; the current item carries `aria-current="step"` and the accent border and text, earlier steps the secondary text and later steps the muted text. A visually hidden "Step n of m" line follows the list for screen readers. In forced-colours mode each item's border repaints to `CanvasText`. The onboarding wizard's hand-built indicator is a candidate to move onto it (follow-up, not B1).
