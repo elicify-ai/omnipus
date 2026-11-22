@@ -1,0 +1,29 @@
+title: ProgramIdentityCheck
+description: >
+  The account check of a program (spec FR-005, FR-046): a gateway-owned run of
+  one of the entry's program words with literal arguments (never shell-parsed).
+  The account label is the masked first non-empty stdout line.
+type: object
+required:
+  - program_word
+additionalProperties: false
+properties:
+  program_word:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: One of the entry's program words.
+  args:
+    type: array
+    maxItems: 16
+    items:
+      type: string
+      maxLength: 256
+  timeout_seconds:
+    type: integer
+    minimum: 1
+    maximum: 30
+    description: Defaults to 20.
+  max_output_bytes:
+    type: integer
+    description: Fixed at 4096; any other value is refused.
