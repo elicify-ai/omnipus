@@ -9,33 +9,50 @@
 // Part (a) is a source guard over the packages that compose agent
 // environments, mirroring the S-111 producer-guard instrument. It scans the
 // production tree (non-test Go files, recursively under every scoped root —
-// CHECK F10) for child-start sites (exec.Command/exec.CommandContext,
-// resolved through the file's own import table so an aliased os/exec is
-// caught), and reports EVERY site regardless of violations: the classification
-// (S1 mandatory / non-program / unlisted) runs on the full enumeration, so a
-// clean site in an unlisted file still fails the guard. An S1 mandatory
-// site's violation is per command (CHECK F10): the enclosing function must
-// call programs.Attach BEFORE the launch position — one late or absent Attach
-// per function is not compliance. The negative controls feed in-memory
-// test-only files (the repository is never modified): a literal GH_TOKEN
-// composition without Attach, an INDIRECT composition (the variable name not
-// a literal), and a clean exec.Command in an unlisted file — each must fail
-// naming its file.
+// CHECK F10) for child-start SITES and reports EVERY site regardless of
+// violations: the classification (S1 mandatory / non-program / unlisted)
+// runs per site, never per file (CHECK R06) — a new child in a previously
+// classified non-program file is a new, unlisted site and fails the guard.
 //
-// Part (b) runs every child kind of the current slice's mandatory inventory
-// (bash foreground, bash background, God Mode, environment_setup, account
-// check, git version probe) with the D-9 sentinel through its real harness
-// and asserts the sentinel reaches no sink. The env-injection seam (the
-// agent environment builder handing program variables to each kind's
-// harness, FR-011) does not exist at RED: each kind reports BLOCKED naming
-// its seam, never a skip.
+// A site is the LAUNCH of a command constructed from exec.Command or
+// exec.CommandContext (resolved through the file's own import table, so an
+// aliased os/exec is caught; direct chains exec.Command(...).Run() count
+// too). The launch is the call that actually starts the child: a
+// Start/Run/Output/CombinedOutput method on the constructed command, or the
+// command handed to a known start sink — the sandbox's StartLocked /
+// StartLockedWithPolicy or the tree's own startGodFloorChild wrapper over
+// them (this tree's mandatory runners launch through the sandbox, CHECK
+// R06: ordering is checked against the launch, not the construction). The
+// Attach rule is per COMMAND: the launch is compliant only when a programs.Attach call
+// whose first argument is that same command variable sits between the
+// command's construction and the launch — an Attach of a different command
+// blesses nothing, and an Attach after the launch blesses nothing.
+// Same-package bare Attach calls (this package's own composition code) are
+// recognised alongside the imported alias.
+//
+// The site table (file, function) rows were read off THIS tree with an
+// independent enumeration, not off any behaviour; the mandatory set comes
+// from the spec's S1 list. GREEN's new mandatory kinds (account check, git
+// version probe — the part-(b) leaves) have NO pending rows: when GREEN
+// creates their sites the guard fails them as unlisted and the same test
+// author adds their exact site rows (the reconciliation the spec assigns to
+// this author).
+//
+// The negative controls feed in-memory test-only files (the repository is
+// never modified): the clean constructor→Attach→launch shape must be
+// recognised per command; a wrong-command Attach, a late Attach, an
+// unattached indirect composition and a new site in a listed non-program
+// file must each fail or record non-compliance as asserted. Part (b) runs
+// every child kind of the current slice's mandatory inventory (bash
+// foreground, bash background, God Mode, environment_setup, account check,
+// git version probe) with the D-9 sentinel through its real harness and
+// asserts the sentinel reaches no sink. The env-injection seam (the agent
+// environment builder handing program variables to each kind's harness,
+// FR-011) does not exist at RED: each kind reports BLOCKED naming its seam,
+// never a skip.
 //
 // Oracle: I-1 (Attach is the only way to add program variables to a child;
-// one masking writer per output stream in the same call) and S-106. The
-// spawn-site table's file rows were read off THIS tree (site inventory), not
-// off any behaviour; the mandatory/non-program classification comes from the
-// spec's S1 list. GREEN's new sites (account check, git version probe) ride
-// the pending rows and are reconciled by the same test author.
+// one masking writer per output stream in the same call) and S-106.
 
 package programs
 
@@ -49,12 +66,17 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-// spawnSiteRow is one row of the spawn-site table: the file the site lives
-// in (repo-relative, forward slashes) and its classification.
+// spawnSiteRow is one row of the spawn-site table: the exact site (file and
+// enclosing function, repo-relative forward-slash file) and its
+// classification. Classification is per site — a function not listed here
+// that launches a child is unlisted no matter how clean its file is.
 type spawnSiteRow struct {
 	File string
+	Func string
 	Kind string // "mandatory-s1" or "non-program"
 	Note string
 }
@@ -62,32 +84,30 @@ type spawnSiteRow struct {
 // spawnSiteTable is the spawn-site inventory (S-106's Given). S1 mandatory:
 // bash foreground/background/God Mode (the shell runner and its background
 // runner), environment_setup. The account check and the git version probe
-// are S1 NEW code: their rows are pending until GREEN creates the sites,
-// and the reconciliation adds their file paths then. Everything else found
-// in the scoped packages today is a non-program site (drivers, hooks,
-// probes, worktree git, taskkill, channel media decoder, browser).
+// are S1 NEW code: GREEN creates their sites and the same author adds
+// exact site rows then (see the part-(b) leaves). Everything found in the
+// scoped packages today beyond the mandatory rows is a non-program site
+// (drivers, hooks, probes, worktree git, taskkill, channel media decoder,
+// browser) — enumerated site by site, not file by file.
 var spawnSiteTable = []spawnSiteRow{
-	// S1 mandatory, existing sites:
-	{"pkg/tools/shell.go", "mandatory-s1", "bash foreground and God Mode share the shell runner"},
-	{"pkg/tools/shell_bg.go", "mandatory-s1", "bash background"},
-	{"pkg/tools/environment_setup_runner.go", "mandatory-s1", "environment_setup"},
-	// S1 mandatory, sites GREEN creates (pending reconciliation):
-	{"pkg/programs/check_account.go", "mandatory-s1", "account check (GREEN new site)"},
-	{"pkg/programs/check_version.go", "mandatory-s1", "git version probe (GREEN new site)"},
-	// Non-program sites found in the scoped packages today:
-	{"pkg/agent/hook_process.go", "non-program", "lifecycle hooks carry no program variables"},
-	{"pkg/agent/runner/driver_stream.go", "non-program", "driver version probe"},
-	{"pkg/agent/runner/driver_claude.go", "non-program", "third-party worker driver"},
-	{"pkg/agent/runner/driver_opencode.go", "non-program", "third-party worker driver"},
-	{"pkg/agent/runner/driver_codex.go", "non-program", "third-party worker driver"},
-	{"pkg/agent/runner/conntest.go", "non-program", "connection test"},
-	{"pkg/agent/runner/worktree.go", "non-program", "worktree git operations"},
-	{"pkg/agent/testutil/home_isolation.go", "non-program", "test helper (go env)"},
-	{"pkg/tools/session_process_windows.go", "non-program", "taskkill"},
-	{"pkg/tools/browser/exec_resolver.go", "non-program", "browser version probe"},
-	{"pkg/tools/browser/manager_session_startup.go", "non-program", "browser version probe"},
-	{"pkg/tools/browser/cdppipe/allocator.go", "non-program", "chrome allocation"},
-	{"pkg/channels/weixin/media.go", "non-program", "channel media decoder"},
+	// S1 mandatory sites:
+	{"pkg/tools/shell.go", "runUnconstrained", "mandatory-s1", "bash foreground and God Mode share the shell runner"},
+	{"pkg/tools/shell_bg.go", "runBackground", "mandatory-s1", "bash background"},
+	{"pkg/tools/environment_setup_runner.go", "startSession", "mandatory-s1", "environment_setup"},
+	// Non-program sites (this tree's inventory):
+	{"pkg/agent/hook_process.go", "NewProcessHook", "non-program", "lifecycle hooks carry no program variables"},
+	{"pkg/agent/runner/driver_stream.go", "detectCLIVersion", "non-program", "driver version probe"},
+	{"pkg/agent/runner/driver_claude.go", "Run", "non-program", "third-party worker driver"},
+	{"pkg/agent/runner/driver_opencode.go", "Run", "non-program", "third-party worker driver"},
+	{"pkg/agent/runner/driver_codex.go", "Run", "non-program", "third-party worker driver"},
+	{"pkg/agent/runner/conntest.go", "probeVersion", "non-program", "connection test"},
+	{"pkg/agent/runner/worktree.go", "runGit", "non-program", "worktree git operations"},
+	{"pkg/agent/testutil/home_isolation.go", "IsolateProcessHome", "non-program", "test helper (go env)"},
+	{"pkg/tools/session_process_windows.go", "killProcessGroup", "non-program", "taskkill"},
+	{"pkg/tools/browser/exec_resolver.go", "chromeMajorVersion", "non-program", "browser version probe"},
+	{"pkg/tools/browser/manager_session_startup.go", "probeChromiumBinaryWithTimeout", "non-program", "browser version probe"},
+	{"pkg/tools/browser/cdppipe/allocator.go", "start", "non-program", "chrome allocation"},
+	{"pkg/channels/weixin/media.go", "tryTranscodeSilkToWAV", "non-program", "channel media decoder"},
 }
 
 // scopedSpawnRoots are the packages that compose agent environments (the
@@ -103,19 +123,42 @@ var scopedSpawnRoots = []string{
 // prefix. GREEN reads the same names from the loaded catalog.
 var programTokenVarNames = []string{"GH_TOKEN", "GITHUB_TOKEN", "sentinel_9f3c2a7e5b1d"}
 
+// spawnLaunchMethods are the exec.Cmd methods that START the child. A call
+// to one of these on a constructed command is the site (CHECK R06: the
+// launch, not the construction, is what must be preceded by the Attach).
+var spawnLaunchMethods = map[string]bool{
+	"Start": true, "Run": true, "Output": true, "CombinedOutput": true,
+}
+
+// spawnSinkSelectors are the sandbox start wrappers this tree actually
+// launches children through (read off pkg/sandbox/hardened_exec.go's API —
+// StartLocked and StartLockedWithPolicy take the *exec.Cmd). The constructor
+// alone is not a site: the sink call that starts the child is.
+var spawnSinkSelectors = map[string]bool{
+	"StartLocked": true, "StartLockedWithPolicy": true,
+}
+
+// spawnLocalStartWrappers are the scanned tree's own wrappers over those
+// sinks (pkg/tools/shell_bg.go::startGodFloorChild — the God-floor path of
+// the mandatory background runner). GREEN reconciliation extends this list
+// if a new wrapper becomes a mandatory row's only launch path.
+var spawnLocalStartWrappers = map[string]bool{
+	"startGodFloorChild": true,
+}
+
 // spawnSite is one discovered child-start site, whether or not it violates
 // the table or the Attach rule (CHECK F10: the enumeration is complete —
 // classification happens on the full list, never on violations alone).
 type spawnSite struct {
-	File               string // repo-relative, forward slashes
-	Line               int    // the launch call's line
-	Func               string // the enclosing function's name
-	AttachBeforeLaunch bool   // a programs.Attach call precedes this launch in the same function
-	EnvProgramNameLit  bool   // a literal program-token name appears in the function
-	Mandatory          bool   // the file is an S1 mandatory row of the table
+	File              string // repo-relative, forward slashes
+	Line              int    // the launch call's line
+	Func              string // the enclosing function's name
+	AttachSameCommand bool   // programs.Attach(<this command>) sits between its construction and this launch
+	EnvProgramNameLit bool   // a literal program-token name appears in the function
+	Mandatory         bool   // a mandatory-s1 table row matches (file, function)
 }
 
-// omnipusImportPrefix is the module's import-path prefix.
+// spawnOmnipusPrefix is the module's import-path prefix.
 const spawnOmnipusPrefix = "github.com/elicify-ai/omnipus"
 
 // spawnImportAliases maps a file's local qualifier to the omnipus or std
@@ -161,7 +204,7 @@ func spawnScan(t *testing.T, root string, extraFiles [][2]string) []spawnSite {
 		if _, err := os.Stat(pkgDir); err != nil {
 			continue // root absent from this checkout
 		}
-		requireWalk := filepath.WalkDir(pkgDir, func(path string, d os.DirEntry, err error) error {
+		walkErr := filepath.WalkDir(pkgDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -186,8 +229,8 @@ func spawnScan(t *testing.T, root string, extraFiles [][2]string) []spawnSite {
 			scanOne(filepath.ToSlash(rel), string(src))
 			return nil
 		})
-		if requireWalk != nil {
-			t.Fatalf("instrument: walk %s: %v", dir, requireWalk)
+		if walkErr != nil {
+			t.Fatalf("instrument: walk %s: %v", dir, walkErr)
 		}
 	}
 	for _, pair := range extraFiles {
@@ -196,11 +239,20 @@ func spawnScan(t *testing.T, root string, extraFiles [][2]string) []spawnSite {
 	return sites
 }
 
+// spawnCtor records one construction of a command variable: the variable's
+// name and the constructor call's position. A later construction of the same
+// variable starts a new span (the earlier Attach cannot bless it).
+type spawnCtor struct {
+	pos token.Pos
+}
+
 // scanFileForSpawnSites parses one file and returns EVERY child-start site:
-// one per exec.Command/exec.CommandContext call whose qualifier resolves to
-// os/exec through the file's import table. Attach-before-launch is judged
-// per site: a programs.Attach call in the same enclosing function at an
-// earlier position.
+// one per launch (Start/Run/Output/CombinedOutput) of a command constructed
+// from exec.Command/exec.CommandContext in the same enclosing function —
+// including direct chains exec.Command(...).Run(). Attach-before-launch is
+// judged PER COMMAND: a programs.Attach whose first argument is that
+// command's variable, positioned between the construction and the launch.
+// Same-package bare Attach calls count (this package's own code).
 func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) []spawnSite {
 	t.Helper()
 	f, perr := parser.ParseFile(fset, file, src, 0)
@@ -208,6 +260,7 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 		t.Fatalf("instrument: parse %s: %v", file, perr)
 	}
 	aliases := spawnImportAliases(f)
+	samePackage := f.Name != nil && f.Name.Name == "programs"
 
 	qualifierSuffix := func(x ast.Expr) string {
 		if id, ok := x.(*ast.Ident); ok {
@@ -215,7 +268,7 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 		}
 		return ""
 	}
-	isExecStart := func(call *ast.CallExpr) bool {
+	isExecCtor := func(call *ast.CallExpr) bool {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return false
@@ -225,24 +278,51 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 		}
 		return qualifierSuffix(sel.X) == "/os/exec"
 	}
-	isAttach := func(call *ast.CallExpr) bool {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
+	// attachVar returns the command variable an Attach call attaches, or ""
+	// when the call is not a recognised programs.Attach of a named variable.
+	attachVar := func(call *ast.CallExpr) string {
+		if len(call.Args) == 0 {
+			return ""
+		}
+		first, ok := call.Args[0].(*ast.Ident)
 		if !ok {
-			return false
+			return ""
 		}
-		if sel.Sel.Name != "Attach" {
-			return false
+		switch fun := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if fun.Sel.Name != "Attach" || qualifierSuffix(fun.X) != "/pkg/programs" {
+				return ""
+			}
+		case *ast.Ident:
+			if fun.Name != "Attach" || !samePackage {
+				return ""
+			}
+		default:
+			return ""
 		}
-		return qualifierSuffix(sel.X) == "/pkg/programs"
+		return first.Name
 	}
-	mandatory := func() bool {
+	// isSinkCall reports whether a call is a known child-start sink (the
+	// sandbox's locked starts through the file's import table, or the
+	// scanned tree's own wrapper over them).
+	isSinkCall := func(call *ast.CallExpr) bool {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			return qualifierSuffix(sel.X) == "/pkg/sandbox" && spawnSinkSelectors[sel.Sel.Name]
+		}
+		if id, ok := call.Fun.(*ast.Ident); ok {
+			return spawnLocalStartWrappers[id.Name]
+		}
+		return false
+	}
+
+	mandatory := func(funcName string) bool {
 		for _, row := range spawnSiteTable {
-			if row.File == file && row.Kind == "mandatory-s1" {
+			if row.File == file && row.Func == funcName && row.Kind == "mandatory-s1" {
 				return true
 			}
 		}
 		return false
-	}()
+	}
 
 	var sites []spawnSite
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -250,13 +330,53 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 		if !ok || fn.Body == nil {
 			return true
 		}
-		var attachPositions []token.Pos
+		ctors := map[string][]spawnCtor{}
+		attaches := map[string][]token.Pos{} // every Attach, even of untracked vars
 		envProgramNameLit := false
+		type launchEvent struct {
+			cmdVar string
+			pos    token.Pos
+		}
+		var launches []launchEvent
+
 		ast.Inspect(fn.Body, func(m ast.Node) bool {
 			switch node := m.(type) {
+			case *ast.AssignStmt:
+				// cmd, cmd2 := exec.Command(...), exec.CommandContext(...)
+				// and single assignments alike: each RHS constructor starts
+				// a span for the ident it names.
+				if len(node.Lhs) == len(node.Rhs) && (node.Tok == token.DEFINE || node.Tok == token.ASSIGN) {
+					for i, rhs := range node.Rhs {
+						call, ok := rhs.(*ast.CallExpr)
+						if !ok || !isExecCtor(call) {
+							continue
+						}
+						lhs, ok := node.Lhs[i].(*ast.Ident)
+						if !ok {
+							continue
+						}
+						ctors[lhs.Name] = append(ctors[lhs.Name], spawnCtor{pos: call.Pos()})
+					}
+				}
 			case *ast.CallExpr:
-				if isAttach(node) {
-					attachPositions = append(attachPositions, node.Pos())
+				if v := attachVar(node); v != "" {
+					attaches[v] = append(attaches[v], node.Pos())
+				}
+				// Direct method launch: cmd.Start()/Run()/Output()/CombinedOutput().
+				if sel, ok := node.Fun.(*ast.SelectorExpr); ok && spawnLaunchMethods[sel.Sel.Name] {
+					if id, ok := sel.X.(*ast.Ident); ok && len(ctors[id.Name]) > 0 {
+						launches = append(launches, launchEvent{cmdVar: id.Name, pos: node.Pos()})
+					}
+				}
+				// Sink launch: the constructed command is handed to a known
+				// starting sink (the sandbox's locked starts, or the tree's
+				// own wrapper over them).
+				if isSinkCall(node) {
+					for _, arg := range node.Args {
+						if id, ok := arg.(*ast.Ident); ok && len(ctors[id.Name]) > 0 {
+							launches = append(launches, launchEvent{cmdVar: id.Name, pos: node.Pos()})
+						}
+					}
 				}
 			case *ast.BasicLit:
 				if node.Kind == token.STRING {
@@ -269,25 +389,64 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 			}
 			return true
 		})
-		ast.Inspect(fn.Body, func(m ast.Node) bool {
-			call, ok := m.(*ast.CallExpr)
-			if !ok || !isExecStart(call) {
-				return true
+
+		// A launch on a var with no tracked constructor (e.g. the var was
+		// built in a helper) cannot be proven attached here — but it is also
+		// not a site of THIS function; the guard reports the site where the
+		// command is both constructed and launched. Helper-split flows are
+		// the launcher function's responsibility (its constructor helpers
+		// appear as their own sites if they construct).
+		for _, launch := range launches {
+			varName := launch.cmdVar
+			// the construction this launch belongs to: the latest one before it
+			var ctor *spawnCtor
+			list := ctors[varName]
+			for i := range list {
+				if list[i].pos < launch.pos {
+					ctor = &list[i]
+				}
 			}
-			before := false
-			for _, p := range attachPositions {
-				if p < call.Pos() {
-					before = true
-					break
+			attached := false
+			if ctor != nil {
+				for _, a := range attaches[varName] {
+					if ctor.pos < a && a < launch.pos {
+						attached = true
+						break
+					}
 				}
 			}
 			sites = append(sites, spawnSite{
-				File:               file,
-				Line:               fset.Position(call.Pos()).Line,
-				Func:               fn.Name.Name,
-				AttachBeforeLaunch: before,
-				EnvProgramNameLit:  envProgramNameLit,
-				Mandatory:          mandatory,
+				File:              file,
+				Line:              fset.Position(launch.pos).Line,
+				Func:              fn.Name.Name,
+				AttachSameCommand: attached,
+				EnvProgramNameLit: envProgramNameLit,
+				Mandatory:         mandatory(fn.Name.Name),
+			})
+		}
+		// Direct chains exec.Command(...).Run(): the selector's X is the
+		// constructor call itself — one site, attachable only before the
+		// chain (nothing can precede it in the same expression).
+		ast.Inspect(fn.Body, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !spawnLaunchMethods[sel.Sel.Name] {
+				return true
+			}
+			inner, ok := sel.X.(*ast.CallExpr)
+			if !ok || !isExecCtor(inner) {
+				return true
+			}
+			sites = append(sites, spawnSite{
+				File:              file,
+				Line:              fset.Position(call.Pos()).Line,
+				Func:              fn.Name.Name,
+				AttachSameCommand: false, // nothing can Attach inside the chain
+				EnvProgramNameLit: envProgramNameLit,
+				Mandatory:         mandatory(fn.Name.Name),
 			})
 			return true
 		})
@@ -297,32 +456,34 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 }
 
 // spawnClassify returns the guard's violations for a full site enumeration:
-// unlisted files, mandatory sites without a preceding programs.Attach, and
-// any site whose function composes a literal program-token name without a
-// preceding Attach (I-1: Attach is the only way program variables reach a
-// child).
+// unlisted SITES (file+function — a new child in a listed non-program file
+// is still unlisted, CHECK R06), mandatory sites whose launch has no
+// same-command Attach between construction and launch, and any site whose
+// function composes a literal program-token name without that Attach
+// (I-1: Attach is the only way program variables reach a child).
 func spawnClassify(sites []spawnSite) []string {
 	var violations []string
-	listed := map[string]bool{}
+	listed := map[[2]string]bool{}
 	for _, row := range spawnSiteTable {
-		listed[row.File] = true
+		listed[[2]string{row.File, row.Func}] = true
 	}
-	seenUnlisted := map[string]bool{}
+	seenUnlisted := map[[2]string]bool{}
 	for _, s := range sites {
-		if !listed[s.File] && !seenUnlisted[s.File] {
-			seenUnlisted[s.File] = true
+		key := [2]string{s.File, s.Func}
+		if !listed[key] && !seenUnlisted[key] {
+			seenUnlisted[key] = true
 			violations = append(violations,
-				fmt.Sprintf("unlisted child-start site %s (%s) — add it to the spawn-site table (S-106)", s.File, s.Func))
+				fmt.Sprintf("unlisted child-start site %s:%d (%s) — add it to the spawn-site table (S-106)", s.File, s.Line, s.Func))
 			continue
 		}
-		if s.EnvProgramNameLit && !s.AttachBeforeLaunch {
+		if s.EnvProgramNameLit && !s.AttachSameCommand {
 			violations = append(violations,
-				fmt.Sprintf("%s:%d (%s) composes a program variable into a child environment without a preceding programs.Attach", s.File, s.Line, s.Func))
+				fmt.Sprintf("%s:%d (%s) composes a program variable into a child environment without a same-command programs.Attach before the launch", s.File, s.Line, s.Func))
 			continue
 		}
-		if s.Mandatory && !s.AttachBeforeLaunch {
+		if s.Mandatory && !s.AttachSameCommand {
 			violations = append(violations,
-				fmt.Sprintf("%s:%d (%s) does not attach program variables through a preceding programs.Attach", s.File, s.Line, s.Func))
+				fmt.Sprintf("%s:%d (%s) does not attach program variables through a same-command programs.Attach before the launch", s.File, s.Line, s.Func))
 		}
 	}
 	return violations
@@ -335,7 +496,7 @@ func TestProgramSpawnGuard(t *testing.T) {
 		requireSitesScanned(t, sites)
 		violations := spawnClassify(sites)
 		if len(violations) > 0 {
-			t.Fatalf("S-106/I-1: every S1 mandatory child kind must add program variables only via a preceding programs.Attach (and install the masking writers in the same call); violating sites: %v", violations)
+			t.Fatalf("S-106/I-1: every S1 mandatory child kind must add program variables only via a same-command programs.Attach before the launch (and install the masking writers in the same call); violating sites: %v", violations)
 		}
 	})
 
@@ -407,6 +568,205 @@ func plantClean() error {
 			"the planted clean exec.Command in an unlisted file")
 	})
 
+	t.Run("a_planted_new_site_in_listed_non_program_file_fails", func(t *testing.T) {
+		// Instrument check (CHECK R06): classification is per SITE — a new
+		// child in a previously classified non-program file inherits NO
+		// exemption: the file is listed but this function is not, and the
+		// guard fails it.
+		testOnly := `package main
+
+import "os/exec"
+
+func plantNewChildInListedNonProgramFile() {
+	_ = exec.Command("go", "version").Run()
+}
+`
+		root := repoRootForSpawnGuard(t)
+		violations := spawnClassify(spawnScan(t, root, [][2]string{{"pkg/agent/hook_process.go", testOnly}}))
+		requireViolationNaming(t, violations, "plantNewChildInListedNonProgramFile",
+			"the planted new site in the listed non-program file pkg/agent/hook_process.go (the file-level exemption is gone)")
+	})
+
+	// ── Per-command Attach association (CHECK R06): unit-level site records ──
+
+	t.Run("a_clean_constructor_attach_launch_is_recognised", func(t *testing.T) {
+		// The correct shape — construct, Attach THAT command, launch — must
+		// be recorded as compliant (the old any-Attach ordering falsely
+		// rejected it; the new record proves the association).
+		src := `package main
+
+import (
+	"os/exec"
+
+	programs "github.com/elicify-ai/omnipus/pkg/programs"
+)
+
+func cleanAttach(set *programs.ProgramVariables) error {
+	cmd := exec.Command("gh", "api", "user")
+	programs.Attach(cmd, set)
+	return cmd.Run()
+}
+`
+		sites := scanOneSpawnSource(t, src)
+		require.Len(t, sites, 1)
+		require.True(t, sites[0].AttachSameCommand,
+			"the clean constructor→Attach→launch shape must record a same-command Attach before the launch")
+	})
+
+	t.Run("a_wrong_command_attach_blesses_nothing", func(t *testing.T) {
+		// An Attach of a DIFFERENT command must not bless the unattached
+		// command's launch.
+		src := `package main
+
+import (
+	"os/exec"
+
+	programs "github.com/elicify-ai/omnipus/pkg/programs"
+)
+
+func wrongCommand(set *programs.ProgramVariables) {
+	attached := exec.Command("gh", "api", "user")
+	programs.Attach(attached, set)
+	_ = attached.Run()
+
+	unmasked := exec.Command("gh", "api", "user")
+	_ = unmasked.Run()
+}
+`
+		sites := scanOneSpawnSource(t, src)
+		require.Len(t, sites, 2)
+		// Source order: the attached command launches first (lower line).
+		sortSitesByLine(sites)
+		require.True(t, sites[0].AttachSameCommand,
+			"the attached command's launch must record its same-command Attach (line %d)", sites[0].Line)
+		require.False(t, sites[1].AttachSameCommand,
+			"the Attach of the OTHER command must bless nothing (line %d)", sites[1].Line)
+	})
+
+	t.Run("a_late_attach_blesses_nothing", func(t *testing.T) {
+		// Attach AFTER the launch is not compliance.
+		src := `package main
+
+import (
+	"os/exec"
+
+	programs "github.com/elicify-ai/omnipus/pkg/programs"
+)
+
+func lateAttach(set *programs.ProgramVariables) {
+	cmd := exec.Command("gh", "api", "user")
+	_ = cmd.Run()
+	programs.Attach(cmd, set)
+}
+`
+		sites := scanOneSpawnSource(t, src)
+		require.Len(t, sites, 1)
+		require.False(t, sites[0].AttachSameCommand,
+			"an Attach after the launch must not satisfy the ordering")
+	})
+
+	t.Run("a_same_package_bare_attach_is_recognised", func(t *testing.T) {
+		// This package's own composition code attaches bare (no import
+		// alias) — the association must still hold.
+		src := `package programs
+
+import "os/exec"
+
+func ownComposition(set *ProgramVariables) error {
+	cmd := exec.Command("gh", "api", "user")
+	Attach(cmd, set)
+	return cmd.Run()
+}
+`
+		sites := scanOneSpawnSource(t, src)
+		require.Len(t, sites, 1)
+		require.True(t, sites[0].AttachSameCommand,
+			"a same-package bare Attach must be recognised")
+	})
+
+	t.Run("a_all_launch_methods_are_recognised", func(t *testing.T) {
+		// Start, Output and CombinedOutput are launches too — a guard that
+		// only knew Run would miss them.
+		src := `package main
+
+import (
+	"os/exec"
+
+	programs "github.com/elicify-ai/omnipus/pkg/programs"
+)
+
+func withStart(set *programs.ProgramVariables) error {
+	cmd := exec.Command("gh", "api", "user")
+	programs.Attach(cmd, set)
+	return cmd.Start()
+}
+
+func withOutput(set *programs.ProgramVariables) ([]byte, error) {
+	cmd := exec.Command("gh", "api", "user")
+	programs.Attach(cmd, set)
+	return cmd.Output()
+}
+
+func withCombinedOutput(set *programs.ProgramVariables) ([]byte, error) {
+	cmd := exec.Command("gh", "api", "user")
+	programs.Attach(cmd, set)
+	return cmd.CombinedOutput()
+}
+`
+		sites := scanOneSpawnSource(t, src)
+		require.Len(t, sites, 3)
+		for _, s := range sites {
+			require.True(t, s.AttachSameCommand,
+				"every launch method must be recognised as a site with its same-command Attach (line %d)", s.Line)
+		}
+	})
+
+	t.Run("a_sandbox_sink_launch_is_recognised", func(t *testing.T) {
+		// The tree's mandatory runners launch through the sandbox's locked
+		// starts, not cmd.Start — a guard that only knew the direct methods
+		// would miss the very rows it exists for.
+		src := `package tools
+
+import (
+	"os/exec"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
+)
+
+func sinkLaunch(lim sandbox.Limits) error {
+	cmd := exec.Command("gh", "api", "user")
+	return sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
+}
+`
+		sites := scanOneSpawnSource(t, src)
+		require.Len(t, sites, 1)
+		require.False(t, sites[0].AttachSameCommand,
+			"this plant attaches nothing — the sink launch must still be a site")
+	})
+
+	t.Run("a_aliased_os_exec_is_caught", func(t *testing.T) {
+		// An aliased os/exec import is resolved through the file's own import
+		// table (CHECK F10 keeps this plant).
+		src := `package main
+
+import (
+	exe "os/exec"
+
+	programs "github.com/elicify-ai/omnipus/pkg/programs"
+)
+
+func aliasedExec(set *programs.ProgramVariables) {
+	cmd := exe.Command("gh", "api", "user")
+	programs.Attach(cmd, set)
+	_ = cmd.Run()
+}
+`
+		sites := scanOneSpawnSource(t, src)
+		require.Len(t, sites, 1)
+		require.True(t, sites[0].AttachSameCommand,
+			"the aliased os/exec constructor must still be tracked")
+	})
+
 	// Part (b): every child kind of the current slice's mandatory inventory
 	// with the sentinel, asserting the sentinel reaches no sink. Each kind's
 	// harness needs the env-injection seam (the agent environment builder
@@ -431,6 +791,23 @@ func plantClean() error {
 	t.Run("b_git_version_probe_sentinel_reaches_no_sink", func(t *testing.T) {
 		t.Fatalf("BLOCKED: %s; the git version probe (FR-014) is not implemented yet", s106Seam)
 	})
+}
+
+// scanOneSpawnSource parses one in-memory source as its own file and returns
+// its sites (unit-level controls never touch the tree or the table).
+func scanOneSpawnSource(t *testing.T, src string) []spawnSite {
+	t.Helper()
+	return scanFileForSpawnSites(t, token.NewFileSet(), "<test-only>/unit.go", src)
+}
+
+// sortSitesByLine orders sites by their launch line (site records are
+// visited in source order; the sort makes that explicit for assertions).
+func sortSitesByLine(sites []spawnSite) {
+	for i := 1; i < len(sites); i++ {
+		for j := i; j > 0 && sites[j].Line < sites[j-1].Line; j-- {
+			sites[j], sites[j-1] = sites[j-1], sites[j]
+		}
+	}
 }
 
 // requireSitesScanned proves the enumeration is not trivially empty (a guard
