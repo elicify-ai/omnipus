@@ -43,6 +43,10 @@ type ProvenanceModeRow struct {
 	SessionType UnifiedSessionType // "" when the kind has no session type of its own (plan, human)
 	Mode        ProvenanceMode     // root or lineage (spec FR-050 table)
 	Producer    string             // where stored provenance comes from ("" for root)
+	// TurnStartPath is "" on kind/type rows; non-empty it covers exactly one
+	// registered turn-start path (S-83: the launch, steering and background
+	// callback paths of the spec's producer table), one row per path.
+	TurnStartPath string
 }
 
 // ProvenanceModeRows returns the classification table in row order.
