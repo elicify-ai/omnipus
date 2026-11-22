@@ -132,8 +132,8 @@ export interface RoomRef {
 }
 
 export interface WorkflowStart {
-  workflow: "W1" | "W18";
-  target_workspace_id: string;
+  workflow: "W1" | "W5" | "W18";
+  target_workspace_id?: string;
 }
 
 export interface SecretRecipientDisplay {
@@ -836,6 +836,15 @@ export interface CommandSegmentInfo {
   prefix_available?: boolean;
 }
 
+export interface ToolApprovalSkill {
+  key: string;
+  name: string;
+  display_name: string;
+  revision: string;
+  unverified: boolean;
+  open_checks: Array<"permission" | "trust">;
+}
+
 export interface ToolApprovalRequiredFrame {
   root_session_id?: string;
   acting_agent_name?: string;
@@ -854,6 +863,9 @@ export interface ToolApprovalRequiredFrame {
   expires_in_ms: number;
   workspace_id?: string;
   segments?: Array<CommandSegmentInfo>;
+  offered_actions: Array<"allow_once" | "allow_for" | "deny" | "cancel" | "approve_version" | "approve_version_allow_for">;
+  allow_durations: Array<"1h" | "3h" | "1d">;
+  skill?: ToolApprovalSkill;
 }
 
 export interface ToolApprovalResolvedFrame {
@@ -931,6 +943,9 @@ export interface SessionStatePendingApproval {
   agent_id: string;
   expires_in_ms: number;
   workspace_id?: string;
+  offered_actions: Array<"allow_once" | "allow_for" | "deny" | "cancel" | "approve_version" | "approve_version_allow_for">;
+  allow_durations: Array<"1h" | "3h" | "1d">;
+  skill?: ToolApprovalSkill;
 }
 
 export interface SessionStateActiveTurn {

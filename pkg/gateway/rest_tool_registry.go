@@ -376,6 +376,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			Mcp *struct {
 				Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
+			Skills *gen.AgentSkillsCfg `json:"skills,omitempty"`
 		}{
 			Builtin: &struct {
 				Policies map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
@@ -512,12 +513,18 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	switch body.Action {
 	case gen.ToolApprovalActionRequestActionAllowOnce:
 		action = ApprovalActionApprove
-	case gen.ToolApprovalActionRequestActionAllow:
-		action = ApprovalActionApprove
-		recordGrant = true
-		if body.Scope != nil {
-			grantScope = *body.Scope
-		}
+	case gen.ToolApprovalActionRequestActionAllowFor,
+		gen.ToolApprovalActionRequestActionApproveVersion,
+		gen.ToolApprovalActionRequestActionApproveVersionAllowFor:
+		// TODO(#1963 developer): C-24/C-26 timed allowance and skill trust
+		// approval. Until implemented these actions store nothing and are
+		// refused with the existing unknown-action error, so nothing grants.
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			fmt.Sprintf("unknown action %q: must be allow, allow_once, deny, or cancel", string(body.Action)),
+		)
+		return
 	case gen.ToolApprovalActionRequestActionDeny:
 		action = ApprovalActionDeny
 	case gen.ToolApprovalActionRequestActionCancel:

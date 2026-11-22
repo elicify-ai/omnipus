@@ -1660,11 +1660,16 @@ type AgentToolsCfg = Partial<{
   mcp: Partial<{
     servers: Array<AgentToolsMcpServerBinding>;
   }>;
+  skills: AgentSkillsCfg;
 }>;
 type AgentToolsMcpServerBinding = {
   id: string;
   tools?: Array<string> | undefined;
 };
+type AgentSkillsCfg = {
+  policies: {};
+};
+type ToolPolicy = "allow" | "ask" | "deny";
 type FallbackModel = {
   model: string;
   provider?: string | undefined;
@@ -1707,6 +1712,7 @@ type AgentToolsUpdateRequest = {
         servers: Array<AgentToolsMcpServerBinding>;
       }>
     | undefined;
+  skills?: AgentSkillsCfg | undefined;
 };
 type AgentCreateRequest =
   | AgentCreateRequestMain
@@ -1845,6 +1851,7 @@ type AgentDetail = {
   skills?: Array<string> | undefined;
   stale_skill_grants?: Array<string> | undefined;
   tool_permissions?: Array<AgentToolPermission> | undefined;
+  skill_permissions?: Array<AgentSkillPermission> | undefined;
   stored_overrides?: {} | undefined;
   connectors?: Array<AgentMCPBinding> | undefined;
   soul?: string | undefined;
@@ -1865,6 +1872,11 @@ type AgentToolPermission = {
   effective: "allow" | "ask" | "deny";
   override: "allow" | "ask" | "deny" | null;
   description?: string | undefined;
+};
+type AgentSkillPermission = {
+  skill: string;
+  effective: "allow" | "ask" | "deny";
+  override: "allow" | "ask" | "deny" | null;
 };
 type AgentModelChainEntry = {
   position: string;
@@ -1900,6 +1912,110 @@ type ExecutorSmokeTestRequest = {
   model?: string | undefined;
   cli_args?: string | undefined;
 };
+type ToolRegistryEntry = {
+  name: string;
+  description: string;
+  scope: "core" | "general";
+  category: string;
+  source: "builtin" | "mcp";
+  server_id?: string | undefined;
+  auto_approve?: ("runs" | "runs_if_args" | "asks") | undefined;
+  visibility: ModelVisibility;
+  visibility_locked: boolean;
+  permission_fixed: boolean;
+};
+type ModelVisibility = "hidden" | "name_only" | "name_and_description" | "full";
+type PermissionSettings = {
+  policies: {};
+  skill_policies: {};
+  visibility: {};
+  skill_visibility: {};
+  skill_trust: ToolPolicy;
+};
+type PermissionSettingsPatch = Partial<{
+  policies: {};
+  skill_policies: {};
+  visibility: {};
+  skill_visibility: {};
+  skill_trust: ToolPolicy;
+}>;
+type AgentSkillEntry = {
+  key: string;
+  name: string;
+  display_name: string;
+  granted: boolean;
+  project_workspace: string | null;
+  configured_policy: "allow" | "ask" | "deny" | null;
+  global_policy: ToolPolicy;
+  effective_policy: ToolPolicy;
+  unverified: boolean;
+};
+type SkillInstallReview = {
+  review_id: string;
+  name: string;
+  version: string;
+  revision: ConfigurationRevision;
+  verification: "matched" | "no_registry_hash" | "mismatch" | "unavailable";
+  verified: boolean;
+  suggested_category:
+    | "tools"
+    | "business"
+    | "development"
+    | "testing_security"
+    | "data_ai"
+    | "devops"
+    | "documentation"
+    | "content_media"
+    | "research"
+    | "lifestyle"
+    | "databases"
+    | "blockchain"
+    | "uncategorised"
+    | null;
+  replaces_existing: boolean;
+  has_local_changes_to_replace: boolean;
+  expires_at: string;
+};
+type SkillInstallReviewStatus = {
+  review_id: string;
+  state:
+    | "staged"
+    | "publishing"
+    | "installed"
+    | "failed"
+    | "expired"
+    | "cancelled";
+  revision: ConfigurationRevision;
+  installed_revision: string | null;
+  replaced_revision: string | null;
+  reason?: string | undefined;
+};
+type SkillTrustApprovalRequest = {
+  revision: ConfigurationRevision;
+};
+type SkillTrustApproval = {
+  key: string;
+  revision: ConfigurationRevision;
+  approved_by: string;
+  approved_at: string;
+};
+type SkillCategoryUpdateRequest = {
+  category: SkillCategory;
+};
+type SkillCategory =
+  | "tools"
+  | "business"
+  | "development"
+  | "testing_security"
+  | "data_ai"
+  | "devops"
+  | "documentation"
+  | "content_media"
+  | "research"
+  | "lifestyle"
+  | "databases"
+  | "blockchain"
+  | "uncategorised";
 type ChannelEntry = {
   id: ChannelId;
   instance_id?: string | undefined;
@@ -2221,6 +2337,8 @@ type IntegrationProvider = {
 type Skill = {
   has_local_changes: boolean;
   revision: ConfigurationRevision;
+  category: SkillCategory;
+  trust_approved: boolean;
   persistence_status?: ConfigurationPersistenceStatus | undefined;
   activation_status?: ConfigurationActivationStatus | undefined;
   changed_fields?: Array<string> | undefined;
@@ -2422,6 +2540,7 @@ type AgentToolsResponse = {
   override_names: Array<string>;
   config: AgentToolsCfg;
   tools: Array<AgentToolEntry>;
+  skills: Array<AgentSkillEntry>;
   agent_type?:
     | ("core" | "system" | "Main" | "Subagent" | "subagent_3p")
     | undefined;
@@ -2684,6 +2803,27 @@ type OperationResult = {
   error?: string | undefined;
   validation?: ProviderValidation | undefined;
 };
+type ToolApprovalResponse = {
+  approval_id: string;
+  action:
+    | "deny"
+    | "allow_once"
+    | "allow_for"
+    | "cancel"
+    | "approve_version"
+    | "approve_version_allow_for";
+  scope?: ("exact" | "prefix") | undefined;
+  status: "ok";
+  grant_recorded?: boolean | undefined;
+  expires_at?: string | undefined;
+  applied?: ToolApprovalApplied | undefined;
+  not_applied_reason?: string | undefined;
+};
+type ToolApprovalApplied = {
+  call_released: boolean;
+  timed_allowance: boolean;
+  trust_approved: boolean;
+};
 type UploadFilesResponse = {
   files: Array<UploadedFile>;
 };
@@ -2828,6 +2968,22 @@ type DayBucket = {
       }
     | undefined;
 };
+type SkillCopyRequest = {
+  new_id: string;
+  category?: SkillCategory | undefined;
+};
+type ToolApprovalActionRequest = {
+  action:
+    | "deny"
+    | "allow_once"
+    | "allow_for"
+    | "cancel"
+    | "approve_version"
+    | "approve_version_allow_for";
+  duration?: ApprovalAllowDuration | undefined;
+  scope?: ("exact" | "prefix") | undefined;
+};
+type ApprovalAllowDuration = "1h" | "3h" | "1d";
 type ChannelConfigureRequest = Partial<
   {
     instance_id: string;
@@ -4794,6 +4950,10 @@ export const AgentToolsMcpServerBinding: z.ZodType<AgentToolsMcpServerBinding> =
   z
     .object({ id: z.string(), tools: z.array(z.string()).optional() })
     .passthrough();
+export const ToolPolicy = z.enum(["allow", "ask", "deny"]);
+export const AgentSkillsCfg: z.ZodType<AgentSkillsCfg> = z.object({
+  policies: z.record(ToolPolicy),
+});
 export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
   .object({
     builtin: z
@@ -4803,6 +4963,7 @@ export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
       .object({ servers: z.array(AgentToolsMcpServerBinding) })
       .partial()
       .passthrough(),
+    skills: AgentSkillsCfg,
   })
   .partial()
   .passthrough();
@@ -5057,6 +5218,17 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
     manifest_tier: z.enum(["full", "compressed", "infra"]),
   })
   .passthrough();
+export const AgentSkillEntry: z.ZodType<AgentSkillEntry> = z.object({
+  key: z.string().min(1),
+  name: z.string().min(1),
+  display_name: z.string(),
+  granted: z.boolean(),
+  project_workspace: z.string().nullable(),
+  configured_policy: z.enum(["allow", "ask", "deny"]).nullable(),
+  global_policy: ToolPolicy,
+  effective_policy: ToolPolicy,
+  unverified: z.boolean(),
+});
 export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
@@ -5067,6 +5239,7 @@ export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
   override_names: z.array(z.string()),
   config: AgentToolsCfg,
   tools: z.array(AgentToolEntry),
+  skills: z.array(AgentSkillEntry),
   agent_type: z
     .enum(["core", "system", "Main", "Subagent", "subagent_3p"])
     .optional(),
@@ -5089,6 +5262,7 @@ export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> =
       .partial()
       .passthrough()
       .optional(),
+    skills: AgentSkillsCfg.optional(),
   });
 export const RunnerTestResponse = z.object({
   ok: z.boolean(),
@@ -5194,7 +5368,13 @@ export const VersionResponse = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+].*)?$/),
   build_sha: z.string().regex(/^([0-9a-f]{7,40}|dev)$/),
 });
-export const ToolRegistryEntry = z
+export const ModelVisibility = z.enum([
+  "hidden",
+  "name_only",
+  "name_and_description",
+  "full",
+]);
+export const ToolRegistryEntry: z.ZodType<ToolRegistryEntry> = z
   .object({
     name: z.string(),
     description: z.string(),
@@ -5203,24 +5383,65 @@ export const ToolRegistryEntry = z
     source: z.enum(["builtin", "mcp"]),
     server_id: z.string().optional(),
     auto_approve: z.enum(["runs", "runs_if_args", "asks"]).optional(),
+    visibility: ModelVisibility,
+    visibility_locked: z.boolean(),
+    permission_fixed: z.boolean(),
   })
   .passthrough();
-export const ToolApprovalActionRequest = z.object({
-  action: z.enum(["deny", "allow_once", "allow", "cancel"]),
-  scope: z.enum(["exact", "prefix"]).optional(),
+export const ApprovalAllowDuration = z.enum(["1h", "3h", "1d"]);
+export const ToolApprovalActionRequest: z.ZodType<ToolApprovalActionRequest> =
+  z.object({
+    action: z.enum([
+      "deny",
+      "allow_once",
+      "allow_for",
+      "cancel",
+      "approve_version",
+      "approve_version_allow_for",
+    ]),
+    duration: ApprovalAllowDuration.optional(),
+    scope: z.enum(["exact", "prefix"]).optional(),
+  });
+export const ToolApprovalApplied: z.ZodType<ToolApprovalApplied> = z.object({
+  call_released: z.boolean(),
+  timed_allowance: z.boolean(),
+  trust_approved: z.boolean(),
 });
-export const ToolApprovalResponse = z
+export const ToolApprovalResponse: z.ZodType<ToolApprovalResponse> = z
   .object({
     approval_id: z.string(),
-    action: z.enum(["deny", "allow_once", "allow", "cancel"]),
+    action: z.enum([
+      "deny",
+      "allow_once",
+      "allow_for",
+      "cancel",
+      "approve_version",
+      "approve_version_allow_for",
+    ]),
     scope: z.enum(["exact", "prefix"]).optional(),
     status: z.literal("ok"),
     grant_recorded: z.boolean().optional(),
+    expires_at: z.string().datetime({ offset: true }).optional(),
+    applied: ToolApprovalApplied.optional(),
+    not_applied_reason: z.string().min(1).max(500).optional(),
   })
   .passthrough();
-export const GlobalToolPolicies = z.object({
-  policies: z.record(z.enum(["allow", "ask", "deny"])),
+export const PermissionSettings: z.ZodType<PermissionSettings> = z.object({
+  policies: z.record(ToolPolicy),
+  skill_policies: z.record(ToolPolicy),
+  visibility: z.record(ModelVisibility),
+  skill_visibility: z.record(ModelVisibility),
+  skill_trust: ToolPolicy,
 });
+export const PermissionSettingsPatch: z.ZodType<PermissionSettingsPatch> = z
+  .object({
+    policies: z.record(ToolPolicy),
+    skill_policies: z.record(ToolPolicy),
+    visibility: z.record(ModelVisibility),
+    skill_visibility: z.record(ModelVisibility),
+    skill_trust: ToolPolicy,
+  })
+  .partial();
 export const ExecProxyStatus = z
   .object({
     enabled: z.boolean(),
@@ -5228,18 +5449,6 @@ export const ExecProxyStatus = z
     address: z.string().optional(),
   })
   .passthrough();
-export const SkillTrustResponse = z.object({
-  level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
-});
-export const SkillTrustUpdateRequest = z.object({
-  level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
-});
-export const SkillTrustUpdateResponse = z.object({
-  saved: z.boolean(),
-  requires_restart: z.boolean(),
-  applied_level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
-  warning: z.string().optional(),
-});
 export const PromptGuardResponse = z.object({
   level: z.enum(["low", "medium", "high"]),
   requires_restart: z.boolean(),
@@ -6106,9 +6315,26 @@ export const SlashCommand = z.object({
   available_while_streaming: z.boolean().optional(),
   delivery: z.enum(["client", "agent"]),
 });
+export const SkillCategory = z.enum([
+  "tools",
+  "business",
+  "development",
+  "testing_security",
+  "data_ai",
+  "devops",
+  "documentation",
+  "content_media",
+  "research",
+  "lifestyle",
+  "databases",
+  "blockchain",
+  "uncategorised",
+]);
 export const Skill: z.ZodType<Skill> = z.object({
   has_local_changes: z.boolean(),
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  category: SkillCategory,
+  trust_approved: z.boolean(),
   persistence_status: ConfigurationPersistenceStatus.optional(),
   activation_status: ConfigurationActivationStatus.optional(),
   changed_fields: z.array(z.string()).optional(),
@@ -6149,11 +6375,77 @@ export const SkillMarketplaceStatus = z.object({
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
 });
 export const SkillInstallRequest = z.union([z.unknown(), z.unknown()]);
-export const SkillCopyRequest = z.object({
+export const SkillInstallReviewStatus: z.ZodType<SkillInstallReviewStatus> =
+  z.object({
+    review_id: z.string().min(1).max(128),
+    state: z.enum([
+      "staged",
+      "publishing",
+      "installed",
+      "failed",
+      "expired",
+      "cancelled",
+    ]),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    installed_revision: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+    replaced_revision: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+    reason: z.string().max(500).optional(),
+  });
+export const SkillInstallReview: z.ZodType<SkillInstallReview> = z.object({
+  review_id: z.string().min(1).max(128),
+  name: z.string().min(1),
+  version: z.string(),
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  verification: z.enum([
+    "matched",
+    "no_registry_hash",
+    "mismatch",
+    "unavailable",
+  ]),
+  verified: z.boolean(),
+  suggested_category: z
+    .enum([
+      "tools",
+      "business",
+      "development",
+      "testing_security",
+      "data_ai",
+      "devops",
+      "documentation",
+      "content_media",
+      "research",
+      "lifestyle",
+      "databases",
+      "blockchain",
+      "uncategorised",
+    ])
+    .nullable(),
+  replaces_existing: z.boolean(),
+  has_local_changes_to_replace: z.boolean(),
+  expires_at: z.string().datetime({ offset: true }),
+});
+export const SkillCopyRequest: z.ZodType<SkillCopyRequest> = z.object({
   new_id: z
     .string()
     .max(64)
     .regex(/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/),
+  category: SkillCategory.optional(),
+});
+export const SkillCategoryUpdateRequest: z.ZodType<SkillCategoryUpdateRequest> =
+  z.object({ category: SkillCategory });
+export const SkillTrustApprovalRequest: z.ZodType<SkillTrustApprovalRequest> =
+  z.object({ revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/) });
+export const SkillTrustApproval: z.ZodType<SkillTrustApproval> = z.object({
+  key: z.string().min(1),
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  approved_by: z.string().min(1),
+  approved_at: z.string().datetime({ offset: true }),
 });
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
@@ -8399,6 +8691,11 @@ export const AgentToolPermission: z.ZodType<AgentToolPermission> = z.object({
   override: z.enum(["allow", "ask", "deny"]).nullable(),
   description: z.string().max(40).optional(),
 });
+export const AgentSkillPermission: z.ZodType<AgentSkillPermission> = z.object({
+  skill: z.string().min(1),
+  effective: z.enum(["allow", "ask", "deny"]),
+  override: z.enum(["allow", "ask", "deny"]).nullable(),
+});
 export const AgentModelChainEntry: z.ZodType<AgentModelChainEntry> = z.object({
   position: z.string().regex(/^(primary|fallback_[1-9][0-9]*)$/),
   model: z.string(),
@@ -8432,6 +8729,7 @@ export const AgentDetail: z.ZodType<AgentDetail> = z.object({
   skills: z.array(z.string()).optional(),
   stale_skill_grants: z.array(z.string()).optional(),
   tool_permissions: z.array(AgentToolPermission).optional(),
+  skill_permissions: z.array(AgentSkillPermission).optional(),
   stored_overrides: z.record(z.enum(["allow", "ask", "deny"])).optional(),
   connectors: z.array(AgentMCPBinding).optional(),
   soul: z.string().optional(),
@@ -8480,7 +8778,9 @@ export const AgentSession = z
     updated_at: z.string().datetime({ offset: true }),
   })
   .passthrough();
-export const ToolPolicy = z.enum(["allow", "ask", "deny"]);
+export const GlobalToolPolicies = z.object({
+  policies: z.record(z.enum(["allow", "ask", "deny"])),
+});
 export const RateLimitConfig = z
   .object({
     enabled: z.boolean(),
@@ -8489,6 +8789,9 @@ export const RateLimitConfig = z
   })
   .partial()
   .passthrough();
+export const SkillTrustResponse = z.object({
+  level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
+});
 export const PerformanceReloadFailedDetails: z.ZodType<PerformanceReloadFailedDetails> =
   z.object({
     stage: z.enum(["refresh", "reload"]),
@@ -8511,6 +8814,15 @@ export const PerformanceReloadFailedError: z.ZodType<PerformanceReloadFailedErro
     code: z.string(),
     details: PerformanceReloadFailedDetails,
   });
+export const SkillTrustUpdateRequest = z.object({
+  level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
+});
+export const SkillTrustUpdateResponse = z.object({
+  saved: z.boolean(),
+  requires_restart: z.boolean(),
+  applied_level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
+  warning: z.string().optional(),
+});
 export const CreateEmailDraftResult = z.object({
   created: z.boolean(),
   message_id: z.string(),
@@ -15004,6 +15316,73 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
   },
   {
     method: "get",
+    path: "/security/permissions",
+    alias: "getPermissionSettings",
+    description: `Skills &amp; Tools spec C-2. Returns the complete stored maps: tool permissions, skill permissions, tool levels, skill levels and skill trust. Replaces GET /security/tool-policies and GET /security/skill-trust, which this package retires (C-22 row 6).
+`,
+    requestFormat: "json",
+    response: PermissionSettings,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "patch",
+    path: "/security/permissions",
+    alias: "patchPermissionSettings",
+    description: `Skills &amp; Tools spec C-2. Changes only the keys the request names, under the config write lock: read stored config, change the named keys, write atomically, reload agents. A key the request does not name is never written. The whole request is validated before anything is written; one bad key → 400 naming the first bad key, nothing saved. A request whose values equal the stored values is valid: 200, nothing written, no audit entry, running agents reloaded again (this is how &quot;Retry applying&quot; works, C-16). One audit entry per changed key. A changed tool or skill permission ends that tool&#x27;s or skill&#x27;s running timed allowances for every agent (C-26 point 7).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PermissionSettingsPatch,
+      },
+    ],
+    response: PermissionSettings,
+    errors: [
+      {
+        status: 400,
+        description: `Nothing stored. Texts include &quot;Nothing to change.&quot; (no key named), a null member or value (naming the key), &quot;&#x60;&lt;key&gt;&#x60; is not a known skill.&quot;, &quot;&#x60;&lt;key&gt;&#x60; is listed twice.&quot;, &quot;Use allow, ask or deny.&quot; (skill_trust), &quot;&#x60;&lt;tool&gt;&#x60; has no permission of its own.&quot; (ToolSearch, Skill), a locked level, allow for an always-ask tool, and today&#x27;s tool-key validation errors.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Nothing was stored (the atomic write did not happen): &quot;Not saved: the settings file could not be written.&quot;
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Stored, not applied to running agents. The error field is exactly &quot;The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.&quot;
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/security/prompt-guard",
     alias: "getPromptGuard",
     description: `Returns the current prompt injection detection strictness level. Default is &quot;medium&quot;. Requires restart is always false (hot-reloaded).
@@ -15305,106 +15684,6 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 500,
         description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/security/skill-trust",
-    alias: "getSkillTrust",
-    description: `Returns the current skill trust level from sandbox.skill_trust. Default is &quot;warn_unverified&quot; when not set.
-`,
-    requestFormat: "json",
-    response: SkillTrustResponse,
-    errors: [
-      {
-        status: 401,
-        description: `Missing or invalid bearer token.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/security/skill-trust",
-    alias: "updateSkillTrust",
-    description: `Persists the new skill trust level to config.sandbox.skill_trust. Only the three canonical values are accepted (case-sensitive). Changes are audit-logged.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: SkillTrustUpdateRequest,
-      },
-    ],
-    response: SkillTrustUpdateResponse,
-    errors: [
-      {
-        status: 400,
-        description: `Invalid trust level value.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/security/tool-policies",
-    alias: "getGlobalToolPolicies",
-    description: `Returns the current global tool policy configuration from sandbox.tool_policies and sandbox.default_tool_policy.
-`,
-    requestFormat: "json",
-    response: GlobalToolPolicies,
-    errors: [
-      {
-        status: 401,
-        description: `Missing or invalid bearer token.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/security/tool-policies",
-    alias: "updateGlobalToolPolicies",
-    description: `Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: GlobalToolPolicies,
-      },
-    ],
-    response: GlobalToolPolicies,
-    errors: [
-      {
-        status: 400,
-        description: `Invalid policy values. Also refused, nothing saved: storing allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 row 15).
-`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly &quot;The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.&quot; No other field is required. The response must not say the write was undone.
-`,
         schema: ErrorResponse,
       },
     ],
@@ -16089,6 +16368,50 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     ],
   },
   {
+    method: "put",
+    path: "/skills/:name/category",
+    alias: "setSkillCategory",
+    description: `Skills &amp; Tools spec C-21. Allowed only while the stored category is uncategorised; after that no edit exists.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: SkillCategoryUpdateRequest,
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Skill,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `The category is already set: &quot;The category is set at install and cannot be changed.&quot;
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "post",
     path: "/skills/:name/copy",
     alias: "copySkill",
@@ -16099,12 +16422,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         name: "body",
         type: "Body",
-        schema: z.object({
-          new_id: z
-            .string()
-            .max(64)
-            .regex(/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/),
-        }),
+        schema: SkillCopyRequest,
       },
       {
         name: "name",
@@ -16143,9 +16461,54 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
   },
   {
     method: "post",
+    path: "/skills/:name/trust-approval",
+    alias: "approveSkillVersion",
+    description: `Skills &amp; Tools spec C-24. More actions → &quot;Approve this version&quot;. A person&#x27;s action only: no agent tool reaches this endpoint. Stores a trust approval of the revision the screen showed, in the protected system area; audited as skill.trust_approved.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: SkillTrustApprovalRequest,
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SkillTrustApproval,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed body, or the skill is verified: &quot;This skill is verified; it needs no approval.&quot;
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `The current revision differs from the one sent: &quot;This skill changed since the page loaded. Review it again.&quot;
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/skills/install",
     alias: "installSkill",
-    description: `Installs a skill by its slug from the ClawHub registry. The slug is the identifier returned in a SkillSearchResult. An optional version pins the installed version; when omitted the latest version is installed.
+    description: `Installs a skill by its slug from the ClawHub registry. The slug is the identifier returned in a SkillSearchResult. An optional version pins the installed version; when omitted the latest version is installed. Skills &amp; Tools spec C-3, C-13: with review_id the server publishes exactly the staged folder of that review, idempotently per review. An unverified skill needs a review while skill trust is ask (409 without one) and is refused (403) while trust is deny; trust is re-checked at publish.
 `,
     requestFormat: "json",
     parameters: [
@@ -16168,13 +16531,25 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         schema: ErrorResponse,
       },
       {
+        status: 403,
+        description: `C-3: skill trust is deny and the skill is unverified: &quot;This skill is unverified, and unverified skills are set to Deny in Skills &amp; Tools. Nothing was installed.&quot;
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
       {
         status: 409,
-        description: `Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller&#x27;s expected revision and the skill changed since it was read).
+        description: `Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller&#x27;s expected revision and the skill changed since it was read). Skills &amp; Tools C-3, C-13: an unverified skill under trust ask without review_id; the staged folder&#x27;s revision differs from the reviewed one (&quot;The skill changed after review. Review it again.&quot;); the review already failed or was cancelled (the same terminal answer again).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 410,
+        description: `C-13: the review expired: &quot;This review expired. Open the skill again to review it.&quot;
 `,
         schema: ErrorResponse,
       },
@@ -16187,6 +16562,112 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 502,
         description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/skills/install/review",
+    alias: "reviewSkillInstall",
+    description: `Skills &amp; Tools spec C-13. Stages the skill (catalog slug and version, or upload reference) with the existing staging code without publishing it, and returns what the review screen shows. A staged review lives 15 minutes and is removed on expiry, on DELETE and after publish. review_id in the body is refused with 400.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.union([z.unknown(), z.unknown()]),
+      },
+    ],
+    response: SkillInstallReview,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `C-3: skill trust is deny and the skill is unverified: &quot;This skill is unverified, and unverified skills are set to Deny in Skills &amp; Tools. Nothing was installed.&quot;
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `The download does not match the catalog checksum: &quot;The downloaded skill does not match the catalog&#x27;s checksum. Nothing was installed.&quot;
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/skills/install/review/:review_id",
+    alias: "getSkillInstallReviewStatus",
+    description: `Skills &amp; Tools spec C-13. The review id is also the install operation&#x27;s id. The screen reads this after a lost Install answer. A terminal state is kept 15 minutes, then the record is removed.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "review_id",
+        type: "Path",
+        schema: z.string().min(1).max(128),
+      },
+    ],
+    response: SkillInstallReviewStatus,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/skills/install/review/:review_id",
+    alias: "discardSkillInstallReview",
+    description: `Skills &amp; Tools spec C-13. Discards the staged folder (&quot;Nothing was installed.&quot; is then true). Unknown or expired id → 404.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "review_id",
+        type: "Path",
+        schema: z.string().min(1).max(128),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],
@@ -17024,7 +17505,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/tool-approvals/:approval_id",
     alias: "postToolApproval",
-    description: `Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
+    description: `Answer a pending tool call approval (Skills &amp; Tools spec C-24, C-26): approve once, allow for a time (1h, 3h or 1d; a timed allowance for the agent named on the card, in memory only), deny, cancel, or, on a skill card, approve this version (with or without a time). The server accepts only an action listed in the card&#x27;s offered_actions. Effects run in order: (1) trust approval, (2) timed allowance, (3) release of the waiting call; the response reports what was stored (applied, expires_at). For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038) allow_for is refused with 400 (today&#x27;s text) before the offered-actions rule and nothing is recorded; no approval of such a tool is ever remembered. An exact-action tool (environment_setup, request_mount, send_email, browser_evaluate, set_config) never offers allow_for; answering allow_for gets 409 and nothing is stored.
 `,
     requestFormat: "json",
     parameters: [
@@ -17043,7 +17524,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     errors: [
       {
         status: 400,
-        description: `Malformed body or unknown action, or action allow for an always-ask tool (&quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot;; nothing recorded).
+        description: `Malformed body or unknown action; nothing stored. Texts: action allow (a screen from before the upgrade) → &quot;This choice is no longer offered. Choose Approve Once or a time limit.&quot;; allow_for or approve_version_allow_for without duration or with another value → &quot;Choose 1 hour, 3 hours or 1 day.&quot;; duration with any other action → &quot;A time limit applies only to Allow for.&quot;; allow_for for an always-ask tool → &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot;.
 `,
         schema: ErrorResponse,
       },
@@ -17054,12 +17535,25 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
       },
       {
         status: 404,
-        description: `Approval ID not found.`,
+        description: `Approval ID not found; also an approval already answered or timed out (&quot;approval … not found&quot;). Nothing happens twice.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Nothing stored. The action is not in the card&#x27;s offered_actions (including allow_for for an exact-action tool): &quot;This choice is not available for this request.&quot; The re-check before any effect failed (C-24): &quot;The skill changed after this request.&quot; or &quot;This skill is now set to Deny.&quot;; the waiting call is refused with the same reason.
+`,
         schema: ErrorResponse,
       },
       {
         status: 410,
         description: `Approval already resolved (FR-018).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The trust approval could not be stored (C-24 step 1): &quot;Could not save the approval. Nothing was changed.&quot; The card stays open for another answer until the approval times out.
+`,
         schema: ErrorResponse,
       },
     ],
@@ -19107,8 +19601,8 @@ export const RoomRef = z
 
 export const WorkflowStart = z
   .object({
-    workflow: z.enum(["W1", "W18"]),
-    target_workspace_id: z.string().min(1).max(128),
+    workflow: z.enum(["W1", "W5", "W18"]),
+    target_workspace_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -19987,6 +20481,17 @@ export const CommandSegmentInfo = z
   })
   .strict();
 
+export const ToolApprovalSkill = z
+  .object({
+    key: z.string().min(1),
+    name: z.string().min(1),
+    display_name: z.string(),
+    revision: z.string().regex(/^[a-f0-9]{64}$/),
+    unverified: z.boolean(),
+    open_checks: z.array(z.enum(["permission", "trust"])).min(1),
+  })
+  .strict();
+
 export const ToolApprovalRequiredFrame = z
   .object({
     root_session_id: z.string().min(1).max(255).optional(),
@@ -20004,6 +20509,9 @@ export const ToolApprovalRequiredFrame = z
     expires_in_ms: z.number().int().min(0).max(86400000),
     workspace_id: z.string().min(1).max(128).optional(),
     segments: z.array(CommandSegmentInfo).optional(),
+    offered_actions: z.array(z.enum(["allow_once", "allow_for", "deny", "cancel", "approve_version", "approve_version_allow_for"])).min(1),
+    allow_durations: z.array(z.enum(["1h", "3h", "1d"])),
+    skill: ToolApprovalSkill.optional(),
   })
   .strict();
 
@@ -20097,6 +20605,9 @@ export const SessionStatePendingApproval = z
     agent_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
     workspace_id: z.string().min(1).max(128).optional(),
+    offered_actions: z.array(z.enum(["allow_once", "allow_for", "deny", "cancel", "approve_version", "approve_version_allow_for"])).min(1),
+    allow_durations: z.array(z.enum(["1h", "3h", "1d"])),
+    skill: ToolApprovalSkill.optional(),
   })
   .strict();
 

@@ -1106,6 +1106,69 @@ func (e AgentRole) Valid() bool {
 	}
 }
 
+// Defines values for AgentSkillEntryConfiguredPolicy.
+const (
+	AgentSkillEntryConfiguredPolicyAllow AgentSkillEntryConfiguredPolicy = "allow"
+	AgentSkillEntryConfiguredPolicyAsk   AgentSkillEntryConfiguredPolicy = "ask"
+	AgentSkillEntryConfiguredPolicyDeny  AgentSkillEntryConfiguredPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentSkillEntryConfiguredPolicy enum.
+func (e AgentSkillEntryConfiguredPolicy) Valid() bool {
+	switch e {
+	case AgentSkillEntryConfiguredPolicyAllow:
+		return true
+	case AgentSkillEntryConfiguredPolicyAsk:
+		return true
+	case AgentSkillEntryConfiguredPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentSkillPermissionEffective.
+const (
+	AgentSkillPermissionEffectiveAllow AgentSkillPermissionEffective = "allow"
+	AgentSkillPermissionEffectiveAsk   AgentSkillPermissionEffective = "ask"
+	AgentSkillPermissionEffectiveDeny  AgentSkillPermissionEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentSkillPermissionEffective enum.
+func (e AgentSkillPermissionEffective) Valid() bool {
+	switch e {
+	case AgentSkillPermissionEffectiveAllow:
+		return true
+	case AgentSkillPermissionEffectiveAsk:
+		return true
+	case AgentSkillPermissionEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentSkillPermissionOverride.
+const (
+	AgentSkillPermissionOverrideAllow AgentSkillPermissionOverride = "allow"
+	AgentSkillPermissionOverrideAsk   AgentSkillPermissionOverride = "ask"
+	AgentSkillPermissionOverrideDeny  AgentSkillPermissionOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentSkillPermissionOverride enum.
+func (e AgentSkillPermissionOverride) Valid() bool {
+	switch e {
+	case AgentSkillPermissionOverrideAllow:
+		return true
+	case AgentSkillPermissionOverrideAsk:
+		return true
+	case AgentSkillPermissionOverrideDeny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentToolEntryConfiguredPolicy.
 const (
 	AgentToolEntryConfiguredPolicyAllow AgentToolEntryConfiguredPolicy = "allow"
@@ -1532,6 +1595,27 @@ func (e AppStateIdentityMode) Valid() bool {
 	case AppStateIdentityModeLocal:
 		return true
 	case AppStateIdentityModePlatform:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ApprovalAllowDuration.
+const (
+	ApprovalAllowDurationN1d ApprovalAllowDuration = "1d"
+	ApprovalAllowDurationN1h ApprovalAllowDuration = "1h"
+	ApprovalAllowDurationN3h ApprovalAllowDuration = "3h"
+)
+
+// Valid indicates whether the value is a known member of the ApprovalAllowDuration enum.
+func (e ApprovalAllowDuration) Valid() bool {
+	switch e {
+	case ApprovalAllowDurationN1d:
+		return true
+	case ApprovalAllowDurationN1h:
+		return true
+	case ApprovalAllowDurationN3h:
 		return true
 	default:
 		return false
@@ -7526,6 +7610,30 @@ func (e MessageParentQuestionKind) Valid() bool {
 	}
 }
 
+// Defines values for ModelVisibility.
+const (
+	ModelVisibilityFull               ModelVisibility = "full"
+	ModelVisibilityHidden             ModelVisibility = "hidden"
+	ModelVisibilityNameAndDescription ModelVisibility = "name_and_description"
+	ModelVisibilityNameOnly           ModelVisibility = "name_only"
+)
+
+// Valid indicates whether the value is a known member of the ModelVisibility enum.
+func (e ModelVisibility) Valid() bool {
+	switch e {
+	case ModelVisibilityFull:
+		return true
+	case ModelVisibilityHidden:
+		return true
+	case ModelVisibilityNameAndDescription:
+		return true
+	case ModelVisibilityNameOnly:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NotificationSeverity.
 const (
 	NotificationSeverityError   NotificationSeverity = "error"
@@ -11699,6 +11807,57 @@ func (e SkillStatus) Valid() bool {
 	}
 }
 
+// Defines values for SkillCategory.
+const (
+	SkillCategoryBlockchain      SkillCategory = "blockchain"
+	SkillCategoryBusiness        SkillCategory = "business"
+	SkillCategoryContentMedia    SkillCategory = "content_media"
+	SkillCategoryDataAi          SkillCategory = "data_ai"
+	SkillCategoryDatabases       SkillCategory = "databases"
+	SkillCategoryDevelopment     SkillCategory = "development"
+	SkillCategoryDevops          SkillCategory = "devops"
+	SkillCategoryDocumentation   SkillCategory = "documentation"
+	SkillCategoryLifestyle       SkillCategory = "lifestyle"
+	SkillCategoryResearch        SkillCategory = "research"
+	SkillCategoryTestingSecurity SkillCategory = "testing_security"
+	SkillCategoryTools           SkillCategory = "tools"
+	SkillCategoryUncategorised   SkillCategory = "uncategorised"
+)
+
+// Valid indicates whether the value is a known member of the SkillCategory enum.
+func (e SkillCategory) Valid() bool {
+	switch e {
+	case SkillCategoryBlockchain:
+		return true
+	case SkillCategoryBusiness:
+		return true
+	case SkillCategoryContentMedia:
+		return true
+	case SkillCategoryDataAi:
+		return true
+	case SkillCategoryDatabases:
+		return true
+	case SkillCategoryDevelopment:
+		return true
+	case SkillCategoryDevops:
+		return true
+	case SkillCategoryDocumentation:
+		return true
+	case SkillCategoryLifestyle:
+		return true
+	case SkillCategoryResearch:
+		return true
+	case SkillCategoryTestingSecurity:
+		return true
+	case SkillCategoryTools:
+		return true
+	case SkillCategoryUncategorised:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillDetailNeedsStatus.
 const (
 	SkillDetailNeedsStatusMissing SkillDetailNeedsStatus = "missing"
@@ -11747,6 +11906,111 @@ func (e SkillDetailState) Valid() bool {
 	case SkillDetailStateDeleted:
 		return true
 	case SkillDetailStateInstalled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillInstallReviewSuggestedCategory.
+const (
+	SkillInstallReviewSuggestedCategoryBlockchain      SkillInstallReviewSuggestedCategory = "blockchain"
+	SkillInstallReviewSuggestedCategoryBusiness        SkillInstallReviewSuggestedCategory = "business"
+	SkillInstallReviewSuggestedCategoryContentMedia    SkillInstallReviewSuggestedCategory = "content_media"
+	SkillInstallReviewSuggestedCategoryDataAi          SkillInstallReviewSuggestedCategory = "data_ai"
+	SkillInstallReviewSuggestedCategoryDatabases       SkillInstallReviewSuggestedCategory = "databases"
+	SkillInstallReviewSuggestedCategoryDevelopment     SkillInstallReviewSuggestedCategory = "development"
+	SkillInstallReviewSuggestedCategoryDevops          SkillInstallReviewSuggestedCategory = "devops"
+	SkillInstallReviewSuggestedCategoryDocumentation   SkillInstallReviewSuggestedCategory = "documentation"
+	SkillInstallReviewSuggestedCategoryLifestyle       SkillInstallReviewSuggestedCategory = "lifestyle"
+	SkillInstallReviewSuggestedCategoryResearch        SkillInstallReviewSuggestedCategory = "research"
+	SkillInstallReviewSuggestedCategoryTestingSecurity SkillInstallReviewSuggestedCategory = "testing_security"
+	SkillInstallReviewSuggestedCategoryTools           SkillInstallReviewSuggestedCategory = "tools"
+	SkillInstallReviewSuggestedCategoryUncategorised   SkillInstallReviewSuggestedCategory = "uncategorised"
+)
+
+// Valid indicates whether the value is a known member of the SkillInstallReviewSuggestedCategory enum.
+func (e SkillInstallReviewSuggestedCategory) Valid() bool {
+	switch e {
+	case SkillInstallReviewSuggestedCategoryBlockchain:
+		return true
+	case SkillInstallReviewSuggestedCategoryBusiness:
+		return true
+	case SkillInstallReviewSuggestedCategoryContentMedia:
+		return true
+	case SkillInstallReviewSuggestedCategoryDataAi:
+		return true
+	case SkillInstallReviewSuggestedCategoryDatabases:
+		return true
+	case SkillInstallReviewSuggestedCategoryDevelopment:
+		return true
+	case SkillInstallReviewSuggestedCategoryDevops:
+		return true
+	case SkillInstallReviewSuggestedCategoryDocumentation:
+		return true
+	case SkillInstallReviewSuggestedCategoryLifestyle:
+		return true
+	case SkillInstallReviewSuggestedCategoryResearch:
+		return true
+	case SkillInstallReviewSuggestedCategoryTestingSecurity:
+		return true
+	case SkillInstallReviewSuggestedCategoryTools:
+		return true
+	case SkillInstallReviewSuggestedCategoryUncategorised:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillInstallReviewVerification.
+const (
+	SkillInstallReviewVerificationMatched        SkillInstallReviewVerification = "matched"
+	SkillInstallReviewVerificationMismatch       SkillInstallReviewVerification = "mismatch"
+	SkillInstallReviewVerificationNoRegistryHash SkillInstallReviewVerification = "no_registry_hash"
+	SkillInstallReviewVerificationUnavailable    SkillInstallReviewVerification = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the SkillInstallReviewVerification enum.
+func (e SkillInstallReviewVerification) Valid() bool {
+	switch e {
+	case SkillInstallReviewVerificationMatched:
+		return true
+	case SkillInstallReviewVerificationMismatch:
+		return true
+	case SkillInstallReviewVerificationNoRegistryHash:
+		return true
+	case SkillInstallReviewVerificationUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillInstallReviewStatusState.
+const (
+	SkillInstallReviewStatusStateCancelled  SkillInstallReviewStatusState = "cancelled"
+	SkillInstallReviewStatusStateExpired    SkillInstallReviewStatusState = "expired"
+	SkillInstallReviewStatusStateFailed     SkillInstallReviewStatusState = "failed"
+	SkillInstallReviewStatusStateInstalled  SkillInstallReviewStatusState = "installed"
+	SkillInstallReviewStatusStatePublishing SkillInstallReviewStatusState = "publishing"
+	SkillInstallReviewStatusStateStaged     SkillInstallReviewStatusState = "staged"
+)
+
+// Valid indicates whether the value is a known member of the SkillInstallReviewStatusState enum.
+func (e SkillInstallReviewStatusState) Valid() bool {
+	switch e {
+	case SkillInstallReviewStatusStateCancelled:
+		return true
+	case SkillInstallReviewStatusStateExpired:
+		return true
+	case SkillInstallReviewStatusStateFailed:
+		return true
+	case SkillInstallReviewStatusStateInstalled:
+		return true
+	case SkillInstallReviewStatusStatePublishing:
+		return true
+	case SkillInstallReviewStatusStateStaged:
 		return true
 	default:
 		return false
@@ -13051,18 +13315,24 @@ func (e TodoStatus) Valid() bool {
 
 // Defines values for ToolApprovalActionRequestAction.
 const (
-	ToolApprovalActionRequestActionAllow     ToolApprovalActionRequestAction = "allow"
-	ToolApprovalActionRequestActionAllowOnce ToolApprovalActionRequestAction = "allow_once"
-	ToolApprovalActionRequestActionCancel    ToolApprovalActionRequestAction = "cancel"
-	ToolApprovalActionRequestActionDeny      ToolApprovalActionRequestAction = "deny"
+	ToolApprovalActionRequestActionAllowFor               ToolApprovalActionRequestAction = "allow_for"
+	ToolApprovalActionRequestActionAllowOnce              ToolApprovalActionRequestAction = "allow_once"
+	ToolApprovalActionRequestActionApproveVersion         ToolApprovalActionRequestAction = "approve_version"
+	ToolApprovalActionRequestActionApproveVersionAllowFor ToolApprovalActionRequestAction = "approve_version_allow_for"
+	ToolApprovalActionRequestActionCancel                 ToolApprovalActionRequestAction = "cancel"
+	ToolApprovalActionRequestActionDeny                   ToolApprovalActionRequestAction = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolApprovalActionRequestAction enum.
 func (e ToolApprovalActionRequestAction) Valid() bool {
 	switch e {
-	case ToolApprovalActionRequestActionAllow:
+	case ToolApprovalActionRequestActionAllowFor:
 		return true
 	case ToolApprovalActionRequestActionAllowOnce:
+		return true
+	case ToolApprovalActionRequestActionApproveVersion:
+		return true
+	case ToolApprovalActionRequestActionApproveVersionAllowFor:
 		return true
 	case ToolApprovalActionRequestActionCancel:
 		return true
@@ -13093,18 +13363,24 @@ func (e ToolApprovalActionRequestScope) Valid() bool {
 
 // Defines values for ToolApprovalResponseAction.
 const (
-	ToolApprovalResponseActionAllow     ToolApprovalResponseAction = "allow"
-	ToolApprovalResponseActionAllowOnce ToolApprovalResponseAction = "allow_once"
-	ToolApprovalResponseActionCancel    ToolApprovalResponseAction = "cancel"
-	ToolApprovalResponseActionDeny      ToolApprovalResponseAction = "deny"
+	ToolApprovalResponseActionAllowFor               ToolApprovalResponseAction = "allow_for"
+	ToolApprovalResponseActionAllowOnce              ToolApprovalResponseAction = "allow_once"
+	ToolApprovalResponseActionApproveVersion         ToolApprovalResponseAction = "approve_version"
+	ToolApprovalResponseActionApproveVersionAllowFor ToolApprovalResponseAction = "approve_version_allow_for"
+	ToolApprovalResponseActionCancel                 ToolApprovalResponseAction = "cancel"
+	ToolApprovalResponseActionDeny                   ToolApprovalResponseAction = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolApprovalResponseAction enum.
 func (e ToolApprovalResponseAction) Valid() bool {
 	switch e {
-	case ToolApprovalResponseActionAllow:
+	case ToolApprovalResponseActionAllowFor:
 		return true
 	case ToolApprovalResponseActionAllowOnce:
+		return true
+	case ToolApprovalResponseActionApproveVersion:
+		return true
+	case ToolApprovalResponseActionApproveVersionAllowFor:
 		return true
 	case ToolApprovalResponseActionCancel:
 		return true
@@ -14871,6 +15147,9 @@ type Agent struct {
 			// Servers List of MCP server bindings.
 			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
+
+		// Skills An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+		Skills *AgentSkillsCfg `json:"skills,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
 	// Type Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and Admin use core; built-in Planner, Researcher and General Purpose use Subagent on the wire. Hidden Judge and Plan Supervisor use system and are excluded from chat/team/delegation selection. Custom creation accepts Main, Subagent and subagent_3p only. Runtime type is immutable after creation. Hidden instructions and supported model tuning remain editable, while hidden capabilities are fixed. Ordinary built-in capabilities are editable within the global policy ceiling. Use editable_fields for the exact rules.
@@ -15039,6 +15318,9 @@ type AgentCreateRequestMain struct {
 			// Servers List of MCP server bindings.
 			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
+
+		// Skills An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+		Skills *AgentSkillsCfg `json:"skills,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
 	// Type Discriminator. Must be exactly "Main" for this variant.
@@ -15133,6 +15415,9 @@ type AgentCreateRequestSubagent struct {
 			// Servers List of MCP server bindings.
 			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
+
+		// Skills An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+		Skills *AgentSkillsCfg `json:"skills,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
 	// Type Discriminator. Must be exactly "Subagent" for this variant.
@@ -15357,8 +15642,11 @@ type AgentDetail struct {
 	Role *AgentRole `json:"role,omitempty"`
 
 	// Runnable True when a run of this agent would start now (no program_warning applies).
-	Runnable *bool     `json:"runnable,omitempty"`
-	Skills   *[]string `json:"skills,omitempty"`
+	Runnable *bool `json:"runnable,omitempty"`
+
+	// SkillPermissions Skills & Tools spec C-9, C-21: per-skill effective permission and the agent's own stored override, for the skills this agent can use (its granted installed skills and the project skills of its mounts). Returned for get_agent fields ["skill_permissions"].
+	SkillPermissions *[]AgentSkillPermission `json:"skill_permissions,omitempty"`
+	Skills           *[]string               `json:"skills,omitempty"`
 
 	// Soul SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul).
 	Soul *string `json:"soul,omitempty"`
@@ -15563,6 +15851,63 @@ type AgentSession struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// AgentSkillEntry One skill row of an agent's Tools tab (AgentToolsResponse.skills; Skills & Tools spec C-4): the skill's global permission, the agent's own override and the effective permission after strictest-wins, the trust floor for an unverified skill and God Mode. Listed for skills granted to the agent and for the project skills of the workspaces it is mounted on.
+type AgentSkillEntry struct {
+	// ConfiguredPolicy The agent's own stored override for this skill; null when it has none and follows the global value.
+	ConfiguredPolicy *AgentSkillEntryConfiguredPolicy `json:"configured_policy"`
+
+	// DisplayName Human-readable skill name.
+	DisplayName string `json:"display_name"`
+
+	// EffectivePolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.
+	EffectivePolicy ToolPolicy `json:"effective_policy"`
+
+	// GlobalPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.
+	GlobalPolicy ToolPolicy `json:"global_policy"`
+
+	// Granted True when the skill is granted to the agent. Always false for a project skill, whose authority is the workspace mount.
+	Granted bool `json:"granted"`
+
+	// Key Permission key (C-23) — the lower-case skill id, or project:<workspace>/<slug>.
+	Key string `json:"key"`
+
+	// Name The skill's slug.
+	Name string `json:"name"`
+
+	// ProjectWorkspace The workspace id of a project skill; null for an installed skill.
+	ProjectWorkspace *string `json:"project_workspace"`
+
+	// Unverified True when the skill is unverified (C-5); project skills always are.
+	Unverified bool `json:"unverified"`
+}
+
+// AgentSkillEntryConfiguredPolicy The agent's own stored override for this skill; null when it has none and follows the global value.
+type AgentSkillEntryConfiguredPolicy string
+
+// AgentSkillPermission One skill's permission for an agent, as reported by get_agent (AgentDetail.skill_permissions; Skills & Tools spec C-9): the skill twin of AgentToolPermission.
+type AgentSkillPermission struct {
+	// Effective The permission that applies to this agent's loads of the skill (strictest wins, trust floor, God Mode).
+	Effective AgentSkillPermissionEffective `json:"effective"`
+
+	// Override The agent's own stored override for this skill; null when there is none.
+	Override *AgentSkillPermissionOverride `json:"override"`
+
+	// Skill The skill's permission key (C-23).
+	Skill string `json:"skill"`
+}
+
+// AgentSkillPermissionEffective The permission that applies to this agent's loads of the skill (strictest wins, trust floor, God Mode).
+type AgentSkillPermissionEffective string
+
+// AgentSkillPermissionOverride The agent's own stored override for this skill; null when there is none.
+type AgentSkillPermissionOverride string
+
+// AgentSkillsCfg An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+type AgentSkillsCfg struct {
+	// Policies Skill key to the agent's own permission. On PUT /agents/{id}/tools this is the complete set of the agent's skill overrides: a key not listed is removed, and {} clears every override. null for the map or a value is refused with 400 naming it.
+	Policies map[string]ToolPolicy `json:"policies"`
+}
+
 // AgentStats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
 type AgentStats struct {
 	// LastActive RFC3339 timestamp of the last turn completed by this agent.
@@ -15678,6 +16023,9 @@ type AgentToolsCfg struct {
 		// Servers List of MCP server bindings.
 		Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
+
+	// Skills An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+	Skills *AgentSkillsCfg `json:"skills,omitempty"`
 }
 
 // AgentToolsMcpServerBinding A single MCP server binding in an agent's tool configuration: which server is assigned and which of its tools are exposed. Shared by AgentToolsCfg (config.mcp.servers) and AgentToolsUpdateRequest (mcp.servers).
@@ -15711,6 +16059,9 @@ type AgentToolsResponse struct {
 			// Servers List of MCP server bindings.
 			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
+
+		// Skills An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+		Skills *AgentSkillsCfg `json:"skills,omitempty"`
 	} `json:"config"`
 	ErrorStage    *string  `json:"error_stage,omitempty"`
 	Message       *string  `json:"message,omitempty"`
@@ -15721,6 +16072,9 @@ type AgentToolsResponse struct {
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
+
+	// Skills Skills & Tools spec C-4, C-23. One entry per skill this agent can use: its granted installed skills and the project skills of the workspaces it is mounted on, each with its key, own override, global and effective permission. Empty when there are none.
+	Skills []AgentSkillEntry `json:"skills"`
 
 	// Tools Per-tool effective policy entries.
 	Tools []struct {
@@ -15786,6 +16140,9 @@ type AgentToolsUpdateRequest struct {
 			// Servers List of MCP server bindings.
 			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
+
+		// Skills An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+		Skills *AgentSkillsCfg `json:"skills,omitempty"`
 	} `json:"config,omitempty"`
 
 	// Mcp MCP server bindings for this agent.
@@ -15799,6 +16156,9 @@ type AgentToolsUpdateRequest struct {
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
+
+	// Skills An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+	Skills *AgentSkillsCfg `json:"skills,omitempty"`
 }
 
 // AgentToolsUpdateRequestBuiltinMode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
@@ -15906,6 +16266,9 @@ type AgentUpdateRequest struct {
 			// Servers List of MCP server bindings.
 			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
+
+		// Skills An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+		Skills *AgentSkillsCfg `json:"skills,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
 	// Voice Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306). Send null to clear. Main only.
@@ -16022,6 +16385,9 @@ type AppStatePatchRequest struct {
 	// OnboardingComplete Mark onboarding as complete. Must be true — false is rejected with 400.
 	OnboardingComplete *bool `json:"onboarding_complete,omitempty"`
 }
+
+// ApprovalAllowDuration How long a timed allowance from an approval card lasts (Skills & Tools spec C-26, founder R2-Q1): 1h, 3h or 1d (24 hours), measured on the server from the moment it is recorded. A timed allowance belongs to the agent named on the card, covers all its sessions and the helpers it starts for itself, lives in memory only and also ends at a gateway restart or when the permission it answers changes.
+type ApprovalAllowDuration string
 
 // Attachment File attachment associated with a transcript entry.
 type Attachment struct {
@@ -22672,6 +23038,9 @@ type ModelTokens struct {
 	Total int `json:"total"`
 }
 
+// ModelVisibility What the model is told about a tool or a skill each turn (Skills & Tools spec C-1). hidden = not listed, still findable by search; name_only = listed by name; name_and_description = listed by name and a one-line description, loaded on demand; full = the complete tool definition every turn, or (for a skill) its whole instructions from the start of each chat, but only when the skill's outcome for that agent is allowed. A level never decides whether a tool or skill may run; an effective deny hides the item whatever its level.
+type ModelVisibility string
+
 // Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
@@ -23314,6 +23683,42 @@ type PerformanceSettingsUpdate struct {
 
 	// ToolsOnDemand New tool-loading mode. true = load tools on demand (fewer tokens per message); false = all allowed tools sent every message (no loading step). Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
+}
+
+// PermissionSettings Response of GET and PATCH /api/v1/security/permissions (Skills & Tools spec C-2): the complete stored global permissions and levels for every tool and skill, and the skill trust choice. These are the operator-only global ceilings; per-agent values can only be stricter. Every PATCH response returns the whole stored state so the page can replace its view with it.
+type PermissionSettings struct {
+	// Policies Global permission of every tool (sandbox.tool_policies): static tool names and mcp_<server>_* wildcards, complete for the static catalog.
+	Policies map[string]ToolPolicy `json:"policies"`
+
+	// SkillPolicies Global permission of every installed and project skill (sandbox.skill_policies). Keys are lower-case skill ids, or project:<workspace>/<slug> for a project-folder skill (C-23).
+	SkillPolicies map[string]ToolPolicy `json:"skill_policies"`
+
+	// SkillTrust A policy value governing whether a tool call is allowed, requires approval, or is denied.
+	SkillTrust ToolPolicy `json:"skill_trust"`
+
+	// SkillVisibility Global level of every installed and project skill (sandbox.skill_visibility), keyed like skill_policies.
+	SkillVisibility map[string]ModelVisibility `json:"skill_visibility"`
+
+	// Visibility Global level of every tool (sandbox.tool_visibility): static tool names and mcp_<server>_* keys; an exact tool key overrides its server key.
+	Visibility map[string]ModelVisibility `json:"visibility"`
+}
+
+// PermissionSettingsPatch Request body of PATCH /api/v1/security/permissions (Skills & Tools spec C-2). Every member is optional and every map names only the keys to change; a key not named is never written, so two tabs changing different keys both keep their change. A request that names no key is refused with 400 "Nothing to change."; keys sent with their stored values give 200 with nothing written and no audit entry. null for a member or a value is refused with 400 naming the key; there is no delete through PATCH. The whole request is validated before anything is written.
+type PermissionSettingsPatch struct {
+	// Policies Tool permissions to change (static tool names or mcp_<server>_* keys).
+	Policies *map[string]ToolPolicy `json:"policies,omitempty"`
+
+	// SkillPolicies Skill permissions to change; keys follow the known-skill-key rule (C-23).
+	SkillPolicies *map[string]ToolPolicy `json:"skill_policies,omitempty"`
+
+	// SkillTrust A policy value governing whether a tool call is allowed, requires approval, or is denied.
+	SkillTrust *ToolPolicy `json:"skill_trust,omitempty"`
+
+	// SkillVisibility Skill levels to change.
+	SkillVisibility *map[string]ModelVisibility `json:"skill_visibility,omitempty"`
+
+	// Visibility Tool levels to change. A locked tool accepts only its locked level.
+	Visibility *map[string]ModelVisibility `json:"visibility,omitempty"`
 }
 
 // Plan A first-class Plan entity (ADR-049 D1/FR-1) that groups an executable task DAG under a goal, Definition of Done, owner agent, and state machine. Tasks join a plan via `Task.plan_id` (same-workspace FK, validated); membership and `progress` are computed read-time by scanning member tasks — never stored on the Plan record (mirrors the removed Milestone's `computeMilestoneCounts`). Persisted at `~/.omnipus/plans/<id>.json` (`pkg/plan`, atomic write + per-plan striped lock). Replaces Milestones (see the Milestone removal diffs) as the container for grouped, judged, goal-driven work.
@@ -27183,8 +27588,11 @@ type Skill struct {
 	ArgumentHint *string `json:"argument_hint,omitempty"`
 
 	// Author Skill author or publisher name.
-	Author        *string   `json:"author,omitempty"`
-	ChangedFields *[]string `json:"changed_fields,omitempty"`
+	Author *string `json:"author,omitempty"`
+
+	// Category The group a skill is shown in on Skills & Tools (Skills & Tools spec C-5). Set at install (from the request, else the file's metadata.category when it is one of these values, else uncategorised); an uncategorised skill can have its category chosen once. Stored in Omnipus's own data, never written into the skill folder.
+	Category      SkillCategory `json:"category"`
+	ChangedFields *[]string     `json:"changed_fields,omitempty"`
 
 	// Description Short description of what the skill does.
 	Description *string `json:"description,omitempty"`
@@ -27215,7 +27623,10 @@ type Skill struct {
 	// Status "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 	Status SkillStatus `json:"status"`
 
-	// Verified True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
+	// TrustApproved Skills & Tools spec C-24: true when the current revision has a stored trust approval. Server-derived; ignored if a client sends it.
+	TrustApproved bool `json:"trust_approved"`
+
+	// Verified Skills & Tools spec C-5: true for a built-in skill, or for a skill whose install was checked against a registry hash AND whose folder has no local changes since; false otherwise. Unverified skills follow the skill trust setting (allow / ask / deny, C-3).
 	Verified bool `json:"verified"`
 
 	// Version Version string as declared by the skill's SKILL.md or its source registry. Often semver ("1.2.3") but NOT required to be — community/ClawHub skills use arbitrary version strings ("1.0", "v2", a date, etc.). Defaults to "0.0.0" when the skill declares no version. Treated as an opaque display label.
@@ -27234,8 +27645,20 @@ type SkillSource string
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
+// SkillCategory The group a skill is shown in on Skills & Tools (Skills & Tools spec C-5). Set at install (from the request, else the file's metadata.category when it is one of these values, else uncategorised); an uncategorised skill can have its category chosen once. Stored in Omnipus's own data, never written into the skill folder.
+type SkillCategory string
+
+// SkillCategoryUpdateRequest Request body of PUT /api/v1/skills/{name}/category (Skills & Tools spec C-21): choose the category of a skill stored as uncategorised. Allowed once; a skill whose category is already set is refused with 409 "The category is set at install and cannot be changed."
+type SkillCategoryUpdateRequest struct {
+	// Category The group a skill is shown in on Skills & Tools (Skills & Tools spec C-5). Set at install (from the request, else the file's metadata.category when it is one of these values, else uncategorised); an uncategorised skill can have its category chosen once. Stored in Omnipus's own data, never written into the skill folder.
+	Category SkillCategory `json:"category"`
+}
+
 // SkillCopyRequest Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
 type SkillCopyRequest struct {
+	// Category The group a skill is shown in on Skills & Tools (Skills & Tools spec C-5). Set at install (from the request, else the file's metadata.category when it is one of these values, else uncategorised); an uncategorised skill can have its category chosen once. Stored in Omnipus's own data, never written into the skill folder.
+	Category *SkillCategory `json:"category,omitempty"`
+
 	// NewId Slug of the new skill (letters, digits and single hyphens).
 	NewId string `json:"new_id"`
 }
@@ -27307,8 +27730,14 @@ type SkillDetailState string
 
 // SkillInstallRequest Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
 type SkillInstallRequest struct {
+	// Category The group a skill is shown in on Skills & Tools (Skills & Tools spec C-5). Set at install (from the request, else the file's metadata.category when it is one of these values, else uncategorised); an uncategorised skill can have its category chosen once. Stored in Omnipus's own data, never written into the skill folder.
+	Category *SkillCategory `json:"category,omitempty"`
+
 	// ReplaceLocalChanges Required true to replace an installed skill whose has_local_changes is true. Absent means false.
 	ReplaceLocalChanges *bool `json:"replace_local_changes,omitempty"`
+
+	// ReviewId Skills & Tools spec C-13. The review (from POST /skills/install/review) to publish. With review_id the server publishes exactly the staged folder of that review, never a fresh download; slug or upload_id must still name the same source the review staged. Current revision differs from the reviewed one, or the source differs → 409 "The skill changed after review. Review it again."; expired → 410 "This review expired. Open the skill again to review it." Idempotent per review: while publishing → 202 with SkillInstallReviewStatus; after installed → 200 with the same result and no second publish; after failed, expired or cancelled → the same terminal answer again. Refused (400) by POST /skills/install/review itself. Required for an unverified skill while skill trust is ask (without it → 409, C-3).
+	ReviewId *string `json:"review_id,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision *string `json:"revision,omitempty"`
@@ -27329,6 +27758,69 @@ type SkillInstallRequest0 = interface{}
 
 // SkillInstallRequest1 defines model for .
 type SkillInstallRequest1 = interface{}
+
+// SkillInstallReview Response of POST /api/v1/skills/install/review (Skills & Tools spec C-13): the skill has been downloaded and unpacked into staging, not published. The person reviews this exact revision; POST /skills/install with this review_id publishes exactly the staged folder. A review lives 15 minutes. A checksum mismatch never produces a review (422).
+type SkillInstallReview struct {
+	// ExpiresAt When the staged review expires and is removed.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// HasLocalChangesToReplace True when the installed skill this would replace has local changes (installing needs replace_local_changes).
+	HasLocalChangesToReplace bool `json:"has_local_changes_to_replace"`
+
+	// Name Slug of the staged skill.
+	Name string `json:"name"`
+
+	// ReplacesExisting True when a skill with this name is already installed and would be replaced.
+	ReplacesExisting bool `json:"replaces_existing"`
+
+	// ReviewId Opaque id of this review; it is also the id of the install operation (GET /skills/install/review/{review_id}).
+	ReviewId string `json:"review_id"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
+
+	// SuggestedCategory The file's metadata.category when it is a valid SkillCategory (same values); null otherwise.
+	SuggestedCategory *SkillInstallReviewSuggestedCategory `json:"suggested_category"`
+
+	// Verification Result of the registry hash check: matched = the archive matched the registry's hash; no_registry_hash = the registry publishes none; unavailable = the registry did not answer the lookup. mismatch is part of the vocabulary but a mismatching archive is refused at review time with 422, so a returned review never carries it.
+	Verification SkillInstallReviewVerification `json:"verification"`
+
+	// Verified True only when verification is matched. An unverified skill follows the trust choice.
+	Verified bool `json:"verified"`
+
+	// Version Version of the staged skill as declared by its source (an opaque display label).
+	Version string `json:"version"`
+}
+
+// SkillInstallReviewSuggestedCategory The file's metadata.category when it is a valid SkillCategory (same values); null otherwise.
+type SkillInstallReviewSuggestedCategory string
+
+// SkillInstallReviewVerification Result of the registry hash check: matched = the archive matched the registry's hash; no_registry_hash = the registry publishes none; unavailable = the registry did not answer the lookup. mismatch is part of the vocabulary but a mismatching archive is refused at review time with 422, so a returned review never carries it.
+type SkillInstallReviewVerification string
+
+// SkillInstallReviewStatus Response of GET /api/v1/skills/install/review/{review_id} (Skills & Tools spec C-13): what really happened to one review's install operation. The screen reads it after a lost Install answer instead of guessing from the skills list. A review reaches a terminal state (installed, failed, expired, cancelled) exactly once and the record is kept 15 minutes after that, then removed (404).
+type SkillInstallReviewStatus struct {
+	// InstalledRevision The content revision that was published; set only when state is installed, null otherwise.
+	InstalledRevision *string `json:"installed_revision"`
+
+	// Reason Plain-language reason, present only when state is failed.
+	Reason *string `json:"reason,omitempty"`
+
+	// ReplacedRevision The content revision of the skill this install replaced; null when nothing was replaced or not yet installed.
+	ReplacedRevision *string `json:"replaced_revision"`
+
+	// ReviewId The review (and install operation) id.
+	ReviewId string `json:"review_id"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
+
+	// State staged = reviewed, Install not pressed; publishing = Install in progress; installed = published; failed = refused or broken (see reason); expired = the review timed out; cancelled = discarded with DELETE.
+	State SkillInstallReviewStatusState `json:"state"`
+}
+
+// SkillInstallReviewStatusState staged = reviewed, Install not pressed; publishing = Install in progress; installed = published; failed = refused or broken (see reason); expired = the review timed out; cancelled = discarded with DELETE.
+type SkillInstallReviewStatusState string
 
 // SkillMarketplaceStatus Reports whether any skill marketplace registry is enabled, returned by GET /api/v1/skills/marketplace. The SPA gates its skill-browse UI on this: when enabled is false, search/install-by-slug are unavailable (the endpoints return 409) and the UI offers only "install from file". A registry is the ClawHub marketplace or a configured GitHub registry.
 type SkillMarketplaceStatus struct {
@@ -27367,6 +27859,27 @@ type SkillSearchResult struct {
 
 	// Version Latest published version of the skill (free-form; may be empty).
 	Version *string `json:"version,omitempty"`
+}
+
+// SkillTrustApproval A stored trust approval of one revision of an unverified skill (Skills & Tools spec C-24), returned by POST /api/v1/skills/{name}/trust-approval. Every field is server-derived. Stored in the protected system area ($OMNIPUS_HOME/system/skill-trust-approvals.json), one record per skill and revision; a changed revision needs a new approval.
+type SkillTrustApproval struct {
+	// ApprovedAt When the approval was stored.
+	ApprovedAt time.Time `json:"approved_at"`
+
+	// ApprovedBy The signed-in person who approved it.
+	ApprovedBy string `json:"approved_by"`
+
+	// Key The skill's permission key (C-23).
+	Key string `json:"key"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
+}
+
+// SkillTrustApprovalRequest Request body of POST /api/v1/skills/{name}/trust-approval (Skills & Tools spec C-24): a person approves the current version of an unverified skill from More actions → "Approve this version". The revision is the one the screen showed; a different current revision is refused with 409. A person's action only: no agent tool reaches this endpoint.
+type SkillTrustApprovalRequest struct {
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 }
 
 // SkillTrustResponse Skill trust level returned by GET /api/v1/security/skill-trust.
@@ -28767,47 +29280,71 @@ type TokenUsageSummary struct {
 	UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 }
 
-// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
+// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4; Skills & Tools spec C-24, C-26). The server accepts only an action listed in the card's offered_actions (ToolApprovalRequiredFrame / SessionStatePendingApproval); any other action gets 409 "This choice is not available for this request." and nothing is stored. The body carries only the action, duration and the bash scope; the client never sends a skill key or revision (they come from the pending approval).
 type ToolApprovalActionRequest struct {
-	// Action Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+	// Action Action to take on this approval. deny — reject this single invocation. allow_once — allow this single invocation only; nothing is recorded. allow_for — allow this invocation AND record a timed allowance for the agent named on the card, for `duration` (C-26). On an ordinary tool card it covers the whole tool; on a bash card the exact command or command family per `scope`; on a pre-flight card the path or addresses the card named; on a skill permission card the skill's permission part. Never offered for an always-ask tool (today exactly set_channel_outbound; answered with 400, checked first) or for an exact-action tool (environment_setup, request_mount, send_email, browser_evaluate, set_config; answered with 409). cancel — dismiss this approval without approving the invocation; distinct from deny, stores nothing. approve_version — store a trust approval of the card's skill revision and release this load (skill trust card). approve_version_allow_for — store the trust approval and a timed allowance of the skill's permission part for `duration`, then release the load (skill combined card). The former value "allow" is refused with 400 "This choice is no longer offered. Choose Approve Once or a time limit."
 	Action ToolApprovalActionRequestAction `json:"action"`
 
-	// Scope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
-	// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
-	// When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
+	// Duration How long a timed allowance from an approval card lasts (Skills & Tools spec C-26, founder R2-Q1): 1h, 3h or 1d (24 hours), measured on the server from the moment it is recorded. A timed allowance belongs to the agent named on the card, covers all its sessions and the helpers it starts for itself, lives in memory only and also ends at a gateway restart or when the permission it answers changes.
+	Duration *ApprovalAllowDuration `json:"duration,omitempty"`
+
+	// Scope Allowance scope for a bash card (ADR-092 D4/FR-024; C-26). Present only when action is "allow_for"; ignored otherwise. "exact" (default when omitted) — command text + cwd. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+	// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — a time choice on one of those records the path-widening or network-widening allowance the frame described, not an exact/prefix command allowance; `scope` is ignored for those approvals.
+	// When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact allowance for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix allowance it did not offer (see CommandSegmentInfo.prefix_available).
 	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
-// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+// ToolApprovalActionRequestAction Action to take on this approval. deny — reject this single invocation. allow_once — allow this single invocation only; nothing is recorded. allow_for — allow this invocation AND record a timed allowance for the agent named on the card, for `duration` (C-26). On an ordinary tool card it covers the whole tool; on a bash card the exact command or command family per `scope`; on a pre-flight card the path or addresses the card named; on a skill permission card the skill's permission part. Never offered for an always-ask tool (today exactly set_channel_outbound; answered with 400, checked first) or for an exact-action tool (environment_setup, request_mount, send_email, browser_evaluate, set_config; answered with 409). cancel — dismiss this approval without approving the invocation; distinct from deny, stores nothing. approve_version — store a trust approval of the card's skill revision and release this load (skill trust card). approve_version_allow_for — store the trust approval and a timed allowance of the skill's permission part for `duration`, then release the load (skill combined card). The former value "allow" is refused with 400 "This choice is no longer offered. Choose Approve Once or a time limit."
 type ToolApprovalActionRequestAction string
 
-// ToolApprovalActionRequestScope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
-// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
-// When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
+// ToolApprovalActionRequestScope Allowance scope for a bash card (ADR-092 D4/FR-024; C-26). Present only when action is "allow_for"; ignored otherwise. "exact" (default when omitted) — command text + cwd. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — a time choice on one of those records the path-widening or network-widening allowance the frame described, not an exact/prefix command allowance; `scope` is ignored for those approvals.
+// When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact allowance for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix allowance it did not offer (see CommandSegmentInfo.prefix_available).
 type ToolApprovalActionRequestScope string
 
-// ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
+// ToolApprovalApplied What an approval answer actually stored (Skills & Tools spec C-24); never what was asked. Always present in ToolApprovalResponse for a skill approval. A false member with not_applied_reason means a partial result: for example the trust approval was stored and the call released, but the timed allowance was not recorded.
+type ToolApprovalApplied struct {
+	// CallReleased True when the waiting call was released to run.
+	CallReleased bool `json:"call_released"`
+
+	// TimedAllowance True when a timed allowance was recorded (see ToolApprovalResponse.expires_at).
+	TimedAllowance bool `json:"timed_allowance"`
+
+	// TrustApproved True when a trust approval of the card's skill revision was stored.
+	TrustApproved bool `json:"trust_approved"`
+}
+
+// ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed and reports what was actually stored (Skills & Tools spec C-24, C-26), never what was asked.
 type ToolApprovalResponse struct {
-	// Action The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
+	// Action The action that was applied. Echoes the request action (ADR-092 D4; C-24, C-26).
 	Action ToolApprovalResponseAction `json:"action"`
+
+	// Applied What an approval answer actually stored (Skills & Tools spec C-24); never what was asked. Always present in ToolApprovalResponse for a skill approval. A false member with not_applied_reason means a partial result: for example the trust approval was stored and the call released, but the timed allowance was not recorded.
+	Applied *ToolApprovalApplied `json:"applied,omitempty"`
 
 	// ApprovalId The approval ID that was resolved.
 	ApprovalId string `json:"approval_id"`
 
-	// GrantRecorded Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
+	// ExpiresAt Wall-clock end of the timed allowance recorded by this answer (server-derived; the server measures the length on its monotonic clock). Present only when a timed allowance was recorded. When a running allowance for the same subject already ends later, this is that later end (an answer never shortens an allowance).
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// GrantRecorded Present only when action is "allow_for" or "approve_version_allow_for". True when the timed allowance was stored for the agent named on the card: a whole-tool, command or command-family allowance, or the pre-flight escalation's own path-widening/network-widening allowance when this approval resolved a D7/D8 escalation (C-26). False means this call was approved once, but the next matching call will ask again; the allowance did not stick (see not_applied_reason).
 	GrantRecorded *bool `json:"grant_recorded,omitempty"`
 
-	// Scope The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
+	// NotAppliedReason Plain-language reason for a partial result, present only when a step of the answer was not stored, e.g. "Approved for this request only. The time limit was not saved: <reason>."
+	NotAppliedReason *string `json:"not_applied_reason,omitempty"`
+
+	// Scope The scope of the timed allowance actually RECORDED for a bash card (ADR-092 D4/FR-024; C-26), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow_for" or "approve_version_allow_for" and the allowance was recorded (grant_recorded true); omitted otherwise.
 	Scope *ToolApprovalResponseScope `json:"scope,omitempty"`
 
 	// Status Result status. Always "ok" when the action was accepted.
 	Status ToolApprovalResponseStatus `json:"status"`
 }
 
-// ToolApprovalResponseAction The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
+// ToolApprovalResponseAction The action that was applied. Echoes the request action (ADR-092 D4; C-24, C-26).
 type ToolApprovalResponseAction string
 
-// ToolApprovalResponseScope The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
+// ToolApprovalResponseScope The scope of the timed allowance actually RECORDED for a bash card (ADR-092 D4/FR-024; C-26), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow_for" or "approve_version_allow_for" and the allowance was recorded (grant_recorded true); omitted otherwise.
 type ToolApprovalResponseScope string
 
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.
@@ -28877,6 +29414,9 @@ type ToolRegistryEntry struct {
 	// Name Canonical tool name (e.g. "workspace_shell", "browser_navigate").
 	Name string `json:"name"`
 
+	// PermissionFixed C-6: true for ToolSearch and Skill; they have no Allow / Ask / Deny of their own (stored global value allow, not editable) and every Set all skips them.
+	PermissionFixed bool `json:"permission_fixed"`
+
 	// Scope Tool visibility scope.
 	Scope ToolRegistryEntryScope `json:"scope"`
 
@@ -28885,6 +29425,12 @@ type ToolRegistryEntry struct {
 
 	// Source Origin of the tool registration. "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
 	Source ToolRegistryEntrySource `json:"source"`
+
+	// Visibility What the model is told about a tool or a skill each turn (Skills & Tools spec C-1). hidden = not listed, still findable by search; name_only = listed by name; name_and_description = listed by name and a one-line description, loaded on demand; full = the complete tool definition every turn, or (for a skill) its whole instructions from the start of each chat, but only when the skill's outcome for that agent is allowed. A level never decides whether a tool or skill may run; an effective deny hides the item whatever its level.
+	Visibility ModelVisibility `json:"visibility"`
+
+	// VisibilityLocked C-6: true for ToolSearch, Skill, AskUserQuestion, goal_claim and set_goal; their level is fixed at full and cannot be changed.
+	VisibilityLocked bool `json:"visibility_locked"`
 }
 
 // ToolRegistryEntryAutoApprove ADR-092 D9: this tool's verdict when Auto-approve is active and the tool's effective policy is "ask". "runs" = always runs with no prompt. "runs_if_args" = runs only when this call's arguments meet the tool's own condition (e.g. a file path resolves inside the workspace or a mount); otherwise it asks. "asks" = always asks under Auto, and is auto-denied in an unattended run. For source="builtin" this is read from the static classifier table (tools.AutoApproveClassOf); "bash" is excluded (its own per-command mechanism, D3/D7/D8) and never appears with this field set. For source="mcp" this reflects the server's tool annotations: "runs" when the server marks the tool read-only or explicitly not destructive, "asks" otherwise (including tools with no annotations at all).
@@ -31053,6 +31599,9 @@ type UpdateSecretOptionsJSONRequestBody = SecretOptionsUpdateRequest
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
 type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest
 
+// PatchPermissionSettingsJSONRequestBody defines body for PatchPermissionSettings for application/json ContentType.
+type PatchPermissionSettingsJSONRequestBody = PermissionSettingsPatch
+
 // UpdatePromptGuardJSONRequestBody defines body for UpdatePromptGuard for application/json ContentType.
 type UpdatePromptGuardJSONRequestBody = PromptGuardUpdateRequest
 
@@ -31092,8 +31641,17 @@ type UpdateThirdPartyAgentSettingsJSONRequestBody = ThirdPartyAgentSettings
 // InstallSkillJSONRequestBody defines body for InstallSkill for application/json ContentType.
 type InstallSkillJSONRequestBody = SkillInstallRequest
 
+// ReviewSkillInstallJSONRequestBody defines body for ReviewSkillInstall for application/json ContentType.
+type ReviewSkillInstallJSONRequestBody = SkillInstallRequest
+
+// SetSkillCategoryJSONRequestBody defines body for SetSkillCategory for application/json ContentType.
+type SetSkillCategoryJSONRequestBody = SkillCategoryUpdateRequest
+
 // CopySkillJSONRequestBody defines body for CopySkill for application/json ContentType.
 type CopySkillJSONRequestBody = SkillCopyRequest
+
+// ApproveSkillVersionJSONRequestBody defines body for ApproveSkillVersion for application/json ContentType.
+type ApproveSkillVersionJSONRequestBody = SkillTrustApprovalRequest
 
 // PatchAppStateJSONRequestBody defines body for PatchAppState for application/json ContentType.
 type PatchAppStateJSONRequestBody = AppStatePatchRequest
@@ -34124,10 +34682,24 @@ func (t SkillInstallRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if t.Category != nil {
+		object["category"], err = json.Marshal(t.Category)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'category': %w", err)
+		}
+	}
+
 	if t.ReplaceLocalChanges != nil {
 		object["replace_local_changes"], err = json.Marshal(t.ReplaceLocalChanges)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'replace_local_changes': %w", err)
+		}
+	}
+
+	if t.ReviewId != nil {
+		object["review_id"], err = json.Marshal(t.ReviewId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'review_id': %w", err)
 		}
 	}
 
@@ -34173,10 +34745,24 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
+	if raw, found := object["category"]; found {
+		err = json.Unmarshal(raw, &t.Category)
+		if err != nil {
+			return fmt.Errorf("error reading 'category': %w", err)
+		}
+	}
+
 	if raw, found := object["replace_local_changes"]; found {
 		err = json.Unmarshal(raw, &t.ReplaceLocalChanges)
 		if err != nil {
 			return fmt.Errorf("error reading 'replace_local_changes': %w", err)
+		}
+	}
+
+	if raw, found := object["review_id"]; found {
+		err = json.Unmarshal(raw, &t.ReviewId)
+		if err != nil {
+			return fmt.Errorf("error reading 'review_id': %w", err)
 		}
 	}
 

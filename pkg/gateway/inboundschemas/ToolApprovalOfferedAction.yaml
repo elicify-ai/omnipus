@@ -1,0 +1,23 @@
+title: ToolApprovalOfferedAction
+description: >
+  One answer an approval card offers (Skills & Tools spec C-24, C-26). The
+  server computes the card's offered_actions when it raises it and accepts
+  only those. allow_once = this call only; allow_for = this call and a timed
+  allowance (with ApprovalAllowDuration); deny; cancel = close without
+  running; approve_version = trust approval of the skill's revision plus
+  this load; approve_version_allow_for = trust approval plus a timed
+  allowance of the skill's permission part. Never offered: allow_for for an
+  always-ask tool or one of the exact-action tools (environment_setup,
+  request_mount, send_email, browser_evaluate, set_config).
+  The asyncapi.yaml frames carry the same values as an inline enum (the
+  AsyncAPI generators take no top-level string enum); keep both in sync by
+  hand.
+type: string
+enum:
+  - allow_once
+  - allow_for
+  - deny
+  - cancel
+  - approve_version
+  - approve_version_allow_for
+example: allow_once

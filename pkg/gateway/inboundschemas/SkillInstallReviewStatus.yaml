@@ -1,0 +1,58 @@
+title: SkillInstallReviewStatus
+description: >
+  Response of GET /api/v1/skills/install/review/{review_id} (Skills & Tools
+  spec C-13): what really happened to one review's install operation. The
+  screen reads it after a lost Install answer instead of guessing from the
+  skills list. A review reaches a terminal state (installed, failed,
+  expired, cancelled) exactly once and the record is kept 15 minutes after
+  that, then removed (404).
+type: object
+additionalProperties: false
+required:
+  - review_id
+  - state
+  - revision
+  - installed_revision
+  - replaced_revision
+properties:
+  review_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The review (and install operation) id.
+    example: rev_7f3a9c
+  state:
+    type: string
+    enum:
+      - staged
+      - publishing
+      - installed
+      - failed
+      - expired
+      - cancelled
+    description: >
+      staged = reviewed, Install not pressed; publishing = Install in
+      progress; installed = published; failed = refused or broken (see
+      reason); expired = the review timed out; cancelled = discarded with
+      DELETE.
+    example: installed
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+    description: The reviewed content revision.
+  installed_revision:
+    type: string
+    nullable: true
+    pattern: '^[a-f0-9]{64}$'
+    description: The content revision that was published; set only when state is installed, null otherwise.
+    example: null
+  replaced_revision:
+    type: string
+    nullable: true
+    pattern: '^[a-f0-9]{64}$'
+    description: The content revision of the skill this install replaced; null when nothing was replaced or not yet installed.
+    example: null
+  reason:
+    type: string
+    maxLength: 500
+    description: Plain-language reason, present only when state is failed.
+    example: "The skill changed after review. Review it again."

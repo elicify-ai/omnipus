@@ -8,6 +8,7 @@ required:
   - override_names
   - config
   - tools
+  - skills
 additionalProperties: false
 properties:
   revision:
@@ -36,6 +37,16 @@ properties:
     description: Per-tool effective policy entries.
     items:
       $ref: AgentToolEntry.yaml
+  skills:
+    type: array
+    description: >
+      Skills & Tools spec C-4, C-23. One entry per skill this agent can use:
+      its granted installed skills and the project skills of the workspaces
+      it is mounted on, each with its key, own override, global and
+      effective permission. Empty when there are none.
+    items:
+      $ref: './AgentSkillEntry.yaml'
+      x-go-type: AgentSkillEntry
   agent_type:
     type: string
     description: >

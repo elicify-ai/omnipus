@@ -1503,6 +1503,34 @@ components:
       $ref: ./components/schemas/ToolPolicy.yaml
     GlobalToolPolicies:
       $ref: ./components/schemas/GlobalToolPolicies.yaml
+    ModelVisibility:
+      $ref: ./components/schemas/ModelVisibility.yaml
+    SkillCategory:
+      $ref: ./components/schemas/SkillCategory.yaml
+    PermissionSettings:
+      $ref: ./components/schemas/PermissionSettings.yaml
+    PermissionSettingsPatch:
+      $ref: ./components/schemas/PermissionSettingsPatch.yaml
+    AgentSkillsCfg:
+      $ref: ./components/schemas/AgentSkillsCfg.yaml
+    AgentSkillEntry:
+      $ref: ./components/schemas/AgentSkillEntry.yaml
+    AgentSkillPermission:
+      $ref: ./components/schemas/AgentSkillPermission.yaml
+    SkillInstallReview:
+      $ref: ./components/schemas/SkillInstallReview.yaml
+    SkillInstallReviewStatus:
+      $ref: ./components/schemas/SkillInstallReviewStatus.yaml
+    SkillTrustApprovalRequest:
+      $ref: ./components/schemas/SkillTrustApprovalRequest.yaml
+    SkillTrustApproval:
+      $ref: ./components/schemas/SkillTrustApproval.yaml
+    SkillCategoryUpdateRequest:
+      $ref: ./components/schemas/SkillCategoryUpdateRequest.yaml
+    ApprovalAllowDuration:
+      $ref: ./components/schemas/ApprovalAllowDuration.yaml
+    ToolApprovalApplied:
+      $ref: ./components/schemas/ToolApprovalApplied.yaml
     ChannelId:
       $ref: ./components/schemas/ChannelId.yaml
     ChannelIdentity:
@@ -4480,13 +4508,20 @@ paths:
       operationId: postToolApproval
       summary: Resolve a pending tool approval (FR-011, FR-082)
       description: >
-        Approve, deny, or cancel a pending tool call approval. For an
-        always-ask tool (today exactly set_channel_outbound; channels spec
-        FR-038, T-10 row 15) the action allow (approve and record a grant) is
-        refused with 400 "set_channel_outbound always asks for approval; it
-        can be set to ask or deny, not allow" and nothing is recorded; only
-        allow_once, deny and cancel are accepted, and no approval of such a
-        tool is ever remembered. Every other tool is unchanged.
+        Answer a pending tool call approval (Skills & Tools spec C-24, C-26):
+        approve once, allow for a time (1h, 3h or 1d; a timed allowance for
+        the agent named on the card, in memory only), deny, cancel, or, on
+        a skill card, approve this version (with or without a time). The
+        server accepts only an action listed in the card's offered_actions.
+        Effects run in order: (1) trust approval, (2) timed allowance, (3)
+        release of the waiting call; the response reports what was stored
+        (applied, expires_at). For an always-ask tool (today exactly
+        set_channel_outbound; channels spec FR-038) allow_for is refused with
+        400 (today's text) before the offered-actions rule and nothing is
+        recorded; no approval of such a tool is ever remembered. An
+        exact-action tool (environment_setup, request_mount, send_email,
+        browser_evaluate, set_config) never offers allow_for; answering
+        allow_for gets 409 and nothing is stored.
       tags:
       - Tools
       parameters:
@@ -4512,9 +4547,15 @@ paths:
                 $ref: '#/components/schemas/ToolApprovalResponse'
         '400':
           description: >
-            Malformed body or unknown action, or action allow for an
-            always-ask tool ("set_channel_outbound always asks for approval;
-            it can be set to ask or deny, not allow"; nothing recorded).
+            Malformed body or unknown action; nothing stored. Texts:
+            action allow (a screen from before the upgrade) → "This choice
+            is no longer offered. Choose Approve Once or a time limit.";
+            allow_for or approve_version_allow_for without duration or with
+            another value → "Choose 1 hour, 3 hours or 1 day."; duration
+            with any other action → "A time limit applies only to Allow
+            for."; allow_for for an always-ask tool →
+            "set_channel_outbound always asks for approval; it can be set
+            to ask or deny, not allow".
           content:
             application/json:
               schema:
@@ -4526,7 +4567,21 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Approval ID not found.
+          description: >
+            Approval ID not found; also an approval already answered or
+            timed out ("approval … not found"). Nothing happens twice.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            Nothing stored. The action is not in the card's offered_actions
+            (including allow_for for an exact-action tool): "This choice is
+            not available for this request." The re-check before any effect
+            failed (C-24): "The skill changed after this request." or "This
+            skill is now set to Deny."; the waiting call is refused with the
+            same reason.
           content:
             application/json:
               schema:
@@ -4537,10 +4592,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: >
+            The trust approval could not be stored (C-24 step 1): "Could not
+            save the approval. Nothing was changed." The card stays open for
+            another answer until the approval times out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /security/tool-policies:
     get:
       operationId: getGlobalToolPolicies
       summary: Get global tool policies
+      deprecated: true
       description: 'Returns the current global tool policy configuration from sandbox.tool_policies and sandbox.default_tool_policy.
 
         '
@@ -4562,6 +4627,7 @@ paths:
     put:
       operationId: updateGlobalToolPolicies
       summary: Update global tool policies
+      deprecated: true
       description: >
         Persists new global tool policies to config.json under the sandbox key
         and waits until the running-agent reload has finished. Changes are
@@ -4617,6 +4683,91 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 error: "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus."
+  /security/permissions:
+    get:
+      operationId: getPermissionSettings
+      summary: Get global tool and skill permissions, levels and skill trust
+      description: >
+        Skills & Tools spec C-2. Returns the complete stored maps: tool
+        permissions, skill permissions, tool levels, skill levels and skill
+        trust. Replaces GET /security/tool-policies and GET
+        /security/skill-trust, which this package retires (C-22 row 6).
+      tags:
+      - Security
+      responses:
+        '200':
+          description: The complete stored permission settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionSettings'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    patch:
+      operationId: patchPermissionSettings
+      summary: Change named permission, level or trust keys
+      description: >
+        Skills & Tools spec C-2. Changes only the keys the request names,
+        under the config write lock: read stored config, change the named
+        keys, write atomically, reload agents. A key the request does not
+        name is never written. The whole request is validated before
+        anything is written; one bad key → 400 naming the first bad key,
+        nothing saved. A request whose values equal the stored values is
+        valid: 200, nothing written, no audit entry, running agents reloaded
+        again (this is how "Retry applying" works, C-16). One audit entry per
+        changed key. A changed tool or skill permission ends that tool's or
+        skill's running timed allowances for every agent (C-26 point 7).
+      tags:
+      - Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PermissionSettingsPatch'
+      responses:
+        '200':
+          description: Stored and applied. The body is the complete stored settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionSettings'
+        '400':
+          description: >
+            Nothing stored. Texts include "Nothing to change." (no key
+            named), a null member or value (naming the key), "`<key>` is not
+            a known skill.", "`<key>` is listed twice.", "Use allow, ask or
+            deny." (skill_trust), "`<tool>` has no permission of its own."
+            (ToolSearch, Skill), a locked level, allow for an always-ask
+            tool, and today's tool-key validation errors.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          description: >
+            Nothing was stored (the atomic write did not happen): "Not
+            saved: the settings file could not be written."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Stored, not applied to running agents. The error field is exactly
+            "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus."
   /security/exec-proxy-status:
     get:
       operationId: getExecProxyStatus
@@ -4645,6 +4796,7 @@ paths:
     get:
       operationId: getSkillTrust
       summary: Get skill trust level
+      deprecated: true
       description: 'Returns the current skill trust level from sandbox.skill_trust. Default is "warn_unverified" when not set.
 
         '
@@ -4666,6 +4818,7 @@ paths:
     put:
       operationId: updateSkillTrust
       summary: Update skill trust level
+      deprecated: true
       description: 'Persists the new skill trust level to config.sandbox.skill_trust. Only the three canonical values are accepted (case-sensitive). Changes are audit-logged.
 
         '
@@ -7792,6 +7945,11 @@ paths:
         Installs a skill by its slug from the ClawHub registry. The slug is the
         identifier returned in a SkillSearchResult. An optional version pins the
         installed version; when omitted the latest version is installed.
+        Skills & Tools spec C-3, C-13: with review_id the server publishes
+        exactly the staged folder of that review, idempotently per review.
+        An unverified skill needs a review while skill trust is ask (409
+        without one) and is refused (403) while trust is deny; trust is
+        re-checked at publish.
       tags:
       - Skills
       security:
@@ -7804,15 +7962,34 @@ paths:
               $ref: '#/components/schemas/SkillInstallRequest'
       responses:
         '200':
-          description: Skill installed.
+          description: >
+            Skill installed. With review_id: also the repeated answer after
+            the review reached installed (same result, no second publish).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Skill'
+        '202':
+          description: >
+            C-13: the review's install is still publishing; read GET
+            /skills/install/review/{review_id} for the outcome.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillInstallReviewStatus'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: >
+            C-3: skill trust is deny and the skill is unverified: "This skill
+            is unverified, and unverified skills are set to Deny in Skills &
+            Tools. Nothing was installed."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':
@@ -7821,7 +7998,19 @@ paths:
             built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed
             skill has local changes; resend with replace_local_changes: true),
             SKILL_CHANGED (revision is the caller's expected revision and the
-            skill changed since it was read).
+            skill changed since it was read). Skills & Tools C-3, C-13: an
+            unverified skill under trust ask without review_id; the staged
+            folder's revision differs from the reviewed one ("The skill
+            changed after review. Review it again."); the review already
+            failed or was cancelled (the same terminal answer again).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: >
+            C-13: the review expired: "This review expired. Open the skill
+            again to review it."
           content:
             application/json:
               schema:
@@ -7837,6 +8026,108 @@ paths:
                 $ref: '#/components/schemas/ConfigurationMutationFailureState'
         '502':
           $ref: '#/components/responses/502BadGateway'
+  /skills/install/review:
+    post:
+      operationId: reviewSkillInstall
+      summary: Stage a skill for review before installing it
+      description: >
+        Skills & Tools spec C-13. Stages the skill (catalog slug and version,
+        or upload reference) with the existing staging code without
+        publishing it, and returns what the review screen shows. A staged
+        review lives 15 minutes and is removed on expiry, on DELETE and
+        after publish. review_id in the body is refused with 400.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillInstallRequest'
+      responses:
+        '200':
+          description: The staged review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillInstallReview'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: >
+            C-3: skill trust is deny and the skill is unverified: "This skill
+            is unverified, and unverified skills are set to Deny in Skills &
+            Tools. Nothing was installed."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          description: >
+            The download does not match the catalog checksum: "The downloaded
+            skill does not match the catalog's checksum. Nothing was
+            installed."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          $ref: '#/components/responses/502BadGateway'
+  /skills/install/review/{review_id}:
+    parameters:
+    - name: review_id
+      in: path
+      required: true
+      description: The review id from POST /skills/install/review.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    get:
+      operationId: getSkillInstallReviewStatus
+      summary: Read what happened to a review and its install
+      description: >
+        Skills & Tools spec C-13. The review id is also the install
+        operation's id. The screen reads this after a lost Install answer.
+        A terminal state is kept 15 minutes, then the record is removed.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: The review's current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillInstallReviewStatus'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: discardSkillInstallReview
+      summary: Discard a staged review
+      description: >
+        Skills & Tools spec C-13. Discards the staged folder ("Nothing was
+        installed." is then true). Unknown or expired id → 404.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: The staged review was discarded.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
   /skills/{name}/copy:
     post:
       operationId: copySkill
@@ -7886,6 +8177,104 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConfigurationMutationFailureState'
+  /skills/{name}/category:
+    put:
+      operationId: setSkillCategory
+      summary: Choose the category of an uncategorised skill (once)
+      description: >
+        Skills & Tools spec C-21. Allowed only while the stored category is
+        uncategorised; after that no edit exists.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: name
+        in: path
+        required: true
+        description: Skill slug.
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillCategoryUpdateRequest'
+      responses:
+        '200':
+          description: The skill with its category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: >
+            The category is already set: "The category is set at install and
+            cannot be changed."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /skills/{name}/trust-approval:
+    post:
+      operationId: approveSkillVersion
+      summary: Approve the current version of an unverified skill
+      description: >
+        Skills & Tools spec C-24. More actions → "Approve this version". A
+        person's action only: no agent tool reaches this endpoint. Stores a
+        trust approval of the revision the screen showed, in the protected
+        system area; audited as skill.trust_approved.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: name
+        in: path
+        required: true
+        description: Skill slug.
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillTrustApprovalRequest'
+      responses:
+        '200':
+          description: The stored trust approval.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillTrustApproval'
+        '400':
+          description: >
+            Malformed body, or the skill is verified: "This skill is
+            verified; it needs no approval."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: >
+            The current revision differs from the one sent: "This skill
+            changed since the page loaded. Review it again."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /skills/{name}:
     delete:
       operationId: deleteSkill

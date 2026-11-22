@@ -1,0 +1,52 @@
+title: ToolApprovalSkill
+description: >
+  The skill an approval card is about (Skills & Tools spec C-9): present on
+  tool_approval_required and on a pending approval in session state when
+  the call loads a skill (Skill, the person's /name trust card, a
+  delegation) or installs one (install_skill, with the staged revision).
+  Every value is server-derived from the pending approval; the client sends
+  none of them back.
+type: object
+additionalProperties: false
+required:
+  - key
+  - name
+  - display_name
+  - revision
+  - unverified
+  - open_checks
+properties:
+  key:
+    type: string
+    minLength: 1
+    description: The skill's permission key (C-23).
+    example: notes-helper
+  name:
+    type: string
+    minLength: 1
+    description: The skill's slug.
+    example: notes-helper
+  display_name:
+    type: string
+    description: Human-readable skill name shown on the card.
+    example: Notes Helper
+  revision:
+    type: string
+    pattern: '^[a-f0-9]{64}$'
+    description: The content revision this card is bound to (for install_skill, the staged revision).
+    example: "3f5c0b1e9a7d4c2b8e6f0a1d3c5b7e9f2a4c6e8b0d1f3a5c7e9b2d4f6a8c0e1b"
+  unverified:
+    type: boolean
+    description: True when the skill is unverified; the card names it so.
+    example: true
+  open_checks:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      type: string
+      enum:
+        - permission
+        - trust
+    description: Which checks this card answers (C-12); both open gives one combined card.
+    example: [permission, trust]

@@ -1,0 +1,25 @@
+title: AgentSkillPermission
+description: >
+  One skill's permission for an agent, as reported by get_agent
+  (AgentDetail.skill_permissions; Skills & Tools spec C-9): the skill twin of
+  AgentToolPermission.
+type: object
+additionalProperties: false
+required: [skill, effective, override]
+properties:
+  skill:
+    type: string
+    minLength: 1
+    description: The skill's permission key (C-23).
+    example: deep-research
+  effective:
+    type: string
+    enum: [allow, ask, deny]
+    description: The permission that applies to this agent's loads of the skill (strictest wins, trust floor, God Mode).
+    example: ask
+  override:
+    type: string
+    nullable: true
+    enum: [allow, ask, deny]
+    description: The agent's own stored override for this skill; null when there is none.
+    example: null

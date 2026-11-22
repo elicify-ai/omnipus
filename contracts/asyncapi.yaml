@@ -1997,21 +1997,25 @@ components:
       type: object
       required:
         - workflow
-        - target_workspace_id
       additionalProperties: false
       properties:
         workflow:
           type: string
           enum:
             - W1
+            - W5
             - W18
           description: >
-            W1 — create an agent in a workspace; W18 — set up a whole team.
+            W1 — create an agent in a workspace; W5 — write a skill (Skills &
+            Tools spec C-8); W18 — set up a whole team.
         target_workspace_id:
           type: string
           minLength: 1
           maxLength: 128
-          description: The workspace the workflow targets.
+          description: >
+            The workspace the workflow targets. Required for W1 and W18 (the
+            server refuses a W1 or W18 start without it with 400); optional
+            for W5 (C-8).
     SecretRecipientDisplay:
       title: SecretRecipientDisplay
       description: >
@@ -6521,6 +6525,52 @@ components:
             b: the grant is recorded as exact for the whole chain) and on
             Windows (FR-041). The dialog omits the "prefix" scope option when
             false. Always present.
+    ToolApprovalSkill:
+      title: ToolApprovalSkill
+      description: >
+        The skill an approval card is about (Skills & Tools spec C-9), on
+        tool_approval_required and on a pending approval in session state.
+        Every value is server-derived from the pending approval. Mirrored by
+        contracts/components/schemas/ToolApprovalSkill.yaml (inboundschemas
+        sync) — keep both copies in sync by hand.
+      type: object
+      required:
+      - key
+      - name
+      - display_name
+      - revision
+      - unverified
+      - open_checks
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          minLength: 1
+          description: The skill's permission key (C-23).
+        name:
+          type: string
+          minLength: 1
+          description: The skill's slug.
+        display_name:
+          type: string
+          description: Human-readable skill name shown on the card.
+        revision:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: The content revision this card is bound to (for install_skill, the staged revision).
+        unverified:
+          type: boolean
+          description: True when the skill is unverified; the card names it so.
+        open_checks:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - permission
+            - trust
+          description: Which checks this card answers (C-12); both open gives one combined card.
     ToolApprovalRequiredFrame:
       title: ToolApprovalRequiredFrame
       description: >
@@ -6540,6 +6590,8 @@ components:
       - session_id
       - turn_id
       - expires_in_ms
+      - offered_actions
+      - allow_durations
       additionalProperties: false
       properties:
         root_session_id:
@@ -6624,12 +6676,49 @@ components:
             command still has exactly one entry so the SPA has one rendering
             path. Absent for every other tool. Offer the "prefix" scope only
             when a segment's prefix_available is true.
+        offered_actions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - allow_once
+            - allow_for
+            - deny
+            - cancel
+            - approve_version
+            - approve_version_allow_for
+          description: >
+            Skills & Tools spec C-24, C-26. The answers this card offers,
+            computed by the server when it raises the card; the server
+            accepts only these (any other action gets 409). cancel is listed
+            whenever the card shows Cancel; it stores nothing.
+        allow_durations:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - 1h
+            - 3h
+            - 1d
+          description: >
+            C-26. The time choices (ApprovalAllowDuration) for allow_for /
+            approve_version_allow_for: [1h, 3h, 1d] whenever one of those
+            actions is offered, empty otherwise. Server-computed.
+        skill:
+          $ref: '#/components/schemas/ToolApprovalSkill'
+          description: >
+            C-9. The skill this card is about; present when the call loads a
+            skill or installs one (install_skill, with the staged revision).
     ToolApprovalResolvedFrame:
       title: ToolApprovalResolvedFrame
       description: >
         Server → client. Emitted once, to every connected client, when a
         pending tool approval leaves the pending state for ANY reason (a
-        decision from any tab, timeout, Stop/cancel, agent deletion, batch
+        decision from any tab (approve once, allow for a time, deny, cancel),
+        timeout, Stop/cancel, agent deletion, batch
         short-circuit, shutdown). The SPA drops the matching queue entry and
         remembers the id so a late snapshot cannot resurrect it. THIS is the
         GENERATING copy; components/schemas/ToolApprovalResolvedFrame.yaml
@@ -6913,6 +7002,8 @@ components:
       - tool_call_id
       - turn_id
       - args
+      - offered_actions
+      - allow_durations
       additionalProperties: false
       properties:
         tool_call_id:
@@ -6990,6 +7081,42 @@ components:
           minLength: 1
           maxLength: 128
           description: Same value and semantics as ToolApprovalRequiredFrame.workspace_id.
+        offered_actions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - allow_once
+            - allow_for
+            - deny
+            - cancel
+            - approve_version
+            - approve_version_allow_for
+          description: >
+            Skills & Tools spec C-24, C-26. The answers this card offers,
+            computed by the server when it raises the card; the server
+            accepts only these (any other action gets 409). cancel is listed
+            whenever the card shows Cancel; it stores nothing.
+        allow_durations:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - 1h
+            - 3h
+            - 1d
+          description: >
+            C-26. The time choices (ApprovalAllowDuration) for allow_for /
+            approve_version_allow_for: [1h, 3h, 1d] whenever one of those
+            actions is offered, empty otherwise. Server-computed.
+        skill:
+          $ref: '#/components/schemas/ToolApprovalSkill'
+          description: >
+            C-9. The skill this card is about; present when the call loads a
+            skill or installs one (install_skill, with the staged revision).
     SessionStateActiveTurn:
       title: SessionStateActiveTurn
       description: >

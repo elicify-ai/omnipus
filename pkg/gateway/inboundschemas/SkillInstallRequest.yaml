@@ -42,3 +42,30 @@ properties:
       Optional version to pin. When omitted the latest published version is
       installed.
     example: "1.4.0"
+  category:
+    $ref: './SkillCategory.yaml'
+    x-go-type: SkillCategory
+    description: >
+      Skills & Tools spec C-5. The category stored with the installed skill.
+      Absent: the skill file's metadata.category when it is one of the
+      values, else uncategorised. Never written into the skill file.
+      Ignored by POST /skills/install/review (the review returns
+      suggested_category instead).
+  review_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      Skills & Tools spec C-13. The review (from POST /skills/install/review)
+      to publish. With review_id the server publishes exactly the staged
+      folder of that review, never a fresh download; slug or upload_id
+      must still name the same source the review staged. Current revision
+      differs from the reviewed one, or the source differs → 409 "The
+      skill changed after review. Review it again."; expired → 410 "This
+      review expired. Open the skill again to review it." Idempotent per
+      review: while publishing → 202 with SkillInstallReviewStatus; after
+      installed → 200 with the same result and no second publish; after
+      failed, expired or cancelled → the same terminal answer again.
+      Refused (400) by POST /skills/install/review itself. Required for an
+      unverified skill while skill trust is ask (without it → 409, C-3).
+    example: rev_7f3a9c

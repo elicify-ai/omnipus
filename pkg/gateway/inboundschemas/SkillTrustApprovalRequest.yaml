@@ -1,0 +1,17 @@
+title: SkillTrustApprovalRequest
+description: >
+  Request body of POST /api/v1/skills/{name}/trust-approval (Skills & Tools
+  spec C-24): a person approves the current version of an unverified skill
+  from More actions → "Approve this version". The revision is the one the
+  screen showed; a different current revision is refused with 409. A
+  person's action only: no agent tool reaches this endpoint.
+type: object
+additionalProperties: false
+required:
+  - revision
+properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+    description: The skill's content revision as the screen showed it (Skill.revision).
+example:
+  revision: "3f5c0b1e9a7d4c2b8e6f0a1d3c5b7e9f2a4c6e8b0d1f3a5c7e9b2d4f6a8c0e1b"

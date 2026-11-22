@@ -1633,10 +1633,14 @@ type SessionStatePendingApproval struct {
 	// L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the agent that made the call, named in the card header.
 	ActingAgentName *string `json:"acting_agent_name,omitempty"`
 	AgentId         string  `json:"agent_id"`
-	ApprovalId      string  `json:"approval_id"`
+	// C-26. The time choices (ApprovalAllowDuration) for allow_for / approve_version_allow_for: [1h, 3h, 1d] whenever one of those actions is offered, empty otherwise. Server-computed.
+	AllowDurations []string `json:"allow_durations"`
+	ApprovalId     string   `json:"approval_id"`
 	// Same value as ToolApprovalRequiredFrame.args — an object, never null. The snapshot reaches exactly the connections the live frame reaches (same audience rule).
 	Args        map[string]any `json:"args"`
 	ExpiresInMs int            `json:"expires_in_ms"`
+	// Skills & Tools spec C-24, C-26. The answers this card offers, computed by the server when it raises the card; the server accepts only these (any other action gets 409). cancel is listed whenever the card shows Cancel; it stores nothing.
+	OfferedActions []string `json:"offered_actions"`
 	// Spec K7, §6.18. Server-derived turn origin, e.g. "while answering <person> on <connection>", "for group <name>", "asked by <Agent>". Omitted for a plain web turn.
 	OriginLabel *string `json:"origin_label,omitempty"`
 	// Spec K7, FR-251. Present on a room's pre-admission approval card (request id = delivery id).
@@ -1646,6 +1650,8 @@ type SessionStatePendingApproval struct {
 	// Same value and rules as ToolApprovalRequiredFrame.segments.
 	Segments  []CommandSegmentInfo `json:"segments,omitempty"`
 	SessionId string               `json:"session_id"`
+	// C-9. The skill this card is about; present when the call loads a skill or installs one (install_skill, with the staged revision).
+	Skill *ToolApprovalSkill `json:"skill,omitempty"`
 	// L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete and approvable.
 	ToolCallId string `json:"tool_call_id"`
 	ToolName   string `json:"tool_name"`
@@ -1816,10 +1822,14 @@ type ToolApprovalRequiredFrame struct {
 	// L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the agent that made the call, named in the card header.
 	ActingAgentName *string `json:"acting_agent_name,omitempty"`
 	AgentId         string  `json:"agent_id"`
-	ApprovalId      string  `json:"approval_id"`
+	// C-26. The time choices (ApprovalAllowDuration) for allow_for / approve_version_allow_for: [1h, 3h, 1d] whenever one of those actions is offered, empty otherwise. Server-computed.
+	AllowDurations []string `json:"allow_durations"`
+	ApprovalId     string   `json:"approval_id"`
 	// Tool invocation arguments. Always object, never null. Required + object type so the Phase 4 contract test catches any nil regression.
 	Args        map[string]any `json:"args"`
 	ExpiresInMs int            `json:"expires_in_ms"`
+	// Skills & Tools spec C-24, C-26. The answers this card offers, computed by the server when it raises the card; the server accepts only these (any other action gets 409). cancel is listed whenever the card shows Cancel; it stores nothing.
+	OfferedActions []string `json:"offered_actions"`
 	// Spec K7, §6.18. Server-derived turn origin, e.g. "while answering <person> on <connection>", "for group <name>", "asked by <Agent>". Omitted for a plain web turn.
 	OriginLabel *string `json:"origin_label,omitempty"`
 	// Spec K7, FR-251. Present on a room's pre-admission approval card (request id = delivery id).
@@ -1827,17 +1837,19 @@ type ToolApprovalRequiredFrame struct {
 	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard). Identifies the related root chat without prescribing the approval's UI placement. Omitted when equal to session_id.
 	RootSessionId *string `json:"root_session_id,omitempty"`
 	// ADR-092 D3/D4 per-segment breakdown of a bash approval. Present on every tool_approval_required whose tool_name is "bash" and whose args carry a non-empty command string, built with the bash tool's own segment splitter and program resolution. A single, unchained command still has exactly one entry so the SPA has one rendering path. Absent for every other tool. Offer the "prefix" scope only when a segment's prefix_available is true.
-	Segments   []CommandSegmentInfo `json:"segments,omitempty"`
-	SessionId  string               `json:"session_id"`
-	ToolCallId string               `json:"tool_call_id"`
-	ToolName   string               `json:"tool_name"`
-	TurnId     string               `json:"turn_id"`
-	Type       string               `json:"type"`
+	Segments  []CommandSegmentInfo `json:"segments,omitempty"`
+	SessionId string               `json:"session_id"`
+	// C-9. The skill this card is about; present when the call loads a skill or installs one (install_skill, with the staged revision).
+	Skill      *ToolApprovalSkill `json:"skill,omitempty"`
+	ToolCallId string             `json:"tool_call_id"`
+	ToolName   string             `json:"tool_name"`
+	TurnId     string             `json:"turn_id"`
+	Type       string             `json:"type"`
 	// Workspace attribution for the requesting session, resolved server-side from session metadata or its delegating parent when a delegated child has none. Omitted when the session belongs to no workspace.
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// ToolApprovalResolvedFrame — Server → client. Emitted once, to every connected client, when a pending tool approval leaves the pending state for ANY reason (a decision from any tab, timeout, Stop/cancel, agent deletion, batch short-circuit, shutdown). The SPA drops the matching queue entry and remembers the id so a late snapshot cannot resurrect it. THIS is the GENERATING copy; components/schemas/ToolApprovalResolvedFrame.yaml exists for the Constraint #8 process and the inboundschemas sync — keep both in sync by hand.
+// ToolApprovalResolvedFrame — Server → client. Emitted once, to every connected client, when a pending tool approval leaves the pending state for ANY reason (a decision from any tab (approve once, allow for a time, deny, cancel), timeout, Stop/cancel, agent deletion, batch short-circuit, shutdown). The SPA drops the matching queue entry and remembers the id so a late snapshot cannot resurrect it. THIS is the GENERATING copy; components/schemas/ToolApprovalResolvedFrame.yaml exists for the Constraint #8 process and the inboundschemas sync — keep both in sync by hand.
 type ToolApprovalResolvedFrame struct {
 	ApprovalId string `json:"approval_id"`
 	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard): lets the root chat's card clear without a lookup. Omitted when equal to session_id.
@@ -1845,6 +1857,22 @@ type ToolApprovalResolvedFrame struct {
 	SessionId     *string `json:"session_id,omitempty"`
 	State         string  `json:"state"`
 	Type          string  `json:"type"`
+}
+
+// ToolApprovalSkill — The skill an approval card is about (Skills & Tools spec C-9), on tool_approval_required and on a pending approval in session state. Every value is server-derived from the pending approval. Mirrored by contracts/components/schemas/ToolApprovalSkill.yaml (inboundschemas sync) — keep both copies in sync by hand.
+type ToolApprovalSkill struct {
+	// Human-readable skill name shown on the card.
+	DisplayName string `json:"display_name"`
+	// The skill's permission key (C-23).
+	Key string `json:"key"`
+	// The skill's slug.
+	Name string `json:"name"`
+	// Which checks this card answers (C-12); both open gives one combined card.
+	OpenChecks []string `json:"open_checks"`
+	// The content revision this card is bound to (for install_skill, the staged revision).
+	Revision string `json:"revision"`
+	// True when the skill is unverified; the card names it so.
+	Unverified bool `json:"unverified"`
 }
 
 // ToolArgumentRefusal — ADR-066 D4 / spec FR-016 (T066-01 schema, T066-04 producer): structured tool-result payload returned INSTEAD of executing a tool call whose serialised arguments exceed the builtin success cap (ContextSettings.builtin_success_cap, 64,000 chars by default). The tool does not run, the turn is not fatal, and the model sees the refusal — naming the tool, the size it sent and the cap — so it can retry smaller. ADR-060 family member: inline schema with a const `error` discriminator, one exported *Code constant in pkg/tools/result.go, a single producer routed through marshalWithinBudget, and an entry in scripts/check-no-handwritten-wire-types.sh's KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS register. toolResult-channel (ADR-060 D2): the refusal IS the tool's result, so it passes the D4 choke point like any other result (US-5.AC3) and flows through ToolCallResultFrame.result live and ToolCall.Error on replay — hence its entry in ToolCallResultFrame.result's oneOf below and in pkg/gateway/tool_result_store.go's allow-list (derived from pkg/tools.AllStructuredFailureCodes()). The SPA detector is stream B5's.
@@ -2010,9 +2038,9 @@ type WhatsAppPairingSubscribeFrame struct {
 
 // WorkflowStart — Optional target data on a MessageFrame that starts an Omnipus workflow from a screen (spec omnipus-system-agent K8; FR-012). Target data only — it names which workflow and which workspace the user picked; it is never an instruction and grants nothing. The server treats it as data for the Omnipus turn (landing 1, WU-10). Mirrored inline in contracts/asyncapi.yaml (components.schemas.WorkflowStart) — keep both copies in sync by hand.
 type WorkflowStart struct {
-	// The workspace the workflow targets.
-	TargetWorkspaceId string `json:"target_workspace_id"`
-	// W1 — create an agent in a workspace; W18 — set up a whole team.
+	// The workspace the workflow targets. Required for W1 and W18 (the server refuses a W1 or W18 start without it with 400); optional for W5 (C-8).
+	TargetWorkspaceId *string `json:"target_workspace_id,omitempty"`
+	// W1 — create an agent in a workspace; W5 — write a skill (Skills & Tools spec C-8); W18 — set up a whole team.
 	Workflow string `json:"workflow"`
 }
 

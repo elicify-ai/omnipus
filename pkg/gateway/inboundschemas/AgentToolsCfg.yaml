@@ -44,3 +44,10 @@ properties:
         items:
           $ref: './AgentToolsMcpServerBinding.yaml'
           x-go-type: AgentToolsMcpServerBinding
+  skills:
+    $ref: './AgentSkillsCfg.yaml'
+    x-go-type: AgentSkillsCfg
+    description: >
+      Per-agent skill permissions (Skills & Tools spec C-4): sparse
+      overrides only. Every writer that does not name skills keeps the
+      stored skills.policies (C-21).

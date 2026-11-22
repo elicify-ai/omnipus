@@ -2,8 +2,8 @@ title: ToolApprovalResolvedFrame
 description: >
   Server → client. Emitted once, to every connected client, the moment a
   pending tool approval (one previously announced by tool_approval_required)
-  leaves the pending state for ANY reason: a decision from any tab (approve,
-  deny, cancel, always), the approval timeout, a chat Stop/cancel, the owning
+  leaves the pending state for ANY reason: a decision from any tab (approve once, allow for a time,
+  deny, cancel), the approval timeout, a chat Stop/cancel, the owning
   agent being deleted, a batch short-circuit, or gateway shutdown. The SPA
   removes the matching approval from its queue (and remembers the id so a
   late snapshot cannot resurrect it). Without this frame, only the tab that

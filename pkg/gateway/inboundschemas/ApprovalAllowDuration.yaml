@@ -1,0 +1,14 @@
+title: ApprovalAllowDuration
+description: >
+  How long a timed allowance from an approval card lasts (Skills & Tools
+  spec C-26, founder R2-Q1): 1h, 3h or 1d (24 hours), measured on the
+  server from the moment it is recorded. A timed allowance belongs to the
+  agent named on the card, covers all its sessions and the helpers it starts
+  for itself, lives in memory only and also ends at a gateway restart or
+  when the permission it answers changes.
+type: string
+enum:
+  - 1h
+  - 3h
+  - 1d
+example: 1h

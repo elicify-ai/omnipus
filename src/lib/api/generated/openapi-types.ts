@@ -767,7 +767,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve a pending tool approval (FR-011, FR-082)
-         * @description Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
+         * @description Answer a pending tool call approval (Skills & Tools spec C-24, C-26): approve once, allow for a time (1h, 3h or 1d; a timed allowance for the agent named on the card, in memory only), deny, cancel, or, on a skill card, approve this version (with or without a time). The server accepts only an action listed in the card's offered_actions. Effects run in order: (1) trust approval, (2) timed allowance, (3) release of the waiting call; the response reports what was stored (applied, expires_at). For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038) allow_for is refused with 400 (today's text) before the offered-actions rule and nothing is recorded; no approval of such a tool is ever remembered. An exact-action tool (environment_setup, request_mount, send_email, browser_evaluate, set_config) never offers allow_for; answering allow_for gets 409 and nothing is stored.
          */
         post: operations["postToolApproval"];
         delete?: never;
@@ -785,11 +785,13 @@ export interface paths {
         };
         /**
          * Get global tool policies
+         * @deprecated
          * @description Returns the current global tool policy configuration from sandbox.tool_policies and sandbox.default_tool_policy.
          */
         get: operations["getGlobalToolPolicies"];
         /**
          * Update global tool policies
+         * @deprecated
          * @description Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
          */
         put: operations["updateGlobalToolPolicies"];
@@ -798,6 +800,30 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/security/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get global tool and skill permissions, levels and skill trust
+         * @description Skills & Tools spec C-2. Returns the complete stored maps: tool permissions, skill permissions, tool levels, skill levels and skill trust. Replaces GET /security/tool-policies and GET /security/skill-trust, which this package retires (C-22 row 6).
+         */
+        get: operations["getPermissionSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change named permission, level or trust keys
+         * @description Skills & Tools spec C-2. Changes only the keys the request names, under the config write lock: read stored config, change the named keys, write atomically, reload agents. A key the request does not name is never written. The whole request is validated before anything is written; one bad key → 400 naming the first bad key, nothing saved. A request whose values equal the stored values is valid: 200, nothing written, no audit entry, running agents reloaded again (this is how "Retry applying" works, C-16). One audit entry per changed key. A changed tool or skill permission ends that tool's or skill's running timed allowances for every agent (C-26 point 7).
+         */
+        patch: operations["patchPermissionSettings"];
         trace?: never;
     };
     "/security/exec-proxy-status": {
@@ -829,11 +855,13 @@ export interface paths {
         };
         /**
          * Get skill trust level
+         * @deprecated
          * @description Returns the current skill trust level from sandbox.skill_trust. Default is "warn_unverified" when not set.
          */
         get: operations["getSkillTrust"];
         /**
          * Update skill trust level
+         * @deprecated
          * @description Persists the new skill trust level to config.sandbox.skill_trust. Only the three canonical values are accepted (case-sensitive). Changes are audit-logged.
          */
         put: operations["updateSkillTrust"];
@@ -1982,10 +2010,57 @@ export interface paths {
         put?: never;
         /**
          * Install a skill from the ClawHub registry
-         * @description Installs a skill by its slug from the ClawHub registry. The slug is the identifier returned in a SkillSearchResult. An optional version pins the installed version; when omitted the latest version is installed.
+         * @description Installs a skill by its slug from the ClawHub registry. The slug is the identifier returned in a SkillSearchResult. An optional version pins the installed version; when omitted the latest version is installed. Skills & Tools spec C-3, C-13: with review_id the server publishes exactly the staged folder of that review, idempotently per review. An unverified skill needs a review while skill trust is ask (409 without one) and is refused (403) while trust is deny; trust is re-checked at publish.
          */
         post: operations["installSkill"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skills/install/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stage a skill for review before installing it
+         * @description Skills & Tools spec C-13. Stages the skill (catalog slug and version, or upload reference) with the existing staging code without publishing it, and returns what the review screen shows. A staged review lives 15 minutes and is removed on expiry, on DELETE and after publish. review_id in the body is refused with 400.
+         */
+        post: operations["reviewSkillInstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skills/install/review/{review_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The review id from POST /skills/install/review. */
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read what happened to a review and its install
+         * @description Skills & Tools spec C-13. The review id is also the install operation's id. The screen reads this after a lost Install answer. A terminal state is kept 15 minutes, then the record is removed.
+         */
+        get: operations["getSkillInstallReviewStatus"];
+        put?: never;
+        post?: never;
+        /**
+         * Discard a staged review
+         * @description Skills & Tools spec C-13. Discards the staged folder ("Nothing was installed." is then true). Unknown or expired id → 404.
+         */
+        delete: operations["discardSkillInstallReview"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2005,6 +2080,46 @@ export interface paths {
          * @description Creates a new user-owned skill from the named skill; the copy's frontmatter name is rewritten to new_id. The copy starts ungranted.
          */
         post: operations["copySkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skills/{name}/category": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose the category of an uncategorised skill (once)
+         * @description Skills & Tools spec C-21. Allowed only while the stored category is uncategorised; after that no edit exists.
+         */
+        put: operations["setSkillCategory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skills/{name}/trust-approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve the current version of an unverified skill
+         * @description Skills & Tools spec C-24. More actions → "Approve this version". A person's action only: no agent tool reaches this endpoint. Stores a trust approval of the revision the screen showed, in the protected system area; audited as skill.trust_approved.
+         */
+        post: operations["approveSkillVersion"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9037,6 +9152,8 @@ export interface components {
                 /** @description List of MCP server bindings. */
                 servers?: components["schemas"]["AgentToolsMcpServerBinding"][];
             };
+            /** @description Per-agent skill permissions (Skills & Tools spec C-4): sparse overrides only. Every writer that does not name skills keeps the stored skills.policies (C-21). */
+            skills?: components["schemas"]["AgentSkillsCfg"];
         };
         /**
          * AgentToolsMcpServerBinding
@@ -9085,6 +9202,8 @@ export interface components {
                 /** @description List of MCP server bindings. */
                 servers?: components["schemas"]["AgentToolsMcpServerBinding"][];
             };
+            /** @description Skills & Tools spec C-4. Omitted: the agent skill overrides stay unchanged. skills.policies {}: clear every skill override. Otherwise skills.policies is the complete set of skill overrides (a key not listed is removed). A skills-only request is {revision, override_names: [], skills: {policies: ...}} with no builtin. override_names naming a tool the request does not supply gets 400 "override_names names tools that are not in this request.". Keys follow C-23 for an agent; null for skills, policies or a value gets 400 naming it. */
+            skills?: components["schemas"]["AgentSkillsCfg"];
         };
         /** @description Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired). */
         AgentCreateRequest: components["schemas"]["AgentCreateRequestMain"] | components["schemas"]["AgentCreateRequestSubagent"] | components["schemas"]["AgentCreateRequestSubagent3p"];
@@ -9566,6 +9685,8 @@ export interface components {
             stale_skill_grants?: string[];
             /** @description Per-tool effective policy and the agent's own stored override. */
             tool_permissions?: components["schemas"]["AgentToolPermission"][];
+            /** @description Skills & Tools spec C-9, C-21: per-skill effective permission and the agent's own stored override, for the skills this agent can use (its granted installed skills and the project skills of its mounts). Returned for get_agent fields ["skill_permissions"]. */
+            skill_permissions?: components["schemas"]["AgentSkillPermission"][];
             /** @description The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included. */
             stored_overrides?: {
                 [key: string]: "allow" | "ask" | "deny";
@@ -9927,6 +10048,18 @@ export interface components {
              * @enum {string}
              */
             auto_approve?: "runs" | "runs_if_args" | "asks";
+            /** @description Skills & Tools spec C-1, C-6: the tool's global level (what the model sees about it). For an MCP tool, its exact key when stored, else its server key mcp_<server>_*. */
+            visibility: components["schemas"]["ModelVisibility"];
+            /**
+             * @description C-6: true for ToolSearch, Skill, AskUserQuestion, goal_claim and set_goal; their level is fixed at full and cannot be changed.
+             * @example false
+             */
+            visibility_locked: boolean;
+            /**
+             * @description C-6: true for ToolSearch and Skill; they have no Allow / Ask / Deny of their own (stored global value allow, not editable) and every Set all skips them.
+             * @example false
+             */
+            permission_fixed: boolean;
         };
         /**
          * AgentToolEntry
@@ -9979,6 +10112,368 @@ export interface components {
             policies: {
                 [key: string]: "allow" | "ask" | "deny";
             };
+        };
+        /**
+         * ModelVisibility
+         * @description What the model is told about a tool or a skill each turn (Skills & Tools spec C-1). hidden = not listed, still findable by search; name_only = listed by name; name_and_description = listed by name and a one-line description, loaded on demand; full = the complete tool definition every turn, or (for a skill) its whole instructions from the start of each chat, but only when the skill's outcome for that agent is allowed. A level never decides whether a tool or skill may run; an effective deny hides the item whatever its level.
+         * @example name_and_description
+         * @enum {string}
+         */
+        ModelVisibility: "hidden" | "name_only" | "name_and_description" | "full";
+        /**
+         * SkillCategory
+         * @description The group a skill is shown in on Skills & Tools (Skills & Tools spec C-5). Set at install (from the request, else the file's metadata.category when it is one of these values, else uncategorised); an uncategorised skill can have its category chosen once. Stored in Omnipus's own data, never written into the skill folder.
+         * @example research
+         * @enum {string}
+         */
+        SkillCategory: "tools" | "business" | "development" | "testing_security" | "data_ai" | "devops" | "documentation" | "content_media" | "research" | "lifestyle" | "databases" | "blockchain" | "uncategorised";
+        /**
+         * PermissionSettings
+         * @description Response of GET and PATCH /api/v1/security/permissions (Skills & Tools spec C-2): the complete stored global permissions and levels for every tool and skill, and the skill trust choice. These are the operator-only global ceilings; per-agent values can only be stricter. Every PATCH response returns the whole stored state so the page can replace its view with it.
+         */
+        PermissionSettings: {
+            /**
+             * @description Global permission of every tool (sandbox.tool_policies): static tool names and mcp_<server>_* wildcards, complete for the static catalog.
+             * @example {
+             *       "bash": "ask",
+             *       "send_email": "ask",
+             *       "read_file": "allow",
+             *       "mcp_github_*": "ask"
+             *     }
+             */
+            policies: {
+                [key: string]: components["schemas"]["ToolPolicy"];
+            };
+            /**
+             * @description Global permission of every installed and project skill (sandbox.skill_policies). Keys are lower-case skill ids, or project:<workspace>/<slug> for a project-folder skill (C-23).
+             * @example {
+             *       "deep-research": "ask",
+             *       "plan": "allow",
+             *       "project:w1/notes": "ask"
+             *     }
+             */
+            skill_policies: {
+                [key: string]: components["schemas"]["ToolPolicy"];
+            };
+            /**
+             * @description Global level of every tool (sandbox.tool_visibility): static tool names and mcp_<server>_* keys; an exact tool key overrides its server key.
+             * @example {
+             *       "bash": "full",
+             *       "serve_web": "name_and_description",
+             *       "mcp_github_*": "hidden"
+             *     }
+             */
+            visibility: {
+                [key: string]: components["schemas"]["ModelVisibility"];
+            };
+            /**
+             * @description Global level of every installed and project skill (sandbox.skill_visibility), keyed like skill_policies.
+             * @example {
+             *       "deep-research": "name_and_description"
+             *     }
+             */
+            skill_visibility: {
+                [key: string]: components["schemas"]["ModelVisibility"];
+            };
+            /** @description What happens with unverified skills (sandbox.skill_trust): allow = install and load follow the skill's own permission; ask = a person approves each new version; deny = unverified skills are refused. */
+            skill_trust: components["schemas"]["ToolPolicy"];
+        };
+        /**
+         * PermissionSettingsPatch
+         * @description Request body of PATCH /api/v1/security/permissions (Skills & Tools spec C-2). Every member is optional and every map names only the keys to change; a key not named is never written, so two tabs changing different keys both keep their change. A request that names no key is refused with 400 "Nothing to change."; keys sent with their stored values give 200 with nothing written and no audit entry. null for a member or a value is refused with 400 naming the key; there is no delete through PATCH. The whole request is validated before anything is written.
+         * @example {
+         *       "policies": {
+         *         "send_email": "deny"
+         *       }
+         *     }
+         */
+        PermissionSettingsPatch: {
+            /**
+             * @description Tool permissions to change (static tool names or mcp_<server>_* keys).
+             * @example {
+             *       "send_email": "deny"
+             *     }
+             */
+            policies?: {
+                [key: string]: components["schemas"]["ToolPolicy"];
+            };
+            /**
+             * @description Skill permissions to change; keys follow the known-skill-key rule (C-23).
+             * @example {
+             *       "deep-research": "ask"
+             *     }
+             */
+            skill_policies?: {
+                [key: string]: components["schemas"]["ToolPolicy"];
+            };
+            /**
+             * @description Tool levels to change. A locked tool accepts only its locked level.
+             * @example {
+             *       "serve_web": "hidden"
+             *     }
+             */
+            visibility?: {
+                [key: string]: components["schemas"]["ModelVisibility"];
+            };
+            /**
+             * @description Skill levels to change.
+             * @example {
+             *       "deep-research": "full"
+             *     }
+             */
+            skill_visibility?: {
+                [key: string]: components["schemas"]["ModelVisibility"];
+            };
+            /** @description The new trust choice for unverified skills (allow, ask or deny). */
+            skill_trust?: components["schemas"]["ToolPolicy"];
+        };
+        /**
+         * AgentSkillsCfg
+         * @description An agent's own skill permissions (Skills & Tools spec C-4): sparse overrides that can only make a skill stricter than its global permission (strictest wins at run time). A key not listed follows the global value. Keys follow the known-skill-key rule (C-23): an installed skill id, or project:<workspace>/<slug> for a project skill of a workspace the agent is mounted on.
+         */
+        AgentSkillsCfg: {
+            /**
+             * @description Skill key to the agent's own permission. On PUT /agents/{id}/tools this is the complete set of the agent's skill overrides: a key not listed is removed, and {} clears every override. null for the map or a value is refused with 400 naming it.
+             * @example {
+             *       "deep-research": "deny",
+             *       "project:w1/notes": "ask"
+             *     }
+             */
+            policies: {
+                [key: string]: components["schemas"]["ToolPolicy"];
+            };
+        };
+        /**
+         * AgentSkillEntry
+         * @description One skill row of an agent's Tools tab (AgentToolsResponse.skills; Skills & Tools spec C-4): the skill's global permission, the agent's own override and the effective permission after strictest-wins, the trust floor for an unverified skill and God Mode. Listed for skills granted to the agent and for the project skills of the workspaces it is mounted on.
+         */
+        AgentSkillEntry: {
+            /**
+             * @description Permission key (C-23) — the lower-case skill id, or project:<workspace>/<slug>.
+             * @example deep-research
+             */
+            key: string;
+            /**
+             * @description The skill's slug.
+             * @example deep-research
+             */
+            name: string;
+            /**
+             * @description Human-readable skill name.
+             * @example Deep Research
+             */
+            display_name: string;
+            /**
+             * @description True when the skill is granted to the agent. Always false for a project skill, whose authority is the workspace mount.
+             * @example true
+             */
+            granted: boolean;
+            /**
+             * @description The workspace id of a project skill; null for an installed skill.
+             * @example null
+             */
+            project_workspace: string | null;
+            /**
+             * @description The agent's own stored override for this skill; null when it has none and follows the global value.
+             * @example null
+             * @enum {string|null}
+             */
+            configured_policy: "allow" | "ask" | "deny" | null;
+            /** @description The skill's global permission (PermissionSettings.skill_policies). */
+            global_policy: components["schemas"]["ToolPolicy"];
+            /** @description What applies to this agent's loads: the strictest of the global value and the override, then the trust floor for an unverified skill, with God Mode lifting only a global ask. */
+            effective_policy: components["schemas"]["ToolPolicy"];
+            /**
+             * @description True when the skill is unverified (C-5); project skills always are.
+             * @example false
+             */
+            unverified: boolean;
+        };
+        /**
+         * AgentSkillPermission
+         * @description One skill's permission for an agent, as reported by get_agent (AgentDetail.skill_permissions; Skills & Tools spec C-9): the skill twin of AgentToolPermission.
+         */
+        AgentSkillPermission: {
+            /**
+             * @description The skill's permission key (C-23).
+             * @example deep-research
+             */
+            skill: string;
+            /**
+             * @description The permission that applies to this agent's loads of the skill (strictest wins, trust floor, God Mode).
+             * @example ask
+             * @enum {string}
+             */
+            effective: "allow" | "ask" | "deny";
+            /**
+             * @description The agent's own stored override for this skill; null when there is none.
+             * @example null
+             * @enum {string|null}
+             */
+            override: "allow" | "ask" | "deny" | null;
+        };
+        /**
+         * SkillInstallReview
+         * @description Response of POST /api/v1/skills/install/review (Skills & Tools spec C-13): the skill has been downloaded and unpacked into staging, not published. The person reviews this exact revision; POST /skills/install with this review_id publishes exactly the staged folder. A review lives 15 minutes. A checksum mismatch never produces a review (422).
+         */
+        SkillInstallReview: {
+            /**
+             * @description Opaque id of this review; it is also the id of the install operation (GET /skills/install/review/{review_id}).
+             * @example rev_7f3a9c
+             */
+            review_id: string;
+            /**
+             * @description Slug of the staged skill.
+             * @example weather
+             */
+            name: string;
+            /**
+             * @description Version of the staged skill as declared by its source (an opaque display label).
+             * @example 1.2.0
+             */
+            version: string;
+            /** @description Content revision of the staged folder (the same revision function as Skill.revision). */
+            revision: components["schemas"]["ConfigurationRevision"];
+            /**
+             * @description Result of the registry hash check: matched = the archive matched the registry's hash; no_registry_hash = the registry publishes none; unavailable = the registry did not answer the lookup. mismatch is part of the vocabulary but a mismatching archive is refused at review time with 422, so a returned review never carries it.
+             * @example matched
+             * @enum {string}
+             */
+            verification: "matched" | "no_registry_hash" | "mismatch" | "unavailable";
+            /**
+             * @description True only when verification is matched. An unverified skill follows the trust choice.
+             * @example true
+             */
+            verified: boolean;
+            /**
+             * @description The file's metadata.category when it is a valid SkillCategory (same values); null otherwise.
+             * @example research
+             * @enum {string|null}
+             */
+            suggested_category: "tools" | "business" | "development" | "testing_security" | "data_ai" | "devops" | "documentation" | "content_media" | "research" | "lifestyle" | "databases" | "blockchain" | "uncategorised" | null;
+            /**
+             * @description True when a skill with this name is already installed and would be replaced.
+             * @example false
+             */
+            replaces_existing: boolean;
+            /**
+             * @description True when the installed skill this would replace has local changes (installing needs replace_local_changes).
+             * @example false
+             */
+            has_local_changes_to_replace: boolean;
+            /**
+             * Format: date-time
+             * @description When the staged review expires and is removed.
+             * @example 2026-11-22T10:15:00Z
+             */
+            expires_at: string;
+        };
+        /**
+         * SkillInstallReviewStatus
+         * @description Response of GET /api/v1/skills/install/review/{review_id} (Skills & Tools spec C-13): what really happened to one review's install operation. The screen reads it after a lost Install answer instead of guessing from the skills list. A review reaches a terminal state (installed, failed, expired, cancelled) exactly once and the record is kept 15 minutes after that, then removed (404).
+         */
+        SkillInstallReviewStatus: {
+            /**
+             * @description The review (and install operation) id.
+             * @example rev_7f3a9c
+             */
+            review_id: string;
+            /**
+             * @description staged = reviewed, Install not pressed; publishing = Install in progress; installed = published; failed = refused or broken (see reason); expired = the review timed out; cancelled = discarded with DELETE.
+             * @example installed
+             * @enum {string}
+             */
+            state: "staged" | "publishing" | "installed" | "failed" | "expired" | "cancelled";
+            /** @description The reviewed content revision. */
+            revision: components["schemas"]["ConfigurationRevision"];
+            /**
+             * @description The content revision that was published; set only when state is installed, null otherwise.
+             * @example null
+             */
+            installed_revision: string | null;
+            /**
+             * @description The content revision of the skill this install replaced; null when nothing was replaced or not yet installed.
+             * @example null
+             */
+            replaced_revision: string | null;
+            /**
+             * @description Plain-language reason, present only when state is failed.
+             * @example The skill changed after review. Review it again.
+             */
+            reason?: string;
+        };
+        /**
+         * SkillTrustApprovalRequest
+         * @description Request body of POST /api/v1/skills/{name}/trust-approval (Skills & Tools spec C-24): a person approves the current version of an unverified skill from More actions → "Approve this version". The revision is the one the screen showed; a different current revision is refused with 409. A person's action only: no agent tool reaches this endpoint.
+         * @example {
+         *       "revision": "3f5c0b1e9a7d4c2b8e6f0a1d3c5b7e9f2a4c6e8b0d1f3a5c7e9b2d4f6a8c0e1b"
+         *     }
+         */
+        SkillTrustApprovalRequest: {
+            /** @description The skill's content revision as the screen showed it (Skill.revision). */
+            revision: components["schemas"]["ConfigurationRevision"];
+        };
+        /**
+         * SkillTrustApproval
+         * @description A stored trust approval of one revision of an unverified skill (Skills & Tools spec C-24), returned by POST /api/v1/skills/{name}/trust-approval. Every field is server-derived. Stored in the protected system area ($OMNIPUS_HOME/system/skill-trust-approvals.json), one record per skill and revision; a changed revision needs a new approval.
+         */
+        SkillTrustApproval: {
+            /**
+             * @description The skill's permission key (C-23).
+             * @example notes-helper
+             */
+            key: string;
+            /** @description The approved content revision. */
+            revision: components["schemas"]["ConfigurationRevision"];
+            /**
+             * @description The signed-in person who approved it.
+             * @example daniel
+             */
+            approved_by: string;
+            /**
+             * Format: date-time
+             * @description When the approval was stored.
+             * @example 2026-11-22T09:30:00Z
+             */
+            approved_at: string;
+        };
+        /**
+         * SkillCategoryUpdateRequest
+         * @description Request body of PUT /api/v1/skills/{name}/category (Skills & Tools spec C-21): choose the category of a skill stored as uncategorised. Allowed once; a skill whose category is already set is refused with 409 "The category is set at install and cannot be changed."
+         * @example {
+         *       "category": "research"
+         *     }
+         */
+        SkillCategoryUpdateRequest: {
+            category: components["schemas"]["SkillCategory"];
+        };
+        /**
+         * ApprovalAllowDuration
+         * @description How long a timed allowance from an approval card lasts (Skills & Tools spec C-26, founder R2-Q1): 1h, 3h or 1d (24 hours), measured on the server from the moment it is recorded. A timed allowance belongs to the agent named on the card, covers all its sessions and the helpers it starts for itself, lives in memory only and also ends at a gateway restart or when the permission it answers changes.
+         * @example 1h
+         * @enum {string}
+         */
+        ApprovalAllowDuration: "1h" | "3h" | "1d";
+        /**
+         * ToolApprovalApplied
+         * @description What an approval answer actually stored (Skills & Tools spec C-24); never what was asked. Always present in ToolApprovalResponse for a skill approval. A false member with not_applied_reason means a partial result: for example the trust approval was stored and the call released, but the timed allowance was not recorded.
+         */
+        ToolApprovalApplied: {
+            /**
+             * @description True when the waiting call was released to run.
+             * @example true
+             */
+            call_released: boolean;
+            /**
+             * @description True when a timed allowance was recorded (see ToolApprovalResponse.expires_at).
+             * @example false
+             */
+            timed_allowance: boolean;
+            /**
+             * @description True when a trust approval of the card's skill revision was stored.
+             * @example true
+             */
+            trust_approved: boolean;
         };
         /**
          * ChannelId
@@ -11768,7 +12263,15 @@ export interface components {
         Skill: {
             /** @description true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins. */
             has_local_changes: boolean;
+            /** @description Content revision of the installed folder (pkg/skills/capture.go ContentRevision). Server-derived; ignored if a client sends it (C-5). */
             revision: components["schemas"]["ConfigurationRevision"];
+            /** @description Skills & Tools spec C-5. Set at install (or from the skill's own metadata.category for a built-in skill), stored in Omnipus's own data, never in the skill file. A skill stored as uncategorised can have it chosen once (PUT /skills/{name}/category, C-21). */
+            category: components["schemas"]["SkillCategory"];
+            /**
+             * @description Skills & Tools spec C-24: true when the current revision has a stored trust approval. Server-derived; ignored if a client sends it.
+             * @example false
+             */
+            trust_approved: boolean;
             persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status?: components["schemas"]["ConfigurationActivationStatus"];
             changed_fields?: string[];
@@ -11806,7 +12309,7 @@ export interface components {
              */
             source?: "builtin" | "global" | "workspace";
             /**
-             * @description True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
+             * @description Skills & Tools spec C-5: true for a built-in skill, or for a skill whose install was checked against a registry hash AND whose folder has no local changes since; false otherwise. Unverified skills follow the skill trust setting (allow / ask / deny, C-3).
              * @example true
              */
             verified: boolean;
@@ -13010,6 +13513,8 @@ export interface components {
             config: components["schemas"]["AgentToolsCfg"];
             /** @description Per-tool effective policy entries. */
             tools: components["schemas"]["AgentToolEntry"][];
+            /** @description Skills & Tools spec C-4, C-23. One entry per skill this agent can use: its granted installed skills and the project skills of the workspaces it is mounted on, each with its key, own override, global and effective permission. Empty when there are none. */
+            skills: components["schemas"]["AgentSkillEntry"][];
             /**
              * @description Agent classification. Built-in roster (Mia / Jim / Ava / Admin) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
              * @example Main
@@ -14678,7 +15183,7 @@ export interface components {
         };
         /**
          * ToolApprovalResponse
-         * @description Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
+         * @description Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed and reports what was actually stored (Skills & Tools spec C-24, C-26), never what was asked.
          */
         ToolApprovalResponse: {
             /**
@@ -14687,13 +15192,13 @@ export interface components {
              */
             approval_id: string;
             /**
-             * @description The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
+             * @description The action that was applied. Echoes the request action (ADR-092 D4; C-24, C-26).
              * @example allow_once
              * @enum {string}
              */
-            action: "deny" | "allow_once" | "allow" | "cancel";
+            action: "deny" | "allow_once" | "allow_for" | "cancel" | "approve_version" | "approve_version_allow_for";
             /**
-             * @description The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
+             * @description The scope of the timed allowance actually RECORDED for a bash card (ADR-092 D4/FR-024; C-26), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow_for" or "approve_version_allow_for" and the allowance was recorded (grant_recorded true); omitted otherwise.
              * @example exact
              * @enum {string}
              */
@@ -14704,8 +15209,24 @@ export interface components {
              * @enum {string}
              */
             status: "ok";
-            /** @description Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
+            /**
+             * @description Present only when action is "allow_for" or "approve_version_allow_for". True when the timed allowance was stored for the agent named on the card: a whole-tool, command or command-family allowance, or the pre-flight escalation's own path-widening/network-widening allowance when this approval resolved a D7/D8 escalation (C-26). False means this call was approved once, but the next matching call will ask again; the allowance did not stick (see not_applied_reason).
+             * @example true
+             */
             grant_recorded?: boolean;
+            /**
+             * Format: date-time
+             * @description Wall-clock end of the timed allowance recorded by this answer (server-derived; the server measures the length on its monotonic clock). Present only when a timed allowance was recorded. When a running allowance for the same subject already ends later, this is that later end (an answer never shortens an allowance).
+             * @example 2026-11-22T10:30:00Z
+             */
+            expires_at?: string;
+            /** @description What this answer stored (C-24). Always present for a skill approval (the card carried a `skill` object); optional otherwise. */
+            applied?: components["schemas"]["ToolApprovalApplied"];
+            /**
+             * @description Plain-language reason for a partial result, present only when a step of the answer was not stored, e.g. "Approved for this request only. The time limit was not saved: <reason>."
+             * @example Approved for this request only. The time limit was not saved: the agent no longer exists.
+             */
+            not_applied_reason?: string;
         };
         /**
          * UploadFilesResponse
@@ -15429,6 +15950,13 @@ export interface components {
              * @example 1.4.0
              */
             version?: string;
+            /** @description Skills & Tools spec C-5. The category stored with the installed skill. Absent: the skill file's metadata.category when it is one of the values, else uncategorised. Never written into the skill file. Ignored by POST /skills/install/review (the review returns suggested_category instead). */
+            category?: components["schemas"]["SkillCategory"];
+            /**
+             * @description Skills & Tools spec C-13. The review (from POST /skills/install/review) to publish. With review_id the server publishes exactly the staged folder of that review, never a fresh download; slug or upload_id must still name the same source the review staged. Current revision differs from the reviewed one, or the source differs → 409 "The skill changed after review. Review it again."; expired → 410 "This review expired. Open the skill again to review it." Idempotent per review: while publishing → 202 with SkillInstallReviewStatus; after installed → 200 with the same result and no second publish; after failed, expired or cancelled → the same terminal answer again. Refused (400) by POST /skills/install/review itself. Required for an unverified skill while skill trust is ask (without it → 409, C-3).
+             * @example rev_7f3a9c
+             */
+            review_id?: string;
         } & (unknown | unknown);
         /**
          * SkillCopyRequest
@@ -15440,6 +15968,8 @@ export interface components {
              * @example plan-copy
              */
             new_id: string;
+            /** @description Skills & Tools spec C-21. Category of the new copy. Absent: the source skill's category. */
+            category?: components["schemas"]["SkillCategory"];
         };
         /**
          * SkillDetail
@@ -15571,19 +16101,21 @@ export interface components {
         };
         /**
          * ToolApprovalActionRequest
-         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4; Skills & Tools spec C-24, C-26). The server accepts only an action listed in the card's offered_actions (ToolApprovalRequiredFrame / SessionStatePendingApproval); any other action gets 409 "This choice is not available for this request." and nothing is stored. The body carries only the action, duration and the bash scope; the client never sends a skill key or revision (they come from the pending approval).
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+             * @description Action to take on this approval. deny — reject this single invocation. allow_once — allow this single invocation only; nothing is recorded. allow_for — allow this invocation AND record a timed allowance for the agent named on the card, for `duration` (C-26). On an ordinary tool card it covers the whole tool; on a bash card the exact command or command family per `scope`; on a pre-flight card the path or addresses the card named; on a skill permission card the skill's permission part. Never offered for an always-ask tool (today exactly set_channel_outbound; answered with 400, checked first) or for an exact-action tool (environment_setup, request_mount, send_email, browser_evaluate, set_config; answered with 409). cancel — dismiss this approval without approving the invocation; distinct from deny, stores nothing. approve_version — store a trust approval of the card's skill revision and release this load (skill trust card). approve_version_allow_for — store the trust approval and a timed allowance of the skill's permission part for `duration`, then release the load (skill combined card). The former value "allow" is refused with 400 "This choice is no longer offered. Choose Approve Once or a time limit."
              * @example allow_once
              * @enum {string}
              */
-            action: "deny" | "allow_once" | "allow" | "cancel";
+            action: "deny" | "allow_once" | "allow_for" | "cancel" | "approve_version" | "approve_version_allow_for";
+            /** @description Length of the timed allowance (C-26). Required when action is allow_for or approve_version_allow_for (missing or another value → 400 "Choose 1 hour, 3 hours or 1 day."); refused for every other action (400 "A time limit applies only to Allow for."). */
+            duration?: components["schemas"]["ApprovalAllowDuration"];
             /**
-             * @description Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
-             *     Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
-             *     When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
+             * @description Allowance scope for a bash card (ADR-092 D4/FR-024; C-26). Present only when action is "allow_for"; ignored otherwise. "exact" (default when omitted) — command text + cwd. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+             *     Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — a time choice on one of those records the path-widening or network-widening allowance the frame described, not an exact/prefix command allowance; `scope` is ignored for those approvals.
+             *     When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact allowance for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix allowance it did not offer (see CommandSegmentInfo.prefix_available).
              * @example exact
              * @enum {string}
              */
@@ -21553,7 +22085,7 @@ export interface operations {
                     "application/json": components["schemas"]["ToolApprovalResponse"];
                 };
             };
-            /** @description Malformed body or unknown action, or action allow for an always-ask tool ("set_channel_outbound always asks for approval; it can be set to ask or deny, not allow"; nothing recorded). */
+            /** @description Malformed body or unknown action; nothing stored. Texts: action allow (a screen from before the upgrade) → "This choice is no longer offered. Choose Approve Once or a time limit."; allow_for or approve_version_allow_for without duration or with another value → "Choose 1 hour, 3 hours or 1 day."; duration with any other action → "A time limit applies only to Allow for."; allow_for for an always-ask tool → "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow". */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -21571,8 +22103,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Approval ID not found. */
+            /** @description Approval ID not found; also an approval already answered or timed out ("approval … not found"). Nothing happens twice. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Nothing stored. The action is not in the card's offered_actions (including allow_for for an exact-action tool): "This choice is not available for this request." The re-check before any effect failed (C-24): "The skill changed after this request." or "This skill is now set to Deny."; the waiting call is refused with the same reason. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -21582,6 +22123,15 @@ export interface operations {
             };
             /** @description Approval already resolved (FR-018). */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The trust approval could not be stored (C-24 step 1): "Could not save the approval. Nothing was changed." The card stays open for another answer until the approval times out. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -21653,6 +22203,86 @@ export interface operations {
             };
             401: components["responses"]["401Unauthorized"];
             /** @description The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus." No other field is required. The response must not say the write was undone. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus."
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getPermissionSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The complete stored permission settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionSettings"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    patchPermissionSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PermissionSettingsPatch"];
+            };
+        };
+        responses: {
+            /** @description Stored and applied. The body is the complete stored settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionSettings"];
+                };
+            };
+            /** @description Nothing stored. Texts include "Nothing to change." (no key named), a null member or value (naming the key), "`<key>` is not a known skill.", "`<key>` is listed twice.", "Use allow, ask or deny." (skill_trust), "`<tool>` has no permission of its own." (ToolSearch, Skill), a locked level, allow for an always-ask tool, and today's tool-key validation errors. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            409: components["responses"]["409Conflict"];
+            /** @description Nothing was stored (the atomic write did not happen): "Not saved: the settings file could not be written." */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stored, not applied to running agents. The error field is exactly "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus." */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -24683,7 +25313,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Skill installed. */
+            /** @description Skill installed. With review_id: also the repeated answer after the review reached installed (same result, no second publish). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -24692,11 +25322,38 @@ export interface operations {
                     "application/json": components["schemas"]["Skill"];
                 };
             };
+            /** @description C-13: the review's install is still publishing; read GET /skills/install/review/{review_id} for the outcome. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillInstallReviewStatus"];
+                };
+            };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description C-3: skill trust is deny and the skill is unverified: "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed." */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["404NotFound"];
-            /** @description Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller's expected revision and the skill changed since it was read). */
+            /** @description Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller's expected revision and the skill changed since it was read). Skills & Tools C-3, C-13: an unverified skill under trust ask without review_id; the staged folder's revision differs from the reviewed one ("The skill changed after review. Review it again."); the review already failed or was cancelled (the same terminal answer again). */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description C-13: the review expired: "This review expired. Open the skill again to review it." */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -24714,6 +25371,100 @@ export interface operations {
                 };
             };
             502: components["responses"]["502BadGateway"];
+        };
+    };
+    reviewSkillInstall: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillInstallRequest"];
+            };
+        };
+        responses: {
+            /** @description The staged review. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillInstallReview"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description C-3: skill trust is deny and the skill is unverified: "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed." */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["404NotFound"];
+            /** @description The download does not match the catalog checksum: "The downloaded skill does not match the catalog's checksum. Nothing was installed." */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            502: components["responses"]["502BadGateway"];
+        };
+    };
+    getSkillInstallReviewStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The review id from POST /skills/install/review. */
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The review's current state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillInstallReviewStatus"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    discardSkillInstallReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The review id from POST /skills/install/review. */
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The staged review was discarded. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
         };
     };
     copySkill: {
@@ -24760,6 +25511,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
+        };
+    };
+    setSkillCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Skill slug. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCategoryUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The skill with its category. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Skill"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description The category is already set: "The category is set at install and cannot be changed." */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    approveSkillVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Skill slug. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillTrustApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description The stored trust approval. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillTrustApproval"];
+                };
+            };
+            /** @description Malformed body, or the skill is verified: "This skill is verified; it needs no approval." */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description The current revision differs from the one sent: "This skill changed since the page loaded. Review it again." */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -29788,6 +30625,20 @@ export type ToolRegistryEntry = components["schemas"]["ToolRegistryEntry"];
 export type AgentToolEntry = components["schemas"]["AgentToolEntry"];
 export type ToolPolicy = components["schemas"]["ToolPolicy"];
 export type GlobalToolPolicies = components["schemas"]["GlobalToolPolicies"];
+export type ModelVisibility = components["schemas"]["ModelVisibility"];
+export type SkillCategory = components["schemas"]["SkillCategory"];
+export type PermissionSettings = components["schemas"]["PermissionSettings"];
+export type PermissionSettingsPatch = components["schemas"]["PermissionSettingsPatch"];
+export type AgentSkillsCfg = components["schemas"]["AgentSkillsCfg"];
+export type AgentSkillEntry = components["schemas"]["AgentSkillEntry"];
+export type AgentSkillPermission = components["schemas"]["AgentSkillPermission"];
+export type SkillInstallReview = components["schemas"]["SkillInstallReview"];
+export type SkillInstallReviewStatus = components["schemas"]["SkillInstallReviewStatus"];
+export type SkillTrustApprovalRequest = components["schemas"]["SkillTrustApprovalRequest"];
+export type SkillTrustApproval = components["schemas"]["SkillTrustApproval"];
+export type SkillCategoryUpdateRequest = components["schemas"]["SkillCategoryUpdateRequest"];
+export type ApprovalAllowDuration = components["schemas"]["ApprovalAllowDuration"];
+export type ToolApprovalApplied = components["schemas"]["ToolApprovalApplied"];
 export type ChannelId = components["schemas"]["ChannelId"];
 export type ChannelIdentity = components["schemas"]["ChannelIdentity"];
 export type ChannelEntry = components["schemas"]["ChannelEntry"];

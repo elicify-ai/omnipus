@@ -3303,6 +3303,7 @@ Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:ti
   - Q6 (06:23Z): Does a permission change end running allowances? → **A**: yes (confirms team-lead's call; C-26 point 7, FR-096).
   - Q7 (06:23Z): May the server store a looser agent value? → **A**: keep as today: stored, the stricter global value wins at run time, only the screen blocks it (confirms team-lead's call; C-26 point 8).
   - `install_skill` keeps the whole-tool time choice, listed in the security points (team-lead, same day).
+  - Q1 (architect, after Q5 A): Do the five exact-action tools keep Cancel on their cards where the card has it today? → **A, keep Cancel** (team-lead's call, 2026-11-22, consistent with the earlier "Cancel stays" ruling). Cancel is not an allowance and stores nothing. In the contract, `cancel` stays in the action enum and is listed in a card's `offered_actions` whenever the card shows Cancel (C-24, C-26 point 9).
   - Effect on ST-Q9 A ("approving once in a chat makes it work everywhere, also in tasks and plans"): narrowed by R2-Q1. A chat answer now makes the skill work for that agent's tasks and plans until the time ends; for every agent and for good, the person sets Allow on Skills & Tools.
 
 ## Questions for the founder

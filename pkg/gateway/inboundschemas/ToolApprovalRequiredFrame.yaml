@@ -22,6 +22,8 @@ required:
   - session_id
   - turn_id
   - expires_in_ms
+  - offered_actions
+  - allow_durations
 additionalProperties: false
 properties:
   type:
@@ -119,3 +121,35 @@ properties:
     description: >
       Spec K7, FR-251. Present on a room's pre-admission approval card
       (request id = delivery id).
+  offered_actions:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: './ToolApprovalOfferedAction.yaml'
+    description: >
+      Skills & Tools spec C-24, C-26. The answers this card offers,
+      computed by the server when it raises the card; the server accepts
+      only these (any other action gets 409). Examples: ordinary tool card
+      [allow_once, allow_for, deny, cancel]; exact-action tool
+      (environment_setup, request_mount, send_email, browser_evaluate,
+      set_config) [allow_once, deny, cancel]; always-ask tool
+      [allow_once, deny, cancel]; skill permission card [allow_once,
+      allow_for, deny]; skill trust card [approve_version, deny]; skill
+      combined card [approve_version, approve_version_allow_for, deny];
+      unverified install card [allow_once, deny]. cancel is listed whenever
+      the card shows Cancel; it stores nothing.
+  allow_durations:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: './ApprovalAllowDuration.yaml'
+    description: >
+      C-26. The time choices for allow_for / approve_version_allow_for:
+      [1h, 3h, 1d] whenever one of those actions is in offered_actions,
+      empty otherwise. Server-computed.
+  skill:
+    $ref: './ToolApprovalSkill.yaml'
+    description: >
+      C-9. The skill this card is about; present when the call loads a
+      skill or installs one (install_skill, with the staged revision).

@@ -102,6 +102,16 @@ properties:
     items:
       $ref: './AgentToolPermission.yaml'
     description: Per-tool effective policy and the agent's own stored override.
+  skill_permissions:
+    type: array
+    items:
+      $ref: './AgentSkillPermission.yaml'
+      x-go-type: AgentSkillPermission
+    description: >
+      Skills & Tools spec C-9, C-21: per-skill effective permission and the
+      agent's own stored override, for the skills this agent can use (its
+      granted installed skills and the project skills of its mounts).
+      Returned for get_agent fields ["skill_permissions"].
   stored_overrides:
     type: object
     additionalProperties:

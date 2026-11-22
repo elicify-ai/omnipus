@@ -1,7 +1,8 @@
 title: ToolApprovalResponse
 description: >
   Response from POST /api/v1/tool-approvals/{approval_id}.
-  Confirms that the approval action was processed.
+  Confirms that the approval action was processed and reports what was
+  actually stored (Skills & Tools spec C-24, C-26), never what was asked.
 type: object
 required:
   - approval_id
@@ -15,13 +16,15 @@ properties:
   action:
     type: string
     description: >
-      The action that was applied. Echoes the request action (ADR-092 D4),
-      including "allow" (approve-and-remember, renamed from "always").
+      The action that was applied. Echoes the request action (ADR-092 D4;
+      C-24, C-26).
     enum:
       - deny
       - allow_once
-      - allow
+      - allow_for
       - cancel
+      - approve_version
+      - approve_version_allow_for
     example: allow_once
   scope:
     type: string
@@ -29,12 +32,14 @@ properties:
       - exact
       - prefix
     description: >
-      The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the
-      requested one: a "prefix" request is recorded as "exact" whenever no
-      safe prefix exists (chained command, bare program, wrapper, unresolvable
-      program, Windows, or any tool other than bash). The SPA must show this
-      value, not its own request. Present only when action is "allow" and the
-      grant was recorded (grant_recorded true); omitted otherwise.
+      The scope of the timed allowance actually RECORDED for a bash card
+      (ADR-092 D4/FR-024; C-26), which is not always the requested one: a
+      "prefix" request is recorded as "exact" whenever no safe prefix exists
+      (chained command, bare program, wrapper, unresolvable program,
+      Windows, or any tool other than bash). The SPA must show this value,
+      not its own request. Present only when action is "allow_for" or
+      "approve_version_allow_for" and the allowance was recorded
+      (grant_recorded true); omitted otherwise.
     example: exact
   status:
     type: string
@@ -45,11 +50,36 @@ properties:
   grant_recorded:
     type: boolean
     description: >
-      Present only when action is "allow". True when the grant was
-      stored — a session command grant (scope: exact/prefix), or the
-      pre-flight escalation's own path-widening/network-widening grant when
-      this approval resolved a D7/D8 escalation instead of an ordinary
-      tool-approval-required frame. False means this call was approved
-      once, but the next identical call (or the next command needing the
-      same widening) will ask again — the grant did not stick (missing
-      session, agent, or tool identity on the approval).
+      Present only when action is "allow_for" or "approve_version_allow_for".
+      True when the timed allowance was stored for the agent named on the
+      card: a whole-tool, command or command-family allowance, or the
+      pre-flight escalation's own path-widening/network-widening allowance
+      when this approval resolved a D7/D8 escalation (C-26). False means
+      this call was approved once, but the next matching call will ask
+      again; the allowance did not stick (see not_applied_reason).
+    example: true
+  expires_at:
+    type: string
+    format: date-time
+    description: >
+      Wall-clock end of the timed allowance recorded by this answer
+      (server-derived; the server measures the length on its monotonic
+      clock). Present only when a timed allowance was recorded. When a
+      running allowance for the same subject already ends later, this is
+      that later end (an answer never shortens an allowance).
+    example: "2026-11-22T10:30:00Z"
+  applied:
+    $ref: './ToolApprovalApplied.yaml'
+    x-go-type: ToolApprovalApplied
+    description: >
+      What this answer stored (C-24). Always present for a skill approval
+      (the card carried a `skill` object); optional otherwise.
+  not_applied_reason:
+    type: string
+    minLength: 1
+    maxLength: 500
+    description: >
+      Plain-language reason for a partial result, present only when a step
+      of the answer was not stored, e.g. "Approved for this request only.
+      The time limit was not saved: <reason>."
+    example: "Approved for this request only. The time limit was not saved: the agent no longer exists."

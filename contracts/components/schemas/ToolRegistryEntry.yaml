@@ -9,6 +9,9 @@ required:
   - scope
   - category
   - source
+  - visibility
+  - visibility_locked
+  - permission_fixed
 properties:
   name:
     type: string
@@ -71,3 +74,23 @@ properties:
       - runs_if_args
       - asks
     example: runs
+  visibility:
+    $ref: './ModelVisibility.yaml'
+    x-go-type: ModelVisibility
+    description: >
+      Skills & Tools spec C-1, C-6: the tool's global level (what the model
+      sees about it). For an MCP tool, its exact key when stored, else its
+      server key mcp_<server>_*.
+  visibility_locked:
+    type: boolean
+    description: >
+      C-6: true for ToolSearch, Skill, AskUserQuestion, goal_claim and
+      set_goal; their level is fixed at full and cannot be changed.
+    example: false
+  permission_fixed:
+    type: boolean
+    description: >
+      C-6: true for ToolSearch and Skill; they have no Allow / Ask / Deny of
+      their own (stored global value allow, not editable) and every Set all
+      skips them.
+    example: false

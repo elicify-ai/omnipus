@@ -1,0 +1,69 @@
+title: PermissionSettings
+description: >
+  Response of GET and PATCH /api/v1/security/permissions (Skills & Tools spec
+  C-2): the complete stored global permissions and levels for every tool and
+  skill, and the skill trust choice. These are the operator-only global
+  ceilings; per-agent values can only be stricter. Every PATCH response
+  returns the whole stored state so the page can replace its view with it.
+type: object
+additionalProperties: false
+required:
+  - policies
+  - skill_policies
+  - visibility
+  - skill_visibility
+  - skill_trust
+properties:
+  policies:
+    type: object
+    description: >
+      Global permission of every tool (sandbox.tool_policies): static tool
+      names and mcp_<server>_* wildcards, complete for the static catalog.
+    additionalProperties:
+      $ref: './ToolPolicy.yaml'
+      x-go-type: ToolPolicy
+    example:
+      bash: ask
+      send_email: ask
+      read_file: allow
+      mcp_github_*: ask
+  skill_policies:
+    type: object
+    description: >
+      Global permission of every installed and project skill
+      (sandbox.skill_policies). Keys are lower-case skill ids, or
+      project:<workspace>/<slug> for a project-folder skill (C-23).
+    additionalProperties:
+      $ref: './ToolPolicy.yaml'
+      x-go-type: ToolPolicy
+    example:
+      deep-research: ask
+      plan: allow
+      project:w1/notes: ask
+  visibility:
+    type: object
+    description: >
+      Global level of every tool (sandbox.tool_visibility): static tool names
+      and mcp_<server>_* keys; an exact tool key overrides its server key.
+    additionalProperties:
+      $ref: './ModelVisibility.yaml'
+      x-go-type: ModelVisibility
+    example:
+      bash: full
+      serve_web: name_and_description
+      mcp_github_*: hidden
+  skill_visibility:
+    type: object
+    description: Global level of every installed and project skill (sandbox.skill_visibility), keyed like skill_policies.
+    additionalProperties:
+      $ref: './ModelVisibility.yaml'
+      x-go-type: ModelVisibility
+    example:
+      deep-research: name_and_description
+  skill_trust:
+    $ref: './ToolPolicy.yaml'
+    x-go-type: ToolPolicy
+    description: >
+      What happens with unverified skills (sandbox.skill_trust): allow =
+      install and load follow the skill's own permission; ask = a person
+      approves each new version; deny = unverified skills are refused.

@@ -1832,6 +1832,7 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 			Mcp *struct {
 				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
+			Skills *AgentSkillsCfg `json:"skills,omitempty"`
 		}{
 			Builtin: &struct {
 				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
@@ -1875,6 +1876,7 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 			Mcp *struct {
 				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
+			Skills *AgentSkillsCfg `json:"skills,omitempty"`
 		}{
 			Builtin: &struct {
 				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
@@ -2419,6 +2421,7 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 			Mcp *struct {
 				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
+			Skills *AgentSkillsCfg `json:"skills,omitempty"`
 		}{
 			Builtin: &struct {
 				Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
@@ -2472,6 +2475,7 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 			Mcp *struct {
 				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
+			Skills *AgentSkillsCfg `json:"skills,omitempty"`
 		}{
 			Builtin: &struct {
 				Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
@@ -2590,6 +2594,7 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 			Mcp *struct {
 				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
+			Skills *AgentSkillsCfg `json:"skills,omitempty"`
 		}{
 			Builtin: &struct {
 				Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`

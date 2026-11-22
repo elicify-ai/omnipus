@@ -1,0 +1,17 @@
+title: ModelVisibility
+description: >
+  What the model is told about a tool or a skill each turn (Skills & Tools
+  spec C-1). hidden = not listed, still findable by search; name_only =
+  listed by name; name_and_description = listed by name and a one-line
+  description, loaded on demand; full = the complete tool definition every
+  turn, or (for a skill) its whole instructions from the start of each chat,
+  but only when the skill's outcome for that agent is allowed. A level never
+  decides whether a tool or skill may run; an effective deny hides the item
+  whatever its level.
+type: string
+enum:
+  - hidden
+  - name_only
+  - name_and_description
+  - full
+example: name_and_description

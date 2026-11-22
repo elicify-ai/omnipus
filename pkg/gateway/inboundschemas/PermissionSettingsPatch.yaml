@@ -1,0 +1,53 @@
+title: PermissionSettingsPatch
+description: >
+  Request body of PATCH /api/v1/security/permissions (Skills & Tools spec
+  C-2). Every member is optional and every map names only the keys to
+  change; a key not named is never written, so two tabs changing different
+  keys both keep their change. A request that names no key is refused with
+  400 "Nothing to change."; keys sent with their stored values give 200 with
+  nothing written and no audit entry. null for a member or a value is
+  refused with 400 naming the key; there is no delete through PATCH. The
+  whole request is validated before anything is written.
+type: object
+additionalProperties: false
+minProperties: 1
+properties:
+  policies:
+    type: object
+    description: Tool permissions to change (static tool names or mcp_<server>_* keys).
+    additionalProperties:
+      $ref: './ToolPolicy.yaml'
+      x-go-type: ToolPolicy
+    example:
+      send_email: deny
+  skill_policies:
+    type: object
+    description: Skill permissions to change; keys follow the known-skill-key rule (C-23).
+    additionalProperties:
+      $ref: './ToolPolicy.yaml'
+      x-go-type: ToolPolicy
+    example:
+      deep-research: ask
+  visibility:
+    type: object
+    description: Tool levels to change. A locked tool accepts only its locked level.
+    additionalProperties:
+      $ref: './ModelVisibility.yaml'
+      x-go-type: ModelVisibility
+    example:
+      serve_web: hidden
+  skill_visibility:
+    type: object
+    description: Skill levels to change.
+    additionalProperties:
+      $ref: './ModelVisibility.yaml'
+      x-go-type: ModelVisibility
+    example:
+      deep-research: full
+  skill_trust:
+    $ref: './ToolPolicy.yaml'
+    x-go-type: ToolPolicy
+    description: The new trust choice for unverified skills (allow, ask or deny).
+example:
+  policies:
+    send_email: deny

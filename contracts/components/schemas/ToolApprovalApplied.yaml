@@ -1,0 +1,26 @@
+title: ToolApprovalApplied
+description: >
+  What an approval answer actually stored (Skills & Tools spec C-24); never
+  what was asked. Always present in ToolApprovalResponse for a skill
+  approval. A false member with not_applied_reason means a partial result:
+  for example the trust approval was stored and the call released, but the
+  timed allowance was not recorded.
+type: object
+additionalProperties: false
+required:
+  - call_released
+  - timed_allowance
+  - trust_approved
+properties:
+  call_released:
+    type: boolean
+    description: True when the waiting call was released to run.
+    example: true
+  timed_allowance:
+    type: boolean
+    description: True when a timed allowance was recorded (see ToolApprovalResponse.expires_at).
+    example: false
+  trust_approved:
+    type: boolean
+    description: True when a trust approval of the card's skill revision was stored.
+    example: true

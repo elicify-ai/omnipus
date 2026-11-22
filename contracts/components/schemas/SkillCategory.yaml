@@ -1,0 +1,23 @@
+title: SkillCategory
+description: >
+  The group a skill is shown in on Skills & Tools (Skills & Tools spec C-5).
+  Set at install (from the request, else the file's metadata.category when it
+  is one of these values, else uncategorised); an uncategorised skill can
+  have its category chosen once. Stored in Omnipus's own data, never written
+  into the skill folder.
+type: string
+enum:
+  - tools
+  - business
+  - development
+  - testing_security
+  - data_ai
+  - devops
+  - documentation
+  - content_media
+  - research
+  - lifestyle
+  - databases
+  - blockchain
+  - uncategorised
+example: research

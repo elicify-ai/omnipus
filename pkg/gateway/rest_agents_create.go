@@ -109,6 +109,7 @@ func agentCreateToolsCfgFromWire[P ~string](tc *struct {
 	Mcp *struct {
 		Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
+	Skills *gen.AgentSkillsCfg `json:"skills,omitempty"`
 },
 ) *agentCreateToolsCfgInput {
 	if tc == nil {

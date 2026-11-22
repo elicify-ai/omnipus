@@ -1,10 +1,13 @@
 title: ToolApprovalActionRequest
 description: >
   Request body for POST /api/v1/tool-approvals/{approval_id}.
-  Resolves a pending tool call approval (ADR-092 D4). Renamed from the
-  4-value approve|deny|cancel|always set: "approve" -> "allow_once",
-  "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel`
-  remain distinct non-approval resolution actions.
+  Resolves a pending tool call approval (ADR-092 D4; Skills & Tools spec
+  C-24, C-26). The server accepts only an action listed in the card's
+  offered_actions (ToolApprovalRequiredFrame / SessionStatePendingApproval);
+  any other action gets 409 "This choice is not available for this
+  request." and nothing is stored. The body carries only the action,
+  duration and the bash scope; the client never sends a skill key or
+  revision (they come from the pending approval).
 type: object
 additionalProperties: false
 required:
@@ -14,31 +17,51 @@ properties:
     type: string
     description: >
       Action to take on this approval.
-      deny       — reject this single invocation.
-      allow_once — allow this single invocation only, no grant recorded.
-      allow      — allow this invocation AND record a session-scoped grant
-      per `scope` below so future matching calls in the same session
-      auto-approve without re-prompting. Refused with 400 for an
-      always-ask tool (today exactly set_channel_outbound): its approvals
-      are never remembered, so only allow_once, deny and cancel apply
-      (channels spec FR-038).
-      cancel    — dismiss this approval without approving the invocation.
-      It remains a distinct wire value from deny.
+      deny — reject this single invocation.
+      allow_once — allow this single invocation only; nothing is recorded.
+      allow_for — allow this invocation AND record a timed allowance for
+      the agent named on the card, for `duration` (C-26). On an ordinary
+      tool card it covers the whole tool; on a bash card the exact command
+      or command family per `scope`; on a pre-flight card the path or
+      addresses the card named; on a skill permission card the skill's
+      permission part. Never offered for an always-ask tool (today exactly
+      set_channel_outbound; answered with 400, checked first) or for an
+      exact-action tool (environment_setup, request_mount, send_email,
+      browser_evaluate, set_config; answered with 409).
+      cancel — dismiss this approval without approving the invocation;
+      distinct from deny, stores nothing.
+      approve_version — store a trust approval of the card's skill revision
+      and release this load (skill trust card).
+      approve_version_allow_for — store the trust approval and a timed
+      allowance of the skill's permission part for `duration`, then release
+      the load (skill combined card).
+      The former value "allow" is refused with 400 "This choice is no
+      longer offered. Choose Approve Once or a time limit."
     enum:
       - deny
       - allow_once
-      - allow
+      - allow_for
       - cancel
+      - approve_version
+      - approve_version_allow_for
     example: allow_once
+  duration:
+    $ref: './ApprovalAllowDuration.yaml'
+    x-go-type: ApprovalAllowDuration
+    description: >
+      Length of the timed allowance (C-26). Required when action is
+      allow_for or approve_version_allow_for (missing or another value →
+      400 "Choose 1 hour, 3 hours or 1 day."); refused for every other
+      action (400 "A time limit applies only to Allow for.").
   scope:
     type: string
     enum:
       - exact
       - prefix
     description: >
-      Grant scope (ADR-092 D4/FR-024). Present only when action is "allow";
-      ignored otherwise. "exact" (default when omitted) — command text +
-      cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a
+      Allowance scope for a bash card (ADR-092 D4/FR-024; C-26). Present
+      only when action is "allow_for"; ignored otherwise. "exact" (default when omitted) — command text +
+      cwd. "prefix" — a
       new {binary, arg_prefix} grant, ignores cwd, token-boundary matched
       (e.g. "npm run test" does not match "npm run testfoo").
       run_in_background is a separate match dimension for both scopes and
@@ -46,14 +69,14 @@ properties:
       recorded tool-call args.
 
       Not meaningful for a D7 (filesystem) or D8 (network) pre-flight
-      escalation shown via the same dialog — approving one of those records
-      the path-widening or network-widening grant the frame described, not
-      an exact/prefix command grant; `scope` is ignored for those approvals.
+      escalation shown via the same dialog — a time choice on one of those
+      records the path-widening or network-widening allowance the frame
+      described, not an exact/prefix command allowance; `scope` is ignored for those approvals.
 
       When the pending approval covers a chained command (more than one
       entry in ToolApprovalRequiredFrame.segments), "prefix" is not
-      available: the server records an exact grant for the whole chain
+      available: the server records an exact allowance for the whole chain
       and reports scope "exact" in ToolApprovalResponse. The server never
-      records a prefix grant it did not offer (see
+      records a prefix allowance it did not offer (see
       CommandSegmentInfo.prefix_available).
     example: exact

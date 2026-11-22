@@ -1,0 +1,26 @@
+title: AgentSkillsCfg
+description: >
+  An agent's own skill permissions (Skills & Tools spec C-4): sparse
+  overrides that can only make a skill stricter than its global permission
+  (strictest wins at run time). A key not listed follows the global value.
+  Keys follow the known-skill-key rule (C-23): an installed skill id, or
+  project:<workspace>/<slug> for a project skill of a workspace the agent is
+  mounted on.
+type: object
+additionalProperties: false
+required:
+  - policies
+properties:
+  policies:
+    type: object
+    description: >
+      Skill key to the agent's own permission. On PUT /agents/{id}/tools this
+      is the complete set of the agent's skill overrides: a key not listed is
+      removed, and {} clears every override. null for the map or a value is
+      refused with 400 naming it.
+    additionalProperties:
+      $ref: './ToolPolicy.yaml'
+      x-go-type: ToolPolicy
+    example:
+      deep-research: deny
+      project:w1/notes: ask

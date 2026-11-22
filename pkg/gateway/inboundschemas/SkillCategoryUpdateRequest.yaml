@@ -1,0 +1,16 @@
+title: SkillCategoryUpdateRequest
+description: >
+  Request body of PUT /api/v1/skills/{name}/category (Skills & Tools spec
+  C-21): choose the category of a skill stored as uncategorised. Allowed
+  once; a skill whose category is already set is refused with 409 "The
+  category is set at install and cannot be changed."
+type: object
+additionalProperties: false
+required:
+  - category
+properties:
+  category:
+    $ref: './SkillCategory.yaml'
+    x-go-type: SkillCategory
+example:
+  category: research

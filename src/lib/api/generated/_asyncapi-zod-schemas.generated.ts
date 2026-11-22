@@ -45,8 +45,8 @@ export const RoomRef = z
 
 export const WorkflowStart = z
   .object({
-    workflow: z.enum(["W1", "W18"]),
-    target_workspace_id: z.string().min(1).max(128),
+    workflow: z.enum(["W1", "W5", "W18"]),
+    target_workspace_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -912,6 +912,17 @@ export const CommandSegmentInfo = z
   })
   .strict();
 
+export const ToolApprovalSkill = z
+  .object({
+    key: z.string().min(1),
+    name: z.string().min(1),
+    display_name: z.string(),
+    revision: z.string().regex(/^[a-f0-9]{64}$/),
+    unverified: z.boolean(),
+    open_checks: z.array(z.enum(["permission", "trust"])).min(1),
+  })
+  .strict();
+
 export const ToolApprovalRequiredFrame = z
   .object({
     root_session_id: z.string().min(1).max(255).optional(),
@@ -929,6 +940,9 @@ export const ToolApprovalRequiredFrame = z
     expires_in_ms: z.number().int().min(0).max(86400000),
     workspace_id: z.string().min(1).max(128).optional(),
     segments: z.array(CommandSegmentInfo).optional(),
+    offered_actions: z.array(z.enum(["allow_once", "allow_for", "deny", "cancel", "approve_version", "approve_version_allow_for"])).min(1),
+    allow_durations: z.array(z.enum(["1h", "3h", "1d"])),
+    skill: ToolApprovalSkill.optional(),
   })
   .strict();
 
@@ -1022,6 +1036,9 @@ export const SessionStatePendingApproval = z
     agent_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
     workspace_id: z.string().min(1).max(128).optional(),
+    offered_actions: z.array(z.enum(["allow_once", "allow_for", "deny", "cancel", "approve_version", "approve_version_allow_for"])).min(1),
+    allow_durations: z.array(z.enum(["1h", "3h", "1d"])),
+    skill: ToolApprovalSkill.optional(),
   })
   .strict();
 

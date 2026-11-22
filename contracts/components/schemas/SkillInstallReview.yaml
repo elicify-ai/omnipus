@@ -1,0 +1,91 @@
+title: SkillInstallReview
+description: >
+  Response of POST /api/v1/skills/install/review (Skills & Tools spec C-13):
+  the skill has been downloaded and unpacked into staging, not published.
+  The person reviews this exact revision; POST /skills/install with this
+  review_id publishes exactly the staged folder. A review lives 15 minutes.
+  A checksum mismatch never produces a review (422).
+type: object
+additionalProperties: false
+required:
+  - review_id
+  - name
+  - version
+  - revision
+  - verification
+  - verified
+  - suggested_category
+  - replaces_existing
+  - has_local_changes_to_replace
+  - expires_at
+properties:
+  review_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Opaque id of this review; it is also the id of the install operation (GET /skills/install/review/{review_id}).
+    example: rev_7f3a9c
+  name:
+    type: string
+    minLength: 1
+    description: Slug of the staged skill.
+    example: weather
+  version:
+    type: string
+    description: Version of the staged skill as declared by its source (an opaque display label).
+    example: "1.2.0"
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+    description: Content revision of the staged folder (the same revision function as Skill.revision).
+  verification:
+    type: string
+    enum:
+      - matched
+      - no_registry_hash
+      - mismatch
+      - unavailable
+    description: >
+      Result of the registry hash check: matched = the archive matched the
+      registry's hash; no_registry_hash = the registry publishes none;
+      unavailable = the registry did not answer the lookup. mismatch is part
+      of the vocabulary but a mismatching archive is refused at review time
+      with 422, so a returned review never carries it.
+    example: matched
+  verified:
+    type: boolean
+    description: True only when verification is matched. An unverified skill follows the trust choice.
+    example: true
+  suggested_category:
+    type: string
+    nullable: true
+    enum:
+      - tools
+      - business
+      - development
+      - testing_security
+      - data_ai
+      - devops
+      - documentation
+      - content_media
+      - research
+      - lifestyle
+      - databases
+      - blockchain
+      - uncategorised
+    description: >
+      The file's metadata.category when it is a valid SkillCategory (same
+      values); null otherwise.
+    example: research
+  replaces_existing:
+    type: boolean
+    description: True when a skill with this name is already installed and would be replaced.
+    example: false
+  has_local_changes_to_replace:
+    type: boolean
+    description: True when the installed skill this would replace has local changes (installing needs replace_local_changes).
+    example: false
+  expires_at:
+    type: string
+    format: date-time
+    description: When the staged review expires and is removed.
+    example: "2026-11-22T10:15:00Z"

@@ -1,0 +1,33 @@
+title: SkillTrustApproval
+description: >
+  A stored trust approval of one revision of an unverified skill (Skills &
+  Tools spec C-24), returned by POST /api/v1/skills/{name}/trust-approval.
+  Every field is server-derived. Stored in the protected system area
+  ($OMNIPUS_HOME/system/skill-trust-approvals.json), one record per skill
+  and revision; a changed revision needs a new approval.
+type: object
+additionalProperties: false
+required:
+  - key
+  - revision
+  - approved_by
+  - approved_at
+properties:
+  key:
+    type: string
+    minLength: 1
+    description: The skill's permission key (C-23).
+    example: notes-helper
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+    description: The approved content revision.
+  approved_by:
+    type: string
+    minLength: 1
+    description: The signed-in person who approved it.
+    example: daniel
+  approved_at:
+    type: string
+    format: date-time
+    description: When the approval was stored.
+    example: "2026-11-22T09:30:00Z"

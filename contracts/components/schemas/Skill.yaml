@@ -11,6 +11,8 @@ required:
   - verified
   - status
   - has_local_changes
+  - category
+  - trust_approved
 additionalProperties: false
 properties:
   has_local_changes:
@@ -24,6 +26,23 @@ properties:
       unreadable. Always false for built-ins.
   revision:
     $ref: './ConfigurationRevision.yaml'
+    description: >
+      Content revision of the installed folder (pkg/skills/capture.go
+      ContentRevision). Server-derived; ignored if a client sends it (C-5).
+  category:
+    $ref: './SkillCategory.yaml'
+    x-go-type: SkillCategory
+    description: >
+      Skills & Tools spec C-5. Set at install (or from the skill's own
+      metadata.category for a built-in skill), stored in Omnipus's own data,
+      never in the skill file. A skill stored as uncategorised can have it
+      chosen once (PUT /skills/{name}/category, C-21).
+  trust_approved:
+    type: boolean
+    description: >
+      Skills & Tools spec C-24: true when the current revision has a stored
+      trust approval. Server-derived; ignored if a client sends it.
+    example: false
   persistence_status:
     $ref: './ConfigurationPersistenceStatus.yaml'
   activation_status:
@@ -73,8 +92,10 @@ properties:
   verified:
     type: boolean
     description: >
-      True when the skill has been verified by the Omnipus team.
-      Unverified skills require explicit trust grant before use.
+      Skills & Tools spec C-5: true for a built-in skill, or for a skill
+      whose install was checked against a registry hash AND whose folder has
+      no local changes since; false otherwise. Unverified skills follow the
+      skill trust setting (allow / ask / deny, C-3).
     example: true
   status:
     type: string

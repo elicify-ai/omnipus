@@ -1,0 +1,64 @@
+title: AgentSkillEntry
+description: >
+  One skill row of an agent's Tools tab (AgentToolsResponse.skills; Skills &
+  Tools spec C-4): the skill's global permission, the agent's own override
+  and the effective permission after strictest-wins, the trust floor for an
+  unverified skill and God Mode. Listed for skills granted to the agent and
+  for the project skills of the workspaces it is mounted on.
+type: object
+additionalProperties: false
+required:
+  - key
+  - name
+  - display_name
+  - granted
+  - project_workspace
+  - configured_policy
+  - global_policy
+  - effective_policy
+  - unverified
+properties:
+  key:
+    type: string
+    minLength: 1
+    description: Permission key (C-23) — the lower-case skill id, or project:<workspace>/<slug>.
+    example: deep-research
+  name:
+    type: string
+    minLength: 1
+    description: The skill's slug.
+    example: deep-research
+  display_name:
+    type: string
+    description: Human-readable skill name.
+    example: Deep Research
+  granted:
+    type: boolean
+    description: True when the skill is granted to the agent. Always false for a project skill, whose authority is the workspace mount.
+    example: true
+  project_workspace:
+    type: string
+    nullable: true
+    description: The workspace id of a project skill; null for an installed skill.
+    example: null
+  configured_policy:
+    type: string
+    nullable: true
+    enum: [allow, ask, deny]
+    description: The agent's own stored override for this skill; null when it has none and follows the global value.
+    example: null
+  global_policy:
+    $ref: './ToolPolicy.yaml'
+    x-go-type: ToolPolicy
+    description: The skill's global permission (PermissionSettings.skill_policies).
+  effective_policy:
+    $ref: './ToolPolicy.yaml'
+    x-go-type: ToolPolicy
+    description: >
+      What applies to this agent's loads: the strictest of the global value and
+      the override, then the trust floor for an unverified skill, with God
+      Mode lifting only a global ask.
+  unverified:
+    type: boolean
+    description: True when the skill is unverified (C-5); project skills always are.
+    example: false

@@ -92,3 +92,16 @@ properties:
         items:
           $ref: './AgentToolsMcpServerBinding.yaml'
           x-go-type: AgentToolsMcpServerBinding
+  skills:
+    $ref: './AgentSkillsCfg.yaml'
+    x-go-type: AgentSkillsCfg
+    description: >
+      Skills & Tools spec C-4. Omitted: the agent skill overrides stay
+      unchanged. skills.policies {}: clear every skill override. Otherwise
+      skills.policies is the complete set of skill overrides (a key not
+      listed is removed). A skills-only request is {revision,
+      override_names: [], skills: {policies: ...}} with no builtin.
+      override_names naming a tool the request does not supply gets 400
+      "override_names names tools that are not in this request.". Keys
+      follow C-23 for an agent; null for skills, policies or a value gets
+      400 naming it.

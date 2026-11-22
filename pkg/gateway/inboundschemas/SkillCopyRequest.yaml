@@ -13,3 +13,9 @@ properties:
     pattern: '^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$'
     description: Slug of the new skill (letters, digits and single hyphens).
     example: "plan-copy"
+  category:
+    $ref: './SkillCategory.yaml'
+    x-go-type: SkillCategory
+    description: >
+      Skills & Tools spec C-21. Category of the new copy. Absent: the
+      source skill's category.
