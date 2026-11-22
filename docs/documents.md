@@ -110,9 +110,14 @@ When an agent opens a PDF with `read_file` (without asking for a line range),
 its model receives the PDF in the same three forms as the table above: the
 whole PDF, images of pages 1–10 with a note naming the next batch to request
 with `preview_document`, or the text. `read_file` shows you no page images in
-the chat; only `preview_document` does. A file that ends in `.pdf` but is not
-a PDF, or a PDF whose text cannot be extracted, is read the way `read_file`
-reads any other file.
+the chat; only `preview_document` does. If a file starts like a PDF (with
+`%PDF-`) but its text cannot be extracted, for example because it is damaged
+or is a scan with no text, `read_file` returns an error saying the text could
+not be extracted. It tries this once and never returns the file's raw contents
+as text; the model then gets no PDF and no page images from that call. A file
+whose name ends in `.pdf` but that does not start like a PDF is not treated as
+a PDF here: `read_file` handles it like any other file with that name (see
+`read_file` in the [built-in tools reference](reference/built-in-tools.md)).
 
 When you attach a PDF to a message and the agent's model reads images but not
 PDFs, the model receives the PDF's text, images of its first pages, and the
