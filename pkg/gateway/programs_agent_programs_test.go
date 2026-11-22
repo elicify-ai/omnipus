@@ -86,17 +86,21 @@ func pgSeedSelectedPrivate(t *testing.T, f *pgGateFixture, workspaceID, agentID,
 
 // pgGithubPresetPresent asserts the S-85 Given's first leg: the github preset
 // entry exists in the real list (presets ship under pkg/programs/presets).
-// At RED the list route does not exist and the row fatal-BLOCKs naming it.
+// The read goes through the person's BROWSER SESSION (CHECK R14: the earlier
+// helper sent the person's bearer token to this person-session-only route — a
+// correct gate answers 403, so the Given could never read the list). At RED
+// the list route does not exist and the row fatal-BLOCKs naming it.
 func pgGithubPresetPresent(t *testing.T, f *pgGateFixture) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/programs", nil)
-	pgAttach(f, req, f.token, false, false)
+	pgAttach(f, req, "", true, true)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
 	if w.Code == http.StatusNotFound {
 		routeMissing(t, w, "GET /programs (the github preset entry of the S-85 Given)", "S-85's Given / preset catalog")
 	}
-	require.Equal(t, http.StatusOK, w.Code, "the program list reads: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code,
+		"the program list reads under the person session (a bearer token gets 403): %s", w.Body.String())
 	var list map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list), "the list body decodes: %s", w.Body.String())
 	entries, _ := list["entries"].([]any)
@@ -133,10 +137,29 @@ func pgCreateProgramEntry(t *testing.T, f *pgGateFixture, body string) map[strin
 }
 
 // pgSwitchProgramOn switches one program on for Dev through the person
-// browser session (FR-007's only allowed caller).
+// browser session (FR-007's only allowed caller), preserving the programs
+// already on: the PUT carries the UNION of Dev's current list and the new id
+// (CHECK R14: the earlier singleton list REPLACED the agent's programs, so
+// the second switch-on silently turned the first entry off and the S-85 edit
+// Given never contained both entries). A refused switch still proposes the
+// union — the refusal is the server's, never a wrong request body.
 func pgSwitchProgramOn(t *testing.T, f *pgGateFixture, programID string) *httptest.ResponseRecorder {
 	t.Helper()
-	return pgPutAgentPrograms(t, f, "dev", fmt.Sprintf(`{"programs":[%q]}`, programID))
+	current := pgDevPrograms(t, f)
+	seen := map[string]bool{}
+	parts := make([]string, 0, len(current)+1)
+	for _, p := range current {
+		s, ok := p.(string)
+		require.True(t, ok, "programs entries are strings: %v", p)
+		if !seen[s] {
+			seen[s] = true
+			parts = append(parts, fmt.Sprintf("%q", s))
+		}
+	}
+	if !seen[programID] {
+		parts = append(parts, fmt.Sprintf("%q", programID))
+	}
+	return pgPutAgentPrograms(t, f, "dev", `{"programs":[`+strings.Join(parts, ",")+`]}`)
 }
 
 // pgDevPrograms reads Dev's programs list through the real read schema.

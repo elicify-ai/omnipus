@@ -29,13 +29,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// pgAsyncResult joins a launched operation and caches its error, so the body
+// and cleanup can both join it (the cached-result pattern of CHECK R03: a
+// one-shot channel received by the body and again by cleanup hangs).
+type pgAsyncResult struct {
+	done   chan struct{}
+	result error
+}
+
+func pgLaunchAsync(op func() error) *pgAsyncResult {
+	r := &pgAsyncResult{done: make(chan struct{})}
+	go func() {
+		r.result = op()
+		close(r.done)
+	}()
+	return r
+}
+
+func (r *pgAsyncResult) wait() error { <-r.done; return r.result }
+
 // pgBusyHolder pauses a second Store object's writer INSIDE its transaction,
 // after its in-lock read (the FR-049 seam, spec R5-N1). The hook acts only on
 // its first engagement — the holder's — so the paste's own transaction is
 // never delayed by the seam once the holder is inside. enter receives the
 // hold channel; closing it releases the holder. Returns the hold channel and
-// the holder's completion channel.
-func pgBusyHolder(t *testing.T, holder *credentials.Store, enter func(hold chan struct{})) (chan struct{}, chan error) {
+// the holder's cached-result handle.
+func pgBusyHolder(t *testing.T, holder *credentials.Store, enter func(hold chan struct{})) (chan struct{}, *pgAsyncResult) {
 	t.Helper()
 	hold := make(chan struct{})
 	engaged := make(chan struct{}, 1)
@@ -59,8 +78,7 @@ func pgBusyHolder(t *testing.T, holder *credentials.Store, enter func(hold chan 
 		enter(hold)
 	}
 	t.Cleanup(func() { credentials.TransactHook = nil })
-	done := make(chan error, 1)
-	go func() { done <- holder.Set("BUSY_PROBE", "x") }()
+	done := pgLaunchAsync(func() error { return holder.Set("BUSY_PROBE", "x") })
 	select {
 	case <-engaged:
 	case <-time.After(2 * time.Second):
@@ -68,6 +86,17 @@ func pgBusyHolder(t *testing.T, holder *credentials.Store, enter func(hold chan 
 	}
 	credentials.TransactHook = func(string) {} // inert: the paste's own transaction must not pause
 	return hold, done
+}
+
+// pgJoinHolder joins the holder's cached-result handle within the grace
+// period (bounded — never an unbounded cleanup hang).
+func pgJoinHolder(t *testing.T, holder *pgAsyncResult, grace time.Duration, what string) {
+	t.Helper()
+	select {
+	case <-holder.done:
+	case <-time.After(grace):
+		t.Errorf("%s did not finish within %s (leaked goroutine)", what, grace)
+	}
 }
 
 func TestProgramSave_BusyStore(t *testing.T) {
@@ -81,13 +110,11 @@ func TestProgramSave_BusyStore(t *testing.T) {
 	t.Cleanup(holder.Close)
 
 	t.Run("busy_6s_holder_answers_503_after_the_bound", func(t *testing.T) {
-		var releasedOnce bool
+		var releaseOnce sync.Once
 		hold, holderDone := pgBusyHolder(t, holder, func(h chan struct{}) { <-h })
 		t.Cleanup(func() {
-			if !releasedOnce {
-				close(hold)
-				<-holderDone
-			}
+			releaseOnce.Do(func() { close(hold) })
+			pgJoinHolder(t, holderDone, 10*time.Second, "the 6 s holder")
 		})
 
 		// The person pastes while the holder is inside its transaction.
@@ -102,7 +129,7 @@ func TestProgramSave_BusyStore(t *testing.T) {
 		require.GreaterOrEqual(t, elapsed, 4500*time.Millisecond, "the paste waited the 5 s bound")
 		require.LessOrEqual(t, elapsed, 5500*time.Millisecond, "the bound is 5 s ± 0.5 s (FR-049)")
 
-		row := pgProgramEntryByID(t, f, "github")
+		row := pgConnection(t, pgProgramEntryByID(t, f, "github"))
 		require.Equal(t, "connected", row["state"], "GitHub is still connected")
 		require.Equal(t, "octocat", row["account_label"], "the old token is still in use")
 		require.Equal(t, float64(1), row["generation"], "generation is still 1")
@@ -111,24 +138,36 @@ func TestProgramSave_BusyStore(t *testing.T) {
 		// Release the holder; 2 s later nothing of the paste is written (the
 		// entry is still connected gen 1; the holder's own unrelated write is
 		// the only new state).
-		close(hold)
-		releasedOnce = true
-		require.NoError(t, <-holderDone, "the holder completes after release")
+		releaseOnce.Do(func() { close(hold) })
+		require.NoError(t, holderDone.wait(), "the holder completes after release")
 		time.Sleep(2 * time.Second)
-		after := pgProgramEntryByID(t, f, "github")
+		after := pgConnection(t, pgProgramEntryByID(t, f, "github"))
 		require.Equal(t, "connected", after["state"], "still connected 2 s after release")
 		require.Equal(t, float64(1), after["generation"], "the paste never landed, even late")
 		require.Equal(t, baselineStarts, f.ghStarted(), "no late check started either")
 	})
 
 	t.Run("holder_released_after_1s_paste_succeeds_generation_2", func(t *testing.T) {
-		_, holderDone := pgBusyHolder(t, holder, func(chan struct{}) { time.Sleep(1 * time.Second) })
+		// CHECK R14: the fake accepts BOTH tokens — the Given's
+		// tok_valid_12345 and the pasted tok_new_67890 (the row reused the
+		// octocat-only fake, so a correct paste check ended check_failed,
+		// never connected).
+		shBody, cmdBody := pgFakeGhAccounts(map[string]string{
+			"tok_valid_12345": "octocat", "tok_new_67890": "hubot"})
+		pgInstallFakeGh(t, f, shBody, cmdBody)
+		hold2, holderDone2 := pgBusyHolder(t, holder, func(chan struct{}) { time.Sleep(1 * time.Second) })
+		t.Cleanup(func() {
+			close(hold2) // the fixed 1 s holder ignores the hold; closing is a no-op
+			pgJoinHolder(t, holderDone2, 10*time.Second, "the 1 s holder")
+		})
 		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
 			`{"value":"tok_new_67890"}`)
 		require.Equal(t, http.StatusOK, w.Code,
 			"the paste succeeds when the holder releases within the bound: %d %s", w.Code, w.Body.String())
 		entry := pgPollEntryState(t, f, "github", "connected", 15*time.Second)
-		require.Equal(t, float64(2), entry["generation"], "the successful paste is generation 2")
-		require.NoError(t, <-holderDone, "the holder's own write completed")
+		require.Equal(t, float64(2), pgConnection(t, entry)["generation"], "the successful paste is generation 2")
+		require.Equal(t, "hubot", pgConnection(t, entry)["account_label"],
+			"the pasted token's check really ran (the fake maps it to hubot)")
+		require.NoError(t, holderDone2.wait(), "the holder's own write completed")
 	})
 }

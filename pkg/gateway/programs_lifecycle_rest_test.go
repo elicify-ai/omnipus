@@ -159,16 +159,28 @@ func pgEntryJSON(e map[string]any) string {
 	return string(b)
 }
 
-// pgPollEntryState polls GET /programs until the entry reaches the wanted
-// state (the async check states end within seconds under the fake gh) and
-// returns the entry.
+// pgConnection decodes the entry's nested `connection` (ProgramConnection:
+// state, generation, account_label, checked_at, message — rev 8 contract
+// table). CHECK R07: the contract NESTS the connection lifecycle under
+// `connection`; flat reads could never be satisfied by a correct schema, so
+// every state/generation/label/message read goes through here.
+func pgConnection(t *testing.T, entry map[string]any) map[string]any {
+	t.Helper()
+	conn, ok := entry["connection"].(map[string]any)
+	require.True(t, ok, "ProgramEntry carries its nested connection (rev 8 contract table): %s", pgEntryJSON(entry))
+	return conn
+}
+
+// pgPollEntryState polls GET /programs until the entry's nested connection
+// reaches the wanted state (the async check states end within seconds under
+// the fake gh) and returns the entry.
 func pgPollEntryState(t *testing.T, f *pgGateFixture, id, want string, within time.Duration) map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	var last map[string]any
 	for {
 		last = pgProgramEntryByID(t, f, id)
-		if last["state"] == want {
+		if pgConnection(t, last)["state"] == want {
 			return last
 		}
 		if time.Now().After(deadline) {
@@ -194,9 +206,14 @@ func pgConnectGithub(t *testing.T, f *pgGateFixture) map[string]any {
 }
 
 func TestProgramCredential_SaveCheckStates(t *testing.T) {
-	f := pgPersonAPI(t)
+	// Each scenario gets its OWN fixture (CHECK R07: the shared fixture
+	// leaked state between independent scenarios — S-03's nothing-ran count
+	// counted S-01's check, S-05's generation 1 followed several successful
+	// saves, and S-36/S-93 both created Acme in one store). S-51→S-52→S-53 in
+	// TestProgramReplaceCheckDisconnect is the one deliberate sequence.
 
 	t.Run("S01_valid_token_connects", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		shBody, cmdBody := pgFakeGhAccounts(map[string]string{"tok_valid_12345": "octocat"})
 		pgInstallFakeGh(t, f, shBody, cmdBody)
 		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
@@ -204,15 +221,16 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "PUT /programs/github/credential (save the token)", "S1 contract table / S-01")
 		}
-		// S-01 Then: state checking, generation 1; a later GET /programs has
-		// state connected, account_label octocat.
+		// S-01 Then: connection state checking, generation 1; a later GET
+		// /programs has connection state connected, account_label octocat.
 		require.Equal(t, http.StatusOK, w.Code, "the save is processed: %s", w.Body.String())
 		var saved map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &saved), "the save answers ProgramEntry: %s", w.Body.String())
-		require.Equal(t, "checking", saved["state"], "the save answers state checking")
-		require.Equal(t, float64(1), saved["generation"], "the first save is generation 1")
+		savedConn := pgConnection(t, saved)
+		require.Equal(t, "checking", savedConn["state"], "the save answers connection state checking")
+		require.Equal(t, float64(1), savedConn["generation"], "the first save is generation 1")
 		entry := pgPollEntryState(t, f, "github", "connected", 15*time.Second)
-		require.Equal(t, "octocat", entry["account_label"], "the check stored the account label octocat")
+		require.Equal(t, "octocat", pgConnection(t, entry)["account_label"], "the check stored the account label octocat")
 		// And: no response contains tok_valid_12345.
 		require.NotContains(t, w.Body.String(), "tok_valid_12345", "the save response never carries the token")
 		listBody := pgProgramsSessionCall(t, f, http.MethodGet, "/programs", "")
@@ -220,6 +238,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 	})
 
 	t.Run("S03_program_missing_saved_not_checked", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// Given NO gh on the gateway PATH: an empty PATH segment set wins over
 		// the fixture's fake (the subtest's t.Setenv scopes to this row).
 		t.Setenv("PATH", t.TempDir())
@@ -230,12 +249,13 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		}
 		require.Equal(t, http.StatusOK, w.Code, "the save is processed: %s", w.Body.String())
 		entry := pgPollEntryState(t, f, "github", "saved_not_checked", 15*time.Second)
-		require.Equal(t, "Saved, not checked: gh was not found on this computer.", entry["message"],
+		require.Equal(t, "Saved, not checked: gh was not found on this computer.", pgConnection(t, entry)["message"],
 			"S-03's verbatim reason: %s", pgEntryJSON(entry))
-		require.Equal(t, 0, f.ghStarted(), "nothing ran (no gh exists)")
+		require.Equal(t, 0, f.ghStarted(), "nothing ran (no gh exists; own fixture)")
 	})
 
 	t.Run("S04_check_rejected_check_failed", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		shBody, cmdBody := pgFakeGhAccounts(map[string]string{"tok_valid_12345": "octocat"})
 		pgInstallFakeGh(t, f, shBody, cmdBody) // 401s for any other token
 		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
@@ -245,35 +265,49 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		}
 		require.Equal(t, http.StatusOK, w.Code, "the save is processed: %s", w.Body.String())
 		entry := pgPollEntryState(t, f, "github", "check_failed", 15*time.Second)
-		require.Equal(t, `The account check failed. GitHub said: "HTTP 401: Bad credentials".`, entry["message"],
+		require.Equal(t, `The account check failed. GitHub said: "HTTP 401: Bad credentials".`, pgConnection(t, entry)["message"],
 			"S-04's verbatim message with GitHub's own words: %s", pgEntryJSON(entry))
-		_, hasLabel := entry["account_label"]
+		_, hasLabel := pgConnection(t, entry)["account_label"]
 		require.False(t, hasLabel, "a rejected check stores no account label: %s", pgEntryJSON(entry))
 	})
 
 	t.Run("S05_store_failure_keeps_previous_token", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// Given connected (generation 1) — real connect with the octocat fake.
 		entry := pgConnectGithub(t, f)
-		require.Equal(t, float64(1), entry["generation"], "instrument: the Given is generation 1")
+		require.Equal(t, float64(1), pgConnection(t, entry)["generation"], "instrument: the Given is generation 1")
 		// The next store write fails: the data directory goes read-only, so
 		// the commit's atomic write cannot create its temp file (the
 		// injection of test-disputes E6 — a real write failure, not a mock).
 		t.Cleanup(func() { _ = os.Chmod(f.api.homePath, 0o700) })
 		require.NoError(t, os.Chmod(f.api.homePath, 0o500), "instrument: the data dir is write-blocked")
+		// CHECK R14: the instrument is CONFIRMED, not assumed — the same
+		// store the route writes through cannot write now. (A root process
+		// could defeat directory DAC; a confirmation that still succeeds says
+		// so loudly instead of silently crediting a non-blocking chmod.)
+		if err := f.store.Set("S05_instrument", "x"); err == nil {
+			t.Fatalf("BLOCKED: the write-block instrument did not hold — the fixture store could still write " +
+				"(a privileged environment defeats directory DAC); S-05 needs a real write failure at the " +
+				"store's atomic-write edge")
+		}
 		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
 			`{"value":"tok_other_67890"}`)
 		require.NoError(t, os.Chmod(f.api.homePath, 0o700), "instrument: the data dir is writable again")
+		require.NoError(t, f.store.Set("S05_instrument", "y"),
+			"instrument: the store writes again after the block is lifted")
 		require.Equal(t, http.StatusInternalServerError, w.Code,
 			"the store failure answers 500: got %d %s", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), "The token could not be saved. The previous token is still in use. Try again.",
 			"the keep-previous message (message table)")
 		after := pgProgramEntryByID(t, f, "github")
-		require.Equal(t, "connected", after["state"], "the row still shows connected")
-		require.Equal(t, "octocat", after["account_label"], "the row still shows octocat")
-		require.Equal(t, float64(1), after["generation"], "generation stays 1")
+		afterConn := pgConnection(t, after)
+		require.Equal(t, "connected", afterConn["state"], "the row still shows connected")
+		require.Equal(t, "octocat", afterConn["account_label"], "the row still shows octocat")
+		require.Equal(t, float64(1), afterConn["generation"], "generation stays 1")
 	})
 
 	t.Run("S06_check_timeout", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		pidFile := filepath.Join(t.TempDir(), "gh-pid")
 		shBody, cmdBody := pgFakeGhSleep(pidFile)
 		pgInstallFakeGh(t, f, shBody, cmdBody)
@@ -286,7 +320,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		// Then: within 25 s the state is check_failed with the timeout
 		// message, and the process group is gone.
 		entry := pgPollEntryState(t, f, "github", "check_failed", 25*time.Second)
-		require.Equal(t, "The account check did not finish in 20 s.", entry["message"],
+		require.Equal(t, "The account check did not finish in 20 s.", pgConnection(t, entry)["message"],
 			"S-06's verbatim timeout message: %s", pgEntryJSON(entry))
 		if runtime.GOOS == "windows" {
 			t.Log("Windows: the pgid-gone read is Unix semantics (spec H-17); the state, message and 25 s bound above are asserted")
@@ -304,6 +338,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 	})
 
 	t.Run("S36_no_check_defined_token_still_available", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// Acme has no account check: create it first (contract: 201).
 		w := pgProgramsSessionCall(t, f, http.MethodPost, "/programs",
 			`{"display_name":"Acme","program_words":["acme"],"token_variables":["ACME_TOKEN"],`+
@@ -319,26 +354,28 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 			id, _ = created["program_id"].(string)
 		}
 		require.NotEmpty(t, id, "the created entry carries its id: %s", w.Body.String())
-		require.Equal(t, "not_connected", created["state"], "a new entry lists not_connected")
+		require.Equal(t, "not_connected", pgConnection(t, created)["state"], "a new entry lists not_connected")
 		// Save without any identity check defined: saved_not_checked, and the
 		// token is available (the message table's none-branch).
 		save := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/"+id+"/credential",
 			`{"value":"acme_tok_123456"}`)
 		require.Equal(t, http.StatusOK, save.Code, "the save is processed: %s", save.Body.String())
 		entry := pgPollEntryState(t, f, id, "saved_not_checked", 15*time.Second)
-		require.Equal(t, "Saved, not checked: this program has no account check.", entry["message"],
+		require.Equal(t, "Saved, not checked: this program has no account check.", pgConnection(t, entry)["message"],
 			"the no-check reason: %s", pgEntryJSON(entry))
 		require.Equal(t, 0, f.ghStarted(), "no check ran (Acme defines none)")
 	})
 
 	t.Run("S93_second_data_recipe_executes", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// S-93: the SECOND recipe the engine executes (S-01 ran gh's). The
 		// recipe is defined only in data — an identity_check created through
 		// the generic create route — and no Go code is specific to the entry
 		// (S-37's catalog test pins the data-file half of that; this row pins
 		// the execution half): the fake `acme` prints `ex-user`, so a saved
 		// token must end connected with the account label ex-user. gh never
-		// runs.
+		// runs. Own fixture: the Acme name never collides with S-36's
+		// (CHECK R07).
 		bin := t.TempDir()
 		fake := filepath.Join(bin, "acme")
 		require.NoError(t, os.WriteFile(fake, []byte("#!/bin/sh\necho ex-user\n"), 0o755),
@@ -355,12 +392,13 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 			`{"value":"acme_tok_123456"}`)
 		require.Equal(t, http.StatusOK, save.Code, "the save is processed: %s", save.Body.String())
 		entry := pgPollEntryState(t, f, id, "connected", 15*time.Second)
-		require.Equal(t, "ex-user", entry["account_label"],
+		require.Equal(t, "ex-user", pgConnection(t, entry)["account_label"],
 			"S-93: connected with the data recipe's output: %s", pgEntryJSON(entry))
 		require.Equal(t, 0, f.ghStarted(), "the gh recipe did not run for Acme's check")
 	})
 
 	t.Run("D1_row10_body_over_the_cap_answered_413", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// D-1 row 10: a request body over 65,536 bytes is answered 413 —
 		// before any value rule runs. The boundary control is D-1 row 4's
 		// REST face: a value of exactly 16,384 bytes (the value max, body
@@ -384,13 +422,14 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 	})
 
 	t.Run("D1_row12_stale_expected_generation_conflict", func(t *testing.T) {
+		f := pgPersonAPI(t)
 		// D-1 row 12: a save whose expected_generation does not match the
 		// current generation is refused 409 with the stale-generation
 		// message, and nothing changes. The stale generation is constructed
 		// from the entry's CURRENT generation (current + 5 is never
 		// current), so the row cannot depend on the sequence state above.
 		before := pgProgramEntryByID(t, f, "github")
-		curGen, ok := before["generation"].(float64)
+		curGen, ok := pgConnection(t, before)["generation"].(float64)
 		require.True(t, ok, "the entry carries its generation: %s", pgEntryJSON(before))
 		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
 			fmt.Sprintf(`{"value":"tok_stale_111111","expected_generation":%v}`, curGen+5))
@@ -411,13 +450,15 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 func TestProgramReplaceCheckDisconnect(t *testing.T) {
 	f := pgPersonAPI(t)
 	entry := pgConnectGithub(t, f) // BLOCKED (routeMissing) at RED; connected gen 1 octocat at GREEN
-	genBefore := entry["generation"]
+	require.Equal(t, float64(1), pgConnection(t, entry)["generation"], "instrument: the sequence starts at generation 1")
 
 	// S-53's Given includes "on for Dev": switch GitHub on for Dev through the
-	// shared agent route's new programs field.
-	switchOn := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/agents/dev", `{"programs":["github"]}`)
+	// shared agent route's new programs field, carrying the revision the
+	// caller read (CHECK R14: a PUT without revision is answered 400
+	// `revision is required` — the Given must be a real accepted write).
+	switchOn := pgPutAgentPrograms(t, f, "dev", `{"programs":["github"]}`)
 	if switchOn.Code != http.StatusOK {
-		t.Fatalf("BLOCKED: the shared /api/v1/agents/dev route does not accept the programs field — required by S-53's Given and S-85 (got %d %s)", switchOn.Code, switchOn.Body.String())
+		t.Fatalf("BLOCKED: the shared /api/v1/agents/dev route does not accept the revisioned programs write — required by S-53's Given and S-85 (got %d %s)", switchOn.Code, switchOn.Body.String())
 	}
 
 	t.Run("S51_replace_generation2_label_hubot", func(t *testing.T) {
@@ -430,38 +471,45 @@ func TestProgramReplaceCheckDisconnect(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "the replace is processed: %s", w.Body.String())
 		var saved map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &saved), "the replace answers ProgramEntry: %s", w.Body.String())
-		require.Equal(t, float64(2), saved["generation"], "the replace is generation 2")
+		require.Equal(t, float64(2), pgConnection(t, saved)["generation"], "the replace is generation 2")
 		replaced := pgPollEntryState(t, f, "github", "connected", 15*time.Second)
-		require.Equal(t, "hubot", replaced["account_label"], "Connected as hubot")
+		require.Equal(t, "hubot", pgConnection(t, replaced)["account_label"], "Connected as hubot")
 		// printenv GH_TOKEN | wc -c = 15 rides the env integration harness
 		// (FR-011 runtime; S-32's row covers that surface).
 	})
 
 	t.Run("S52_check_again_failed_generation_unchanged", func(t *testing.T) {
+		// CHECK R07: the baseline is taken IMMEDIATELY before this row's
+		// operation (the earlier row compared to the generation captured
+		// before S-51's replace — legitimately stale in a deliberate
+		// sequence).
+		baseline := pgConnection(t, pgProgramEntryByID(t, f, "github"))
 		shBody, cmdBody := pgFakeGhAccounts(map[string]string{}) // 401s for everything
 		pgInstallFakeGh(t, f, shBody, cmdBody)
 		w := pgProgramsSessionCall(t, f, http.MethodPost, "/programs/github/check", `{}`)
 		require.Equal(t, http.StatusAccepted, w.Code, "the re-check is accepted: %s", w.Body.String())
 		failed := pgPollEntryState(t, f, "github", "check_failed", 15*time.Second)
-		require.Contains(t, failed["message"], "HTTP 401: Bad credentials",
+		failedConn := pgConnection(t, failed)
+		require.Contains(t, failedConn["message"], "HTTP 401: Bad credentials",
 			"the re-check failed with GitHub's words: %s", pgEntryJSON(failed))
-		require.Equal(t, genBefore, failed["generation"],
-			"a failed re-check never changes the generation: %s vs %s", failed["generation"], genBefore)
+		require.Equal(t, baseline["generation"], failedConn["generation"],
+			"a failed re-check never changes the generation: %v vs %v", failedConn["generation"], baseline["generation"])
 	})
 
 	t.Run("S53_disconnect_generation_plus_one_switch_stays_on", func(t *testing.T) {
 		// Disconnect is DELETE /programs/{id}/credential (rev 8 route table),
 		// never DELETE /programs/{id} (that is the entry delete — S-38's
 		// preset row answers 422 there).
-		before := pgProgramEntryByID(t, f, "github")
+		before := pgConnection(t, pgProgramEntryByID(t, f, "github"))
 		w := pgProgramsSessionCall(t, f, http.MethodDelete, "/programs/github/credential", "")
 		if w.Code == http.StatusNotFound {
 			routeMissing(t, w, "DELETE /programs/github/credential (disconnect)", "S1 contract table / S-53")
 		}
 		require.Equal(t, http.StatusOK, w.Code, "the disconnect is processed: %s", w.Body.String())
 		after := pgPollEntryState(t, f, "github", "not_connected", 15*time.Second)
-		require.Equal(t, before["generation"].(float64)+1, after["generation"],
-			"disconnect increments the generation: %v -> %v", before["generation"], after["generation"])
+		afterConn := pgConnection(t, after)
+		require.Equal(t, before["generation"].(float64)+1, afterConn["generation"],
+			"disconnect increments the generation: %v -> %v", before["generation"], afterConn["generation"])
 		// Dev's switch stays on (the disconnect keeps switches).
 		dev := pgProgramsSessionCall(t, f, http.MethodGet, "/api/v1/agents/dev", "")
 		require.Equal(t, http.StatusOK, dev.Code, "GET /api/v1/agents/dev: %s", dev.Body.String())
@@ -531,8 +579,13 @@ func TestProgramEntryDeleteRows(t *testing.T) {
 			"the delete is refused while the entry is on: got %d %s", del.Code, del.Body.String())
 		require.Contains(t, del.Body.String(), "Dev", "the refusal names the agent (S-35)")
 
+		// CHECK R14: the unchanged baseline is taken IMMEDIATELY BEFORE the
+		// delete — after the switch-on, whose enabled_agent_ids the refusal
+		// legitimately keeps (comparing to the create-time entry would fail
+		// a correct refusal that merely preserved the enabled state).
+		before := pgProgramEntryByID(t, f, id)
 		still := pgProgramEntryByID(t, f, id)
-		require.Equal(t, pgEntryJSON(created), pgEntryJSON(still),
+		require.Equal(t, pgEntryJSON(before), pgEntryJSON(still),
 			"S-35: Acme is still listed, unchanged")
 	})
 
