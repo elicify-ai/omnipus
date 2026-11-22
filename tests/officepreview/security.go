@@ -55,6 +55,43 @@ func TrustedOffice(t *testing.T, home, root string) string {
 	return dependency
 }
 
+// PackagedOfficeFixture stages the same fixture recipe as TrustedOffice, as
+// a PACKAGED component: the manifest is written at the slot root itself with
+// TrustPackaged and no root, and no operator-registered manifest is ever
+// written. The packaged slots are not registration locations (OF-1), and the
+// own-folder check applies only after a manifest is marked
+// operator-registered (OF-4) — TrustedOffice's positive-control resolve
+// would otherwise correctly refuse the registered manifest it staged at a
+// slot outside the own folder (observed on the merged code:
+// omnipus-scratch/office-preview-of/logs/f1-probe.log). The manifest fields
+// are exactly what the packaged-slot rows' previous registered→packaged
+// conversion produced; the positive control is the caller's "populated slot
+// is a genuinely verified component" resolve after this write, identical to
+// the renderer rows. Returns the unhashed resource path, as TrustedOffice
+// does.
+func PackagedOfficeFixture(t *testing.T, root string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(root, 0700))
+	program := []byte("#!/bin/sh\nexit 73\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "soffice"), program, 0700))
+	digest := sha256.Sum256(program)
+	hexDigest := hex.EncodeToString(digest[:])
+	listDigest := sha256.Sum256([]byte("soffice " + hexDigest + "\n"))
+	manifest := component.Manifest{
+		Schema: 1, Component: component.KindOffice, Version: "26.8.1",
+		Platform: runtime.GOOS + "-" + runtime.GOARCH, Executable: "soffice",
+		Files: map[string]string{"soffice": hexDigest}, FileListSHA256: hex.EncodeToString(listDigest[:]),
+		Trust: component.TrustPackaged, Root: "",
+		RegisteredBy: "test-operator", RegisteredAt: "2026-10-31T00:00:00Z",
+	}
+	data, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "manifest.json"), data, 0600))
+	dependency := filepath.Join(root, "unhashed-resource.txt")
+	require.NoError(t, os.WriteFile(dependency, []byte("original resource"), 0600))
+	return dependency
+}
+
 // WriterRoots invokes the REAL enumeration on both commissioned versions:
 // 3ecdd3a3e has (home,cfg), 264bd7bc7 adds the grants argument. The type
 // switch is solely a signature bridge for identical red/green assertions.

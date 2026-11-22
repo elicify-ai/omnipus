@@ -86,17 +86,15 @@ func TestOfficePreviewProtectsEveryProgramFolder(t *testing.T) {
 							if kind == component.KindPDFRenderer {
 								officepreview.RegisteredRendererFixture(t, home, root, false)
 							} else {
-								officepreview.TrustedOffice(t, home, root)
-								path := filepath.Join(component.RegisteredDir(home, kind), "manifest.json")
-								raw, err := os.ReadFile(path)
-								require.NoError(t, err)
-								var m component.Manifest
-								require.NoError(t, json.Unmarshal(raw, &m))
-								m.Root, m.Trust = "", component.TrustPackaged
-								raw, err = json.Marshal(m)
-								require.NoError(t, err)
-								require.NoError(t, os.WriteFile(filepath.Join(root, "manifest.json"), raw, 0600))
-								require.NoError(t, os.Remove(path))
+								// The slot is not a registration location (OF-1), so the
+								// packaged manifest is written directly — exactly what the
+								// renderer fixture does with register=false, and the same
+								// bytes the removed registered→packaged conversion produced.
+								// The old two-step flow staged an operator-REGISTERED
+								// manifest first, whose positive-control resolve now
+								// correctly refuses a registration outside the own folder
+								// (F1, f1-probe.log). Assertions are untouched.
+								officepreview.PackagedOfficeFixture(t, root)
 							}
 							_, problem := resolver.Resolve(kind)
 							require.Nil(t, problem, "instrument: populated slot is a genuinely verified component")
@@ -180,9 +178,15 @@ func TestOfficePreviewProtectsEveryProgramFolder(t *testing.T) {
 	})
 	if runtime.GOOS == "darwin" {
 		t.Run("case_and_unicode_identity", func(t *testing.T) {
+			// §3.9 fixture move (sanctioned class): TrustedOffice stages an
+			// operator-registered manifest and verifies it by resolving it, and
+			// that resolve refuses a registered root outside the own folder —
+			// on darwin too (f1-probe.log). Assertions are untouched; only the
+			// fixture root relocates inside the staged own folder.
+			own := t89OwnFolder(t)
 			for _, names := range [][2]string{{"OfficeCASE", "officecase"}, {"Café", "Café"}} {
 				home := t.TempDir()
-				parent := t.TempDir()
+				parent := own
 				root, alias := filepath.Join(parent, names[0]), filepath.Join(parent, names[1])
 				officepreview.TrustedOffice(t, home, root)
 				a, err := os.Stat(root)
