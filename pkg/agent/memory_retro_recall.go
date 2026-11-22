@@ -58,7 +58,8 @@ func retroRecallWindowFromRetention(ret config.OmnipusRetentionConfig) retroReca
 }
 
 // SetRetroRecallWindow sets how far back recall reads reflections, from the
-// retention setting (FR-050). Called when the agent instance is built.
+// retention setting (FR-050). Called when the agent instance is built; a
+// live source set with SetRetroRecallSource takes precedence.
 func (ms *MemoryStore) SetRetroRecallWindow(ret config.OmnipusRetentionConfig) {
 	w := retroRecallWindowFromRetention(ret)
 	ms.recallMu.Lock()
@@ -66,15 +67,33 @@ func (ms *MemoryStore) SetRetroRecallWindow(ret config.OmnipusRetentionConfig) {
 	ms.recallWindow = &w
 }
 
-// retroRecallWindowOrLegacy returns the set window, or the pre-FR-050
-// 365-day window for a store whose window was never set.
-func (ms *MemoryStore) retroRecallWindowOrLegacy() retroRecallWindow {
+// SetRetroRecallSource makes recall read the retention setting from source
+// on every search, so a retention change reaches an agent that is already
+// built without a rebuild or restart (B2, CR-08). source reports false when
+// it has no running config; the window set at build time is then used.
+func (ms *MemoryStore) SetRetroRecallSource(source func() (config.OmnipusRetentionConfig, bool)) {
 	ms.recallMu.Lock()
 	defer ms.recallMu.Unlock()
-	if ms.recallWindow == nil {
+	ms.recallSource = source
+}
+
+// retroRecallWindowOrLegacy returns the window from the live source, else
+// the set window, else the pre-FR-050 365-day window for a store whose
+// window was never set.
+func (ms *MemoryStore) retroRecallWindowOrLegacy() retroRecallWindow {
+	ms.recallMu.Lock()
+	source := ms.recallSource
+	set := ms.recallWindow
+	ms.recallMu.Unlock()
+	if source != nil {
+		if ret, ok := source(); ok {
+			return retroRecallWindowFromRetention(ret)
+		}
+	}
+	if set == nil {
 		return retroRecallWindow{days: retroRecallLegacyDays}
 	}
-	return *ms.recallWindow
+	return *set
 }
 
 // ReadRetrosForRecall returns the private room's reflections inside the

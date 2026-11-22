@@ -299,6 +299,32 @@ func (al *AgentLoop) wireMemoryRateLimiterOn(registry *AgentRegistry, limiter *t
 	}
 }
 
+// wireRetroRecallSourceOn points every agent's recall window at the running
+// config's retention setting (FR-050, B2 / CR-08): the window is read on
+// each recall search, so a retention change applies to agents that are
+// already built. Re-applied to every registry the loop publishes.
+func (al *AgentLoop) wireRetroRecallSourceOn(registry *AgentRegistry) {
+	if registry == nil {
+		return
+	}
+	source := func() (config.OmnipusRetentionConfig, bool) {
+		cfg := al.GetConfig()
+		if cfg == nil {
+			return config.OmnipusRetentionConfig{}, false
+		}
+		return cfg.Storage.Retention, true
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		agentInst, ok := registry.GetAgent(agentID)
+		if !ok || agentInst.ContextBuilder == nil {
+			continue
+		}
+		if mem := agentInst.ContextBuilder.Memory(); mem != nil {
+			mem.SetRetroRecallSource(source)
+		}
+	}
+}
+
 // resolveBoolWithDefault returns the bool value from a *bool, falling back to
 // defaultVal when the pointer is nil. Used by WireTier13Deps for config fields
 // that default true when absent.
