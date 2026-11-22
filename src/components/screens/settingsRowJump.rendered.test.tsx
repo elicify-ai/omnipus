@@ -29,17 +29,25 @@
  * stylesheet's effective cascade (src/styles/globals.css, read from disk —
  * vitest's `?raw` returns '' for a .css import): the flash must be a
  * NON-ZERO-duration, ONE-iteration animation whose keyframes change a
- * paintable property between frames (FR-075 "flashes once"), and the LAST
- * equal-specificity rule for the row target in document order — the one the
- * cascade applies to a reduced-motion user — must sit in the
- * `prefers-reduced-motion: reduce` block and set no animation (FR-075
- * "without animation"). What this still cannot see: custom-property values
- * (`--motion-duration-slow: 0s` would hide from a static read),
- * cross-specificity overrides, and rendered pixels — the authorized
- * exact-commit browser lane owns those. The DOM side (the mark on exactly
- * that row) is asserted rendered. The browser-run witness for the same legs
- * is the e2e suite's FR-075 tests (typecheck-only here; the authorized
- * exact-commit lane executes them).
+ * paintable property between frames (FR-075 "flashes once"), resolved by
+ * folding every declaration for the row target in cascade order — a `calc()`
+ * duration is EVALUATED, so an expression that resolves to zero counts as
+ * zero (CHECK R6-01/N90), and a later `animation` shorthand or
+ * `animation-duration` longhand overrides an earlier duration within a rule
+ * or across rules (CHECK R6-01/N91); under reduced motion the fold runs over
+ * ALL matching rules, so the animation the cascade would apply must resolve
+ * to none — a later declaration that re-enables it fails (CHECK R6-01/N92)
+ * (FR-075 "without animation"). The model's own limits are asserted against
+ * the shipped sheet, not assumed (expectCascadeModelApplies): no selector
+ * variant that would out-rank the fold, no `!important`, and no `@layer` or
+ * other conditional block around a row-target rule. What this still cannot
+ * see: custom-property VALUES (`--motion-duration-slow` is defined in the
+ * imported tokens file, so the shipped calc() duration reads as 'unknown' —
+ * accepted as not provably zero, never silently zero) and rendered pixels —
+ * the authorized exact-commit browser lane owns those. The DOM side (the
+ * mark on exactly that row) is asserted rendered. The browser-run witness
+ * for the same legs is the e2e suite's FR-075 tests (typecheck-only here;
+ * the authorized exact-commit lane executes them).
  *
  * RED note: the production build landed (a94f859e3a merged e717a2e3e7)
  * before this part, so these cases have no pre-change red to show — the
@@ -370,17 +378,25 @@ async function expectExactlyThisRowMarked(row: HTMLElement): Promise<void> {
 
 // ── Stylesheet-side oracle (jsdom loads no stylesheet; see the header) ────────
 //
-// Effective-cascade oracle (CHECK R5-02): the required behaviour is visual —
-// a short visible flash once, and NO animation under reduced motion — so the
-// oracle reads the cascade the browser would apply, not a source declaration.
-// jsdom computes no animation, so "effective" here means: the rules for the
-// row target, in document order, each tagged with whether it sits inside the
-// reduce media block. At equal specificity the LAST matching rule decides,
-// which is exactly the cascade outcome for both arms.
+// Effective-cascade oracle (CHECK R5-02; strengthened CHECK R6-01): the
+// required behaviour is visual — a short visible flash once, and NO animation
+// under reduced motion — so the oracle reads the cascade the browser would
+// apply, not a source declaration. jsdom computes no animation, so
+// "effective" here means: every rule for the row target in document order,
+// each tagged with its enclosing block headers, folded DECLARATION BY
+// DECLARATION — a later `animation` shorthand or `animation-duration`
+// longhand overrides an earlier duration (N91), a `calc()` duration is
+// evaluated so any expression that resolves to zero counts as zero (N90),
+// and the reduced-motion fold runs over ALL rules, so a later declaration
+// that re-enables the animation resolves the name away from none and fails
+// (N92). At equal specificity the last declaration decides — exactly the
+// cascade outcome for both arms while `expectCascadeModelApplies` holds.
 
 interface RowTargetRule {
   inReduceMedia: boolean
   body: string
+  /** The enclosing block headers (outermost first), e.g. `@media (…)`. */
+  headers: string[]
 }
 
 /** Index of the brace that closes the block opened at `open` (-1 if unbalanced). */
@@ -412,14 +428,15 @@ function rowTargetRules(css: string, selector: string): RowTargetRule[] {
     const open = m.index + m[0].length - 1
     const close = balancedClose(css, open)
     if (close === -1) break
-    hits.push({ inReduceMedia: insideReduceMedia(css, m.index), body: css.slice(open + 1, close) })
+    const headers = enclosingHeaders(css, m.index)
+    hits.push({ inReduceMedia: headers.some(isReduceMediaHeader), body: css.slice(open + 1, close), headers })
     re.lastIndex = close + 1
   }
   return hits
 }
 
-/** Whether position `at` sits inside a prefers-reduced-motion: reduce block. */
-function insideReduceMedia(css: string, at: number): boolean {
+/** The block headers enclosing position `at` (outermost first), e.g. `@media (…)`. */
+function enclosingHeaders(css: string, at: number): string[] {
   const headers: string[] = []
   let header = ''
   for (let i = 0; i < at; i++) {
@@ -434,7 +451,17 @@ function insideReduceMedia(css: string, at: number): boolean {
       header += c
     }
   }
-  return headers.some((h) => h.includes('prefers-reduced-motion') && h.includes('reduce'))
+  return headers
+}
+
+/**
+ * Whether a block header is exactly a prefers-reduced-motion: reduce
+ * condition. Matched against the parenthesised condition, not a substring:
+ * `prefers-reduced-motion: no-preference` contains the letters of "reduce"
+ * and must never count as the reduce block.
+ */
+function isReduceMediaHeader(header: string): boolean {
+  return /\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)/i.test(header)
 }
 
 /** Split a value into its top-level tokens (whitespace outside parentheses). */
@@ -457,19 +484,220 @@ function shorthandTokens(value: string): string[] {
 }
 
 /**
- * Whether a duration token means zero time. A literal `0s`/`0ms`, a calc
- * whose numeric factors are all zero, or NO duration token at all (the CSS
- * default is 0s) all animate nothing. What this cannot see: a custom
- * property that itself resolves to zero (`--motion-duration-slow: 0s`) —
- * jsdom resolves no variables; the browser lane owns computed values.
+ * A duration the reader resolved, in milliseconds — or 'unknown' when the
+ * sheet only decides the value at run time (a custom property the reader
+ * cannot resolve; see expectCascadeModelApplies). 'unknown' is NEVER
+ * silently zero: the oracle rejects only what it can PROVE is zero, and
+ * only the documented browser lane can vouch for a value the sheet defers
+ * to a variable.
  */
-function isZeroDuration(token: string): boolean {
-  if (/^(?:0+(?:\.0+)?|\.0+)(?:s|ms)$/.test(token)) return true
-  if (token.startsWith('calc(')) {
-    const numbers = token.match(/\d+(?:\.\d+)?/g) ?? []
-    return numbers.length === 0 || numbers.every((n) => Number(n) === 0)
+type DurationMs = number | 'unknown'
+
+/** One evaluated calc operand: a time in ms, a bare number, or unresolved. */
+type TimeOperand = { kind: 'ms' | 'n'; value: number } | { kind: 'unknown' }
+
+/** Addition/subtraction of like operands; a time plus a bare number is invalid and unresolved. */
+function addSub(a: TimeOperand, b: TimeOperand, op: '+' | '-'): TimeOperand {
+  if (a.kind === 'unknown' || b.kind === 'unknown') return { kind: 'unknown' }
+  if (a.kind !== b.kind) return { kind: 'unknown' }
+  return { kind: a.kind, value: op === '+' ? a.value + b.value : a.value - b.value }
+}
+
+/** Multiplication/division. A zero factor annihilates even an unresolved operand (N90). */
+function mulDiv(a: TimeOperand, b: TimeOperand, op: '*' | '/'): TimeOperand {
+  if (a.kind === 'unknown' || b.kind === 'unknown') {
+    if (op === '*' && ((a.kind === 'n' && a.value === 0) || (b.kind === 'n' && b.value === 0))) {
+      return { kind: 'ms', value: 0 }
+    }
+    return { kind: 'unknown' }
   }
-  return !/(?:s|ms)$/.test(token) || /^(?:0+(?:\.0+)?)$/.test(token)
+  if (op === '*') {
+    if (a.kind === 'ms' && b.kind === 'ms') return { kind: 'unknown' } // ms² is not a time
+    const time = a.kind === 'ms' ? a : b.kind === 'ms' ? b : null
+    if (time) return { kind: 'ms', value: time.value * (a.kind === 'n' ? a.value : b.value) }
+    return { kind: 'n', value: a.value * b.value }
+  }
+  if (b.value === 0) return { kind: 'unknown' } // division by zero is undecidable
+  if (a.kind === 'ms' && b.kind === 'n') return { kind: 'ms', value: a.value / b.value }
+  if (a.kind === 'n' && b.kind === 'n') return { kind: 'n', value: a.value / b.value }
+  return { kind: 'unknown' } // ms/ms is not a time
+}
+
+/**
+ * Evaluate a calc()'s expression the way the browser would: a sum of terms
+ * over times (`300ms`, `1s`), bare numbers and `var()` references. A `var()`
+ * is an unresolved operand — it survives only where it cannot hide a zero
+ * (multiplying it by a zero factor annihilates the product, so
+ * `calc(var(--x) * 0)` IS zero). A negative result is an invalid duration,
+ * which the browser drops — undecidable here.
+ */
+function evalTimeExpr(src: string): DurationMs {
+  const tokens = src.replace(/var\([^)]*\)/g, ' @var ').match(/@var|\d+(?:\.\d+)?(?:ms|s)?|[()+\-*/]/g)
+  if (!tokens) return 'unknown'
+  const list: string[] = tokens // narrowed alias: TS does not carry the guard into the closures below
+  let pos = 0
+  const peek = (): string | undefined => list[pos]
+  function factor(): TimeOperand {
+    const token = list[pos++]
+    if (token === undefined || token === '@var') return { kind: 'unknown' }
+    if (token === '(') {
+      const inner = expr()
+      if (list[pos++] !== ')') return { kind: 'unknown' }
+      return inner
+    }
+    if (token === '-') {
+      const operand = factor()
+      return operand.kind === 'unknown' ? operand : { kind: operand.kind, value: -operand.value }
+    }
+    if (token === '+') return factor()
+    const literal = /^(\d+(?:\.\d+)?)(ms|s)?$/.exec(token)
+    if (!literal) return { kind: 'unknown' }
+    return literal[2]
+      ? { kind: 'ms', value: Number(literal[1]) * (literal[2] === 's' ? 1000 : 1) }
+      : { kind: 'n', value: Number(literal[1]) }
+  }
+  function term(): TimeOperand {
+    let left = factor()
+    while (peek() === '*' || peek() === '/') {
+      const op = list[pos++] as '*' | '/'
+      left = mulDiv(left, factor(), op)
+    }
+    return left
+  }
+  function expr(): TimeOperand {
+    let left = term()
+    while (peek() === '+' || peek() === '-') {
+      const op = list[pos++] as '+' | '-'
+      left = addSub(left, term(), op)
+    }
+    return left
+  }
+  const result = expr()
+  if (pos !== tokens.length) return 'unknown' // unparsed remainder: undecidable
+  if (result.kind === 'unknown' || result.kind === 'n') return 'unknown'
+  return result.value < 0 ? 'unknown' : result.value
+}
+
+/**
+ * Evaluate one duration token the way the browser would: a literal time
+ * (`1s`, `300ms`, `0s`) or a `calc()` over times, numbers and `var()`
+ * references. FR-075's flash requires time that is actually non-zero, so
+ * every expression that RESOLVES to zero counts as zero — `calc(0s)`,
+ * `calc(300ms * 0)` (CHECK R6-01/N90) — not merely a token whose numerals
+ * are all zero.
+ */
+function durationMs(token: string): DurationMs {
+  const literal = /^(\d+(?:\.\d+)?)(ms|s)$/.exec(token)
+  if (literal) return literal[2] === 's' ? Number(literal[1]) * 1000 : Number(literal[1])
+  const calc = /^calc\((.*)\)$/.exec(token)
+  return calc ? evalTimeExpr(calc[1]) : 'unknown' // a bare var(...) or alien token: undecidable
+}
+
+/** A rule body's declarations, in order (comments stripped; no strings/braces — see rowTargetRules). */
+function parseDeclarations(body: string): Array<{ prop: string; value: string }> {
+  const declarations: Array<{ prop: string; value: string }> = []
+  for (const chunk of body.replace(/\/\*[\s\S]*?\*\//g, ' ').split(';')) {
+    const at = chunk.indexOf(':')
+    if (at > 0) declarations.push({ prop: chunk.slice(0, at).trim().toLowerCase(), value: chunk.slice(at + 1).trim() })
+  }
+  return declarations
+}
+
+/** The animation the cascade's declarations resolve to (the CSS initial values, to start). */
+interface AnimationState {
+  name: string
+  duration: DurationMs
+  iteration: string
+}
+
+/**
+ * Fold the rules' declarations in cascade order — document order within a
+ * rule, rule order across the sheet; the later declaration of the same
+ * longhand wins (CHECK R6-01/N91). An `animation` shorthand sets all three
+ * tracked longhands at once (its omitted components reset to the CSS
+ * initials: duration 0s, one iteration), so a later shorthand overrides
+ * earlier longhands of any of them, and a later longhand overrides an
+ * earlier shorthand's component.
+ */
+function effectiveAnimation(rules: RowTargetRule[]): AnimationState {
+  const state: AnimationState = { name: '', duration: 0, iteration: '1' }
+  for (const rule of rules) {
+    for (const declaration of parseDeclarations(rule.body)) {
+      if (declaration.prop === 'animation') {
+        const tokens = shorthandTokens(declaration.value)
+        state.name = tokens[0] ?? ''
+        const durationToken = tokens.find((t) => /^(?:\d+(?:\.\d+)?(?:s|ms)|calc\()/.test(t))
+        state.duration = durationToken ? durationMs(durationToken) : 0
+        const iteration = [...tokens].reverse().find((t) => /^\d+(?:\.\d+)?$/.test(t))
+        state.iteration = iteration ?? '1'
+      } else if (declaration.prop === 'animation-name') {
+        state.name = declaration.value
+      } else if (declaration.prop === 'animation-duration') {
+        state.duration = durationMs(declaration.value)
+      } else if (declaration.prop === 'animation-iteration-count') {
+        state.iteration = declaration.value
+      }
+    }
+  }
+  return state
+}
+
+/**
+ * The cascade model the two arms read through — the last matching DECLARATION
+ * in document order at equal specificity — holds only while the shipped
+ * sheet keeps the row target free of the constructs that would reorder it.
+ * Assert them here so a future sheet change fails HERE loudly instead of
+ * silently reading through the reader (CHECK R6-01: the limit is checked,
+ * not assumed):
+ *   1. SPECIFICITY — every use of the row-target attribute opens its own
+ *      selector and each selector list is exactly `[data-settings-row-target]`;
+ *      a compound, descendant or `#id` variant would out-rank the collected
+ *      rules and decide a different declaration than the fold reads.
+ *   2. IMPORTance — no `!important` in any row-target rule; an important
+ *      declaration beats every later normal one, inverting the fold.
+ *   3. LAYERS and other conditional rules — every enclosing block header of
+ *      a row-target rule is either nothing or exactly the
+ *      prefers-reduced-motion: reduce condition; a `@layer`, a
+ *      no-preference block or any other media query changes which rules
+ *      apply per arm, which the two folds do not model.
+ * What the reader still cannot model even with this guard, stated plainly:
+ * a custom property's VALUE (`--motion-duration-slow` is defined in the
+ * imported tokens file, so `calc(var(--motion-duration-slow) * 4)` reads as
+ * 'unknown' — accepted as not provably zero, never silently zero), computed
+ * styles and rendered pixels — the authorized exact-commit browser lane
+ * owns those.
+ */
+function expectCascadeModelApplies(css: string, rules: RowTargetRule[]): void {
+  const occurrences = [...css.matchAll(/\[data-settings-row-target\]/g)]
+  expect(occurrences.length, 'model guard premise: the sheet references the row-target attribute').toBeGreaterThan(0)
+  for (const occurrence of occurrences) {
+    const start = occurrence.index ?? 0
+    let selectorStart = start
+    while (selectorStart > 0 && !'{};'.includes(css[selectorStart - 1])) selectorStart--
+    expect(
+      css.slice(selectorStart, start).trim(),
+      'model guard (CHECK R6-01, specificity): a selector combines the row-target attribute with other simple selectors — the fold reads only the bare attribute selector',
+    ).toBe('')
+    let selectorEnd = start + occurrence[0].length
+    while (selectorEnd < css.length && !'{}'.includes(css[selectorEnd])) selectorEnd++
+    expect(css[selectorEnd], 'model guard (CHECK R6-01, specificity): the row-target attribute is used outside a rule selector').toBe('{')
+    expect(
+      css.slice(start + occurrence[0].length, selectorEnd).trim(),
+      'model guard (CHECK R6-01, specificity): a selector list groups the row-target attribute with another selector — grouped specificities are outside the fold',
+    ).toBe('')
+  }
+  for (const rule of rules) {
+    expect(
+      rule.body.includes('!important'),
+      'model guard (CHECK R6-01, importance): a row-target rule carries !important — important beats every later normal declaration, which the fold does not model',
+    ).toBe(false)
+    for (const header of rule.headers) {
+      expect(
+        isReduceMediaHeader(header),
+        `model guard (CHECK R6-01, layers): a row-target rule sits inside "${header.trim()}" — only the prefers-reduced-motion: reduce condition is modeled; a @layer, a no-preference block or any other conditional block changes which rules apply per arm`,
+      ).toBe(true)
+    }
+  }
 }
 
 /** The `@keyframes <name>` block's body (balanced), or null. */
@@ -548,40 +776,43 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       scrolled.some((el) => el === row),
       'RED (FR-075): the jump must scroll the reached row into view — the scroll ran on another element',
     ).toBe(true)
-    // "flashes once": the cascade's rule for the marked row must name an
-    // animation with a NON-ZERO duration and exactly one iteration, and the
-    // named keyframes must change a paintable property between frames —
-    // a zero-duration animation (N65) or identical transparent frames (N66)
-    // satisfy a declaration but flash nothing. Replaces the old oracle that
-    // accepted any body merely ENDING in the count 1 (FR-075 "flashes
-    // once" — CHECK R5-02); jsdom computes no animation, so this reads the
-    // effective top-level rule and its keyframes (see the section comment).
-    const normalRules = rowTargetRules(globalsCss, '[data-settings-row-target]').filter((r) => !r.inReduceMedia)
-    const animationValue = [...normalRules].reverse().map((r) => r.body.match(/animation:\s*([^;]+);/)?.[1]?.trim() ?? '').find(Boolean)
+    // "flashes once": the animation the cascade APPLIES to the marked row —
+    // folded declaration by declaration (see the section comment) — must
+    // name an animation with a NON-ZERO duration and exactly one iteration,
+    // and the named keyframes must change a paintable property between
+    // frames. A calc that RESOLVES to zero is zero (N90: calc(300ms * 0)),
+    // a later animation-duration longhand overrides the shorthand's
+    // duration (N91), a zero literal is zero (N65) and identical transparent
+    // frames paint nothing (N66) — each satisfies a mere source declaration
+    // but flashes nothing (FR-075 "flashes once", CHECK R5-02 + R6-01;
+    // jsdom computes no animation, so this reads the effective cascade).
+    const allRules = rowTargetRules(globalsCss, '[data-settings-row-target]')
+    expectCascadeModelApplies(globalsCss, allRules)
+    const normal = effectiveAnimation(allRules.filter((rule) => !rule.inReduceMedia))
     expect(
-      animationValue,
+      normal.name,
       'RED (FR-075): the mark must be mapped to an animation — the flash has no referent',
     ).toBeTruthy()
-    const tokens = shorthandTokens(animationValue as string)
-    const keyframesName = tokens[0] ?? ''
     expect(
-      /^[a-z][a-z0-9-]*$/i.test(keyframesName),
-      `FR-075: the animation shorthand must name its keyframes first, got: ${animationValue}`,
+      normal.name,
+      `FR-075: the flash animation must be enabled in normal motion, got "${normal.name}"`,
+    ).not.toBe('none')
+    expect(
+      /^[a-z][a-z0-9-]*$/i.test(normal.name),
+      `FR-075: the animation must name its keyframes, got: ${normal.name}`,
     ).toBe(true)
-    // The duration is the first time/calc token; no token means the CSS
-    // default 0s — no flash.
-    const duration = tokens.find((t) => /^(?:\d+(?:\.\d+)?(?:s|ms)|calc\()/.test(t)) ?? '0s'
     expect(
-      isZeroDuration(duration),
-      `FR-075 (CHECK R5-02): the flash must have a non-zero duration — got duration token: ${duration}`,
+      normal.duration !== 'unknown' && normal.duration === 0,
+      `FR-075 (CHECK R6-01): the flash must have a non-zero duration — the effective cascade resolves the duration to ${
+        normal.duration === 'unknown' ? 'an expression the reader cannot resolve (a var() the tokens file decides)' : `${String(normal.duration)}ms`
+      }`,
     ).toBe(false)
-    const iteration = [...tokens].reverse().find((t) => /^\d+(?:\.\d+)?$/.test(t))
     expect(
-      iteration,
-      `FR-075: the flash must run exactly once (animation iteration count 1), got: ${animationValue}`,
+      normal.iteration,
+      `FR-075: the flash must run exactly once (animation iteration count 1), got: ${normal.iteration}`,
     ).toBe('1')
-    const keyframes = keyframesBody(globalsCss, keyframesName)
-    expect(keyframes, `FR-075: the named keyframes (${keyframesName}) must exist in the stylesheet`).toBeTruthy()
+    const keyframes = keyframesBody(globalsCss, normal.name)
+    expect(keyframes, `FR-075: the named keyframes (${normal.name}) must exist in the stylesheet`).toBeTruthy()
     expect(
       framesChangeVisibleProperty(keyframes as string),
       `FR-075 (CHECK R5-02): the flash keyframes must change a visible property between frames — identical frames flash nothing`,
@@ -602,27 +833,27 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       scrolled.some((el) => el === row),
       'RED (FR-075): under reduced motion the row must still be scrolled into view',
     ).toBe(true)
-    // "without animation": the cascade's LAST word for the row target must
-    // be the reduce rule setting no animation. At equal specificity the
-    // last matching rule decides — a later normal rule that re-declares the
-    // flash (N74) would undo a reduce rule the sheet merely CONTAINS, which
-    // is what the replaced oracle accepted (any reduce-block rule saying
-    // `none`, a source declaration). FR-075's "without animation" is the
-    // effective outcome for a reduced-motion user (CHECK R5-02).
+    // "without animation": the animation the cascade would APPLY to a
+    // reduced-motion user must resolve to none. Under reduce, EVERY rule for
+    // the row target applies (the reduce block only ADDS rules), so the fold
+    // runs over all of them: a later declaration that re-enables the
+    // animation — in the same reduce rule (N92) or in a later normal rule
+    // (N74) — resolves the name away from none and fails here. Replaces the
+    // old oracle that accepted a reduce-block rule whose body merely
+    // CONTAINED `animation: none` and a "last rule" shape check (source
+    // declarations, CHECK R5-02 → CHECK R6-01); FR-075's "without animation"
+    // is the effective outcome for a reduced-motion user.
     const allRules = rowTargetRules(globalsCss, '[data-settings-row-target]')
     expect(allRules.length, 'premise: the stylesheet styles the marked row').toBeGreaterThan(0)
     expect(
-      allRules.some((r) => r.inReduceMedia),
+      allRules.some((rule) => rule.inReduceMedia),
       'the stylesheet must carry a prefers-reduced-motion: reduce rule for the marked row',
     ).toBe(true)
-    const effective = allRules[allRules.length - 1]
+    expectCascadeModelApplies(globalsCss, allRules)
+    const reduced = effectiveAnimation(allRules)
     expect(
-      effective.inReduceMedia,
-      'RED (FR-075, CHECK R5-02): under prefers-reduced-motion: reduce the LAST cascade rule for the row must be the reduce rule — a later equal-specificity rule would undo it',
-    ).toBe(true)
-    expect(
-      /animation:\s*none/.test(effective.body),
-      'RED (FR-075): under prefers-reduced-motion: reduce the row animation must be disabled — the flash would run for reduced-motion users',
+      reduced.name === '' || reduced.name === 'none',
+      `RED (FR-075): under prefers-reduced-motion: reduce the row must have NO animation — the effective cascade applies "${reduced.name}"`,
     ).toBe(true)
   })
 
