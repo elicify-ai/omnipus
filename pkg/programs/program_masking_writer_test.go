@@ -25,16 +25,15 @@ package programs
 // The sentinel is D-9's: sentinel_9f3c2a7e5b1d (L = 21 bytes).
 //
 // The per-stream, kill/timeout/read-error delivery halves of S-130 and the
-// capture-cap instrumentation of S-103 run at the integration level
-// (TestProgramMasking_Boundaries); the scenarios' fragment rules are pinned
-// here at the writer level.
+// capture-cap instrumentation are NOT proved by this direct writer suite.
+// Actual Attach -> cap is in sandbox; missing runtime paths remain individually
+// loud in TestProgramMasking_RuntimeMissing, not inferred from these unit rows.
 
 import (
 	"bytes"
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -162,57 +161,13 @@ func TestProgramMaskingWriter_Fragmentation(t *testing.T) {
 	})
 
 	t.Run("S104_timely_emission_through_a_pipe_while_open", func(t *testing.T) {
-		// S-104/CHECK F13: the read happens WHILE the stream is open, through
-		// a real pipe (a bytes.Buffer read can never prove timeliness — it is
-		// filled synchronously). The innocent prefix before a partial token
-		// must flow to the reader while the writer is still open; the token
-		// bytes the stream released raw total at most 7; the completion shows
-		// [FILTERED] and no 8-or-more-byte fragment.
-		pr, pw := io.Pipe()
-		firstChunk := make(chan string, 1)
-		restCh := make(chan []byte, 1)
-		go func() {
-			// One reader goroutine: it takes the first emitted chunk (the
-			// timeliness proof) and then drains to EOF so no later write of
-			// the masking writer can block on the pipe.
-			chunk := make([]byte, 128)
-			n, _ := pr.Read(chunk) // blocks until the masking writer emits
-			firstChunk <- string(chunk[:n])
-			rest, _ := io.ReadAll(pr)
-			restCh <- rest
-		}()
-		w := NewMaskingWriter(pw, []string{redSentinel})
-		_, err := w.Write([]byte("run ok: " + redSentinel[:10]))
-		require.NoError(t, err)
-		var first string
-		select {
-		case first = <-firstChunk:
-		case <-time.After(5 * time.Second):
-			t.Fatal("S-104: the writer released nothing while the stream was open — innocent output must flow, not queue behind a partial token")
-		}
-		require.True(t, strings.HasPrefix(first, "run ok: "),
-			"the innocent prefix is emitted while the stream is open (got %q)", first)
-		_, err = w.Write([]byte(redSentinel[10:]))
-		require.NoError(t, err)
-		require.NoError(t, w.Close())
-		require.NoError(t, pw.Close(), "the test closes the pipe's write side after the writer closed")
-		rest := <-restCh
-		full := first + string(rest)
-		require.Contains(t, full, "[FILTERED]", "the completion masks the token")
-		requireNoLeak(t, full, redSentinel)
-		emittedRaw := len(full) - len("run ok: ") - len("[FILTERED]")
-		require.LessOrEqual(t, emittedRaw, 7,
-			"hold-back: at most 7 token bytes are ever released raw (got %d)", emittedRaw)
+		testMaskingLivePipe(t)
 	})
 
-	t.Run("S103_cap_window_records_no_fragment", func(t *testing.T) {
-		// S-103's writer-level face (R4-N1/R3-N1): the recording sink sits
-		// BEFORE the 80-byte capture cap, so the cap window's bytes are
-		// exactly what the masking writer emitted first. The first 10 sentinel
-		// bytes fall inside the cap; masking must already have applied there —
-		// no 8-or-more-byte fragment may appear in the window. (The
-		// instrument check of the spec — the writer removed from
-		// programs.Attach in a test build — is CHECK's mutation probe.)
+	t.Run("writer_unit_cap_window_records_no_fragment", func(t *testing.T) {
+		// Helper-only cap window. Actual Attach -> recording sink -> real
+		// cappedBuffer is TestProgramsAttach_ForegroundCaptureCap in sandbox.
+		// This direct writer row alone is NOT the S-103 runtime instrument.
 		sink := &recordingSink{}
 		w := NewMaskingWriter(sink, []string{redSentinel})
 		_, err := w.Write([]byte(strings.Repeat("a", 70) + redSentinel[:10]))
