@@ -28,6 +28,6 @@ func TestProgramCredential_RouteSweep_MissingBoundaries(t *testing.T) {
 		t.Fatal("BLOCKED: independent registered-route-to-credential-writer reachability inventory is not connected — required by S-113/R09; names and observed generic requests cannot discover a special-payload-only writer")
 	})
 	t.Run("all_concrete_schema_paths_and_live_revisions", func(t *testing.T) {
-		t.Fatal("BLOCKED: every Programs edit/save/check/disconnect and channel/settings payload is not reconciled to generated schemas and actual read revisions — required by S-113/R09; method attempts and revision 1 do not prove valid payload coverage")
+		pgConcreteProgramsPayloads(t)
 	})
 }
