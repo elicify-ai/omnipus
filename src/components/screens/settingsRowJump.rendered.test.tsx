@@ -453,6 +453,40 @@ async function expectExactlyThisRowMarked(row: HTMLElement, groupWitness?: HTMLE
 
 // ── Stylesheet-side oracle (jsdom loads no stylesheet; see the header) ────────
 //
+// THE GRAMMAR THIS READER FULLY UNDERSTANDS (CHECK round 8 strategy ruling:
+// stop modelling more CSS — fail closed instead). Anything on the row target
+// that could change the flash and falls outside this grammar FAILS the test,
+// naming the declaration, as "unsupported by the FR-075 oracle":
+// unsupported means the row is NOT PROVEN to flash once.
+//   - Properties: the `animation` shorthand and the longhands animation-name,
+//     animation-duration, animation-delay, animation-iteration-count,
+//     animation-play-state. Any other `animation-*` property is unsupported.
+//     Non-animation properties (colors, spacing, …) do not change the flash
+//     and are ignored.
+//   - Shorthand components, in ANY order, one each (the css-animations
+//     grammar): a time — the FIRST is the duration, the SECOND the delay;
+//     the iteration count — a number or the keyword `infinite` (an explicit
+//     infinite is never the omitted one-iteration default, R7-01/N64); a
+//     play-state keyword (`running`, `paused` — a paused flash does not
+//     flash, R8-04); the reserved easing/direction/fill-mode keywords
+//     (consumed — the name may sit in any position, R7-W01/N104); and the
+//     keyframes name — the first remaining ident; a SECOND remaining ident
+//     is unsupported. Predefined keywords match ASCII-case-insensitively,
+//     as CSS does (INFINITE is infinite, R8-02/N107); a custom name keeps
+//     its case.
+//   - Times: a literal `<number>(ms|s)` (leading decimal point allowed,
+//     R7-02) or `calc()` over times, numbers, `+ - * /`, parentheses, nested
+//     `calc()` and `var()` references. The calc text must be consumed
+//     COMPLETELY — any unrecognised character or leftover is unsupported,
+//     never silently dropped (R8-05/N120).
+//   - var(): resolves from the row-target rules' OWN custom-property
+//     declarations (last wins in fold order — the element-local cascade,
+//     R8-03/N113) and then from the tokens file the sheet imports (the same
+//     cascade resolution the browser does). A referenced property declared
+//     by ANY OTHER selector in the sheet — an ancestor or sibling rule — is
+//     unsupported: the value on the marked element would depend on cascade
+//     details the reader does not model.
+//
 // Effective-cascade oracle (CHECK R5-02; strengthened CHECK R6-01): the
 // required behaviour is visual — a short visible flash once, and NO animation
 // under reduced motion — so the oracle reads the cascade the browser would
@@ -583,6 +617,12 @@ type DurationMs = number | 'unknown'
 /** Depth limit for var() chains, so a self-referencing property terminates. */
 const VAR_DEPTH_LIMIT = 8
 
+/** Custom-property values the cascade consults for var() resolution. */
+type CustomProps = ReadonlyMap<string, string>
+
+/** No element-local declarations — resolution falls through to the tokens file. */
+const NO_LOCAL_PROPS: CustomProps = new Map()
+
 /** One evaluated calc operand: a time in ms, a bare number, or unresolved. */
 type TimeOperand = { kind: 'ms' | 'n'; value: number } | { kind: 'unknown' }
 
@@ -599,30 +639,32 @@ function topLevelComma(s: string): number {
 }
 
 /** One duration operand from a VALUE the cascade supplies (a var's resolved value or fallback). */
-function timeOperandOfValue(value: string, depth: number): TimeOperand {
+function timeOperandOfValue(value: string, depth: number, props: CustomProps): TimeOperand {
   const trimmed = value.trim()
   const literal = /^((?:\d+(?:\.\d+)?|\.\d+))(ms|s)$/i.exec(trimmed)
   if (literal) return { kind: 'ms', value: Number(literal[1]) * (literal[2].toLowerCase() === 's' ? 1000 : 1) }
   if (/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed)) return { kind: 'n', value: Number(trimmed) }
-  const resolved = evalTimeExpr(trimmed, depth)
+  const resolved = evalTimeExpr(trimmed, depth, props)
   return resolved === 'unknown' ? { kind: 'unknown' } : { kind: 'ms', value: resolved }
 }
 
 /**
  * Resolve `var(name, fallback?)` the way the cascade does: the custom
- * property's value if defined (itself evaluated — it may be a time, a
- * number, a calc() or a further var()), else the fallback, else unresolved.
- * Depth-limited so a self-referencing property terminates as unresolved.
+ * property's value if defined — the row-target rules' own declarations
+ * first (the element-local cascade, R8-03), then the tokens file's root
+ * values — itself evaluated (it may be a time, a number, a calc() or a
+ * further var()); else the fallback; else unresolved. Depth-limited so a
+ * self-referencing property terminates as unresolved.
  */
-function resolveVarArgs(args: string, depth: number): TimeOperand {
+function resolveVarArgs(args: string, depth: number, props: CustomProps): TimeOperand {
   if (depth <= 0) return { kind: 'unknown' }
   const at = topLevelComma(args)
   const name = (at === -1 ? args : args.slice(0, at)).trim()
-  const custom = CUSTOM_PROPERTIES.get(name)
-  if (custom !== undefined) return timeOperandOfValue(custom, depth - 1)
+  const custom = props.get(name) ?? CUSTOM_PROPERTIES.get(name)
+  if (custom !== undefined) return timeOperandOfValue(custom, depth - 1, props)
   const fallback = at === -1 ? '' : args.slice(at + 1).trim()
   if (!fallback) return { kind: 'unknown' }
-  return timeOperandOfValue(fallback, depth - 1)
+  return timeOperandOfValue(fallback, depth - 1, props)
 }
 
 /** Addition/subtraction of like operands; a time plus a bare number is invalid and unresolved. */
@@ -655,24 +697,61 @@ function mulDiv(a: TimeOperand, b: TimeOperand, op: '*' | '/'): TimeOperand {
 /**
  * Evaluate a calc()'s expression the way the browser would: a sum of terms
  * over times (`300ms`, `1s`, `.3s` — a leading decimal point is part of the
- * number, CHECK R7-02/N98), bare numbers and `var()` references. A `var()`
- * resolves from the tokens file's custom properties (or its fallback) — the
- * same resolution the browser's cascade does — and survives as unresolved
- * only where it cannot hide a zero (multiplying it by a zero factor
- * annihilates the product, so `calc(var(--x) * 0)` IS zero). A negative
- * result is an invalid duration, which the browser drops — unresolved here,
- * and unresolved FAILS the oracle rather than guessing (see DurationMs).
- * Depth-limited so var() chains and self-references terminate.
+ * number, CHECK R7-02/N98), bare numbers, parentheses, nested `calc()` and
+ * `var()` references. A `var()` resolves from the row-target rules' own
+ * custom properties (or the tokens file's, or its fallback) — the same
+ * resolution the browser's cascade does — and survives as unresolved only
+ * where it cannot hide a zero (multiplying it by a zero factor annihilates
+ * the product, so `calc(var(--x) * 0)` IS zero). A negative result is an
+ * invalid duration, which the browser drops — unresolved here, and
+ * unresolved FAILS the oracle rather than guessing (see DurationMs). The
+ * lexer consumes the WHOLE text (CHECK R8-05/N120): a scan that skipped
+ * unrecognised characters once projected `calc(300ms + 1ms rubbish)` onto a
+ * 301ms duration — so any character that is not whitespace, a var
+ * placeholder, a number with an optional unit, a nested `calc(` or an
+ * operator makes the whole expression unresolved, and leftover after the
+ * grammar does the same. Depth-limited so var() chains terminate.
  */
-function evalTimeExpr(src: string, depth: number = VAR_DEPTH_LIMIT): DurationMs {
+function evalTimeExpr(src: string, depth: number = VAR_DEPTH_LIMIT, props: CustomProps = NO_LOCAL_PROPS): DurationMs {
   if (depth <= 0) return 'unknown'
   const varArgs: string[] = []
   const replaced = src.replace(/var\(\s*([^)]*)\)/gi, (_all, args: string) => {
     varArgs.push(args.trim())
     return ' @var '
   })
-  const tokens = replaced.match(/@var|(?:\d+(?:\.\d+)?|\.\d+)(?:ms|s)?|[()+\-*/]/gi)
-  if (!tokens) return 'unknown'
+  const tokens: string[] = []
+  let at = 0
+  while (at < replaced.length) {
+    const rest = replaced.slice(at)
+    if (rest.startsWith('@var')) {
+      tokens.push('@var')
+      at += 4
+      continue
+    }
+    const ws = /^\s+/.exec(rest)
+    if (ws) {
+      at += ws[0].length
+      continue
+    }
+    const number = /^(?:\d+(?:\.\d+)?|\.\d+)(?:ms|s)?/i.exec(rest)
+    if (number) {
+      tokens.push(number[0])
+      at += number[0].length
+      continue
+    }
+    const nestedCalc = /^calc\(/i.exec(rest)
+    if (nestedCalc) {
+      tokens.push('calc(')
+      at += nestedCalc[0].length
+      continue
+    }
+    if (/^[()+\-*/]/.test(rest)) {
+      tokens.push(rest[0])
+      at += 1
+      continue
+    }
+    return 'unknown' // an unrecognised character: the text is not a calc this reader understands
+  }
   const list: string[] = tokens // narrowed alias: TS does not carry the guard into the closures below
   let pos = 0
   let varIndex = 0 // @var tokens appear in the varArgs capture order
@@ -680,8 +759,8 @@ function evalTimeExpr(src: string, depth: number = VAR_DEPTH_LIMIT): DurationMs 
   function factor(): TimeOperand {
     const token = list[pos++]
     if (token === undefined) return { kind: 'unknown' }
-    if (token === '@var') return resolveVarArgs(varArgs[varIndex++] ?? '', depth)
-    if (token === '(') {
+    if (token === '@var') return resolveVarArgs(varArgs[varIndex++] ?? '', depth, props)
+    if (token === '(' || token === 'calc(') {
       const inner = expr()
       if (list[pos++] !== ')') return { kind: 'unknown' }
       return inner
@@ -714,7 +793,7 @@ function evalTimeExpr(src: string, depth: number = VAR_DEPTH_LIMIT): DurationMs 
     return left
   }
   const result = expr()
-  if (pos !== list.length) return 'unknown' // unparsed remainder: not evaluated
+  if (pos !== list.length) return 'unknown' // leftover after the grammar: not evaluated
   if (result.kind === 'unknown' || result.kind === 'n') return 'unknown'
   return result.value < 0 ? 'unknown' : result.value
 }
@@ -730,14 +809,14 @@ function evalTimeExpr(src: string, depth: number = VAR_DEPTH_LIMIT): DurationMs 
  * cannot evaluate returns 'unknown', which the oracle FAILS on instead of
  * guessing a value (CHECK R7-02; see DurationMs).
  */
-function durationMs(token: string): DurationMs {
+function durationMs(token: string, props: CustomProps = NO_LOCAL_PROPS): DurationMs {
   const literal = /^((?:\d+(?:\.\d+)?|\.\d+))(ms|s)$/i.exec(token)
   if (literal) return literal[2].toLowerCase() === 's' ? Number(literal[1]) * 1000 : Number(literal[1])
   const calc = /^calc\((.*)\)$/i.exec(token)
-  if (calc) return evalTimeExpr(calc[1])
+  if (calc) return evalTimeExpr(calc[1], VAR_DEPTH_LIMIT, props)
   const varRef = /^var\(([^)]*)\)$/.exec(token)
   if (varRef) {
-    const operand = resolveVarArgs(varRef[1], VAR_DEPTH_LIMIT)
+    const operand = resolveVarArgs(varRef[1], VAR_DEPTH_LIMIT, props)
     return operand.kind === 'ms' ? operand.value : 'unknown' // a bare number is no duration
   }
   return 'unknown' // an alien token: not evaluated
@@ -760,79 +839,151 @@ interface AnimationState {
   /** The shorthand's SECOND time token (the first is the duration); no oracle reads it yet. */
   delay: DurationMs
   iteration: string
+  /** `running` (the CSS initial) or `paused` — a paused flash does not flash (R8-04). */
+  playState: string
+  /**
+   * The first declaration the reader could not classify or evaluate, named
+   * in full, or null. FAIL-CLOSED (CHECK round 8 strategy ruling): the
+   * reader understands only the grammar stated at the top of this section,
+   * and anything outside it that could change the flash means the row is
+   * NOT PROVEN to flash once — both arms fail on it.
+   */
+  unsupported: string | null
 }
 
 /**
- * The `animation` shorthand's reserved keywords, by component: a bare token
- * matching one of these is its component, NEVER the keyframes name. The
- * function-valued components (cubic-bezier(), steps()) arrive as function
- * tokens and are classified by their trailing ')'.
+ * The `animation` shorthand's reserved keywords that this oracle only
+ * CONSUMES (easing, direction, fill-mode): a bare token matching one of
+ * these is its component, NEVER the keyframes name. The iteration count
+ * (`infinite`, numbers) and play-state (`running`, `paused`) components are
+ * tracked, not consumed. The function-valued components (cubic-bezier(),
+ * steps()) arrive as function tokens and are classified by their trailing
+ * ')'. All matching is ASCII-case-insensitive, as CSS predefined keywords
+ * are (INFINITE is infinite, R8-02); a custom name keeps its case.
  */
 const SHORTHAND_KEYWORDS = new Set([
   'linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', // easing functions
   'normal', 'reverse', 'alternate', 'alternate-reverse', // direction
   'forwards', 'backwards', 'both', // fill-mode
-  'running', 'paused', // play-state
-  'infinite', // iteration count
 ])
+const PLAY_STATE_KEYWORDS = new Set(['running', 'paused'])
 const TIME_TOKEN = /^(?:\d+(?:\.\d+)?|\.\d+)(?:ms|s)$/i
 const NUMBER_TOKEN = /^(?:\d+(?:\.\d+)?|\.\d+)$/
+
+/** The animation longhands the grammar models; any other animation-* is unsupported. */
+const MODELED_LONGHANDS = new Set([
+  'animation-name',
+  'animation-duration',
+  'animation-delay',
+  'animation-iteration-count',
+  'animation-play-state',
+])
 
 /**
  * Fold the rules' declarations in cascade order — document order within a
  * rule, rule order across the sheet; the later declaration of the same
  * longhand wins (CHECK R6-01/N91). An `animation` shorthand sets all the
  * tracked longhands at once (its omitted components reset to the CSS
- * initials: duration 0s, one iteration), so a later shorthand overrides
- * earlier longhands of any of them, and a later longhand overrides an
- * earlier shorthand's component.
+ * initials: duration 0s, one iteration, running), so a later shorthand
+ * overrides earlier longhands of any of them, and a later longhand
+ * overrides an earlier shorthand's component.
+ *
+ * Custom properties declared by the rules THEMSELVES are the element-local
+ * cascade (R8-03/N113): collected first (all declarations, so an earlier
+ * rule's var() sees a later rule's value, as computed-value time does),
+ * then layered over the tokens file by resolveVarArgs. A var() referenced
+ * by an animation declaration must not be declared by any OTHER selector in
+ * the sheet — such a declaration would change the element's value through
+ * cascade details the reader does not model, so it fails closed.
  */
-function effectiveAnimation(rules: RowTargetRule[]): AnimationState {
-  const state: AnimationState = { name: '', duration: 0, delay: 0, iteration: '1' }
+function effectiveAnimation(rules: RowTargetRule[], css: string): AnimationState {
+  const state: AnimationState = { name: '', duration: 0, delay: 0, iteration: '1', playState: 'running', unsupported: null }
+  const failWith = (prop: string, value: string, reason: string): void => {
+    if (state.unsupported === null) state.unsupported = `"${prop}: ${value}" ${reason} — unsupported by the FR-075 oracle`
+  }
+  const evaluate = (token: string, declaration: { prop: string; value: string }): DurationMs => {
+    const ms = durationMs(token, customProps)
+    if (ms === 'unknown') failWith(declaration.prop, declaration.value, 'carries a time the reader cannot evaluate')
+    return ms
+  }
+  // Pass 1 — the element's own custom-property values and the animation
+  // declarations, in cascade order.
+  const customProps = new Map<string, string>()
+  const animated: Array<{ prop: string; value: string }> = []
+  const varNames = new Set<string>()
   for (const rule of rules) {
     for (const declaration of parseDeclarations(rule.body)) {
-      if (declaration.prop === 'animation') {
-        // The shorthand's components may appear in ANY order (css-animations
-        // grammar: each at most once, the two times in appearance order).
-        // Classify each token by TYPE, not position: the first time is the
-        // duration, the second the delay; the iteration count is a number or
-        // the keyword `infinite` (an explicit infinite is never the omitted
-        // one-iteration default, CHECK R7-01/N64); easing, direction,
-        // fill-mode and play-state keywords and function components are
-        // consumed; and whatever remains is the keyframes name — so
-        // name-last order parses like any other (CHECK R7-W01/N104). A bare
-        // `none` names the animation (a second one is a fill-mode).
-        let name: string | null = null
-        let sawNone = false
-        const times: string[] = []
-        let iteration: string | null = null
-        for (const token of shorthandTokens(declaration.value)) {
-          if (TIME_TOKEN.test(token) || /^calc\(/i.test(token)) {
-            times.push(token)
-          } else if (NUMBER_TOKEN.test(token) || token === 'infinite') {
-            iteration = token
-          } else if (SHORTHAND_KEYWORDS.has(token.toLowerCase())) {
-            // its own component; none of them is tracked
-          } else if (token.endsWith(')')) {
-            // cubic-bezier(), steps(): a function component, never the name
-          } else if (token.toLowerCase() === 'none') {
-            if (name === null && !sawNone) name = 'none'
-            sawNone = true
-          } else {
-            name = token
-          }
-        }
-        state.name = name ?? ''
-        state.duration = times[0] ? durationMs(times[0]) : 0
-        state.delay = times[1] ? durationMs(times[1]) : 0
-        state.iteration = iteration ?? '1'
-      } else if (declaration.prop === 'animation-name') {
-        state.name = declaration.value
-      } else if (declaration.prop === 'animation-duration') {
-        state.duration = durationMs(declaration.value)
-      } else if (declaration.prop === 'animation-iteration-count') {
-        state.iteration = declaration.value
+      const { prop, value } = declaration
+      if (prop.startsWith('--')) {
+        customProps.set(prop, value)
+      } else if (prop === 'animation' || MODELED_LONGHANDS.has(prop)) {
+        animated.push(declaration)
+        for (const m of value.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)) varNames.add(m[1])
+      } else if (prop.startsWith('animation')) {
+        failWith(prop, value, 'is an animation property the reader does not model')
       }
+      // properties outside the animation grammar do not change the flash
+    }
+  }
+  // A referenced custom property must be declared only by the arm's own
+  // rules (or nowhere): a declaration on any other selector is unsupported.
+  for (const name of varNames) {
+    const pattern = new RegExp(`${name}\\s*:`, 'g')
+    const everywhere = (css.match(pattern) ?? []).length
+    const inRules = rules.reduce((n, rule) => n + (rule.body.match(pattern) ?? []).length, 0)
+    if (everywhere > inRules) {
+      failWith(name, '(custom property)', 'is declared outside the row-target rules, so its value on the marked element depends on cascade details the reader does not model')
+    }
+  }
+  // Pass 2 — classify and evaluate the animation declarations in order.
+  for (const declaration of animated) {
+    if (state.unsupported !== null) break // the first unsupported declaration decides the failure
+    const { prop, value } = declaration
+    if (prop === 'animation') {
+      // The shorthand's components may appear in ANY order (css-animations
+      // grammar: each at most once, the two times in appearance order).
+      // Classify each token by TYPE, not position (the grammar above).
+      let name: string | null = null
+      let sawNone = false
+      const times: string[] = []
+      let iteration: string | null = null
+      for (const token of shorthandTokens(value)) {
+        const lower = token.toLowerCase()
+        if (TIME_TOKEN.test(token) || /^calc\(/i.test(token)) {
+          times.push(token)
+        } else if (NUMBER_TOKEN.test(token) || lower === 'infinite') {
+          iteration = lower // an explicit infinite is never the omitted default (R7-01); case-insensitive (R8-02)
+        } else if (PLAY_STATE_KEYWORDS.has(lower)) {
+          state.playState = lower // a paused flash does not flash (R8-04)
+        } else if (SHORTHAND_KEYWORDS.has(lower)) {
+          // its own component; none of them is tracked
+        } else if (token.endsWith(')')) {
+          // cubic-bezier(), steps(): a function component, never the name
+        } else if (lower === 'none') {
+          if (name === null && !sawNone) name = 'none'
+          sawNone = true
+        } else if (name === null) {
+          name = token // the keyframes name, in any position; its case is kept
+        } else {
+          failWith(prop, value, 'carries a second token that is no known shorthand component')
+        }
+      }
+      state.name = name ?? ''
+      state.duration = times[0] ? evaluate(times[0], declaration) : 0
+      state.delay = times[1] ? evaluate(times[1], declaration) : 0
+      state.iteration = iteration ?? '1'
+    } else if (prop === 'animation-name') {
+      state.name = value
+    } else if (prop === 'animation-duration') {
+      state.duration = evaluate(value, declaration)
+    } else if (prop === 'animation-delay') {
+      state.delay = evaluate(value, declaration)
+    } else if (prop === 'animation-iteration-count') {
+      state.iteration = value
+    } else if (prop === 'animation-play-state') {
+      const v = value.trim().toLowerCase()
+      if (PLAY_STATE_KEYWORDS.has(v)) state.playState = v
+      else failWith(prop, value, 'carries a play-state the reader does not know')
     }
   }
   return state
@@ -986,7 +1137,16 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     // jsdom computes no animation, so this reads the effective cascade).
     const allRules = rowTargetRules(globalsCss, '[data-settings-row-target]')
     expectCascadeModelApplies(globalsCss, allRules)
-    const normal = effectiveAnimation(allRules.filter((rule) => !rule.inReduceMedia))
+    const normal = effectiveAnimation(allRules.filter((rule) => !rule.inReduceMedia), globalsCss)
+    // FAIL CLOSED (CHECK round 8 strategy ruling): a declaration the reader
+    // cannot classify or evaluate means the row is NOT PROVEN to flash
+    // once — it fails here, naming the declaration, instead of guessing.
+    expect(
+      normal.unsupported,
+      normal.unsupported
+        ? `FR-075 (CHECK round 8, fail closed): the flash is NOT PROVEN to flash once — the effective cascade for the marked row carries ${normal.unsupported}`
+        : 'no unsupported declaration',
+    ).toBeNull()
     expect(
       normal.name,
       'RED (FR-075): the mark must be mapped to an animation — the flash has no referent',
@@ -1000,13 +1160,13 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       `FR-075: the animation must name its keyframes, got: ${normal.name}`,
     ).toBe(true)
     expect(
-      normal.duration === 'unknown' || normal.duration === 0,
-      `FR-075 (CHECK R6-01, R7-02): the flash must have a decidable, NON-ZERO duration — the effective cascade resolves the duration to ${
-        normal.duration === 'unknown'
-          ? 'an expression the reader cannot evaluate, which fails here instead of guessing a value'
-          : `${String(normal.duration)}ms`
-      }`,
-    ).toBe(false)
+      normal.duration,
+      `FR-075 (CHECK R6-01, R7-02): the flash must have a decidable, NON-ZERO duration — the effective cascade resolves the duration to ${String(normal.duration)}ms`,
+    ).not.toBe(0)
+    expect(
+      normal.playState,
+      `FR-075 (CHECK R8-04): the flash must actually RUN — a paused animation never flashes, got play-state "${normal.playState}"`,
+    ).toBe('running')
     expect(
       normal.iteration,
       `FR-075: the flash must run exactly once (animation iteration count 1 — the keyword infinite never flashes once), got: ${normal.iteration}`,
@@ -1050,7 +1210,15 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       'the stylesheet must carry a prefers-reduced-motion: reduce rule for the marked row',
     ).toBe(true)
     expectCascadeModelApplies(globalsCss, allRules)
-    const reduced = effectiveAnimation(allRules)
+    const reduced = effectiveAnimation(allRules, globalsCss)
+    // FAIL CLOSED under reduced motion too: an unsupported declaration
+    // could re-enable or otherwise change what a reduced-motion user gets.
+    expect(
+      reduced.unsupported,
+      reduced.unsupported
+        ? `FR-075 (CHECK round 8, fail closed): the reduced-motion cascade carries ${reduced.unsupported}`
+        : 'no unsupported declaration',
+    ).toBeNull()
     expect(
       reduced.name === '' || reduced.name === 'none',
       `RED (FR-075): under prefers-reduced-motion: reduce the row must have NO animation — the effective cascade applies "${reduced.name}"`,
