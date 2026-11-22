@@ -335,6 +335,109 @@ async function portRow(): Promise<HTMLElement> {
 }
 
 /**
+ * The spec-named WITNESS phrases per indexed setting row (CHECK R8-01:
+ * bind the marked, scrolled row to the requested setting's own control or
+ * value, located independently of the mark). Sources, never the code:
+ * the 88-row map of design-notes §2 (Dataset D-9's basis: "Bind address"
+ * row 52, "Port" 53, "Log level" 57, "Rotate master key" 49, "Add key" 50,
+ * "View log" 48, "Rate limits per agent" 47, "MCP tool result cap" 14,
+ * "Change (model + effort)" 1, the Edit-per-agent row 22, program paths 23,
+ * the Memory link row 72/9, "Clear sessions" 64), "Badge corrections from
+ * the code" ("wording names chat history: Clear all chat history"), D-4
+ * row 7 (gateway.host is "Bind address"), FR-108, and the spec's
+ * accessibility naming rules ("Every control is named by its visible
+ * label"; "icon buttons name their target"; "Program fields name the
+ * program").
+ *
+ * LISTED, NOT MAPPED — 'model-providers': its row wrapper carries neither
+ * the D-9-named control ("Connect a provider" is the section main action,
+ * outside the row) nor its own name (the wrapper's heading reads
+ * "Providers"). Per the part-25 brief that row is stopped for a ruling
+ * instead of guessing a witness; its sweep case keeps the identity,
+ * only-one-mark, scroll and content legs.
+ */
+const WITNESS_PHRASES: Record<string, string[]> = {
+  'default-model': ['Change'],
+  'active-transcriber': ['Active transcriber'],
+  'voice-input': ['Voice input'],
+  'auto-recap': ['Auto recap'],
+  'bootstrap-recap': ['Bootstrap recap'],
+  'summarization-model': ['Summarization model'],
+  'recap-limits': ['Recap limits'],
+  'how-long-memory-is-kept': ['How long memory is kept', 'Data & retention'],
+  judge: ['Edit Judge'],
+  'plan-supervisor': ['Edit Plan Supervisor'],
+  omnipus: ['Edit Omnipus'],
+  'claude-code-program-path': ['Claude Code program path'],
+  'codex-program-path': ['Codex program path'],
+  'opencode-program-path': ['OpenCode program path'],
+  'max-parallel-agents': ['Max parallel agents'],
+  'tries-per-goal': ['Tries per goal'],
+  'idle-reminder-quiet-window': ['Idle reminder quiet window'],
+  'stalled-work-check-ins': ['Stalled-work check-ins'],
+  'max-tool-calls-per-turn': ['Max tool calls per turn'],
+  'mcp-tool-result-cap': ['MCP tool result cap'],
+  'default-context-window': ['Default context window'],
+  'model-overrides': ['Model overrides'],
+  'security-health': ['Security health'],
+  'auto-approve': ['Auto-approve'],
+  'god-mode': ['God Mode'],
+  'prompt-injection-defense': ['Prompt injection defense'],
+  'rate-limits': ['Rate limits per agent'],
+  'audit-log': ['View log'],
+  'sandbox-mode': ['Sandbox mode'],
+  'filesystem-model': ['Filesystem model'],
+  'shell-workspace-limit': ['Shell workspace limit'],
+  'allowed-folders': ['Allowed folders'],
+  'internal-network-addresses': ['Internal network addresses'],
+  'network-proxy-for-shell-commands': ['Network proxy for shell commands'],
+  'stored-keys': ['Add key'],
+  'master-key': ['Rotate master key'],
+  'bind-address': ['Bind address'],
+  port: ['Port'],
+  'gateway-token': ['Gateway token'],
+  'preview-server': ['Preview server'],
+  'log-level': ['Log level'],
+  'restart-gateway': ['Restart gateway'],
+  'remote-access': ['Remote access'],
+  storage: ['Storage'],
+  'keep-chat-history-for': ['Keep chat history for'],
+  'keep-memory-for': ['Keep memory for'],
+  'clear-all-chat-history': ['Clear all chat history'],
+  version: ['Version'],
+}
+
+/**
+ * Locate a spec-named witness on or inside the row: an element whose
+ * aria-label contains the phrase (switches, icon buttons, radio groups and
+ * segmented controls name themselves), or whose own text STARTS with it —
+ * the row's name line, heading, field label or button text, bounded to 150
+ * characters so a long description that merely MENTIONS another setting
+ * never matches — or, for the link rows the spec names by their target
+ * ("a link row to Data & retention", D-9 row 9), a link whose text contains
+ * it. Matching is case-insensitive: the sheet's typographic casing may
+ * differ from the spec's ("Remote Access", "View Log", "opencode program
+ * path").
+ */
+function findSpecWitness(row: Element, phrases: string[]): Element | null {
+  for (const phrase of phrases) {
+    const needle = phrase.toLowerCase()
+    const descendants = Array.from(row.querySelectorAll('*'))
+    for (const el of [row, ...descendants]) {
+      const aria = (el.getAttribute('aria-label') ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
+      if (aria.includes(needle)) return el
+    }
+    for (const el of [...descendants, row]) {
+      const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
+      if (!text) continue
+      if (text.startsWith(needle) && text.length <= 150) return el
+      if ((el.tagName === 'A' || el.getAttribute('role') === 'link') && text.includes(needle)) return el
+    }
+  }
+  return null
+}
+
+/**
  * Regex-escape a label for an accessible-name match. The result link's
  * accessible name is its label and section label read together ("Model
  * overridesLimits" — jsdom's accname concatenates without separators), so
@@ -424,8 +527,20 @@ async function expectGroupOpen(testId: string, headerName: string): Promise<HTML
  *    furniture is required either. A text-only stand-in stays bounded by
  *    the identity, only-one-mark and scroll-receiver legs — and, for the
  *    closed-group cases, by the witnessed group header above.
+ * 3. The requested setting's own witness (CHECK R8-01/N114, N115): when the
+ *    caller names the entry's row id, the marked row must carry the
+ *    spec-named control or value of THAT setting (WITNESS_PHRASES, from
+ *    Dataset D-9's map, never from the implementation), and must not carry
+ *    another listed setting's witness while that setting's own row sits
+ *    elsewhere — the id, mark and scroll moving TOGETHER onto a wrong real
+ *    row (the Log-level row answering a Bind-address or Port jump) is the
+ *    fault this leg kills. A real nested row is not a foreign mark: the
+ *    other row genuinely lying inside (or around) the marked one passes.
  */
-async function expectExactlyThisRowMarked(row: HTMLElement, groupWitness?: HTMLElement): Promise<void> {
+async function expectExactlyThisRowMarked(
+  row: HTMLElement,
+  witnesses?: { groupWitness?: HTMLElement; entryRowId?: string },
+): Promise<void> {
   await waitFor(() => {
     expect(row, 'RED (FR-075): the reached row must be marked').toHaveAttribute('data-settings-row-target')
     expect(row, 'RED (FR-075): the reached row must be marked to assistive tech').toHaveAttribute('aria-current', 'true')
@@ -443,11 +558,31 @@ async function expectExactlyThisRowMarked(row: HTMLElement, groupWitness?: HTMLE
     (row.textContent ?? '').trim().length,
     'FR-075: the marked row must carry its own content — it must not be empty',
   ).toBeGreaterThan(0)
-  if (groupWitness) {
+  if (witnesses?.groupWitness) {
     expect(
-      row === groupWitness || row.contains(groupWitness),
+      row === witnesses.groupWitness || row.contains(witnesses.groupWitness),
       'RED (FR-075, CHECK R7-03): the marked row must be the reached group setting\'s own row — the group header witnessed by name must lie on or inside the marked row, not elsewhere while the id agrees with the implementation',
     ).toBe(true)
+  }
+  if (witnesses?.entryRowId) {
+    const phrases = WITNESS_PHRASES[witnesses.entryRowId]
+    if (phrases) {
+      expect(
+        findSpecWitness(row, phrases),
+        `RED (FR-075, CHECK R8-01): the marked row must be the requested setting's own row — none of the spec-named controls/values for "${witnesses.entryRowId}" (${phrases.join(' / ')}) lies on or inside it, while the id agrees with the implementation`,
+      ).not.toBeNull()
+      for (const [otherId, otherPhrases] of Object.entries(WITNESS_PHRASES)) {
+        if (otherId === witnesses.entryRowId) continue
+        const other = findSpecWitness(row, otherPhrases)
+        if (!other) continue
+        const otherRow = document.querySelector<HTMLElement>(`[data-settings-row="${otherId}"]`)
+        if (otherRow && (row === otherRow || row.contains(otherRow) || otherRow.contains(row))) continue
+        expect(
+          other,
+          `FR-075 (CHECK R8-01): the marked row for "${witnesses.entryRowId}" carries another listed setting's witness (${otherId}: ${otherPhrases.join(' / ')}) while that setting's own row is elsewhere — the mark may not sit on a foreign row`,
+        ).toBeNull()
+      }
+    }
   }
 }
 
@@ -1116,7 +1251,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     // "the section opens": the result's own section is the one shown.
     expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
     const row = await portRow()
-    await expectExactlyThisRowMarked(row)
+    await expectExactlyThisRowMarked(row, { entryRowId: 'port' })
     // "the row scrolls into view": the scroll ran on THIS row — the exact
     // receiver (stricter than the oracle's on-or-inside leg above).
     const scrolled = (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock
@@ -1185,7 +1320,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     await jumpViaSearchResult()
     expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
     const row = await portRow()
-    await expectExactlyThisRowMarked(row)
+    await expectExactlyThisRowMarked(row, { entryRowId: 'port' })
     // "still scrolled into view" under reduced motion too.
     const scrolled = (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mock
       .contexts as HTMLElement[]
@@ -1228,7 +1363,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
   it('a deep link with row marks the row in its own section', async () => {
     await openSettings('?tab=gateway&row=port')
     expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
-    await expectExactlyThisRowMarked(await portRow())
+    await expectExactlyThisRowMarked(await portRow(), { entryRowId: 'port' })
   })
 
   it('a deep link whose tab disagrees opens the row\'s own section, not the tab\'s', async () => {
@@ -1240,7 +1375,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
       screen.queryByRole('heading', { name: 'Data & retention', level: 2 }),
       'FR-075: the row\'s own section opens — the disagreed tab must not win',
     ).not.toBeInTheDocument()
-    await expectExactlyThisRowMarked(await portRow())
+    await expectExactlyThisRowMarked(await portRow(), { entryRowId: 'port' })
   })
 
   // R5-01 (CHECK round 5): the indexed Model-overrides row lives in a group
@@ -1260,7 +1395,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     // And the marked row is that one row, with its aria-current identity.
     await expectExactlyThisRowMarked(
       await rowFor('model-overrides', 'RED (FR-075): the indexed Model-overrides row must render — its group opened and its identity reached the DOM'),
-      groupToggle,
+      { groupWitness: groupToggle, entryRowId: 'model-overrides' },
     )
   })
 
@@ -1270,7 +1405,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     const groupToggle = await expectGroupOpen('limits-group-overrides', 'Model overrides')
     await expectExactlyThisRowMarked(
       await rowFor('model-overrides', 'RED (FR-075): the indexed Model-overrides row must render — its group opened and its identity reached the DOM'),
-      groupToggle,
+      { groupWitness: groupToggle, entryRowId: 'model-overrides' },
     )
   })
 
@@ -1279,7 +1414,7 @@ describe('FR-075 — reaching one setting row from a search result or a deep lin
     await jumpViaSearchResult()
     expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeInTheDocument()
     const row = await portRow()
-    await expectExactlyThisRowMarked(row)
+    await expectExactlyThisRowMarked(row, { entryRowId: 'port' })
     // FR-075: the row is marked, not focused — marking must never steal
     // focus into the row (focus stays with the section).
     const focused = document.activeElement
@@ -1316,12 +1451,15 @@ describe('FR-075 reach — every setting the search index names is reachable and
       `FR-075: the search result for "${entry.label}" must open its own section (${sectionInfo(entry.section).label})`,
     ).toBeInTheDocument()
     // "marks exactly that row" — the whole mark shape (identity, the row
-    // itself scrolled into view, its own content), scoped to this entry.
+    // itself scrolled into view, its own content), scoped to this entry —
+    // and bound to the setting's own spec-named control or value (CHECK
+    // R8-01), except for the rows listed for a ruling in WITNESS_PHRASES.
     await expectExactlyThisRowMarked(
       await rowFor(
         entry.row,
         `RED (FR-075): the setting row the index names for "${entry.label}" (${entry.row}) must be reachable — the row must render in its opened section`,
       ),
+      { entryRowId: entry.row },
     )
   }, 20_000)
 })
