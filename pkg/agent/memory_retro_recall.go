@@ -106,9 +106,9 @@ func (ms *MemoryStore) retroRecallWindowOrLegacy() retroRecallWindow {
 // end the search and is not hidden either. The readable reflections are
 // returned together with a *memrooms.PartialReadError naming every failed
 // read, so the caller keeps the hits and warns that the results are
-// incomplete. A folder or file removed between listing and reading is an
-// expected omission (the memrooms.ScanMemoriesWithErrors rule), not a
-// failure. A missing retros folder is no reflections, not an error.
+// incomplete. That includes a folder or file that disappeared between
+// listing and reading (SFH-12 names that case as a hidden failure). Only a
+// missing retros folder is ordinary: no reflections, not an error.
 func (ms *MemoryStore) ReadRetrosForRecall() ([]Retro, error) {
 	w := ms.retroRecallWindowOrLegacy()
 	retrosBase := filepath.Join(ms.privateRoom.Root, "retros")
@@ -163,9 +163,6 @@ func (ms *MemoryStore) ReadRetrosForRecall() ([]Retro, error) {
 		dir := filepath.Join(retrosBase, d.name)
 		files, rerr := os.ReadDir(dir)
 		if rerr != nil {
-			if errors.Is(rerr, os.ErrNotExist) {
-				continue // removed after listing: expected omission
-			}
 			logger.WarnCF("agent.memory", "ReadRetrosForRecall: cannot read day dir",
 				map[string]any{"dir": dir, "error": rerr.Error()})
 			readFailures = append(readFailures, fmt.Errorf("reflections of %s: %w", d.name, rerr))
@@ -178,9 +175,6 @@ func (ms *MemoryStore) ReadRetrosForRecall() ([]Retro, error) {
 			path := filepath.Join(dir, f.Name())
 			data, ferr := os.ReadFile(path)
 			if ferr != nil {
-				if errors.Is(ferr, os.ErrNotExist) {
-					continue // removed after listing: expected omission
-				}
 				logger.WarnCF("agent.memory", "ReadRetrosForRecall: skipping unreadable retro file",
 					map[string]any{"path": path, "error": ferr.Error()})
 				readFailures = append(readFailures,

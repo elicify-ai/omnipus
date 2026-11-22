@@ -510,8 +510,8 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 	if retroPartialErr != nil {
 		// B4 (SFH-12): the results are incomplete, so "no matching entries"
 		// would be a false claim; say what is missing and keep the hits.
-		result.ForLLM = fmt.Sprintf("[note: some past reflections could not be read, so these results may be "+
-			"incomplete; check file access and retry: %v]\n\n%s", retroPartialErr, result.ForLLM)
+		result.ForLLM = fmt.Sprintf("[note: retrospective search is incomplete: some past reflections could not "+
+			"be read; check file access and retry: %v]\n\n%s", retroPartialErr, result.ForLLM)
 	}
 	return result
 }
