@@ -398,6 +398,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
     return [
       {
         key: 'auto_approve',
+        configKey: 'sandbox.auto_approve',
         label: 'Auto-approve',
         value: sandboxConfig?.auto_approve === true,
         kind: 'switch',
@@ -416,6 +417,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       },
       {
         key: 'max_agent_llm_calls_per_hour',
+        configKey: 'sandbox.rate_limits.max_agent_llm_calls_per_hour',
         label: 'Model calls per hour',
         value: rateLimits?.max_agent_llm_calls_per_hour || '',
         kind: 'number',
@@ -425,6 +427,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       },
       {
         key: 'max_agent_tool_calls_per_minute',
+        configKey: 'sandbox.rate_limits.max_agent_tool_calls_per_minute',
         label: 'Tool calls per minute',
         value: rateLimits?.max_agent_tool_calls_per_minute || '',
         kind: 'number',

@@ -125,6 +125,7 @@ export function GatewaySection() {
     return [
       {
         key: 'gateway.bind_address',
+        configKey: 'gateway.host',
         label: 'Bind address',
         value: g?.bind_address ?? LOCAL_ONLY,
         kind: 'select',

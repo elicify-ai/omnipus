@@ -22,6 +22,13 @@ export type SaveBarValue = string | number | boolean | null
 export interface SaveBarField { // not-wire-format: screen-side description of one editable setting
   /** Dotted config key (also the key in the write body and in pending-restart). */
   key: string
+  /**
+   * The canonical config key GET /config/pending-restart names this value
+   * by, when it differs from `key` (an endpoint member or a UI alias, such
+   * as `gateway.bind_address` for `gateway.host`). The saved-state check
+   * matches pending entries by this key (C-6, FR-020).
+   */
+  configKey?: string
   /** Visible label (names the setting in prompts, the bar and the restart window). */
   label: string
   /** The saved value as last read. */
@@ -235,6 +242,7 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
             const f = byKey.get(key)
             return {
               key,
+              pendingKey: f?.configKey,
               draft: sentDrafts[key],
               before: beforeRef.current[key],
               recorded: recordsFailedApplies(section, { key, value: sentDrafts[key], password: f?.password, target: f?.target }),

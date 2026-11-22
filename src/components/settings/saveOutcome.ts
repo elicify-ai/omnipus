@@ -174,8 +174,13 @@ export type CheckedState = // not-wire-format: result of the saved-state check f
 
 /** One value of a Save whose answer was lost, for the saved-state check. */
 export interface SavedStateItem { // not-wire-format: screen-side input of the C-6 check
-  /** Dotted config key, as GET /config/pending-restart names it. */
+  /** The value's key: names it in the result and in `readBack`. */
   key: string
+  /**
+   * The canonical config key GET /config/pending-restart names the value by,
+   * when it differs from `key`. Defaults to `key`.
+   */
+  pendingKey?: string
   /** The value the Save sent. */
   draft: unknown
   /** The saved value before the Save. */
@@ -202,7 +207,8 @@ export async function savedStateCheck(
   const pending = await readPendingRestartFresh()
   const result: Record<string, CheckedState> = {}
   for (const item of items) {
-    const entry = pending.find((e) => e.key === item.key)
+    const pendingKey = item.pendingKey ?? item.key
+    const entry = pending.find((e) => e.key === pendingKey)
     let saved: unknown
     if (entry) {
       saved = entry.persisted_value
