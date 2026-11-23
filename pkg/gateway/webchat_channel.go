@@ -309,14 +309,17 @@ func (c *webchatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMes
 // (replay.go::buildMediaFrame): empty parts only for an unavailable
 // preview.
 //
-// retry marks a Retry result (rest_preview_retry.go): its chat record was
-// already saved, or failed to save, before this publish, so a later
-// snapshot must show the saved record only. The same publish therefore
-// removes the group's earlier projected frame, under the hub lock, and adds
-// none (B06: a projected copy came back after the replay as a second group;
-// for an unsaved Retry it showed pages that were never saved; SFH-01: an
-// obsolete unavailable group outlived a saved Retry). The journal still
-// carries the frame for an incremental catch-up.
+// retry marks a Retry result (rest_preview_retry.go), published after the
+// chat record was settled, so the group's projected frame must hold what is
+// saved. Only a successful Retry is saved: its frame replaces the earlier
+// one (SFH-01: an obsolete unavailable group outlived a saved Retry, and a
+// call outside the snapshot's history page got no group at all). An
+// unavailable Retry result (rendering failed, or the pages could not be
+// saved) leaves the saved record unchanged, so the earlier frame stays and
+// this one goes to the journal only, for an incremental catch-up (B07: an
+// unsaved Retry's pages must not come back in a snapshot). A group whose
+// call is on the snapshot's history page comes from that page and its
+// projected copy is skipped (ws_hub_projection.go::projectionFrames, B06).
 func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []generated.MediaPart, retry bool) error {
 	if len(parts) == 0 && (msg.Preview == nil || msg.Preview.Outcome != previewOutcomeUnavailable) {
 		return fmt.Errorf("webchat: preview group for tool call %s has no stored thumbnails and is not marked unavailable", msg.ToolCallID)
@@ -339,8 +342,8 @@ func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []
 		return nil
 	}
 	meta := hubFrameMeta{kind: hubKindItem, key: previewItemKey(id)}
-	if retry {
-		meta.kind = hubKindForgetItem
+	if retry && (msg.Preview == nil || msg.Preview.Outcome == previewOutcomeUnavailable) {
+		meta = hubFrameMeta{kind: hubKindOther}
 	}
 	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), meta, frame)
 	return nil
