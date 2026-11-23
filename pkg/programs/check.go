@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 // maxCheckErrorRunes bounds the vendor error quoted in a failed check.
@@ -65,7 +67,7 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, timeout time
 	if err != nil {
 		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the credential store could not be read."}
 	}
-	token, err := store.Get(TokenReference(entry.ID))
+	token, _, err := credentials.ReadProgramCredential(store, TokenReference(entry.ID))
 	if err != nil {
 		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the credential store could not be read."}
 	}
@@ -103,6 +105,15 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, timeout time
 	if startErr := cmd.Start(); startErr != nil {
 		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
 	}
+	// FR-005: the check's whole process tree must be owned before it runs
+	// on; when it cannot be (Windows Job Object), the check is stopped and
+	// not trusted.
+	if groupErr := startProcessGroup(cmd); groupErr != nil {
+		slog.Warn("programs: account check stopped: its processes could not be owned", "program", entry.ID, "error", groupErr)
+		_ = cmd.Wait()
+		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
+	}
+	defer releaseProcessGroup(cmd)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	timer := time.NewTimer(timeout)

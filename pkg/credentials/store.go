@@ -386,7 +386,7 @@ func (s *Store) Set(name, value string) error {
 	}
 
 	return s.transact(func(sf *storeFile) error {
-		if programOwnedLocked(sf, name) {
+		if programReservedLocked(sf, name) {
 			return &ProgramOwnedError{Reference: name}
 		}
 		entry, err := encrypt(s.key, name, []byte(value))

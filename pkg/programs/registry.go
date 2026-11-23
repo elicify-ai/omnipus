@@ -10,12 +10,13 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
 // referencePrefix starts the credential-store reference of every program
 // token. One reference per entry: an entry has one credential per
 // installation (FR-006), handed to every token variable of the entry.
-const referencePrefix = "program."
+const referencePrefix = credentials.ProgramReferencePrefix
 
 // TokenReference returns the credential-store reference of an entry's token.
 func TokenReference(id string) string { return referencePrefix + id }

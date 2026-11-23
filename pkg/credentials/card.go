@@ -122,7 +122,7 @@ func (s *Store) commitCardLocked(sf *storeFile, requestID, sessionID string, val
 		}
 		sf.CardHighWater[item.BaseName] = version
 		ref := fmt.Sprintf("%s.v%d", item.BaseName, version)
-		if programOwnedLocked(sf, ref) {
+		if programReservedLocked(sf, ref) {
 			return CardReceipt{}, &ProgramOwnedError{Reference: ref}
 		}
 		entry, sealErr := encrypt(s.key, ref, []byte(item.Value))

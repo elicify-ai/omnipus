@@ -33,10 +33,11 @@ const (
 	MsgInheritedGitConfig = "Git settings from the environment (GIT_CONFIG_*) were replaced for this command by the connected git logins."
 )
 
-// TokenSource reads saved program tokens. *credentials.Store satisfies it.
-type TokenSource interface {
-	Get(name string) (string, error)
-}
+// TokenSource is the credential store program tokens are read from. Tokens
+// are read only through credentials.ReadProgramCredential, which requires a
+// valid program-owned binding and generation (FR-048, I-3 at the reader), so
+// an ordinary credential carrying a program reference's name is never used.
+type TokenSource = *credentials.Store
 
 // TurnRequest is what one command's program resolution needs from the turn.
 type TurnRequest struct {
@@ -172,8 +173,16 @@ func rememberToken(v string) {
 		return
 	}
 	retired.Lock()
+	defer retired.Unlock()
+	if _, known := retired.values[v]; known {
+		return
+	}
 	retired.values[v] = struct{}{}
-	retired.Unlock()
+	out := make([]string, 0, len(retired.values))
+	for t := range retired.values {
+		out = append(out, t)
+	}
+	publishTokenReplacer(out)
 }
 
 // knownTokens returns every token value seen so far, sorted.
@@ -291,7 +300,7 @@ func Resolve(cfg *config.Config, store TokenSource, storeErr error, req TurnRequ
 	}
 	tokens := map[string]string{}
 	for _, e := range on {
-		v, gerr := store.Get(TokenReference(e.ID))
+		v, _, gerr := credentials.ReadProgramCredential(store, TokenReference(e.ID))
 		var nf *credentials.NotFoundError
 		switch {
 		case errors.As(gerr, &nf):

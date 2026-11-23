@@ -44,6 +44,19 @@ type programMeta struct {
 	Generation int64 `json:"generation"`
 }
 
+// ProgramReferencePrefix starts the reference of every program token
+// (pkg/programs TokenReference). The namespace is reserved: an ordinary
+// writer can neither create nor change a name in it, so a lookalike credential
+// can never stand in for a program's token (FR-048, invariant I-3).
+const ProgramReferencePrefix = "program."
+
+// programReservedLocked reports whether an ordinary writer must refuse ref:
+// it belongs to a connected program, or it lies in the reserved program
+// namespace.
+func programReservedLocked(sf *storeFile, ref string) bool {
+	return programOwnedLocked(sf, ref) || strings.HasPrefix(ref, ProgramReferencePrefix)
+}
+
 // programOwnedLocked reports whether ref belongs to a connected program in sf:
 // it has program metadata, or a card secret with recipient kind program.
 func programOwnedLocked(sf *storeFile, ref string) bool {
@@ -167,4 +180,39 @@ func (s *Store) ProgramEntryGeneration(reference string) (int64, bool) {
 		return 0, false
 	}
 	return meta.Generation, true
+}
+
+// ReadProgramCredential returns the value and generation of a program-owned
+// token, read in one store snapshot. It is the only way program tokens are
+// read for use (FR-048, invariant I-3 at the reader): the reference must have
+// program metadata, a card-secret binding with recipient kind program whose
+// version is the current generation, and a stored value. Anything else — no
+// publication, a disconnected program, or an ordinary credential that merely
+// carries the reference's name — is a *NotFoundError, so an unowned lookalike
+// is never used as a program's token.
+//
+// It is a function, not a *Store method, so the Store's I-3 method
+// classification is unchanged; it only reads.
+func ReadProgramCredential(s *Store, reference string) (string, int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.key == nil {
+		return "", 0, ErrStoreLocked
+	}
+	sf, err := s.loadFileInternal()
+	if err != nil {
+		return "", 0, err
+	}
+	meta, owned := sf.ProgramEntries[reference]
+	secret, bound := sf.CardSecrets[reference]
+	entry, stored := sf.Credentials[reference]
+	if !owned || !bound || !stored || secret.Recipient.Kind != KindProgram ||
+		meta.Generation <= 0 || int64(secret.Version) != meta.Generation {
+		return "", 0, &NotFoundError{Name: reference}
+	}
+	plain, err := decrypt(s.key, reference, entry)
+	if err != nil {
+		return "", 0, err
+	}
+	return plain, meta.Generation, nil
 }

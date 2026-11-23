@@ -95,7 +95,7 @@ func (s *Store) RemoveReference(ref string) (CardInventoryEntry, error) {
 	}
 	var entry CardInventoryEntry
 	err := s.transact(func(sf *storeFile) error {
-		if programOwnedLocked(sf, ref) {
+		if programReservedLocked(sf, ref) {
 			return &ProgramOwnedError{Reference: ref}
 		}
 		secret, card := sf.CardSecrets[ref]
@@ -134,7 +134,7 @@ func (s *Store) SetPrivateChannelAvailability(ref string, available bool) (CardI
 	}
 	var out CardInventoryEntry
 	err := s.transact(func(sf *storeFile) error {
-		if programOwnedLocked(sf, ref) {
+		if programReservedLocked(sf, ref) {
 			return &ProgramOwnedError{Reference: ref}
 		}
 		secret, ok := sf.CardSecrets[ref]
@@ -170,7 +170,7 @@ func (s *Store) SelectPrivateVersion(ref string) (CardInventoryEntry, error) {
 	}
 	var out CardInventoryEntry
 	err := s.transact(func(sf *storeFile) error {
-		if programOwnedLocked(sf, ref) {
+		if programReservedLocked(sf, ref) {
 			return &ProgramOwnedError{Reference: ref}
 		}
 		secret, ok := sf.CardSecrets[ref]
