@@ -870,7 +870,10 @@ export function ProvidersSection() {
   const {
     data: defaultModel = null,
     isLoading: defaultModelLoading,
-    isError: defaultModelError,
+    // G2-F1: only a failed first read is the card's error state. A failed
+    // refresh keeps the known default (for example a Save's acknowledged
+    // answer) on screen, so a newer pick still compares against it.
+    isLoadingError: defaultModelError,
   } = useQuery({
     queryKey: ['default-model'],
     queryFn: async () => {
@@ -1180,6 +1183,10 @@ export function ProvidersSection() {
     },
     onOutcome: (outcome) => {
       if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
+      // G2-F1: the acknowledged PUT answer (putDefaultModel's validated
+      // DefaultModel) is the saved baseline at once, so a newer pick equal to
+      // the old default stays a draft; the refetch below is for freshness only.
+      if (outcome.kind === 'saved' && outcome.body) queryClient.setQueryData(['default-model'], outcome.body as DefaultModel)
       const submitted = submittedDefault.current
       setDefaultDraft((d) =>
         d &&

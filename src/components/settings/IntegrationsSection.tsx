@@ -25,6 +25,7 @@ import {
   getErrorMessage,
   type IntegrationProvider,
   type IntegrationProviderUpdateRequest,
+  type IntegrationProvidersResponse,
 } from '@/lib/api'
 import { isApiError, parseServerErrorField } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
@@ -110,6 +111,10 @@ export function IntegrationsSection() {
     },
     onOutcome: (outcome) => {
       if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
+      // G2-F1: the acknowledged PUT answer (configureIntegrationProvider's
+      // validated IntegrationProvidersResponse) is the saved baseline at once;
+      // the refetch below is for freshness only.
+      if (outcome.kind === 'saved' && outcome.body) queryClient.setQueryData(['integrations'], outcome.body as IntegrationProvidersResponse)
       // CR-04: a choice made while this Save was running stays a draft.
       const saved = sentTranscriber.current
       setTranscriberDraft((d) => (d === saved ? null : d))
