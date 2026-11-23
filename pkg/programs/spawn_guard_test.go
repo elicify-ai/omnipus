@@ -96,6 +96,7 @@ var spawnSiteTable = []spawnSiteRow{
 	{"pkg/tools/environment_setup_runner.go", "startSession", "mandatory-s1", "environment_setup"},
 	{"pkg/programs/check.go", "runCheck", "mandatory-s1", "account check (FR-005/S-106), with source masking before Start"},
 	// Non-program sites (this tree's inventory):
+	{"pkg/programs/procgroup_windows.go", "stopProcessGroup", "non-program", "taskkill control child; receives no program environment"},
 	{"pkg/agent/hook_process.go", "NewProcessHook", "non-program", "lifecycle hooks carry no program variables"},
 	{"pkg/agent/runner/driver_stream.go", "detectCLIVersion", "non-program", "driver version probe"},
 	{"pkg/agent/runner/driver_claude.go", "Run", "non-program", "third-party worker driver"},

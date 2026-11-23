@@ -15,14 +15,12 @@
 // S-124 (independent work joined with a connector), S-125 (a person's UI
 // edit preserves provenance).
 //
-// The hand-on chains need the runtime seams: provenance on the
-// turn-feeding messages and durable write requests (FR-041), the join at
-// every handoff, and the program-variable attach (FR-010/FR-011). None
-// exists at RED — each scenario reports BLOCKED naming its seam, never a
-// skip, with the spec's verbatim expectations recorded beside it for the
-// same test author's GREEN reconciliation. (The join algebra itself is
-// order 9's committed suite; the per-turn decision is order 26's unit
-// rows; the record classification is order 12.)
+// The carrier, runtime attachment and record classification now exist.
+// Remaining rows below are incomplete real producer/write/dispatch fixtures,
+// not assertions that those production mechanisms are all absent. Seeded
+// record re-entry tests and provenance-algebra tests do not certify an actual
+// delegate, peer, task, goal or UI writer. The original spec oracles stay loud
+// until each complete chain is exercised.
 //
 // Oracle: US-5 scenario texts, A-1 (founder Q1), FR-010–FR-012, FR-041,
 // R4-M2. Expected values come from the spec, never from the runtime.
@@ -31,8 +29,8 @@ package bus
 
 import "testing"
 
-// s1HandOnSeam is the missing runtime all rows share.
-const s1HandOnSeam = "provenance on the turn-feeding messages and durable write requests (FR-041), the join at every handoff, and the program-variable attach (FR-010/FR-011) are not implemented"
+// These are outstanding test-author fixtures, not accepted deferrals.
+const s1HandOnSeam = "the complete actual producer/write/dispatch fixture for this chain is not yet implemented in the test harness; seeded-record and direct-carrier tests do not establish this handoff"
 
 func TestProgramProvenance_HandOn(t *testing.T) {
 	t.Run("S75_telegram_to_delegated_helper", func(t *testing.T) {
@@ -81,15 +79,10 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-82's cannot-forge assertion", s1HandOnSeam)
 	})
 
-	t.Run("S111_omitted_producer_dev_command_gets_no_token_and_the_unresolved_notice", func(t *testing.T) {
-		// CHECK R11's runtime half, individually named (spec S-111 + FR-010
-		// fail-closed): a turn whose producing write request OMITS
-		// provenance starts Dev with NO program variables attached — a Dev
-		// command that would read a token sees nothing — and the turn
-		// carries the unresolved-provenance notice. The omission is fail-
-		// closed at the runtime boundary, never zero-value-permissive.
-		t.Fatalf("BLOCKED: %s — required by S-111's runtime half (the omitted-producer turn: Dev command sees no token, unresolved notice emitted)", s1HandOnSeam)
-	})
+	// S111_omitted_producer_dev_command_gets_no_token_and_the_unresolved_notice
+	// migrated intact to pkg/agent::TestProgramProvenance_OmittedInputRuntime:
+	// real connected positive count16, real omitted-input child count0, exact
+	// unresolved notice. A source guard alone cannot substitute for that row.
 }
 
 func TestProgramProvenance_Updates(t *testing.T) {
@@ -101,12 +94,9 @@ func TestProgramProvenance_Updates(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-107's same-write join", s1HandOnSeam)
 	})
 
-	t.Run("S108_background_completion_continues_a_telegram_turn", func(t *testing.T) {
-		// GREEN asserts here (spec S-108): the completion's system message
-		// starts Dev's continuation turn → its output is 0 with the telegram
-		// notice.
-		t.Fatalf("BLOCKED: %s — required by S-108", s1HandOnSeam)
-	})
+	// S108 migrated intact to pkg/agent::TestProgramProvenance_ActualBackgroundHandoff:
+	// actual Telegram-input child -> real notifier inbound -> real continuation
+	// child, exact original-origin carrier, count0 and Telegram-off notice.
 
 	t.Run("S109_goal_followup_from_a_telegram_created_goal", func(t *testing.T) {
 		// GREEN asserts here (spec S-109): the goal keeper's follow-up turn
