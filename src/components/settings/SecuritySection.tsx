@@ -50,7 +50,6 @@ import {
 } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import {
-  fetchConfig,
   fetchRateLimits,
   updateRateLimits,
   fetchCredentials,
@@ -347,19 +346,9 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
 
-  // The config read still decides the section's loading and error states; the
-  // per-agent limits come from their own route below (#1882).
-  const {
-    isLoading,
-    isError: configError,
-    error: configReadError,
-    refetch: refetchConfig,
-    isFetching: configFetching,
-  } = useQuery({
-    queryKey: ['config'],
-    queryFn: fetchConfig,
-  })
-
+  // N-2 (FR-066): no view here uses GET /config, so it gates nothing. Each
+  // view waits for the reads it shows; the per-agent limits come from their
+  // own route below (#1882).
   const {
     data: credentials = [],
     isError: credentialsError,
@@ -597,19 +586,8 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   // The Approvals read joins the frame only on its first load: after it
   // failed, its Retry shows in the Approvals group and the rest stays put.
   const approvalsFirstLoad = sandboxConfigLoading && sandboxConfigFailures === 0
-  if (isLoading || (view === 'keys' ? credentialsLoading : rateLimitsLoading || approvalsFirstLoad)) {
+  if (view === 'keys' ? credentialsLoading : rateLimitsLoading || approvalsFirstLoad) {
     return <SectionLoading label={sectionLabel} />
-  }
-
-  if (configError) {
-    return (
-      <ReadErrorCallout
-        title={`The ${sectionLabel} settings could not be loaded`}
-        error={configReadError}
-        onRetry={() => void refetchConfig()}
-        retrying={configFetching}
-      />
-    )
   }
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.
