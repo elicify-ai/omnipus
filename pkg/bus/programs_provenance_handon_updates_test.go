@@ -92,11 +92,12 @@ func TestProgramProvenance_Updates(t *testing.T) {
 	// actual Telegram-input child -> real notifier inbound -> real continuation
 	// child, exact original-origin carrier, count0 and Telegram-off notice.
 
-	t.Run("S109_goal_followup_from_a_telegram_created_goal", func(t *testing.T) {
-		// GREEN asserts here (spec S-109): the goal keeper's follow-up turn
-		// outputs 0 with the telegram notice.
-		t.Fatalf("BLOCKED: %s — required by S-109", s1HandOnSeam)
-	})
+	// S109_goal_followup_from_a_telegram_created_goal migrated intact to
+	// pkg/agent::TestProgramProvenance_ActualGoalFollowup: registered set_goal
+	// in a real Telegram turn, actual persisted goal, real keeper tick/notifier
+	// inbound and unchanged actual system-message consumer, real command0 and
+	// full Telegram notice; exact source/stored/wake/receiving origins checked.
+	// The clock edge is controlled; no goal, routing or provenance is seeded.
 
 	// S110_steering_an_existing_helper_from_telegram migrated intact to
 	// pkg/agent::TestProgramProvenance_ActualExistingHelperSteer: actual web
