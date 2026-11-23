@@ -27,11 +27,27 @@ const KEY_LABELS: Record<string, string> = {
   'tools.exec.enable_proxy': 'Network proxy for shell commands',
   'session.dm_scope': 'Direct message scope',
   'tools.run_in_workspace.warmup_timeout_seconds': 'Workspace warm-up time limit',
+  // N-3: the retention save records these (B1); labels as on Data & retention.
+  'storage.retention.session_days': 'Keep chat history for',
+  'storage.retention.memory_retros_days': 'Keep memory for',
+  'storage.retention.memory_retros_forever': 'Keep forever',
+  // N-3: the rate-limit save records these; labels as on Protection.
+  'sandbox.rate_limits.max_agent_llm_calls_per_hour': 'Model calls per hour',
+  'sandbox.rate_limits.max_agent_tool_calls_per_minute': 'Tool calls per minute',
+  // The Agents and goals save records these (performancePendingApplyConfigKeys);
+  // labels as on Limits.
+  'performance.max_parallel_agents': 'Max parallel agents',
+  'tools.manifest.compressed': 'Tool loading',
+  'planning.goal_max_rounds': 'Tries per goal',
+  'planning.goal_reminder_quiet_seconds': 'Idle reminder quiet window',
+  'planning.goal_stalled_checkin_enabled': 'Stalled-work check-ins',
+  'planning.goal_stalled_checkin_minutes': 'Check-in interval',
+  'agents.defaults.max_tool_iterations': 'Max tool calls per turn',
 }
 
 export function pendingKeyLabel(key: string): string {
   if (KEY_LABELS[key]) return KEY_LABELS[key]
-  if (key.startsWith('security.rate_limits')) return 'Rate limits'
+  if (key.startsWith('sandbox.rate_limits')) return 'Rate limits'
   if (key.startsWith('context.')) return 'Limits: context and tool results'
   if (key.startsWith('sandbox.third_party_agents')) return 'Third-party agents'
   if (key.startsWith('security.platform_auth')) return 'Platform sign-in'
