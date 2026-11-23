@@ -164,7 +164,7 @@ func collectAgentFiles(src ExportSource, id string) (*exportedAgent, error) {
 	if mdPresent {
 		files = append(files, packagedFile{path: agentInstructionsPath(id), body: agentMD})
 	}
-	return &exportedAgent{files: files, name: v.Name, envNames: envNames, programs: exportedPrograms(ac.Programs)}, nil
+	return &exportedAgent{files: files, name: v.Name, envNames: envNames, programs: exportedPrograms(v.Programs)}, nil
 }
 
 // sourceErr passes a coded source error through and wraps any other.
