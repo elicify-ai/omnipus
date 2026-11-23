@@ -11,9 +11,13 @@
  *     section, announces the count in a polite live region, shows the kit
  *     Empty state "No settings match" with the typed text when nothing
  *     matches, and treats typed markup as text.
- *   - D-13: "port" → Gateway → Port; "PORT" → same; "web search" → moved to
- *     Skills & Tools, with a link; "backup"/"restore" → "Backup and restore
- *     were removed."; "pair" → "Device pairing is not available in Settings
+ *   - D-13: "port" → Gateway → Port; "PORT" → same; "web search" → Providers;
+ *     Tool permissions / Skill trust → temporarily unavailable, no destination.
+ *     These replace D-13 row 3 under Q1 A in
+ *     /workspace/omnipus-coordination/decisions/2026-11-23-founder-q1-q2.md
+ *     and team-lead ruling 2026-11-23 implementing Q1 A (part 32).
+ *     "backup"/"restore" → "Backup and restore were removed.";
+ *     "pair" → "Device pairing is not available in Settings
  *     at the moment."; "retention" → Data & retention → both settings;
  *     "zzqx" → empty "No settings match"; whitespace → full section list, no
  *     results panel; "<script>" → treated as text, no match; "browsers" →
@@ -109,11 +113,35 @@ describe('D-13 — search answers', () => {
     expect(within(panel).getByText('Gateway')).toBeInTheDocument()
   })
 
-  it('D-13 row 3 / FR-007: "web search" says it moved to Skills & Tools, with a link', async () => {
-    await openSettings()
+  it('Q1 A / D-13 row 3: "web search" leads to Providers without claiming a move', async () => {
+    // Start elsewhere so a no-op link cannot pass by leaving Providers open.
+    await openSettings('?tab=gateway')
+    expect(await screen.findByRole('heading', { name: 'Gateway', level: 2 })).toBeVisible()
     await typeQuery('web search')
-    expect(await screen.findByText(/moved to Skills & Tools|Skills & Tools/)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /Skills & Tools/i })).toBeInTheDocument()
+    const panel = await screen.findByTestId('settings-search-results')
+    expect(within(panel).getByText('Web search')).toBeVisible()
+    expect(within(panel).queryByText('Providers'), 'Q1 A: Web search still belongs to Providers').not.toBeNull()
+    expect(within(panel).queryByText(/moved|Skills & Tools/i), 'Q1 A: do not promise a moved location').not.toBeInTheDocument()
+    const result = within(panel).getByRole('link', { name: /Web search/i })
+    const target = new URL(result.getAttribute('href')!, window.location.origin)
+    expect(target.pathname).toBe('/settings')
+    expect(target.searchParams.get('tab')).toBe('providers')
+    await userEvent.click(result)
+    expect(await screen.findByRole('heading', { name: 'Providers', level: 2 }), 'Q1 A: activating the actual result opens Providers').toBeVisible()
+  })
+
+  it.each(['Tool permissions', 'Skill trust'])('Q1 A: %s search entry states temporary unavailability and leads nowhere', async (setting) => {
+    await openSettings()
+    await typeQuery(setting)
+    const panel = await screen.findByTestId('settings-search-results')
+    const label = within(panel).getByText(setting, { exact: true })
+    expect(label, 'instrument: the real result must exist before testing its unavailable state').toBeVisible()
+    const row = label.closest('li')!
+    expect(row).not.toBeNull()
+    expect.soft(within(row).queryByText('Temporarily unavailable until the Skills & Tools update lands.'), 'Q1 A: report the temporary gap, not a new location').not.toBeNull()
+    expect.soft(within(row).queryAllByRole('link'), 'Q1 A: the unavailable entry has no navigation destination').toHaveLength(0)
+    expect.soft(within(row).queryAllByRole('button'), 'Q1 A: the unavailable entry offers no temporary action').toHaveLength(0)
+    expect.soft(row, 'Q1 A: Settings cannot say these controls moved').not.toHaveTextContent(/moved to/i)
   })
 
   it('D-13 row 4: "backup" and "restore" answer the removal notice', async () => {

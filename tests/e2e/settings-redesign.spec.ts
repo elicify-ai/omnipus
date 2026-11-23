@@ -9,8 +9,13 @@
  *   - G-01 (US-1 AS1, AS2): 11 sections in 3 groups, no Sign-in; the open
  *     section survives a reload.
  *   - G-02 (US-1 AS3–AS7, spot-check incl. devices): D-3 links land per D-3.
- *   - G-03 (US-1 AS8–AS10): "web search" → moved to Skills & Tools; "zzqx"
- *     → "No settings match".
+ *   - G-03 (US-1 AS8–AS10): "web search" → Providers; Tool permissions /
+ *     Skill trust → temporarily unavailable with no destination; "zzqx"
+ *     → "No settings match". Revised by Q1 A in
+ *     /workspace/omnipus-coordination/decisions/2026-11-23-founder-q1-q2.md
+ *     and team-lead ruling 2026-11-23 implementing Q1 A (part 32).
+ *     This revision has static checks only; browser execution is deferred
+ *     to the cut, not claimed as observed RED or GREEN.
  *   - G-04 (US-1 AS9, US-9 AS5; FR-008, FR-070): at 390 px the list shows
  *     first, every spot-checked section is reached from the list and
  *     returns to it (R2-05), with the Settings back button, no sideways
@@ -110,12 +115,26 @@ test.describe('G-02 — old links land in the right place (US-1 AS3–AS7)', () 
 })
 
 test.describe('G-03 — search (US-1 AS8–AS10)', () => {
-  test('"web search" says it moved to Skills & Tools; "zzqx" shows the empty state', async ({ page }) => {
-    await openSettings(page)
+  test('Q1 A: "web search" opens Providers, unavailable permissions lead nowhere, and "zzqx" keeps the empty state', async ({ page }) => {
+    // Starting in Gateway makes an ignored result click fail the destination check.
+    await openSettings(page, '?tab=gateway')
+    await expect(page.getByRole('heading', { name: 'Gateway', level: 2 })).toBeVisible()
     const box = page.getByRole('searchbox', { name: /search/i })
     await box.fill('web search')
-    await expect(page.getByText(/Skills & Tools/)).toBeVisible()
-    await expect(page.getByRole('link', { name: /Skills & Tools/i })).toBeVisible()
+    const results = page.getByTestId('settings-search-results')
+    await expect(results.getByText('Providers', { exact: true })).toBeVisible()
+    await expect(results.getByText(/moved|Skills & Tools/i)).toHaveCount(0)
+    await results.getByRole('link', { name: /Web search/i }).click()
+    await expect(page).toHaveURL(/[?#&]tab=providers(?:&|$)/)
+    await expect(page.getByRole('heading', { name: 'Providers', level: 2 })).toBeVisible()
+    for (const setting of ['Tool permissions', 'Skill trust']) {
+      await box.fill(setting)
+      await expect(results.getByText(setting, { exact: true })).toBeVisible()
+      await expect(results.getByText('Temporarily unavailable until the Skills & Tools update lands.', { exact: true })).toBeVisible()
+      await expect(results.getByRole('link')).toHaveCount(0)
+      await expect(results.getByRole('button')).toHaveCount(0)
+      await expect(results.getByText(/moved to/i)).toHaveCount(0)
+    }
     await box.fill('zzqx')
     await expect(page.getByText('No settings match')).toBeVisible()
     await expect(page.getByText(/zzqx/)).toBeVisible()

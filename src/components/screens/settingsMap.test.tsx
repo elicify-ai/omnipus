@@ -15,8 +15,11 @@
  *     "Agents and goals".
  *   - D-9 row 5 / FR-053: Providers holds a "Voice input" group with Active
  *     transcriber.
- *   - D-9 rows 4+6 / FR-060: no Web search, no skill-trust/tool grid;
- *     Protection announces they live in Skills & Tools.
+ *   - D-9 rows 4+6 / FR-060: Web search remains under Providers for now;
+ *     the skill-trust/tool grid is temporarily unavailable, with no Settings
+ *     entry or promised replacement location. This supersedes row 6 under
+ *     Q1 A in /workspace/omnipus-coordination/decisions/2026-11-23-founder-q1-q2.md
+ *     and team-lead ruling 2026-11-23 implementing Q1 A (part 32).
  *   - D-9 row 8 / FR-051: God Mode is a button in Protection (and Gateway
  *     has no God Mode control).
  *   - D-9 row 12 / S-Q3: the tool-loading switch stays in Limits → Agents
@@ -270,16 +273,21 @@ describe('D-9 rows 5-6, row 8 — Providers voice, moved-out skills, God Mode', 
     expect(screen.getByText('Web Search')).toBeInTheDocument()
   })
 
-  it('Protection announces tool permissions and skill trust live in Skills & Tools (D-9 row 6)', async () => {
+  it('Q1 A / D-9 row 6: Protection names the temporary tool-permission and skill-trust gap without a Skills link', async () => {
     await openSettings('?tab=protection')
-    expect(
-      await screen.findByText(/Skills & Tools/),
-      'BLOCKED RED (FR-060/D-9 row 6): Protection must link skill trust and tool permissions to Skills & Tools',
-    ).toBeInTheDocument()
-    // The God Mode control is a button in Protection (D-9 row 8, FR-051).
+    // Retain the working-section witness and the D-9 row 8 / FR-051 oracle.
     expect(
       await screen.findByRole('button', { name: /Turn (on|off) God Mode/i }),
     ).toBeInTheDocument()
+    const notice = await screen.findByTestId('protection-moved-permissions')
+    expect(notice, 'instrument: inspect the real Protection callout, not an unloaded screen').toBeVisible()
+    expect.soft(notice, 'Q1 A: the callout names the unavailable tool permissions').toHaveTextContent(/tool(?: and skill)? permissions|tool permission grid/i)
+    expect.soft(notice, 'Q1 A: the callout names the unavailable skill trust').toHaveTextContent(/skill trust/i)
+    expect.soft(notice, 'Q1 A: describe the temporary gap').toHaveTextContent(/temporarily unavailable/i)
+    expect.soft(notice, 'Q1 A: name the update that ends the gap').toHaveTextContent(/until the Skills & Tools update lands/i)
+    expect.soft(notice, 'Q1 A: do not claim the controls have already moved').not.toHaveTextContent(/moved|set on that page now/i)
+    const destinations = within(notice).queryAllByRole('link').map((link) => new URL(link.getAttribute('href')!, window.location.origin).pathname)
+    expect.soft(destinations, 'Q1 A: there is no temporary link to the Skills page').not.toEqual(expect.arrayContaining([expect.stringMatching(/^\/skills(?:\/|$)/)]))
   })
 
   it('Gateway has no God Mode control (FR-051)', async () => {
