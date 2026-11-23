@@ -147,6 +147,18 @@ function readWorkspaceLimit(data: SandboxConfigResponse | undefined | null): Wor
 type SandboxUpdateBody = Parameters<typeof updateSandboxConfig>[0] &
   Partial<Record<WorkspaceLimitKey, boolean>>
 
+/**
+ * One paths/SSRF save. body is what the request sends; addedPath (the entry
+ * this save adds, if any) and edit (its staged-edit number) are client-only,
+ * so the save's own error handler knows which edit it belongs to.
+ */
+type PathsSsrfSaveVars = {
+  body: Parameters<typeof updateSandboxConfig>[0]
+  token?: string
+  addedPath: string | null
+  edit: number
+}
+
 // ── Status dot ────────────────────────────────────────────────────────────────
 
 type DotVariant = 'green' | 'amber' | 'red'
@@ -383,6 +395,14 @@ export function SandboxSection(): React.ReactElement {
   // ── Paths/SSRF editor state ───────────────────────────────────────────────
   const [pathList, setPathList] = useState<string[]>([])
   const [newPath, setNewPath] = useState('')
+  // The input's current text, readable from a save's delayed error handler
+  // (its closure is from the render that started the save). Written only by
+  // setNewPathDraft, in event handlers.
+  const newPathDraftRef = useRef('')
+  function setNewPathDraft(value: string) {
+    newPathDraftRef.current = value
+    setNewPath(value)
+  }
   const [pathAddError, setPathAddError] = useState<string | null>(null)
   const [pathRowErrors, setPathRowErrors] = useState<Record<number, string>>({})
   const [pathRestartedRows, setPathRestartedRows] = useState<Set<number>>(new Set())
@@ -398,9 +418,9 @@ export function SandboxSection(): React.ReactElement {
   const [showWildcardModal, setShowWildcardModal] = useState(false)
   const [showEnforceModal, setShowEnforceModal] = useState(false)
   const pendingSaveRef = useRef<(() => void) | null>(null)
-  // The path the current paths/SSRF save adds, if any: a refused save puts
-  // it back into the input for correction instead of leaving it in the list.
-  const pendingAddedPathRef = useRef<string | null>(null)
+  // Counts staged paths/SSRF edits, so a save's error handler can tell
+  // whether a newer edit was staged after it (SFH-03).
+  const pathsEditRef = useRef(0)
 
   // ── Save status ────────────────────────────────────────────────────────────
   const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
@@ -495,8 +515,8 @@ export function SandboxSection(): React.ReactElement {
 
   // ── Paths/SSRF save mutation ──────────────────────────────────────────────
   const saveMutation = useMutation({
-    mutationFn: (vars: { body: Parameters<typeof updateSandboxConfig>[0]; token?: string }) =>
-      updateSandboxConfig(vars.body, vars.token),
+    // addedPath and edit are client-only: the request sends body alone.
+    mutationFn: (vars: PathsSsrfSaveVars) => updateSandboxConfig(vars.body, vars.token),
     onMutate: () => setSaveState('saving'),
     onSuccess: (resp) => {
       setSaveState('saved')
@@ -509,7 +529,7 @@ export function SandboxSection(): React.ReactElement {
         setPathRestartedRows(new Set(pathList.map((_, i) => i)))
       }
     },
-    onError: (err: Error) => {
+    onError: (err: Error, vars) => {
       setSaveState('error')
       const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
@@ -519,22 +539,35 @@ export function SandboxSection(): React.ReactElement {
         setSsrfAdvancedErrors((prev) => ({ ...prev, [rowIdx]: ssrfRowMatch[2] }))
         return
       }
+      // A newer edit was staged after this save: its own save carries the
+      // list on and settles it. The failure stays visible in the save error
+      // below the editors, but the list and the input belong to that edit.
+      if (vars.edit !== pathsEditRef.current) return
       // Nothing was saved: the list goes back to the saved one (B09: a
       // refused entry stayed in the list and every later save resent it and
-      // failed the same way). An entry this save added returns to the input
-      // with the refusal under it, so it can be corrected; a refusal that
-      // names a saved row stays on that row.
-      const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(msg)
-      const added = pendingAddedPathRef.current
-      pendingAddedPathRef.current = null
+      // failed the same way). The path this save added returns to the input,
+      // unless the person has typed something new there since. A refusal
+      // stays on the row it names when that row is saved, goes under the
+      // input when it names the restored path (or no row), and otherwise
+      // stays in the save error alone, so it is never shown against a path
+      // that did not cause it.
       revertPathsSsrfToServer()
-      if (added !== null) setNewPath(added)
-      const rowIdx = pathRowMatch ? parseInt(pathRowMatch[1], 10) : -1
-      if (pathRowMatch && rowIdx < (configData?.allowed_paths ?? []).length) {
+      const added = vars.addedPath
+      const inputFree = newPathDraftRef.current === ''
+      if (added !== null && inputFree) setNewPathDraft(added)
+      const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(msg)
+      if (!pathRowMatch) {
+        if (inputFree) setPathAddError(msg)
+        return
+      }
+      const rowIdx = parseInt(pathRowMatch[1], 10)
+      const savedPaths = configData?.allowed_paths ?? []
+      const refused = vars.body.allowed_paths?.[rowIdx]
+      if (rowIdx < savedPaths.length && refused === savedPaths[rowIdx]) {
         setPathRowErrors({ [rowIdx]: pathRowMatch[2] })
         return
       }
-      setPathAddError(pathRowMatch ? pathRowMatch[2] : msg)
+      if (added !== null && refused === added && inputFree) setPathAddError(pathRowMatch[2])
     },
   })
 
@@ -556,7 +589,7 @@ export function SandboxSection(): React.ReactElement {
 
   // ── Commit helper (paths + SSRF) ──────────────────────────────────────────
   function commitPathsSsrf(paths: string[], ssrf: string[], addedPath: string | null = null) {
-    pendingAddedPathRef.current = addedPath
+    const edit = ++pathsEditRef.current
     setPathRowErrors({})
     setSsrfAdvancedErrors({})
     askSandboxConfirm({
@@ -570,6 +603,8 @@ export function SandboxSection(): React.ReactElement {
             ssrf: { allow_internal: ssrf },
           },
           token,
+          addedPath,
+          edit,
         }),
       cancel: revertPathsSsrfToServer,
     })
@@ -602,7 +637,7 @@ export function SandboxSection(): React.ReactElement {
     setPathAddError(null)
     const next = [...pathList, trimmed]
     setPathList(next)
-    setNewPath('')
+    setNewPathDraft('')
     commitPathsSsrf(next, ssrfList, trimmed)
   }
 
@@ -1205,7 +1240,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                   restartedRows={pathRestartedRows}
                   onDelete={handleDeletePath}
                   newPath={newPath}
-                  onNewPathChange={(v) => { setNewPath(v); setPathAddError(null) }}
+                  onNewPathChange={(v) => { setNewPathDraft(v); setPathAddError(null) }}
                   onAdd={handleAddPath}
                   addError={pathAddError}
                 />
