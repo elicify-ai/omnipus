@@ -57,11 +57,13 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-78's restart persistence", s1HandOnSeam)
 	})
 
-	t.Run("S79_unresolved_chain_withholds", func(t *testing.T) {
-		// GREEN asserts here (spec S-79): a helper whose parent record is
-		// unreadable → 0 with the unresolved notice (fail closed).
-		t.Fatalf("BLOCKED: %s — required by S-79's unresolved notice", s1HandOnSeam)
-	})
+	// S79_unresolved_chain_withholds migrated intact to
+	// pkg/agent::TestProgramProvenance_ActualUnreadableParent: actual delegate
+	// helper, parent-only journal corruption, readable-chain count16 control,
+	// actual child and exact count0/unresolved receiving-context oracle.
+	// D5 row13 is additionally real in TestProgramProvenance_ActualHelperHopBound:
+	// seventeen actual delegate edges, exact 15/16 eligible and 17 unresolved
+	// boundary counts. No manually constructed lineage or fake resolver.
 
 	// S80_mixed_provenance_through_a_peer_request migrated intact to
 	// pkg/gateway::TestProgramProvenance_ActualMixedPeerRequest: separate real
