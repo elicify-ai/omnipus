@@ -103,11 +103,10 @@ func TestProgramProvenance_Updates(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-109", s1HandOnSeam)
 	})
 
-	t.Run("S110_steering_an_existing_helper_from_telegram", func(t *testing.T) {
-		// GREEN asserts here (spec S-110): the helper's turn that consumes
-		// the steer outputs 0 with the telegram notice.
-		t.Fatalf("BLOCKED: %s — required by S-110", s1HandOnSeam)
-	})
+	// S110_steering_an_existing_helper_from_telegram migrated intact to
+	// pkg/agent::TestProgramProvenance_ActualExistingHelperSteer: actual web
+	// launch, idle same helper, real Telegram parent delegate-steer, unique
+	// executed-child instrument, exact count0/Telegram notice and saved join.
 
 	t.Run("S123_web_off_telegram_on_mixed_steering_both_orders", func(t *testing.T) {
 		// GREEN asserts here (spec S-123): both steering orders output 0
