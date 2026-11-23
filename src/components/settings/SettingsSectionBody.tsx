@@ -61,12 +61,14 @@ export function SettingsSectionBody({ section, prefillOverride, focusGodMode, ba
       return <SecuritySection view="protection" godMode={<GodModeControl focusOnMount={focusGodMode} />} />
     case 'sandbox':
       return (
-        <div className="space-y-[var(--space-6)]">
-          <SandboxSection />
-          <Group title="Network proxy for shell commands">
-            <ExecProxyStatusCard />
-          </Group>
-        </div>
+        <SectionSaveScope>
+          <div className="space-y-[var(--space-6)]">
+            <SandboxSection />
+            <Group title="Network proxy for shell commands">
+              <ExecProxyStatusCard />
+            </Group>
+          </div>
+        </SectionSaveScope>
       )
     case 'keys':
       return <SecuritySection view="keys" />

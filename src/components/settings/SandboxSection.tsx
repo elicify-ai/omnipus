@@ -23,12 +23,14 @@ import {
 } from '@/lib/api'
 import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
 import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
-import { PasswordBadge, RestartBadge, SaveBarPanel, SaveOutcomeLine } from './SaveBar'
+import { PasswordBadge, RestartBadge } from './SaveBar'
 import { checkFormPart, toWriteResponse, type PartCheck } from './saveOutcome'
-import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
+import type { FormSavePart } from './useFormSaveBar'
+import { useSectionSavePart } from './SectionSaveScope'
 import { AllowedPathsEditor } from './AllowedPathsEditor'
 import { SsrfEditor, SSRF_PRESETS } from './SsrfEditor'
 import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -616,7 +618,8 @@ export function SandboxSection(): React.ReactElement {
     },
   }
 
-  const { bar, message } = useFormSaveBar([part])
+  // One Save bar for the section with the proxy switch (CR-02, FR-010).
+  const { outcome: sandboxOutcome, ownBar } = useSectionSavePart(part)
 
   // ── Allowed paths handlers ─────────────────────────────────────────────────
   function handleDeletePath(index: number) {
@@ -909,6 +912,9 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
       </Card>
     )
   }
+
+  // FR-065: the section's loading frame until both of its reads answer.
+  if (statusLoading || configLoading) return <SectionLoading label="Sandbox & network" />
 
   return (
     <section className="space-y-[var(--space-2-5)]">
@@ -1226,7 +1232,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                     {saveError}
                   </p>
                 )}
-                <SaveOutcomeLine message={message('sandbox-config')} />
+                {sandboxOutcome}
               </>
             )}
           </div>
@@ -1259,7 +1265,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
         onConfirm={confirmPendingDraft}
       />
 
-      <SaveBarPanel {...bar} />
+      {ownBar}
     </section>
   )
 }

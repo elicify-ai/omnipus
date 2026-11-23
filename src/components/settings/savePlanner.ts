@@ -90,6 +90,9 @@ const RECORDING_ENDPOINTS: ReadonlySet<string> = new Set([
   '/api/v1/security/prompt-guard',
   '/api/v1/security/rate-limits',
   '/api/v1/performance',
+  // B1: a retention save that reached config.json but not the running
+  // gateway is listed as apply_failed (C-6 outcome table).
+  '/api/v1/settings/retention',
 ])
 
 /** True when the endpoint this value is written to records failed applies (C-6). */

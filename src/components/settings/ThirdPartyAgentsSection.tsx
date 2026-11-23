@@ -22,8 +22,7 @@ import { Card } from '@/components/ui/card'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { QueryErrorState } from '@/components/ui/query-error-state'
+import { ReadErrorCallout } from './ReadErrorCallout'
 import {
   fetchCliValidate,
   getErrorMessage,
@@ -41,6 +40,7 @@ import { SaveBarPanel, SaveOutcomeLine } from './SaveBar'
 import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
 import { useFormSaveBar, type FormSavePart } from './useFormSaveBar'
 import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
 
 type CliKey = keyof ThirdPartyAgentSettingsView['clis']
 type PresetField = keyof CliPreset
@@ -104,20 +104,6 @@ function checkResultToast(label: string, result: CliValidateResponse): { message
   }
 }
 
-function LoadingRows() {
-  return (
-    <div data-testid="third-party-agents-loading" aria-busy="true" className="space-y-[var(--space-2-5)]">
-      {CLI_ROWS.map(({ cli }) => (
-        <Card key={cli} className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
-          <Skeleton className="h-4 w-32" />
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-full" />
-        </Card>
-      ))}
-    </div>
-  )
-}
-
 export function ThirdPartyAgentsSection() {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -135,7 +121,7 @@ export function ThirdPartyAgentsSection() {
   const [checkingCli, setCheckingCli] = useState<CliKey | null>(null)
   const inputRefs = useRef(new Map<string, HTMLInputElement>())
 
-  const { data, isPending, isError, error, refetch } = useQuery({
+  const { data, isPending, isError, error, refetch, isFetching } = useQuery({
     queryKey: THIRD_PARTY_AGENTS_QUERY_KEY,
     queryFn: getThirdPartyAgentSettings,
   })
@@ -297,15 +283,16 @@ export function ThirdPartyAgentsSection() {
     }
   }
 
-  if (isPending) return <LoadingRows />
+  if (isPending) return <SectionLoading label="Third-party agents" cards={CLI_ROWS.length} data-testid="third-party-agents-loading" />
 
   if (isError) {
     return (
-      <QueryErrorState
-        layout="fill"
-        testId="third-party-agents-error"
-        message={`Could not load third-party agent settings: ${getErrorMessage(error, 'unknown error')}`}
+      <ReadErrorCallout
+        title="The third-party agent settings could not be loaded"
+        error={error}
         onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="third-party-agents-error"
       />
     )
   }

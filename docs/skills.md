@@ -84,7 +84,7 @@ Only a plain program name, such as `python3`, is checked. Anything else, for exa
 
 Agents change a skill with the ordinary file tools (`write_file`, `edit_file`, `append_file`) and with `edit_skill`. `edit_skill` does four things only: `copy` a skill, `delete_file` (remove one file), `delete` (remove the whole skill) and `restore` (bring back an older version). There is no `create_skill` or `remove_skill` any more. To create a skill, an agent writes `<new-name>/SKILL.md`. To delete one, it uses `edit_skill` with `action=delete`.
 
-One setting decides all of it: the `edit_skill` permission, in **Settings** under tool permissions (see [tools](tools.md)).
+One setting decides all of it: the `edit_skill` permission, set with the tool permissions on the Skills & Tools page (see [tools](tools.md)).
 
 | Setting | What happens |
 |---|---|
@@ -221,4 +221,4 @@ A skill installed from a GitHub link takes its folder name from the link. That n
 - [agents](agents.md) — creating agents and choosing each one's skills.
 - [library](library.md) — mounting a folder into a workspace, which is how a repository's own skills arrive.
 - [memory](memory.md) — what your agents remember across conversations — different from a procedure you teach once.
-- [settings](settings.md) — the skill trust setting and the rest of the app's configuration.
+- [settings](settings.md) — the app's configuration. Tool permissions and the skill trust setting are on the Skills & Tools page.

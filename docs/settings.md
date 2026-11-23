@@ -39,7 +39,7 @@ If part of a section cannot be loaded, that part shows what could not be loaded,
 
 ### When the port or address changes
 
-The page can only talk to the address it was opened from. When a restart moves the gateway to a new port, the **Restart now?** window says the new address and, if you reach Omnipus through a proxy, which port the proxy must point at. Once the old address stops answering, **Open the new address** takes you there, and Settings at the new address confirms the restart. If nothing changes within 60 seconds, the window says so: check that the gateway is running and read its log.
+The page can only talk to the address it was opened from. When a restart moves the gateway to a new port, the **Restart now?** window says the new address and, if you reach Omnipus through a proxy, which port the proxy must point at. Once the old address stops answering, **Open the new address** takes you there, and Settings at the new address confirms the restart. If nothing changes within 60 seconds, the window says so: check that the gateway is running and read its log. If the gateway restarted but your changes are still listed as waiting for a restart, or that list cannot be read, the window says the changes are not confirmed in use, and you can restart again.
 
 ## When you would use it
 
@@ -143,7 +143,7 @@ Each section and neighbor screen has one job.
 | Settings, Third-party agents | The program and standard parameters Omnipus uses for each external command-line tool (Claude Code, Codex, opencode) |
 | Settings, Limits | Three groups, each closed until you open it: **Context and tool results** (context budget), **Model overrides** (context length per model) and **Agents and goals** (tool calls per turn, agents at once, goal timers; every value there asks for your password) |
 | Settings, Protection | Security health, Auto-approve (saved with **Save changes**, Password badge), the **Turn on God Mode…** button (acts at once, never part of a Save), prompt-injection **Defense level** (Low, Medium or High, saved with **Save changes**; it applies without a restart), per-agent rate limits, the audit log |
-| Settings, Sandbox & network | Sandbox mode, filesystem model, shell workspace limit, allowed folders, internal network addresses (all asking for your password, on one Save), and the network proxy for shell commands |
+| Settings, Sandbox & network | Sandbox mode, filesystem model, shell workspace limit, allowed folders, internal network addresses (all asking for your password, on one Save), and the network proxy for shell commands (on the same Save, no password, applies after a gateway restart) |
 | Settings, Keys & secrets | The credential vault |
 | Settings, Gateway | Bind address, port, gateway token, preview server, log level; restarting the gateway |
 | Settings, Data & retention | How long chat history and memory are kept, storage numbers, clearing all chat history |

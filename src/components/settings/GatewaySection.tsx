@@ -28,8 +28,6 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Spinner } from '@/components/ui/spinner'
 import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, getErrorMessage, type Config } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { usePendingRestart } from '@/hooks/restart'
@@ -38,6 +36,8 @@ import { toWriteResponse } from './saveOutcome'
 import { useSaveBar, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { GatewayRestartModal } from './GatewayRestartModal'
 import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
+import { ReadErrorCallout } from './ReadErrorCallout'
 
 // ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
 
@@ -108,7 +108,7 @@ export function GatewaySection() {
   const bindResolver = useRef<((ok: boolean) => void) | null>(null)
   const { entries: pendingEntries } = usePendingRestart()
 
-  const { data: config, isLoading, isError: isConfigError, refetch: refetchConfig } = useQuery({
+  const { data: config, isLoading, isError: isConfigError, error: configError, refetch: refetchConfig, isFetching: configFetching } = useQuery({
     queryKey: ['config'],
     queryFn: fetchConfig,
   })
@@ -125,6 +125,7 @@ export function GatewaySection() {
     return [
       {
         key: 'gateway.bind_address',
+        configKey: 'gateway.host',
         label: 'Bind address',
         value: g?.bind_address ?? LOCAL_ONLY,
         kind: 'select',
@@ -215,30 +216,18 @@ export function GatewaySection() {
   // FR-065: loading text with a spinner and Skeleton cards until the reads
   // answer; both stop moving under reduced motion (FR-075).
   if (isLoading) {
-    return (
-      <div className="space-y-[var(--space-2)]" aria-busy="true" data-testid="gateway-loading">
-        <div role="status" className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-          <Spinner decorative />
-          Loading Gateway…
-        </div>
-        {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-[var(--space-8)] w-full" />
-        ))}
-      </div>
-    )
+    return <SectionLoading label="Gateway" data-testid="gateway-loading" />
   }
 
   if (isConfigError || !config) {
     return (
-      <Card className="border-[var(--color-error)]/40 p-[var(--space-3)] space-y-[var(--space-2-5)]">
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">The gateway settings could not be loaded.</p>
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-          Nothing can be saved here until they load, so no setting is overwritten with a default.
-        </p>
-        <Button size="sm" variant="outline" onClick={() => refetchConfig()}>
-          Retry
-        </Button>
-      </Card>
+      <ReadErrorCallout
+        title="The gateway settings could not be loaded"
+        error={configError}
+        onRetry={() => void refetchConfig()}
+        retrying={configFetching}
+        data-testid="gateway-error"
+      />
     )
   }
 
@@ -416,7 +405,9 @@ export function GatewaySection() {
         emphasis="cancel"
         onConfirm={() => settleBind(true)}
       />
-      <GatewayRestartModal open={restartModalOpen} onClose={() => setRestartModalOpen(false)} />
+      {/* Mounted only while open: a closed window does not read the waiting
+          changes again when the section's settings load (FR-066). */}
+      {restartModalOpen && <GatewayRestartModal open onClose={() => setRestartModalOpen(false)} />}
     </div>
   )
 }

@@ -91,6 +91,15 @@ properties:
     type: object
     description: Event-specific metadata. Structure varies by event type.
     additionalProperties: true
+  fields:
+    type: object
+    description: >
+      Event-specific data of a structured audit record (pkg/audit.Record,
+      written by audit.Emit: for example turn.cancel.*, askuser.auto_default,
+      tool.policy.* and browser events). Those records carry their data here
+      instead of in details; the values are redacted like details. Structure
+      varies by event type. May be absent.
+    additionalProperties: true
   actor:
     type: string
     description: >

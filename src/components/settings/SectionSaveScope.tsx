@@ -26,7 +26,7 @@ const SectionSaveContext = createContext<Registry | null>(null)
 const SectionMessagesContext = createContext<Record<string, FieldMessage | null>>({})
 
 function summaryOf(p: FormSavePart): string {
-  return JSON.stringify([p.id, p.count, p.invalidCount, p.restartLabels ?? [], p.passwordLabels ?? []])
+  return JSON.stringify([p.id, p.count, p.invalidCount, p.restartLabels ?? [], p.passwordLabels ?? [], p.blocked?.() ?? false])
 }
 
 function wrap(key: string, latest: React.MutableRefObject<Map<string, FormSavePart>>, snapshot: FormSavePart): FormSavePart {
@@ -34,6 +34,7 @@ function wrap(key: string, latest: React.MutableRefObject<Map<string, FormSavePa
   return {
     id: snapshot.id,
     count: snapshot.count,
+    blocked: snapshot.blocked ? () => now().blocked?.() ?? false : undefined,
     invalidCount: snapshot.invalidCount,
     restartLabels: snapshot.restartLabels,
     passwordLabels: snapshot.passwordLabels,

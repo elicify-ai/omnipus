@@ -5281,7 +5281,14 @@ paths:
         body, and a wrong type each answer 400 naming the field and its
         range. Every other writer that would change the effective retention
         values — the generic PUT /config included — is refused by effect
-        (FR-044).
+        (FR-044). If config.json was written but the running settings could
+        not be refreshed afterwards, the answer is 500 ErrorResponse with
+        code "saved_not_refreshed" and details.keys naming the changed
+        storage.retention.* keys, which are also listed as apply_failed in
+        GET /config/pending-restart (C-6 outcome table): saved, not in use;
+        the retention sweeps keep the running values until a later refresh
+        or a restart. A failure before config.json was written answers 500
+        without that code.
       tags:
         - Settings
       security:
@@ -5307,6 +5314,14 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '500':
+          description: >
+            Failed before the write (no code), or written and then the live
+            refresh failed (code "saved_not_refreshed", details.keys).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /settings/context:

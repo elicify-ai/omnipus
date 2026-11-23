@@ -190,8 +190,12 @@ func (a *restAPI) putRetentionSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// B1 (SFH-01, I-5): the keys this body writes. When config.json is
+	// written but the live refresh fails, they are recorded as apply_failed
+	// inside the config write lock and named in details.keys (C-6).
+	written := retentionUpdateKeys(upd)
 	var before, after config.OmnipusRetentionConfig
-	writeErr := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	_, writeErr := a.safeUpdateConfigJSONRecorded(applyFailedSourceRefresh, func(m map[string]any) error {
 		retention, mapErr := retentionMapForWrite(m)
 		if mapErr != nil {
 			return mapErr
@@ -208,8 +212,18 @@ func (a *restAPI) putRetentionSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		after = retentionFromMap(retention)
 		return nil
-	})
-	if writeErr != nil {
+	}, func() []configKeyPath { return written })
+	var refreshErr *configRefreshError
+	switch {
+	case writeErr == nil:
+	case errors.As(writeErr, &refreshErr):
+		// config.json holds the change, the running settings (and so the
+		// sweeps) do not: saved, not in use. The persisted change is audited.
+		a.auditRetentionChange(r, before, after)
+		logsafeError("rest: PUT /settings/retention: saved but not refreshed", "error", writeErr)
+		writeSavedNotRefreshed(w, savedNotRefreshedText, written)
+		return
+	default:
 		var refusal *requestRefusalError
 		if errors.As(writeErr, &refusal) {
 			jsonErr(w, http.StatusBadRequest, refusal.Error())
@@ -226,6 +240,22 @@ func (a *restAPI) putRetentionSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, retentionSettingsView(stored))
+}
+
+// retentionUpdateKeys returns the canonical storage.retention.* keys a
+// RetentionSettingsUpdate writes (the fields present in the body).
+func retentionUpdateKeys(upd gen.RetentionSettingsUpdate) []configKeyPath {
+	var keys []string
+	if upd.SessionDays != nil {
+		keys = append(keys, "storage.retention.session_days")
+	}
+	if upd.MemoryRetrosDays != nil {
+		keys = append(keys, "storage.retention.memory_retros_days")
+	}
+	if upd.MemoryRetrosForever != nil {
+		keys = append(keys, "storage.retention.memory_retros_forever")
+	}
+	return canonicalConfigKeys(keys...)
 }
 
 // retentionMapForWrite returns m.storage.retention as a map, creating the

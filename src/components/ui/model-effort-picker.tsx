@@ -88,9 +88,14 @@ const EFFORT_HELP_TEXT = 'How much the model thinks before answering. More effor
 
 const NOT_SET = ''
 
-/** The one catalog read every picker shares (ADR-068's catalog query). */
+/**
+ * The one catalog read every picker shares (ADR-068's catalog query). The
+ * screen or section that shows the picker re-validates the catalog when it
+ * opens; a picker mounting later reuses that answer instead of sending its
+ * own catalog read (FR-066: a Retry re-reads only what failed).
+ */
 function useServedCatalog() {
-  const query = useQuery(providersCatalogQueryOptions())
+  const query = useQuery({ ...providersCatalogQueryOptions(), refetchOnMount: false })
   return {
     catalog: query.data,
     status: query.status,

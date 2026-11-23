@@ -69,6 +69,7 @@ import {
   getErrorMessage,
 } from '@/lib/api'
 import type { PromptInjectionLevel } from '@/lib/api'
+import type { RateLimitsUpdateRequest } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { DiagnosticsSection } from './DiagnosticsSection'
 import { SandboxSection } from './SandboxSection'
@@ -80,6 +81,7 @@ import { useStepUp } from './useStepUp'
 import { AutoApproveAskList } from './AutoApproveAskList'
 import { settingsRow } from './settingsSections'
 import { useReturnFocus } from './useReturnFocus'
+import { SectionLoading } from './SectionLoading'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -211,9 +213,12 @@ export interface AutoApproveDraft { // not-wire-format: React props from Protect
  * password once for the whole Save.
  */
 export function AutoApproveControl({ draft }: { draft: AutoApproveDraft }) {
-  const { isLoading, isError } = useQuery({
+  const { isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
+    // The section already sent this read; a failed one is read again only
+    // by Retry, not each time this card mounts.
+    retryOnMount: false,
   })
   const { data: sandboxStatus } = useQuery({
     queryKey: ['sandbox-status'],
@@ -233,11 +238,13 @@ export function AutoApproveControl({ draft }: { draft: AutoApproveDraft }) {
 
   if (isError) {
     return (
-      <Card className="p-[var(--space-3)]">
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-          Failed to load the Auto-approve setting. Please try again.
-        </p>
-      </Card>
+      <ReadErrorCallout
+        title="The Approvals settings could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="auto-approve-load-error"
+      />
     )
   }
 
@@ -317,6 +324,18 @@ export interface SecuritySectionProps { // not-wire-format: React props
   godMode?: React.ReactNode
 }
 
+/**
+ * FR-015/019: a rate-limit Save sends only the limits the person changed, so
+ * a value another tab saved meanwhile is not overwritten with this tab's old
+ * copy. The endpoint is a partial update.
+ */
+function changedRateLimits(body: Record<string, unknown>): RateLimitsUpdateRequest {
+  const update: RateLimitsUpdateRequest = {}
+  if ('max_agent_llm_calls_per_hour' in body) update.max_agent_llm_calls_per_hour = Number(body.max_agent_llm_calls_per_hour) || 0
+  if ('max_agent_tool_calls_per_minute' in body) update.max_agent_tool_calls_per_minute = Number(body.max_agent_tool_calls_per_minute) || 0
+  return update
+}
+
 export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   // FR-069: focus returns to the control that opened the dialog.
   const rotateFocus = useReturnFocus()
@@ -330,12 +349,25 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
   // The config read still decides the section's loading and error states; the
   // per-agent limits come from their own route below (#1882).
-  const { isLoading, isError: configError } = useQuery({
+  const {
+    isLoading,
+    isError: configError,
+    error: configReadError,
+    refetch: refetchConfig,
+    isFetching: configFetching,
+  } = useQuery({
     queryKey: ['config'],
     queryFn: fetchConfig,
   })
 
-  const { data: credentials = [], isError: credentialsError } = useQuery({
+  const {
+    data: credentials = [],
+    isError: credentialsError,
+    isLoading: credentialsLoading,
+    error: credentialsReadError,
+    refetch: refetchCredentials,
+    isFetching: credentialsFetching,
+  } = useQuery({
     queryKey: ['credentials'],
     queryFn: fetchCredentials,
     retry: false,
@@ -346,6 +378,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   const {
     data: rateLimits,
     isError: rateLimitsError,
+    isLoading: rateLimitsLoading,
     error: rateLimitsReadError,
     refetch: refetchRateLimits,
     isFetching: rateLimitsFetching,
@@ -357,7 +390,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
   // Auto-approve is a draft on the same Save bar (FR-010, FR-025): Save sends
   // it with PUT /security/sandbox-config after the Save's one password prompt.
-  const { data: sandboxConfig } = useQuery({
+  const { data: sandboxConfig, isLoading: sandboxConfigLoading, errorUpdateCount: sandboxConfigFailures } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
     // Read here only on Protection; elsewhere the control's own read fills
@@ -385,6 +418,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
     return [
       {
         key: 'auto_approve',
+        configKey: 'sandbox.auto_approve',
         label: 'Auto-approve',
         value: sandboxConfig?.auto_approve === true,
         kind: 'switch',
@@ -403,6 +437,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       },
       {
         key: 'max_agent_llm_calls_per_hour',
+        configKey: 'sandbox.rate_limits.max_agent_llm_calls_per_hour',
         label: 'Model calls per hour',
         value: rateLimits?.max_agent_llm_calls_per_hour || '',
         kind: 'number',
@@ -412,6 +447,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       },
       {
         key: 'max_agent_tool_calls_per_minute',
+        configKey: 'sandbox.rate_limits.max_agent_tool_calls_per_minute',
         label: 'Tool calls per minute',
         value: rateLimits?.max_agent_tool_calls_per_minute || '',
         kind: 'number',
@@ -429,12 +465,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
         ? toWriteResponse(() => updateSandboxConfig({ auto_approve: body.auto_approve === true }, ctx.reauthToken))
         : ctx.target === 'prompt-guard'
         ? toWriteResponse(() => updatePromptGuardLevel(body[PROMPT_GUARD_KEY] as PromptInjectionLevel))
-        : toWriteResponse(() =>
-        updateRateLimits({
-          max_agent_llm_calls_per_hour: Number(body.max_agent_llm_calls_per_hour ?? rateLimits?.max_agent_llm_calls_per_hour ?? 0) || 0,
-          max_agent_tool_calls_per_minute: Number(body.max_agent_tool_calls_per_minute ?? rateLimits?.max_agent_tool_calls_per_minute ?? 0) || 0,
-        }),
-      ),
+        : toWriteResponse(() => updateRateLimits(changedRateLimits(body))),
     readBack: async (key) => {
       if (key === 'auto_approve') return (await fetchSandboxConfig()).auto_approve === true
       if (key === PROMPT_GUARD_KEY) return (await fetchPromptGuardLevel()).level
@@ -561,12 +592,24 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       })
   }
 
-  if (isLoading) {
-    return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading...</div>
+  // FR-065: each view shows its section's loading frame until its reads answer.
+  const sectionLabel = view === 'keys' ? 'Keys & secrets' : 'Protection'
+  // The Approvals read joins the frame only on its first load: after it
+  // failed, its Retry shows in the Approvals group and the rest stays put.
+  const approvalsFirstLoad = sandboxConfigLoading && sandboxConfigFailures === 0
+  if (isLoading || (view === 'keys' ? credentialsLoading : rateLimitsLoading || approvalsFirstLoad)) {
+    return <SectionLoading label={sectionLabel} />
   }
 
   if (configError) {
-    return <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load security settings. Please try again.</p>
+    return (
+      <ReadErrorCallout
+        title={`The ${sectionLabel} settings could not be loaded`}
+        error={configReadError}
+        onRetry={() => void refetchConfig()}
+        retrying={configFetching}
+      />
+    )
   }
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.
@@ -806,7 +849,16 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
         <Card className="divide-y divide-[var(--color-border)]">
           {credentialsError && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load credentials. Please try again.</div>
+            <div className="p-[var(--space-3)]">
+              <ReadErrorCallout
+                title="The saved keys could not be loaded"
+                error={credentialsReadError}
+                onRetry={() => void refetchCredentials()}
+                retrying={credentialsFetching}
+                blocksSaving={false}
+                data-testid="credentials-load-error"
+              />
+            </div>
           )}
           {!credentialsError && credentials.length === 0 && (
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] flex items-center gap-[var(--space-2)]">

@@ -110,7 +110,9 @@ export function IntegrationsSection() {
     },
     onOutcome: (outcome) => {
       if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
-      setTranscriberDraft(null)
+      // CR-04: a choice made while this Save was running stays a draft.
+      const saved = sentTranscriber.current
+      setTranscriberDraft((d) => (d === saved ? null : d))
       void queryClient.invalidateQueries({ queryKey: ['integrations'] })
     },
     discard: () => setTranscriberDraft(null),

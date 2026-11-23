@@ -6,14 +6,15 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
-import { Button } from '@/components/ui/button'
-import { Spinner } from '@/components/ui/spinner'
-import { fetchRetentionSettings, updateRetentionSettings, getErrorMessage } from '@/lib/api'
+import { fetchRetentionSettings, updateRetentionSettings } from '@/lib/api'
 import type { RetentionSettingsUpdate } from '@/lib/api'
 import { SaveBar } from './SaveBar'
 import { toWriteResponse } from './saveOutcome'
 import type { SaveBarField, SaveBarValue } from './useSaveBar'
 import { DataSection } from './DataSection'
+import { ReadErrorCallout } from './ReadErrorCallout'
+import { useSettingsShell } from './SettingsShellContext'
+import { SectionLoading } from './SectionLoading'
 
 const RETENTION_QUERY_KEY = ['settings', 'retention'] as const
 
@@ -27,7 +28,8 @@ function dayRange(min: number, max: number) {
 
 export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?: boolean }) {
   const queryClient = useQueryClient()
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const shell = useSettingsShell()
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: RETENTION_QUERY_KEY,
     queryFn: fetchRetentionSettings,
   })
@@ -41,21 +43,16 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
 
   let retention: React.ReactNode
   if (isLoading) {
+    retention = <SectionLoading label="Data & retention" />
+  } else if (!data) {
     retention = (
-      <div className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
-        <Spinner decorative />
-        Loading Data & retention…
-      </div>
-    )
-  } else if (isError || !data) {
-    retention = (
-      <Callout variant="error" data-testid="retention-error">
-        <CalloutTitle>The retention settings could not be loaded</CalloutTitle>
-        <CalloutDescription>{getErrorMessage(error, 'The gateway did not answer.')}</CalloutDescription>
-        <Button variant="outline" size="sm" onClick={() => void refetch()}>
-          Retry
-        </Button>
-      </Callout>
+      <ReadErrorCallout
+        title="The retention settings could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="retention-error"
+      />
     )
   } else {
     // FR-048: the config-file switch keeps everything; the fields stay editable.
@@ -63,6 +60,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
     const fields: SaveBarField[] = [
       {
         key: 'session_days',
+        configKey: 'storage.retention.session_days',
         label: 'Keep chat history for',
         value: data.session_days,
         kind: 'number',
@@ -71,6 +69,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
       },
       {
         key: 'memory_retros_forever',
+        configKey: 'storage.retention.memory_retros_forever',
         label: 'Keep forever',
         value: data.memory_retros_forever,
         kind: 'switch',
@@ -79,6 +78,7 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
       },
       {
         key: 'memory_retros_days',
+        configKey: 'storage.retention.memory_retros_days',
         label: 'Keep memory for',
         value: data.memory_retros_days,
         kind: 'number',
@@ -88,8 +88,21 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
         disabledWhen: { key: 'memory_retros_forever', equals: true },
       },
     ]
+    // SFH-06 / FR-066: a failed background read keeps the form (and its
+    // drafts) mounted. The error shows above it, and Save is blocked until
+    // the read succeeds again.
     retention = (
       <>
+        {isError && (
+          <ReadErrorCallout
+            title="The retention settings could not be loaded"
+            error={error}
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+            data-testid="retention-error"
+            action="Your changes are kept. Press Retry to load the settings again, then save."
+          />
+        )}
         {locked && (
           <Callout variant="info" className="mb-[var(--space-3)]">
             <CalloutTitle>Nothing is deleted at the moment</CalloutTitle>
@@ -101,6 +114,11 @@ export function DataRetentionSection({ backupRemoved = false }: { backupRemoved?
         <SaveBar
           section="data"
           fields={fields}
+          preSave={async () => {
+            if (!isError) return true
+            shell.announce('Nothing was saved. The retention settings could not be loaded; press Retry first.')
+            return false
+          }}
           onSave={(body) =>
             toWriteResponse(() => updateRetentionSettings(body as RetentionSettingsUpdate))
           }

@@ -30,6 +30,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/memrooms"
@@ -187,6 +188,9 @@ type MemoryStore struct {
 	// memory_retro_recall.go.
 	recallMu     sync.Mutex
 	recallWindow *retroRecallWindow
+	// recallSource, when set, is read on every recall search and wins over
+	// recallWindow (SetRetroRecallSource; B2).
+	recallSource func() (config.OmnipusRetentionConfig, bool)
 }
 
 // SetClock overrides the clock used to stamp persisted memory records

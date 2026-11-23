@@ -673,6 +673,7 @@ func (al *AgentLoop) rewireFastUpsertRegistry(newRegistry *AgentRegistry, cfg *c
 	if al.memoryRateLimiter != nil {
 		al.wireMemoryRateLimiterOn(newRegistry, al.memoryRateLimiter)
 	}
+	al.wireRetroRecallSourceOn(newRegistry)
 	wireDelegationInjectors(al, newRegistry)
 	wireWorkingDirInjectors(al, newRegistry)
 	wireModeNoteInjectors(al, newRegistry)

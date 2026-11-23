@@ -108,6 +108,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
   // other security_setting_change) renders as an unexpandable, all-blank row.
   const hasDetail = hasNonEmpty(entry.parameters) ||
                     hasNonEmpty(entry.details) ||
+                    hasNonEmpty(entry.fields) ||
                     !!entry.command ||
                     !!entry.policy_rule ||
                     !!entry.actor ||
@@ -204,6 +205,10 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
               )}
               {hasNonEmpty(entry.details) && (
                 <JsonBlock label="Details" value={entry.details!} />
+              )}
+              {/* FR-107: structured records (audit.Emit) carry their data under fields. */}
+              {hasNonEmpty(entry.fields) && (
+                <JsonBlock label="Fields" value={entry.fields!} />
               )}
               {hasNonEmpty(entry.old_value) && (
                 <JsonBlock label="Old Value" value={entry.old_value!} />

@@ -9,14 +9,15 @@ import { resolveSettingsLink } from '@/components/settings/settingsSections'
 // any string is accepted and an unknown value falls back to Providers.
 // `?provider=&model=` pre-fills a Limits → Model overrides row (FR-004);
 // `?focus=god-mode` lands on the God Mode button in Protection (FR-005);
-// `?restarted=1` is the landing link after a port change (FR-063);
+// `?restarted=1` is the landing link after a port change (FR-063); the
+// router's search parser reads the bare 1 as a number, so both forms count;
 // `?row=<row id>` scrolls to and highlights one setting row (FR-075).
 const settingsSearchSchema = z.object({
   tab: z.string().max(64).optional().catch(undefined),
   provider: z.string().min(1).max(64).optional().catch(undefined),
   model: z.string().min(1).max(256).optional().catch(undefined),
   focus: z.string().max(32).optional().catch(undefined),
-  restarted: z.string().max(8).optional().catch(undefined),
+  restarted: z.union([z.literal(1), z.literal('1')]).optional().catch(undefined),
   row: z.string().max(64).optional().catch(undefined),
 })
 
@@ -50,7 +51,7 @@ function SettingsRoute() {
       prefillOverride={link.prefillOverride}
       focusGodMode={link.focusGodMode}
       backupRemoved={link.backupRemoved}
-      restarted={search.restarted === '1'}
+      restarted={search.restarted !== undefined}
       targetRow={link.row}
     />
   )

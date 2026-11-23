@@ -40,7 +40,10 @@ interface RecapModelSlotProps {
 }
 
 export function RecapModelSlot({ value, scope, contextName, disabled, note, chipRef, modelTrigger, onCommit, children }: RecapModelSlotProps) {
-  const catalogQuery = useQuery(providersCatalogQueryOptions())
+  // MemorySection's own catalog read re-validates on Settings open; a slot
+  // mounting later (after a Retry) reuses that answer instead of sending
+  // another catalog read (FR-066: Retry re-reads only what failed).
+  const catalogQuery = useQuery({ ...providersCatalogQueryOptions(), refetchOnMount: false })
   const catalog = catalogQuery.data
   const lookup = useCallback((pair: EffortPair) => findServedRow(catalog, pair.provider, pair.model), [catalog])
   const effortSwitch = useEffortSwitch({
