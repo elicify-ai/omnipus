@@ -33,12 +33,11 @@ import "testing"
 const s1HandOnSeam = "the complete actual producer/write/dispatch fixture for this chain is not yet implemented in the test harness; seeded-record and direct-carrier tests do not establish this handoff"
 
 func TestProgramProvenance_HandOn(t *testing.T) {
-	t.Run("S75_telegram_to_delegated_helper", func(t *testing.T) {
-		// GREEN asserts here (spec S-75): Telegram off, GitHub on for Dev;
-		// the helper's output is 0 with the telegram notice; after Telegram
-		// is switched on the same delegation outputs 16.
-		t.Fatalf("BLOCKED: %s — required by S-75's helper outputs", s1HandOnSeam)
-	})
+	// S75_telegram_to_delegated_helper migrated intact to
+	// pkg/agent::TestProgramProvenance_ActualDelegatedHelper: actual input ->
+	// delegate tool -> launcher -> durable child -> registered bash, exact
+	// count0/Telegram notice then count16 after the channel switch is on.
+	// The durable carrier is observed from the actual launch, not seeded.
 
 	t.Run("S76_telegram_to_peer_request", func(t *testing.T) {
 		// GREEN asserts here (spec S-76): Telegram off, GitHub on for Ops;
