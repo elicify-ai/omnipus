@@ -39,18 +39,16 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 	// count0/Telegram notice then count16 after the channel switch is on.
 	// The durable carrier is observed from the actual launch, not seeded.
 
-	t.Run("S76_telegram_to_peer_request", func(t *testing.T) {
-		// GREEN asserts here (spec S-76): Telegram off, GitHub on for Ops;
-		// Ops's output is 0 with the telegram notice.
-		t.Fatalf("BLOCKED: %s — required by S-76", s1HandOnSeam)
-	})
+	// S76_telegram_to_peer_request migrated intact to
+	// pkg/gateway::TestProgramProvenance_ActualPeerRequest: real Dev send_message,
+	// real gateway admission/router/ledger and running Ops turn, exact count0
+	// and Telegram notice after the connected Ops count16 positive control.
 
-	t.Run("S77_telegram_to_new_board_task_ui_task_independent", func(t *testing.T) {
-		// GREEN asserts here (spec S-77): the task run outputs 0 with the
-		// telegram notice; a task with the same text created by the person
-		// in the UI follows A-1 and outputs 16.
-		t.Fatalf("BLOCKED: %s — required by S-77's two-task assertion", s1HandOnSeam)
-	})
+	// S77_telegram_to_new_board_task_ui_task_independent migrated intact to
+	// pkg/gateway::TestProgramProvenance_ActualBoardTasks: actual Telegram
+	// create_task versus the person's real REST create with the same prompt,
+	// actual Board start/executor/launcher/commands, exact count0/Telegram
+	// notice versus count16 and exact lineage/receiving origin sets.
 
 	t.Run("S78_provenance_survives_restart", func(t *testing.T) {
 		// GREEN asserts here (spec S-78): a helper launched from a Telegram
@@ -65,18 +63,15 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-79's unresolved notice", s1HandOnSeam)
 	})
 
-	t.Run("S80_mixed_provenance_through_a_peer_request", func(t *testing.T) {
-		// GREEN asserts here (spec S-80): telegram allowed, discord not; the
-		// peer-consumer run is 0 and the notice names discord.
-		t.Fatalf("BLOCKED: %s — required by S-80's mixed join", s1HandOnSeam)
-	})
+	// S80_mixed_provenance_through_a_peer_request migrated intact to
+	// pkg/gateway::TestProgramProvenance_ActualMixedPeerRequest: separate real
+	// Telegram/Discord inputs, admitted into one live Dev turn, actual peer
+	// tool/router/ledger/Ops command, exact two-origin set, count0 and full
+	// Discord-off notice with Telegram allowed. No manually joined carrier.
 
-	t.Run("S82_model_text_cannot_set_provenance", func(t *testing.T) {
-		// GREEN asserts here (spec S-82): a peer request whose body says
-		// "origin: webchat" leaves Ops's turn provenance {connector:telegram}
-		// — model text never writes provenance — and outputs 0.
-		t.Fatalf("BLOCKED: %s — required by S-82's cannot-forge assertion", s1HandOnSeam)
-	})
+	// S82_model_text_cannot_set_provenance migrated intact to the same actual
+	// pkg/gateway peer test: body says origin:webchat, but the actual ledger
+	// AND receiver turn carry exactly connector:telegram; real child count0.
 
 	// S111_omitted_producer_dev_command_gets_no_token_and_the_unresolved_notice
 	// migrated intact to pkg/agent::TestProgramProvenance_OmittedInputRuntime:
