@@ -5920,6 +5920,40 @@ export const CredentialRotateRequest = z.object({
 export const PackageExportRequest = z.object({
   agent_ids: z.array(z.string()),
 });
+export const PackageExportPlanRequest = z.object({
+  scope: z.literal("agents"),
+  agent_ids: z.array(z.string()),
+});
+export const PackageExportPlan = z.object({
+  plan_id: z.string().uuid(),
+  created_at: z.string().datetime({ offset: true }),
+  expires_at: z.string().datetime({ offset: true }),
+  scope: z.literal("agents"),
+  elements: z.array(
+    z.object({
+      type: z.string(),
+      source_id: z.string(),
+      name: z.string(),
+      kind: z.enum(["main", "worker", "external_worker"]),
+      files: z.array(z.object({ path: z.string(), size: z.number().int() })),
+      bytes: z.number().int(),
+    })
+  ),
+  left_out: z.array(
+    z.object({
+      type: z.string(),
+      reason: z.string(),
+      message: z.string(),
+      items: z.array(z.string()).optional(),
+    })
+  ),
+  needs_secrets: z.array(
+    z.object({ name: z.string(), used_by: z.string(), kind: z.string() })
+  ),
+  disclosures: z.array(z.object({ code: z.string(), message: z.string() })),
+  size_bytes: z.number().int(),
+  file_name: z.string(),
+});
 export const PackageManifest: z.ZodType<PackageManifest> = z
   .object({
     format: z.literal("omnpkg"),
@@ -13654,6 +13688,97 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
   },
   {
     method: "post",
+    path: "/packages/export/plan",
+    alias: "createPackageExportPlan",
+    description: `Runs the same capture, cleaning and refusals as POST /packages/export for exactly one agent, builds the bundle in memory only to measure it, discards the bytes and keeps the review in memory for 30 minutes (at most 32 reviews; adding one more drops expired reviews first, then the oldest). Writes nothing to the data folder, writes no audit entry and uses no upload slot. The review never carries a removed value, only names. Reviews do not survive a gateway restart. Local mode only; refused while developer bypass mode is on.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PackageExportPlanRequest,
+      },
+    ],
+    response: PackageExportPlan,
+    errors: [
+      {
+        status: 400,
+        description: `agent_ids does not hold exactly one ID (export_selection_invalid), the body is not valid JSON, has an unknown property, or scope is not agents.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Agent not found (agent_not_found).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed (only POST).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 413,
+        description: `JSON body over 1 MiB.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `The agent cannot be exported; the same code the export gives (core_agent_not_exportable, agent_prompt_missing, element_not_creatable, agent_file_unreadable, external_worker_not_supported_yet).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/packages/export/plan/:plan_id",
+    alias: "getPackageExportPlan",
+    description: `Returns the stored review unchanged while now is before its expires_at. Does not capture the agent again. An unknown, malformed or expired ID, or any ID after a gateway restart, answers 404 plan_not_found. Local mode only; refused while developer bypass mode is on.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "plan_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: PackageExportPlan,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Review unknown, malformed or expired (plan_not_found).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed (only GET).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/packages/import",
     alias: "uploadPackage",
     description: `Copies the whole body (at most 64 MiB) into a staging folder, then runs every format check (bounded zstd decoding, manifest, checksums, entry paths and types, agent layout) and a dry run of the create rules. Nothing outside the staging folder, staging maintenance and the audit log is changed. The preview is provisional; the staging expires 30 minutes after it became ready. At most 5 stagings are kept at once.
@@ -13686,6 +13811,54 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
       {
         status: 422,
         description: `The package was refused (not_a_package, package_too_new, element_schema_too_new, package_too_large with details.limit window, checksum_mismatch, manifest_mismatch, unsafe_path, unsafe_entry_type, no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable, external_worker_not_supported_yet).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Developer bypass mode is on.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/packages/import/:staging_id",
+    alias: "cancelPackageImport",
+    description: `Cancels a staged upload that is ready and has not been applied, in one step under the staging registry lock that the apply also takes. A ready upload (expired or not) has its folder removed and its slot freed (204). If the folder cannot be removed, the upload is marked cancelled: it can never be applied and holds no slot, and removal is attempted again by the next upload&#x27;s clean-up or a repeated cancel (500 staging_cleanup_failed). An upload being received, being applied or kept for clean-up after a failed import is never touched (409 staging_busy). Not audited (no data enters or leaves). Local mode only; refused while developer bypass mode is on.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "staging_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Staging unknown, already used or already cancelled (staging_not_found).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed (only DELETE on this path; POST on /apply).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `The upload is being received, being applied, or kept for clean-up (staging_busy); nothing was changed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The upload is cancelled but its folder could not be removed yet (staging_cleanup_failed); removal is attempted again at a later upload or a repeated cancel.`,
         schema: ErrorResponse,
       },
       {
