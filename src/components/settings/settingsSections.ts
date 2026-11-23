@@ -196,9 +196,12 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   S('data', 'Clear all chat history', 'Deletes all chat transcripts.'),
   S('about', 'Version', 'Version, build and system information.'),
   // Moved, removed and hidden items (FR-007).
-  { label: 'Web search', description: 'Search providers and keys.', note: 'Moved to Skills & Tools.', href: '/skills' },
-  { label: 'Tool permissions', description: 'Allow, Ask or Deny for each tool.', note: 'Moved to Skills & Tools.', href: '/skills' },
-  { label: 'Skill trust', description: 'Whether unverified skills may load.', note: 'Moved to Skills & Tools.', href: '/skills' },
+  // G2-F5 (founder 2026-11-23, Q1 A): web search is still under Providers;
+  // tool permissions and skill trust are in no place until the Skills & Tools
+  // landing, so their entries say so and lead nowhere.
+  { section: 'providers', label: 'Web search', description: 'Search providers and keys.' },
+  { label: 'Tool permissions', description: 'Allow, Ask or Deny for each tool.', note: 'Temporarily unavailable until the Skills & Tools update lands.' },
+  { label: 'Skill trust', description: 'Whether unverified skills may load.', note: 'Temporarily unavailable until the Skills & Tools update lands.' },
   { label: 'Verbose chat', description: 'Show every tool call in the transcript.', note: 'Moved to Profile → Chat display.', href: '/profile' },
   { label: 'Backup', description: 'Create or restore a backup.', note: 'Backup and restore were removed.' },
   { label: 'Restore', description: 'Restore a backup.', note: 'Backup and restore were removed.' },

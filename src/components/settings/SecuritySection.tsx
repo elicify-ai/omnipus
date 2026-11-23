@@ -28,9 +28,8 @@ import { ExecProxyStatusCard } from './ExecProxyStatusCard'
 import { SkillTrustSection } from './SkillTrustSection'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash, Key, Lock } from '@phosphor-icons/react'
-import { Link } from '@tanstack/react-router'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { Callout, CalloutActions, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
+import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -771,16 +770,11 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
           </section>
           {auditBlock}
           <Callout variant="info" data-testid="protection-moved-permissions">
-            <CalloutTitle>Tool and skill permissions moved</CalloutTitle>
+            <CalloutTitle>Tool permissions and skill trust are temporarily unavailable</CalloutTitle>
             <CalloutDescription>
-              Allow, Ask or Deny for each tool, and whether unverified skills may load, are set on that page now.
+              Allow, Ask or Deny for each tool, and whether unverified skills may load, are temporarily unavailable until the Skills &amp; Tools update lands.
               An agent can still be stricter on its own profile.
             </CalloutDescription>
-            <CalloutActions>
-              <Button asChild variant="outline" size="sm">
-                <Link to="/skills">Open Skills &amp; Tools</Link>
-              </Button>
-            </CalloutActions>
           </Callout>
           {/* One Save bar for the section: Auto-approve, Defense level and the rate limits. */}
           <SaveBarPanel {...rateLimitState.bar} />
