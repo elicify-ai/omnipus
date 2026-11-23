@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"io/fs"
 	"path/filepath"
 	"sort"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -22,20 +22,22 @@ import (
 )
 
 // Oracles: ARCHITECT-RULING-R4-goals.md §2 D1-D4 (founder Option R).
-// These literals come from W14, not the current catalogue/classifier.
+// Catalogue sentences reference the generated W14 contract per team-lead's
+// 2026-11-23 ruling; code, display names and state/effect oracles stay independent.
 const opencodeR4Code = "delegation_not_resumable"
-const opencodeR4NoFact = "I couldn't continue this delegation: its previous conversation can't be resumed. Start a new delegation."
+
+var opencodeR4NoFact = generated.LLMErrorMessageVariants[opencodeR4Code]["no_cli"]
 
 var opencodeR4CLIs = []struct{ key, display string }{
 	{"claude-code", "Claude Code"}, {"codex", "Codex"}, {"opencode", "OpenCode"},
 }
 
 func opencodeR4Chat(display string) string {
-	return "I couldn't continue this delegation in " + display + ": its previous conversation can't be resumed. Start a new delegation."
+	return strings.ReplaceAll(generated.LLMErrorUserMessages[opencodeR4Code], "{cli}", display)
 }
 
 func opencodeR4Neutral(display string) string {
-	return "This delegation could not continue in " + display + ": its previous conversation can't be resumed. Start a new delegation."
+	return strings.ReplaceAll(generated.LLMErrorNeutralMessages[opencodeR4Code], "{cli}", display)
 }
 
 func opencodeR4Goal() *steer.GoalSpec {
@@ -145,24 +147,6 @@ func opencodeR4Snapshot(t *testing.T, al *AgentLoop) opencodeR4Writes {
 	active, queued := len(gate.active), len(gate.queue)
 	gate.mu.Unlock()
 	return opencodeR4Writes{len(recs), len(goals), len(metas), paths, active, queued}
-}
-
-// The ruling deliberately leaves the exported sentinel's name to backend-lead.
-// Until that name is supplied, require an actual wrapped cause, then compare
-// independently invoked Launch/tool chains with errors.Is against that shared
-// identity. This detects per-call errors.New and string-only matching; it does
-// not pretend to assert the as-yet-unnamed export's source-package placement.
-func opencodeR4GoalCause(t *testing.T, err error, row string) error {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("BLOCKED: external goal refusal and its pkg/tools sentinel not implemented — required by D1/%s", row)
-	}
-	cause := errors.Unwrap(err)
-	require.Error(t, cause, "%s: Launch must WRAP the new sentinel, not return contextual text alone", row)
-	for errors.Unwrap(cause) != nil {
-		cause = errors.Unwrap(cause)
-	}
-	return cause
 }
 
 func opencodeR4SaveHuman(t *testing.T, al *AgentLoop, sid, text string) bus.InboundMessage {

@@ -15,7 +15,15 @@ import (
 // Source for R4-GW-A/B/C: team-lead addition, 2026-11-23, founder Q13 B,
 // OC-1899-3. Board task-run chat remains REFUSED in this landing, but an
 // existing-session refusal must be addressed and saved there for reload.
-// No exact gateway sentence has been approved yet; do not invent one.
+// TEXT.md §3 now supplies the exact non-catalogue sentence. Keep it literal,
+// independently of the gateway implementation and generated error catalogue.
+const opencodeR4TaskChatTemplate = "I couldn't deliver your message: this task runs in {cli} and doesn't accept chat messages here. To change the work, open Tasks and stop the task or its plan before editing the task."
+
+func opencodeR4TaskChatSentence(cli string) string {
+	display := map[string]string{"claude-code": "Claude Code", "codex": "Codex", "opencode": "OpenCode"}[cli]
+	return strings.ReplaceAll(opencodeR4TaskChatTemplate, "{cli}", display)
+}
+
 func TestOpenCodeR4_GatewayA_TaskRunWorkerRefusalIsSessionTagged(t *testing.T) {
 	for _, cli := range []string{"claude-code", "codex", "opencode"} {
 		for _, explicit := range []bool{true, false} {
@@ -31,7 +39,7 @@ func TestOpenCodeR4_GatewayA_TaskRunWorkerRefusalIsSessionTagged(t *testing.T) {
 				assert.NotContains(t, frameTypes, string(generated.WsFrameTypeSessionStarted), "Q13 B: no replacement chat may be created")
 				if assert.Len(t, refusals, 1, "Q13 B: a task-run chat frame gets one visible refusal, never silence or acceptance") {
 					assert.Equal(t, &f.sid, refusals[0].SessionId, "Q13 B: error must identify the addressed task-run session")
-					assert.NotEmpty(t, strings.TrimSpace(refusals[0].Message), "Q13 B: the session-tagged refusal must have visible text")
+					assert.Equal(t, opencodeR4TaskChatSentence(cli), refusals[0].Message, "Q13 B: exact approved TEXT.md section 3 refusal")
 				}
 			})
 		}
@@ -58,7 +66,9 @@ func TestOpenCodeR4_GatewayB_TaskRunWorkerRefusalSurvivesReload(t *testing.T) {
 						saved = append(saved, entry)
 					}
 				}
-				assert.Len(t, saved, 1, "Q13 B: exactly one refusal row must survive a fresh transcript-store read")
+				if assert.Len(t, saved, 1, "Q13 B: exactly one refusal row must survive a fresh transcript-store read") {
+					assert.Equal(t, opencodeR4TaskChatSentence(cli), saved[0].Content, "Q13 B: save the exact approved task-chat refusal")
+				}
 				var replayed []generated.ReplayErrorFrame
 				_, err := streamReplay(context.Background(), f.sid, entries, computeReplayStats(entries), func(frame any) error {
 					raw, marshalErr := json.Marshal(frame)
@@ -83,8 +93,8 @@ func TestOpenCodeR4_GatewayB_TaskRunWorkerRefusalSurvivesReload(t *testing.T) {
 					assert.Equal(t, f.sid, replayed[0].SessionId)
 					assert.NotEmpty(t, saved[0].ID, "saved refusal has a durable identity")
 					assert.Equal(t, saved[0].ID, replayed[0].EntryId)
-					assert.NotEmpty(t, strings.TrimSpace(replayed[0].Message))
-					assert.Equal(t, saved[0].Content, replayed[0].Message, "live/durable/replay text must agree; exact copy awaits approved gateway wording")
+					assert.Equal(t, opencodeR4TaskChatSentence(cli), replayed[0].Message, "Q13 B: replay the exact approved refusal")
+					assert.Equal(t, saved[0].Content, replayed[0].Message, "live/durable/replay text must agree with the approved wording")
 					if assert.Len(t, live, 1) {
 						assert.Equal(t, live[0].Message, replayed[0].Message)
 					}

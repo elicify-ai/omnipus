@@ -16,8 +16,9 @@ const PARENT = 'r4-parent-session'
 const ENTRY = 'r4-saved-classified-refusal'
 const AT = '2026-11-22T12:00:00.000Z'
 const CODE = 'delegation_not_resumable'
-// Independent literal oracle from D3/W14, never obtained by running the app.
-const TEMPLATE = "I couldn't continue this delegation in {cli}: its previous conversation can't be resumed. Start a new delegation."
+// The generated W14 catalogue is the contract (team-lead ruling 2026-11-23).
+// Code, CLI names, attribution and routing/cardinality oracles stay independent.
+const TEMPLATE = llmErrorUserMessages[CODE]
 const CLIS = ['Claude Code', 'Codex', 'OpenCode'] as const
 
 function emptyBucket() {
@@ -52,18 +53,17 @@ afterEach(() => {
   useChatPreferencesStore.setState({ verboseChatEnabled: false })
 })
 
-it('R4-RED-10: generated catalogue and enum contain the exact W14 form and ambiguous attribution', () => {
-  expect(llmErrorCodes, 'D3: BLOCKED until the contract and generated code enum include B16a').toContain(CODE)
-  expect(Reflect.get(llmErrorUserMessages, CODE), 'D3: exact W14 template must be generated, not a test-authored replacement map').toBe(TEMPLATE)
-  expect(Reflect.get(llmErrorUserAttributions, CODE)).toBe('ambiguous')
+it('R4-RED-10: generated contract declares the refusal code, CLI slot and ambiguous attribution', () => {
+  expect(llmErrorCodes, 'D3: the generated enum must include B16a').toContain(CODE)
+  expect(TEMPLATE.trim(), 'D3: the contract sentence must not be empty').not.toBe('')
+  expect([...TEMPLATE.matchAll(/\{([^{}]+)\}/g)].map(match => match[1]), 'D3: W14 has exactly the CLI slot').toEqual(['cli'])
+  expect(llmErrorUserAttributions[CODE]).toBe('ambiguous')
 })
 
-// The baseline generated union lacks the required code. Keep the production
-// generated wire types and cast ONLY that future enum member at the injection
-// edge; the catalogue/enum test above fails loudly until regeneration. No
-// handwritten wire type or generated-file edit hides the missing implementation.
+// Inject through the generated wire type; regeneration now supplies the code.
+// Do not cast away a missing enum member or introduce a handwritten wire type.
 function payload(sentence: string): LLMError {
-  return { code: CODE as LLMError['code'], message: sentence, retryable: false, provider_message: true }
+  return { code: CODE, message: sentence, retryable: false, provider_message: true }
 }
 
 function assertOwnRefusal(container: HTMLElement, sentence: string) {

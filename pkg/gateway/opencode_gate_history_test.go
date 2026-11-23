@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
@@ -14,10 +15,12 @@ import (
 // in runner/opencode_captured_error_test.go. Never synthesize it from the parser.
 const opencodeGateCapturedUnknown = `{"type":"error","timestamp":1795147660495,"sessionID":"ses_e08dc8729ffexGiTHbDIAcf2Ue","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_0be266a4"}}}`
 
-// Founder-approved #1857 W4, notifications-1857-pending-wording.md and
-// contracts/components/schemas/LLMError.yaml. Literal oracles, not renderer calls.
-const opencodeGateUnknownChat = "I couldn't finish the run in OpenCode: it stopped with an error I couldn't identify. Retry the task; if it keeps happening, check that OpenCode works on its own."
-const opencodeGateUnknownParent = "The run in OpenCode stopped with an error that could not be identified. Retry the task; if it keeps happening, check that OpenCode works on its own."
+// Founder-approved #1857 W4 contract sentences, referenced through the
+// generated catalogue per team-lead's 2026-11-23 ruling, never renderer calls.
+var (
+	opencodeGateUnknownChat   = strings.ReplaceAll(generated.LLMErrorUserMessages["external_cli_failed"], "{cli}", "OpenCode")
+	opencodeGateUnknownParent = strings.ReplaceAll(generated.LLMErrorNeutralMessages["external_cli_failed"], "{cli}", "OpenCode")
+)
 
 func opencodeGateReopen(t *testing.T, store *session.UnifiedStore, sid string) []session.TranscriptEntry {
 	t.Helper()

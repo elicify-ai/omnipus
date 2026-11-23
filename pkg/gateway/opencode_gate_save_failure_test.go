@@ -24,9 +24,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Founder-approved #1857 W17, not a string copied from a runtime translation.
-const opencodeGateSaveChat = "This turn finished, but I couldn't save its final state. Recent messages may be missing from your history; check the answer above before repeating anything."
-const opencodeGateSaveParent = "The run finished, but its final state could not be saved. Recent messages may be missing from the history; check the result before repeating any part of the task."
+// Founder-approved #1857 W17 contract sentences, referenced through the
+// generated catalogue per team-lead's 2026-11-23 ruling, not runtime translation.
+var (
+	opencodeGateSaveChat   = gen.LLMErrorUserMessages["transcript_save_failed"]
+	opencodeGateSaveParent = gen.LLMErrorNeutralMessages["transcript_save_failed"]
+)
 
 // CHANGED REQUIREMENT, not test weakening: ARCHITECT-RULING-R2.md section 1
 // (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/opencode-fixes/gate-20261121/ARCHITECT-RULING-R2.md).

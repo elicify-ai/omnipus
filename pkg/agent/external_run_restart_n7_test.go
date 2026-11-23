@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -76,7 +77,16 @@ func TestN7_RestartedRevivalOfStartedExternalSessionRefusesInsteadOfFreshRun(t *
 	ts.opts.ExternalCLIResume = false
 	res, err := runExternalCLISubTurn(context.Background(), al, ts, "message after restart")
 	require.ErrorIs(t, err, errExternalResumeUnavailable)
-	require.Nil(t, res, "a refused entry starts no process")
+	// R4 D3: refusing a lost conversation returns the classified neutral
+	// parent result; process absence is established by the counters below.
+	require.NotNil(t, res, "the parent must receive the classified refusal")
+	require.ErrorIs(t, res.Err, errExternalResumeUnavailable)
+	require.Contains(t, res.ContentForLLM(), "delegation_not_resumable")
+	want := strings.ReplaceAll(generated.LLMErrorNeutralMessages["delegation_not_resumable"], "{cli}", "Claude Code")
+	require.NotEmpty(t, want, "the neutral contract sentence must be present")
+	require.Equal(t, 1, strings.Count(res.ContentForLLM(), want), "the parent receives the full neutral refusal once")
+	chat := strings.ReplaceAll(generated.LLMErrorUserMessages["delegation_not_resumable"], "{cli}", "Claude Code")
+	require.NotContains(t, res.ContentForLLM(), chat, "the parent must not impersonate the helper's chat voice")
 	runs, resumes := drv.snapshot()
 	require.Equal(t, 1, runs, "no fresh CLI Run may start in the old chat after a restart")
 	require.Empty(t, resumes)

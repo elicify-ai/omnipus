@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -15,11 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Independent oracles: architect ruling R1-c/R1-d/R2, and the founder-approved
-// W17 catalogue in contracts/components/schemas/LLMError.yaml. No runtime
-// translation or cap helper manufactures an expected value.
-const opencodeR2ChatWarning = "This turn finished, but I couldn't save its final state. Recent messages may be missing from your history; check the answer above before repeating anything."
-const opencodeR2NeutralWarning = "The run finished, but its final state could not be saved. Recent messages may be missing from the history; check the result before repeating any part of the task."
+// Oracles: architect ruling R1-c/R1-d/R2 and the generated W17 contract
+// catalogue (team-lead ruling 2026-11-23). Do not call runtime translators
+// or cap helpers to manufacture expected values.
+var (
+	opencodeR2ChatWarning    = generated.LLMErrorUserMessages["transcript_save_failed"]
+	opencodeR2NeutralWarning = generated.LLMErrorNeutralMessages["transcript_save_failed"]
+)
+
 const opencodeR2OwnershipLog = "external-cli: execution ownership unknown"
 const opencodeR2SaveLog = "external-cli: a helper message could not be saved to the transcript"
 

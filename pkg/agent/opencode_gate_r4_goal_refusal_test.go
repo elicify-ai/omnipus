@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -29,11 +30,12 @@ func TestOpenCodeR4_01_ExternalGoalLaunchRefusesBeforeWrites(t *testing.T) {
 			assert.Equal(t, before, opencodeR4Snapshot(t, al), "D1: zero new lifecycle/goal/session/transcript files or admissions")
 			assert.Zero(t, processes.Load(), "D1: Launch must not reach an external driver")
 			assert.Zero(t, provider.calls.Load(), "D1: no native fallback may run")
-			sentinel := opencodeR4GoalCause(t, err, "R4-RED-1")
+			require.ErrorIs(t, err, tools.ErrDelegateGoalUnsupported, "D1: Launch uses the exported tools sentinel, not a same-text duplicate")
+			require.ErrorIs(t, errors.Unwrap(err), tools.ErrDelegateGoalUnsupported, "D1: Launch must wrap the sentinel")
 			assert.NotErrorIs(t, err, tools.ErrDelegateTargetCannotReport, "goal refusal has its own sentinel")
 			req.Origin.CallID = "r4-second-independent-launch"
 			_, again := NewSteerLauncher(al).Launch(context.Background(), req)
-			assert.ErrorIs(t, again, sentinel, "D1: independently invoked refusals wrap the SAME sentinel identity")
+			assert.ErrorIs(t, again, tools.ErrDelegateGoalUnsupported, "D1: independently invoked refusals wrap the SAME exported sentinel identity")
 			assert.Equal(t, before, opencodeR4Snapshot(t, al), "repeated refusal must also persist nothing")
 		})
 	}
@@ -165,8 +167,9 @@ func TestOpenCodeR4_04_RealDelegateRefusesExternalGoalWithoutSession(t *testing.
 			assert.Zero(t, processes.Load())
 			assert.Zero(t, provider.calls.Load())
 			assert.Equal(t, before, opencodeR4Snapshot(t, al), "D1: neither Launch nor real delegate may write a refused helper")
-			sentinel := opencodeR4GoalCause(t, launchErr, "R4-RED-4")
-			assert.ErrorIs(t, result.Err, sentinel, "real tool result must preserve the Launch sentinel via errors.Is")
+			require.ErrorIs(t, launchErr, tools.ErrDelegateGoalUnsupported, "D1: the independent Launch uses the exported tools sentinel")
+			require.ErrorIs(t, errors.Unwrap(launchErr), tools.ErrDelegateGoalUnsupported, "D1: Launch wraps the exported sentinel")
+			assert.ErrorIs(t, result.Err, tools.ErrDelegateGoalUnsupported, "real tool result must preserve the exported Launch sentinel via errors.Is")
 		})
 	}
 }
