@@ -48,7 +48,7 @@ func (a *restAPI) putChannelPrograms(w http.ResponseWriter, r *http.Request, id 
 	if !readProgramsBody(w, r, &req) {
 		return
 	}
-	err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	err := a.safeUpdateProgramsConfigJSON(func(m map[string]any) error {
 		live := a.agentLoop.GetConfig()
 		if _, ok := live.Channels[id]; !ok {
 			return &programsWriteError{status: http.StatusNotFound, message: "unknown instance"}

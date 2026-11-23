@@ -126,6 +126,11 @@ type restAPI struct {
 	// writer's value (T-8 row 2). Every other save is not dedicated.
 	outboundDedicatedWrite bool
 
+	// programsDedicatedWrite is true only while a dedicated Programs writer's
+	// save runs (safeUpdateProgramsConfigJSON, guarded by configMu): only
+	// then may a save change the Programs controls (FR-009, FR-028).
+	programsDedicatedWrite bool
+
 	// limitAgentStore is the agent store the #904 global tool-iteration
 	// lowering (PUT /performance, D11) reads and writes. Nil in production
 	// (agentstore.New(homePath) is used); tests inject I/O and revision

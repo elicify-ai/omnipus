@@ -58,6 +58,7 @@ func (a *restAPI) programService() *programs.Service {
 		a.programs.svc = programs.NewService(a.agentLoop.GetConfig, a.programStore,
 			filepath.Join(a.homePath, "programs", "connections.json"))
 		a.programs.svc.SetSupersededSink(a.auditProgramSuperseded)
+		a.programs.svc.SetCheckedSink(a.auditProgramChecked)
 		// FR-005/S-08: the account check's program passes the shared
 		// third-party program check over every agent-writable folder.
 		a.programs.svc.SetProgramPathCheck(func(word, found string, cfg *config.Config) (string, error) {
@@ -318,7 +319,7 @@ func (a *restAPI) createProgram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var newID string
-	err = a.safeUpdateConfigJSON(func(m map[string]any) error {
+	err = a.safeUpdateProgramsConfigJSON(func(m map[string]any) error {
 		cfg := a.agentLoop.GetConfig()
 		entries, lerr := programs.Entries(cfg)
 		if lerr != nil {
@@ -368,7 +369,7 @@ func (a *restAPI) editProgram(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	checkRelevant := false
-	err = a.safeUpdateConfigJSON(func(m map[string]any) error {
+	err = a.safeUpdateProgramsConfigJSON(func(m map[string]any) error {
 		cur := a.agentLoop.GetConfig()
 		entries, lerr := programs.Entries(cur)
 		if lerr != nil {
@@ -502,7 +503,7 @@ func (a *restAPI) deleteProgram(w http.ResponseWriter, id string) {
 		writeProgramServiceError(w, derr)
 		return
 	}
-	err = a.safeUpdateConfigJSON(func(m map[string]any) error {
+	err = a.safeUpdateProgramsConfigJSON(func(m map[string]any) error {
 		cur := a.agentLoop.GetConfig()
 		section := cur.Programs
 		section.Entries = slices.DeleteFunc(slices.Clone(section.Entries), func(c config.ProgramEntryConfig) bool { return c.ID == id })
@@ -523,7 +524,7 @@ func (a *restAPI) putProgramSettings(w http.ResponseWriter, r *http.Request) {
 	if !readProgramsBody(w, r, &req) {
 		return
 	}
-	err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	err := a.safeUpdateProgramsConfigJSON(func(m map[string]any) error {
 		cur := a.agentLoop.GetConfig()
 		if req.Revision != programsRevision(cur) {
 			return &programsWriteError{status: http.StatusConflict,
