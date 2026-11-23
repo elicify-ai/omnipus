@@ -643,7 +643,7 @@ Only Omnipus can remove a secret, with `remove_secret`, and you approve it first
 
 ## How to manage saved secrets
 
-1. Open **Settings**, then select **Security**.
+1. Open **Settings**, then select **Keys & secrets**.
 2. Find **Credential Vault** and select **Add key**.
 3. Enter a key name and its value, then select **Save**.
 4. Re-type your password if Omnipus asks you to confirm the change.
@@ -677,7 +677,7 @@ If any entry cannot be authenticated during credential-file format conversion, t
 
 ## How to review security activity
 
-1. Open **Settings**, select **Security**, then open **Advanced / technical details**.
+1. Open **Settings**, then select **Protection**.
 2. Find **Audit Log** and select **View Log**.
 3. Filter entries by event or decision to narrow the list.
 4. Check the chain status. **Chain verified** means the displayed log passed its integrity check.
