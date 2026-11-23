@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -36,7 +37,7 @@ func persistAsyncToolFeedback(ts *turnState, toolCallID, content string, isError
 		Type:      session.EntryTypeSystem,
 		Role:      "system",
 		AgentID:   ts.resolveActiveAgentID(),
-		Content:   content,
+		Content:   programs.MaskTokens(content), // B3 (FR-020)
 		Timestamp: now,
 		Status:    status,
 		TurnID:    ts.turnID,

@@ -417,11 +417,11 @@ func (t *ExecTool) execute(ctx context.Context, args map[string]any, cb AsyncCal
 
 	switch action {
 	case "run":
-		return t.executeRun(ctx, args, cb)
+		return maskProgramTokens(t.executeRun(ctx, args, cb))
 	case "poll":
 		return t.executePoll(ctx, args)
 	case "read":
-		return t.executeRead(ctx, args)
+		return maskProgramTokens(t.executeRead(ctx, args))
 	case "kill":
 		return t.executeKill(ctx, args)
 	default:

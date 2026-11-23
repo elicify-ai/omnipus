@@ -724,15 +724,16 @@ A connected program's token (see [Settings → Programs](settings.md#programs) a
 - **Parts count too.** Any run of 8 or more characters that equals part of a current program token, or of a token that was replaced or disconnected since Omnipus started, is replaced by one `[FILTERED]`. A whole token, a token cut short, the end of a token and repeated copies each become a single `[FILTERED]`. Output split across many small writes is handled the same way: the filter holds back at most the last 7 characters until it knows whether they start a token.
 - **Background commands.** When a background `bash` command finishes, its result is shown in the chat and kept in the chat's history, with tokens already hidden. A result with a non-zero exit code is shown as an error. If an earlier read of the command's output already showed the `[FILTERED]` replacement, the finish message says "Output read earlier showed [FILTERED] where a connected program's token was hidden." instead of repeating that output.
 - **Always on.** This filter works regardless of the general secret-filter switch and its minimum length setting, and in God Mode too. The general filter still runs later as a second layer.
-- **Separate from the credentials page.** A program token is managed only under Settings → Programs or through a program card in the chat. The general credentials page, its API and the agents' secret tools cannot change or remove it.
+- **Second pass on everything the agent and you see.** Every tool result (including a file `read_file` returns), the messages shown to you in the chat, background-command results and their notices, and the gateway log also pass through an always-on check that replaces any whole current or replaced program token, as written or in its escaped spellings inside text and JSON, with `[FILTERED]`. It runs before results are shortened, saved to the chat's history or sent to the model, and it does not depend on the general secret-filter switch. Tokens saved before a restart are known to it from the start.
+- **Separate from the credentials page.** A program token is managed only under Settings → Programs or through a program card in the chat. The general credentials page, its API and the agents' secret tools cannot change or remove it. Names that start with `program.` are reserved for program tokens: the credentials page and its API refuse to create one, and a credential with such a name that was not saved through Settings → Programs is never used as a program's token.
 
 Limits of the filter:
 
 - **Changed forms are not recognised.** A token that the command changes before printing it (encoded in base64, reversed, split with spaces, hashed) is not hidden.
-- **Files are not filtered.** A command that writes a token into a file puts the real token in that file; a later read of the file is covered only by the general secret filter.
+- **Files are not filtered.** A command that writes a token into a file puts the real token in that file. When a tool later reads the file, the second pass above hides a whole token in the result, but not a part of one.
 - **Pieces shorter than 8 characters are not hidden.** For example, a program that prints only the first 4 characters of a token shows them.
 - **Rare false matches.** An ordinary run of 8 or more characters that happens to equal part of a token is hidden too. For tokens made of random characters this practically never happens. A token with little variety (for example `aaaaaaaa1`) can hide matching ordinary output, such as a line of `a`s.
-- **Replaced tokens are remembered until restart.** After a restart, a token you replaced or disconnected before the restart is no longer filtered by this layer.
+- **Replaced tokens are remembered until restart.** After a restart, a token you replaced or disconnected before the restart is no longer filtered by these layers. The current token of every connected program is.
 
 ## Chat links and opening the Library for you
 

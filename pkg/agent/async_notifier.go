@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/google/uuid"
@@ -267,7 +268,9 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 	}
 
 	// FR-N8: bound content to the shared 1MB cap before it goes anywhere.
-	content := truncateAsyncNotifyContent(event.Content)
+	// B4 (FR-020): the always-on program-token pass precedes truncation, so a
+	// cut can never leave part of a token behind.
+	content := truncateAsyncNotifyContent(programs.MaskTokens(event.Content))
 
 	// Sensitive-data filtering, matching the original asyncCallback's
 	// behavior exactly (FR-N1) — the LLM must never see its own credentials

@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -1752,12 +1753,14 @@ func toolResultUserContent(toolName, channel string, suppress bool, result *tool
 	if result == nil || result.Silent || result.ForUser == "" {
 		return ""
 	}
+	// B2 (FR-020): the always-on program-token pass, whatever the general
+	// filter switch says.
 	if !suppress {
-		return result.ForUser
+		return programs.MaskTokens(result.ForUser)
 	}
 	channelType, _ := config.ParseInstanceKey(channel)
 	if result.IsError && isMessagingChannel(channelType) {
-		return attributedToolErrorNotice(toolName, result.ForUser)
+		return attributedToolErrorNotice(toolName, programs.MaskTokens(result.ForUser))
 	}
 	return ""
 }
@@ -1770,7 +1773,7 @@ func asyncToolResultUserContent(toolName, channel string, suppress bool, result 
 		return content
 	}
 	if suppress && channel == "webchat" && result != nil && !result.Silent && result.IsError && result.ForUser != "" {
-		return attributedToolErrorNotice(toolName, result.ForUser)
+		return attributedToolErrorNotice(toolName, programs.MaskTokens(result.ForUser))
 	}
 	return ""
 }
@@ -1789,7 +1792,7 @@ func persistAsyncToolErrorNotice(ts *turnState, toolCallID, content string) {
 		Type:      session.EntryTypeSystem,
 		Role:      "system",
 		AgentID:   ts.resolveActiveAgentID(),
-		Content:   content,
+		Content:   programs.MaskTokens(content), // B3 (FR-020)
 		Timestamp: now,
 		Status:    "error",
 		TurnID:    ts.turnID,

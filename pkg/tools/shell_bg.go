@@ -417,6 +417,7 @@ func (t *ExecTool) auditBackgroundSweepFailure(ctx context.Context, command, cwd
 // ("finished (exit code N)", IsError:true) instead of an intentional,
 // user-initiated cancellation.
 func backgroundCompletionResult(sessionID string, status SessionStatus, exitCode int, output string) *ToolResult {
+	output = programs.MaskTokens(output) // B1 (FR-020)
 	if output == "" {
 		output = "(no output)"
 	}
@@ -590,4 +591,17 @@ func startGodFloorChild(cmd *exec.Cmd, lim sandbox.Limits) (*ToolResult, error) 
 		}
 	}
 	return nil, sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
+}
+
+// maskProgramTokens is boundary B1 (connected-programs FR-020): the
+// always-on program-token pass over a bash or environment_setup result,
+// whatever the general filter switch says. B0 already masked the child's
+// output at the source; this is defence in depth.
+func maskProgramTokens(r *ToolResult) *ToolResult {
+	if r == nil {
+		return r
+	}
+	r.ForLLM = programs.MaskTokens(r.ForLLM)
+	r.ForUser = programs.MaskTokens(r.ForUser)
+	return r
 }

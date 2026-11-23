@@ -41,11 +41,33 @@ func SetSensitiveValueReplacer(r *strings.Replacer) (restore func()) {
 	return func() { sensitiveValueReplacer.Store(prev) }
 }
 
+// programValueReplacer replaces every current and retired connected-program
+// token (connected-programs FR-020, boundary B6). pkg/programs publishes it
+// each time it learns a token value; it is kept apart from
+// sensitiveValueReplacer because a full credential re-registration replaces
+// that set, while a retired program token must stay masked for the life of
+// the process. nil means no program token is known.
+var programValueReplacer atomic.Pointer[strings.Replacer]
+
+// SetProgramValueReplacer installs r as the process-wide program-token
+// replacer (nil removes it) and returns a func that restores the previous one.
+func SetProgramValueReplacer(r *strings.Replacer) (restore func()) {
+	prev := programValueReplacer.Swap(r)
+	return func() { programValueReplacer.Store(prev) }
+}
+
 // ScrubSensitiveValues returns s with every registered credential plaintext
-// replaced, at any length of s. With nothing registered it returns s unchanged.
+// and every known program token replaced, at any length of s. With nothing
+// registered it returns s unchanged.
 func ScrubSensitiveValues(s string) string {
+	if s == "" {
+		return s
+	}
+	if p := programValueReplacer.Load(); p != nil {
+		s = p.Replace(s)
+	}
 	r := sensitiveValueReplacer.Load()
-	if r == nil || s == "" {
+	if r == nil {
 		return s
 	}
 	return r.Replace(s)
