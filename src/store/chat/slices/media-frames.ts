@@ -20,7 +20,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import type { MediaFrame, MediaPart } from '@/lib/api/generated/asyncapi-types'
 import { findOpenAssistantMessageId } from '../messages'
 import type { ChatMessage, MediaAttachment, SessionChatState } from '../types'
-import { isPreviewUnavailableMarker, mediaDedupKey } from '../media-identity'
+import { isPreviewUnavailableMarker, mediaDedupKey, replaceThumbnailGroups } from '../media-identity'
 
 export { isPreviewUnavailableMarker }
 
@@ -28,20 +28,16 @@ type WithBucket = (sid: string | null, updater: (bucket: SessionChatState) => Pa
 
 /**
  * Merge incoming media into a message's existing list. A thumbnail group is
- * replaced as a whole by whatever arrives next for the same tool call (a
- * Retry result, or a newer unavailable outcome): its earlier pages and
- * marker go, so the group's state is always its latest frame's and a Retry
- * never adds a second set of pages to the first (B06: 8 images for 4 pages).
+ * replaced as a whole, in its place, by whatever arrives next for the same
+ * tool call (a Retry result, or a newer unavailable outcome): its earlier
+ * pages and marker go, so the group's state is always its latest frame's, a
+ * Retry never adds a second set of pages to the first (B06: 8 images for 4
+ * pages) and the group does not move below the other cards.
  */
 function mergeMedia(existing: MediaAttachment[] | undefined, incoming: MediaAttachment[]): MediaAttachment[] {
-  const replacedGroups = new Set(
-    incoming.filter((a) => a.presentation === 'page_thumbnails' && a.toolCallId).map((a) => a.toolCallId as string),
-  )
-  const kept = (existing ?? []).filter(
-    (a) => !(a.presentation === 'page_thumbnails' && a.toolCallId !== undefined && replacedGroups.has(a.toolCallId)),
-  )
+  const { merged: kept, rest } = replaceThumbnailGroups(existing ?? [], incoming)
   const seen = new Set(kept.map(mediaDedupKey))
-  const fresh = incoming.filter((a) => {
+  const fresh = rest.filter((a) => {
     const key = mediaDedupKey(a)
     if (seen.has(key)) return false
     seen.add(key)

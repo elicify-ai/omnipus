@@ -17,3 +17,38 @@ export function mediaDedupKey(item: MediaAttachment): string {
   if (isPreviewUnavailableMarker(item)) return `marker\u0000${item.toolCallId ?? ''}`
   return `${item.toolCallId ?? ''}\u0000${item.url}`
 }
+
+function thumbnailGroupOf(item: MediaAttachment): string | undefined {
+  return item.presentation === 'page_thumbnails' ? item.toolCallId : undefined
+}
+
+/**
+ * Replace, in place, every thumbnail group of `existing` that `incoming` also
+ * carries (§5.2: a group's state is its latest frame's, and it keeps its
+ * place among the other cards). Returns the merged list and the incoming
+ * items that were not placed (other media, and groups `existing` lacks).
+ */
+export function replaceThumbnailGroups(
+  existing: readonly MediaAttachment[],
+  incoming: readonly MediaAttachment[],
+): { merged: MediaAttachment[]; rest: MediaAttachment[] } {
+  const incomingGroups = new Set(incoming.flatMap((item) => thumbnailGroupOf(item) ?? []))
+  const placed = new Set<string>()
+  const merged: MediaAttachment[] = []
+  for (const item of existing) {
+    const group = thumbnailGroupOf(item)
+    if (group === undefined || !incomingGroups.has(group)) {
+      merged.push(item)
+      continue
+    }
+    if (!placed.has(group)) {
+      placed.add(group)
+      merged.push(...incoming.filter((next) => thumbnailGroupOf(next) === group))
+    }
+  }
+  const rest = incoming.filter((item) => {
+    const group = thumbnailGroupOf(item)
+    return group === undefined || !placed.has(group)
+  })
+  return { merged, rest }
+}
