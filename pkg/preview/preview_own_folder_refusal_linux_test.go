@@ -359,14 +359,13 @@ func t131ConverterMarkerScript() string {
 }
 
 // t131MarkerExists reports whether any converter-start marker exists under
-// root right now. Pure and goroutine-safe: the call folders are mutated by
-// the service while the poller walks them, so walk errors are ignored, not
-// failed (t131ObserveCall's poller runs on the test's main goroutine).
-func t131MarkerExists(root string) bool {
+// root right now. A failed walk is not evidence of absence: return its error
+// so the observer fails the test instead of certifying an incomplete scan.
+func t131MarkerExists(root string) (bool, error) {
 	found := false
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		if !d.IsDir() && d.Name() == t131ConverterMarkerName {
 			found = true
@@ -374,7 +373,7 @@ func t131MarkerExists(root string) bool {
 		}
 		return nil
 	})
-	return found
+	return found, walkErr
 }
 
 // t131ObserveCall runs the preview call and reports whether a converter
@@ -388,6 +387,11 @@ func t131MarkerExists(root string) bool {
 // 0.3 s, far longer than the poll needs.
 func t131ObserveCall(t *testing.T, home string, run func() (*Result, error)) (started bool, res *Result, err error) {
 	t.Helper()
+	markerExists := func() bool {
+		found, scanErr := t131MarkerExists(home)
+		assert.NoError(t, scanErr, "TA-06: marker observation failed; an unreadable tree cannot prove no converter start")
+		return found
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -397,13 +401,12 @@ func t131ObserveCall(t *testing.T, home string, run func() (*Result, error)) (st
 	for {
 		select {
 		case <-done:
-			return t131MarkerExists(home), res, err
+			return markerExists(), res, err
 		case <-breakpoint:
 			t.Errorf("TA-06: the observed call never returned; failing the row instead of polling forever")
 			return true, res, err
 		default:
-			if t131MarkerExists(home) {
-				started = true
+			if markerExists() {
 				<-done
 				return true, res, err
 			}
@@ -412,22 +415,22 @@ func t131ObserveCall(t *testing.T, home string, run func() (*Result, error)) (st
 	}
 }
 
-// t131DumpTree lists every path under root — the controls carry it in their
-// failure message so an absent marker can be diagnosed from the run log
-// alone (what the launch left behind, and where).
+// t131DumpTree lists paths under root and reports any traversal failure —
+// the controls carry it in their failure message so an absent marker can be
+// diagnosed from the run log alone (what the launch left behind, and where).
 func t131DumpTree(t *testing.T, root string) string {
 	t.Helper()
 	var lines []string
 	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			lines = append(lines, path+" (error: "+err.Error()+")")
-			return nil
+			return err
 		}
 		lines = append(lines, path)
 		return nil
 	})
 	if walkErr != nil {
-		return "walk failed: " + walkErr.Error()
+		return strings.Join(lines, "\n") + "\nwalk failed: " + walkErr.Error()
 	}
 	return strings.Join(lines, "\n")
 }
