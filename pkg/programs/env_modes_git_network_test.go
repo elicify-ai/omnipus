@@ -41,12 +41,10 @@ func TestProgramEnv_PerModeAndTool(t *testing.T) {
 		t.Fatal("BLOCKED: S25's actual God Mode count16 is exercised in pkg/agent::TestProgramRuntime_OngoingOriginSetting; an independent real-proxy token-creation observation fixture is still missing for the mandatory no-egress-token clause — required by S-25")
 	})
 
-	t.Run("S28_unmatched_program_word_no_grant_token_still_available", func(t *testing.T) {
-		// GREEN asserts here (spec S-28): no entry has the word aws → the
-		// network approval is requested exactly as before and names no
-		// GitHub site; GH_TOKEN is in that command's environment.
-		t.Fatalf("BLOCKED: %s — required by S-28's approval-and-env assertions", s1EnvSeam)
-	})
+	// S28_unmatched_program_word_no_grant_token_still_available migrated intact
+	// to pkg/agent::TestProgramEnv_ActualUnmatchedAndScript: actual ordinary and
+	// connected-program aws children, exact unchanged approval arguments, token
+	// verification inside the real child, and real proxy's denied GitHub host.
 
 	// S29_environment_setup_children_get_the_token moved intact to
 	// pkg/agent::TestProgramEnvironmentSetup_ActualChild: real run/poll/read,
@@ -57,12 +55,10 @@ func TestProgramEnv_PerModeAndTool(t *testing.T) {
 	// failure after a positive runtime control, actual echo and count0, exact
 	// unavailable notice. A service-only read assertion does not replace it.
 
-	t.Run("S89_script_calling_gh_internally", func(t *testing.T) {
-		// GREEN asserts here (spec S-89): ./deploy.sh runs gh api user →
-		// octocat in God Mode; in Auto the GitHub sites are NOT auto-granted
-		// and the network is handled as today.
-		t.Fatalf("BLOCKED: %s (and the per-run network grants) — required by S-89's two-mode assertion", s1EnvSeam)
-	})
+	// S89_script_calling_gh_internally migrated intact to
+	// pkg/agent::TestProgramEnv_ActualUnmatchedAndScript: actual deploy.sh in
+	// explicitly active God Mode gives octocat; Auto reaches the ordinary
+	// script approval and the real proxy observes no GitHub auto-grant.
 }
 
 func TestProgramGitHelper_ResetChain(t *testing.T) {
@@ -99,32 +95,14 @@ func TestProgramGitVersion_ChildExecutable(t *testing.T) {
 }
 
 func TestProgramNetwork_AutoAsk(t *testing.T) {
-	t.Run("S21_auto_grants_profile_sites_revokes_after_run", func(t *testing.T) {
-		// GREEN asserts here (spec S-21): gh api user → no approval; the
-		// proxy allows api.github.com for that run's token; the token is
-		// revoked after the run.
-		t.Fatalf("BLOCKED: %s (and the egress proxy grants, FR-015) — required by S-21", s1EnvSeam)
-	})
-
-	t.Run("S22_other_hosts_still_asked", func(t *testing.T) {
-		// GREEN asserts here (spec S-22): `gh api user && curl
-		// https://example.org` → exactly one approval, naming example.org
-		// only.
-		t.Fatalf("BLOCKED: %s — required by S-22's single-approval assertion", s1EnvSeam)
-	})
-
-	t.Run("S23_deny_wins", func(t *testing.T) {
-		// GREEN asserts here (spec S-23): rule {action: deny, binary: gh} →
-		// refused with the existing deny message; not run.
-		t.Fatalf("BLOCKED: %s — required by S-23's deny-first assertion", s1EnvSeam)
-	})
-
-	t.Run("S24_ask_grants_after_approval", func(t *testing.T) {
-		// GREEN asserts here (spec S-24): Ask mode, the person approves
-		// `gh api user` → no second prompt; GitHub sites allowed for that
-		// run only.
-		t.Fatalf("BLOCKED: %s — required by S-24's after-approval assertion", s1EnvSeam)
-	})
+	// S21/S22/S23/S24 migrated intact to
+	// pkg/agent::TestProgramNetwork_ActualAutoAsk. The actual loop, modes,
+	// approval adapter, child environment, public EgressProxy policy and
+	// foreground revocation execute. Canceled upstream requests distinguish
+	// allowed from denied hosts without public calls; this is not a claim of
+	// a successful live network request. A separate grant/revoke instrument
+	// proves that observer sees both policy outcomes. S23 retains the ordinary
+	// deny control; S24 holds actual approval before admitting the real child.
 
 	t.Run("S26_program_word_spellings", func(t *testing.T) {
 		// GREEN asserts here (spec S-26, dataset D-3): each row's command

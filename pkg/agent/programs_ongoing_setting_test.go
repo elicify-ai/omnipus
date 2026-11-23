@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +77,15 @@ func TestProgramRuntime_OngoingOriginSetting(t *testing.T) {
 		require.Contains(t, completion.Content, "15", "the original child still has its original environment at completion")
 	})
 	t.Run("S25_God_Mode_actual_child_count", func(t *testing.T) {
+		if !sandbox.GodModeAvailable {
+			t.Fatal("BLOCKED: this build has no God Mode support — required by S25")
+		}
+		previousAvailability := godModeAvailable.Load()
+		SetGodModeAvailable(true) // Same public boot gate as the gateway, before construction.
+		t.Cleanup(func() { setGodModeAvailable(previousAvailability) })
 		f := newProgramsTurnFixtureFor(t, func(cfg *config.Config) { cfg.Sandbox.GodMode = true })
+		require.True(t, GodModeActive(f.al.GetConfig()), "Given: both God Mode activation gates are on")
+		require.True(t, shellGodModeForAgentNoRewire(t, f.al, "dev"), "Given: the actual child tool was built in God Mode")
 		require.Equal(t, "16", programsChildCount(t, f, "GH_TOKEN", "s25"), "S25: the actual God Mode child receives the saved token; no-egress-token creation is a separate mandatory clause")
 	})
 }
