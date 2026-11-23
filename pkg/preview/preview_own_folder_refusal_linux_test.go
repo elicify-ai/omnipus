@@ -260,6 +260,8 @@ func TestT131_ServiceRefusesCachedRootThatBecameLink(t *testing.T) {
 			res, previewErr := t131PreviewDocx(t, svc)
 			require.NoError(t, previewErr, "T-131(b): preview 1 against the in-own registration must succeed")
 			require.NotNil(t, res)
+			require.Positive(t, starts,
+				"R3-F1 instrument: preview 1 must produce an observed real converter start before no-start assertions are trusted")
 			// testHookConverterStart fires only on the CONFINED spawn path
 			// (pkg/preview/confine.go: "once per confined LibreOffice");
 			// this unit row runs unconfined, so the count stays at its
