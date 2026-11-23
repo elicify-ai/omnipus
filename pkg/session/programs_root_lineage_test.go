@@ -10,20 +10,12 @@
 // restart) and S-144 (every work kind is lineage; unknown identity fails
 // closed).
 //
-// Level Integration: the scenarios' full shape needs the turn runtime
-// (printenv through an attached program variable, origin join at turn
-// start, gateway restart). At RED three seams are missing: (1) the
-// provenance_mode classification table (session.ProvenanceModeRows is the
-// RED stub, returns nil — FR-050), (2) the provenance field +
-// provenance_mode on the lifecycle/session records and its load-time
-// classification (FR-041/FR-050), and (3) the runtime: origin join at turn
-// start over the program settings and the program-variable attach
-// (FR-010/FR-011). Each subtest opens with a seam check that BLOCKs naming
-// them — never a skip — and then asserts the identity evidence the
-// classifier consumes through the REAL session store, including across a
-// store reopen (the restart axis the scenarios name). The runtime clauses
-// stay spec-quoted comments until the runtime lands; the same test author
-// completes them at GREEN reconciliation (CHECK is a different instance).
+// The classification table, record fields and attached-child runtime now
+// exist. This package keeps real identity/store-reopen checks. Actual root
+// turns and seeded-lineage child re-entry are in pkg/agent's runtime suite.
+// The remaining final fatals name incomplete actual-producer/dispatch fixtures;
+// seeded records cannot certify those producers or a whole gateway restart.
+// CHECK remains a separate instance from this test author.
 //
 // Oracle: I-2, FR-050 (root = identified standing conversation: origin kind
 // chat/channel/main, no parent, no task evidence, not plan-owned; every
@@ -40,14 +32,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// s1RootLineageSeamsReady BLOCKs unless the classification table exists.
-// The record provenance fields and the producer stamps cannot be referenced
-// at RED at all; they are named here and their clauses stay spec-quoted in
-// the bodies until GREEN lands them.
+// A missing table is still loud, but fields/runtime that now exist are not
+// falsely described as absent. This precondition is not a producer audit.
 func s1RootLineageSeamsReady(t *testing.T) {
 	t.Helper()
 	if len(ProvenanceModeRows()) == 0 {
-		t.Fatalf("BLOCKED: the provenance_mode classification table is not implemented — required by FR-050/S-83/S-143/S-144 (session.ProvenanceModeRows returned no rows). Also missing and named here for GREEN: the provenance + provenance_mode fields on the lifecycle/session records with load-time classification (FR-041/FR-050), the producer stamps on the durable writers (FR-041), and the turn-start origin join over the program settings with the program-variable attach (FR-010/FR-011 runtime)")
+		t.Fatal("BLOCKED: session.ProvenanceModeRows returned no classification rows — required by FR-050/S-83/S-143/S-144; the table must exist before its identity/store assertions can run")
 	}
 }
 
@@ -83,13 +73,11 @@ func TestProgramProvenance_RootLineage(t *testing.T) {
 		require.NoError(t, err, "the record survives the restart")
 		require.Equal(t, SessionTypeMain, after.Type, "identity evidence survives")
 
-		// GREEN asserts here (spec S-137): the root record stores no
-		// provenance; with web on and Telegram off the Telegram turns print
-		// `0` and the web turns print `16`, in both orders and after the
-		// restart — each root turn is the join of the inputs it actually
-		// consumes (R4-M2). Runtime BLOCK until the turn provenance join and
-		// the program-variable attach exist:
-		t.Fatalf("BLOCKED: the turn-start origin join over the program settings and the program-variable attach are not implemented — required by FR-010/FR-011/S-137's printenv clauses")
+		// Runtime and actual root-record assertions migrated intact to
+		// pkg/agent::TestProgramProvenance_RootLineageRuntime/S137...:
+		// two actual origins in both orders, actual child counts 0/16 and a
+		// closed/reopened loop. Keep this independent store-identity check.
+		require.Equal(t, ProvenanceModeRoot, ClassifyProvenanceMode(ProvenanceModeEvidence{Origin: OriginKindMain, ParentSessionID: after.ParentSessionID, TaskID: after.TaskID}), "S137: the identified main record is root, not sticky lineage")
 	})
 
 	t.Run("S138_child_record_keeps_restriction_and_classification_and_clause", func(t *testing.T) {
@@ -129,7 +117,7 @@ func TestProgramProvenance_RootLineage(t *testing.T) {
 		// provenance (written before this feature) is `unresolved` and
 		// prints `0`. The main record is classified `root` on load. Runtime
 		// BLOCK until the record provenance and the join exist:
-		t.Fatalf("BLOCKED: the record provenance fields with load-time classification are not implemented — required by FR-041/FR-050/S-138")
+		t.Fatal("BLOCKED: the actual delegated-helper producer and web-steering join fixture is not yet implemented here — required by FR-041/FR-050/S-138; seeded lineage re-entry in pkg/agent does not certify that producer")
 	})
 
 	t.Run("S143_parentless_task_session_lineage_survives_reentry_and_restart", func(t *testing.T) {
@@ -160,7 +148,7 @@ func TestProgramProvenance_RootLineage(t *testing.T) {
 		// GREEN asserts here (spec S-143): the record is `lineage` with
 		// {connector:telegram}; every run prints `0`; the web re-entry turn
 		// is {connector:telegram, web}, still withheld. Runtime BLOCK:
-		t.Fatalf("BLOCKED: the producer stamp on task sessions and the turn-start origin join are not implemented — required by FR-041/FR-010/S-143's printenv clauses")
+		t.Fatal("BLOCKED: the actual Telegram-created task producer/dispatch fixture is not yet implemented here — required by FR-041/FR-010/S-143; seeded task-lineage re-entry/reopen in pkg/agent does not establish that original writer")
 	})
 
 	t.Run("S144_every_work_kind_lineage_unknown_identity_fails_closed", func(t *testing.T) {
@@ -213,6 +201,6 @@ func TestProgramProvenance_RootLineage(t *testing.T) {
 		// origin are `lineage` and `unresolved` and print `0`; the old
 		// `main` session is `root`, and a web turn in it prints `16`.
 		// Runtime BLOCK:
-		t.Fatalf("BLOCKED: the per-kind provenance stamps and the turn-start origin join are not implemented — required by FR-041/FR-010/S-144's printenv clauses")
+		t.Fatal("BLOCKED: actual per-kind producer/dispatch fixtures for scheduled, heartbeat, verifier and plan work plus unknown-origin records are not yet complete — required by FR-041/FR-010/S-144; seeded scheduled/verifier/heartbeat re-entry in pkg/agent is narrower")
 	})
 }

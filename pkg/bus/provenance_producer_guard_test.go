@@ -41,9 +41,10 @@ package bus
 // declarations. It cannot establish completeness for arbitrarily named
 // carriers or mutation closures. Current plan.Store.Create/Update,
 // goal.Store.Create/Update and cron.CronService.UpdateJob write records or
-// patches directly. Their individually named BLOCKED rows below retain the
-// missing required-provenance write-request obligation (I-2); section H11
-// of the RED disputes records this remaining integration boundary.
+// patches directly. Their individually named executable AST assertions below
+// check the required-provenance input shape (I-2), with positive/omitted-field
+// instruments in programs_required_write_contract_test.go. These are structural
+// contract tests, not runtime producer or arbitrary-carrier completeness proof.
 //
 // Matching resolves the file's own import table (an alias `bb` importing
 // github.com/.../pkg/bus matches bus constructions; a same-named qualifier
@@ -204,9 +205,16 @@ func TestProgramProvenance_ProducerGuard(t *testing.T) {
 			"an unlisted declared carrier fails the ordinary guard without editing its whitelist: %v", v)
 	})
 
-	for _, boundary := range []string{"plan_Create_Update", "goal_Create_Update", "cron_UpdateJob"} {
-		t.Run("S111_required_provenance_request_"+boundary, func(t *testing.T) {
-			t.Fatalf("BLOCKED: %s still accepts a record/patch or mutation closure, not the required-provenance write request — required by I-2/S-111; guard completeness for this write boundary is not established", boundary)
+	for _, row := range []struct {
+		name, pkg  string
+		boundaries []programWriteBoundary
+	}{
+		{"plan_Create_Update", "plan", []programWriteBoundary{{"Store", "Create"}, {"Store", "Update"}}},
+		{"goal_Create_Update", "goal", []programWriteBoundary{{"Store", "Create"}, {"Store", "Update"}}},
+		{"cron_UpdateJob", "cron", []programWriteBoundary{{"CronService", "UpdateJob"}}},
+	} {
+		t.Run("S111_required_provenance_request_"+row.name, func(t *testing.T) {
+			assertProgramRequiredWriteBoundary(t, row.pkg, row.boundaries)
 		})
 	}
 }

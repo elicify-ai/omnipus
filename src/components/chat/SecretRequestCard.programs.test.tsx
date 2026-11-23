@@ -20,7 +20,8 @@ const card: SessionStateSecretRequest = {
 
 function openRestoredCard(connection: ProgramConnection) {
   const list: ProgramList = {
-    revision: 'programs-test-revision', web_chat_allowed: true,
+    // Contract ConfigurationRevision: exactly 64 lower-case hex characters.
+    revision: 'a'.repeat(64), web_chat_allowed: true,
     entries: [{ id: 'github', kind: 'preset', display_name: 'GitHub',
       program_words: ['gh', 'git'], token_variables: ['GH_TOKEN', 'GITHUB_TOKEN'],
       network_sites: ['github.com'], enabled_agent_ids: [], revision: 1, connection }],

@@ -9,14 +9,11 @@
 // S-27, S-87; TestProgramNetwork_AutoAsk (order 25) — S-21, S-22, S-23,
 // S-24, S-26, S-84.
 //
-// Every scenario here is runtime behaviour through the real agent exec
-// harness: program variables attached to a child (FR-011), the managed git
-// helper chain (FR-013), the git version probe (FR-014) and the per-run
-// network grants (FR-015). None of those seams exists at RED — the agent
-// environment builder cannot hand program variables to any harness — so
-// each scenario reports BLOCKED naming its seam, never a skip, with the
-// spec's verbatim expectations recorded beside it for the same test
-// author's GREEN reconciliation.
+// The runtime attachment, git helper and version probe now exist. Executable
+// migrated rows below name the real agent/tool tests that replaced their original
+// unconditional markers. Remaining rows are incomplete author fixtures, not a
+// claim that every production seam is still absent. Each stays loud until its
+// actual scenario is driven; a passing lower boundary does not discharge it.
 //
 // Oracle: US-3 scenario texts, the message table, dataset D-3 (S-26's
 // program-word spellings). Expected values come from the spec, never from
@@ -26,26 +23,22 @@ package programs
 
 import "testing"
 
-// s1EnvSeam is the missing seam all four orders share.
-const s1EnvSeam = "the agent environment builder cannot attach program variables to the exec harness (FR-011 runtime)"
+// These remaining scenarios have no complete mode/grant/receiver fixture yet.
+// This is unfinished test-author work, not an accepted requirement deferral.
+const s1EnvSeam = "this row's full mode/network/child fixture is not yet implemented in the test harness; existing Attach and child tests do not prove it"
 
 func TestProgramEnv_PerModeAndTool(t *testing.T) {
-	t.Run("S11_only_switched_on_agent_gets_the_token", func(t *testing.T) {
-		// GREEN asserts here (spec S-11): GitHub connected, on for Dev only;
-		// Dev's printenv GH_TOKEN | wc -c is 16, Mia's is 0.
-		t.Fatalf("BLOCKED: %s — required by S-11's per-agent outputs", s1EnvSeam)
-	})
+	// S11_only_switched_on_agent_gets_the_token moved, without removing its
+	// oracle, to pkg/agent::TestProgramEnv_PerModeAndTool. It now runs the
+	// actual loop-wired child and asserts both exact byte counts.
 
-	t.Run("S18_gh_uses_the_token", func(t *testing.T) {
-		// GREEN asserts here (spec S-18): Dev runs `gh api user --jq .login`
-		// → octocat (the fake gh answers from the program token).
-		t.Fatalf("BLOCKED: %s — required by S-18's gh run", s1EnvSeam)
-	})
+	// S18_gh_uses_the_token is also executable in pkg/agent's real-loop
+	// TestProgramEnv_PerModeAndTool; its oracle remains exactly octocat.
 
 	t.Run("S25_god_mode_token_available_no_egress_token", func(t *testing.T) {
 		// GREEN asserts here (spec S-25): God Mode, GitHub on for Dev →
 		// printenv is 16 and no egress token is created.
-		t.Fatalf("BLOCKED: %s — required by S-25's God Mode run", s1EnvSeam)
+		t.Fatal("BLOCKED: S25's actual God Mode count16 is exercised in pkg/agent::TestProgramRuntime_OngoingOriginSetting; an independent real-proxy token-creation observation fixture is still missing for the mandatory no-egress-token clause — required by S-25")
 	})
 
 	t.Run("S28_unmatched_program_word_no_grant_token_still_available", func(t *testing.T) {
@@ -55,18 +48,14 @@ func TestProgramEnv_PerModeAndTool(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-28's approval-and-env assertions", s1EnvSeam)
 	})
 
-	t.Run("S29_environment_setup_children_get_the_token", func(t *testing.T) {
-		// GREEN asserts here (spec S-29): environment_setup with a script
-		// running printenv GH_TOKEN | wc -c → 16.
-		t.Fatalf("BLOCKED: %s — required by S-29's script output", s1EnvSeam)
-	})
+	// S29_environment_setup_children_get_the_token moved intact to
+	// pkg/agent::TestProgramEnvironmentSetup_ActualChild: real run/poll/read,
+	// an executed-child instrument and exact byte count, not a marker.
 
-	t.Run("S31_store_unavailable_notice_echo_still_works", func(t *testing.T) {
-		// GREEN asserts here (spec S-31): store set to fail on read →
-		// `echo ok` outputs ok plus the store-unavailable notice, and no
-		// program variable is set.
-		t.Fatalf("BLOCKED: %s (and the store-read failure injection) — required by S-31's notice", s1EnvSeam)
-	})
+	// S31_store_unavailable_notice_echo_still_works migrated intact to
+	// pkg/agent::TestProgramStoreFailure_ActualChildren: real locked-store
+	// failure after a positive runtime control, actual echo and count0, exact
+	// unavailable notice. A service-only read assertion does not replace it.
 
 	t.Run("S89_script_calling_gh_internally", func(t *testing.T) {
 		// GREEN asserts here (spec S-89): ./deploy.sh runs gh api user →
@@ -77,14 +66,9 @@ func TestProgramEnv_PerModeAndTool(t *testing.T) {
 }
 
 func TestProgramGitHelper_ResetChain(t *testing.T) {
-	t.Run("S19_git_uses_stored_token_ignores_existing_helper", func(t *testing.T) {
-		// GREEN asserts here (spec S-19): a global git config helper for
-		// https://github.com answering old-account/old_pw_123456 → git
-		// credential fill receives x-access-token and the token (shown as
-		// [FILTERED] in any record), and the old helper logged no get, store
-		// or erase.
-		t.Fatalf("BLOCKED: %s (and the managed helper chain, FR-013) — required by S-19's fill assertion", s1EnvSeam)
-	})
+	// S19_git_uses_stored_token_ignores_existing_helper migrated intact to
+	// pkg/agent::TestProgramGitHelper_ActualChild: real git and global helper,
+	// positive old-helper control, exact credential fields and no operations.
 
 	t.Run("S20_no_token_in_config_or_arguments", func(t *testing.T) {
 		// GREEN asserts here (spec S-20): git push to a local HTTPS receiver
@@ -94,11 +78,10 @@ func TestProgramGitHelper_ResetChain(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-20's no-token-anywhere assertion", s1EnvSeam)
 	})
 
-	t.Run("S88_new_git_gets_the_helper", func(t *testing.T) {
-		// GREEN asserts here (spec S-88): the child's PATH git reports 2.43
-		// → GIT_CONFIG_COUNT=2 and the two managed entries are present.
-		t.Fatalf("BLOCKED: %s — required by S-88's managed-entries assertion", s1EnvSeam)
-	})
+	// S88_new_git_gets_the_helper migrated intact to
+	// pkg/tools::TestProgramGitEnv_RealExecBoundary: actual ExecTool/Resolve/
+	// probe/Attach/child boundary, explicitly not full-loop evidence-guard
+	// admission. Chief-authorized boundary; the push-through-guard row is UAT.
 }
 
 func TestProgramGitVersion_ChildExecutable(t *testing.T) {
@@ -110,12 +93,9 @@ func TestProgramGitVersion_ChildExecutable(t *testing.T) {
 		t.Fatalf("BLOCKED: %s (and the version probe, FR-014) — required by S-27's old-git message", s1EnvSeam)
 	})
 
-	t.Run("S87_explicit_git_path_is_the_one_probed", func(t *testing.T) {
-		// GREEN asserts here (spec S-87): /opt/old/git reports 2.30.2, PATH
-		// git 2.43 → Dev runs /opt/old/git push → no managed git entries are
-		// set and the notice names 2.30.2.
-		t.Fatalf("BLOCKED: %s — required by S-87's explicit-path probe", s1EnvSeam)
-	})
+	// S87_explicit_git_path_is_the_one_probed migrated intact to
+	// pkg/agent::TestProgramGitVersion_ActualChild: distinct absolute old/git
+	// and PATH git, real recorded probe before command, exact old-git notice.
 }
 
 func TestProgramNetwork_AutoAsk(t *testing.T) {
