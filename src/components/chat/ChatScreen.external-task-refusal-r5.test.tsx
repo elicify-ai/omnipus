@@ -90,7 +90,25 @@ it.each(STATES)('F1: replayed task refusal stays separate from an %s assistant a
   assertTaskNoticeAndAnswer(container, original)
 })
 
-it.each(['empty', 'streaming'] as const)('F1: switch away and back reattaches one refusal without marking the retained %s answer as error', async state => {
+// CHECK round6 F1/F2: keep the live refusal in the bucket when its saved copy
+// arrives. Navigation/reload reconstruction below does not exercise adoption.
+it('F1: saved replay adopts the retained live refusal without navigation or a second row', async () => {
+  const original = seed('streaming')
+  feed(liveTaskRefusal())
+  let container!: HTMLElement
+  await act(async () => { container = mount().container })
+  assertTaskNoticeAndAnswer(container, original)
+  const refusalRows = () => getMessages(useChatStore.getState().sessionsById[SID]).filter(m => m.content === TASK_REFUSAL)
+  const liveRefusalIds = refusalRows().map(m => m.id)
+  expect(refusalRows().map(m => m.errorEntryId), 'instrument: the retained live row has not received a saved entry id').toEqual([undefined])
+
+  feed(savedTaskRefusal(), savedTaskRefusal())
+  assertTaskNoticeAndAnswer(container, original)
+  expect(refusalRows().map(m => m.id), 'F1: saved replay adopts the actual live row rather than replacing it').toEqual(liveRefusalIds)
+  expect(refusalRows().map(m => m.errorEntryId), 'F2: the adopted row carries its durable saved identity after repeated replay').toEqual([REFUSAL_ID])
+})
+
+it.each(['empty', 'streaming'] as const)('F1: after switching away and back, replay shows one refusal and preserves the retained %s answer', async state => {
   const original = seed(state)
   feed(liveTaskRefusal())
   let container!: HTMLElement
