@@ -589,6 +589,12 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 				hcm.sendResolveRefusal(sessionOwnerMissingRefusal(owner))
 				return true
 			}
+			// Founder Q13 B: an external worker's Board task chat refuses
+			// typed messages, visibly and saved, before the worker gate
+			// below and before the owner path admits anything.
+			if hcm.refuseExternalTaskRunChat(owner) {
+				return true
+			}
 			if hcm.targetAgentID == "" {
 				hcm.targetAgentID = owner
 				return false

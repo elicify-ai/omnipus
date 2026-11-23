@@ -73,6 +73,18 @@ func (al *AgentLoop) deliverHumanHelperInput(msg bus.InboundMessage) bool {
 			return false
 		}
 		err = al.enqueueHelperSteeringFromMessage(msg, agentID, rec.Is3P)
+		// ARCHITECT-RULING-R4 D2: an external-CLI helper with no conversation
+		// to take the message refuses in its own chat, classified and saved
+		// after the person's row, instead of a bare unsaved reply.
+		if llm, ok := al.humanHelperRefusal(err, rec); ok {
+			logger.WarnCF("agent", "A message to a helper was not accepted",
+				map[string]any{"session_id": msg.SessionID, "code": string(llm.Code), "error": err.Error()})
+			if saveErr := al.refuseHumanHelperInput(msg, agentID, llm); saveErr != nil {
+				logger.ErrorCF("agent", "A refusal shown in a helper chat could not be saved; it will not appear after a reload",
+					map[string]any{"session_id": msg.SessionID, "error": saveErr.Error()})
+			}
+			return true
+		}
 	default:
 		// FR-032: a person typing into the chat of a LIVE external-CLI task run
 		// steers that run (interrupt + native resume, consumed by the task

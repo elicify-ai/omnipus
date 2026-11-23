@@ -246,9 +246,9 @@ func (al *AgentLoop) externalRunIsTaskOrigin(sessionID string) (bool, error) {
 // noLiveExternalConversationErr is the shared BDD-05.6 refusal for "there is no
 // live external CLI conversation to deliver to".
 func (al *AgentLoop) noLiveExternalConversationErr(sessionID string) error {
-	return &authoredRefusalError{text: fmt.Sprintf(
+	return &noLiveConversationError{authoredRefusalError{text: fmt.Sprintf(
 		"external-cli steer: session %s has no live external CLI conversation to deliver to (FR-043); the instruction was not delivered",
-		sessionID)}
+		sessionID)}}
 }
 
 // loadLifecycleRecord loads sessionID's durable lifecycle record, or (nil, err)
