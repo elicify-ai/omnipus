@@ -53,8 +53,13 @@ function mergeHistoryMedia(current: ChatMessage, saved: ChatMessage, baseline: C
   return unionMedia([...merged, ...rest])
 }
 
-/** Live objects changed since request start win; unchanged cached history can be refreshed. */
-export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessage | undefined, baseline: ChatMessage | undefined): ChatMessage {
+/**
+ * Live objects changed since request start win; unchanged cached history can be refreshed.
+ * mediaBaseline is what thumbnail groups are compared with; it defaults to
+ * baseline, and a caller that passes no baseline to keep the live text still
+ * passes the captured row here, so an unchanged group takes its saved state.
+ */
+export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessage | undefined, baseline: ChatMessage | undefined, mediaBaseline: ChatMessage | undefined = baseline): ChatMessage {
   if (!current) return entry
   const liveWins = current !== baseline || current.isStreaming === true || current.status === 'streaming'
   const merged = { ...entry, ...(liveWins ? current : {}), id: entry.id, historyPosition: entry.historyPosition } as ChatMessage
@@ -66,7 +71,7 @@ export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessa
   // never carry one, and only one source of a combined row holds it.
   const saved: ChatMessage = entry
   if (saved.role === 'assistant' && current.role === 'assistant' && (saved.media?.length || current.media?.length)) {
-    merged.media = mergeHistoryMedia(current, saved, baseline, liveWins)
+    merged.media = mergeHistoryMedia(current, saved, mediaBaseline, liveWins)
   }
   if (entry.role === 'assistant' && current.role === 'assistant' && (entry.tool_calls || current.tool_calls)) {
     const calls = new Map((entry.tool_calls ?? []).map(call => [call.id, call]))
