@@ -398,6 +398,9 @@ export function SandboxSection(): React.ReactElement {
   const [showWildcardModal, setShowWildcardModal] = useState(false)
   const [showEnforceModal, setShowEnforceModal] = useState(false)
   const pendingSaveRef = useRef<(() => void) | null>(null)
+  // The path the current paths/SSRF save adds, if any: a refused save puts
+  // it back into the input for correction instead of leaving it in the list.
+  const pendingAddedPathRef = useRef<string | null>(null)
 
   // ── Save status ────────────────────────────────────────────────────────────
   const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
@@ -510,19 +513,28 @@ export function SandboxSection(): React.ReactElement {
       setSaveState('error')
       const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
-      const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(msg)
-      if (pathRowMatch) {
-        const rowIdx = parseInt(pathRowMatch[1], 10)
-        setPathRowErrors((prev) => ({ ...prev, [rowIdx]: pathRowMatch[2] }))
-        return
-      }
       const ssrfRowMatch = /ssrf\.allow_internal\[(\d+)\]:\s*(.+)/.exec(msg)
       if (ssrfRowMatch) {
         const rowIdx = parseInt(ssrfRowMatch[1], 10)
         setSsrfAdvancedErrors((prev) => ({ ...prev, [rowIdx]: ssrfRowMatch[2] }))
         return
       }
-      setPathAddError(msg)
+      // Nothing was saved: the list goes back to the saved one (B09: a
+      // refused entry stayed in the list and every later save resent it and
+      // failed the same way). An entry this save added returns to the input
+      // with the refusal under it, so it can be corrected; a refusal that
+      // names a saved row stays on that row.
+      const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(msg)
+      const added = pendingAddedPathRef.current
+      pendingAddedPathRef.current = null
+      revertPathsSsrfToServer()
+      if (added !== null) setNewPath(added)
+      const rowIdx = pathRowMatch ? parseInt(pathRowMatch[1], 10) : -1
+      if (pathRowMatch && rowIdx < (configData?.allowed_paths ?? []).length) {
+        setPathRowErrors({ [rowIdx]: pathRowMatch[2] })
+        return
+      }
+      setPathAddError(pathRowMatch ? pathRowMatch[2] : msg)
     },
   })
 
@@ -543,7 +555,8 @@ export function SandboxSection(): React.ReactElement {
   }
 
   // ── Commit helper (paths + SSRF) ──────────────────────────────────────────
-  function commitPathsSsrf(paths: string[], ssrf: string[]) {
+  function commitPathsSsrf(paths: string[], ssrf: string[], addedPath: string | null = null) {
+    pendingAddedPathRef.current = addedPath
     setPathRowErrors({})
     setSsrfAdvancedErrors({})
     askSandboxConfirm({
@@ -590,7 +603,7 @@ export function SandboxSection(): React.ReactElement {
     const next = [...pathList, trimmed]
     setPathList(next)
     setNewPath('')
-    commitPathsSsrf(next, ssrfList)
+    commitPathsSsrf(next, ssrfList, trimmed)
   }
 
   // ── SSRF handlers ─────────────────────────────────────────────────────────
