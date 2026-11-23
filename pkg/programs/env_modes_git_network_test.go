@@ -113,7 +113,7 @@ func TestProgramNetwork_AutoAsk(t *testing.T) {
 		// the command's environment regardless of a word match (S-28's
 		// `aws s3 ls` carries it; S-89's script does too); only the
 		// auto-approval is gated on the matcher.
-		t.Fatalf("BLOCKED: %s (and the program-word matcher) — required by S-26's D-3 rows", s1EnvSeam)
+		t.Fatal("BLOCKED: S26 D3 rows1-10 now execute the actual matcher, child, proxy grants/revocation and ordinary approval controls in pkg/agent::TestProgramNetwork_ActualSpellingMatrix, but that fixture lacks the BDD Background's enforcing kernel sandbox; three no_sandbox_ask mismatches cannot certify the no-prompt clause. Full sandboxed acceptance remains unverified; individual dispute H41 — required by S-26/FR-015")
 	})
 
 	// S84_shared_program_word_per_site_helper migrated intact to
