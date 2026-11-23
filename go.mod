@@ -25,7 +25,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gomarkdown/markdown v0.0.0-20260724235538-61af6e1e6971
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853
 	github.com/h2non/filetype v1.1.3
 	github.com/klauspost/compress v1.20.2
