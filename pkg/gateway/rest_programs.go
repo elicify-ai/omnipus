@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/programs"
@@ -54,6 +55,7 @@ func (a *restAPI) programService() *programs.Service {
 	a.programs.once.Do(func() {
 		a.programs.svc = programs.NewService(a.agentLoop.GetConfig, a.programStore,
 			filepath.Join(a.homePath, "programs", "connections.json"))
+		a.programs.svc.SetSupersededSink(a.auditProgramSuperseded)
 		a.programs.svc.ResumeChecks()
 	})
 	return a.programs.svc
@@ -327,6 +329,7 @@ func (a *restAPI) createProgram(w http.ResponseWriter, r *http.Request) {
 		writeProgramValidation(w, err)
 		return
 	}
+	a.auditProgram(auditProgramCustomChanged, audit.DecisionAllow, "", map[string]any{"program_id": newID, "change": "created"})
 	a.writeProgramEntry(w, http.StatusCreated, newID, nil)
 }
 
@@ -394,6 +397,7 @@ func (a *restAPI) editProgram(w http.ResponseWriter, r *http.Request, id string)
 		writeProgramValidation(w, err)
 		return
 	}
+	a.auditProgram(auditProgramCustomChanged, audit.DecisionAllow, "", map[string]any{"program_id": id, "change": "edited"})
 	a.writeProgramEntry(w, http.StatusOK, id, nil)
 }
 
@@ -474,6 +478,7 @@ func (a *restAPI) deleteProgram(w http.ResponseWriter, id string) {
 		return
 	}
 	svc.ForgetEntry(id)
+	a.auditProgram(auditProgramCustomChanged, audit.DecisionAllow, "", map[string]any{"program_id": id, "change": "deleted"})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -502,6 +507,8 @@ func (a *restAPI) putProgramSettings(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return
 	}
+	a.auditProgram(auditProgramSettingChanged, audit.DecisionAllow, "", map[string]any{
+		"setting": "web_chat_allowed", "allowed": req.WebChatAllowed})
 	a.listPrograms(w)
 }
 
@@ -535,12 +542,18 @@ func (a *restAPI) saveProgramCredential(w http.ResponseWriter, r *http.Request, 
 		writeProgramValidation(w, err)
 		return
 	}
-	conn, err := a.programService().Publish(id, value, req.ExpectedGeneration, nil)
+	svc := a.programService()
+	event := auditProgramConnected
+	if svc.Connection(id).State != programs.StateNotConnected {
+		event = auditProgramReplaced
+	}
+	conn, err := svc.Publish(id, value, req.ExpectedGeneration, nil)
 	if err != nil {
 		writeProgramServiceError(w, err)
 		return
 	}
 	slog.Info("programs.token_saved", "program", id, "generation", conn.Generation)
+	a.auditProgram(event, audit.DecisionAllow, "", map[string]any{"program_id": id, "generation": conn.Generation})
 	a.writeProgramEntry(w, http.StatusOK, id, &conn)
 }
 
@@ -551,6 +564,7 @@ func (a *restAPI) disconnectProgram(w http.ResponseWriter, id string) {
 		return
 	}
 	slog.Info("programs.disconnected", "program", id, "generation", conn.Generation)
+	a.auditProgram(auditProgramDisconnected, audit.DecisionAllow, "", map[string]any{"program_id": id, "generation": conn.Generation})
 	a.writeProgramEntry(w, http.StatusOK, id, &conn)
 }
 
@@ -560,5 +574,7 @@ func (a *restAPI) recheckProgram(w http.ResponseWriter, id string) {
 		writeProgramServiceError(w, err)
 		return
 	}
+	a.auditProgram(auditProgramCheck, audit.DecisionAllow, "", map[string]any{
+		"program_id": id, "generation": conn.Generation, "check_revision": conn.CheckRevision})
 	a.writeProgramEntry(w, http.StatusAccepted, id, &conn)
 }

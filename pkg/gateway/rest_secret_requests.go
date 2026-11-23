@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 )
@@ -51,6 +52,9 @@ func (a *restAPI) HandleSecretRequests(w http.ResponseWriter, r *http.Request) {
 					admitted := false
 					personOnly(func(http.ResponseWriter, *http.Request) { admitted = true })(w, r)
 					if !admitted {
+						programID, _ := secretrequest.ProgramID(peek)
+						a.auditProgram(auditProgramCardRefused, audit.DecisionDeny, "", map[string]any{
+							"program_id": programID, "request_id": id, "reason": "not a signed-in person session"})
 						return
 					}
 				}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
@@ -80,5 +81,7 @@ func (a *restAPI) putChannelPrograms(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	slog.Info("programs.channel_setting_changed", "channel", id, "allowed", req.Allowed)
+	a.auditProgram(auditProgramSettingChanged, audit.DecisionAllow, "", map[string]any{
+		"setting": "channel_programs_allowed", "channel_id": id, "allowed": req.Allowed})
 	a.getChannelPrograms(w, id)
 }

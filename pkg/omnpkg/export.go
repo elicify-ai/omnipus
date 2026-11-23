@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 
@@ -40,7 +41,7 @@ type ExportSource interface {
 
 // exportRemovedFields are the top-level record fields Field mapping removes at
 // export (home path, timestamps, lock flag, skill grants).
-var exportRemovedFields = []string{"workspace", "created_at", "updated_at", "locked", "skill_grants"}
+var exportRemovedFields = []string{"workspace", "created_at", "updated_at", "locked", "skill_grants", "programs"}
 
 // exportRemovedSubagentFields are the retired/unused subagents fields (ADR A3).
 var exportRemovedSubagentFields = []string{"allow_agents", "model"}
@@ -53,6 +54,12 @@ var executorRuntimeFields = []string{"cli_path", "cli_args", "env_overrides"}
 // NeedsSecretKindExecutorEnv is the needs_secrets kind of an external
 // worker's removed environment override (FR-014).
 const NeedsSecretKindExecutorEnv = "executor_env"
+
+// NeedsSecretKindProgram is the needs_secrets kind of a connected program
+// switched on for the exported agent (connected programs FR-022). Name is
+// the program entry id. Neither the token nor the switch travels: the
+// shared login is entered on the target under Settings -> Programs.
+const NeedsSecretKindProgram = "program"
 
 // Export packs the selected agent into w (manifest first, FR-001/FR-002,
 // Field mapping Export column, FR-018 bounded source reads). Nothing is
@@ -72,9 +79,12 @@ func Export(ctx context.Context, src ExportSource, sel Selection, w io.Writer) e
 	if err != nil {
 		return err
 	}
-	secrets := make([]NeedsSecret, 0, len(agent.envNames))
+	secrets := make([]NeedsSecret, 0, len(agent.envNames)+len(agent.programs))
 	for _, n := range agent.envNames {
 		secrets = append(secrets, NeedsSecret{Name: n, UsedBy: id, Kind: NeedsSecretKindExecutorEnv})
+	}
+	for _, p := range agent.programs {
+		secrets = append(secrets, NeedsSecret{Name: p, UsedBy: id, Kind: NeedsSecretKindProgram})
 	}
 	pkg, err := buildPackage(id, agent.name, agent.files, secrets, time.Now().UTC().Truncate(time.Second))
 	if err != nil {
@@ -100,6 +110,7 @@ type exportedAgent struct {
 	files    []packagedFile
 	name     string
 	envNames []string // removed executor environment-override names (FR-014)
+	programs []string // switched-on connected programs, declared not carried (FR-022)
 }
 
 // collectAgentFiles reads and cleans the record and captures SOUL.md and
@@ -153,7 +164,7 @@ func collectAgentFiles(src ExportSource, id string) (*exportedAgent, error) {
 	if mdPresent {
 		files = append(files, packagedFile{path: agentInstructionsPath(id), body: agentMD})
 	}
-	return &exportedAgent{files: files, name: v.Name, envNames: envNames}, nil
+	return &exportedAgent{files: files, name: v.Name, envNames: envNames, programs: exportedPrograms(ac.Programs)}, nil
 }
 
 // sourceErr passes a coded source error through and wraps any other.
@@ -342,4 +353,16 @@ func buildPackage(id, name string, files []packagedFile, secrets []NeedsSecret, 
 		return nil, fmt.Errorf("omnpkg: close zstd: %w", err)
 	}
 	return out.Bytes(), nil
+}
+
+// exportedPrograms returns the agent's switched-on program ids, in stored
+// order without blanks or repeats, for needs_secrets (FR-022).
+func exportedPrograms(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if id != "" && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }

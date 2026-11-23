@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -115,11 +116,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// a client still sending this retired field.
 	// Persist to config.json BEFORE mutating the live config.
 	// Capture the new values to apply after persistence succeeds.
+	programsBefore := slices.Clone(uf.cfg.Agents.List[uf.foundIdx].Programs)
 	if uf.preparePersistence() {
 		return
 	}
 	if uf.persistAndReload() {
 		return
+	}
+	if uf.ru.req.Programs != nil {
+		// FR-021: one value-free row when the switch list actually changed.
+		after := normalizeAgentPrograms(*uf.ru.req.Programs)
+		uf.ru.a.auditAgentProgramsChange(uf.ru.id, normalizeAgentPrograms(programsBefore), after)
 	}
 	uf.respond()
 }

@@ -88,6 +88,18 @@ type Service struct {
 	checks  map[string]*reservation
 	nextID  uint64
 	running sync.WaitGroup
+
+	// superseded is told when a running check's reservation is replaced
+	// (FR-021 audit row "superseded"). Nil = not recorded.
+	superseded func(id string, generation int64)
+}
+
+// SetSupersededSink installs the sink told about every superseded check
+// (FR-021). Call it before the first check starts.
+func (s *Service) SetSupersededSink(fn func(id string, generation int64)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.superseded = fn
 }
 
 // NewService builds the service. statePath is the connection-state file
@@ -301,6 +313,9 @@ func (s *Service) supersedeLocked(id string) {
 	if r := s.checks[id]; r != nil {
 		r.cancel()
 		delete(s.checks, id)
+		if s.superseded != nil {
+			s.superseded(id, r.generation)
+		}
 	}
 }
 
