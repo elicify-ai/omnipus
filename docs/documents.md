@@ -16,7 +16,7 @@ Page images appear only in the web chat. Replies sent through other channels (fo
 |---|---|
 | The agent previews a file | While the tool runs you see the usual running tool card. When it finishes, the group of page images appears in the reply |
 | The agent previews the same file again (for example after fixing it) | A new group appears. Earlier groups stay, so you can compare before and after |
-| You reload the page or reopen the chat | The same groups come back. Nothing is rendered again |
+| You reload the page or reopen the chat | Saved preview groups come back, once per preview call, with the latest saved result. Nothing is rendered again. If a Retry showed page images but could not save them to the chat, the previous saved result comes back instead |
 | You delete the chat | The page images are deleted with it |
 
 ### Looking at a page up close
@@ -41,13 +41,13 @@ If one page cannot be loaded in the viewer, the viewer shows "Page n could not b
 | A page image replaced by "Image unavailable" | That image could not be loaded into your browser (for example a dropped connection) | Use **Retry** on that image. A failure is reported once for the group, not once per image |
 | The card "Page previews unavailable — the PDF renderer is not installed" | The program that turns pages into images is not installed. The agent still received the document or its text; you just get no page images | Follow the instructions on the card: re-run the Omnipus installer with the PDF renderer component, or register it with `omnipus pdf-renderer register <folder>`. This card has no Retry button |
 | The card "Page previews unavailable — the PDF renderer is damaged" or "… rendering the pages failed" | The page images could not be made this time. The agent may still have received the document itself, but no pages were rendered, so nothing was shown or checked visually | Select **Retry** on the card |
-| The card "Page previews could not be saved" | The page images could not be saved this time, so none are shown. The agent may still have received the document itself | Select **Retry** on the card |
+| The card "Page previews could not be saved" | The page images could not be saved. A first preview shows no page images; after a Retry, newly rendered page images may show beside this card until you reload. The agent may still have received the document itself | Select **Retry** on the card. The Retry outcomes below explain what happens next |
 
 After you select **Retry**:
 
 | Card shows | Meaning |
 |---|---|
-| "Retrying — rendering the pages again…" | The retry started. The page images replace the card when they are ready; if the retry fails again, the card comes back with Retry |
+| "Retrying — rendering the pages again…" | The retry is being requested or is running. When rendering and saving succeed, its page images replace the card in the same group. If rendering fails, the card comes back with Retry. If saving fails, page images may appear beside "Page previews could not be saved" and Retry instead |
 | "The file changed — ask the agent to preview again." | The file was changed after the preview, so the old preview cannot be retried. Ask the agent to preview the current file |
 | "Retry failed: …" | The retry could not start, with the reason. For example "Retry failed: the PDF renderer is not available." You can try again unless you no longer have access to the chat or the file |
 | "This file is outside the workspace Library, so its previews can't be retried here. Ask the agent to preview it again." | Retry works only for files in the chat's workspace Library (its work folder and mounted folders). The card then hides its Retry button |
@@ -239,9 +239,13 @@ a copy yourself.
     reason is `that folder cannot be mounted: it is, contains or lies inside the <component> program folder (<folder>), and agents can never get write access there. Mount a folder that does not include it.`
     The folder picker greys the folder with
     `Contains or lies inside a document preview program folder — agents can never write there.`
-    When an agent asks with `request_mount`, no approval card appears, so
-    neither **Add folder** nor **Always Allow** is offered: the agent gets
-    this reason as the tool's result straight away.
+    When `request_mount` finds this program-folder overlap before approval,
+    no approval card appears, so neither **Add folder** nor **Always Allow**
+    is offered: the agent gets this reason as the tool's result straight
+    away. Only these program-folder refusals skip the card. A folder that the
+    earlier Omnipus-data-folder or system-folder check refuses keeps that
+    check's own reason, and the usual approval card may appear before the
+    request is refused.
   - **A new or changed entry** in `tools.allow_write_paths` or
     `sandbox.allowed_paths`, on a settings save or a reload. Nothing is written
     and the current settings stay in force. The text is
@@ -250,7 +254,9 @@ a copy yourself.
     `config error: <field> entry "<entry>": Omnipus cannot tell which folders it covers, so it may include a document preview program folder; write it as ^/<folder>(?:/\|$).`
     In Settings, a refused path does not stay in the sandbox's path list: the
     list shows the saved paths again, and the refused path goes back into the
-    input box with the reason under it, so you can correct it.
+    input box with the reason under it, so you can correct it. If you have
+    already typed something new in the box, your text stays and the reason
+    shows only in the save error below the lists.
 - Access that was already there is not refused: settings in force when Omnipus
   started, entries a reload leaves unchanged, and a mount or a remembered chat
   approval made before the folder became a program folder. Omnipus checks for
