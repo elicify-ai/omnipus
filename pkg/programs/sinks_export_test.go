@@ -12,8 +12,9 @@
 // persisted error notices, truncation at the notifier edge, audit files,
 // export bundles) with the sentinel `sentinel_9f3c2a7e5b1d` connected and
 // on for Dev and the general filter off. The runtime, background and export
-// fixtures now exist for the migrated rows. S48's combined seven-sink campaign
-// remains unfinished author work, not an assertion that no token can flow yet.
+// fixtures now exist for the migrated rows. S48's combined real campaign lives
+// in pkg/gateway::TestProgramMasking_ActualSevenSinks; S50's separate actual
+// person-route audit campaign lives in pkg/gateway::TestProgramSentinel_AllSinks.
 // A component test or static source guard is not whole-campaign evidence.
 //
 // Oracle: US-6 scenario texts, D-4/D-9 rows, FR-016/FR-020/FR-021/FR-022.
@@ -21,9 +22,6 @@
 package programs
 
 import "testing"
-
-// One combined campaign is still needed even though individual sinks run.
-const s1SinkSeam = "a combined real foreground/background/rotation/export fixture observing all seven specified sinks is not yet implemented in the test harness; individual sink receipts do not establish this campaign"
 
 // TestProgramMasking_Boundaries and all its former marker rows were relocated,
 // not removed: S46 is now pkg/agent::TestProgramMasking_Boundaries; S47/S74 are
@@ -34,19 +32,16 @@ const s1SinkSeam = "a combined real foreground/background/rotation/export fixtur
 // error notice and published events replace the original unconditional fatals.
 // Do not emit a vacuous empty Test function in this package for the relocation.
 
-func TestProgramSentinel_AllSinks(t *testing.T) {
-	t.Run("S48_sentinel_absent_from_every_sink", func(t *testing.T) {
-		// GREEN asserts here (spec S-48): foreground and background (success
-		// and error), the token rotated, Dev exported → transcript, model
-		// request record, published chat messages, gateway log, audit file,
-		// account labels and export bundle contain no sentinel.
-		t.Fatalf("BLOCKED: %s — required by S-48's seven sinks", s1SinkSeam)
-	})
-
-	// S50_audit_rows_value_free is now executable in pkg/gateway's
-	// TestProgramSentinel_AllSinks: the same scenario needs the actual person
-	// routes and shared audit logger, not a substitute program-service call.
-}
+// S48_sentinel_absent_from_every_sink is relocated, not removed:
+// pkg/gateway::TestProgramMasking_ActualSevenSinks/S48_every_sink_value_free.
+// One actual foreground/background success/error + rotation + registered export
+// campaign observes transcript, model requests, published chat, gateway log,
+// audit file, account labels and the decoded bundle with real reader controls.
+// Its exact eight-byte window oracle includes both current and retired tokens.
+// The neutral discovery name prevents the protected first eight bytes of the
+// specified token from entering t.TempDir-derived command arguments as metadata.
+// S50 separately stays in pkg/gateway::TestProgramSentinel_AllSinks; neither
+// campaign is replaced by the other or by a vacuous empty test in this package.
 
 func TestProgramExportImport(t *testing.T) {
 	t.Run("S49_export_lists_program_import_arrives_off", func(t *testing.T) {
