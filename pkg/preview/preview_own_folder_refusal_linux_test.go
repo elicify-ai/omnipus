@@ -282,8 +282,10 @@ func TestT131_ServiceRefusesCachedRootThatBecameLink(t *testing.T) {
 
 			// The root becomes a link pointing OUTSIDE OWN; the manifest is
 			// left byte-identical.
-			moved := filepath.Join(base, "elsewhere", "lo")
-			require.NoError(t, os.MkdirAll(filepath.Dir(moved), 0o755))
+			outside, err := os.MkdirTemp(base, "cached-link-outside-")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = os.RemoveAll(outside) })
+			moved := filepath.Join(outside, "lo")
 			// Keep the watched inode: only its ancestor moves. A new inode
 			// would invalidate the no-open observation across the link swap.
 			require.NoError(t, os.Rename(recorded, moved), "T-131(b): move the real fixture outside OWN")
