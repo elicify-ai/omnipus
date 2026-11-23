@@ -1,96 +1,109 @@
-// PerformanceSection.noToolsOnDemand.test.tsx — order 48 (S-44; ST-Q4 B;
-// C-22 row 2). Oracle: skills-tools-redesign-spec.md S-44 — "Settings →
-// Limits shows no 'Load tools on demand' switch, and saving Max parallel
-// agents there still succeeds"; C-22 row 2 removes the PerformanceSection
-// row, the CONFIG_KEYS entry, the label, the default and the field-path
-// entry, while the other Limits values keep working.
-//
-// RED today: this tree is the Settings base — the switch still renders
-// (PerformanceSection.tsx 'Load tools on demand'), so the absence assertion
-// fails against the real section.
+// Order 48 / CHECK F19. S-44 and C-22 row 2: the retired switch is absent,
+// and a Max parallel agents change survives confirmation, sends only the
+// remaining field, stays unsaved while the reply is held, then shows Saved.
+// Only the HTTP edge and debounce clock are controlled; real section,
+// step-up dialog, mutation, HTTP validation and UI store stay in the chain.
+// GREEN and mutation/proof-of-failability remain deferred to independent CHECK.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-
-const addToast = vi.fn()
-
-vi.mock('@/store/ui', () => ({
-  useUiStore: vi.fn(() => ({ addToast })),
-}))
-
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>()
-  return {
-    ...actual,
-    fetchPerformanceSettings: vi.fn(),
-    updatePerformanceSettings: vi.fn(),
-    fetchAppState: vi.fn(),
-    isApiError: actual.isApiError,
-  }
-})
-
-import * as api from '@/lib/api'
-import type { AppState } from '@/lib/api'
+import type { AppState, PerformanceSettings, PerformanceSettingsUpdate } from '@/lib/api/generated/openapi-types'
+import { useUiStore } from '@/store/ui'
 import { PerformanceSection } from './PerformanceSection'
 
-// The landed PerformanceSettings carries no tools_on_demand — the mock
-// already reflects the post-removal shape (C-22 row 2).
-const SETTINGS = {
-  max_parallel_agents: 4,
-  effective_max_parallel_agents: 4,
-  max_parallel_agents_configured: true,
+// Post-removal read shape from S-44/C-22: no tools_on_demand. Distinct retained
+// values let a follow-up GET show the acknowledged cap without changing peers.
+const SETTINGS: PerformanceSettings = {
+  max_parallel_agents: 4, effective_max_parallel_agents: 4, max_parallel_agents_configured: true,
+  goal_max_rounds: 20, goal_reminder_quiet_seconds: 60,
+  goal_stalled_checkin_enabled: true, goal_stalled_checkin_minutes: 30,
+  max_tool_iterations: 200, max_tool_iterations_saved_state: 'ok',
 }
-
-const PLATFORM_APP_STATE = {
+const PLATFORM_APP_STATE: AppState = {
   onboarding_complete: true,
   identity: { mode: 'platform', edition: 'hosted', signed_in: true },
-} as AppState
-
-function makeClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-function renderSection() {
-  return render(
-    <QueryClientProvider client={makeClient()}>
-      <PerformanceSection />
-    </QueryClientProvider>,
-  )
-}
-
-beforeEach(() => {
-  vi.clearAllMocks()
-  vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(SETTINGS as never)
-  vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
+let client: QueryClient
+let stored: PerformanceSettings
+let writes: PerformanceSettingsUpdate[]
+let releaseSave: (value: Response) => void
+let pendingSave: Promise<Response>
+let fetchEdge: ReturnType<typeof vi.fn<typeof fetch>>
+const reply = (body: AppState | PerformanceSettings) => new Response(JSON.stringify(body), {
+  status: 200, headers: { 'Content-Type': 'application/json' },
 })
 
-afterEach(() => {
+const tick = async (ms = 0) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+beforeEach(() => {
+  vi.useFakeTimers()
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } })
+  stored = { ...SETTINGS }
+  writes = []
+  pendingSave = new Promise<Response>((resolve) => { releaseSave = resolve })
+  document.cookie = 'csrf=f19-limits; path=/'
+  for (const toast of useUiStore.getState().toasts) useUiStore.getState().removeToast(toast.id)
+  fetchEdge = vi.fn<typeof fetch>(async (input, init) => {
+    const path = new URL(input instanceof Request ? input.url : String(input), 'http://localhost').pathname
+    const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+    if (path === '/api/v1/state' && method === 'GET') return reply(PLATFORM_APP_STATE)
+    if (path === '/api/v1/performance' && method === 'GET') return reply(stored)
+    if (path === '/api/v1/performance' && method === 'PUT') {
+      writes.push(JSON.parse(String(init?.body)) as PerformanceSettingsUpdate)
+      return pendingSave
+    }
+    throw new Error(`fixture: unexpected ${method} ${path}`)
+  })
+  vi.stubGlobal('fetch', fetchEdge)
+})
+afterEach(async () => {
+  // Do not strand the actual mutation if any assertion fails while it is held.
+  releaseSave(reply(stored))
+  await act(async () => { await pendingSave })
+  cleanup()
+  client.clear()
+  // The existing success indicator schedules a 2s reset without an unmount
+  // cancellation. Drain that real callback on the controlled external clock,
+  // rather than leaving a real timer alive past this file's teardown.
+  await tick(2000)
+  for (const toast of useUiStore.getState().toasts) useUiStore.getState().removeToast(toast.id)
+  vi.unstubAllGlobals()
   vi.useRealTimers()
 })
+async function renderSection() {
+  const view = render(<QueryClientProvider client={client}><PerformanceSection /></QueryClientProvider>)
+  await tick()
+  expect(screen.getByLabelText('Max parallel agents')).toHaveValue(4)
+  return view
+}
 
 describe('PerformanceSection — no tools-on-demand control after the removal (order 48)', () => {
-  it('S-44: Limits shows no "Load tools on demand" switch', async () => {
-    renderSection()
-    // The section loaded (its other content is there) before asserting the
-    // absence — the tripwire for a section that failed to render at all.
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
-    expect(screen.queryByText(/load tools on demand/i)).toBeNull()
+  it('S-44: Limits loads the real retained control and shows no Load tools on demand switch', async () => {
+    await renderSection()
+    expect(screen.queryByText(/load tools on demand/i)).not.toBeInTheDocument()
   })
 
-  it('S-44: saving Max parallel agents still succeeds — the change path survives the removal', async () => {
-    renderSection()
-    // Load with real timers, then control the autosave debounce (600 ms).
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
-    vi.useFakeTimers()
+  it('S-44: confirms the exact retained-field save, waits for its ACK, then shows Saved and the confirmed value', async () => {
+    await renderSection()
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
-    await act(async () => {
-      vi.advanceTimersByTime(700)
-    })
-    vi.useRealTimers()
-    // The re-auth confirm — the section's real save path — is offered for a
-    // Max-parallel change: the other Limits values keep working (C-22 row 2).
-    const dialog = await screen.findByRole('alertdialog')
+    // Existing Limits debounce is 600 ms; this is not the C-16 queue's timing.
+    await tick(700)
+    const dialog = screen.getByRole('alertdialog')
     expect(dialog).toHaveTextContent('Change the performance settings?')
-    expect(screen.getByRole('button', { name: 'Change performance settings' })).toBeTruthy()
+    expect(writes).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Change performance settings' }))
+    await tick()
+    expect(writes).toHaveLength(1)
+    // Soft only so the same real save can finish and independently prove the
+    // ACK/success path even while today's retired extra field is still RED.
+    expect.soft(writes).toEqual([{ max_parallel_agents: 8 }])
+    expect(screen.queryByText('Saved')).not.toBeInTheDocument()
+    stored = { ...SETTINGS, max_parallel_agents: 8, effective_max_parallel_agents: 8 }
+    releaseSave(reply(stored))
+    await tick()
+    expect(screen.getByText('Saved')).toBeInTheDocument()
+    expect(screen.getByLabelText('Max parallel agents')).toHaveValue(8)
+    expect(writes).toHaveLength(1)
+    expect(useUiStore.getState().toasts.filter((toast) => toast.variant === 'error')).toEqual([])
   })
 })
