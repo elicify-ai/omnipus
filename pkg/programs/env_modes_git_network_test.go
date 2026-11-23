@@ -23,9 +23,8 @@ package programs
 
 import "testing"
 
-// These remaining scenarios have no complete mode/grant/receiver fixture yet.
-// This is unfinished test-author work, not an accepted requirement deferral.
-const s1EnvSeam = "this row's full mode/network/child fixture is not yet implemented in the test harness; existing Attach and child tests do not prove it"
+// Each remaining scenario names its own unresolved observation/fixture boundary
+// and dated dispute. None is an accepted requirement deferral or a product PASS.
 
 func TestProgramEnv_PerModeAndTool(t *testing.T) {
 	// S11_only_switched_on_agent_gets_the_token moved, without removing its
@@ -38,7 +37,7 @@ func TestProgramEnv_PerModeAndTool(t *testing.T) {
 	t.Run("S25_god_mode_token_available_no_egress_token", func(t *testing.T) {
 		// GREEN asserts here (spec S-25): God Mode, GitHub on for Dev →
 		// printenv is 16 and no egress token is created.
-		t.Fatal("BLOCKED: S25's actual God Mode count16 is exercised in pkg/agent::TestProgramRuntime_OngoingOriginSetting; an independent real-proxy token-creation observation fixture is still missing for the mandatory no-egress-token clause — required by S-25")
+		t.Fatal("BLOCKED: S25's actual God Mode count16 is exercised in pkg/agent::TestProgramRuntime_OngoingOriginSetting, but no actual mint/creation-history observer is established here. Empty child proxy URL or post-revocation runHosts cannot prove no token was ever created; need a creation-boundary observer with an Auto positive control; individual dispute H43 — required by S-25/FR-017")
 	})
 
 	// S28_unmatched_program_word_no_grant_token_still_available migrated intact
@@ -71,7 +70,7 @@ func TestProgramGitHelper_ResetChain(t *testing.T) {
 		// that only accepts x-access-token:tok_valid_12345 → the push
 		// succeeds, the receiver recorded x-access-token, and no git config
 		// file, remote URL or observed argument list contains the token.
-		t.Fatalf("BLOCKED: %s — required by S-20's no-token-anywhere assertion", s1EnvSeam)
+		t.Fatal("BLOCKED: real local HTTPS Git receiver, actual agent-driven git push and complete config/remote-URL/argv observations are not implemented in this fixture. S19 credential fill and S88's externally faked push are not an authenticated Git transfer; S88's narrower boundary authorization does not extend to S20; individual author-fixture dispute H48 — required by S-20/FR-013")
 	})
 
 	// S88_new_git_gets_the_helper migrated intact to
@@ -86,7 +85,7 @@ func TestProgramGitVersion_ChildExecutable(t *testing.T) {
 		// 2.30.2 first on the child's PATH → no GIT_CONFIG_COUNT in the
 		// environment, the result contains the old-git message with 2.30.2,
 		// and the probe ran inside Dev's sandbox (recorded by the fake git).
-		t.Fatalf("BLOCKED: %s (and the version probe, FR-014) — required by S-27's old-git message", s1EnvSeam)
+		t.Fatal("BLOCKED: S27's distinct gateway2.43/workspace-child-PATH2.30.2 fixture plus actual same-turn enforcing-sandbox probe attestation is not implemented. RuntimeEnvPaths, composed child PATH and gitVersionProbe exist; S87 explicit-path and S106 sink tests do not establish these additional clauses. No fake boot-base registration or gateway PATH substitution; individual author-fixture dispute H47 — required by S-27/FR-014")
 	})
 
 	// S87_explicit_git_path_is_the_one_probed migrated intact to

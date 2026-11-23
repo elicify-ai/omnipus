@@ -25,7 +25,7 @@ func TestProgramCredential_RouteSweep_MethodInstrument(t *testing.T) {
 
 func TestProgramCredential_RouteSweep_MissingBoundaries(t *testing.T) {
 	t.Run("independent_registered_route_to_writer_inventory", func(t *testing.T) {
-		t.Fatal("BLOCKED: independent registered-route-to-credential-writer reachability inventory is not connected — required by S-113/R09; names and observed generic requests cannot discover a special-payload-only writer")
+		t.Fatal("BLOCKED: independent registered-handler-to-I3-store-mutator reachability inventory is not implemented in this test harness. pgRequiredSweepMethods is name-based and observed probes miss special-payload-only writers; TestProgramCredential_RouteSweep_PlantedIndirectWriter proves that blind spot. Need an independent method/payload-row inventory, not another route-name list; individual harness dispute H46 — required by S-113/R09/FR-045")
 	})
 	t.Run("all_concrete_schema_paths_and_live_revisions", func(t *testing.T) {
 		pgConcreteProgramsPayloads(t)

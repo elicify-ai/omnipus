@@ -126,7 +126,7 @@ func TestProgramCheck_Ordering(t *testing.T) {
 	// sequences, exact generation/result ordering and the real shared audit
 	// sink with a positive reader/outcome instrument. No synthetic product row.
 	t.Run("S139_delayed_launch_cannot_stop_the_newer_check", func(t *testing.T) {
-		t.Fatal("BLOCKED: Service.Publish still launches under its single lock with no commit/reserve-before-launch barrier — required by S139's exact A-commit, B-launch, A-resume sequence; scheduler timing is not that fixture")
+		t.Fatal("BLOCKED: actual S139 commit/reserve-before-launch barrier is not implemented in this fixture; Service.Publish holds its mutex through CommitProgramCredential and launchLocked, so blocking TransactHook also blocks B. Need a deterministic real-flow reservation/launch seam, not seeded reservations or scheduler sleeps; individual dispute H42 — required by S-139/FR-047")
 	})
 }
 

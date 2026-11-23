@@ -29,8 +29,8 @@ package bus
 
 import "testing"
 
-// These are outstanding test-author fixtures, not accepted deferrals.
-const s1HandOnSeam = "the complete actual producer/write/dispatch fixture for this chain is not yet implemented in the test harness; seeded-record and direct-carrier tests do not establish this handoff"
+// S78's individual unresolved park/boot/resume fixture stays loud below.
+// Its dated dispute is not an accepted requirement deferral.
 
 func TestProgramProvenance_HandOn(t *testing.T) {
 	// S75_telegram_to_delegated_helper migrated intact to
@@ -54,7 +54,7 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 		// GREEN asserts here (spec S-78): a helper launched from a Telegram
 		// turn, parked, gateway restarted → resume runs print 0 with the
 		// telegram notice.
-		t.Fatalf("BLOCKED: %s — required by S-78's restart persistence", s1HandOnSeam)
+		t.Fatal("BLOCKED: actual Telegram-created parked helper -> real gateway boot recovery -> same helper resume -> child0/Telegram notice fixture is not implemented. S123 begins LifecycleCompleted, not parked; boot distinguishes needs_input, an already-stopped helper awaiting Revive, and restart-stopped native-helper revival. Those paths exist and must not be replaced by seeded lineage or invented automatic resume; individual lifecycle-fixture dispute H49 — required by S-78/FR-041")
 	})
 
 	// S79_unresolved_chain_withholds migrated intact to
