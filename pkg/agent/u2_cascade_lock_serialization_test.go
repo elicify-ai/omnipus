@@ -77,8 +77,13 @@ func u2TraversalB(c *SteerCanceller, id string, effect GenerationCancelFunc, don
 }
 func u2Stacks() string {
 	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
-	return string(buf[:n])
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return string(buf[:n])
+		}
+		buf = make([]byte, len(buf)*2)
+	}
 }
 
 func TestCascade_TraversalAndStampingAreSerialized(t *testing.T) {
@@ -126,6 +131,11 @@ func TestCascade_TraversalAndStampingAreSerialized(t *testing.T) {
 		effectCalls.Add(1)
 		return al.SteerGenerationCancel(ctx, id, gen)
 	}
+	// Warm the parent index before holding the root lifecycle lock, so A
+	// reaches durable stamping instead of blocking earlier in index loading.
+	if _, err := c.Lifecycle.List(session.LifecycleFilter{SteeringSessionID: root.SessionID}); err != nil {
+		t.Fatalf("warm lifecycle parent index: %v", err)
+	}
 	lock := c.Lifecycle.Lock(root.SessionID)
 	lock.Lock()
 	var release sync.Once
@@ -135,7 +145,7 @@ func TestCascade_TraversalAndStampingAreSerialized(t *testing.T) {
 	go u2TraversalA(c, root.SessionID, effect, a)
 	waitForGate(t, "A to block at the real lifecycle traversal/stamp boundary", func() bool {
 		for _, stack := range strings.Split(u2Stacks(), "\n\n") {
-			if strings.Contains(stack, "u2TraversalA(") && (strings.Contains(stack, "(*LifecycleStore).Load(") || strings.Contains(stack, "(*LifecycleStore).AcceptStopControl(")) {
+			if strings.Contains(stack, "u2TraversalA(") && strings.Contains(stack, "(*LifecycleStore).acceptStopControl(") {
 				return true
 			}
 		}
