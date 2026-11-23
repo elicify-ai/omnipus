@@ -1593,6 +1593,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/packages/export/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review what a bundle of one agent would contain (export review)
+         * @description Runs the same capture, cleaning and refusals as POST /packages/export for exactly one agent, builds the bundle in memory only to measure it, discards the bytes and keeps the review in memory for 30 minutes (at most 32 reviews; adding one more drops expired reviews first, then the oldest). Writes nothing to the data folder, writes no audit entry and uses no upload slot. The review never carries a removed value, only names. Reviews do not survive a gateway restart. Local mode only; refused while developer bypass mode is on.
+         */
+        post: operations["createPackageExportPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packages/export/plan/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read back an export review
+         * @description Returns the stored review unchanged while now is before its expires_at. Does not capture the agent again. An unknown, malformed or expired ID, or any ID after a gateway restart, answers 404 plan_not_found. Local mode only; refused while developer bypass mode is on.
+         */
+        get: operations["getPackageExportPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/packages/import": {
         parameters: {
             query?: never;
@@ -1608,6 +1648,26 @@ export interface paths {
          */
         post: operations["uploadPackage"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packages/import/{staging_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel an unused upload
+         * @description Cancels a staged upload that is ready and has not been applied, in one step under the staging registry lock that the apply also takes. A ready upload (expired or not) has its folder removed and its slot freed (204). If the folder cannot be removed, the upload is marked cancelled: it can never be applied and holds no slot, and removal is attempted again by the next upload's clean-up or a repeated cancel (500 staging_cleanup_failed). An upload being received, being applied or kept for clean-up after a failed import is never touched (409 staging_busy). Not audited (no data enters or leaves). Local mode only; refused while developer bypass mode is on.
+         */
+        delete: operations["cancelPackageImport"];
         options?: never;
         head?: never;
         patch?: never;
@@ -14495,6 +14555,144 @@ export interface components {
             agent_ids: string[];
         };
         /**
+         * PackageExportPlanRequest
+         * @description Request body of POST /api/v1/packages/export/plan (the export review, epic #1094 slice B1). B1 accepts scope "agents" and exactly one agent ID; any other count is refused by the server with 400 export_selection_invalid (not by this schema), so later slices can add several agents and other scopes without breaking this shape.
+         */
+        PackageExportPlanRequest: {
+            /**
+             * @description What to review. B1 knows only "agents".
+             * @example agents
+             * @enum {string}
+             */
+            scope: "agents";
+            /**
+             * @description IDs of the agents to review (exactly one in B1).
+             * @example [
+             *       "5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c"
+             *     ]
+             */
+            agent_ids: string[];
+        };
+        /**
+         * PackageExportPlan
+         * @description The export review ("plan") of POST /api/v1/packages/export/plan (201) and GET /api/v1/packages/export/plan/{plan_id} (200), epic #1094 slice B1. It says what a bundle exported now would contain and leave out, using the same capture, cleaning and refusals as the export itself. It is held in memory for 30 minutes (expires_at = created_at + 30 minutes) and never carries a removed value: names only. The export itself is not bound to the review.
+         */
+        PackageExportPlan: {
+            /**
+             * Format: uuid
+             * @description Handle for reading this review back (UUID v4).
+             */
+            plan_id: string;
+            /**
+             * Format: date-time
+             * @description When the review was made (UTC).
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description created_at plus 30 minutes; the review is readable while now is before it.
+             */
+            expires_at: string;
+            /**
+             * @description Echo of the request's scope.
+             * @example agents
+             * @enum {string}
+             */
+            scope: "agents";
+            /** @description The reviewed elements (exactly one agent in B1). */
+            elements: {
+                /**
+                 * @description Element type (agent in B1).
+                 * @example agent
+                 */
+                type: string;
+                /** @description The element's ID on this install. */
+                source_id: string;
+                /**
+                 * @description The element's name.
+                 * @example Writer
+                 */
+                name: string;
+                /**
+                 * @description Agent kind.
+                 * @example main
+                 * @enum {string}
+                 */
+                kind: "main" | "worker" | "external_worker";
+                /** @description The files that go into the bundle for this element, in bundle order. */
+                files: {
+                    /**
+                     * @description Path of the file inside the bundle.
+                     * @example agents/5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c/SOUL.md
+                     */
+                    path: string;
+                    /**
+                     * Format: int64
+                     * @description Size in bytes.
+                     * @example 2000
+                     */
+                    size: number;
+                }[];
+                /**
+                 * Format: int64
+                 * @description Sum of the element's file sizes in bytes.
+                 */
+                bytes: number;
+            }[];
+            /** @description What does not travel, and why, in a fixed order. type and reason are open strings because later slices add values. B1 types: skill, connector, agent_memory, session, work_files, team, agent_setting. B1 reasons: type_not_exportable, host_path, secret_value, not_carried, not_restored. */
+            left_out: {
+                /**
+                 * @description What is left out.
+                 * @example agent_memory
+                 */
+                type: string;
+                /**
+                 * @description Why it is left out.
+                 * @example type_not_exportable
+                 */
+                reason: string;
+                /** @description Plain-English explanation. Never contains a value. */
+                message: string;
+                /** @description Names concerned (skill names, connector IDs, environment variable names). Never values. */
+                items?: string[];
+            }[];
+            /** @description Secrets the importer must enter again (same item shape as the manifest's needs_secrets; names only). */
+            needs_secrets: {
+                /**
+                 * @description Secret name, for example an environment variable name.
+                 * @example API_TOKEN
+                 */
+                name: string;
+                /** @description Source ID of the element that uses the secret. */
+                used_by: string;
+                /**
+                 * @description Kind of secret.
+                 * @example executor_env
+                 */
+                kind: string;
+            }[];
+            /** @description Notices the person must see before downloading. B1 always carries exactly one, free_text_copied. */
+            disclosures: {
+                /**
+                 * @description Disclosure code.
+                 * @example free_text_copied
+                 */
+                code: string;
+                /** @description Plain-English text of the disclosure. */
+                message: string;
+            }[];
+            /**
+             * Format: int64
+             * @description Byte length of the bundle as it would be built at review time.
+             */
+            size_bytes: number;
+            /**
+             * @description The download file name the export will use (same rule as the export's Content-Disposition).
+             * @example Writer.omnpkg
+             */
+            file_name: string;
+        };
+        /**
          * PackageImportPreview
          * @description Response of POST /api/v1/packages/import (201). The upload was checked in full and kept in a staging folder until expires_at (30 minutes after it became ready). Everything in the preview is provisional: apply re-runs the checks on the current state and lists each difference as the warning changed_since_preview (FR-021, FR-042).
          */
@@ -23891,6 +24089,136 @@ export interface operations {
             };
         };
     };
+    createPackageExportPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackageExportPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description The review. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageExportPlan"];
+                };
+            };
+            /** @description agent_ids does not hold exactly one ID (export_selection_invalid), the body is not valid JSON, has an unknown property, or scope is not agents. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Agent not found (agent_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method not allowed (only POST). */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description JSON body over 1 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The agent cannot be exported; the same code the export gives (core_agent_not_exportable, agent_prompt_missing, element_not_creatable, agent_file_unreadable, external_worker_not_supported_yet). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getPackageExportPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The plan_id from the review. */
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored review. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageExportPlan"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Review unknown, malformed or expired (plan_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method not allowed (only GET). */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     uploadPackage: {
         parameters: {
             query?: never;
@@ -23934,6 +24262,73 @@ export interface operations {
             };
             /** @description The package was refused (not_a_package, package_too_new, element_schema_too_new, package_too_large with details.limit window, checksum_mismatch, manifest_mismatch, unsafe_path, unsafe_entry_type, no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable, external_worker_not_supported_yet). */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    cancelPackageImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The staging_id from the upload's preview. */
+                staging_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The upload was cancelled and its folder removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Staging unknown, already used or already cancelled (staging_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method not allowed (only DELETE on this path; POST on /apply). */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The upload is being received, being applied, or kept for clean-up (staging_busy); nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The upload is cancelled but its folder could not be removed yet (staging_cleanup_failed); removal is attempted again at a later upload or a repeated cancel. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -29934,6 +30329,8 @@ export type MailboxRemovalResult = components["schemas"]["MailboxRemovalResult"]
 export type MailboxCleanupRequest = components["schemas"]["MailboxCleanupRequest"];
 export type PackageManifest = components["schemas"]["PackageManifest"];
 export type PackageExportRequest = components["schemas"]["PackageExportRequest"];
+export type PackageExportPlanRequest = components["schemas"]["PackageExportPlanRequest"];
+export type PackageExportPlan = components["schemas"]["PackageExportPlan"];
 export type PackageImportPreview = components["schemas"]["PackageImportPreview"];
 export type PackageImportApplyRequest = components["schemas"]["PackageImportApplyRequest"];
 export type PackageImportResult = components["schemas"]["PackageImportResult"];

@@ -24,6 +24,12 @@ const (
 	StagingApplying     StagingState = "applying"
 	StagingDone         StagingState = "done"
 	StagingNeedsCleanup StagingState = "needs-cleanup"
+
+	// StagingCancelled (B1 cancel lifecycle; spec "Cancel lifecycle"): a ready
+	// staging whose folder could not be removed. It can never be applied, does
+	// not count as a slot, and its folder removal is attempted again by the
+	// next upload's Sweep or a repeated cancel — never on a timer or at boot.
+	StagingCancelled StagingState = "cancelled"
 )
 
 // UnfinishedImport names a kept orphan staging for the unfinished_import_found
@@ -47,6 +53,19 @@ type StagingRegistry struct {
 	now     func() time.Time
 	entries map[string]*stagingEntry
 	orphans map[string]UnfinishedImport // kept orphan folders with an unfinished journal
+
+	// RemoveDir is nil in production. A test sets it to make folder removal
+	// fail (the B1 cancel spec's "test seam makes the removal fail"): when
+	// set, it replaces os.RemoveAll for the cancel removals only, that is
+	// Cancel's removal and Sweep's retry for a cancelled staging.
+	RemoveDir func(dir string) error
+
+	// AfterBeginApply is nil in production. A test sets it to pause an apply
+	// right after BeginApply moved the staging to applying (the B1
+	// cancel/apply interleaving checkpoint). Called with the registry lock
+	// RELEASED, so the test's concurrent cancel can take the lock; the apply
+	// resumes when the function returns (a channel handshake, never a sleep).
+	AfterBeginApply func(id string)
 }
 
 // NewStagingRegistry builds a registry over base with the given clock.
@@ -64,6 +83,20 @@ func (r *StagingRegistry) Dir(id string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.entries[id]; !ok {
+		return "", newErr(CodeStagingNotFound)
+	}
+	return r.stagingPath(id)
+}
+
+// stagingPath is the folder of staging id under the staging root. Only a
+// canonical staging UUID (the form Reserve issues) names a folder, so an ID
+// can never point outside the root; anything else is staging_not_found.
+func (r *StagingRegistry) stagingPath(id string) (string, error) {
+	u, err := uuid.Parse(id)
+	if err != nil || u.String() != id {
+		return "", newErr(CodeStagingNotFound)
+	}
+	if !filepath.IsLocal(id) {
 		return "", newErr(CodeStagingNotFound)
 	}
 	return filepath.Join(r.base, id), nil
@@ -175,18 +208,70 @@ func (r *StagingRegistry) State(id string) (StagingState, error) {
 // already running anywhere, FR-038).
 func (r *StagingRegistry) BeginApply(id string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	e, ok := r.entries[id]
 	if !ok || e.state != StagingReady || r.expiredLocked(e) {
+		r.mu.Unlock()
 		return newErr(CodeStagingNotFound)
 	}
 	for _, other := range r.entries {
 		if other.state == StagingApplying {
+			r.mu.Unlock()
 			return newErr(CodeImportInProgress)
 		}
 	}
 	e.state = StagingApplying
+	hook := r.AfterBeginApply
+	r.mu.Unlock()
+	// Test seam (nil in production): pauses the apply at the B1 interleaving
+	// checkpoint — the state change is visible, the lock is released, so a
+	// concurrent cancel observes "applying" (spec "Cancel and apply at the
+	// same moment"). Behaviour with the hook nil is unchanged.
+	if hook != nil {
+		hook(id)
+	}
 	return nil
+}
+
+// Cancel is the B1 ready-only cancel (spec "Cancel lifecycle"): one registry
+// operation under the single lock, with no separate state check before it.
+// A ready staging (expired or not) has its folder removed and its entry
+// dropped (nil, 204). When the removal fails the entry moves to cancelled
+// (never applicable, not a slot) and staging_cleanup_failed is returned with
+// the removal error joined; a repeated cancel of a cancelled entry retries
+// the removal the same way. receiving, applying and needs-cleanup answer
+// staging_busy and change nothing; done and unknown IDs answer
+// staging_not_found. It is not Release, which frees any state.
+func (r *StagingRegistry) Cancel(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[id]
+	if !ok || e.state == StagingDone {
+		return newErr(CodeStagingNotFound)
+	}
+	switch e.state {
+	case StagingReady, StagingCancelled:
+	default:
+		return newErr(CodeStagingBusy)
+	}
+	if err := r.removeDirLocked(id); err != nil {
+		e.state = StagingCancelled
+		return errors.Join(newErr(CodeStagingCleanupFailed), fmt.Errorf("omnpkg: remove cancelled staging folder: %w", err))
+	}
+	delete(r.entries, id)
+	return nil
+}
+
+// removeDirLocked removes a cancelled or cancelling staging's folder through
+// the RemoveDir seam when a test set it, else os.RemoveAll.
+func (r *StagingRegistry) removeDirLocked(id string) error {
+	dir, err := r.stagingPath(id)
+	if err != nil {
+		return err
+	}
+	if r.RemoveDir != nil {
+		return r.RemoveDir(dir)
+	}
+	return os.RemoveAll(dir)
 }
 
 // AbortApply returns an applying staging to ready after a refusal that wrote
@@ -202,7 +287,11 @@ func (r *StagingRegistry) FinishApply(id string) error {
 	if err := r.transition(id, StagingApplying, func(e *stagingEntry) { e.state = StagingDone }); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(filepath.Join(r.base, id)); err != nil {
+	dir, err := r.stagingPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("omnpkg: delete finished staging folder: %w", err)
 	}
 	return nil
@@ -231,7 +320,11 @@ func (r *StagingRegistry) Release(id string) error {
 		return newErr(CodeStagingNotFound)
 	}
 	delete(r.entries, id)
-	if err := os.RemoveAll(filepath.Join(r.base, id)); err != nil {
+	dir, err := r.stagingPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("omnpkg: delete released staging folder: %w", err)
 	}
 	return nil
@@ -252,7 +345,8 @@ func (r *StagingRegistry) transition(id string, from StagingState, apply func(*s
 }
 
 // Sweep is the per-upload maintenance: drop needs-cleanup entries whose folder
-// is gone, delete expired ready stagings and orphan folders whose journal is
+// is gone, retry the folder removal of cancelled stagings (dropping each one
+// whose removal succeeds), delete expired ready stagings and orphan folders whose journal is
 // absent or terminal (done / rolled_back), keep unfinished-journal orphans
 // (started / committed / rollback_incomplete — they hold a slot and are
 // returned for the unfinished_import_found warning, FR-044). A folder that
@@ -264,8 +358,14 @@ func (r *StagingRegistry) Sweep() []UnfinishedImport {
 		switch {
 		case e.state == StagingNeedsCleanup && !r.folderExists(id):
 			delete(r.entries, id)
+		case e.state == StagingCancelled:
+			// B1: a cancel whose folder removal failed is retried here, at
+			// the next upload; the entry goes once the removal succeeds.
+			if r.removeDirLocked(id) == nil {
+				delete(r.entries, id)
+			}
 		case r.expiredLocked(e):
-			if os.RemoveAll(filepath.Join(r.base, id)) == nil {
+			if dir, err := r.stagingPath(id); err == nil && os.RemoveAll(dir) == nil {
 				delete(r.entries, id)
 			}
 		}
@@ -312,6 +412,10 @@ func (r *StagingRegistry) scanOrphansLocked() map[string]UnfinishedImport {
 }
 
 func (r *StagingRegistry) folderExists(id string) bool {
-	info, err := os.Stat(filepath.Join(r.base, id))
+	dir, err := r.stagingPath(id)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(dir)
 	return err == nil && info.IsDir()
 }

@@ -101,6 +101,12 @@ type packageT5Seams struct {
 
 	// Now is the staging clock (Dataset D9). nil means time.Now.
 	Now func() time.Time
+
+	// PlanOpenSecretFile is nil in production. The B1 no-open test's planted
+	// control sets it: the plan create handler calls it once (a deliberate
+	// open of a watched secret file, output unchanged) so the open watcher
+	// proves it would see a leak (spec "Review never opens secret files").
+	PlanOpenSecretFile func()
 }
 
 // packageT5 is the process-wide seam set. Tests must not run in parallel.
@@ -113,7 +119,8 @@ func packageSeamsBlocked() bool {
 	return s.AuditWrite != nil || s.CrashAt != "" || s.Reload != nil || s.ReloadTimeout ||
 		s.EnsureMain != nil || s.WriteWorkspace != nil || s.SaveDelegation != nil ||
 		s.AfterMembershipWrite != nil || s.PublishRename != nil || s.DiscardPending != nil ||
-		s.CreatePendingFault != "" || s.RecoveryLeave != nil || s.SyncDir != nil || s.Now != nil
+		s.CreatePendingFault != "" || s.RecoveryLeave != nil || s.SyncDir != nil || s.Now != nil ||
+		s.PlanOpenSecretFile != nil
 }
 
 func packageNow() time.Time {
@@ -123,13 +130,14 @@ func packageNow() time.Time {
 	return time.Now()
 }
 
-// packageState is the per-gateway package state: the staging registry and
-// what each preview showed (apply lists a change as changed_since_preview,
-// FR-041, FR-042).
+// packageState is the per-gateway package state: the staging registry, what
+// each preview showed (apply lists a change as changed_since_preview,
+// FR-041, FR-042) and the B1 export reviews.
 type packageState struct {
 	mu       sync.Mutex
 	registry *omnpkg.StagingRegistry
 	previews map[string]packagePreviewSnapshot // staging ID -> what the preview showed
+	plans    packagePlanStore                  // B1 export reviews (in memory only)
 }
 
 // packagePreviewSnapshot is what a preview showed that apply re-checks: the
@@ -189,12 +197,17 @@ func (a *restAPI) forgetPreview(stagingID string) {
 	delete(a.packages.previews, stagingID)
 }
 
-// registerPackageRoutes registers the three package routes. It is called from
-// the local-mode block of registerAdditionalEndpoints only (FR-045): withAuth
-// and RequireNotBypass on all three, the upload with a 64 MiB body limit,
-// export and apply with the 1 MiB JSON limit.
+// registerPackageRoutes registers the package routes. It is called from the
+// local-mode block of registerAdditionalEndpoints only (FR-045; B1 FR-009):
+// withAuth and RequireNotBypass on every route, the upload with a 64 MiB body
+// limit, export, review, apply and cancel with the 1 MiB JSON limit. The
+// /import/ subtree carries both apply (POST .../apply) and cancel (DELETE).
 func (a *restAPI) registerPackageRoutes(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/packages/export", a.adminWrap(a.handlePackageExport))
+	// B1 review routes (spec Reachability): the exact create path plus the
+	// /{plan_id} read subtree, both under adminWrap and its 1 MiB JSON limit.
+	cm.RegisterHTTPHandler("/api/v1/packages/export/plan", a.adminWrap(a.handlePackageExportPlanCreate))
+	cm.RegisterHTTPHandler("/api/v1/packages/export/plan/", a.adminWrap(a.handlePackageExportPlanRead))
 	cm.RegisterHTTPHandler("/api/v1/packages/import",
 		a.withAuthAndBodyLimit(middleware.RequireNotBypass(a.handlePackageImport), packageUploadBodyLimit))
 	cm.RegisterHTTPHandler("/api/v1/packages/import/", a.adminWrap(a.handlePackageImportApply))
@@ -227,7 +240,10 @@ var packageMessages = map[string]string{
 	omnpkg.CodeNameSuffixExhausted:        "every \"(imported N)\" name is taken; rename an existing agent first",
 	omnpkg.CodeImportRolledBack:           "the import failed and was undone",
 	omnpkg.CodeImportRollbackIncomplete:   "the import failed and could not be fully undone; restart the gateway to finish the clean-up",
+	omnpkg.CodeStagingBusy:                "the upload is being received, being imported or kept for clean-up; it was not cancelled",
+	omnpkg.CodeStagingCleanupFailed:       "the upload was cancelled, but its temporary files could not be removed yet; removal is attempted again at a later upload",
 	packageCodeAgentNotFound:              "agent not found",
+	packageCodePlanNotFound:               "the review was not found or has expired; review the agent again",
 	packageCodeAuditFailed:                "the audit log could not be written",
 	packageCodeModeNotAvailable:           "only mode \"new\" is available",
 	packageCodeWorkspaceNotFound:          "workspace not found",
@@ -246,7 +262,7 @@ func packageStatus(pe *omnpkg.PackageError) int {
 	switch pe.Code {
 	case omnpkg.CodeExportSelectionInvalid:
 		return http.StatusBadRequest
-	case packageCodeAgentNotFound, omnpkg.CodeStagingNotFound, packageCodeWorkspaceNotFound:
+	case packageCodeAgentNotFound, omnpkg.CodeStagingNotFound, packageCodeWorkspaceNotFound, packageCodePlanNotFound:
 		return http.StatusNotFound
 	case omnpkg.CodePackageTooLarge:
 		if pe.Detail["limit"] == omnpkg.LimitWindow {
@@ -254,9 +270,10 @@ func packageStatus(pe *omnpkg.PackageError) int {
 		}
 		return http.StatusRequestEntityTooLarge
 	case omnpkg.CodeTooManyStagedImports, omnpkg.CodeImportInProgress, omnpkg.CodeNameSuffixExhausted,
-		packageCodeDefaultWSMissing:
+		packageCodeDefaultWSMissing, omnpkg.CodeStagingBusy:
 		return http.StatusConflict
-	case omnpkg.CodeImportRolledBack, omnpkg.CodeImportRollbackIncomplete, packageCodeAuditFailed:
+	case omnpkg.CodeImportRolledBack, omnpkg.CodeImportRollbackIncomplete, packageCodeAuditFailed,
+		omnpkg.CodeStagingCleanupFailed:
 		return http.StatusInternalServerError
 	default:
 		return http.StatusUnprocessableEntity
@@ -302,7 +319,7 @@ func writePackageErr(w http.ResponseWriter, op string, err error) {
 		jsonErr(w, http.StatusRequestEntityTooLarge, "request body too large")
 		return
 	}
-	slog.Error("packages: request failed", "operation", op, "error", err)
+	logsafeError("packages: request failed", "operation", op, "error", err)
 	jsonErr(w, http.StatusInternalServerError, "internal server error")
 }
 

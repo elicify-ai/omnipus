@@ -18,6 +18,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
 import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
 import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
+import { Route as AppExportImportRouteImport } from './routes/_app/export-import'
 import { Route as AppLibraryRouteImport } from './routes/_app/library'
 import { Route as AppOmnipusRouteImport } from './routes/_app/omnipus'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
@@ -83,6 +84,11 @@ const AppBrowserLiveRoute = AppBrowserLiveRouteImport.update({
 const AppConnectorsRoute = AppConnectorsRouteImport.update({
   id: '/connectors',
   path: '/connectors',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppExportImportRoute = AppExportImportRouteImport.update({
+  id: '/export-import',
+  path: '/export-import',
   getParentRoute: () => AppRoute,
 } as any)
 const AppLibraryRoute = AppLibraryRouteImport.update({
@@ -221,6 +227,7 @@ export interface FileRoutesByFullPath {
   '/automations': typeof AppAutomationsRoute
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
+  '/export-import': typeof AppExportImportRoute
   '/library': typeof AppLibraryRoute
   '/omnipus': typeof AppOmnipusRoute
   '/policies': typeof AppPoliciesRoute
@@ -253,6 +260,7 @@ export interface FileRoutesByTo {
   '/automations': typeof AppAutomationsRoute
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
+  '/export-import': typeof AppExportImportRoute
   '/library': typeof AppLibraryRoute
   '/omnipus': typeof AppOmnipusRoute
   '/policies': typeof AppPoliciesRoute
@@ -286,6 +294,7 @@ export interface FileRoutesById {
   '/_app/automations': typeof AppAutomationsRoute
   '/_app/browser-live': typeof AppBrowserLiveRoute
   '/_app/connectors': typeof AppConnectorsRoute
+  '/_app/export-import': typeof AppExportImportRoute
   '/_app/library': typeof AppLibraryRoute
   '/_app/omnipus': typeof AppOmnipusRoute
   '/_app/policies': typeof AppPoliciesRoute
@@ -321,6 +330,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/browser-live'
     | '/connectors'
+    | '/export-import'
     | '/library'
     | '/omnipus'
     | '/policies'
@@ -353,6 +363,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/browser-live'
     | '/connectors'
+    | '/export-import'
     | '/library'
     | '/omnipus'
     | '/policies'
@@ -385,6 +396,7 @@ export interface FileRouteTypes {
     | '/_app/automations'
     | '/_app/browser-live'
     | '/_app/connectors'
+    | '/_app/export-import'
     | '/_app/library'
     | '/_app/omnipus'
     | '/_app/policies'
@@ -482,6 +494,13 @@ declare module '@tanstack/react-router' {
       path: '/connectors'
       fullPath: '/connectors'
       preLoaderRoute: typeof AppConnectorsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/export-import': {
+      id: '/_app/export-import'
+      path: '/export-import'
+      fullPath: '/export-import'
+      preLoaderRoute: typeof AppExportImportRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/library': {
@@ -689,6 +708,7 @@ interface AppRouteChildren {
   AppAutomationsRoute: typeof AppAutomationsRoute
   AppBrowserLiveRoute: typeof AppBrowserLiveRoute
   AppConnectorsRoute: typeof AppConnectorsRoute
+  AppExportImportRoute: typeof AppExportImportRoute
   AppLibraryRoute: typeof AppLibraryRoute
   AppOmnipusRoute: typeof AppOmnipusRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
@@ -707,6 +727,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAutomationsRoute: AppAutomationsRoute,
   AppBrowserLiveRoute: AppBrowserLiveRoute,
   AppConnectorsRoute: AppConnectorsRoute,
+  AppExportImportRoute: AppExportImportRoute,
   AppLibraryRoute: AppLibraryRoute,
   AppOmnipusRoute: AppOmnipusRoute,
   AppPoliciesRoute: AppPoliciesRoute,

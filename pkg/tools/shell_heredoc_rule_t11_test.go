@@ -105,7 +105,10 @@ func TestGuard_HereDocumentShapeKeepsPriorChecks(t *testing.T) {
 		{"matching shape cannot allow parent traversal", wrap("print('../shared/x')"), false, false, "path traversal detected", ""},
 		{"matching shape cannot exempt an existing root component", wrap("print('/tmp/t11-q11-outside')"), false, false, "path outside working dir", "/tmp/t11-q11-outside"},
 		{"matching shape cannot exempt adjacent fragments", wrap("print('/tm' 'p/x')"), false, false, "path outside working dir", "/tm"},
-		{"absolute program position stays refused", "/bin/python3 <<'PY'\nprint('" + absent + "/v1/users')\nPY\n", false, false, "RUNNING a program", ""},
+		// #1960 S0 (FR-1): the absolute program itself is no longer refused, but
+		// `/bin/python3` is not the plain program name the here-document form
+		// requires, so the literal keeps the guard's normal refusal.
+		{"absolute program position keeps the normal decision for the literal", "/bin/python3 <<'PY'\nprint('" + absent + "/v1/users')\nPY\n", false, false, "path outside working dir", absent + "/v1/users"},
 		{"workspace path remains an ordinary allowance", wrap("print('" + filepath.Join(cwd, "document.txt") + "')"), true, true, "", ""},
 	}
 	for _, c := range cases {

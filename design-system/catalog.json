@@ -971,6 +971,13 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/stepper.tsx",
+      "classification": "composite",
+      "exports": ["Stepper", "StepperProps"],
+      "publicExports": ["Stepper"],
+      "publicTypes": ["StepperProps"]
+    },
+    {
       "source": "src/components/ui/agent-icon.tsx",
       "classification": "composite",
       "exports": ["AgentIcon", "AgentIconProps"],

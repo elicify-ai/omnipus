@@ -523,7 +523,10 @@ func (t *ReadFileTool) Description() string {
 		"Text supports pagination via `offset` and `length` as bytes. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
 		"automatically decoded to plain text; for these, `offset` and `length` count " +
-		"characters of extracted text rather than raw bytes. Other binary files (containing " +
+		"characters of extracted text rather than raw bytes. A file that starts with `%PDF-` or is " +
+		"named `.pdf` is read as a PDF even without null bytes (unless its name marks it as an image); if its text " +
+		"cannot be extracted (scanned or image-only, damaged, encrypted, or not really a PDF) the call returns an " +
+		"error, never the raw bytes. Other binary files (containing " +
 		"null bytes and not one of those document or image formats) are rejected outright. `length` above the server-side max " +
 		"is silently capped, not rejected — check the returned header's total size if you need " +
 		"to know how much was actually read."
@@ -704,8 +707,12 @@ func (t *ReadFileTool) readOpenFile(
 		return ErrorResult("length must be > 0")
 	}
 
-	// Reject binary files: null bytes are a reliable binary indicator.
-	if bytes.Contains(sniff[:sniffN], []byte{0}) {
+	// Reject binary files: null bytes are a reliable binary indicator. A PDF
+	// is also routed to extraction by its signature or extension, because its
+	// first 512 bytes can be plain ASCII with no null byte (#1959); a PDF that
+	// then fails to extract returns the structured error below, never its raw
+	// bytes as text.
+	if bytes.Contains(sniff[:sniffN], []byte{0}) || docextract.LooksLikePDF(sniff[:sniffN], filepath.Base(path)) {
 		// Before rejecting, check whether this opaque binary is actually a
 		// readable document (Word/PowerPoint/Excel/PDF). If so, return its
 		// extracted plain text instead. Extraction reads through the SAME

@@ -684,12 +684,8 @@ func TestExecCommandInjection_WorkspaceRestriction(t *testing.T) {
 				pinPathRule: true,
 				why:         "echo never opens the path, so there is no read to grant — and leaving it off the allowlist is what keeps `echo x,SECRET` blocked",
 			},
-			{
-				name:        "path_in_command_position",
-				cmd:         readable + " --version",
-				pinPathRule: true,
-				why:         "a path in command position is an EXEC; ADR-068 ruled on reads only",
-			},
+			// path_in_command_position moved out: #1960 FR-1 runs it (see
+			// checkProgramByAbsolutePath1960).
 			{
 				name:        "read_beside_a_redirect_to_an_unresolvable_target",
 				cmd:         "cat " + readable + " > $OUT",
@@ -736,6 +732,75 @@ func TestExecCommandInjection_WorkspaceRestriction(t *testing.T) {
 					"a refused command must not have leaked the outside file's content")
 			})
 		}
+	})
+
+	t.Run("program_named_by_absolute_path_reaches_the_program", func(t *testing.T) {
+		checkProgramByAbsolutePath1960(t, tool, outside, readable, readableCanary, preexisting, preexistingContent)
+	})
+}
+
+// checkProgramByAbsolutePath1960 pins #1960 FR-1/D1: a program named by its
+// absolute path runs.
+//
+// Until #1960 the case `<outside file> --version` was pinned above as a
+// guard refusal ("a path in command position is an EXEC"). FR-1 changed
+// that rule on purpose: the program word is no longer refused only because
+// it lies outside the working directory (the protected-file check still
+// runs first, and is covered by the secret-set test below). The oracle is
+// therefore the CHILD's own failure: the fixture file is mode 0600, so the
+// shell itself must refuse to execute it with "Permission denied" and exit
+// code 126, and that error must reach the agent unchanged (FR-1: the
+// program's own errors pass through). The two protection cases after it
+// pin what FR-1 did NOT relax: every other operand of such a command is
+// still judged as before, so a write or an unprovable reference outside
+// the working directory is still refused by the guard.
+func checkProgramByAbsolutePath1960(t *testing.T, tool *tools.ExecTool, outside, readable, readableCanary,
+	preexisting, preexistingContent string,
+) {
+	t.Helper()
+	t.Run("program_word_passes_the_guard_and_the_child_error_passes_through", func(t *testing.T) {
+		cmd := readable + " --version"
+		result := runExec(t, tool, cmd)
+		require.NotContains(t, result.ForLLM, guardRefusalMarker,
+			"#1960 FR-1: %q names its program by absolute path and must reach the program, not the guard; message was %q",
+			cmd, result.ForLLM)
+		require.NotContains(t, result.ForLLM, outsideWorkDirMarker,
+			"#1960 FR-1: the program word alone must not trip the out-of-working-directory rule; message was %q",
+			result.ForLLM)
+		require.True(t, result.IsError,
+			"executing a mode-0600 file must fail in the child; got success with %q", result.ForLLM)
+		assert.Contains(t, result.ForLLM, "Permission denied",
+			"the shell's own error for a non-executable file must pass through unchanged")
+		assert.Contains(t, result.ForLLM, "exited with code 126",
+			"the child's own exit status (126, found but not executable) must pass through")
+		assert.NotContains(t, result.ForLLM, readableCanary,
+			"executing a non-executable file must not print its content")
+	})
+
+	t.Run("a_write_beside_the_program_is_still_refused", func(t *testing.T) {
+		target := filepath.Join(outside, "exec-1960-out.txt")
+		cmd := readable + " --version > " + target
+		result := runExec(t, tool, cmd)
+		requireGuardRefused(t, result, cmd,
+			"FR-1 relaxes only the program word; a redirect writing outside the working directory is still refused")
+		require.Contains(t, result.ForLLM, outsideWorkDirMarker,
+			"the write must be refused by the out-of-working-directory rule; message was %q", result.ForLLM)
+		_, statErr := os.Stat(target)
+		require.True(t, errors.Is(statErr, os.ErrNotExist),
+			"write %q was refused but %q exists anyway", cmd, target)
+	})
+
+	t.Run("an_unprovable_operand_beside_the_program_is_still_refused", func(t *testing.T) {
+		cmd := readable + " " + preexisting
+		result := runExec(t, tool, cmd)
+		requireGuardRefused(t, result, cmd,
+			"FR-1 relaxes only the program word; an operand an unknown program may write is still judged as before")
+		require.Contains(t, result.ForLLM, outsideWorkDirMarker,
+			"the operand must be refused by the out-of-working-directory rule; message was %q", result.ForLLM)
+		body, readErr := os.ReadFile(preexisting)
+		require.NoError(t, readErr)
+		require.Contains(t, string(body), preexistingContent,
+			"refused command %q must not have modified %q", cmd, preexisting)
 	})
 }
 

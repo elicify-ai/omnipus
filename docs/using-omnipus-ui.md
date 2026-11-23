@@ -12,7 +12,7 @@ The layout has two fixed points, and everything hangs off one of them:
 flowchart LR
   SignIn[Sign-in screen] -->|opens| Workspace[Your default workspace]
   Bar[Sidebar] -->|lists| Workspaces[All your workspaces]
-  Bar -->|links to| Screens[Agents, Connectors, Skills and Tools, Library]
+  Bar -->|links to| Screens[Agents, Connectors, Skills and Tools, Export & Import, Library]
   Workspace -->|panel toggles| Panels[Tasks, Calendar, Library, Mail, Team]
   Workspace -->|base page is| Chat[Chat: replies, tool calls, activity]
 ```
@@ -43,7 +43,7 @@ What the sidebar holds:
 |---|---|
 | Omnipus | A fixed entry above the workspaces that opens Omnipus's one ongoing chat from any workspace, without changing the workspace you are in. See [Omnipus](#omnipus). |
 | Workspaces | Your active workspaces: the default workspace first, then pinned workspaces, then up to five unpinned ones. If there are more, select **more…** to reveal them; **Show fewer** collapses that workspace list again. These controls reveal workspaces, not a list of sessions. Selecting a name opens its chat. Under the name is one row for each eligible agent's main chat in that workspace — not a list of recent conversations. Workers are not listed. Omnipus has its own fixed entry above the workspaces, not a workspace agent row. Select an agent's name to open that agent's main chat. The **⋯** button on the row opens that agent's actions; on a member's row they are **History** (earlier chats for that workspace and that agent), **Hide from sidebar**, **Edit**, and **Remove**. The control beside the name is **Show <workspace> agents** or **Hide <workspace> agents**. A collapsed workspace shows only the attention dot and the count, not the agent rows. An expanded workspace shows the rows, and a main chat that needs you shows a halo on its icon. The workspace you are in starts expanded. Showing the agents or opening the workspace refreshes the team list. Below an expanded workspace's rows, **Add agent** opens Omnipus's chat with creating an agent for that workspace already started; you stay in that workspace. Under that, the **Group chats** section lists the workspace's [group chats](group-chats.md); its **+** menu creates a squad or a quick group. The **+** creates a workspace once you type a name. **Archive** reaches the retired ones. |
-| Assets | App-wide screens: [tools](tools.md) (the Skills & Tools screen), [connectors](connectors.md), and the [library](library.md) panel for files and [knowledge base](knowledge.md) notes. |
+| Assets | App-wide screens: [tools](tools.md) (the Skills & Tools screen), [connectors](connectors.md), [Export & Import](export-import.md) (move one of your agents to another install; self-hosted edition only), and the [library](library.md) panel for files and [knowledge base](knowledge.md) notes. |
 | Account menu | Your username at the very bottom opens notifications, [usage](#where-settings-and-account-live), [profile](#where-settings-and-account-live), [settings](settings.md), and sign out. |
 
 There is no Agents screen: a workspace's agents live on its **Team** (see [agents](agents.md)).
