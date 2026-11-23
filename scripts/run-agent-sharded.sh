@@ -113,30 +113,62 @@ echo "=== agent sharded: partition ${SHARDS} ways ===" >&2
 # HIGH 2: capture the partitioner output and CHECK it. The old process
 # substitution swallowed a failing partitioner and produced a green
 # zero-shard run.
-if ! PARTITION_OUT="$(python3 scripts/gateway-test-shards.py list "$SHARDS" --binary "$BINARY")"; then
+if ! PARTITION_OUT="$(python3 scripts/gateway-test-shards.py chunks "$SHARDS" --binary "$BINARY" --out-dir "$WORKDIR/partitions")"; then
   echo "FATAL: test partitioner failed; refusing to run zero shards (old behavior: green exit with no tests)" >&2
   exit 1
 fi
-mapfile -t REGEXES <<< "$PARTITION_OUT"
-if [ "${#REGEXES[@]}" -ne "$SHARDS" ]; then
-  echo "FATAL: partitioner returned ${#REGEXES[@]} shard regexes, expected $SHARDS" >&2
+mapfile -t CHUNK_FILES <<< "$PARTITION_OUT"
+if [ "${#CHUNK_FILES[@]}" -ne "$SHARDS" ]; then
+  echo "FATAL: partitioner returned ${#CHUNK_FILES[@]} shard files, expected $SHARDS" >&2
   exit 1
 fi
+
+# Independently check every argument BEFORE starting any shard. Count bytes,
+# not characters: Linux's per-string argv ceiling is independent of ARG_MAX.
+MAX_RUN_REGEX_BYTES=100000
+for i in "${!CHUNK_FILES[@]}"; do
+  if [ ! -s "${CHUNK_FILES[$i]}" ] || [ ! -r "${CHUNK_FILES[$i]}" ]; then
+    echo "FATAL: shard $i has no readable regex chunks" >&2
+    exit 1
+  fi
+  while IFS= read -r REGEX || [ -n "$REGEX" ]; do
+    if [ -z "$REGEX" ]; then
+      echo "FATAL: shard $i has an empty -test.run regex" >&2
+      exit 1
+    fi
+    REGEX_BYTES=$(printf '%s' "$REGEX" | wc -c)
+    if [ "$REGEX_BYTES" -gt "$MAX_RUN_REGEX_BYTES" ]; then
+      echo "FATAL: shard $i -test.run regex is $((REGEX_BYTES)) bytes; limit is $MAX_RUN_REGEX_BYTES bytes" >&2
+      exit 1
+    fi
+  done < "${CHUNK_FILES[$i]}"
+done
 
 PIDS=()
 LOGS=()
 RUN_START=$(date +%s)
-for i in "${!REGEXES[@]}"; do
+for i in "${!CHUNK_FILES[@]}"; do
   LOG="$WORKDIR/shard-${i}.log"
   LOGS+=("$LOG")
-  echo "shard $i: starting (regex len ${#REGEXES[$i]})" >&2
+  echo "shard $i: starting (bounded regex chunks)" >&2
+  # Chunks are sequential inside a shard; shards still run in parallel.
+  # Each invocation keeps the existing timeout and -test.parallel budget.
   (
     set +e
     # HIGH 1: run from the package directory — `go test` runs a package's
     # tests with the package dir as cwd; the compiled binary must too.
     cd "$ROOT/pkg/agent" || exit 1
-    "$BINARY" -test.v -test.timeout "$TIMEOUT" -test.parallel 1 -test.run "${REGEXES[$i]}" >"$LOG" 2>&1
-    echo "SHARD_EXIT=$?" >> "$LOG"
+    SHARD_EXIT=0
+    # Read the manifest up front so a test reading stdin cannot consume it.
+    mapfile -t REGEXES < "${CHUNK_FILES[$i]}"
+    for REGEX in "${REGEXES[@]}"; do
+      "$BINARY" -test.v -test.timeout "$TIMEOUT" -test.parallel 1 -test.run "$REGEX" >>"$LOG" 2>&1
+      CHUNK_EXIT=$?
+      if [ "$CHUNK_EXIT" -ne 0 ]; then
+        SHARD_EXIT="$CHUNK_EXIT"
+      fi
+    done
+    echo "SHARD_EXIT=$SHARD_EXIT" >> "$LOG"
   ) &
   PIDS+=($!)
 done
@@ -153,9 +185,11 @@ ANY_FAIL=0
 for i in "${!LOGS[@]}"; do
   LOG="${LOGS[$i]}"
   if [ -f "$LOG" ]; then
-    echo "=== SHARD $i START ===" >> "$COMBINED"
-    cat "$LOG" >> "$COMBINED"
-    echo "=== SHARD $i END ===" >> "$COMBINED"
+    {
+      echo "=== SHARD $i START ==="
+      cat "$LOG"
+      echo "=== SHARD $i END ==="
+    } >> "$COMBINED"
     if grep -q '^SHARD_EXIT=[^0]' "$LOG" 2>/dev/null; then
       ANY_FAIL=1
     fi

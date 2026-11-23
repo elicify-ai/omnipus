@@ -3,7 +3,10 @@
 
 Usage:
   python3 scripts/gateway-test-shards.py list N --binary B
-      Emit N lines of regex patterns, one per shard.
+      Emit N bounded regex patterns, one per shard; reject oversized shards.
+  python3 scripts/gateway-test-shards.py chunks N --binary B --out-dir D
+      Emit N absolute file paths, one per shard. Each file contains bounded
+      regex patterns (one per line) to run sequentially within that shard.
   python3 scripts/gateway-test-shards.py check
       Verify the partition is complete and non-overlapping.
   python3 scripts/gateway-test-shards.py count --binary B
@@ -14,7 +17,7 @@ Usage:
       Every runnable test listed by the binary must have at least one
       top-level `--- PASS|FAIL|SKIP` result line in the combined shard
       log; exits 1 printing the missing names otherwise. Both this and
-      `list` derive the expected set from the SAME binary with the SAME
+      `list`/`chunks` derive the expected set from the SAME binary with the SAME
       runnable-name rule, so the shards and the check cannot disagree
       about what should have run.
 
@@ -36,7 +39,7 @@ against a compiled `go test -c` binary of a package holding all four kinds
   Benchmark*  yes                         NO — needs -test.bench; never reports
 
 So the runnable set is Test*/Fuzz*/Example*: exactly what -test.list emits
-minus Benchmark*. `list` partitions it and `verify` expects it, so a listed
+minus Benchmark*. `list`/`chunks` partition it and `verify` expects it, so a listed
 test can no longer silently miss every shard regex (the old filter kept
 only `Test`-prefixed names, dropping Fuzz*/Example* — none existed in
 pkg/agent or pkg/gateway at fix time, i.e. a latent gap).
@@ -47,7 +50,13 @@ import hashlib
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import List, Set
+
+# Linux limits each argv string to MAX_ARG_STRLEN (131072 bytes on CI's
+# 4 KiB pages), regardless of the larger total ARG_MAX budget. Leave room
+# for the terminating NUL and count UTF-8 bytes, including regex escaping.
+MAX_RUN_REGEX_BYTES = 100000
 
 # Names matching these prefixes are executed by a plain run of the compiled
 # test binary and report a top-level result line. See the module docstring
@@ -95,18 +104,46 @@ def partition_tests(names: List[str], n: int) -> List[List[str]]:
 
 
 def names_to_regex(names: List[str]) -> str:
-    """Convert a list of test names to a -run regex.
-
-    Uses alternation with word boundaries to avoid partial matches.
-    For large lists, we use a more efficient form.
-    """
+    """Build an exact-name -test.run regex, refusing unsafe argv lengths."""
     if not names:
-        return "^$"  # Match nothing
-    if len(names) == 1:
-        return f"^{re.escape(names[0])}$"
-    # Build alternation: ^(TestA|TestB|...)$
-    escaped = "|".join(re.escape(n) for n in names)
-    return f"^({escaped})$"
+        regex = "^$"  # Match nothing
+    elif len(names) == 1:
+        regex = f"^{re.escape(names[0])}$"
+    else:
+        escaped = "|".join(re.escape(n) for n in names)
+        regex = f"^({escaped})$"
+    size = len(regex.encode("utf-8"))
+    if size > MAX_RUN_REGEX_BYTES:
+        raise ValueError(
+            f"-test.run regex is {size} UTF-8 bytes; limit is {MAX_RUN_REGEX_BYTES} bytes"
+        )
+    return regex
+
+
+def names_to_regex_chunks(names: List[str]) -> List[str]:
+    """Split one shard into bounded regexes without changing its test order."""
+    regexes: List[str] = []
+    chunk: List[str] = []
+    name_bytes = 0
+    for name in names:
+        escaped_bytes = len(re.escape(name).encode("utf-8"))
+        # Fail clearly if even the singleton cannot fit, before writing a
+        # chunk manifest or attempting exec with an oversized argument.
+        if escaped_bytes + 2 > MAX_RUN_REGEX_BYTES:
+            names_to_regex([name])
+        # A singleton has two anchor bytes. Multiple names have four
+        # anchor/group bytes plus one separator per existing chunk member.
+        candidate_bytes = name_bytes + escaped_bytes + (len(chunk) + 4 if chunk else 2)
+        if chunk and candidate_bytes > MAX_RUN_REGEX_BYTES:
+            regexes.append(names_to_regex(chunk))
+            chunk = []
+            name_bytes = 0
+        chunk.append(name)
+        name_bytes += escaped_bytes
+    # Empty shards still get a match-nothing invocation, never an empty
+    # -test.run (which would match the entire test binary).
+    regexes.append(names_to_regex(chunk))
+    return regexes
 
 
 # Top-level result lines only: `-v` prints subtest results indented and with
@@ -158,11 +195,14 @@ def verify_log(binary_path: str, log_path: str) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("cmd", choices=("list", "check", "count", "verify"))
-    parser.add_argument("n", type=int, nargs="?", default=4, help="Number of shards (for list)")
+    parser.add_argument("cmd", choices=("list", "chunks", "check", "count", "verify"))
+    parser.add_argument("n", type=int, nargs="?", default=4, help="Number of shards (for list/chunks)")
     parser.add_argument("--binary", help="Path to pre-compiled test binary")
     parser.add_argument("--log", help="Combined shard log (for verify)")
+    parser.add_argument("--out-dir", help="Directory for per-shard regex files (for chunks)")
     args = parser.parse_args()
+    if args.cmd == "chunks" and not args.out_dir:
+        parser.error("chunks requires --out-dir")
 
     if args.cmd == "verify":
         if not args.binary or not args.log:
@@ -197,10 +237,20 @@ def main():
             print(f"  shard {i}: {len(shard)} tests")
         return
 
-    if args.cmd == "list":
-        for shard in shards:
-            regex = names_to_regex(shard)
-            print(regex)
+    try:
+        if args.cmd == "list":
+            for shard in shards:
+                print(names_to_regex(shard))
+        elif args.cmd == "chunks":
+            directory = Path(args.out_dir).resolve()
+            directory.mkdir(parents=True, exist_ok=True)
+            for i, shard in enumerate(shards):
+                regexes = names_to_regex_chunks(shard)
+                path = directory / f"shard-{i}.regexes"
+                path.write_text("\n".join(regexes) + "\n", encoding="utf-8")
+                print(path)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
 
 
 if __name__ == "__main__":
