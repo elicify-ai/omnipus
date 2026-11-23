@@ -29,11 +29,11 @@ func TestOfficePreview_TextFailureIsNotABlankPage(t *testing.T) {
 	res, previewErr := svc.Preview(context.Background(), adm, Request{
 		Name: "broken-text.pdf", Ext: ".pdf", Data: pdf, First: 1, Last: 2,
 	})
-	if previewErr != nil {
-		require.Contains(t, previewErr.Error(), "page 1", "a typed extraction failure must name the page")
-		require.NotContains(t, strings.ToLower(previewErr.Error()), "scanned")
-		return
-	}
+	// R3-F3: this fixture has a failed page followed by an extractable page.
+	// It must return a partial result; a top-level typed error cannot pass
+	// before the structural page-number assertions below have been reached.
+	require.NoError(t, previewErr, "SF-02/T5: the two-page fixture must return partial text, not bypass its page-number checks through a typed error")
+	require.NotNil(t, res, "SF-02/T5: both requested pages need a result to number")
 	var body strings.Builder
 	for _, page := range res.Text {
 		fmt.Fprintf(&body, "page %d: %s\n", page.Number, page.Text)

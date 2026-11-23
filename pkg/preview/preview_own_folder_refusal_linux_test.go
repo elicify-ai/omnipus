@@ -9,8 +9,8 @@ package preview
 // used. Plus the §3.9 risk-point-3 case (team-lead ruling 2026-11-21): a
 // registered root inside OWN that becomes an outward LINK after a first
 // successful preview must be refused on the next preview even though the
-// service caches the LibreOffice component — the converter start count must
-// stay at 1.
+// service caches the LibreOffice component — its real executable must not
+// even be opened behind a refusal.
 //
 // The oracles are the spec's OF-4 texts, never the code. RED on the code
 // before §3.9: the previews convert (the converter count rises), so every
@@ -233,7 +233,8 @@ func TestT131_ServiceRefusesRegisteredRootOutsideOwn(t *testing.T) {
 // TestT131_ServiceRefusesCachedRootThatBecameLink — §3.9 risk point 3 (the
 // cached LibreOffice): a registered root INSIDE OWN that becomes an outward
 // link after a first successful preview is refused on every later preview;
-// the converter start count stays at 1. The manifest is never rewritten.
+// the real converter executable is never opened again. The manifest is never
+// rewritten, and the kernel watch spans the move without a polling gap.
 func TestT131_ServiceRefusesCachedRootThatBecameLink(t *testing.T) {
 	for _, record := range []string{"no-startup-record", "startup-record-grants-original"} {
 		t.Run(record, func(t *testing.T) {
@@ -253,43 +254,43 @@ func TestT131_ServiceRefusesCachedRootThatBecameLink(t *testing.T) {
 			before, err := os.ReadFile(manifestPath)
 			require.NoError(t, err)
 
-			// Preview 1: the stub converter really converts — one start.
-			starts := 0
-			testHookConverterStart = func(converterStart) { starts++ }
-			t.Cleanup(func() { testHookConverterStart = nil })
+			// R3-F1: observe the real file, not the confined-only start hook.
+			// A direct exec, with no Service/fingerprint read, proves that a
+			// converter launch reaches this instrument even when unconfined.
+			executable := filepath.Join(recorded, "program", "soffice.bin")
+			watched, err := os.Stat(executable)
+			require.NoError(t, err)
+			opens := t131ConverterFileOpenCount(t, executable)
+			require.Zero(t, opens(), "R3-F1 instrument: no converter file open before the control")
+			control := exec.Command(executable, "--version")
+			control.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "HOME=" + t.TempDir()}
+			version, controlErr := control.CombinedOutput()
+			require.NoError(t, controlErr, "R3-F1 instrument: execute unchanged real LibreOffice: %s", version)
+			controlOpens := opens()
+			require.Positive(t, controlOpens, "R3-F1 instrument: a real exec must be visible without fingerprint reads")
+
+			// Preview 1: real conversion must produce a PDF and a further
+			// positive observation before any refusal's absence is trusted.
 			res, previewErr := t131PreviewDocx(t, svc)
 			require.NoError(t, previewErr, "T-131(b): preview 1 against the in-own registration must succeed")
 			require.NotNil(t, res)
-			require.Positive(t, starts,
-				"R3-F1 instrument: preview 1 must produce an observed real converter start before no-start assertions are trusted")
-			// testHookConverterStart fires only on the CONFINED spawn path
-			// (pkg/preview/confine.go: "once per confined LibreOffice");
-			// this unit row runs unconfined, so the count stays at its
-			// observed preview-1 value and the assertion below pins that it
-			// never changes. The live count proof of the cached case belongs
-			// to a confined real row; the mutant-killer here is the exact
-			// refusal text of previews 2 and 3.
-			//
-			// TA-06 (gate round 2) disposition: the converter here is the
-			// REAL LibreOffice, so it cannot carry the marker stub the
-			// planted rows use. Its launch observation is the OUTCOME:
-			// run-limited waits for the converter synchronously, so a start
-			// behind these refusals would surface as a different, later
-			// result, and the exact instant refusals of previews 2 and 3
-			// (plus the unchanged count and unchanged results) pin that. The
-			// positive control is preview 1's produced pages — a real,
-			// observed launch — against which the frozen counts are read.
-			startsAfterFirst := starts
+			require.NotEmpty(t, res.PDF, "R3-F1 control: real LibreOffice must produce the converted PDF")
+			opensAfterFirst := opens()
+			require.Greater(t, opensAfterFirst, controlOpens,
+				"R3-F1 instrument: preview 1 must produce an additional observed converter file open")
+			t.Logf("R3-F1 live observer: direct exec opens=%d; preview 1 additional opens=%d", controlOpens, opensAfterFirst-controlOpens)
 
 			// The root becomes a link pointing OUTSIDE OWN; the manifest is
 			// left byte-identical.
 			moved := filepath.Join(base, "elsewhere", "lo")
 			require.NoError(t, os.MkdirAll(filepath.Dir(moved), 0o755))
-			moveCmd := exec.Command("cp", "-p", "-r", recorded, moved)
-			out, moveErr := moveCmd.CombinedOutput()
-			require.NoError(t, moveErr, "T-131(b): the fixture copies out of OWN: %s", out)
-			require.NoError(t, os.RemoveAll(recorded))
+			// Keep the watched inode: only its ancestor moves. A new inode
+			// would invalidate the no-open observation across the link swap.
+			require.NoError(t, os.Rename(recorded, moved), "T-131(b): move the real fixture outside OWN")
 			require.NoError(t, os.Symlink(moved, recorded))
+			afterMove, err := os.Stat(executable)
+			require.NoError(t, err)
+			require.True(t, os.SameFile(watched, afterMove), "R3-F1 instrument: the same converter inode is still watched through the outward link")
 			resolved, err := filepath.EvalSymlinks(recorded)
 			require.NoError(t, err)
 			require.NotEqual(t, filepath.Clean(recorded), filepath.Clean(resolved),
@@ -299,8 +300,8 @@ func TestT131_ServiceRefusesCachedRootThatBecameLink(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, string(before), string(after), "T-131(b): the manifest stays byte-identical across the swap")
 
-			// Preview 2: refused with the exact OF-4 text; the cached
-			// component must NOT convert (the count stays at 1).
+			// Preview 2: the exact OF-4 refusal must precede even opening
+			// the cached converter. Queued opens also catch start-then-refuse.
 			want := "Office preview is disabled: the registered LibreOffice folder " + recorded +
 				" is outside Omnipus's own folder (" + own + "); on Linux, Omnipus uses only preview programs inside it. " +
 				"Remove the registration with \"omnipus office unregister\", or put LibreOffice in a folder inside " + own + " and register that folder."
@@ -309,14 +310,18 @@ func TestT131_ServiceRefusesCachedRootThatBecameLink(t *testing.T) {
 			require.Nil(t, res)
 			require.EqualError(t, previewErr, want,
 				"T-131(b): preview 2 must be the OF-4 sentence word for word; got %q", previewErr)
-			require.Equal(t, startsAfterFirst, starts,
-				"T-131(b): the cached LibreOffice must not convert behind the refusal — the converter start count never changes")
+			opensAfterSecond := opens()
+			require.Equal(t, opensAfterFirst, opensAfterSecond,
+				"T-131(b)/R3-F1: the cached LibreOffice executable must not even be opened behind preview 2's refusal")
+			t.Logf("R3-F1 live observer: preview 2 additional opens=%d", opensAfterSecond-opensAfterFirst)
 
 			// Preview 3: the same refusal again.
 			_, previewErr = t131PreviewDocx(t, svc)
 			require.Error(t, previewErr, "T-131(b): preview 3 must refuse again")
 			require.EqualError(t, previewErr, want, "T-131(b): preview 3 is the same refusal")
-			require.Equal(t, startsAfterFirst, starts, "T-131(b): the converter start count stays frozen after three previews")
+			opensAfterThird := opens()
+			require.Equal(t, opensAfterFirst, opensAfterThird, "T-131(b)/R3-F1: no converter file open behind preview 3's refusal")
+			t.Logf("R3-F1 live observer: preview 3 additional opens=%d", opensAfterThird-opensAfterSecond)
 		})
 	}
 }
