@@ -96,19 +96,41 @@ func (al *AgentLoop) humanHelperRefusal(err error, rec *session.LifecycleRecord)
 	return TranslateTurnError(newResumeUnavailableRefusal(al.executorCLIOf(rec.AgentID), err)), true
 }
 
+// helperRefusalNotSavedText is the notice shown right after a helper-chat
+// refusal that could not be saved (the person's own message was saved), so
+// the person knows it may be missing after a reload (SFH-R5-1). It is a
+// separate message-scoped notice, never a turn's end. Approved wording:
+// prompt-r4 TEXT.md §4, helper chat.
+const helperRefusalNotSavedText = "I couldn't save the refusal above, so it may be missing after a reload. Copy it before reloading."
+
 // refuseHumanHelperInput shows a classified refusal of msg in the helper's
 // own chat — one typed error event addressed to the helper session, never to
-// its parent — and saves it as the row after the person's saved message. It
-// changes no lifecycle state, queues nothing and starts nothing. A save
-// failure is returned: the live refusal was still shown.
+// its parent, scoped to the person's message so it ends no turn (SFH-R5-2) —
+// and saves it as the row after the person's saved message. It changes no
+// lifecycle state, queues nothing and starts nothing. When the save fails, a
+// second message-scoped notice tells the person the refusal was not saved
+// (SFH-R5-1), and the save error is returned for the caller's log.
 func (al *AgentLoop) refuseHumanHelperInput(msg bus.InboundMessage, agentID string, llm LLMError) error {
-	al.emitEvent(EventKindError, EventMeta{SessionKey: msg.SessionID, TracePath: "steer.human_input"}, ErrorPayload{
-		Stage:     "human_input",
-		ChatID:    msg.ChatID,
-		SessionID: msg.SessionID,
-		Code:      string(llm.Code),
-		Message:   llm.Message,
+	meta := EventMeta{SessionKey: msg.SessionID, TracePath: "steer.human_input"}
+	al.emitEvent(EventKindError, meta, ErrorPayload{
+		Stage:               "human_input",
+		ChatID:              msg.ChatID,
+		SessionID:           msg.SessionID,
+		Code:                string(llm.Code),
+		Message:             llm.Message,
+		RefusedInput:        true,
+		RefusedInputEntryID: msg.TranscriptEntryID,
 	})
 	_, err := al.AppendSessionRefusal(msg.SessionID, agentID, llm.Code, llm.Message)
+	if err != nil {
+		al.emitEvent(EventKindError, meta, ErrorPayload{
+			Stage:               "human_input_not_saved",
+			ChatID:              msg.ChatID,
+			SessionID:           msg.SessionID,
+			Message:             helperRefusalNotSavedText,
+			RefusedInput:        true,
+			RefusedInputEntryID: msg.TranscriptEntryID,
+		})
+	}
 	return err
 }

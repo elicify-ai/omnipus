@@ -86,9 +86,14 @@ func (al *AgentLoop) deliverHumanHelperInput(msg bus.InboundMessage) bool {
 			return true
 		}
 	default:
-		// FR-032: a person typing into the chat of a LIVE external-CLI task run
-		// steers that run (interrupt + native resume, consumed by the task
-		// loop). Any other task chat keeps the ordinary dispatch.
+		// FR-032 delivery into a LIVE external-CLI task run (interrupt +
+		// native resume, consumed by the task loop). Web chat does not reach
+		// this branch today: the gateway refuses a message typed into an
+		// external worker's Board task chat before it is saved or published
+		// (founder Q13 B, pkg/gateway/ws_task_chat_refusal.go). The branch
+		// stays as the bus-level path for any other inbound addressed to such
+		// a session, and epic #1969 G16 re-enables it for web chat. Any other
+		// task chat keeps the ordinary dispatch.
 		taskRec := al.liveExternalTaskRecord(msg.SessionID)
 		if taskRec == nil {
 			return false
