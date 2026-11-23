@@ -22,6 +22,11 @@ function thumbnailGroupOf(item: MediaAttachment): string | undefined {
   return item.presentation === 'page_thumbnails' ? item.toolCallId : undefined
 }
 
+/** The items (pages and marker) of one tool call's thumbnail group, in order. */
+export function thumbnailGroupItems(media: readonly MediaAttachment[], toolCallId: string): MediaAttachment[] {
+  return media.filter((item) => thumbnailGroupOf(item) === toolCallId)
+}
+
 /**
  * Replace, in place, every thumbnail group of `existing` that `incoming` also
  * carries (§5.2: a group's state is its latest frame's, and it keeps its

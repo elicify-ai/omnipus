@@ -2,7 +2,7 @@ import type { SessionHistoryState } from './types'
 import type { SessionHistoryMetadata, SessionHistoryEntry, SessionHistoryPage } from '@/lib/api/history-types'
 import type { ChatMessage, MediaAttachment, SessionChatState } from './types'
 import { isPendingTailMessage } from './cursor'
-import { mediaDedupKey } from './media-identity'
+import { mediaDedupKey, replaceThumbnailGroups, thumbnailGroupItems } from './media-identity'
 
 export function emptyHistoryState(): SessionHistoryState {
   return {
@@ -28,6 +28,31 @@ export function unionMedia(media: readonly MediaAttachment[]): MediaAttachment[]
   return [...new Map(media.map(item => [mediaDedupKey(item), item])).values()]
 }
 
+/**
+ * The media of a combined row. Thumbnail groups resolve whole, by tool call
+ * (office-preview §5.2/§5.3): a group the saved record carries replaces the
+ * cached one in place, so live pages of a Retry that was never saved do not
+ * survive a snapshot (B07) and a saved Retry is not shown beside its live
+ * copy (B06). The baseline rule still holds per group: a group that changed
+ * live since the read began (or any group, when there is no baseline to
+ * compare with) is newer than the saved record and is kept. Other media is
+ * unioned as before (chat-links BS-5.4).
+ */
+function mergeHistoryMedia(current: ChatMessage, saved: ChatMessage, baseline: ChatMessage | undefined, liveWins: boolean): MediaAttachment[] {
+  const currentMedia = current.media ?? []
+  const newerLive = new Set<string>()
+  if (liveWins) {
+    for (const group of new Set(currentMedia.flatMap(item => item.presentation === 'page_thumbnails' && item.toolCallId ? [item.toolCallId] : []))) {
+      const live = thumbnailGroupItems(currentMedia, group)
+      const before = baseline ? thumbnailGroupItems(baseline.media ?? [], group) : []
+      if (!baseline || live.length !== before.length || live.some((item, i) => item !== before[i])) newerLive.add(group)
+    }
+  }
+  const savedMedia = (saved.media ?? []).filter(item => !(item.presentation === 'page_thumbnails' && item.toolCallId && newerLive.has(item.toolCallId)))
+  const { merged, rest } = replaceThumbnailGroups(currentMedia, savedMedia)
+  return unionMedia([...merged, ...rest])
+}
+
 /** Live objects changed since request start win; unchanged cached history can be refreshed. */
 export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessage | undefined, baseline: ChatMessage | undefined): ChatMessage {
   if (!current) return entry
@@ -41,7 +66,7 @@ export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessa
   // never carry one, and only one source of a combined row holds it.
   const saved: ChatMessage = entry
   if (saved.role === 'assistant' && current.role === 'assistant' && (saved.media?.length || current.media?.length)) {
-    merged.media = unionMedia([...(current.media ?? []), ...(saved.media ?? [])])
+    merged.media = mergeHistoryMedia(current, saved, baseline, liveWins)
   }
   if (entry.role === 'assistant' && current.role === 'assistant' && (entry.tool_calls || current.tool_calls)) {
     const calls = new Map((entry.tool_calls ?? []).map(call => [call.id, call]))
