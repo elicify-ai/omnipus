@@ -105,7 +105,56 @@ func (al *AgentLoop) sessionLineageProvenance(sessionID string, declared session
 	if stored.IsUnresolved() {
 		return unresolved("lineage session has no stored provenance", nil)
 	}
+	if reason, aerr := al.lineageAncestryUnresolved(rec); reason != "" {
+		return unresolved(reason, aerr)
+	}
 	return stored, true
+}
+
+// maxProvenanceLineageHops is FR-041's ancestry bound: a session more than
+// this many steering hops below its root has unresolved provenance.
+const maxProvenanceLineageHops = 16
+
+// lineageAncestryUnresolved walks a lineage session's steering ancestry
+// (FR-041, S-79). The ancestry must be readable all the way to its root and
+// at most maxProvenanceLineageHops long; otherwise it returns why (and the
+// read error, if any), and the session's provenance is unresolved (fail
+// closed). An ancestor with no lifecycle record is accepted only as the root:
+// its session metadata must be readable and name no parent.
+func (al *AgentLoop) lineageAncestryUnresolved(rec *session.LifecycleRecord) (string, error) {
+	sessions := al.GetSessionStore()
+	lifecycle := al.GetSessionLifecycleStore()
+	seen := map[string]bool{rec.SessionID: true}
+	cur := rec
+	for hops := 0; ; hops++ {
+		parentID := cur.SteeringSessionID()
+		if parentID == "" {
+			return "", nil
+		}
+		if hops+1 > maxProvenanceLineageHops {
+			return "lineage is more than 16 hops deep", nil
+		}
+		if seen[parentID] {
+			return "lineage ancestry is cyclic", nil
+		}
+		seen[parentID] = true
+		parent, err := lifecycle.Load(parentID)
+		if err == nil && parent != nil {
+			cur = parent
+			continue
+		}
+		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
+			return "lineage ancestor's lifecycle record unreadable", err
+		}
+		meta, merr := sessions.GetMeta(parentID)
+		if merr != nil || meta == nil {
+			return "lineage ancestor unreadable", merr
+		}
+		if meta.ParentSessionID != "" {
+			return "lineage ancestor has no lifecycle record", nil
+		}
+		return "", nil
+	}
 }
 
 // wakeProvenance is the provenance of a server wake that adds no origin of
