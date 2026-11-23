@@ -6,6 +6,7 @@ package bus
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -69,7 +70,7 @@ func NewProvenance(origins ...Origin) Provenance {
 			out = append(out, o)
 		}
 	}
-	return Provenance{origins: out}
+	return Provenance{origins: canonicalOrigins(out)}
 }
 
 func containsOrigin(set []Origin, o Origin) bool {
@@ -104,7 +105,7 @@ func Join(a, b Provenance) Provenance {
 			out = append(out, o)
 		}
 	}
-	return Provenance{origins: out}
+	return Provenance{origins: canonicalOrigins(out)}
 }
 
 // Eligible reports whether a turn carrying p may use connected programs: not
@@ -159,4 +160,12 @@ func (p *Provenance) UnmarshalJSON(b []byte) error {
 	}
 	*p = NewProvenance(origins...)
 	return nil
+}
+
+// canonicalOrigins puts an origin set in its one canonical (sorted) order. A
+// provenance is a set (I-2): two provenances with the same origins are the
+// same value, whichever order the origins were joined in.
+func canonicalOrigins(origins []Origin) []Origin {
+	sort.Slice(origins, func(i, j int) bool { return origins[i] < origins[j] })
+	return origins
 }
