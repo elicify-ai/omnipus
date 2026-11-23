@@ -118,6 +118,15 @@ func TestSkillConsent_Table(t *testing.T) {
 		finishNativeD10(t, h, run, true, false, nativeSkillR1)
 		assert.Empty(t, h.reg.pendingApprovals())
 	})
+	t.Run("instrument real session-carrying project entry loads mounted R2 on successive turns", func(t *testing.T) {
+		h, _ := newNativeD10Harness(t, "allow", "allow")
+		seedNativeD10Project(t, h, nativeSkillR2)
+		for range 2 {
+			run := beginNativeD10(t, h, "load", "chat", "test-agent", "project")
+			finishNativeD10(t, h, run, true, false, nativeSkillR2)
+		}
+		assert.Empty(t, h.reg.pendingApprovals())
+	})
 	t.Run("instrument staging observer sees a planted package and its cleanup", func(t *testing.T) {
 		home := t.TempDir()
 		pin := filepath.Join(home, "skills", ".staging", "instrument", "SKILL.md")
@@ -275,25 +284,11 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		h.script.args = map[string]any{"name": key}
 	} else if in.shelf == "project" {
 		key = "project:d10/notes-helper"
-		// Isolate the real project shelf: the initial installed fixture must not
-		// win name resolution and turn this into an installed-skill test.
-		require.NoError(t, os.RemoveAll(filepath.Join(h.api.homePath, "skills", "notes-helper")))
-		root := filepath.Join(t.TempDir(), "project")
-		dir := filepath.Join(root, ".claude", "skills", "notes-helper")
-		require.NoError(t, os.MkdirAll(dir, 0o700))
-		projectPath = filepath.Join(dir, "SKILL.md")
 		body := in.currentBody
 		if in.approvedBody != "" {
 			body = in.approvedBody
 		}
-		require.NoError(t, os.WriteFile(projectPath, []byte(body), 0o600))
-		require.NoError(t, workspace.SaveRecord(h.api.homePath, workspace.Workspace{ID: "d10", Name: "D10 project", Status: "active", CoreTeam: []string{"test-agent", "peer-agent"}}))
-		_, err := workspace.EnsureWorkDir(h.api.homePath, "d10")
-		require.NoError(t, err)
-		_, warning, err := workspace.CreateMount(h.api.homePath, "d10", "project", root)
-		require.NoError(t, err)
-		require.Empty(t, warning)
-		require.Equal(t, []string{root}, workspace.AllowedMountRoots(h.api.homePath, "d10"))
+		projectPath = seedNativeD10Project(t, h, body)
 	} else if in.entry != "install" {
 		path := filepath.Join(h.api.homePath, "skills", "notes-helper", "SKILL.md")
 		if in.approvedBody != "" {
@@ -446,6 +441,71 @@ func nativeD10Current(t *testing.T, h *nativeSkillHarness, key string) string {
 	return revision
 }
 
+// This is the literal project input shared by the observer instrument and D10#19,
+// not a returned decision. No installed same-name package may satisfy this test.
+func seedNativeD10Project(t *testing.T, h *nativeSkillHarness, body string) string {
+	t.Helper()
+	require.NoError(t, os.RemoveAll(filepath.Join(h.api.homePath, "skills", "notes-helper")))
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	dir := filepath.Join(root, ".claude", "skills", "notes-helper")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	file := filepath.Join(dir, "SKILL.md")
+	require.NoError(t, os.WriteFile(file, []byte(body), 0o600))
+	require.NoError(t, workspace.SaveRecord(h.api.homePath, workspace.Workspace{ID: "d10", Name: "D10 project", Status: "active", CoreTeam: []string{"test-agent", "peer-agent"}}))
+	_, err = workspace.EnsureWorkDir(h.api.homePath, "d10")
+	require.NoError(t, err)
+	_, warning, err := workspace.CreateMount(h.api.homePath, "d10", "project", root)
+	require.NoError(t, err)
+	require.Empty(t, warning)
+	require.Equal(t, []string{root}, workspace.AllowedMountRoots(h.api.homePath, "d10"))
+	return file
+}
+
+// ProcessDirectWithChannelAs intentionally omits SessionID. A project web-chat
+// must instead enter the actual dispatcher with its session/workspace identity.
+// Each owned run joins before done is sent, so successive project probes cannot
+// leave a previous dispatcher competing for the next inbound or final outbound.
+func runNativeD10ProjectChat(ctx context.Context, h *nativeSkillHarness, owner, sessionID, message string) (resultErr error) {
+	runCtx, cancel := context.WithCancel(ctx)
+	runExited := make(chan struct{})
+	var runErr error
+	go func() {
+		defer close(runExited)
+		runErr = h.api.agentLoop.Run(runCtx)
+	}()
+	defer func() {
+		cancel()
+		<-runExited
+		if resultErr == nil {
+			resultErr = runErr
+		}
+	}()
+	if err := h.handler.msgBus.PublishInbound(runCtx, bus.InboundMessage{
+		Channel: "webchat", ChatID: "d10-chat", SessionID: sessionID,
+		SessionKey: "agent:" + owner + ":session:" + sessionID,
+		Sender:     bus.SenderInfo{CanonicalID: "d10-person"}, Content: message,
+		UserInitiated: true,
+		Metadata:      map[string]string{"agent_id": owner, "workspace_id": "d10"},
+	}); err != nil {
+		return err
+	}
+	select {
+	case reply := <-h.handler.msgBus.OutboundChan():
+		if reply.SessionID != sessionID {
+			return fmt.Errorf("fixture UNVERIFIED: expected final for %s, got %s", sessionID, reply.SessionID)
+		}
+		return nil
+	case <-runExited:
+		if runErr != nil {
+			return runErr
+		}
+		return fmt.Errorf("fixture UNVERIFIED: native dispatcher exited before the project's final outbound")
+	case <-runCtx.Done():
+		return runCtx.Err()
+	}
+}
+
 func beginNativeD10(t *testing.T, h *nativeSkillHarness, entry, attendance, owner, shelf string) nativeSkillRun {
 	t.Helper()
 	h.seq++
@@ -476,6 +536,8 @@ func beginNativeD10(t *testing.T, h *nativeSkillHarness, entry, attendance, owne
 		var err error
 		if attendance == "unattended" {
 			_, err = h.api.agentLoop.ProcessScheduled(ctx, owner, meta.ID, message, "scheduled", meta.ID)
+		} else if shelf == "project" {
+			err = runNativeD10ProjectChat(ctx, h, owner, meta.ID, message)
 		} else {
 			_, err = h.api.agentLoop.ProcessDirectWithChannelAs(ctx, owner, message, "agent:"+owner+":session:"+meta.ID, "webchat", meta.ID)
 		}
