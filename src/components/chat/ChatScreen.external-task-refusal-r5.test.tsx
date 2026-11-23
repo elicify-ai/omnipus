@@ -8,7 +8,7 @@ import { emptyHistoryFixture } from '../../../tests/chat-history-paging/empty-hi
 import { useChatStore, getMessages, makeBucketMessages, type ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import type { DoneFrame, ErrorFrame, ReplayErrorFrame, ReplayMessageFrame, SessionStateFrame, TokenFrame } from '@/lib/api/generated/asyncapi-types'
+import type { DoneFrame, ErrorFrame, MessageStatusFrame, ReplayErrorFrame, ReplayMessageFrame, SessionStateFrame, TokenFrame } from '@/lib/api/generated/asyncapi-types'
 import { llmErrorUserMessages } from '@/lib/api/generated/llm-error-messages'
 
 const SID = 'r5-external-task-or-helper'
@@ -178,5 +178,34 @@ it.each(['system_notice', 'correlated_error'] as const)('SFH-R5-2: %s preserves 
   await act(async () => { rendered = mount() })
   expect(lines(rendered.container, ANSWER)).toHaveLength(1)
   expect(lines(rendered.container, sentence)).toHaveLength(1)
+  expect(useChatStore.getState().sessionsById[SID].messagesById[ANSWER_ID]).toMatchObject({ content: ANSWER, status: 'done' })
+})
+
+// C2 Part 1, Server/SPA behaviour: the displayed sender row is failed by
+// message_status; the refusal does not turn the concurrent answer into error.
+it('C2: refused helper follow-up marks only its sender row failed and preserves the live answer', async () => {
+  const original = seed('streaming')
+  const clientId = 'r5-helper-sender-row'
+  const human: ChatMessage = { id: clientId, role: 'user', content: 'This follow-up is refused.', timestamp: stamp, status: 'done', deliveryStatus: 'received' }
+  act(() => {
+    const bucket = useChatStore.getState().sessionsById[SID]
+    useChatStore.setState({ sessionsById: { ...useChatStore.getState().sessionsById, [SID]: { ...bucket, ...makeBucketMessages([...getMessages(bucket), human]) } } })
+  })
+  const sentence = llmErrorUserMessages.delegation_not_resumable.replace('{cli}', 'OpenCode')
+  const refusal: ErrorFrame = { type: 'error', session_id: SID, client_message_id: clientId, message: sentence,
+    payload: { llm_error: { code: 'delegation_not_resumable', message: sentence, retryable: false, provider_message: true } } }
+  const failed: MessageStatusFrame = { type: 'message_status', session_id: SID, client_message_id: clientId, state: 'failed' }
+  feed(refusal, failed)
+  let rendered!: ReturnType<typeof mount>
+  await act(async () => { rendered = mount() })
+  const bucket = useChatStore.getState().sessionsById[SID]
+  expect(bucket.messagesById[clientId]).toMatchObject({ ...human, deliveryStatus: 'failed', status: 'error' })
+  expect(bucket.messagesById[ANSWER_ID]).toMatchObject(original)
+  expect(bucket.activeTurnId).toBe(TURN)
+  expect(bucket.isStreaming).toBe(true)
+  expect(lines(rendered.container, sentence)).toHaveLength(1)
+  const done: DoneFrame = { type: 'done', session_id: SID, message_id: ANSWER_ID, turn_id: TURN }
+  feed(done)
+  expect(useChatStore.getState().sessionsById[SID].messagesById[clientId]).toMatchObject({ content: human.content, deliveryStatus: 'failed', status: 'error' })
   expect(useChatStore.getState().sessionsById[SID].messagesById[ANSWER_ID]).toMatchObject({ content: ANSWER, status: 'done' })
 })

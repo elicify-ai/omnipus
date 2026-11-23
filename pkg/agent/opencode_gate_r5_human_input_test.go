@@ -88,7 +88,7 @@ func TestOpenCodeR5_FinishingWindowRefusalUsesNonTerminalOwnSessionCarrier(t *te
 		}
 	}
 	require.Len(t, human, 1, "C2: retain the actual refused human row")
-	assert.Equal(t, "failed", human[0].Status, "C2: refusing this input settles its own row, never the healthy assistant")
+	assert.Equal(t, f.message.Content, human[0].Content, "refusing input preserves the saved human text; C2 displayed-row reconciliation is checked at the gateway/consumer")
 	require.Len(t, answers, 1)
 	assert.Equal(t, opencodeR5HealthyAnswer, answers[0].Content)
 	require.Len(t, refusals, 1, "SFH-R5-2: fresh history contains both healthy answer and distinct refusal")
