@@ -126,6 +126,10 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		AutoDenyAsk: rec.Unattended,
 	}
 	if wake == nil {
+		// FR-041 / S-75: the instruction this turn consumes was written by
+		// the launching (or steering) turn, whose provenance is the
+		// session's stored lineage; it is never an unresolved input.
+		opts.InputOrigin = launchInputOrigin(rec)
 		// A queued promotion consumes ALL wake content in arrival order. Take
 		// the current list (not the earlier Load snapshot) and clear it in a
 		// single durable mutation BEFORE the turn can start. If that write

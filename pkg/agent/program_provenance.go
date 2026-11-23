@@ -5,11 +5,14 @@
 package agent
 
 import (
+	"context"
 	"errors"
+	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // provenanceOrigins is the stored form of a provenance on durable records that
@@ -114,4 +117,48 @@ func (al *AgentLoop) wakeProvenance(sessionID string) bus.Provenance {
 		return bus.UnresolvedProvenance()
 	}
 	return stored
+}
+
+// joinInstructionProvenance joins the calling agent turn's provenance into a
+// lineage session's stored provenance when that turn changes the session's
+// instructions (FR-041, I-2: "joined into a record ... as any agent change to
+// its instructions"; S-110). The join only adds origins; an unresolved caller
+// makes the record unresolved (fail closed). A root stores none and is left
+// alone, and a call that does not come from an agent turn (no turn origin in
+// ctx: a person's control, a server wake) joins nothing.
+func (al *AgentLoop) joinInstructionProvenance(ctx context.Context, sessionID string) error {
+	if tools.ToolTurnOrigin(ctx) == nil {
+		return nil
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return session.ErrLifecycleNotFound
+	}
+	caller := tools.ToolTurnProvenance(ctx)
+	err := lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+		if rec == nil {
+			return session.ErrLifecycleNotFound
+		}
+		if rec.ProvenanceMode != session.ProvenanceModeLineage {
+			return nil
+		}
+		rec.Provenance = provenanceOrigins(bus.Join(storedProvenance(rec.Provenance), caller))
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("program provenance: join the instruction origin into %q: %w", sessionID, err)
+	}
+	return nil
+}
+
+// launchInputOrigin is the origin of a lineage session's own instruction
+// input — its launch instruction, a queued or delegated steer, a revival's
+// new instruction: the session's stored provenance, into which the
+// instruction's writer joined its turn (FR-041, S-75, S-110). Any other
+// session's such input stays unresolved.
+func launchInputOrigin(rec *session.LifecycleRecord) inputOrigin {
+	if rec == nil || rec.ProvenanceMode != session.ProvenanceModeLineage {
+		return inputOrigin{}
+	}
+	return inputOrigin{provenance: storedProvenance(rec.Provenance)}
 }
