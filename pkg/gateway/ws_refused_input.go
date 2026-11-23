@@ -27,7 +27,10 @@ import (
 // that id, and a session-only error frame would end (and relabel) a turn still
 // streaming in a view of the chat (SFH-R5-2). Its refusal is therefore sent as
 // a system notice (replay_message, role system) — the existing non-terminal
-// carrier the SPA shows as its own row without touching any turn — and the
+// carrier the SPA shows as its own row; it neither ends the turn nor replaces
+// its answer, but like any live system notice it bakes a view's tool calls
+// still in flight into their message
+// (replay-and-status-frames.ts::bakePendingNonAssistantToolCalls) — and the
 // reason it could not be scoped is logged. No client id is ever invented.
 func (h *WSHandler) hubRefusedInput(sessionID string, p agent.ErrorPayload) {
 	clientID, found := "", false
