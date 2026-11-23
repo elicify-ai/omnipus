@@ -49,9 +49,9 @@
 // asserts the sentinel reaches no sink. Foreground/background share the actual
 // seven-sink campaign in pkg/gateway::TestProgramMasking_ActualSevenSinks;
 // actual God Mode uses its TestProgramMasking_ActualGodModeSinks companion.
-// Account check runs here. The other two mandatory kinds retain loud,
-// specific unfinished-fixture markers, never skips. Token delivery alone is
-// not every-sink coverage.
+// Account check runs here. Setup and git-version-probe use their actual
+// TestProgramMasking_ActualOtherChildSinks campaigns in pkg/gateway. These
+// observe all seven sinks, not merely token delivery or a source guard.
 //
 // Oracle: I-1 (Attach is the only way to add program variables to a child;
 // one masking writer per output stream in the same call) and S-106.
@@ -783,15 +783,16 @@ func aliasedExec(set *programs.ProgramVariables) {
 	// S106_God_Mode_every_sink_value_free. That actual campaign requires both
 	// runtime and registered-shell God Mode before exercising all seven sinks;
 	// it is never inferred from the ordinary-mode companion.
-	const s106Seam = "this mandatory child kind still needs a combined real runtime/sink fixture — required by S-106(b)"
-	t.Run("b_environment_setup_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; actual setup token-delivery coverage is not a setup-child seven-sink campaign", s106Seam)
-	})
+	// b_environment_setup_sentinel_reaches_no_sink and
+	// b_git_version_probe_sentinel_reaches_no_sink are relocated to
+	// pkg/gateway::TestProgramMasking_ActualOtherChildSinks, with exact leaves
+	// S106_environment_setup_every_sink_value_free and
+	// S106_git_version_probe_every_sink_value_free. The registered setup child
+	// really runs/read/callbacks; the git command triggers the actual FR014
+	// probe before its child. Both observe all seven real sinks. No empty
+	// passing wrapper or ordinary-bash surrogate discharges these rows.
 	t.Run("b_account_check_sentinel_reaches_no_sink", func(t *testing.T) {
 		assertAccountCheckSinks(t)
-	})
-	t.Run("b_git_version_probe_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; account-check and ordinary bash observations do not exercise the actual FR-014 git probe through all seven sinks", s106Seam)
 	})
 }
 

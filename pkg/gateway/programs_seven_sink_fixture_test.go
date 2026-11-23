@@ -45,7 +45,7 @@ type programsSentinelFixture struct {
 	svc *programs.Service
 }
 
-func newProgramsSentinelFixture(t *testing.T, god bool) *programsSentinelFixture {
+func newProgramsSentinelFixture(t *testing.T, god bool, configure ...func(*config.Config)) *programsSentinelFixture {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Fatal("BLOCKED: S48/S106's combined campaign needs native Windows check and command fixtures; the POSIX child scripts do not certify Windows")
@@ -101,6 +101,9 @@ func newProgramsSentinelFixture(t *testing.T, god bool) *programsSentinelFixture
 	cfg.Sandbox.GodMode = god
 	cfg.Tools.FilterSensitiveData = false
 	cfg.Programs.WebChatAllowed = true
+	for _, apply := range configure {
+		apply(cfg) // Test-only configuration, before constructing the real tools.
+	}
 	require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{ID: "sales", Name: "Sales", Status: "active", CoreTeam: []string{"dev"}}))
 	_, err := agentstore.New(home).CreateState("dev", &cfg.Agents.List[0], programsSinkSoul)
 	require.NoError(t, err)
