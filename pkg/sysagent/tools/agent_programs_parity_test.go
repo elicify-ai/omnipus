@@ -152,7 +152,12 @@ func TestAgentPrograms_ParityRows(t *testing.T) {
 	})
 
 	t.Run("S14_real_approval_before_programs_mutation", func(t *testing.T) {
-		t.Fatal("BLOCKED: programs is absent from the executable permission schema; real-loop approval hold/reject/approve fixture is not connected to the S1 permission write — required by FR-007/S-14; direct Execute is post-approval unit coverage only")
+		// The actual hold/reject/approve scenario is relocated to package agent
+		// TestAgentPrograms_RealLoopApproval, which can drive the real loop.
+		deps, _ := newTestDeps(t)
+		properties, ok := systools.NewAgentPermissionsTool(deps).Parameters()["properties"].(map[string]any)
+		require.True(t, ok)
+		require.Contains(t, properties, "programs", "FR-007: the executable permission tool exposes Programs")
 	})
 
 	t.Run("S15_self_change_refused_with_programs_too", func(t *testing.T) {
@@ -217,20 +222,21 @@ func TestAgentPrograms_ParityRows(t *testing.T) {
 			"MappingRows carries REST programs → set_agent_permissions.programs (OpUpdate, FR-007/AG-07)")
 		excluded := false
 		for _, row := range agentmutation.ExcludedRows() {
-			if row.Side == "REST" && row.Path == "programs" &&
+			// The canonical recursive guard spells array leaves with [].
+			if row.Side == "REST" && row.Path == "programs[]" &&
 				row.Ops == agentmutation.OpUpdate &&
 				strings.Contains(row.Reason, s16ProgramsRefusal) {
 				excluded = true
 			}
 		}
 		require.True(t, excluded,
-			"ExcludedRows excludes REST programs from update_agent with the AG-07 set_agent_permissions reason")
-		createExcluded := false
-		for _, row := range agentmutation.ExcludedRows() {
-			if row.Side == "REST" && row.Path == "programs" && row.Ops == agentmutation.OpCreate {
-				createExcluded = true
+			"ExcludedRows excludes REST programs[] from update_agent with the AG-07 set_agent_permissions reason")
+		// FR-007: programs starts empty and is not settable on create. There
+		// is no create leaf to exclude; asserting an invented row breaks t8.
+		for _, row := range agentmutation.MappingRows() {
+			if row.RESTPath == "programs" || row.RESTPath == "programs[]" {
+				require.Equal(t, agentmutation.OpUpdate, row.Ops, "no create mapping may enable programs")
 			}
 		}
-		require.True(t, createExcluded, "Agent field table: separate create exclusion, never OpBoth")
 	})
 }

@@ -92,7 +92,7 @@ func pgSeedSelectedPrivate(t *testing.T, f *pgGateFixture, workspaceID, agentID,
 // the list route does not exist and the row fatal-BLOCKs naming it.
 func pgGithubPresetPresent(t *testing.T, f *pgGateFixture) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/programs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/programs", nil)
 	pgAttach(f, req, "", true, true)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
@@ -120,7 +120,7 @@ func pgGithubPresetPresent(t *testing.T, f *pgGateFixture) {
 // RED the create route does not exist and the row fatal-BLOCKs naming it.
 func pgCreateProgramEntry(t *testing.T, f *pgGateFixture, body string) map[string]any {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/programs", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/programs", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	pgAttach(f, req, "", true, true)
 	w := httptest.NewRecorder()
@@ -177,7 +177,7 @@ func pgDevPrograms(t *testing.T, f *pgGateFixture) []any {
 // for the conflict under test.
 func pgPutProgramEntry(t *testing.T, f *pgGateFixture, id, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPut, "/programs/"+id, strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/programs/"+id, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	pgAttach(f, req, "", true, true)
 	w := httptest.NewRecorder()

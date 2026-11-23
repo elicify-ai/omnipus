@@ -72,7 +72,7 @@ export const test = base.extend<{ programsS1: Fixture }>({
       const workspaceResult = await gateway.apiFetch('POST', '/api/v1/workspaces', { name: 'S1 Home', core_team: [dev.id] } satisfies WorkspaceCreateRequest);
       expect(workspaceResult.status, workspaceResult.raw).toBe(201);
       const workspace = Workspace.parse(workspaceResult.body);
-      const listed = await gateway.apiFetch('GET', '/programs');
+      const listed = await gateway.apiFetch('GET', '/api/v1/programs');
       if (listed.status === 404) throw new Error('BLOCKED: GET /programs not implemented — required by S1 browser fixture/FR-001');
       expect(listed.status, listed.raw).toBe(200);
       const doc = listed.body as Record<string, unknown>;

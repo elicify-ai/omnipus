@@ -94,6 +94,7 @@ var spawnSiteTable = []spawnSiteRow{
 	{"pkg/tools/shell.go", "runUnconstrained", "mandatory-s1", "bash foreground and God Mode share the shell runner"},
 	{"pkg/tools/shell_bg.go", "runBackground", "mandatory-s1", "bash background"},
 	{"pkg/tools/environment_setup_runner.go", "startSession", "mandatory-s1", "environment_setup"},
+	{"pkg/programs/check.go", "runCheck", "mandatory-s1", "account check (FR-005/S-106), with source masking before Start"},
 	// Non-program sites (this tree's inventory):
 	{"pkg/agent/hook_process.go", "NewProcessHook", "non-program", "lifecycle hooks carry no program variables"},
 	{"pkg/agent/runner/driver_stream.go", "detectCLIVersion", "non-program", "driver version probe"},
@@ -784,7 +785,7 @@ func aliasedExec(set *programs.ProgramVariables) {
 		t.Fatalf("BLOCKED: %s; the environment_setup runner has no program-variable seam yet", s106Seam)
 	})
 	t.Run("b_account_check_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; the account check (I-3/FR-005) is not implemented yet", s106Seam)
+		assertAccountCheckSinks(t)
 	})
 	t.Run("b_git_version_probe_sentinel_reaches_no_sink", func(t *testing.T) {
 		t.Fatalf("BLOCKED: %s; the git version probe (FR-014) is not implemented yet", s106Seam)

@@ -27,7 +27,7 @@ async function openProfile(page: Page, origin: string, workspaceId: string, devI
 }
 
 async function githubConnection(gateway: import('./fixtures/gateway-process').GatewayProcess) {
-  const result = await gateway.apiFetch('GET', '/programs');
+  const result = await gateway.apiFetch('GET', '/api/v1/programs');
   expect(result.status, result.raw).toBe(200);
   const entries = (result.body as Record<string, unknown>).entries as Array<Record<string, unknown>>;
   const github = entries.find((entry) => entry.id === 'github');
@@ -44,7 +44,7 @@ test.describe('Programs — private real gateway', () => {
     await row.getByRole('button', { name: /paste a token/i }).click();
     const field = page.getByLabel(/token/i).filter({ visible: true }).first();
     await field.fill('tok_valid_12345');
-    const saved = page.waitForResponse((r) => r.url().endsWith('/programs/github/credential') && r.request().method() === 'PUT');
+    const saved = page.waitForResponse((r) => r.url().endsWith('/api/v1/programs/github/credential') && r.request().method() === 'PUT');
     await field.press('Enter');
     const response = await saved;
     expect(response.status()).toBe(200);
@@ -81,7 +81,7 @@ test.describe('Programs — private real gateway', () => {
     await page.getByLabel(/program words?/i).fill('acme');
     await page.getByLabel(/token variables?/i).fill('ACME_TOKEN');
     await page.getByLabel(/network sites?/i).fill('api.acme.example');
-    const created = page.waitForResponse((r) => r.url().endsWith('/programs') && r.request().method() === 'POST');
+    const created = page.waitForResponse((r) => r.url().endsWith('/api/v1/programs') && r.request().method() === 'POST');
     await page.getByRole('button', { name: /^create$|^save$/i }).click();
     expect((await created).status()).toBe(201);
     await page.reload();
@@ -92,7 +92,7 @@ test.describe('Programs — private real gateway', () => {
   });
 
   test('S53: independently connect and enable Dev, disconnect leaves profile switch on', async ({ page, programsS1: f }) => {
-    const saved = await f.gateway.apiFetch('PUT', '/programs/github/credential', { value: 'tok_valid_12345' });
+    const saved = await f.gateway.apiFetch('PUT', '/api/v1/programs/github/credential', { value: 'tok_valid_12345' });
     expect(saved.status, saved.raw).toBe(200);
     await expect.poll(async () => (await githubConnection(f.gateway)).state).toBe('connected');
     const before = await githubConnection(f.gateway);
@@ -119,7 +119,7 @@ test.describe('Programs — private real gateway', () => {
   });
 
   test('S81: configured own bearer, no cookie, exact person refusal and unchanged state', async ({ programsS1: f }) => {
-    const before = await f.gateway.apiFetch('GET', '/programs');
+    const before = await f.gateway.apiFetch('GET', '/api/v1/programs');
     const agentBefore = await f.gateway.apiFetch('GET', `/api/v1/agents/${f.devId}`);
     const starts = f.starts();
     // Node fetch has no browser cookie jar and keeps the ephemeral bearer out
@@ -128,12 +128,12 @@ test.describe('Programs — private real gateway', () => {
     const ordinary = new Request(`${f.gateway.baseURL}/api/v1/agents/${f.devId}`, { headers });
     expect(ordinary.headers.has('Cookie')).toBe(false);
     expect((await fetch(ordinary)).status, 'known existing route accepts this exact configured bearer').toBe(200);
-    const attack = new Request(`${f.gateway.baseURL}/programs/github/credential`, { method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'tok_valid_12345' }) });
+    const attack = new Request(`${f.gateway.baseURL}/api/v1/programs/github/credential`, { method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'tok_valid_12345' }) });
     expect(attack.headers.has('Cookie')).toBe(false);
     const denied = await fetch(attack);
     expect(denied.status).toBe(403);
     expect(await denied.text()).toContain('this action requires a signed-in person');
-    expect((await f.gateway.apiFetch('GET', '/programs')).body).toEqual(before.body);
+    expect((await f.gateway.apiFetch('GET', '/api/v1/programs')).body).toEqual(before.body);
     expect((await f.gateway.apiFetch('GET', `/api/v1/agents/${f.devId}`)).body).toEqual(agentBefore.body);
     expect(f.starts()).toBe(starts);
     // This UI-edge test does not inspect encrypted-store metadata/body reads;

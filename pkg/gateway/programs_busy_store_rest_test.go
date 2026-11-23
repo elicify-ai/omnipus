@@ -123,7 +123,7 @@ func TestProgramSave_BusyStore(t *testing.T) {
 
 		// The person pastes while the holder is inside its transaction.
 		start := time.Now()
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_new_67890"}`)
 		elapsed := time.Since(start)
 		require.Equal(t, http.StatusServiceUnavailable, w.Code,
@@ -184,7 +184,7 @@ func TestProgramSave_BusyStore(t *testing.T) {
 		_, holderDone2 := pgBusyHolder(t, holder, func(chan struct{}) { time.Sleep(1 * time.Second) })
 		require.NotEmpty(t, beforeStore.Values)
 		require.Positive(t, baselineStarts)
-		w := pgProgramsSessionCall(t, f, http.MethodPut, "/programs/github/credential",
+		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_new_67890"}`)
 		require.Equal(t, http.StatusOK, w.Code,
 			"the paste succeeds when the holder releases within the bound: %d %s", w.Code, w.Body.String())

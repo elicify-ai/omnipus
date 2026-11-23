@@ -17,7 +17,7 @@ func TestCustomProgram_RESTCollectionLimit(t *testing.T) {
 	}
 	before := pgProgramsList(t, f)
 	require.Len(t, before, 32, "otherwise-valid distinct entries fill, not exceed, the cap")
-	w := pgProgramsSessionCall(t, f, http.MethodPost, "/programs", `{"display_name":"Acme","program_words":["acme"],"token_variables":["ACME_TOKEN"],"network_sites":["api.acme.example"]}`)
+	w := pgProgramsSessionCall(t, f, http.MethodPost, "/api/v1/programs", `{"display_name":"Acme","program_words":["acme"],"token_variables":["ACME_TOKEN"],"network_sites":["api.acme.example"]}`)
 	require.Equal(t, http.StatusConflict, w.Code, "D-2 row 31 is collection conflict, not a field error: %s", w.Body.String())
 	require.Equal(t, before, pgProgramsList(t, f))
 }
