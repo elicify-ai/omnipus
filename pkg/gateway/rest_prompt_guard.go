@@ -102,8 +102,8 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
 		// Saved, not in use: listed as apply_failed before the answer (C-6).
-		// Recorded only if no newer prompt-guard write or apply has decided
-		// the state since this write (B5, M-8).
+		// Dropped only when a successful apply already covers this write
+		// (B5, M-8, G2-B1).
 		a.applyFailed.recordAt(applyFailedSourcePromptGuard, ticket, keys)
 		slog.Info("rest: prompt guard level updated (restart required)", "level", string(body.Level))
 		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
@@ -121,7 +121,10 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 			"level", string(body.Level))
 	}
 
-	a.applyFailed.clearSourceAt(applyFailedSourcePromptGuard, ticket)
+	if confirmed {
+		// G2-B1: only a confirmed reload proves this write is in use.
+		a.applyFailed.appliedAt(applyFailedSourcePromptGuard, ticket.seq)
+	}
 	slog.Info("rest: prompt guard level updated", "level", string(body.Level))
 
 	jsonOK(w, gen.PromptGuardUpdateResponse{
