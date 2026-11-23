@@ -72,6 +72,16 @@ type TurnPrograms struct {
 	Notices []string
 
 	gitLogins []gitLogin
+	// withheld are the variables two sources set (FR-024): neither value
+	// may reach the child, including the agent's private value.
+	withheld []string
+}
+
+// Withholds reports whether name is a variable two sources set for this
+// command (FR-024). The launch sites drop the agent's private value of such a
+// variable, so neither source reaches the child.
+func (p *TurnPrograms) Withholds(name string) bool {
+	return p != nil && slices.Contains(p.withheld, name)
 }
 
 // HasGitLogins reports whether any entry supplies a managed git login.
@@ -296,7 +306,7 @@ func Resolve(cfg *config.Config, store TokenSource, storeErr error, req TurnRequ
 		out.Entries = append(out.Entries, e)
 	}
 	out.Tokens = knownTokens()
-	out.Env, out.Notices = variableEnv(out.Entries, tokens, req.PrivateVariables)
+	out.Env, out.Notices, out.withheld = variableEnv(out.Entries, tokens, req.PrivateVariables)
 	logins, gitNotices := gitLogins(out.Entries)
 	// A helper reads its token from the entry's first variable; when that
 	// variable was not set (a run-time conflict) the helper is not added
@@ -312,7 +322,7 @@ func Resolve(cfg *config.Config, store TokenSource, storeErr error, req TurnRequ
 
 // variableEnv sets each token variable once. A variable two entries set, or
 // that an agent-private variable also sets, is set by neither (FR-024, S-30).
-func variableEnv(entries []ProgramEntry, tokens map[string]string, private []string) ([]string, []string) {
+func variableEnv(entries []ProgramEntry, tokens map[string]string, private []string) (env, notices, withheld []string) {
 	owners := map[string][]string{}
 	var order []string
 	for _, e := range entries {
@@ -324,15 +334,15 @@ func variableEnv(entries []ProgramEntry, tokens map[string]string, private []str
 		}
 	}
 	sort.Strings(order)
-	var env, notices []string
 	for _, v := range order {
 		if len(owners[v]) > 1 || slices.Contains(private, v) {
 			notices = append(notices, fmt.Sprintf(msgVariableConflict, v))
+			withheld = append(withheld, v)
 			continue
 		}
 		env = append(env, v+"="+tokens[owners[v][0]])
 	}
-	return env, notices
+	return env, notices, withheld
 }
 
 // gitLogins returns one managed login per git host; a host two entries

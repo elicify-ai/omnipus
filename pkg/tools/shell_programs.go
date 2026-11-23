@@ -32,6 +32,22 @@ func resolveTurnPrograms(ctx context.Context, src ProgramSource, private []Priva
 	return src(ctx, names)
 }
 
+// withoutProgramConflicts drops the private variables a connected program
+// also sets for this command (FR-024: two sources set one variable, so
+// neither is set). The program side is already left out of the resolution.
+func withoutProgramConflicts(p *programs.TurnPrograms, private []PrivateVariable) []PrivateVariable {
+	if p == nil {
+		return private
+	}
+	out := make([]PrivateVariable, 0, len(private))
+	for _, v := range private {
+		if !p.Withholds(v.Name) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // programNotices joins the resolution's notices into one paragraph block.
 func programNotices(p *programs.TurnPrograms) string {
 	if p == nil {

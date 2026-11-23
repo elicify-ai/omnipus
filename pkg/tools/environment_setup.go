@@ -488,12 +488,13 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 
 	env := t.setupEnv(lim, area, runtimeEnv)
 	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
-	for _, private := range privateVars {
-		env = withPrivateVariable(env, private.Name, private.Value)
-	}
 	// FR-011: the agent's connected programs reach this child only through
 	// programs.Attach in startSession; the notices ride the start result.
 	turnPrograms := resolveTurnPrograms(ctx, t.programs, privateVars)
+	// FR-024: a variable a connected program also sets is set by neither.
+	for _, private := range withoutProgramConflicts(turnPrograms, privateVars) {
+		env = withPrivateVariable(env, private.Name, private.Value)
+	}
 	privateNotice = joinNotice(privateNotice, programNotices(turnPrograms))
 	return appendRuntimeNotice(t.startSession(ctx, startPlan{
 		programs:       turnPrograms.Attachment(nil),
