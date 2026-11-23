@@ -93,10 +93,6 @@ type Service struct {
 	// (FR-021 audit row "superseded"). Nil = not recorded.
 	superseded func(id string, generation int64)
 
-	// checked is told when a check's result is published (FR-021 audit row
-	// "check" with its outcome). Nil = not recorded.
-	checked func(id string, generation int64, checkRevision int64, state string)
-
 	// pathCheck decides whether an account check's program may run (FR-005,
 	// S-08). Nil = checkProgramLocation.
 	pathCheck ProgramPathCheck
@@ -108,15 +104,6 @@ func (s *Service) SetSupersededSink(fn func(id string, generation int64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.superseded = fn
-}
-
-// SetCheckedSink installs the sink told about every published check result
-// (FR-021): program, generation, check revision and resulting state, never a
-// value or an account label. Call it before the first check starts.
-func (s *Service) SetCheckedSink(fn func(id string, generation int64, checkRevision int64, state string)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.checked = fn
 }
 
 // NewService builds the service. statePath is the connection-state file
@@ -416,9 +403,6 @@ func (s *Service) finish(id string, r *reservation, res checkResult) {
 	c.CheckedAt = time.Now().UTC()
 	s.conns[id] = c
 	s.persistLocked()
-	if s.checked != nil {
-		s.checked(id, c.Generation, c.CheckRevision, c.State)
-	}
 }
 
 func checkTimeoutSeconds(e ProgramEntry) int {

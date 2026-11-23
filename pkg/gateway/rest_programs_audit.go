@@ -50,14 +50,6 @@ func (a *restAPI) auditProgramSuperseded(programID string, generation int64) {
 	})
 }
 
-// auditProgramChecked is the programs service's audit sink for a published
-// check result (FR-021): the outcome is the resulting state, value-free.
-func (a *restAPI) auditProgramChecked(programID string, generation, checkRevision int64, state string) {
-	a.auditProgram(auditProgramCheck, audit.DecisionAllow, "", map[string]any{
-		"program_id": programID, "generation": generation, "check_revision": checkRevision, "outcome": state,
-	})
-}
-
 // auditAgentProgramsChange records a changed program switch list for one
 // agent. An update that leaves the list as it was writes nothing.
 func (a *restAPI) auditAgentProgramsChange(agentID string, before, after []string) {
