@@ -76,8 +76,8 @@ func checkProgramLocation(_ string, foundPath string, cfg *config.Config) (strin
 			return "", fmt.Errorf("the agent-writable folder %q could not be made absolute: %w", root, aerr)
 		}
 		spellings := []string{abs}
-		if real, rerr := filepath.EvalSymlinks(abs); rerr == nil {
-			spellings = append(spellings, real)
+		if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+			spellings = append(spellings, resolved)
 		} else if !errors.Is(rerr, os.ErrNotExist) {
 			return "", fmt.Errorf("the agent-writable folder %q could not be examined: %w", abs, rerr)
 		}
