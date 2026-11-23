@@ -346,8 +346,12 @@ test('F24 integration: real upload, review, category, Install, exact bytes and p
   expect((await grantAck).status()).toBe(200)
   const stored = await nativeGet(native, '/api/v1/agents/mia', wire.Agent)
   expect(stored.skills?.slice().sort()).toEqual([...new Set([...(mia.skills ?? []), 'f24-upload'])].sort())
-  expect(stored.skill_grants?.['f24-upload']).toMatch(/\S+/)
-  for (const [key, value] of Object.entries(mia.skill_grants ?? {})) expect(stored.skill_grants?.[key]).toBe(value)
+  // Generated Agent's static map carrier is {}; its runtime schema validates
+  // string values. Compare the whole map without indexing or inventing a type.
+  expect(stored.skill_grants).toEqual({
+    ...(mia.skill_grants ?? {}),
+    'f24-upload': expect.stringMatching(/\S+/),
+  })
   await page.getByTestId('agent-profile-sheet').getByRole('button', { name: /^Close/i }).click()
   await editAgent(page, native, ws.id, mia.id, mia.name); await page.getByTestId('tab-skills').click()
   await expect(page.getByTestId('skill-checkbox-f24-upload')).toBeChecked()
