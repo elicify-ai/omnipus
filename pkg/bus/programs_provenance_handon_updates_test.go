@@ -106,13 +106,13 @@ func TestProgramProvenance_Updates(t *testing.T) {
 	// launch, idle same helper, real Telegram parent delegate-steer, unique
 	// executed-child instrument, exact count0/Telegram notice and saved join.
 
-	t.Run("S123_web_off_telegram_on_mixed_steering_both_orders", func(t *testing.T) {
-		// GREEN asserts here (spec S-123): both steering orders output 0
-		// with the web-chat notice; both turn provenances are
-		// {web, connector:telegram}; the same after a restart before each
-		// helper's turn.
-		t.Fatalf("BLOCKED: %s — required by S-123's both-orders assertion", s1HandOnSeam)
-	})
+	// S123_web_off_telegram_on_mixed_steering_both_orders migrated intact to
+	// pkg/agent::TestProgramProvenance_ActualMixedHelperSteering: four actual
+	// delegate/steer chains, both input orders, with/without fresh runtime
+	// reconstruction before the next steer/helper turn. Exact saved/receiving
+	// mixed origins, count0 and web-off notice remain strong assertions.
+	// Restart reloads config, actors, credentials, sessions and lifecycle data;
+	// recovery of an already queued steer or parked helper is not claimed.
 
 	// S124_independent_joined_with_connector_and_ui_regression migrated intact
 	// to pkg/gateway::TestProgramProvenance_ActualHeartbeatTask: persisted real
