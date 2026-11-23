@@ -174,7 +174,7 @@ These numbers shape a goal's life:
 
 | Control | Value | Where it lives |
 |---|---|---|
-| Tries per goal | 20 by default | Settings, Limits, Agents and goals, "Goal completion budget" |
+| Tries per goal | 20 by default | Settings → Limits → Agents and goals → Tries per goal |
 | Task attempts | 3 by default | On the task |
 | Question rounds | 1 per goal | Fixed |
 | Automatic-reminder pause | 5 consecutive completed reminders without progress, or 3 consecutive failed reminder turns; no lifetime reminder limit | Fixed |

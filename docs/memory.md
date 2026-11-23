@@ -57,12 +57,33 @@ Omnipus provides these four memory tools. Which an agent can use depends on its 
 With Auto recap on (Settings → Memory & recaps; it is on by default on a new install):
 
 1. The idle timer triggers recap after the timeout you set — 30 minutes by default. After a gateway restart, catch-up runs only when **Bootstrap recap** is also enabled. That one-time pass considers sessions with no retrospective marker and a usable owning agent. It requires a readable transcript with at least one valid, nonzero entry timestamp, and the newest such timestamp must be at least 30 minutes old, independently of your configured idle timeout. This is a transcript-entry time check, not a file-modification-age check. Sessions without a usable transcript timestamp are skipped, and delegated sessions do not get an automatic recap. Starts are spread out according to the bootstrap rate limit — five per minute by default.
-2. A background model call uses recent user messages and is asked for a recap of at most 150 words, up to five wins, up to five items to improve, and up to five items worth remembering. These are instructions to the model, not validated word or list-size limits; a successful response can be longer.
+2. A background model call uses recent user messages and, by default, is asked for a recap of at most 150 words, up to five wins, up to five items to improve, and up to five items worth remembering. These targets can be changed in [Recap limits](#recap-limits). They are instructions to the model, not validated word or list-size limits; a successful response can be longer.
 3. The recap, followed by any items worth remembering, is stored per agent **and per workspace** — at `workspaces/<workspace>/.omnipus/carry-forward/<agent>.md` — and injected into that agent's next session **in the same workspace**. A summary written in one workspace never follows the agent into another workspace, and a conversation that had no workspace stores no summary at all. If writing the carry-forward summary fails, no retrospective success marker is filed. The session can be considered for a bootstrap recap after a gateway restart, subject to recap settings and eligibility checks. The current process retains its recap claim, so another recap pass in that process is not a guaranteed retry. Check the gateway log and repair the storage problem first. The retrospective is filed under its date and appears in `recall_memory` results.
-4. If summary generation fails or produces an unusable reply, Omnipus tries to carry forward a bounded verbatim tail of recent user text. It keeps up to 1,500 Unicode characters of user-message text, plus formatting; an oversized final message contributes only its tail, and surrounding whitespace is trimmed. The fallback summary names the failure reason, and its retrospective is marked as a fallback. The workspace and storage requirements above still apply, so this is not a guarantee that every recent message or fact survives.
+4. If summary generation fails or produces an unusable reply, Omnipus tries to carry forward a bounded verbatim tail of recent user text. By default, it keeps up to 1,500 Unicode characters of user-message text, plus formatting; change that amount in [Recap limits](#recap-limits). An oversized final message contributes only its tail, and surrounding whitespace is trimmed. The fallback summary names the failure reason, and its retrospective is marked as a fallback. The workspace and storage requirements above still apply, so this is not a guarantee that every recent message or fact survives.
 5. The items worth remembering reach the agent's next session in that workspace through the carry-forward file, so a fact you gave in the last conversation is still in front of the agent. They are not saved as notes: only the agent's `remember` tool creates a note. Each recap replaces the workspace's carry-forward file, so the carried items last until the next recap is written; a note made with `remember` stays. Deleting an agent (or a workspace) removes its carry-forward files with it.
 
 Delegated sub-task sessions never get a recap — only real conversations do.
+
+## Recap limits
+
+Open **Settings → Memory & recaps → Recap limits** to change how much a recap reads and writes, and how long it may take. All ten controls accept whole numbers within the ranges below.
+
+| Control | Default | Accepted range | What it changes |
+|---|---|---|---|
+| Answer length limit | 2,048 tokens | 512 to 16,384 tokens | The output limit sent to the recap model, including reasoning tokens. The ChatGPT sign-in exception is below. |
+| Conversation sent for the recap | 2,000 tokens | 500 to 32,000 tokens | How much recent user-message text is sent. The character allowance is this value multiplied by **Characters per token**; older text is left out. |
+| Summary length | 150 words | 50 to 500 words | The maximum word count requested in the recap instructions, not a validated response length. |
+| Items per list | 5 | 1 to 10 | The maximum requested for each list of wins, improvements and things worth remembering. The returned list size is not validated. |
+| Kept text if the recap fails | 1,500 characters | 200 to 8,000 characters | The Unicode-character limit on recent user text kept word-for-word when a recap fails, before formatting. |
+| Characters per token | 4 | 2 to 8 | The estimate used to convert the input token allowance to characters. It is not an exact token count. |
+| Recap time limit | 60 seconds | 15 to 300 seconds | One overall deadline covering the primary model, fallbacks, retries and pauses. |
+| Retries after a dropped connection | 2 | 0 to 5 | Extra attempts on the same model if its connection drops before any answer arrives. Zero turns off these retries. |
+| Pause before a retry | 500 milliseconds | 100 to 5,000 milliseconds | The first retry's pause. Later pauses are multiplied by the retry number and shortened if the overall deadline is nearer. |
+| Minimum gap between catch-up recaps | 1 second | 1 to 60 seconds | The minimum spacing between recap starts in the restart catch-up pass, in addition to its per-minute cap. |
+
+**ChatGPT sign-in models do not use Answer length limit.** That route takes no output limit from Omnipus, whether selected as the primary recap model or a fallback. Other routes receive the configured limit; Summary length and Items per list remain instructions, not guarantees of the returned length.
+
+**Reset to defaults** puts these ten shipped defaults into the draft only. Press **Save changes** to store a reset or any other edit; **Discard** returns to the saved values. Reset does not change the saved model, fallbacks or other recap settings.
 
 ## How long conversations stay in view
 
@@ -118,8 +139,8 @@ Cancellation is not proof that an action never happened: a tool may have acted b
 |---|---|
 | Search matches words, not meaning | A note saved as "invoice" will not surface for "billing" unless the words overlap. There is no meaning-based search. |
 | No memory browser | No screen in the app lists saved notes, and no tool deletes one. To remove a note, delete its file under `~/.omnipus/`. |
-| Retrospectives expire | A nightly clean-up deletes retrospectives older than **Keep memory for** in Settings → Data & retention: 180 days by default, from 1 to 730 days. With **Keep forever** on, nothing is deleted. Recall reads reflections as far back as they are kept. |
-| Transcripts expire | Chat history is kept 90 days by default (Settings → Data & retention, 1 to 365 days). The sweep removes eligible transcript files by file-modification age, not a strict per-message read cutoff. A main chat's current transcript file is protected, while eligible older rolled files can expire. `recall_conversation` can read content that remains in the archive, including content older than 90 days; it cannot recover files the sweep removed. |
+| Retrospectives expire | Reflection cleanup follows **Keep memory for** in Settings → Data & retention: 180 days by default, adjustable from 1 to 730 days. It runs daily while the gateway is running, not at a fixed nighttime hour. **Keep forever** removes the age cutoff for deletion and recall. Each recall search still reads at most the newest **3,650** eligible dated reflection folders; folders beyond that read limit are skipped by that search, with a warning in the gateway log, even if they remain on disk. |
+| Transcripts expire | Chat history is kept 90 days by default (Settings → Data & retention, 1 to 365 days). Cleanup runs at gateway startup, then daily while it is running. The sweep removes eligible transcript files by file-modification age, not a strict per-message read cutoff. A main chat's current transcript file is protected, while eligible older rolled files can expire. `recall_conversation` can read content that remains in the archive, including content older than 90 days; it cannot recover files the sweep removed. |
 | Saved notes never expire | Nothing prunes them; a workspace in use for years keeps every note. |
 | Writes are rate-limited | An agent can save at most 60 notes per minute, and one caller at most 600. Beyond that the save is rejected and the agent is told to wait. |
 | Sharing needs a workspace | The shared room exists only for work in a workspace. Outside one, every note is saved privately and the agent is told so. |
