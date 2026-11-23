@@ -64,11 +64,11 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-79's unresolved notice", s1HandOnSeam)
 	})
 
-	t.Run("S80_mixed_provenance_through_a_peer_request", func(t *testing.T) {
-		// GREEN asserts here (spec S-80): telegram allowed, discord not; the
-		// peer-consumer run is 0 and the notice names discord.
-		t.Fatalf("BLOCKED: %s — required by S-80's mixed join", s1HandOnSeam)
-	})
+	// S80_mixed_provenance_through_a_peer_request migrated intact to
+	// pkg/gateway::TestProgramProvenance_ActualMixedPeerRequest: separate real
+	// Telegram/Discord inputs, admitted into one live Dev turn, actual peer
+	// tool/router/ledger/Ops command, exact two-origin set, count0 and full
+	// Discord-off notice with Telegram allowed. No manually joined carrier.
 
 	// S82_model_text_cannot_set_provenance migrated intact to the same actual
 	// pkg/gateway peer test: body says origin:webchat, but the actual ledger
