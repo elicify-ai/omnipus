@@ -4,11 +4,9 @@ package agent
 // The external shell wrapper records its actual environment before exec'ing
 // /bin/sh with the original argv. This makes even the builtin echo observable
 // without changing the command or substituting a matcher/grant/TurnPrograms.
-// Full S26 acceptance remains BLOCKED in pkg/programs: this fixture does not
-// install the BDD Background's enforcing kernel sandbox. The zero-approval
-// oracle is retained (not changed to match no_sandbox_ask); a mismatch fails
-// nonfatally so the actual command and revocation are still observed. H41 in
-// the original-author dispute pack records this incomplete Given explicitly.
+// Each exact leaf self-execs before applying the real enforcing Linux boot
+// policy. Its actual shell must prove a kernel denial against a positively
+// readable protected canary; zero approvals remain the spec's exact oracle.
 import (
 	"fmt"
 	"os"
@@ -37,19 +35,33 @@ func TestProgramNetwork_ActualSpellingMatrix(t *testing.T) {
 		{"D3_10_nested_shell", `bash -c "gh api user"`, "S26_GH_CONNECTION_ERROR", false},
 	} {
 		t.Run(row.name, func(t *testing.T) {
+			if programsKernelReexec(t) {
+				return
+			}
 			var ordinary []map[string]any
 			connectedCases := []bool{true}
 			if !row.grant {
 				connectedCases = []bool{false, true}
 			}
 			for _, connected := range connectedCases {
+				observe, err := os.MkdirTemp("/dev/shm", "s1-spelling-")
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, os.RemoveAll(observe)) })
 				x := newProgramsNetworkFixture(t, false, true, false)
 				if !connected {
 					x.f.al.GetConfig().Agents.List[0].Programs = nil
 				}
 				bin := strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))[0]
-				countPath := filepath.Join(x.work, "spelling-child-count")
-				wrapper := fmt.Sprintf("#!/bin/sh\nprintenv GH_TOKEN | wc -c > %q\nprintf '%%s' \"${HTTPS_PROXY:-}\" > %q\nmv %q %q\nwhile [ ! -f %q ]; do sleep 0.01; done\nexec /bin/sh \"$@\"\n", countPath, x.child+".tmp", x.child+".tmp", x.child, x.release)
+				// Observations use an already-permitted scratch device, not a new
+				// policy grant or a production guard exception. The command itself
+				// remains unchanged and rooted in the real workspace.
+				x.child, x.release = filepath.Join(observe, "proxy"), filepath.Join(observe, "release")
+				countPath := filepath.Join(observe, "spelling-child-count")
+				canary := programsEnforceKernel(t, x.f)
+				cwd := programsForeground(t, x.f, "s26-cwd-control", "pwd")
+				require.Equal(t, x.work, strings.TrimSpace(cwd), "Given: the actual shell is rooted in this fixture's workspace")
+				denial := filepath.Join(observe, "spelling-kernel-denial")
+				wrapper := "#!/bin/sh\n" + programsKernelReadAttempt(canary, denial) + fmt.Sprintf("printenv GH_TOKEN | wc -c > %q\nprintf '%%s' \"${HTTPS_PROXY:-}\" > %q\nmv %q %q\nwhile [ ! -f %q ]; do sleep 0.01; done\nexec /bin/sh \"$@\"\n", countPath, x.child+".tmp", x.child+".tmp", x.child, x.release)
 				require.NoError(t, os.WriteFile(filepath.Join(bin, "sh"), []byte(wrapper), 0700))
 				wantCount, check := "16", `[ "$GH_TOKEN" = tok_valid_12345 ] || exit 83`
 				if !connected {
@@ -85,13 +97,14 @@ func TestProgramNetwork_ActualSpellingMatrix(t *testing.T) {
 					args = append(args, req.Args)
 				}
 				if row.grant {
-					assert.Empty(t, requests, "S26 requires no approval under its enforcing-sandbox Given; this fixture's no-kernel mismatch is not product RED proof")
+					assert.Empty(t, requests, "S26 requires no approval under the actual enforcing-sandbox Given")
 				} else if !connected {
 					ordinary = args
 				} else {
 					require.Equal(t, ordinary, args, "unmatched D3 spelling keeps exact ordinary approval arguments/count")
 				}
 				result := finish()
+				programsAssertKernelDenied(t, canary, denial)
 				if row.name == "D3_10_nested_shell" {
 					require.Contains(t, result, row.output, "actual nested gh's own connection error survives; no fake success")
 				} else {
@@ -110,6 +123,9 @@ func TestProgramNetwork_ActualSpellingMatrix(t *testing.T) {
 					require.Contains(t, control, "[Command exited with code 7]", "ToolResult's documented foreground suffix preserves the actual fixture exit7")
 					require.Equal(t, control, strings.TrimSpace(result), "S26/FR-026: the complete nested gh error and exit pass through unchanged")
 				}
+				// Setenv cleanup is row-scoped. Do not let this completed
+				// external shell observer become the next fixture's fallback sh.
+				require.NoError(t, os.Remove(filepath.Join(bin, "sh")))
 			}
 		})
 	}
