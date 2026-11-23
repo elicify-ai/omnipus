@@ -48,7 +48,8 @@
 // git version probe) with the D-9 sentinel through its real harness and
 // asserts the sentinel reaches no sink. Foreground/background share the actual
 // seven-sink campaign in pkg/gateway::TestProgramMasking_ActualSevenSinks;
-// account check runs here. The other three mandatory kinds retain loud,
+// actual God Mode uses its TestProgramMasking_ActualGodModeSinks companion.
+// Account check runs here. The other two mandatory kinds retain loud,
 // specific unfinished-fixture markers, never skips. Token delivery alone is
 // not every-sink coverage.
 //
@@ -777,10 +778,12 @@ func aliasedExec(set *programs.ProgramVariables) {
 	// and error paths, rotation and all seven sinks, including nonvacuous
 	// transcript/model/published-output assertions. Do not replace its real
 	// persistence failure with empty passing wrappers here.
+	// b_bash_god_mode_sentinel_reaches_no_sink is relocated separately to
+	// pkg/gateway::TestProgramMasking_ActualGodModeSinks/
+	// S106_God_Mode_every_sink_value_free. That actual campaign requires both
+	// runtime and registered-shell God Mode before exercising all seven sinks;
+	// it is never inferred from the ordinary-mode companion.
 	const s106Seam = "this mandatory child kind still needs a combined real runtime/sink fixture — required by S-106(b)"
-	t.Run("b_bash_god_mode_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; ordinary foreground/background coverage does not exercise the actual God Mode path through all seven sinks", s106Seam)
-	})
 	t.Run("b_environment_setup_sentinel_reaches_no_sink", func(t *testing.T) {
 		t.Fatalf("BLOCKED: %s; actual setup token-delivery coverage is not a setup-child seven-sink campaign", s106Seam)
 	})
