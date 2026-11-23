@@ -43,7 +43,7 @@ func programsAssertTaskDocument(t *testing.T, raw []byte, prompt string, origins
 	if provenance, present := document["provenance"]; present {
 		assert.NoError(t, json.Unmarshal(provenance, &actualOrigins), "%s: persisted provenance must be an origin set", boundary)
 	}
-	assert.ElementsMatch(t, origins, actualOrigins, "%s: I-2/S107 exact saved origin set, not missing/unresolved, overwritten or a later write", boundary)
+	assert.ElementsMatch(t, origins, actualOrigins, "%s: I-2 exact saved origin set, not missing/unresolved, overwritten or a later write", boundary)
 }
 
 // Read the actual persisted bytes synchronously while the writer still holds its
