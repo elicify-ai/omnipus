@@ -111,14 +111,14 @@ func TestProgramProvenance_Updates(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-123's both-orders assertion", s1HandOnSeam)
 	})
 
-	t.Run("S124_independent_joined_with_connector_and_ui_regression", func(t *testing.T) {
-		// GREEN asserts here (spec S-124): the creator edit is accepted, the
-		// task's provenance is {independent, connector:telegram}, output 0
-		// (web off per founder Q1 = A) and 16 with web on; a person-created
-		// task's edit is refused as today and its prompt and provenance are
-		// unchanged.
-		t.Fatalf("BLOCKED: %s — required by S-124's join and regression rows", s1HandOnSeam)
-	})
+	// S124_independent_joined_with_connector_and_ui_regression migrated intact
+	// to pkg/gateway::TestProgramProvenance_ActualHeartbeatTask: persisted real
+	// workspace heartbeat -> reconciler -> cron lane -> scheduled runner ->
+	// registered create_task; real Telegram creator edit with same-write exact
+	// independent+Telegram origin and actual Board/task command, web off/on.
+	// Separate independently constructed setting chains, not a same-task rerun.
+	// TestProgramProvenance_ActualPersonTaskAuthority additionally checks the
+	// actual matching refused update outcome and byte-identical UI task record.
 
 	// S125_person_ui_edit_preserves_provenance migrated intact to
 	// pkg/gateway::TestProgramProvenance_ActualPersonTaskEdit: actual Telegram
