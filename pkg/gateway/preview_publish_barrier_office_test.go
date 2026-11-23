@@ -230,7 +230,7 @@ func TestOfficePreviewRefusesOverlapsPublishedDuringPreview(t *testing.T) {
 	// are discovered from home, but a root under home would be refused by the
 	// pre-existing secret-set and data-directory guards instead of reaching
 	// the §3.2 refusal under test (and would mask the red).
-	root := officepreview.RegisteredOfficeExecutable(t, home, filepath.Join(t.TempDir(), "office"), self)
+	root := officepreview.RegisteredOfficeExecutable(t, home, filepath.Join(officepreview.OwnRoot(t), "office"), self)
 	resolver := &component.Resolver{Home: home, Executable: self}
 	office, problem := resolver.Resolve(component.KindOffice)
 	require.Nil(t, problem, "instrument: the registered fixture verifies cleanly before the preview")

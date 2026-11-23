@@ -24,6 +24,8 @@ package preview
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -359,12 +361,15 @@ func t131ConverterMarkerScript() string {
 }
 
 // t131MarkerExists reports whether any converter-start marker exists under
-// root right now. A failed walk is not evidence of absence: return its error
-// so the observer fails the test instead of certifying an incomplete scan.
+// root right now. A descendant removed by completed-call cleanup is absent;
+// a missing root or any other walk error still makes the observation fail.
 func t131MarkerExists(root string) (bool, error) {
 	found := false
 	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			if path != root && errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if !d.IsDir() && d.Name() == t131ConverterMarkerName {

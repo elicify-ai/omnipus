@@ -75,7 +75,7 @@ func gatefixReadyDummyRenderer(t *testing.T, home string) {
 	t.Helper()
 	previous := preview.Shared()
 	t.Cleanup(func() { preview.SetShared(previous) })
-	root := filepath.Join(t.TempDir(), "renderer")
+	root := filepath.Join(officepreview.OwnRoot(t), "renderer")
 	officepreview.RegisteredRendererFixture(t, home, root, true)
 	self, err := os.Executable()
 	require.NoError(t, err)
