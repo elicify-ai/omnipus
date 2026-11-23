@@ -120,11 +120,10 @@ func TestProgramProvenance_Updates(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-124's join and regression rows", s1HandOnSeam)
 	})
 
-	t.Run("S125_person_ui_edit_preserves_provenance", func(t *testing.T) {
-		// GREEN asserts here (spec S-125): a person's UI edit leaves the
-		// stored provenance exactly {connector:telegram} (no web added,
-		// nothing removed) and the run outputs 0; a person's new task is
-		// {independent}.
-		t.Fatalf("BLOCKED: %s — required by S-125's preserve rule", s1HandOnSeam)
-	})
+	// S125_person_ui_edit_preserves_provenance migrated intact to
+	// pkg/gateway::TestProgramProvenance_ActualPersonTaskEdit: actual Telegram
+	// create/update tool writes, real person's REST prompt PATCH with exact
+	// origin at the in-lock persist boundary, real task command/count0 and
+	// Telegram notice; actual delete/new UI task must be exactly independent.
+	// Its real new-task child additionally checks A-1's enabled-web count16.
 }
