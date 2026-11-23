@@ -9,7 +9,7 @@ import { useConnectionStore } from './connection'
 import { useToolApprovalStore } from './toolApproval'
 import { useUiStore } from './ui'
 import type { MediaFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
-import { entry, expectValidFrame, page, pos, snapshot } from '../../tests/chat-history-paging/fixtures'
+import { entry, expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../tests/chat-history-paging/fixtures'
 
 const SID = 'office-cached-snapshot'
 const SOURCE = 'office-cached-source'
@@ -125,5 +125,74 @@ describe('Office cached snapshot group ownership (F1 / B07)', () => {
     expect(group(TARGET).map(item => item.url), 'F1 converse: the post-capture live group wins atomically').toEqual(['/api/v1/media/new-live-1', '/api/v1/media/new-live-2'])
     expect(group(TARGET).every(item => item.preview?.outcome === 'complete')).toBe(true)
     expectUnrelatedGroups()
+  })
+
+  it('reconciles each thumbnail group independently on a still-streaming combined assistant row', () => {
+    // Team-lead update 3: saved state wins for an unchanged group even while
+    // the combined row keeps streaming; a group changed after capture wins live.
+    const display = 'office-combined-first'
+    const tools = 'office-combined-tools'
+    const turn = 'office-combined-active-turn'
+    const firstText = 'Inspecting the document. '
+    const secondText = 'The turn is still running.'
+    const state: ServerFrame = {
+      type: 'session_state', session_id: SID, user_id: 'office-reader', pending_approvals: [],
+      emitted_at: '2026-11-24T00:00:00Z', history_state: { status: 'available' },
+      active_turn: { turn_id: turn, agent_id: 'mia', started_at: '2026-11-24T00:00:00Z' },
+    }
+    feed(state,
+      { type: 'token', session_id: SID, turn_id: turn, agent_id: 'mia', message_id: display, content: firstText, seq: 1 },
+      { type: 'token', session_id: SID, turn_id: turn, agent_id: 'mia', message_id: SOURCE, content: secondText, seq: 2 },
+    )
+    expect(bucket().messageOrder, 'instrument: real tokens produce one combined row').toEqual([display])
+    expect(bucket().messagesById[display]).toMatchObject({
+      content: firstText + secondText, isStreaming: true, turnId: turn, mergedReplayIds: [SOURCE],
+    })
+    expect(bucket().messagesById[display].historyParts?.map(part => part.sourceId)).toEqual([display, SOURCE])
+    const sources = [
+      entry(1, { id: display, role: 'assistant', turn_id: turn, content: firstText }),
+      entry(2, { id: SOURCE, role: 'assistant', turn_id: turn, content: secondText }),
+      entry(3, { id: tools, type: 'tool_call', role: 'assistant', turn_id: turn, content: '',
+        tool_calls: [TARGET, OTHER].map(id => ({ id, tool: 'preview_document', status: 'success' as const,
+          content_state: 'full' as const, parameters: {}, result: { text: 'saved result' } })),
+      }),
+    ]
+    const selected = page(sources, { sessionId: SID, rows: 4 })
+    expectValidPage(selected, [pos(1), pos(2), pos(3)], 4)
+    const begin = (cut: number) => feed({ ...snapshot(selected), seq: cut, boot_id: BOOT }, state)
+    const finish = (cut: number) => {
+      const history_origin = { position: pos(3), entry_id: tools, turn_id: turn }
+      feed(...sources.slice(0, 2).map(source => replay(source, SID)),
+        ...[TARGET, OTHER].flatMap((call): ServerFrame[] => [
+          { type: 'tool_call_start', session_id: SID, tool: 'preview_document', call_id: call, params: {}, agent_id: 'mia', history_origin },
+          { type: 'tool_call_result', session_id: SID, tool: 'preview_document', call_id: call, status: 'success', result: 'saved result', history_origin },
+          { ...preview(call, 'unavailable'), history_origin },
+        ]),
+        { type: 'done', session_id: SID },
+        { type: 'catch_up_complete', session_id: SID, seq: cut, boot_id: BOOT, mode: 'snapshot' },
+      )
+      expect(bucket().history.historyLoaded).toBe(true)
+      expect(bucket().history.readerPositions).toEqual([pos(1), pos(2), pos(3)])
+    }
+    begin(10)
+    finish(10)
+    expect(group(TARGET).map(item => item.url)).toEqual([''])
+    expect(group(OTHER).map(item => item.url)).toEqual([''])
+    expect(bucket().messagesById[display].isStreaming, 'instrument: history did not finish the active turn').toBe(true)
+    feed({ ...preview(TARGET, 'unavailable', ['/api/v1/media/combined-unsaved-1', '/api/v1/media/combined-unsaved-2']), seq: 11 })
+    expect(group(TARGET).map(item => item.url)).toEqual(['/api/v1/media/combined-unsaved-1', '/api/v1/media/combined-unsaved-2', ''])
+    expect(group(TARGET).at(-1)?.unavailableReason).toBe('storage_failed')
+    begin(11)
+    feed({ ...preview(OTHER, 'complete', ['/api/v1/media/combined-live-1', '/api/v1/media/combined-live-2']), seq: 12 })
+    expect(bucket().cursor?.seq, 'instrument: the changed control is admitted after capture').toBe(12)
+    expect(group(OTHER).map(item => item.url)).toEqual(['/api/v1/media/combined-live-1', '/api/v1/media/combined-live-2'])
+    finish(11)
+    expect(bucket().messageOrder, 'one combined display row survives reconciliation').toEqual([display])
+    expect(bucket().messagesById[display]).toMatchObject({ content: firstText + secondText, isStreaming: true, turnId: turn })
+    expect(bucket().messagesById[display].historyParts?.map(part => part.sourceId)).toEqual([display, SOURCE, tools])
+    expect(group(OTHER).map(item => item.url), 'F1 residual control: the group changed live stays whole').toEqual(['/api/v1/media/combined-live-1', '/api/v1/media/combined-live-2'])
+    expect(group(OTHER).every(item => item.preview?.outcome === 'complete')).toBe(true)
+    expect(group(TARGET).map(item => item.url), 'F1 residual: unchanged unsaved Retry pages disappear despite the streaming combined row').toEqual([''])
+    expect(group(TARGET)[0]).toMatchObject({ toolCallId: TARGET, unavailableReason: 'renderer_failed', preview: { outcome: 'unavailable' } })
   })
 })
