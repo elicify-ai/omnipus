@@ -1,0 +1,285 @@
+// Export Review step — spec order 21 (issue #1967 B1).
+// Oracles: spec scenarios "Review shows the server's review", "Review
+// survives a reload", "Expired review"; the left_out message table; the
+// free_text_copied disclosure text and the fixed "Never included" statement.
+// The package API module is mocked (spec "Integration Boundaries").
+import React from 'react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { shouldRetryMutation, mutationRetryDelay } from '@/lib/queryClient'
+import { ApiError } from '@/lib/api-error'
+import type { PackageExportPlan } from '@/lib/api/packages'
+
+let mockSearch: Record<string, string | undefined> = {}
+
+const { navigateSpy, mockAgents, mockWorkspaces, mockPlanCreate, mockPlanRead } = vi.hoisted(() => ({
+  navigateSpy: vi.fn(),
+  mockAgents: vi.fn(),
+  mockWorkspaces: vi.fn(),
+  mockPlanCreate: vi.fn(),
+  mockPlanRead: vi.fn(),
+}))
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts, useSearch: () => mockSearch }),
+    useNavigate: () => navigateSpy,
+  }
+})
+
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  fetchAgents: mockAgents,
+  fetchWorkspaces: mockWorkspaces,
+}))
+
+vi.mock('@/lib/api/packages', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/packages')>()),
+  createPackageExportPlan: mockPlanCreate,
+  getPackageExportPlan: mockPlanRead,
+}))
+
+import { Route } from '@/routes/_app/export-import'
+import { rememberIdentityMode } from '@/lib/api/identityMode'
+import { useUiStore } from '@/store/ui'
+
+// The review of Writer (Main) with AGENT.md 500 B, SOUL.md 2,000 B, skills
+// research + Summarize, connector github (spec "Review shows the server's
+// review"). Messages are the spec's exact left_out table rows, in table order.
+const leftOut = [
+  { type: 'agent_memory', reason: 'type_not_exportable', message: "This agent's memory is not included in this version." },
+  { type: 'session', reason: 'type_not_exportable', message: "This agent's chats are not included." },
+  { type: 'work_files', reason: 'type_not_exportable', message: 'Workspace files are not included.' },
+  {
+    type: 'team',
+    reason: 'not_carried',
+    message:
+      'Team membership and delegation lines are not included. On import the agent joins the workspace you choose, with no delegation lines.',
+  },
+  {
+    type: 'skill',
+    reason: 'type_not_exportable',
+    message: 'Skills are not included. The agent keeps their names; the other install uses a skill with the same name if it has one.',
+    items: ['research', 'Summarize'],
+  },
+  {
+    type: 'connector',
+    reason: 'not_restored',
+    message:
+      'Connector names travel inside the agent\'s settings, but no connector settings or secrets are included, and the assignments are not restored on import. Assign connectors again after import.',
+    items: ['github'],
+  },
+]
+
+// Plan validity windows derive from the real clock (CHECK F07): a fresh plan
+// was created one minute ago and is valid for EXACTLY the spec's 30-minute
+// lifetime from creation (round 2: the interval was 31 minutes — expires_at
+// now = created_at + 30 min exactly); the expired variant was created two
+// hours ago. No wall-clock-pinned fixtures. ONE Date.now() call per plan
+// (CHECK 3 minor): two separate calls can differ by a millisecond, making the
+// interval 29:59.999 and the exact-30-minute claim flaky.
+export function writerPlan(): PackageExportPlan {
+  const created = Date.now() - 60_000
+  return {
+    plan_id: 'P1',
+    created_at: new Date(created).toISOString(),
+    expires_at: new Date(created + 30 * 60_000).toISOString(),
+    scope: 'agents',
+    elements: [
+      {
+        type: 'agent',
+        source_id: 'a-writer',
+        name: 'Writer',
+        kind: 'main',
+        files: [
+          // GREEN CHECK P03: the REAL wire paths, exactly as the backend's plan
+          // builder emits them (pkg/omnpkg/format.go::AgentsPrefix +
+          // agentRecordPath/agentSoulPath/agentInstructionsPath — the bundle
+          // layout `omnipus/agents/<id>/<file>`), not bare names.
+          { path: 'omnipus/agents/a-writer/agent.json', size: 1200 },
+          { path: 'omnipus/agents/a-writer/SOUL.md', size: 2000 },
+          { path: 'omnipus/agents/a-writer/AGENT.md', size: 500 },
+        ],
+        bytes: 3700,
+      },
+    ],
+    left_out: leftOut,
+    needs_secrets: [],
+    disclosures: [
+      {
+        code: 'free_text_copied',
+        message: 'Text you wrote (prompts and instructions) is copied exactly as it is. If you pasted a password or key into it, it goes with the bundle.',
+      },
+    ],
+    size_bytes: 3700,
+    file_name: 'Writer.omnpkg',
+  }
+}
+
+beforeEach(() => {
+  mockSearch = { wizard: 'export' }
+  navigateSpy.mockReset()
+  mockAgents.mockResolvedValue([{ id: 'a-writer', name: 'Writer', type: 'Main', locked: false, description: 'writes' }])
+  mockWorkspaces.mockResolvedValue([])
+  mockPlanCreate.mockReset().mockResolvedValue(writerPlan())
+  mockPlanRead.mockReset().mockResolvedValue(writerPlan())
+  rememberIdentityMode('local')
+  useUiStore.setState({ addToast: vi.fn() as unknown as () => void })
+})
+
+afterEach(() => {
+  // The single render handle is released, so no view outlives its test
+  // (CHECK F07 round 2).
+  active?.unmount()
+  active = null
+  sessionStorage.clear()
+})
+
+// ONE render handle (CHECK F07 round 2): the previous view is unmounted
+// before the next one mounts, exactly as an address-driven wizard does.
+// Round 1's goTo only re-rendered on top of the old view, so the preselect
+// row had two Writer radios mounted and the second getByRole could not
+// uniquely identify the intended one.
+let active: ReturnType<typeof render> | null = null
+
+function renderPage() {
+  active?.unmount()
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: mutationRetryDelay } },
+  })
+  const Component = (Route as unknown as { component: React.ComponentType }).component
+  active = render(
+    <QueryClientProvider client={client}>
+      <Component />
+    </QueryClientProvider>,
+  )
+  return active
+}
+
+// The wizard is address-driven: arriving at an address (a link, a reload)
+// UNMOUNTS the previous view and mounts the route at the new search. goTo
+// models exactly that through the same single handle (CHECK F07).
+function goTo(search: Record<string, string | undefined>) {
+  mockSearch = search
+  return renderPage()
+}
+
+async function reviewWriter() {
+  renderPage()
+  fireEvent.click(await screen.findByRole('radio', { name: /Writer/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+  await waitFor(() => expect(navigateSpy).toHaveBeenCalled())
+  const navArg = navigateSpy.mock.calls[0][0] as { search?: Record<string, string> }
+  return navArg
+}
+
+describe('Export Review — the server review is shown (US-2.3, US-6.1)', () => {
+  it('labels the real full-path files with the plain labels, their path and size, and shows the About size (GREEN CHECK P03)', async () => {
+    const nav = await reviewWriter()
+    expect(nav.search?.step).toBe('review')
+    expect(nav.search?.plan_id).toBe('P1')
+    goTo({ wizard: 'export', step: 'review', plan_id: 'P1' })
+    // GREEN CHECK P03 (spec "Export · Review" table row, line 417: Settings
+    // agent.json, Prompt SOUL.md, Instructions AGENT.md with sizes; FR-018):
+    // the labels must survive the real full-path carrier — each plain label
+    // next to its own full path and size, the path shown once (the file cell).
+    expect(await screen.findByText('Settings')).toBeInTheDocument()
+    expect(screen.getByText('omnipus/agents/a-writer/agent.json')).toBeInTheDocument()
+    expect(screen.getByText('1.2 KB')).toBeInTheDocument()
+    expect(screen.getByText('Prompt')).toBeInTheDocument()
+    expect(screen.getByText('omnipus/agents/a-writer/SOUL.md')).toBeInTheDocument()
+    expect(screen.getByText('2.0 KB')).toBeInTheDocument()
+    expect(screen.getByText('Instructions')).toBeInTheDocument()
+    expect(screen.getByText('omnipus/agents/a-writer/AGENT.md')).toBeInTheDocument()
+    expect(screen.getByText('500 B')).toBeInTheDocument()
+    expect(screen.getByText(/About/)).toBeInTheDocument()
+  })
+
+  it('lists the left-out rows in the exact table order with their exact messages and items', async () => {
+    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
+    renderPage()
+    await screen.findByText('Left out')
+    const bodyText = document.body.textContent ?? ''
+    const at = (s: string) => bodyText.indexOf(s)
+    expect(at("This agent's memory is not included in this version.")).toBeGreaterThan(-1)
+    expect(at("This agent's chats are not included.")).toBeGreaterThan(at("This agent's memory is not included in this version."))
+    expect(at('Workspace files are not included.')).toBeGreaterThan(at("This agent's chats are not included."))
+    expect(at('Team membership and delegation lines are not included.')).toBeGreaterThan(at('Workspace files are not included.'))
+    expect(at('Skills are not included. The agent keeps their names;')).toBeGreaterThan(at('Team membership and delegation lines are not included.'))
+    expect(at('Connector names travel inside the agent\'s settings,')).toBeGreaterThan(at('Skills are not included. The agent keeps their names;'))
+    expect(screen.getByText('research')).toBeInTheDocument()
+    expect(screen.getByText('Summarize')).toBeInTheDocument()
+    expect(screen.getByText('github')).toBeInTheDocument()
+  })
+
+  it('shows the free-text notice and the fixed "Never included" statement', async () => {
+    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
+    renderPage()
+    expect(
+      await screen.findByText(
+        'Text you wrote (prompts and instructions) is copied exactly as it is. If you pasted a password or key into it, it goes with the bundle.',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Never included: passwords, API keys and tokens stored in Omnipus, provider keys, channel tokens, this install's settings file, and an external worker's program path, environment values and extra arguments.",
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('lists secrets under "Enter again after import" when the plan needs them', async () => {
+    const plan = writerPlan()
+    plan.needs_secrets = [{ name: 'API_TOKEN', used_by: 'external tool', kind: 'executor_env' }]
+    mockPlanRead.mockResolvedValue(plan)
+    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
+    renderPage()
+    expect(await screen.findByText('Enter again after import')).toBeInTheDocument()
+    expect(screen.getByText('API_TOKEN')).toBeInTheDocument()
+  })
+})
+
+describe('Export Review — reload and expiry (US-2.7, US-2.8)', () => {
+  it('a reload re-reads the plan from the server by plan_id', async () => {
+    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
+    renderPage()
+    await screen.findByText('Settings')
+    expect(mockPlanRead).toHaveBeenCalledWith('P1')
+  })
+
+  it('an expired or evicted plan (read 404) returns to Choose with the expired notice', async () => {
+    mockPlanRead.mockRejectedValue(new ApiError(404, 'gone', { code: 'plan_not_found' }))
+    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
+    renderPage()
+    expect(await screen.findByText('The review expired. Check your choice and review again.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument()
+  })
+
+  it('after the expired notice the agent is ticked only when preselect is in the address', async () => {
+    mockPlanRead.mockRejectedValue(new ApiError(404, 'gone', { code: 'plan_not_found' }))
+    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1', preselect: 'agent:a-writer' }
+    renderPage()
+    await screen.findByText('The review expired. Check your choice and review again.')
+    expect(screen.getByRole('radio', { name: /Writer/ })).toBeChecked()
+
+    mockSearch = { wizard: 'export', step: 'review', plan_id: 'P1' }
+    renderPage()
+    await screen.findByText('The review expired. Check your choice and review again.')
+    expect(screen.getByRole('radio', { name: /Writer/ })).not.toBeChecked()
+  })
+
+  it('a plan whose expires_at has passed locally returns to Choose with the notice before Download', async () => {
+    const plan = writerPlan()
+    // Expired relative to the REAL clock: created two hours ago, the 30-minute
+    // window closed 90 minutes ago (CHECK F07 — derived, not pinned).
+    plan.created_at = new Date(Date.now() - 2 * 60 * 60_000).toISOString()
+    plan.expires_at = new Date(Date.now() - 90 * 60_000).toISOString()
+    mockPlanRead.mockResolvedValue(plan)
+    goTo({ wizard: 'export', step: 'review', plan_id: 'P1' })
+    await screen.findByText('Settings')
+    fireEvent.click(screen.getByRole('button', { name: 'Download' }))
+    expect(await screen.findByText('The review expired. Check your choice and review again.')).toBeInTheDocument()
+  })
+})

@@ -342,6 +342,40 @@
       }
     },
     {
+      "id": "_app/export-import",
+      "kind": "route",
+      "source": "src/routes/_app/export-import.tsx",
+      "symbol": "Route",
+      "lane": 4,
+      "verification": [
+        {
+          "checkId": "surface:app-export-import:unit",
+          "file": "tests/design-system/surfaces/app-export-import.test.tsx",
+          "test": "_app/export-import surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:app-export-import:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/export-import surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:app-export-import:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/export-import surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/export-import"
+      }
+    },
+    {
       "id": "_app/library",
       "kind": "route",
       "source": "src/routes/_app/library.tsx",
@@ -8187,6 +8221,62 @@
     {
       "source": "src/routes/_app/index.tsx",
       "lane": 7
+    },
+    {
+      "source": "src/components/export-import/ExportChooseStep.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/ExportDownloadStep.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/ExportReviewStep.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/ExportWizard.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/ImportConfirmStep.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/ImportFileStep.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/ImportPreviewStep.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/ImportResultStep.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/ImportWizard.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/QuickExportButton.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/importRecord.ts",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/landing.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/components/export-import/shared.tsx",
+      "lane": 4
+    },
+    {
+      "source": "src/routes/_app/export-import.tsx",
+      "lane": 4
     },
     {
       "source": "src/routes/_app/library.tsx",

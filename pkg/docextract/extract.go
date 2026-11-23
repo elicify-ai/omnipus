@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -105,6 +107,15 @@ func ExtractBytes(data []byte, mime string, filename string) (text string, ok bo
 		return extractOOXMLBytes(data, detectedExt)
 	}
 
+	// A PDF is recognised by its signature or .pdf name even when the MIME says
+	// text (a text MIME otherwise sends raw PDF syntax to the model, #1959).
+	// A .pdf name alone does not override an image MIME (an SVG named .pdf keeps
+	// its source-text fallback); the signature still wins.
+	if bytes.HasPrefix(data, []byte("%PDF-")) ||
+		(isPDF("", ext) && !strings.HasPrefix(lowerMIME, "image/")) {
+		return extractPDF(bytes.NewReader(data), int64(len(data)))
+	}
+
 	// Other recognized MIME values are authoritative over filename extensions.
 	switch {
 	case isPDF(lowerMIME, ""):
@@ -174,6 +185,14 @@ func IsExtractableBytes(data []byte, filename string) bool {
 		return true
 	}
 	return archiveKindForMagic(data) != "" || IsExtractable("", filename)
+}
+
+// LooksLikePDF reports whether bounded leading file bytes or the filename say
+// the file is a PDF: the "%PDF-" signature at byte 0, or a .pdf extension. A
+// PDF's first bytes can be plain ASCII (a header line and small objects with
+// no NUL byte), so callers must not rely on a NUL byte to recognise one.
+func LooksLikePDF(data []byte, filename string) bool {
+	return bytes.HasPrefix(data, []byte("%PDF-")) || isPDF("", strings.ToLower(filepath.Ext(filename)))
 }
 
 // isTextLike returns true for MIME types or extensions treated as UTF-8 text.
@@ -588,7 +607,94 @@ func extractTextBytes(raw []byte) (string, bool, string) {
 // extractPDF reads text from a PDF using ledongthuc/pdf (pure Go, no CGo).
 // It reads from r (size bytes) so the same core serves both the path-based
 // Extract and the in-memory ExtractBytes without re-opening a file.
-func extractPDF(r io.ReaderAt, size int64) (string, bool, string) {
+func extractPDF(r io.ReaderAt, size int64) (text string, ok bool, reason string) {
+	// A malformed page tree can make the parser loop forever (#1959), and a
+	// deferred recover cannot stop a loop. Run the parse in a goroutine and
+	// wait at most pdfExtractTimeout. A timed-out goroutine cannot be killed,
+	// so at most pdfMaxStuck of them may be spinning at once; beyond that new
+	// extractions are refused immediately instead of piling up.
+	if pdfStuck.Load() >= pdfMaxStuck {
+		return "", false, "pdf extraction unavailable: earlier extractions are still stuck"
+	}
+	timer := time.NewTimer(pdfExtractTimeout)
+	defer timer.Stop()
+	// Reserve a parse slot before starting: slots bound the goroutines in
+	// flight (running or stuck), so a burst of concurrent calls cannot start
+	// more than pdfMaxStuck parses. A caller waits for a slot at most one budget.
+	select {
+	case pdfSlots <- struct{}{}:
+	case <-timer.C:
+		return "", false, "pdf extraction busy: too many extractions are running"
+	}
+	type result struct {
+		text   string
+		ok     bool
+		reason string
+	}
+	var state atomic.Int32 // 0 running, 1 finished in time, 2 abandoned (timed out)
+	done := make(chan result, 1)
+	go func() {
+		t, k, rs := extractPDFParse(r, size)
+		// The slot is released only when the parse really returns.
+		defer func() {
+			select {
+			case <-pdfSlots:
+			default:
+			}
+		}()
+		if !state.CompareAndSwap(0, 1) {
+			// Abandoned earlier: the stuck parse has finally ended.
+			pdfStuck.Add(-1)
+			return
+		}
+		done <- result{t, k, rs}
+	}()
+	// Once a slot is won, the parse gets its own full budget.
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(pdfExtractTimeout)
+	select {
+	case res := <-done:
+		return res.text, res.ok, res.reason
+	case <-timer.C:
+		// Count before abandoning so the worker's decrement cannot run first.
+		pdfStuck.Add(1)
+		if state.CompareAndSwap(0, 2) {
+			return "", false, "pdf extraction timed out (the file may be malformed)"
+		}
+		pdfStuck.Add(-1)
+		res := <-done
+		return res.text, res.ok, res.reason
+	}
+}
+
+// pdfSlots bounds the PDF parses in flight (running or stuck) at pdfMaxStuck.
+var pdfSlots = make(chan struct{}, pdfMaxStuck)
+
+// pdfExtractTimeout bounds one PDF parse; a variable so tests can shorten it.
+var pdfExtractTimeout = 15 * time.Second
+
+// pdfMaxStuck is how many timed-out parses may still be running before
+// further PDF extractions are refused.
+const pdfMaxStuck = 2
+
+// pdfStuck counts timed-out parses whose goroutines have not yet returned.
+var pdfStuck atomic.Int32
+
+// extractPDFParse does the actual parsing; see extractPDF for the guards.
+func extractPDFParse(r io.ReaderAt, size int64) (text string, ok bool, reason string) {
+	// The PDF parser indexes into attacker-controlled bytes and can panic on a
+	// malformed file (for example a long run of trailing newlines, #1959). A
+	// parser panic is an extraction failure, never a crash of the caller.
+	defer func() {
+		if p := recover(); p != nil {
+			text, ok, reason = "", false, fmt.Sprintf("pdf parsing failed: %v", p)
+		}
+	}()
 	pr, err := pdf.NewReader(r, size)
 	if err != nil {
 		return "", false, fmt.Sprintf("pdf open failed: %v", err)
@@ -609,6 +715,11 @@ func extractPDF(r io.ReaderAt, size int64) (string, bool, string) {
 	}
 
 	s := filterControlCharacters(string(raw))
+	// A PDF with pages but no text (scanned images, an empty page) yields only
+	// whitespace; that is "no extractable text", not an empty success.
+	if strings.TrimSpace(s) == "" {
+		return "", false, "pdf contains no extractable text"
+	}
 	runes := []rune(s)
 	truncated := false
 	if len(runes) > maxExtractRunes {
