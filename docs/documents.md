@@ -252,11 +252,17 @@ a copy yourself.
     `config error: <field> entry "<entry>" would give agents write access to the <component> program folder <folder>; agents can never get write access there.`
     An entry Omnipus cannot reduce to a folder is refused too:
     `config error: <field> entry "<entry>": Omnipus cannot tell which folders it covers, so it may include a document preview program folder; write it as ^/<folder>(?:/\|$).`
-    In Settings, a refused path does not stay in the sandbox's path list: the
-    list shows the saved paths again, and the refused path goes back into the
-    input box with the reason under it, so you can correct it. If you have
-    already typed something new in the box, your text stays and the reason
-    shows only in the save error below the lists.
+    In Settings, a new path refused on save does not become a saved entry. If
+    you have not started a newer change to the sandbox path list or the
+    internal-address list while that save was pending, both lists return to
+    their saved values, and the path that save added returns to the input with
+    the reason under it.
+
+    If you have already typed something new in the input, your text stays and
+    the reason appears in the save error below the lists instead. If you have
+    started a newer change to either list, the earlier failure leaves the newer
+    lists and input alone; its reason still appears in the save error below the
+    lists.
 - Access that was already there is not refused: settings in force when Omnipus
   started, entries a reload leaves unchanged, and a mount or a remembered chat
   approval made before the folder became a program folder. Omnipus checks for
