@@ -33,12 +33,11 @@ import "testing"
 const s1HandOnSeam = "the complete actual producer/write/dispatch fixture for this chain is not yet implemented in the test harness; seeded-record and direct-carrier tests do not establish this handoff"
 
 func TestProgramProvenance_HandOn(t *testing.T) {
-	t.Run("S75_telegram_to_delegated_helper", func(t *testing.T) {
-		// GREEN asserts here (spec S-75): Telegram off, GitHub on for Dev;
-		// the helper's output is 0 with the telegram notice; after Telegram
-		// is switched on the same delegation outputs 16.
-		t.Fatalf("BLOCKED: %s — required by S-75's helper outputs", s1HandOnSeam)
-	})
+	// S75_telegram_to_delegated_helper migrated intact to
+	// pkg/agent::TestProgramProvenance_ActualDelegatedHelper: actual input ->
+	// delegate tool -> launcher -> durable child -> registered bash, exact
+	// count0/Telegram notice then count16 after the channel switch is on.
+	// The durable carrier is observed from the actual launch, not seeded.
 
 	t.Run("S76_telegram_to_peer_request", func(t *testing.T) {
 		// GREEN asserts here (spec S-76): Telegram off, GitHub on for Ops;
@@ -104,11 +103,10 @@ func TestProgramProvenance_Updates(t *testing.T) {
 		t.Fatalf("BLOCKED: %s — required by S-109", s1HandOnSeam)
 	})
 
-	t.Run("S110_steering_an_existing_helper_from_telegram", func(t *testing.T) {
-		// GREEN asserts here (spec S-110): the helper's turn that consumes
-		// the steer outputs 0 with the telegram notice.
-		t.Fatalf("BLOCKED: %s — required by S-110", s1HandOnSeam)
-	})
+	// S110_steering_an_existing_helper_from_telegram migrated intact to
+	// pkg/agent::TestProgramProvenance_ActualExistingHelperSteer: actual web
+	// launch, idle same helper, real Telegram parent delegate-steer, unique
+	// executed-child instrument, exact count0/Telegram notice and saved join.
 
 	t.Run("S123_web_off_telegram_on_mixed_steering_both_orders", func(t *testing.T) {
 		// GREEN asserts here (spec S-123): both steering orders output 0
