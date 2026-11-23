@@ -54,6 +54,8 @@ import (
 	"testing"
 	"time"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/tests/testutil/presetbuild"
 	"github.com/elicify-ai/omnipus/tests/testutil/programstore"
 	"github.com/stretchr/testify/require"
 )
@@ -383,7 +385,32 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 	})
 
 	t.Run("S93_data_only_preset_GET_and_literal_recipe", func(t *testing.T) {
-		t.Fatal("BLOCKED: no production embedded catalog or gateway catalog injection exists; CatalogFromFS is a RED stub — required by FR-001/S-37/S-93: add only tests/fixtures/cli-credentials-s1/presets/example.json through the real preset build path, GET /programs, then execute exampletool [whoami] validating EXAMPLE_TOKEN and connected/ex-user; custom REST creation is not this evidence")
+		// Real added-data test build: no REST-created custom surrogate and no
+		// replacement loader. The probe drives login, GET and credential PUT.
+		var actual struct { // test-build output containing generated wire carriers
+			List  gen.ProgramList
+			Entry gen.ProgramEntry
+		}
+		require.NoError(t, json.Unmarshal(presetbuild.ProbeHTTP(t), &actual))
+		require.Len(t, actual.List.Entries, 3, "S37: shipped GitHub/Fly plus the added JSON preset")
+		exampleIndex := -1
+		for i := range actual.List.Entries {
+			if actual.List.Entries[i].Id == "example" {
+				exampleIndex = i
+				break
+			}
+		}
+		require.GreaterOrEqual(t, exampleIndex, 0, "GET /api/v1/programs must list the added Example")
+		example := actual.List.Entries[exampleIndex]
+		require.Equal(t, "Example", example.DisplayName)
+		require.Equal(t, "preset", string(example.Kind))
+		require.Equal(t, []string{"exampletool"}, example.ProgramWords)
+		require.Equal(t, []string{"EXAMPLE_TOKEN"}, example.TokenVariables)
+		require.Equal(t, []string{"api.example.invalid"}, example.NetworkSites)
+		require.Equal(t, "connected", string(actual.Entry.Connection.State), "S93: the literal added-data recipe ran")
+		require.NotNil(t, actual.Entry.Connection.AccountLabel)
+		require.Equal(t, "ex-user", *actual.Entry.Connection.AccountLabel)
+		require.Equal(t, int64(1), actual.Entry.Connection.Generation)
 	})
 
 	t.Run("D1_row10_body_over_the_cap_answered_413", func(t *testing.T) {
@@ -519,16 +546,9 @@ func TestProgramReplaceCheckDisconnect(t *testing.T) {
 
 }
 
-func TestProgramError_PassThrough(t *testing.T) {
-	t.Run("S32_program_error_passed_through", func(t *testing.T) {
-		// Given GitHub on for Dev; the fake gh prints
-		// `HTTP 403: Resource not accessible by integration` and exits 1.
-		// When Dev runs `gh api repos/o/r` — the agent exec runtime is the
-		// env integration slice's harness (FR-011); at RED the agent env
-		// builder cannot hand program variables to the shell harness at all.
-		t.Fatalf("BLOCKED: the agent environment builder cannot attach program variables to the bash harness (FR-011 runtime) — required by S-32's `gh api repos/o/r` run (expect: exactly `HTTP 403: Resource not accessible by integration` and exit code 1, nothing rewritten)")
-	})
-}
+// TestProgramError_PassThrough/S32_program_error_passed_through moved to
+// pkg/agent/programs_runtime_refusals_test.go: it now executes the actual Dev
+// child and asserts the unchanged error line plus the real exit-code result.
 
 // TestProgramEntryDeleteRows pins the entry-delete refusals on the real
 // mux: S-35 (a custom entry that is on for an agent cannot be deleted —
@@ -581,17 +601,6 @@ func TestProgramEntryDeleteRows(t *testing.T) {
 	})
 }
 
-// TestProgramRunTimeConflicts pins the run-time conflict rows of US-3
-// (order 21's S-30/S-86 clauses). Both need the env integration slice's
-// harness (FR-011: the agent environment builder attaching program variables
-// and the managed git helper to the child) — missing at RED, so each row is
-// a loud BLOCKED naming the seam and the exact oracle, never a skip.
-func TestProgramRunTimeConflicts(t *testing.T) {
-	t.Run("S30_runtime_variable_conflict_fails_closed", func(t *testing.T) {
-		t.Fatalf("BLOCKED: the agent environment builder cannot attach program variables to the bash harness (FR-011 runtime) — required by S-30 (hand-edited config: GitHub on for Dev AND a selected private GH_TOKEN; Dev runs `printenv GH_TOKEN | wc -c`; expect output `0` plus the run-time conflict notice `GH_TOKEN was not set for this command: two sources set it. A person can fix this in Settings → Programs.`)")
-	})
-
-	t.Run("S86_runtime_git_host_conflict_no_helper", func(t *testing.T) {
-		t.Fatalf("BLOCKED: the agent environment builder cannot attach the managed git helper to the bash harness (FR-011 runtime) — required by S-86 (hand-edited config: GitHub and \"GitLab Mirror\" with host github.com both on for Dev, in BOTH entry orders; Dev runs `git credential fill` for github.com; expect no managed helper answers, the notice `The connected git login for github.com was not used: two programs supply it. A person can fix this in Settings → Programs.`, and the same result in both orders)")
-	})
-}
+// TestProgramRunTimeConflicts/S30 and /S86 retain their exact named rows in
+// pkg/agent/programs_runtime_refusals_test.go, now using real selected private
+// credentials, real connected records, actual Dev children and both entry orders.

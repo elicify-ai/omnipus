@@ -16,8 +16,11 @@ package programs
 // the same table.
 
 import (
+	"encoding/json"
 	"testing"
 	"testing/fstest"
+
+	"github.com/elicify-ai/omnipus/tests/testutil/presetbuild"
 
 	"github.com/stretchr/testify/require"
 )
@@ -135,7 +138,28 @@ func TestProgramCatalog_PresetIsData(t *testing.T) {
 	})
 
 	t.Run("S37_actual_embedded_catalog_lists_added_data_file", func(t *testing.T) {
-		t.Fatal("BLOCKED: no production preset embedding/catalog load path exists beyond CatalogFromFS RED stub — required by FR-001/S-37/S-93; MapFS parsing alone does not prove that an added example.json ships and lists through GET /programs")
+		// Build the real Presets embed with precisely one added JSON input.
+		// No environment-gated omission and no MapFS surrogate.
+		var probe struct { // test-build output, not a gateway wire format
+			Entries    []ProgramEntry
+			Connection Connection
+		}
+		require.NoError(t, json.Unmarshal(presetbuild.Probe(t), &probe))
+		require.Len(t, probe.Entries, 3, "GitHub, Fly and the added Example are actually embedded")
+		require.Equal(t, "GitHub", findEntry(t, probe.Entries, "github").DisplayName)
+		require.Equal(t, "Fly", findEntry(t, probe.Entries, "fly").DisplayName)
+		ex := findEntry(t, probe.Entries, "example")
+		require.Equal(t, "preset", ex.Kind)
+		require.Equal(t, "Example", ex.DisplayName)
+		require.Equal(t, []string{"exampletool"}, ex.ProgramWords)
+		require.Equal(t, []string{"EXAMPLE_TOKEN"}, ex.TokenVariables)
+		require.Equal(t, []string{"api.example.invalid"}, ex.NetworkSites)
+		require.NotNil(t, ex.IdentityCheck)
+		require.Equal(t, "exampletool", ex.IdentityCheck.ProgramWord)
+		require.Equal(t, []string{"whoami"}, ex.IdentityCheck.Args)
+		require.Equal(t, "connected", probe.Connection.State)
+		require.Equal(t, "ex-user", probe.Connection.AccountLabel)
+		require.Equal(t, int64(1), probe.Connection.Generation)
 	})
 
 	t.Run("S38_presets_carry_the_read_only_kind", func(t *testing.T) {
