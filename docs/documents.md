@@ -239,12 +239,18 @@ a copy yourself.
     reason is `that folder cannot be mounted: it is, contains or lies inside the <component> program folder (<folder>), and agents can never get write access there. Mount a folder that does not include it.`
     The folder picker greys the folder with
     `Contains or lies inside a document preview program folder — agents can never write there.`
+    When an agent asks with `request_mount`, no approval card appears, so
+    neither **Add folder** nor **Always Allow** is offered: the agent gets
+    this reason as the tool's result straight away.
   - **A new or changed entry** in `tools.allow_write_paths` or
     `sandbox.allowed_paths`, on a settings save or a reload. Nothing is written
     and the current settings stay in force. The text is
     `config error: <field> entry "<entry>" would give agents write access to the <component> program folder <folder>; agents can never get write access there.`
     An entry Omnipus cannot reduce to a folder is refused too:
     `config error: <field> entry "<entry>": Omnipus cannot tell which folders it covers, so it may include a document preview program folder; write it as ^/<folder>(?:/\|$).`
+    In Settings, a refused path does not stay in the sandbox's path list: the
+    list shows the saved paths again, and the refused path goes back into the
+    input box with the reason under it, so you can correct it.
 - Access that was already there is not refused: settings in force when Omnipus
   started, entries a reload leaves unchanged, and a mount or a remembered chat
   approval made before the folder became a program folder. Omnipus checks for
