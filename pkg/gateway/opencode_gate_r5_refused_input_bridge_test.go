@@ -19,12 +19,20 @@ import (
 // team-lead's follow-up. Missing fields cannot create a false pass: the old
 // uncorrelated ErrorFrame must fail the non-terminal wire assertions below.
 func TestOpenCodeR5_RefusedInputBridgeNeverSendsTurnEndingErrorToSecondView(t *testing.T) {
-	h := makeMinimalHandler()
-	first, firstFrames := makeForwarderTestConn(16)
+	// The integrated bridge now resolves correlation from the actual archive.
+	// Seed a real saved human row with no client id, not a nil store or a
+	// made-up absent entry. No task classifier is invoked in this bridge unit.
+	f := opencodeR4GatewayFixture(t, "opencode")
+	h, sid, firstFrames := f.handler, f.sid, f.conn.sendCh
+	const entryID = "r5-actual-refused-human-row"
+	require.NoError(t, h.agentLoop.ResolveSessionStore(sid).AppendTranscriptStrict(sid, session.TranscriptEntry{
+		ID: entryID, Role: "user", Content: "Input without a client id", Timestamp: time.Now().UTC(),
+	}))
+	clientID, found := h.clientMessageIDLookup(sid, entryID)
+	require.True(t, found, "instrument: saved human row is really present")
+	require.Empty(t, clientID, "instrument: the original client id is truly unavailable")
 	second, secondFrames := makeForwarderTestConn(16)
 	parent, parentFrames := makeForwarderTestConn(16)
-	sid := "r5-finishing-helper"
-	bindTestConnToSession(h, "r5-finishing-view-a", sid, first)
 	bindTestConnToSession(h, "r5-finishing-view-b", sid, second)
 	bindTestConnToSession(h, "r5-parent-view", "r5-parent", parent)
 	// W14 catalogue oracle is authorized by team-lead's prior ruling. Keep
@@ -42,7 +50,7 @@ func TestOpenCodeR5_RefusedInputBridgeNeverSendsTurnEndingErrorToSecondView(t *t
 	}
 	if entry := value.FieldByName("RefusedInputEntryID"); entry.IsValid() {
 		require.Equal(t, reflect.String, entry.Kind())
-		entry.SetString("r5-actual-refused-human-row")
+		entry.SetString(entryID)
 	}
 	h.hubSyncTap(agent.Event{Kind: agent.EventKindError,
 		Meta: agent.EventMeta{SessionKey: sid}, Payload: payload})
@@ -69,16 +77,10 @@ func TestOpenCodeR5_RefusedInputBridgeNeverSendsTurnEndingErrorToSecondView(t *t
 		// No original client id is available here. A turn-ending error with
 		// only a session tag is the exact SFH-R5-2 regression, not a notice.
 		assert.Nil(t, frame.ClientMessageId, "do not fabricate original client correlation")
-		flag := reflect.ValueOf(frame).FieldByName("RefusedInput")
-		if !flag.IsValid() {
-			t.Fatalf("SFH-R5-2: actual second-view frame is an uncorrelated turn-ending error, not a supported non-terminal carrier: %s", secondRaw)
-		}
-		if flag.Kind() == reflect.Pointer {
-			require.False(t, flag.IsNil())
-			flag = flag.Elem()
-		}
-		require.Equal(t, reflect.Bool, flag.Kind())
-		assert.True(t, flag.Bool(), "SFH-R5-2: generated wire discriminator must preserve input-refusal semantics")
+		// The generated contract has no wire-level refused-input flag. A
+		// session-only ErrorFrame is terminal in the actual reducer; an
+		// internal ErrorPayload.RefusedInput flag cannot change that.
+		t.Fatalf("SFH-R5-2: actual second-view frame is an uncorrelated turn-ending error, not a supported non-terminal carrier: %s", secondRaw)
 	default:
 		t.Fatalf("SFH-R5-2: unsupported refused-input carrier %q", envelope.Type)
 	}
@@ -97,6 +99,11 @@ func TestOpenCodeR5_RefusedHelperInputReconcilesOriginalRowExactlyOnce(t *testin
 	gotClient, found := f.handler.clientMessageIDLookup(f.sid, entryID)
 	require.True(t, found, "instrument: the real archived human row is readable")
 	require.Equal(t, clientID, gotClient)
+	// Represent the other half of an admitted web send: intake remembers its
+	// received state as well as saving its row. The echo is unused by this
+	// bridge unit; no writer/lookup/state method is mocked.
+	f.handler.rememberAcceptedMessage(f.sid, clientID, nil)
+	require.Equal(t, "received", f.handler.acceptedMessageState(f.sid, clientID), "instrument: the sender row starts received, not already failed")
 	before := qa2ReopenHelperTranscript(t, store, f.sid)
 	second, secondFrames := makeForwarderTestConn(16)
 	bindTestConnToSession(f.handler, "r5-correlated-second-view", f.sid, second)
@@ -128,7 +135,7 @@ func TestOpenCodeR5_RefusedHelperInputReconcilesOriginalRowExactlyOnce(t *testin
 		assert.Equal(t, text, original.Message)
 		require.NotNil(t, original.Payload)
 		require.NotNil(t, original.Payload.LlmError)
-		assert.Equal(t, code, string(original.Payload.LlmError.Code))
+		assert.Equal(t, code, original.Payload.LlmError.Code)
 		var tick generated.MessageStatusFrame
 		require.NoError(t, json.Unmarshal(<-frames, &tick))
 		assert.Equal(t, "message_status", tick.Type)

@@ -33,7 +33,7 @@ func TestOpenCodeR5_TaskChatPredicateExcludesHelperNativeAndNonTask(t *testing.T
 			f.record, err = f.handler.agentLoop.GetSessionLifecycleStore().Load(f.sid)
 			require.NoError(t, err)
 			hcm := &wsHandlerHandleChatMessage{h: f.handler, wc: f.conn, frameSessionID: f.sid, clientMessageID: opencodeR5Client}
-			assert.False(t, hcm.refuseExternalTaskRunChat(opencodeR4GWWorker), "gap 1: Q13 B task-chat refusal must not capture %s", kind)
+			assert.Nil(t, hcm.classifyExternalTaskRunChat(opencodeR4GWWorker), "gap 1: Q13 B task-chat refusal must not capture %s", kind)
 			visible, _ := opencodeR5Visible(t, f)
 			assert.Empty(t, visible, "gap 1: leave non-task refusal/delivery to its existing path")
 			assert.Equal(t, before, qa2ReopenHelperTranscript(t, store, f.sid), "gap 1: classifier non-applicability has no write")
