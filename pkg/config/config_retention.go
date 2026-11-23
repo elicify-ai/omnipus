@@ -18,8 +18,8 @@ type OmnipusRetentionConfig struct {
 	// ArchiveBeforeDelete compresses old partitions to .jsonl.gz before deletion.
 	ArchiveBeforeDelete bool `json:"archive_before_delete,omitempty"`
 	// MemoryRetrosDays is how many days of retrospective files to keep per
-	// agent. 0 = use default (30 days). Used by MemoryStore.SweepRetros.
-	// Spec v7 FR-034.
+	// agent. 0 = use default (180 days, see RetentionMemoryRetrosDays). Used
+	// by MemoryStore.SweepRetros. Spec v7 FR-034.
 	MemoryRetrosDays int `json:"memory_retros_days,omitempty"`
 	// MemoryRetrosForever keeps every retrospective: the nightly memory sweep
 	// deletes none, while the chat-history sweep still applies SessionDays
