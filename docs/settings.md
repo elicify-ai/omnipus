@@ -195,6 +195,8 @@ Each worker's **Runtime** tab shows the saved program and parameters read-only, 
 
 **Who may use the token.** A program's token is offered only to agents that have the program switched on (see [agents](agents.md#programs)), and only for work that a person started in the web chat or through a connection where programs are allowed (see [connectors](connectors.md#programs-on-a-connection)). The web-chat setting on this tab is that switch for work started in the web chat (`web_chat_allowed`).
 
+**Audit log.** Each of these actions writes one entry to the audit log, and no entry ever holds a token: connecting, replacing, checking again and disconnecting a program; a check that a newer save or check replaced before it finished (recorded as `superseded`); switching programs on or off for an agent; changing a connection's or the web chat's program setting; creating, editing or deleting your own entry; and a program card refused because it was not submitted from a signed-in browser session.
+
 ## Goal timers
 
 The goal timer controls live in **Settings → Performance**, beside the goal completion budget. They govern when the existing keeper can start another work turn, not how long that turn may run.
