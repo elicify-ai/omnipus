@@ -922,6 +922,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	// FR-041 / S-77: a task a person creates on the Board is work with no
+	// starting message: its origin is independent.
+	t.Provenance = []string{string(bus.OriginIndependent)}
 	if err := a.taskStore.Create(t); err != nil {
 		if isTaskValidationErr(err) {
 			jsonTaskValidationErr(w, err)

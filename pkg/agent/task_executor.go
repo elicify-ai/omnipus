@@ -398,10 +398,11 @@ func (te *TaskExecutor) mintTaskLifecycleRecordFor(sessionID string, t *task.Tas
 	}
 	rec := &session.LifecycleRecord{
 		SessionID: sessionID,
-		// FR-050 row 3: a task session is lineage. The task record stores no
-		// provenance yet, so its runs are unresolved (fail closed, I-2).
+		// FR-050 row 3: a task session is lineage, stamped from its work
+		// record: the task's stored provenance (FR-041, S-77). A task with
+		// none stays unresolved (fail closed, I-2).
 		ProvenanceMode: session.ProvenanceModeLineage,
-		Provenance:     nil,
+		Provenance:     append([]string(nil), t.Provenance...),
 		// Generation starts at 1 (LifecycleRecord.Generation's own doc
 		// comment, and what every other minter writes —
 		// steer_launcher.go's launchDirect and launchSteered both use 1).
@@ -1377,6 +1378,7 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 		WorkspaceID: t.WorkspaceID,
 		Owner:       t.Owner,
 		Initiator:   initiatedBy,
+		Provenance:  t.Provenance,
 	})
 	if err != nil {
 		return "", te.failTaskBeforeDispatch(t.ID, te.mapLaunchRefusal(t, "", "launch", err))
@@ -2114,6 +2116,10 @@ func (al *AgentLoop) processTaskDirect(
 		// leaving it unset here (while the external-CLI sibling below sets it)
 		// was the gap.
 		WorkspaceID: tools.ToolWorkspaceID(taskCtx),
+		// FR-041 / S-77: the task's instruction was written by whoever
+		// created or last changed the task; its origin is the run's stored
+		// lineage, never an unresolved input.
+		InputOrigin: al.sessionInstructionOrigin(taskChatID),
 	})
 	// A Stop accepted while the run had no turn in flight is met by the next
 	// turn's admission as a cancelled dispatch. For a run that owns an

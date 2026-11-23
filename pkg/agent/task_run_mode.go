@@ -167,6 +167,7 @@ func (te *TaskExecutor) launchMainTaskRun(ctx context.Context, t *task.Task, occ
 		Origin:            steer.Origin{Kind: steer.OriginKindTask, CallID: t.OriginCallID, TaskID: t.ID},
 		PlanID:            t.PlanID,
 		Initiator:         initiatedBy,
+		Provenance:        t.Provenance,
 	})
 	if err != nil {
 		return "", te.mapLaunchRefusal(t, mainID, "launch", err)

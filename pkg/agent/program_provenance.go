@@ -162,3 +162,19 @@ func launchInputOrigin(rec *session.LifecycleRecord) inputOrigin {
 	}
 	return inputOrigin{provenance: storedProvenance(rec.Provenance)}
 }
+
+// sessionInstructionOrigin is launchInputOrigin for a session known by id: the
+// stored lineage of a lineage session (a task run, S-77), otherwise
+// unresolved. A session with no lifecycle record (a plan supervision turn, a
+// board turn) has no stored instruction origin and stays unresolved.
+func (al *AgentLoop) sessionInstructionOrigin(sessionID string) inputOrigin {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil || sessionID == "" {
+		return inputOrigin{}
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return inputOrigin{}
+	}
+	return launchInputOrigin(rec)
+}

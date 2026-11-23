@@ -35,6 +35,11 @@ type LaunchRequest struct {
 	// PlanID gives an ordinary-root task launch durable plan ownership.
 	// Empty means OwnerScopeHuman.
 	PlanID string
+	// Provenance is, for a task-origin launch, the task record's stored
+	// origins (connected-programs I-2, FR-041, S-77): the run's lineage is
+	// stamped from its work record, not from whoever pressed start. Nil is
+	// unresolved (fail closed). Ignored for every other origin kind.
+	Provenance []string
 	// Goal is optional — criteria plus a Definition of Done, in the same
 	// shape create_task validates (pkg/tools/task.go::validateRequest).
 	// Nil means no goal (founder decision, round 3).

@@ -15,6 +15,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
@@ -1441,6 +1442,8 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	// CreatedByAgentID. The parent link is refused for the same reason.
 	if !foreign {
 		tc.entity.OriginSessionID = strings.TrimSpace(ToolTranscriptSessionID(tc.ctx))
+		// FR-041 / S-77: the task carries the creating turn's provenance.
+		tc.entity.Provenance = provenanceStrings(ToolTurnProvenance(tc.ctx))
 		tc.entity.OriginCallID = strings.TrimSpace(ToolCallID(tc.ctx))
 		if tc.t.initiatorFn != nil {
 			tc.entity.Initiator = tc.t.initiatorFn(tc.ctx)
@@ -2331,6 +2334,12 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	// GOAL-FR-029/FR-030: the criteria/dod change lands on the task record
 	// (dual-write) and then on the paired goal record — creating one if this
 	// is a legacy task's first-ever criteria/dod (see SyncTaskGoalRecord).
+	if tu.patch.Prompt != nil || tu.patch.Description != nil || tu.patch.Title != nil {
+		// FR-041: an agent change to the task's instructions joins its
+		// turn's provenance in the same write.
+		joined := provenanceStrings(ToolTurnProvenance(tu.ctx))
+		tu.patch.JoinProvenance = &joined
+	}
 	req := TaskWriteRequest{Patch: tu.patch, Prior: tu.triggerSent, Provenance: ToolTurnProvenance(tu.ctx)}
 	if tu.triggerSent {
 		// r17 TK-30: every update that carries a trigger reconciles the live
@@ -2588,4 +2597,18 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// delete and a failure returned above, so reaching here means both the
 	// goal record and the task are gone.
 	return NewToolResult(fmt.Sprintf(`{"deleted":%q}`, taskID))
+}
+
+// provenanceStrings is the stored form of a provenance (its origin strings;
+// nil when unresolved).
+func provenanceStrings(p bus.Provenance) []string {
+	origins := p.Origins()
+	if len(origins) == 0 {
+		return nil
+	}
+	out := make([]string, len(origins))
+	for i, o := range origins {
+		out[i] = string(o)
+	}
+	return out
 }

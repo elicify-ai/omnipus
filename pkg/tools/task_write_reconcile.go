@@ -65,9 +65,9 @@ type TaskWriteRequest struct {
 	ReconcileSchedule ScheduleReconciler
 	// Provenance is the writer's provenance (I-2): the agent turn's for a
 	// tool write; unresolved for a person's UI write, which must leave the
-	// task's stored provenance unchanged (R3-C1). The task record does not
-	// store provenance yet, so this write does not join it; task runs are
-	// unresolved (fail closed) until it does.
+	// task's stored provenance unchanged (R3-C1). The join itself travels in
+	// Patch.JoinProvenance, set by the agent tool when it changes the task's
+	// instructions, so it lands in the same store write.
 	Provenance bus.Provenance
 }
 
