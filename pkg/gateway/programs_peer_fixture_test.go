@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,7 @@ type programsPeerFixture struct {
 	provider             *programsPeerProvider
 	home, work, dev, ops string
 	events               agent.EventSubscription
+	shutdown             func() // Idempotent cancel/join/close for an actual runtime restart.
 }
 
 func newProgramsPeerFixture(t *testing.T) *programsPeerFixture {
@@ -93,7 +95,7 @@ func newProgramsPeerFixture(t *testing.T) *programsPeerFixture {
 		cfg.Agents.List[i].Tools.Builtin.Policies["bash"] = config.ToolPolicyAllow
 	}
 	cfg.Programs.WebChatAllowed = true
-	cfg.Channels = map[string]config.ChannelInstanceConfig{"telegram": {Type: "telegram", WorkspaceID: "sales", ProgramsAllowed: false}}
+	cfg.Channels = map[string]config.ChannelInstanceConfig{"telegram": {Type: "telegram", WorkspaceID: "sales", Identity: &config.ChannelIdentity{Kind: "agent", ID: "dev"}, ProgramsAllowed: false}}
 	require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{ID: "sales", Name: "Sales", Status: "active", CoreTeam: []string{"dev", "ops"}}))
 	p := &programsPeerProvider{wu5GatewayProvider: newWU5GatewayProvider(), origins: map[string][]bus.Provenance{}}
 	b := bus.NewMessageBus()
@@ -127,16 +129,23 @@ func newProgramsPeerFixture(t *testing.T) *programsPeerFixture {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- al.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-done:
-			require.NoError(t, err)
-		case <-time.After(10 * time.Second):
-			t.Error("real peer fixture's running loop did not stop")
-		}
-		al.UnsubscribeEvents(f.events.ID)
-	})
+	var shutdown sync.Once
+	f.shutdown = func() {
+		shutdown.Do(func() {
+			cancel()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("real peer fixture's running loop did not stop")
+			}
+			al.UnsubscribeEvents(f.events.ID)
+			al.Close()
+			store.Close()
+			b.Close()
+		})
+	}
+	t.Cleanup(f.shutdown)
 	return f
 }
 

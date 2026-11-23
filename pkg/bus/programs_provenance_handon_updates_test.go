@@ -80,13 +80,13 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 }
 
 func TestProgramProvenance_Updates(t *testing.T) {
-	t.Run("S107_telegram_edits_a_web_created_task", func(t *testing.T) {
-		// GREEN asserts here (spec S-107): the prompt edit joins telegram
-		// into the task's stored provenance in the SAME reconciled write; the
-		// run outputs 0 with the telegram notice; the same after a restart
-		// between the edit and the run.
-		t.Fatalf("BLOCKED: %s — required by S-107's same-write join", s1HandOnSeam)
-	})
+	// S107_telegram_edits_a_web_created_task migrated intact to
+	// pkg/gateway::TestProgramProvenance_ActualTaskPromptEdit: real web
+	// create_task, actual Telegram update_task, exact prompt/origin snapshot
+	// inside the real persist hook BEFORE reconciliation, actual Board run,
+	// count0 and full Telegram notice. Repeated with fresh gateway-domain
+	// loop/bus/stores/credential/launcher reconstruction, not just Store reopen.
+	// OS re-exec, HTTP startup and UAT are outside this integration boundary.
 
 	// S108 migrated intact to pkg/agent::TestProgramProvenance_ActualBackgroundHandoff:
 	// actual Telegram-input child -> real notifier inbound -> real continuation
