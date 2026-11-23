@@ -79,7 +79,7 @@ func officeReviewClassificationChild(mode string) int {
 	}
 }
 
-func officeReviewClassifiedProcess(t *testing.T, mode string) (*launcher.Process, error, *exec.ExitError) {
+func officeReviewClassifiedProcess(t *testing.T, mode string) (*launcher.Process, *exec.ExitError, error) {
 	t.Helper()
 	dir := t.TempDir()
 	self, err := os.Executable()
@@ -119,7 +119,7 @@ func officeReviewClassifiedProcess(t *testing.T, mode string) (*launcher.Process
 	require.ErrorAs(t, waitErr, &exitErr)
 	require.NotNil(t, exitErr.ProcessState)
 	t.Logf("mode=%s signalled=%t user=%s system=%s cause=%s read=%v", mode, !exitErr.Exited(), exitErr.UserTime(), exitErr.SystemTime(), proc.KillCause(), readErr)
-	return proc, readErr, exitErr
+	return proc, exitErr, readErr
 }
 
 func TestOfficePreview_CPUClassificationPreservesConcreteProtocolFailures(t *testing.T) {
@@ -134,7 +134,7 @@ func TestOfficePreview_CPUClassificationPreservesConcreteProtocolFailures(t *tes
 		{"ordinary-exit", "PDF renderer failed (protocol)"},
 	} {
 		t.Run(row.mode, func(t *testing.T) {
-			proc, readErr, exitErr := officeReviewClassifiedProcess(t, row.mode)
+			proc, exitErr, readErr := officeReviewClassifiedProcess(t, row.mode)
 			used := exitErr.UserTime() + exitErr.SystemTime()
 			require.True(t, protocol.IsProtocolError(readErr), "instrument: the actual protocol reader must reject this response")
 			if row.mode == "ordinary-exit" {
@@ -172,7 +172,7 @@ func TestOfficePreview_CPUClassificationPreservesConcreteProtocolFailures(t *tes
 // unit test, NOT a claim that each synthetic duration was spent on CPU.
 // The real full-budget/near-budget processes are tested separately above.
 func TestOfficePreview_CPUAccountingBoundaryInputs(t *testing.T) {
-	_, _, signalled := officeReviewClassifiedProcess(t, "early-signal")
+	_, signalled, _ := officeReviewClassifiedProcess(t, "early-signal")
 	require.False(t, signalled.Exited())
 	usage, ok := signalled.SysUsage().(*syscall.Rusage)
 	require.True(t, ok, "instrument: public Unix usage record is required; never edit launcher internals")
@@ -202,7 +202,7 @@ func TestOfficePreview_CPUAccountingBoundaryInputs(t *testing.T) {
 			require.Equal(t, row.want, cpuLimitKilled(fmt.Errorf("wait wrapper: %w", signalled)))
 		})
 	}
-	_, _, ordinary := officeReviewClassifiedProcess(t, "ordinary-exit")
+	_, ordinary, _ := officeReviewClassifiedProcess(t, "ordinary-exit")
 	require.True(t, ordinary.Exited())
 	ordinaryUsage, ok := ordinary.SysUsage().(*syscall.Rusage)
 	require.True(t, ok)
