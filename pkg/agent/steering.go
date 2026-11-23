@@ -757,8 +757,14 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 		// publishable text. A lifecycle read fault carries store paths: it stays an
 		// ordinary wrapped error (cause preserved for logs and errors.Is) and is
 		// never given the publishable-text capability (NEW-8).
+		// #1857 B16a: the refusal is typed delegation_not_resumable with the
+		// helper's CLI fact, keeps the sentinel's identity, and keeps the
+		// authored sentence the delegate tool shows the calling agent.
 		if errors.Is(availErr, errExternalResumeUnavailable) {
-			return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, errExternalResumeUnavailable.Error())}
+			return false, newResumeUnavailableRefusal(al.executorCLIOf(rec.AgentID), &reviveRefusalError{
+				text:  fmt.Sprintf("steer: revive %q: %s", sessionID, errExternalResumeUnavailable.Error()),
+				cause: availErr,
+			})
 		}
 		return false, fmt.Errorf("steer: revive %q: %w", sessionID, availErr)
 	}

@@ -219,6 +219,9 @@ const (
 	// collision with an MCP tool among the pair (W20); the code's own
 	// sentence (W21) is the no-MCP, fail-closed class.
 	toolDedupVariantMCP = "mcp"
+	// delegationVariantNoCLI is delegation_not_resumable's no-fact sentence
+	// (W14's form without the CLI clause), used when no display name is known.
+	delegationVariantNoCLI = "no_cli"
 )
 
 // cliModelUnavailableTypes are the structured error types a CLI reports when
@@ -451,6 +454,51 @@ func newExternalCLIRefusal(code LLMErrorCode, variant, cli string, cause error) 
 	text, neutral := renderMessageVoices(code, catalogueSentence(code, variant),
 		neutralCatalogueSentence(code, variant), messageSlotFacts{cli: CLIDisplayName(cli)})
 	return &externalCLIRefusalError{code: code, text: text, neutral: neutral, cause: cause}
+}
+
+// newResumeUnavailableRefusal types errExternalResumeUnavailable (§13.8.5
+// B16a) as delegation_not_resumable, W14 form 1, with {cli} filled from the
+// closed display-name map. A CLI without a display name selects the no-fact
+// variant explicitly: the slotted sentence with no fact would fall back to the
+// generic "can't tell why" sentence, which is untrue here. cause keeps its
+// identity (errors.Is) and its text (Error()).
+func newResumeUnavailableRefusal(cli string, cause error) *externalCLIRefusalError {
+	variant := ""
+	if CLIDisplayName(cli) == "" {
+		variant = delegationVariantNoCLI
+	}
+	return newExternalCLIRefusal(CodeDelegationNotResumable, variant, cli, cause)
+}
+
+// reviveRefusalError is a revival refusal whose sentence Omnipus authored for
+// the calling agent (pkg/tools.refusalTexter shows it as written) and whose
+// cause keeps its identity for errors.Is — which curatedTurnError, having no
+// Unwrap, cannot do.
+type reviveRefusalError struct {
+	text  string
+	cause error
+}
+
+func (e *reviveRefusalError) Error() string       { return e.text }
+func (e *reviveRefusalError) RefusalText() string { return e.text }
+func (e *reviveRefusalError) Unwrap() error       { return e.cause }
+
+// executorCLIOf is agentID's configured external-CLI key, or "" when the
+// agent is unknown or has no external executor. It is a fact for the {cli}
+// slot only: CLIDisplayName maps it, and an unmapped key never reaches a
+// person.
+func (al *AgentLoop) executorCLIOf(agentID string) string {
+	if al == nil || al.GetRegistry() == nil {
+		return ""
+	}
+	a, ok := al.GetRegistry().GetAgent(strings.TrimSpace(agentID))
+	if !ok {
+		return ""
+	}
+	if executor := executorConfigOf(a); executor != nil {
+		return executor.CLI
+	}
+	return ""
 }
 
 // classifyDriverStartError types a driver Run (start) failure: an unusable

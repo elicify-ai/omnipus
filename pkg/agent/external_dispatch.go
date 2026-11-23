@@ -189,6 +189,20 @@ func (ed *runExternalCLISubTurnState) reportWorkspaceRefusal(wsErr error) error 
 	return fmt.Errorf("external-cli dispatch: %w", wsErr)
 }
 
+// resumeUnavailableResult is the dispatch's B16a refusal (§13.8.5):
+// delegation_not_resumable for every surface. The returned error carries the
+// chat form for the helper's own view (finishExternalLiveView announces and
+// saves it); the result carries the code and the neutral form for the parent,
+// a surface outside the chat, as a classified run failure does. Both keep
+// errExternalResumeUnavailable's identity.
+func resumeUnavailableResult(cli string, cause error) (*tools.ToolResult, error) {
+	refusal := newResumeUnavailableRefusal(cli, cause)
+	return &tools.ToolResult{
+		Err:    refusal,
+		ForLLM: "(" + string(refusal.code) + ") " + refusal.neutral,
+	}, refusal
+}
+
 func runExternalCLISubTurn(
 	ctx context.Context,
 	al *AgentLoop,
@@ -208,6 +222,19 @@ func runExternalCLISubTurn(
 	if cli == "" {
 		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, cliVariantNoProgram, "",
 			fmt.Errorf("external-cli dispatch: executor.cli is empty (set claude-code, codex, or opencode)"))
+	}
+
+	// #1857 B16a first: a later entry whose CLI conversation is gone can never
+	// continue, whatever its program or workspace (externalResumeMissing).
+	// NEW-3: an unreadable session record refuses before any driver exists;
+	// it must never fall through to a fresh, unmarked run.
+	sessionKey := externalRunSessionKey(ed.childTS)
+	resumeOnly, resumeOnlyErr := al.externalRunResumeOnly(sessionKey)
+	if resumeOnlyErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", resumeOnlyErr)
+	}
+	if al.externalResumeMissing(sessionKey, ed.childTS, resumeOnly) {
+		return resumeUnavailableResult(cli, fmt.Errorf("external-cli dispatch: %w", errExternalResumeUnavailable))
 	}
 
 	ed.runID = ed.childTS.turnID
@@ -352,17 +379,14 @@ func runExternalCLISubTurn(
 	//    fake/stub driver. cancel is the run's own cancel func, retained on the
 	//    holder so a steer delivery interrupts THIS run (N2). resumeOnly is true
 	//    for a steered (non-task) session, whose every post-launch entry must
-	//    resume-or-refuse.
-	sessionKey := externalRunSessionKey(ed.childTS)
-	resumeOnly, resumeOnlyErr := al.externalRunResumeOnly(sessionKey)
-	if resumeOnlyErr != nil {
-		// NEW-3: an unreadable session record refuses before any driver exists;
-		// it must never fall through to a fresh, unmarked run.
-		return nil, fmt.Errorf("external-cli dispatch: %w", resumeOnlyErr)
-	}
+	//    resume-or-refuse (read at the top, with the B16a check).
 	sess, resume, beginErr := al.beginExternalRun(sessionKey, ed.childTS, cancel, resumeOnly)
 	if beginErr != nil {
-		return nil, fmt.Errorf("external-cli dispatch: %w", beginErr)
+		wrapped := fmt.Errorf("external-cli dispatch: %w", beginErr)
+		if errors.Is(beginErr, errExternalResumeUnavailable) {
+			return resumeUnavailableResult(cli, wrapped)
+		}
+		return nil, wrapped
 	}
 	defer al.finishExternalRun(sess, sessionKey)
 
@@ -424,8 +448,7 @@ func runExternalCLISubTurn(
 	if driverErr != nil {
 		wrapped := fmt.Errorf("external-cli dispatch: %w", driverErr)
 		if errors.Is(driverErr, errExternalResumeUnavailable) {
-			// B16a (resume unavailable) is a separate class, not this round.
-			return nil, wrapped
+			return resumeUnavailableResult(cli, wrapped)
 		}
 		// #1857 B16-config: the driver could not be built (selected by error
 		// identity, not call site — §13.8.5).
