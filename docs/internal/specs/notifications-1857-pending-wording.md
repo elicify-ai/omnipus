@@ -74,8 +74,8 @@ has no `{cli}` slot. One case still falls back to the generic sentence:
 - **W14 form 1 is wired (OpenCode fixes, 2026-11-23).** `delegation_not_resumable` carries the
   resume-unavailable chat and neutral sentences and the no-fact chat form (variant `no_cli`). Its
   neutral no-fact form (`neutral_variants.no_cli`, "This delegation could not continue: its previous
-  conversation can't be resumed. Start a new delegation.") is a developer derivation applying W14's
-  clause drop to the neutral sentence; it is not yet approved wording. W14 form 2 (workspace changed,
+  conversation can't be resumed. Start a new delegation.") applies W14's clause drop to the neutral
+  sentence and is approved (Prometheus, 2026-11-23). W14 form 2 (workspace changed,
   B16b) is not wired.
 
 ## Known limits (chief, 2026-11-18; not lost, revisited after the founder's W answer)

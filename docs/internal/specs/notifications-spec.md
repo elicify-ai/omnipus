@@ -1262,7 +1262,7 @@ Neutral twins (R-WD-8) — every row's form for the surfaces outside a chat (`ta
 | W11 | `This agent reached its limit of model requests for this hour. It can continue in {minutes} minutes, or the limit can be raised in Settings.` |
 | W12 | `{provider} ({host}) answered with an error. Fix: retry in a moment; if it repeats, switch model.` (already neutral) |
 | W13 | limit: `The model {cli} uses is limiting requests right now. Try the task again in a moment.` · out of credit: `{cli}'s model provider account is out of credit. Top up that account to run tasks with {cli}.` (already neutral) |
-| W14 | resume unavailable: `This delegation could not continue in {cli}: its previous conversation can't be resumed. Start a new delegation.` · workspace changed: `This delegation could not continue in {cli}: its workspace changed since it started. Start a new delegation.` |
+| W14 | resume unavailable: `This delegation could not continue in {cli}: its previous conversation can't be resumed. Start a new delegation.` — no-fact form (no CLI display name; approved, Prometheus, 2026-11-23): `This delegation could not continue: its previous conversation can't be resumed. Start a new delegation.` · workspace changed: `This delegation could not continue in {cli}: its workspace changed since it started. Start a new delegation.` |
 | W15 | `The reply completed but the conversation could not be saved. This exchange may be missing from the history; check the delivered result before repeating any part of the task.` |
 | W16 | `Part of this conversation could not be recorded while the work continued. The work continues; recent messages may be missing after you reopen the chat.` |
 
