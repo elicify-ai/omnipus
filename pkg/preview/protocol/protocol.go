@@ -243,6 +243,12 @@ type Response struct {
 // the program; nothing the peer sent after the violation is used.
 type ProtocolError struct {
 	Reason string
+	// Ended marks a stream that stopped or broke before the response was
+	// complete: end of output, a short frame header or payload, or a read
+	// error. A program killed while it writes (a resource limit) ends its
+	// stream this way, so the caller may attribute such an error to that
+	// kill. Every other violation is something the peer positively sent.
+	Ended bool
 }
 
 func (e *ProtocolError) Error() string { return "protocol error: " + e.Reason }
@@ -251,10 +257,23 @@ func violation(format string, args ...any) error {
 	return &ProtocolError{Reason: fmt.Sprintf(format, args...)}
 }
 
+// streamEnded is a violation with Ended set.
+func streamEnded(format string, args ...any) error {
+	return &ProtocolError{Reason: fmt.Sprintf(format, args...), Ended: true}
+}
+
 // IsProtocolError reports whether err is a protocol violation.
 func IsProtocolError(err error) bool {
 	var pe *ProtocolError
 	return errors.As(err, &pe)
+}
+
+// IsMalformedOutput reports whether err is a violation the peer positively
+// sent (a bad frame, META, page, text or size), as opposed to a stream that
+// merely ended early. A killed program cannot produce one.
+func IsMalformedOutput(err error) bool {
+	var pe *ProtocolError
+	return errors.As(err, &pe) && !pe.Ended
 }
 
 // PageSink receives each rendered page as soon as it has been validated, so
@@ -377,9 +396,9 @@ func readFrame(lr *countingReader) (byte, []byte, error) {
 			return 0, nil, violation("output exceeds %d bytes", MaxStdoutBytes)
 		}
 		if errors.Is(err, io.EOF) {
-			return 0, nil, violation("stream ended before DONE")
+			return 0, nil, streamEnded("stream ended before DONE")
 		}
-		return 0, nil, violation("truncated frame header: %v", err)
+		return 0, nil, streamEnded("truncated frame header: %v", err)
 	}
 	typ := h[0]
 	length := binary.LittleEndian.Uint32(h[1:5])
@@ -398,7 +417,7 @@ func readFrame(lr *countingReader) (byte, []byte, error) {
 		if lr.over {
 			return 0, nil, violation("output exceeds %d bytes", MaxStdoutBytes)
 		}
-		return 0, nil, violation("truncated frame payload (type %d, %d bytes): %v", typ, length, err)
+		return 0, nil, streamEnded("truncated frame payload (type %d, %d bytes): %v", typ, length, err)
 	}
 	return typ, payload, nil
 }
@@ -470,7 +489,7 @@ func expectEOF(lr *countingReader) error {
 		return violation("output after the terminal frame")
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
-		return violation("reading after the terminal frame: %v", err)
+		return streamEnded("reading after the terminal frame: %v", err)
 	}
 	if err == nil {
 		// A reader may return (0, nil); one more read decides.
@@ -479,7 +498,7 @@ func expectEOF(lr *countingReader) error {
 			return violation("output after the terminal frame")
 		}
 		if err != nil && !errors.Is(err, io.EOF) {
-			return violation("reading after the terminal frame: %v", err)
+			return streamEnded("reading after the terminal frame: %v", err)
 		}
 	}
 	return nil

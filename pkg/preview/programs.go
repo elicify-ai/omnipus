@@ -180,6 +180,14 @@ func classifyProgramError(err error, proc *launcher.Process) *failure {
 	case "wall":
 		return programFailure("rendering stopped: time limit exceeded")
 	}
+	// Output the renderer positively got wrong is its fault even near the
+	// CPU limit: the parent killed it for that, and cpuLimitKilled's
+	// accounting slack must not relabel it (SFH-02). Only a stream that
+	// merely ended early is left to the CPU check, which is what a kill at
+	// the limit produces mid-write.
+	if protocol.IsMalformedOutput(err) {
+		return programFailure("PDF renderer failed (protocol)")
+	}
 	if cpuLimitKilled(proc.Wait()) {
 		return programFailure("rendering stopped: CPU time exceeded")
 	}
