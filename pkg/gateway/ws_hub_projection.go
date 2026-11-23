@@ -35,6 +35,9 @@ const (
 	hubKindToolStart
 	hubKindToolResult
 	hubKindItem // media, turn-level error: shown until the turn's done
+	// hubKindForgetItem journals the frame and removes the projection item
+	// keyed meta.key (a preview Retry result replacing its group, SFH-01).
+	hubKindForgetItem
 )
 
 // hubFrameMeta is what publish needs to know about a frame to keep the
@@ -187,6 +190,9 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 			p.moveAfterTurnProviderNotices(touched, it.turnID)
 			it.namedCopy = isNamedProviderCopy(frame)
 		}
+	case hubKindForgetItem:
+		p.forgetItem("item:" + meta.key)
+		return
 	case hubKindDone:
 		// done(T) is published only after T's final answer was persisted
 		// (persist-before-done, §4.3), and every earlier round and tool call
@@ -269,6 +275,26 @@ func (p *activeTurnProjection) forgetTurn(turnID string) {
 		keepOrder = append(keepOrder, key)
 	}
 	p.order = keepOrder
+}
+
+// forgetItem drops one item. A preview Retry result is saved (or failed to
+// save) before it is published, so the group's earlier projected frame is
+// obsolete: a snapshot must take the group from the transcript, and a group
+// outside the snapshot's history page must not come back with old state.
+func (p *activeTurnProjection) forgetItem(key string) {
+	it := p.items[key]
+	if it == nil {
+		return
+	}
+	p.bytes -= len(it.text) + len(it.start) + len(it.end)
+	delete(p.items, key)
+	kept := p.order[:0]
+	for _, k := range p.order {
+		if k != key {
+			kept = append(kept, k)
+		}
+	}
+	p.order = kept
 }
 
 func (p *activeTurnProjection) clear() {

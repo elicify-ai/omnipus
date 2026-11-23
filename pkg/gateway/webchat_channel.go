@@ -311,10 +311,12 @@ func (c *webchatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMes
 //
 // retry marks a Retry result (rest_preview_retry.go): its chat record was
 // already saved, or failed to save, before this publish, so a later
-// snapshot must show the saved record only and the frame stays out of the
-// active-turn projection (B06: a projected copy came back after the replay
-// as a second group; for an unsaved Retry it showed pages that were never
-// saved). The journal still carries it for an incremental catch-up.
+// snapshot must show the saved record only. The same publish therefore
+// removes the group's earlier projected frame, under the hub lock, and adds
+// none (B06: a projected copy came back after the replay as a second group;
+// for an unsaved Retry it showed pages that were never saved; SFH-01: an
+// obsolete unavailable group outlived a saved Retry). The journal still
+// carries the frame for an incremental catch-up.
 func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []generated.MediaPart, retry bool) error {
 	if len(parts) == 0 && (msg.Preview == nil || msg.Preview.Outcome != previewOutcomeUnavailable) {
 		return fmt.Errorf("webchat: preview group for tool call %s has no stored thumbnails and is not marked unavailable", msg.ToolCallID)
@@ -338,7 +340,7 @@ func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []
 	}
 	meta := hubFrameMeta{kind: hubKindItem, key: previewItemKey(id)}
 	if retry {
-		meta = hubFrameMeta{kind: hubKindOther}
+		meta.kind = hubKindForgetItem
 	}
 	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), meta, frame)
 	return nil
