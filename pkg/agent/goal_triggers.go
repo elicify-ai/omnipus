@@ -1974,9 +1974,9 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUpReserved(sessionID, goalID, source
 		SourceKind:          sourceKind,
 		SenderCanonicalID:   goalLoopFollowUpSenderID,
 		Content:             content,
-		// A goal wake adds no origin: the session's stored lineage, or
-		// unresolved for a root (the goal record stores none yet, I-2).
-		Provenance: al.wakeProvenance(sessionID),
+		// I-2 / S-109: a goal wake carries the goal's recorded origin,
+		// joined with the session's stored lineage.
+		Provenance: al.goalWakeProvenance(sessionID, goalID),
 		Metadata:   metadata,
 	}); err != nil {
 		logger.WarnCF("agent", "goal: follow-up turn dispatch failed",
@@ -2246,9 +2246,9 @@ func (al *AgentLoop) dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, 
 		SourceKind:          sourceKind,
 		SenderCanonicalID:   goalLoopFollowUpSenderID,
 		Content:             content,
-		// A goal wake adds no origin: the session's stored lineage, or
-		// unresolved for a root (the goal record stores none yet, I-2).
-		Provenance: al.wakeProvenance(sessionID),
+		// I-2 / S-109: a goal wake carries the goal's recorded origin,
+		// joined with the session's stored lineage.
+		Provenance: al.goalWakeProvenance(sessionID, goalID),
 		Metadata: map[string]any{
 			"steer_message_id": messageID,
 			"steer_generation": rec.Generation,

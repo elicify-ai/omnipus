@@ -178,3 +178,27 @@ func (al *AgentLoop) sessionInstructionOrigin(sessionID string) inputOrigin {
 	}
 	return launchInputOrigin(rec)
 }
+
+// goalWakeProvenance is the provenance of a goal keeper's wake into sessionID
+// (I-2, FR-041, S-109): the goal's recorded origin (where its instructions
+// came from), joined with the session's stored lineage for a lineage session.
+// A goal with no recorded origin adds nothing (the session's lineage, or
+// unresolved for a root); a goal record that cannot be read leaves a root's
+// wake unresolved (fail closed).
+func (al *AgentLoop) goalWakeProvenance(sessionID, goalID string) bus.Provenance {
+	stored, lineage := al.sessionLineageProvenance(sessionID, "")
+	var recorded []string
+	if goalID != "" {
+		if g, err := resolveGoalRecordStore().Get(goalID); err == nil && g != nil {
+			recorded = g.Provenance
+		}
+	}
+	switch {
+	case lineage && len(recorded) == 0:
+		return stored
+	case lineage:
+		return bus.Join(stored, storedProvenance(recorded))
+	default:
+		return storedProvenance(recorded)
+	}
+}
