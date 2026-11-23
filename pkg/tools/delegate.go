@@ -576,7 +576,8 @@ func (t *DelegateTool) Description() string {
 		"goal — pass criteria and dod together, one without the other is refused — the helper works toward " +
 		"them and claims completion with goal_claim (a met claim requires one-line evidence), the Judge " +
 		"checks the claim, and the verdict reaches " +
-		"you with the helper's completion message; clear_goal removes the goal later. Set a goal for " +
+		"you with the helper's completion message; clear_goal removes the goal later. " +
+		"Goals (criteria and dod) are refused for a worker on an external CLI. Set a goal for " +
 		"multi-step work or work you must verify before relying on it; leave it off for a quick lookup or " +
 		"a single action. A helper never inherits your goal or criteria, and it cannot set a goal for " +
 		"itself: only criteria and dod on this call give it one. " +
