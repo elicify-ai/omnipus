@@ -116,11 +116,11 @@ func TestProgramNetwork_AutoAsk(t *testing.T) {
 		t.Fatalf("BLOCKED: %s (and the program-word matcher) — required by S-26's D-3 rows", s1EnvSeam)
 	})
 
-	t.Run("S84_shared_program_word_per_site_helper", func(t *testing.T) {
-		// GREEN asserts here (spec S-84): custom GitLab (word git) and
-		// GitHub both on for Dev → `git ls-remote https://gitlab.com/o/r`
-		// needs no approval; the managed helper for gitlab.com answers with
-		// the GitLab token and the one for github.com with the GitHub token.
-		t.Fatalf("BLOCKED: %s — required by S-84's per-site helpers", s1EnvSeam)
-	})
+	// S84_shared_program_word_per_site_helper migrated intact to
+	// pkg/agent::TestProgramNetwork_ActualSharedGitWord: actual Auto loop and
+	// child with the exact git ls-remote command, both checked saved programs,
+	// real installed git credential fill for both hosts, actual run-token
+	// proxy grants for the union, zero approval and revocation after the run.
+	// Only the external remote executable/model edges are controlled; canceled
+	// upstream probes certify policy authorization, not successful live fetches.
 }
