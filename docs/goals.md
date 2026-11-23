@@ -13,6 +13,8 @@ Goals come from two places:
 
 An agent can also start a goal itself with `set_goal`; it then appears like any goal.
 
+An agent that delegates work can give its helper a goal by passing criteria and a Definition of Done to `delegate`. This is refused when the helper runs on an external command-line tool (Claude Code, Codex or OpenCode): such a helper cannot report a claim for the Judge to check, so nothing is started. The agent can delegate again without the goal and check the answer itself, or create a task, whose runs on an external worker are judged against the task's goal.
+
 From there the two are one machine: same loop, same claim, same Judge. Only visibility differs.
 
 The working agent writes the goal record itself, as its opening move, and shows it in the chat as working assumptions. You do not approve them; if they are wrong you say so, and the agent updates the record and shows what changed. If the agent is unsure it understands you, it asks — one round of questions per goal. On the web app that is a question card; on a connector, a plain question in chat.
