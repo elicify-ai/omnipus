@@ -393,10 +393,31 @@ func projectionFrames(sessionID string, items []projSnapshotItem, emitted map[st
 				out = appendNonEmpty(out, it.end)
 			}
 		case hubKindItem:
+			// A thumbnail group the replay already delivered from the saved
+			// record is not sent again (B06: the copy arrived after the
+			// replay and showed as a second group).
+			if callID, ok := previewItemCallID(it.id); ok && emitted[emittedPreviewKey(callID)] {
+				continue
+			}
 			out = appendNonEmpty(out, it.start)
 		}
 	}
 	return out
+}
+
+// previewItemPrefix starts the projection item key of a preview_document
+// thumbnail group (webchat_channel.go::sendPreviewGroup).
+const previewItemPrefix = "media:preview:"
+
+// previewItemKey is the projection item key of toolCallID's thumbnail group.
+// One key per tool call: a later frame for the same group replaces the
+// earlier one, as it does in the chat.
+func previewItemKey(toolCallID string) string { return previewItemPrefix + toolCallID }
+
+// previewItemCallID is the tool call id of a thumbnail-group item key.
+func previewItemCallID(key string) (string, bool) {
+	id, ok := strings.CutPrefix(key, previewItemPrefix)
+	return id, ok && id != ""
 }
 
 func appendNonEmpty(out [][]byte, frames ...[]byte) [][]byte {

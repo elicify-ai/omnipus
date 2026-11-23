@@ -473,7 +473,21 @@ func (a *restAPI) sendPreviewRetryFrame(ctx context.Context, msg bus.OutboundMed
 	if !ok {
 		return errors.New("web chat channel cannot send media")
 	}
-	return sender.SendMedia(ctx, msg)
+	return sender.SendMedia(withPreviewRetryPublish(ctx), msg)
+}
+
+// previewRetryPublishKey marks the context of a Retry result's publish
+// (webchat_channel.go::sendPreviewGroup keeps it out of the active-turn
+// projection).
+type previewRetryPublishKey struct{}
+
+func withPreviewRetryPublish(ctx context.Context) context.Context {
+	return context.WithValue(ctx, previewRetryPublishKey{}, true)
+}
+
+func isPreviewRetryPublish(ctx context.Context) bool {
+	retry, _ := ctx.Value(previewRetryPublishKey{}).(bool)
+	return retry
 }
 
 // renderPreviewRetry renders src under adm (taken by the handler before the

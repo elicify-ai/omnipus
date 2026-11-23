@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -230,7 +229,7 @@ func mediaRefURL(ref string) string {
 // nobody is watching: the caller (the agent loop's tool-media delivery)
 // treats an error as fatal and would otherwise discard toolResult.Media, so
 // the attachment would be lost from the transcript too.
-func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessage) error {
+func (c *webchatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
 	group := msg.Presentation == previewPresentationPageThumbnails
 	if len(msg.Parts) == 0 && !group {
 		slog.Warn("webchat: SendMedia called with empty parts — skipping", "chat_id", msg.ChatID)
@@ -271,7 +270,7 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 		parts = append(parts, part)
 	}
 	if group {
-		return c.sendPreviewGroup(msg, parts)
+		return c.sendPreviewGroup(msg, parts, isPreviewRetryPublish(ctx))
 	}
 	if len(parts) == 0 {
 		return fmt.Errorf(
@@ -309,7 +308,14 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 // (office-preview spec §5.2), the same projection replay builds
 // (replay.go::buildMediaFrame): empty parts only for an unavailable
 // preview.
-func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []generated.MediaPart) error {
+//
+// retry marks a Retry result (rest_preview_retry.go): its chat record was
+// already saved, or failed to save, before this publish, so a later
+// snapshot must show the saved record only and the frame stays out of the
+// active-turn projection (B06: a projected copy came back after the replay
+// as a second group; for an unsaved Retry it showed pages that were never
+// saved). The journal still carries it for an incremental catch-up.
+func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []generated.MediaPart, retry bool) error {
 	if len(parts) == 0 && (msg.Preview == nil || msg.Preview.Outcome != previewOutcomeUnavailable) {
 		return fmt.Errorf("webchat: preview group for tool call %s has no stored thumbnails and is not marked unavailable", msg.ToolCallID)
 	}
@@ -330,8 +336,10 @@ func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []
 		}
 		return nil
 	}
-	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), hubFrameMeta{
-		kind: hubKindItem, key: "media:preview:" + id + ":" + strconv.FormatInt(time.Now().UnixNano(), 10), // a Retry result is a new item
-	}, frame)
+	meta := hubFrameMeta{kind: hubKindItem, key: previewItemKey(id)}
+	if retry {
+		meta = hubFrameMeta{kind: hubKindOther}
+	}
+	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), meta, frame)
 	return nil
 }

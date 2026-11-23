@@ -2,6 +2,7 @@ import type { SessionHistoryState } from './types'
 import type { SessionHistoryMetadata, SessionHistoryEntry, SessionHistoryPage } from '@/lib/api/history-types'
 import type { ChatMessage, MediaAttachment, SessionChatState } from './types'
 import { isPendingTailMessage } from './cursor'
+import { mediaDedupKey } from './media-identity'
 
 export function emptyHistoryState(): SessionHistoryState {
   return {
@@ -17,9 +18,14 @@ export function historyMetadata(page: SessionHistoryPage): SessionHistoryMetadat
   return metadata
 }
 
-/** One card per file url, in first-seen order; a later copy of a url replaces the earlier one. */
+/**
+ * One card per media item, in first-seen order; a later copy replaces the
+ * earlier one. Items are the same by mediaDedupKey, never by URL alone: the
+ * unavailable markers of two thumbnail groups both have an empty URL and
+ * must stay two cards (B06: one group's card vanished on reload).
+ */
 export function unionMedia(media: readonly MediaAttachment[]): MediaAttachment[] {
-  return [...new Map(media.map(item => [item.url, item])).values()]
+  return [...new Map(media.map(item => [mediaDedupKey(item), item])).values()]
 }
 
 /** Live objects changed since request start win; unchanged cached history can be refreshed. */
