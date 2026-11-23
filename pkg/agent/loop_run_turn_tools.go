@@ -1319,6 +1319,11 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 						"error":   pubErr.Error(),
 					})
 			}
+			persisted := userContent
+			if cfg := ex.rx.rr.rq.ri.rf.rt.al.GetConfig(); cfg != nil {
+				persisted = cfg.FilterSensitiveData(persisted)
+			}
+			persistAsyncToolFeedback(ts, toolCallID, persisted, result.IsError)
 		}
 	}
 

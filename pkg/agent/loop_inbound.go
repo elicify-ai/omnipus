@@ -641,7 +641,11 @@ func (al *AgentLoop) processSystemMessage(
 		// silently dropped at the gate even after that stamping fix —
 		// discovered while regression-testing D6b (goal_keeper_repairs_test.go's
 		// TestKeeper_SenderGateUnwedged_TwoFullIdleCycles).
-		SenderID:             msg.Sender.CanonicalID,
+		SenderID: msg.Sender.CanonicalID,
+		// I-2/S-108: the continuation's turn joins the provenance the
+		// system message carries (for example the background callback's
+		// {connector:telegram}); without it the turn is unresolved.
+		InputOrigin:          inboundInputOrigin(msg),
 		UserMessage:          fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
 		DefaultResponse:      "Background task completed.",
 		SendResponse:         true,

@@ -119,6 +119,7 @@ func (t *ExecTool) runBackground(
 	}
 
 	session.outputBuffer = &bytes.Buffer{}
+	session.programMasked = len(set.Tokens) > 0
 
 	var startErr error
 	if t.godMode {
@@ -258,7 +259,7 @@ func (t *ExecTool) runBackground(
 		// async notification has content to show — do NOT Reset() here: an
 		// explicit action=read call after completion must still be able to
 		// drain this same buffered output (Reset is session.Read()'s job).
-		outputSoFar := session.outputBuffer.String()
+		outputSoFar := session.completionOutputLocked()
 		session.mu.Unlock()
 
 		// Stop the timeout guard now that the session's real fate is settled
@@ -431,7 +432,10 @@ func backgroundCompletionResult(sessionID string, status SessionStatus, exitCode
 		isError = false
 	case StatusDone:
 		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)
-		isError = false
+		// A natural exit is a success only with exit code 0. A non-zero exit
+		// is an error result, as in the foreground path, so a suppressed-
+		// feedback turn still persists its error notice (S-73).
+		isError = exitCode != 0
 	default:
 		// Unexpected status reaching this switch (e.g. StatusRunning, which
 		// should never be the FINAL status a completion goroutine observes) —
