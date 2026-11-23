@@ -45,7 +45,12 @@ func TestOfficePreviewMountRESTAndPickerRefuseProgramFolders(t *testing.T) {
 			t.Setenv(config.EnvHome, api.homePath)
 			wsID := createTestWorkspace(t, api, "T-86 mount refusal")
 			root := officepreview.OwnRoot(t)
-			officepreview.TrustedOffice(t, api.homePath, root)
+			// The empty-slot case must stand on packaged-slot protection alone:
+			// on Linux this target also contains the own folder, so registering
+			// root there would provide an unrelated reason to refuse the mount.
+			if shape != "contains_empty_packaged_slot" {
+				officepreview.TrustedOffice(t, api.homePath, root)
+			}
 			root, err := filepath.EvalSymlinks(root)
 			require.NoError(t, err)
 			target := root
@@ -69,6 +74,8 @@ func TestOfficePreviewMountRESTAndPickerRefuseProgramFolders(t *testing.T) {
 				// This parent contains BOTH empty component slots. The spec
 				// defines no tie-break; either exact eligible refusal is valid.
 				for _, kind := range []component.Kind{component.KindOffice, component.KindPDFRenderer} {
+					require.NoFileExists(t, filepath.Join(component.RegisteredDir(api.homePath, kind), component.ManifestFile),
+						"instrument: empty-slot protection must not be masked by a registered component")
 					name := "LibreOffice"
 					if kind == component.KindPDFRenderer {
 						name = "PDF renderer"
