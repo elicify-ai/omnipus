@@ -13,7 +13,7 @@ import type { ZodType } from 'zod'
 import * as wire from '../../../src/lib/api/generated/schemas'
 import type {
   AgentCreateRequestMain, AgentUpdateRequest, IntegrationProviderUpdateRequest,
-  McpServerCreate, PermissionSettingsPatch, SkillCategory, WorkspaceCreateRequest,
+  McpServerCreate, PermissionSettingsPatch, SkillCategory, SkillCategoryUpdateRequest, WorkspaceCreateRequest,
 } from '../../../src/lib/api/generated/openapi-types'
 import { GatewayProcess } from './gateway-process'
 import { DEFAULT_OMNIPUS_BINARY } from '../setup'
@@ -180,17 +180,37 @@ export async function disclose(page: Page, name: RegExp) {
   if (await button.getAttribute('aria-expanded') === 'false') await button.click()
 }
 
-// Real installed files are a fixture input; the native inventory reads them.
+// Literal local files are Given inputs, not a fake publication result. C-5
+// stores category OUTSIDE the folder: a file hint alone does not set that state.
+export async function localSkill(native: SkillsToolsNative, slug: string, category: SkillCategory) {
+  const dir = path.join(native.gateway.homeDir, 'skills', slug)
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, 'SKILL.md')
+  const body = `---\nname: ${slug}\ndescription: F24 ${slug} fixture.\n---\n\nF24-${slug}-INSTRUCTIONS\n`
+  fs.writeFileSync(file, body)
+  if (category !== 'uncategorised') {
+    // C-21's real once-only writer, never a test-owned metadata store.
+    const request: SkillCategoryUpdateRequest = { category }
+    const stored = await nativeWrite(native, 'PUT', `/api/v1/skills/${slug}/category`, request, wire.Skill)
+    expect(stored.id).toBe(slug)
+    expect(stored.category).toBe(category)
+  }
+  expect(fs.readFileSync(file, 'utf8'), 'native category writes leave the complete input file unchanged').toBe(body)
+}
+
 // Do this AFTER startup SyncBuiltins, not a restart that would restore the set.
-export async function inventory(native: SkillsToolsNative, entries: ReadonlyArray<readonly [string, SkillCategory]>) {
+// Only explicitly named real built-ins survive; never replace their bytes/stamp.
+export async function inventory(native: SkillsToolsNative, entries: ReadonlyArray<readonly [string, SkillCategory]>, preserveBuiltins: readonly string[] = []) {
+  const initial = await nativeGet(native, '/api/v1/skills', wire.Skill.array())
+  for (const slug of preserveBuiltins) {
+    expect(entries.some(([name]) => name === slug), 'preserved built-in is an explicit requested input').toBe(true)
+    expect(initial.find((skill) => skill.id === slug)?.source, `real startup-seeded ${slug}, never a fabricated built-in`).toBe('builtin')
+  }
   const root = path.join(native.gateway.homeDir, 'skills')
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (entry.isDirectory() && !entry.name.startsWith('.')) fs.rmSync(path.join(root, entry.name), { recursive: true })
+    if (entry.isDirectory() && !entry.name.startsWith('.') && !preserveBuiltins.includes(entry.name)) fs.rmSync(path.join(root, entry.name), { recursive: true })
   }
-  for (const [slug, category] of entries) {
-    const dir = path.join(root, slug); fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${slug}\ndescription: F24 ${slug} fixture.\nmetadata:\n  category: ${category}\n---\n\nF24-${slug}-INSTRUCTIONS\n`)
-  }
+  for (const [slug, category] of entries) if (!preserveBuiltins.includes(slug)) await localSkill(native, slug, category)
   const actual = await nativeGet(native, '/api/v1/skills', wire.Skill.array())
   expect(actual.map((skill) => skill.id).sort(), 'positive native inventory receipt, no hidden extra shelf').toEqual(entries.map(([slug]) => slug).sort())
   for (const [slug, category] of entries) expect(actual.find((skill) => skill.id === slug)?.category).toBe(category)

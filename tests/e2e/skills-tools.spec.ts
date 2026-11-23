@@ -12,7 +12,7 @@ import * as wire from '../../src/lib/api/generated/schemas'
 import type { McpServerUpdate, PermissionSettingsPatch, SessionCreateRequest, SkillInstallRequest } from '../../src/lib/api/generated/openapi-types'
 import {
   test, GITHUB_TOOLS, GITHUB_KEYS, INSTALL_MARKDOWN, nativeGet, nativeWrite,
-  openPage, skillsToolsTab, disclose, inventory, github, missingContext7, grantMia,
+  openPage, skillsToolsTab, disclose, inventory, localSkill, github, missingContext7, grantMia,
   workspaceFor, editAgent, consent, responseFor, saved, nativeProbeAgent,
   modelTurn, seedSearchDefault, type SkillsToolsNative,
 } from './fixtures/skills-tools-native'
@@ -21,7 +21,9 @@ test.use({ storageState: { cookies: [], origins: [] } })
 test.setTimeout(240_000)
 test.describe.configure({ retries: 0 }) // No paid-model variance to retry away.
 
-const TEN_SKILLS = ['plan', 'deep-research', 'weather', 'notes', 'verify', 'outline', 'summarise', 'translate', 'proofread', 'compare'] as const
+// S-20 fixes the two granted names; the other eight are new fixture skills,
+// never handwritten replacements for startup-owned built-ins.
+const TEN_SKILLS = ['plan', 'deep-research', 'f24-one', 'f24-two', 'f24-three', 'f24-four', 'f24-five', 'f24-six', 'f24-seven', 'f24-eight'] as const
 function toolRow(page: Page, key: string) { return page.getByTestId(`tool-row-${key}`) }
 function skillRow(page: Page, key: string) { return page.getByTestId(`skill-row-${key}`) }
 function service(page: Page, id: string) { return page.getByRole('group', { name: new RegExp(`^${id}(?:\\s|$)`, 'i') }) }
@@ -29,7 +31,7 @@ async function selected(row: Locator, value: 'Allow' | 'Ask' | 'Deny') {
   await expect(row.getByRole('button', { name: value, exact: true })).toHaveAttribute('aria-pressed', 'true')
 }
 async function tenInstalled(native: SkillsToolsNative) {
-  await inventory(native, TEN_SKILLS.map((id) => [id, 'tools'] as const))
+  await inventory(native, TEN_SKILLS.map((id) => [id, id === 'plan' ? 'business' : id === 'deep-research' ? 'research' : 'tools'] as const), ['plan', 'deep-research'])
 }
 async function external(page: Page, native: SkillsToolsNative, id = 'github') {
   await openPage(page, native, 'External tools')
@@ -103,8 +105,7 @@ test('S-58 actual built-in plan can only be copied; installed weather can be cop
   // Use the real startup-seeded plan, never fake its built-in stamp/content.
   const initial = await nativeGet(native, '/api/v1/skills', wire.Skill.array())
   expect(initial.find((s) => s.id === 'plan')?.source).toBe('builtin')
-  const dir = path.join(native.gateway.homeDir, 'skills', 'weather'); fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: weather\ndescription: F24 installed weather.\nmetadata:\n  category: tools\n---\n\nF24-WEATHER\n')
+  await localSkill(native, 'weather', 'tools')
   await openPage(page, native)
   // The spec's built-in category decision puts plan in Business, not Tools.
   await disclose(page, /^BUSINESS(?:\s|$)/i)
