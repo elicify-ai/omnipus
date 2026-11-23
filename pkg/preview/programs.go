@@ -192,19 +192,32 @@ func classifyProgramError(err error, proc *launcher.Process) *failure {
 	return programFailure("PDF renderer failed (" + err.Error() + ")")
 }
 
+// cpuAccountingSlack is how far below programCPUSeconds the CPU time the
+// parent reads after a real CPU-limit kill may lie. On Linux the kernel
+// enforces RLIMIT_CPU against the tick-sampled user+system clock
+// (kernel/time/posix-cpu-timers.c::check_process_timers, CPUCLOCK_PROF),
+// while the wait status's rusage reports user+system scaled to the precise
+// run time (kernel/sched/cputime.c::cputime_adjust). The two clocks differ,
+// so a program the kernel killed at the limit can report slightly less: a
+// 3 s limit measured on Linux read 2.990 s and 2.999 s in 2 of 15 kills.
+// One second keeps the CPU time the discriminator (a signal death with
+// little CPU is never this outcome) while covering that gap at 60 s.
+const cpuAccountingSlack = time.Second
+
 // cpuLimitKilled reports a program ended by its CPU-time limit
 // (programCPUSeconds, RLIMIT_CPU with soft = hard): killed by a signal after
-// using at least the limit. The signal differs by system: Linux sends SIGKILL
-// at the hard limit (kernel posix-cpu-timers), macOS SIGXCPU; so the signal's
-// name or the error text cannot tell it apart, the CPU time used can. On
-// Windows a process never ends by a signal, so this is always false there.
+// using the limit, less cpuAccountingSlack. The signal differs by system:
+// Linux sends SIGKILL at the hard limit (kernel posix-cpu-timers), macOS
+// SIGXCPU; so the signal's name or the error text cannot tell it apart, the
+// CPU time used can. On Windows a process never ends by a signal, so this is
+// always false there.
 func cpuLimitKilled(waitErr error) bool {
 	var exitErr *exec.ExitError
 	if !errors.As(waitErr, &exitErr) || exitErr.ProcessState == nil || exitErr.Exited() {
 		return false
 	}
 	used := exitErr.UserTime() + exitErr.SystemTime()
-	return used >= programCPUSeconds*time.Second
+	return used >= programCPUSeconds*time.Second-cpuAccountingSlack
 }
 
 // officeConversion converts one Office document to PDF with LibreOffice.
