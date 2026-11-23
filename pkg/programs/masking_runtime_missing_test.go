@@ -11,7 +11,10 @@ func TestProgramMasking_RuntimeMissing(t *testing.T) {
 		// pkg/agent::TestProgramMasking_ActualBackground. The cap observation
 		// is separate below; neither the unit writer nor timed reads imply it.
 		{"S103_Dev_exec_reaches_instrumented_cap", "test-build 80-byte cap and recording sink at the actual foreground capture input; normal-cap companion is real in pkg/agent, but no injectable pre-cap recorder exists at this boundary"},
-		{"S104_background_retention_cap", "actual background retention-cap read before the agent's downstream tool-result cap; timed reads are real in pkg/agent but do not drive this separate cap boundary"},
+		// S104_background_retention_cap migrated intact to
+		// pkg/agent::TestProgramMasking_ActualRetentionCap: actual loop-wired
+		// background start and registered tool read before the agent's result
+		// limit; exact prefix, real truncation marker and masked token position.
 		// D9 rows1/2/3/8 migrated intact to
 		// pkg/agent::TestProgramMasking_ActualInterruptedForeground: the real
 		// seven/eight/ten-byte and middle-ten children, actual SIGKILL, a
