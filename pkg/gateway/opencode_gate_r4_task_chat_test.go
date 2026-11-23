@@ -37,6 +37,13 @@ func TestOpenCodeR4_GatewayA_TaskRunWorkerRefusalIsSessionTagged(t *testing.T) {
 				refusals, frameTypes := opencodeR4GatewayFrames(t, f.conn)
 				f.assertNoAdmission(t)
 				assert.NotContains(t, frameTypes, string(generated.WsFrameTypeSessionStarted), "Q13 B: no replacement chat may be created")
+				// CHECK round5 F3: A must independently catch a live-only/no-save refusal.
+				saved := opencodeR5ErrorRows(qa2ReopenHelperTranscript(t, f.handler.agentLoop.ResolveSessionStore(f.sid), f.sid))
+				if assert.Len(t, saved, 1, "GatewayA: the live refusal must also survive a fresh-store read") {
+					assert.Equal(t, opencodeR4TaskChatSentence(cli), saved[0].Content)
+					assert.Empty(t, saved[0].ErrorCode, "task-chat intake refusal is uncoded")
+					assert.NotEmpty(t, saved[0].ID, "saved refusal has its own durable identity")
+				}
 				if assert.Len(t, refusals, 1, "Q13 B: a task-run chat frame gets one visible refusal, never silence or acceptance") {
 					assert.Equal(t, &f.sid, refusals[0].SessionId, "Q13 B: error must identify the addressed task-run session")
 					assert.Equal(t, opencodeR4TaskChatSentence(cli), refusals[0].Message, "Q13 B: exact approved TEXT.md section 3 refusal")
