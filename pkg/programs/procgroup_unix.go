@@ -22,6 +22,13 @@ func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
+// startProcessGroup has nothing to add on Unix: the group exists from the
+// start (Setpgid).
+func startProcessGroup(_ *exec.Cmd) error { return nil }
+
+// releaseProcessGroup has nothing to release on Unix.
+func releaseProcessGroup(_ *exec.Cmd) {}
+
 // stopProcessGroup kills the check's whole process group.
 func stopProcessGroup(cmd *exec.Cmd) {
 	if cmd.Process == nil {
