@@ -5,6 +5,10 @@
 package gateway
 
 import (
+	"time"
+
+	"github.com/google/uuid"
+
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
@@ -19,9 +23,12 @@ import (
 // WireLLMError like any typed error; an uncoded one is an Omnipus sentence
 // (the not-saved notice) and is sent as written.
 //
-// A message whose saved row carries no client message id cannot be scoped:
-// its refusal is sent session-tagged only, as before, and the reason is
-// logged.
+// A message whose saved row carries no client message id cannot be scoped by
+// that id, and a session-only error frame would end (and relabel) a turn still
+// streaming in a view of the chat (SFH-R5-2). Its refusal is therefore sent as
+// a system notice (replay_message, role system) — the existing non-terminal
+// carrier the SPA shows as its own row without touching any turn — and the
+// reason it could not be scoped is logged. No client id is ever invented.
 func (h *WSHandler) hubRefusedInput(sessionID string, p agent.ErrorPayload) {
 	clientID, found := "", false
 	if p.RefusedInputEntryID != "" {
@@ -42,9 +49,14 @@ func (h *WSHandler) hubRefusedInput(sessionID string, p agent.ErrorPayload) {
 		if found {
 			reason = "the refused message carried no client_message_id"
 		}
-		logsafeWarn("ws: a refusal of one message could not be scoped to it; sent to the whole chat",
+		logsafeWarn("ws: a refusal of one message could not be scoped to it; sent as a chat notice",
 			"session_id", sessionID, "entry_id", p.RefusedInputEntryID, "reason", reason)
-		h.hubPublishFrame(sessionID, string(generated.WsFrameTypeError), frame, nil)
+		noticeID := uuid.NewString()
+		stamp := time.Now().UTC().Format(time.RFC3339Nano)
+		h.hubPublishFrame(sessionID, string(generated.WsFrameTypeReplayMessage), generated.ReplayMessageFrame{
+			Type: string(generated.WsFrameTypeReplayMessage), SessionId: sessionID,
+			Id: &noticeID, Role: "system", Content: frame.Message, Timestamp: &stamp,
+		}, nil)
 		return
 	}
 	frame.ClientMessageId = &clientID

@@ -53,6 +53,7 @@ import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import { insertHistoryMessageId } from '../cursor'
 import { applyMediaFrame } from './media-frames'
+import { appendErrorNotice } from './error-notice-frames'
 import type { ChatMessage, ChatStore, PositionedToolCall, RateLimitEventData, SessionChatState } from '../types'
 import { recordCombinedPart } from '../history-parts'
 
@@ -988,6 +989,26 @@ function ownerAgentOf(msgs: ChatMessage[], m: ChatMessage): string | undefined {
   for (let i = at - 1; i >= 0; i--) if (msgs[i].agentId) return msgs[i].agentId
   return undefined
 }
+/**
+ * #1789: the live error frame carries no entry id, so the bubble it made cannot
+ * match a saved entry by id. Find it instead of adding a second copy: same code
+ * (or, for an uncoded entry, an uncoded message-scoped notice — architect
+ * round-5 F1) and text, in the current turn (after the last user message),
+ * same agent, within a few seconds of the saved entry, and not yet stamped with
+ * an id. An older replayed error with identical text stays a separate row.
+ */
+function findLiveCopyOfSavedError(
+  msgs: ChatMessage[], display: string, code: string | undefined,
+  agentId: string | undefined, timestamp: string | undefined,
+): ChatMessage | undefined {
+  let lastUser = -1
+  for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'user') { lastUser = i; break }
+  return msgs.slice(lastUser + 1).find((m) =>
+    m.status === 'error' && !m.errorEntryId && m.content === display
+    && (code ? m.errorCode === code : !m.errorCode && !!m.refusalNotice)
+    && (!agentId || ownerAgentOf(msgs, m) === agentId)
+    && isSameMoment(m.timestamp, timestamp))
+}
 /** #1789: a live bubble and a saved entry describe one event only if their times are close. */
 const SAME_EVENT_WINDOW_MS = 15_000
 function isSameMoment(a: string | undefined, b: string | undefined): boolean {
@@ -1029,26 +1050,19 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
                 (m) => m.errorEntryId === replayEntryId,
               )
               if (alreadyRendered) return {}
-              // #1789: the live error frame carries no entry id, so the bubble
-              // it made cannot match above. Adopt it instead of adding a second
-              // copy: same code and text, in the current turn (after the last
-              // user message), same agent, within a few seconds of the saved
-              // entry, and not yet stamped with an id. An older replayed error
-              // with identical text stays a separate row.
-              const msgs = getMessages(b)
-              let lastUser = -1
-              for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'user') { lastUser = i; break }
-              const live = msgs.slice(lastUser + 1).find((m) =>
-                m.status === 'error' && !m.errorEntryId && !!replayLlmError
-                && m.errorCode === replayLlmError.code && m.content === replayDisplay
-                && (!frame.agent_id || ownerAgentOf(msgs, m) === frame.agent_id)
-                && isSameMoment(m.timestamp, frame.timestamp))
+              const live = findLiveCopyOfSavedError(getMessages(b), replayDisplay, replayLlmError?.code, frame.agent_id, frame.timestamp)
               if (live) {
                 return produce(b, (draft) => {
                   const m = draft.messagesById[live.id]
                   if (m) m.errorEntryId = replayEntryId
                 }) as Partial<SessionChatState>
               }
+              // Architect round-5 F1: a saved error with no code is an Omnipus
+              // notice, such as the refusal of one task-chat message — never a
+              // turn's end. It stays its own row: it never relabels, empties or
+              // closes the assistant answer before it, and its entry id dedups
+              // a re-replay.
+              if (!replayLlmError) return appendErrorNotice(b, replayDisplay, undefined, replayEntryId, undefined)
             }
             // Coalesce into the trailing streaming assistant bubble when
             // one exists. The live path closes the bubble via the C8 union

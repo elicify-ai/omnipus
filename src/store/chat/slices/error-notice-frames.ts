@@ -33,11 +33,11 @@ export function appendErrorNotice(
     status: 'error',
     isStreaming: false,
     refusalNotice: true,
+    ...(entryId ? { errorEntryId: entryId } : {}),
     ...(llmError
       ? {
           errorCode: llmError.code,
           ...(detail !== undefined ? { errorDetail: detail } : {}),
-          ...(entryId ? { errorEntryId: entryId } : {}),
           ...(llmError.facts ? { errorFacts: llmError.facts } : {}),
         }
       : {}),
