@@ -197,6 +197,8 @@ async function checkUnknownKeys(keys: string[], sentDrafts: Record<string, SaveB
     const msgs: Record<string, FieldMessage> = {}
     const resolved: string[] = []
     const unknown: string[] = []
+    // SFH-04-R: a recovered saved-not-in-use value still gets the restart offer.
+    const restartLabels: string[] = []
     let failed = 0
     for (const key of keys) {
       const st = states[key]
@@ -205,7 +207,10 @@ async function checkUnknownKeys(keys: string[], sentDrafts: Record<string, SaveB
       } else if (st.kind === 'saved') {
         known[key] = sentDrafts[key]
         resolved.push(key)
-        if (!st.inUse) msgs[key] = { tone: 'warning', text: NOT_IN_USE_MESSAGE }
+        if (!st.inUse) {
+          msgs[key] = { tone: 'warning', text: NOT_IN_USE_MESSAGE }
+          restartLabels.push(byKey.get(key)?.label ?? key)
+        }
       } else if (st.kind === 'not-saved') {
         failed += 1
         msgs[key] = { tone: 'error', text: 'This change was not saved. Save it again.' }
@@ -217,7 +222,7 @@ async function checkUnknownKeys(keys: string[], sentDrafts: Record<string, SaveB
         }
       }
     }
-    return { ok: true as const, known, msgs, resolved, failed, unknown }
+    return { ok: true as const, known, msgs, resolved, failed, unknown, restartLabels }
   } catch {
     return { ok: false as const }
   }
@@ -355,7 +360,8 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
         setSavedAt(formatTime(new Date()))
         shell.announce('Changes saved.' + (restartLabels.length ? ' Some need a gateway restart.' : ''))
       }
-      if (restartLabels.length) shell.offerRestart(restartLabels)
+      // The restart offer waits until no value of this Save is still unknown.
+      if (restartLabels.length && unknown.length === 0) shell.offerRestart(restartLabels)
     },
     [onSaved, shell],
   )
@@ -405,7 +411,7 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
       if (a.unknown.length) {
         const c = await runCheck(a.unknown, sentDrafts)
         if (c.ok) {
-          finish({ ...a.nextKnown, ...c.known }, { ...a.nextMessages, ...c.msgs }, [...a.resolved, ...c.resolved], a.failed + c.failed, c.unknown, a.restartLabels, sentDrafts)
+          finish({ ...a.nextKnown, ...c.known }, { ...a.nextMessages, ...c.msgs }, [...a.resolved, ...c.resolved], a.failed + c.failed, c.unknown, [...a.restartLabels, ...c.restartLabels], sentDrafts)
         } else {
           finish(a.nextKnown, a.nextMessages, a.resolved, a.failed, a.unknown, a.restartLabels, sentDrafts)
         }
@@ -422,7 +428,7 @@ export function useSaveBar({ section, fields, onSave, readBack, preSave, onSaved
     if (!keys.length) return
     const sentDrafts = unknownSentRef.current
     const c = await runCheck(keys, sentDrafts)
-    if (c.ok) finish(c.known, c.msgs, c.resolved, failedCount + c.failed, c.unknown, [], sentDrafts)
+    if (c.ok) finish(c.known, c.msgs, c.resolved, failedCount + c.failed, c.unknown, c.restartLabels, sentDrafts)
   }, [unknownKeys, runCheck, finish, failedCount])
 
   const discard = useCallback(() => {
