@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -68,10 +69,18 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, timeout time
 	if err != nil {
 		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the credential store could not be read."}
 	}
-	path, err := exec.LookPath(check.ProgramWord)
+	found, err := exec.LookPath(check.ProgramWord)
 	if err != nil {
 		return checkResult{state: StateSavedNotChecked,
 			message: "Saved, not checked: " + check.ProgramWord + " was not found on this computer."}
+	}
+	// FR-005/S-08: a program agents could have planted never runs with
+	// gateway authority; the checked, resolved file is the one executed.
+	path, err := s.programPathCheck()(check.ProgramWord, found, s.cfg())
+	if err != nil {
+		slog.Warn("programs: account check program refused by its location check", "program", check.ProgramWord, "error", err)
+		return checkResult{state: StateSavedNotChecked,
+			message: "Saved, not checked: " + check.ProgramWord + " is installed in a folder agents can write to, so it was not run. Install it in a system folder."}
 	}
 	home, err := os.MkdirTemp("", "omnipus-program-check-")
 	if err != nil {

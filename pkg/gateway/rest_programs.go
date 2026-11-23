@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/programs"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 // programsBodyLimit is the Programs request body cap (D-1 row 10).
@@ -56,6 +58,12 @@ func (a *restAPI) programService() *programs.Service {
 		a.programs.svc = programs.NewService(a.agentLoop.GetConfig, a.programStore,
 			filepath.Join(a.homePath, "programs", "connections.json"))
 		a.programs.svc.SetSupersededSink(a.auditProgramSuperseded)
+		// FR-005/S-08: the account check's program passes the shared
+		// third-party program check over every agent-writable folder.
+		a.programs.svc.SetProgramPathCheck(func(word, found string, cfg *config.Config) (string, error) {
+			roots, rootsErr := thirdpartycli.AgentWritableRoots(a.homePath, cfg)
+			return thirdpartycli.CheckProgramPath(word, found, roots, rootsErr)
+		})
 		a.programs.svc.ResumeChecks()
 	})
 	return a.programs.svc
@@ -359,6 +367,7 @@ func (a *restAPI) editProgram(w http.ResponseWriter, r *http.Request, id string)
 		jsonErr(w, http.StatusBadRequest, "revision is required")
 		return
 	}
+	checkRelevant := false
 	err = a.safeUpdateConfigJSON(func(m map[string]any) error {
 		cur := a.agentLoop.GetConfig()
 		entries, lerr := programs.Entries(cur)
@@ -386,6 +395,7 @@ func (a *restAPI) editProgram(w http.ResponseWriter, r *http.Request, id string)
 		if cerr := programs.EditGitHostConflict(cur, section.Entries[idx]); cerr != nil {
 			return cerr
 		}
+		checkRelevant = checkRelevantChange(stored, section.Entries[idx])
 		return writeProgramsSection(m, section)
 	})
 	var werr *programsWriteError
@@ -398,7 +408,33 @@ func (a *restAPI) editProgram(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	a.auditProgram(auditProgramCustomChanged, audit.DecisionAllow, "", map[string]any{"program_id": id, "change": "edited"})
+	if checkRelevant {
+		// R3-M3/FR-047: the committed edit changes how the account check runs,
+		// so check_revision advances and, with a saved credential, a new check
+		// replaces the running one (S-116). The entry edit itself is saved.
+		if _, cerr := a.programService().CheckRelevantEdited(id); cerr != nil {
+			slog.Error("rest: program edit saved but its account check was not restarted", "program_id", id, "error", cerr)
+			jsonErr(w, http.StatusInternalServerError, "The change was saved, but the account check could not start. Run the check again.")
+			return
+		}
+	}
 	a.writeProgramEntry(w, http.StatusOK, id, nil)
+}
+
+// checkRelevantChange reports whether an edit changed a check-relevant field:
+// the account check or the token variables (R3-M3). Display name, program
+// words, network sites and git leave check_revision unchanged (S-131).
+func checkRelevantChange(before, after config.ProgramEntryConfig) bool {
+	if !slices.Equal(before.TokenVariables, after.TokenVariables) {
+		return true
+	}
+	if (before.IdentityCheck == nil) != (after.IdentityCheck == nil) {
+		return true
+	}
+	if before.IdentityCheck == nil {
+		return false
+	}
+	return !reflect.DeepEqual(*before.IdentityCheck, *after.IdentityCheck)
 }
 
 // mergeCustomEdit applies the fields present in an edit to the stored entry.

@@ -6,6 +6,7 @@
 package credentials
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/app/internal"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 )
 
 // NewCredentialsCommand returns the `omnipus credentials` command with subcommands.
@@ -70,6 +72,11 @@ func newSetCommand() *cobra.Command {
 			}
 			defer store.Close()
 			if err := store.Set(name, value); err != nil {
+				if errors.Is(err, credentials.ErrStoreBusy) {
+					// S-146: the same truthful busy message as the
+					// browser; nothing was written and the exit is nonzero.
+					return errors.New(programs.MsgStoreBusy)
+				}
 				return fmt.Errorf("failed to store credential: %w", err)
 			}
 			fmt.Printf("Credential %q stored.\n", name)

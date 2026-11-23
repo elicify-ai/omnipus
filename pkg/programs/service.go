@@ -92,6 +92,10 @@ type Service struct {
 	// superseded is told when a running check's reservation is replaced
 	// (FR-021 audit row "superseded"). Nil = not recorded.
 	superseded func(id string, generation int64)
+
+	// pathCheck decides whether an account check's program may run (FR-005,
+	// S-08). Nil = checkProgramLocation.
+	pathCheck ProgramPathCheck
 }
 
 // SetSupersededSink installs the sink told about every superseded check
@@ -277,6 +281,52 @@ func (s *Service) Recheck(id string) (Connection, error) {
 	s.conns[id] = cur
 	s.persistLocked()
 	s.launchLocked(entry, cur)
+	return cur, nil
+}
+
+// CheckRelevantEdited records a committed edit of a check-relevant field
+// (identity_check or token_variables, R3-M3): check_revision advances by one,
+// any running check is superseded, and, whenever a credential is saved, a new
+// check is reserved and started for the edited entry in any state, checking
+// included (FR-047, S-116). Edits of other fields must not call it, so their
+// running check still publishes (S-131).
+func (s *Service) CheckRelevantEdited(id string) (Connection, error) {
+	entry, found, err := Lookup(s.cfg(), id)
+	if err != nil {
+		return Connection{}, err
+	}
+	if !found {
+		return Connection{}, ErrUnknownProgram
+	}
+	store, err := s.store()
+	if err != nil {
+		return Connection{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.connectionLocked(id)
+	cur.CheckRevision++
+	s.supersedeLocked(id)
+	_, saved := store.ProgramEntryGeneration(TokenReference(id))
+	if saved {
+		if _, gerr := store.Get(TokenReference(id)); gerr != nil {
+			saved = false
+		}
+	}
+	switch {
+	case !saved:
+		// No credential: nothing to check; the state stays as it is.
+	case entry.IdentityCheck == nil:
+		cur.State, cur.Message, cur.AccountLabel = StateSavedNotChecked, MsgNoCheck, ""
+		cur.CheckedAt = time.Now().UTC()
+	default:
+		cur.State, cur.Message, cur.AccountLabel = StateChecking, "", ""
+	}
+	s.conns[id] = cur
+	s.persistLocked()
+	if saved && entry.IdentityCheck != nil {
+		s.launchLocked(entry, cur)
+	}
 	return cur, nil
 }
 
