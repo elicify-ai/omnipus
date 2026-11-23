@@ -10,7 +10,7 @@ Settings has 11 sections in three groups, listed down the left side (on a phone,
 - **Security**: Protection, Sandbox & network, Keys & secrets
 - **System**: Gateway, Data & retention, About
 
-The open section is part of the address (`/settings?tab=gateway`), so a reload or a shared link opens the same section, and Back and Forward move between sections. The **Search settings** box above the list finds a setting by name and tells you when a setting has moved elsewhere, for example web search and tool permissions to Skills & Tools, or Verbose chat to Profile. Choosing a setting in the results opens its section, scrolls to that setting and highlights it with a short flash (with reduced motion turned on, it is marked without the flash). A link can do the same with `row`, for example `/settings?tab=gateway&row=port`.
+The open section is part of the address (`/settings?tab=gateway`), so a reload or a shared link opens the same section, and Back and Forward move between sections. **Search settings** finds indexed settings by name. For example, Verbose chat is under Profile → Chat display. Web search remains under Providers; the global permission and skill-trust editors are temporarily unavailable until the Skills & Tools update lands. Choosing an indexed row opens its section, scrolls to that setting and highlights it with a short flash (with reduced motion turned on, it is marked without the flash). A link can do the same with `row`, for example `/settings?tab=gateway&row=port`.
 
 Personal things are not sections here. Profile is its own screen, holding your name, timezone, password, the context your agents read about you, and **Chat display** (Verbose chat). Usage is its own screen, showing token totals by agent, model, provider, and session.
 
@@ -31,7 +31,9 @@ A Save ends in one of four ways, shown next to each setting:
 | An error under the setting, and "N changes could not be saved" | Nothing was stored for that setting; your change stays on the page |
 | "N changes may not have been saved", with **Retry** | The answer was lost; Settings checks what was stored and tells you |
 
-If part of a section cannot be loaded, that part shows what could not be loaded, the server's reason and **Retry**, which loads only that part again. Only that part is blocked from saving; your changes elsewhere in the section stay and still save. A value stored outside its range (for example by editing the configuration file by hand) is shown as stored and marked; the Save bar then asks you to fix it before saving.
+If part of a section cannot be loaded, that part names the failed read and offers **Retry** for that read. Only that part is blocked from saving; your changes elsewhere in the section stay and still save. A server failure can show the generic message "The server is unavailable. Please try again in a moment." It does not necessarily show the server's underlying cause. Read the gateway log when that message is not enough to diagnose it.
+
+Values you edit are checked before they are saved. Stored-value handling depends on the setting: some forms show an out-of-range stored value and require a correction, while others show a resolved value with a warning. For Max tool calls per turn, see [A saved value outside 1 to 1000](#a-saved-value-outside-1-to-1000).
 
 **This setting was changed somewhere else while you were saving** means another tab or program stored a different value at the same time. The message names the value that is stored now.
 
@@ -49,7 +51,7 @@ The page can only talk to the address it was opened from. When a restart moves t
 - You want agents to know your role and preferences without repeating yourself in every chat.
 - You want to change how long transcripts are kept, check storage use, or cap how hard agents can call a model.
 
-Two jobs that look like settings live on their own pages: what agents may do is [tool permissions](tools.md), and how they are confined is the [sandbox](security.md).
+See [tool permissions](tools.md) for what agents may do and [security](security.md) for how the sandbox confines them. The installation-wide permission editor and skill-trust control are temporarily unavailable in the web app; the agent editor still lets you tighten one agent's permissions.
 
 ## How to connect a model provider
 
@@ -76,7 +78,7 @@ Only usable services can be chosen. Unusable services shown in the picker are di
 
 The service list below the cards puts ready services first. Services needing a key have **Add key** or **Edit key**. With the cards present, enter the key and click **Save key**. On a local install, you must re-type your password; on a hosted or desktop install, you confirm the change instead. A successful key save switches that service on without changing your default or fallback choice.
 
-If an integration save fails, its error message shows the server's reason when one is provided.
+A failed integration save shows an error, but a gateway server failure does not guarantee a specific unlock, repair or reload explanation. Check the gateway log when the displayed message is not enough to diagnose the problem, then retry manually.
 
 The server refuses **Remove key** and **Check connection** while development authentication bypass (`gateway.dev_mode_bypass`) is active. Turn it off and sign in before retrying. Ordinary key saves keep the confirmation rules above.
 
@@ -95,7 +97,7 @@ Click **Remove key** to review what will happen. For example, the Tavily confirm
 
 Removal deletes Omnipus's saved key and switches off that service. It does **not** revoke the key with the service, recall a search already sent, or change your default or fallback choices. The selected default keeps its existing "key missing — searches will fail" warning; the selected fallback warns "key missing — the fallback will not run". **Fix** opens the key editor. An available fallback may still answer when the default is missing its key. **Add key** and **Save key** can restore the service without reassigning its role.
 
-Removal is refused without changes if search roles are still undecided, another connection shares the key, or the service uses a key reference set outside Settings. The message explains the fix: choose default and fallback services, give the other connections their own key, or remove the manually configured reference first. A later-stage failure can leave partial changes; its error says what happened, and the refreshed row shows the current state. Do not assume an error means the key or service was left unchanged.
+Removal is refused without changes if search roles are still undecided, another connection shares the key, or the service uses a key reference set outside Settings. The message explains the fix: choose default and fallback services, give the other connections their own key, or remove the manually configured reference first. A later-stage failure can leave partial changes; check the refreshed row for the current state and the gateway log for the cause. Do not assume an error means the key or service was left unchanged.
 
 ### Check a connection
 
@@ -116,14 +118,14 @@ Removal is refused without changes if search roles are still undecided, another 
 | **The service could not complete the check. Try again.** | Try again after the cooldown. |
 | **The service returned an unexpected response. Try again.** | Try again after the cooldown. |
 | **The key changed while checking. Check again.** | The server rejected the old key's result. Wait for the cooldown, then check the current saved key. |
-| **Could not read the saved key from the credential store. Unlock or repair it, then try again.** | Unlock or repair the credential store before checking again. |
+| A gateway server error | A specific credential-store cause is not guaranteed to appear. Check the gateway log, correct the reported problem, then check again after the cooldown. |
 | **The saved key is not available to the running service. Reload the configuration, then try again.** | Reload the configuration before checking again. |
-| **The server is unavailable. Please try again in a moment.** | No specific server recovery message was provided. Wait, then check manually after the cooldown. |
+| **The server is unavailable. Please try again in a moment.** | The generic message does not mean the server supplied no cause. Check the gateway log, then retry manually after the cooldown. |
 | **You can check again in {N} seconds.** | Another check was refused by the local limit. Wait for the displayed countdown; no check is scheduled automatically. |
 
 There can be only one check in progress for each service, with a 30-second cooldown per service on this Omnipus instance, including failed checks. A service may request a longer wait. After the cooldown, click **Check connection** for a fresh attempt; an old success is not reused as a new check.
 
-If the server cannot complete a check, the row shows its own recovery message when one is provided, rather than replacing instructions to unlock, repair or reload with a generic unavailable message.
+A failed check shows an error, but a gateway server failure does not guarantee a specific unlock, repair or reload explanation. The generic unavailable message does not mean the server supplied no cause. Check the gateway log, correct the reported problem there, and retry manually. These gateway errors are separate from the service diagnostic outcomes above, such as a rejected key or a timeout.
 
 Connection results are temporary and belong to one service. Finishing another service's check does not clear them. Saving or removing a key clears only that service's old result; a changed service row also clears its result. Checks do not change your roles, switch off a service, or change ordinary fallback or native-model search behaviour.
 
@@ -137,8 +139,8 @@ Each section and neighbor screen has one job.
 
 | Screen or section | What it is for |
 |---|---|
-| Settings, Providers | Connect providers, manage keys and sign-ins, set the default model; **Voice input**: the Active transcriber and a key for each voice service; web-search providers |
-| Settings, Memory & recaps | What the team remembers: recap settings. How long memory is kept is in Data & retention |
+| Settings, Providers | Connect providers, manage keys and sign-ins, set the default model; **Voice input**: the Active transcriber and keys for keyed voice services; web-search providers |
+| Settings, Memory & recaps | What the team remembers: recap settings, including [Recap limits](memory.md#recap-limits). How long memory is kept is in Data & retention |
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Third-party agents | The program and standard parameters Omnipus uses for each external command-line tool (Claude Code, Codex, opencode) |
 | Settings, Limits | Three groups, each closed until you open it: **Context and tool results** (context budget), **Model overrides** (context length per model) and **Agents and goals** (tool calls per turn, agents at once, goal timers; every value there asks for your password) |
@@ -149,36 +151,48 @@ Each section and neighbor screen has one job.
 | Settings, Data & retention | How long chat history and memory are kept, storage numbers, clearing all chat history |
 | Settings, About | Version and build information |
 | Profile | Your name, timezone, font size, password, workspace context, and Chat display (Verbose chat) |
-| Usage | Token totals by period, agent, model, provider, and session; cache-hit percentage by agent and provider |
+| Usage | Token totals by period for agent, model and provider; up to 50 sessions by recorded total tokens, independent of the period; cache-hit percentage by agent and provider |
 
 Old links keep working. An old `?tab=` name opens the section that holds those settings now:
 
 | Old link | Opens |
 |---|---|
-| `models`, `performance`, `context` | Limits |
+| `models`, `performance` | Limits |
 | `integrations` | Providers |
 | `security` | Protection |
 | `chat` | Profile, Chat display |
 | `backup`, `backups`, `restore` | Data & retention, with the notice "Backup and restore were removed." |
-| `devices`, `signin`, or a name Settings does not know | Providers |
+| `context`, `devices`, `signin`, or a name Settings does not know | Providers |
 
-Device pairing and signed-in browsers are not in Settings at the moment. Tool permissions and whether unverified skills may load are set in [Skills & Tools](skills.md).
+Device pairing and signed-in browsers are not in Settings at the moment. The installation-wide tool-permission editor and unverified-skill trust control are also temporarily unavailable: neither the new Settings nor [Skills & Tools](skills.md) has replacement controls yet. Existing configured values still apply.
 
-**Voice input**, under **Settings → Providers**, holds the **Active transcriber**: the one service that turns your voice messages into text. Only services that have a key are offered. Changing it is part of the Providers Save and asks for your password. Each voice service has its own row; **Add key** or **Edit key** opens a side panel with the key field and a show/hide button, and **Save key** there asks for your password. The default model on the same page is saved by the same **Save changes**; it does not ask for the password.
+**Voice input**, under **Settings → Providers**, holds the **Active transcriber**: the one service that turns your voice messages into text. Only configured services are offered. A keyed voice service needs its saved key; Audio Model is configured by its voice-model setting and does not need a separate service key here. Changing the transcriber is part of the Providers Save and asks for your password. Each voice service has its own row; for a keyed service, **Add key** or **Edit key** opens a side panel with the key field and a show/hide button, and **Save key** there asks for your password. The default model on the same page is saved by the same **Save changes**; it does not ask for the password.
 
 **Settings → Limits** opens with its three groups closed. The **No context length** link on a model opens Limits with **Model overrides** open and a new row filled in for that model; it is stored only when you press **Save changes**. If one group cannot be loaded, only that group shows the error and **Retry**; the other groups still save.
 
-**Tool-result share limit**, under **Settings → Limits**, sets the maximum share of the active model's context window that all tool results together may occupy before trimming is needed. The context window is how much information the model can read at once. This is a percentage of the whole window, not the smaller budget left after reserving space for output and instructions, and it replaces the absolute character count. The default is **50%**. Enter a percentage **greater than 0% and no more than 100%**; fractional percentages are accepted.
+In **Settings → Limits → Context and tool results**, five controls set individual result sizes and the default context window. They are separate from the combined **Tool-result share limit** below and the **Model overrides** group.
+
+| Control | Default | Accepted values | What it changes |
+|---|---|---|---|
+| MCP tool result cap | 62,500 characters | Whole numbers from 1 to 150,000 | How much text from one successful connected-server result can stay in the live conversation. |
+| Built-in tool result cap | 64,000 characters | Whole numbers from 1 to 150,000 | How much text from one successful built-in result can stay, including attachment text, recalled material and delegated reports. |
+| Failed tool result cap | 10,000 characters | Whole numbers from 1 to 150,000 | How much text from one failed, denied or skipped result can stay, for built-in and connected-server tools alike. |
+| Ingest bound | 8,000,000 bytes | Whole numbers from 1 to 8,388,607 | How much Omnipus reads from one network or subprocess source. This is a byte limit on incoming data, not a character limit on text kept in the conversation. |
+| Default context window | Unset | Leave blank to unset, or enter a positive whole number of tokens | The global context-window size choice. An agent's own override takes precedence, then a matching provider/model override, then this default. A known model capability still caps the effective window. |
+
+The three result caps count Unicode characters, not bytes or tokens. They are upper limits: a tight request budget can shorten a result further. **Model overrides** sets a window for one provider/model pair rather than changing the global default. Press **Save changes** to store edits; a successfully applied context change is used on the next turn without a gateway restart.
+
+**Tool-result share limit**, in the same group, sets the maximum share of the active model's context window that all tool results together may occupy before trimming is needed. The context window is how much information the model can read at once. This is a percentage of the whole window, not the smaller budget left after reserving space for output and instructions. It replaces the old combined character limit, not the individual result caps. The default is **50%**. Enter a percentage **greater than 0% and no more than 100%**; fractional percentages are accepted.
 
 For scripts, the same setting is `context.tool_result_share_fraction` in configuration and `tool_result_share_fraction` on `GET` / `PUT /api/v1/settings/context`. Send the fraction, not the percentage: `0.125` means 12.5%. An omitted field in a partial update keeps the saved value; it does not reset to 50%. Null, text, booleans, zero and values outside the interval are rejected. A successful update takes effect on the next turn without a restart.
 
-The existing Usage screen counts recorded agent-turn-loop tokens, not money. Auxiliary provider calls such as automatic recaps, fallback goal compilation and audio-model transcription are outside that per-call accounting path; see [observability](operations/observability.md#model-call-cache-accounting) for the coverage limits. Choose a period and use **By agent**, **By model**, **By provider**, or **By session** to see the breakdown. **Cached** is cache reads plus cache writes, already included in the total; **Uncached** is the rest. **By agent** and **By provider** also show **Cache hit**, the share of all input tokens read from the provider's cache. For example, a ratio of `0.8` appears as **80%**. A row with no input tokens shows no percentage, not **0%**. These numbers are on Usage, not a separate caching page. A ChatGPT sign-in call still counts tokens but is not given a dollar cost. See the provider's invoice for costs.
+The existing Usage screen counts recorded agent-turn-loop tokens, not money. Auxiliary provider calls such as automatic recaps, fallback goal compilation and audio-model transcription are outside that per-call accounting path; see [observability](operations/observability.md#model-call-cache-accounting) for the coverage limits. Choose a period for **By agent**, **By model** and **By provider**. **By session** is different: it lists up to 50 sessions, sorted by their recorded total tokens, and is not filtered by the selected period. Do not read those session totals as usage for the chosen day, week or month. **Cached** is cache reads plus cache writes, already included in the total; **Uncached** is the rest. **By agent** and **By provider** also show **Cache hit**, the share of all input tokens read from the provider's cache. For example, a ratio of `0.8` appears as **80%**. A row with no input tokens shows no percentage, not **0%**. These numbers are on Usage, not a separate caching page. A ChatGPT sign-in call still counts tokens but is not given a dollar cost. See the provider's invoice for costs.
 
 For **ChatGPT (subscription)**, Omnipus uses the same conversation identifier on successive calls to help the provider reuse cached input. This routing identifier is not built from credentials or message text. Reuse is not guaranteed: **Cache hit** measures the share of input tokens actually read from cache, not the percentage of calls with any cache reuse.
 
 There is no longer a computed default for `performance.max_parallel_agents`. Leave the field blank to let live available memory govern each new agent turn; the Limits section reports this as "automatic — bounded by available memory". Set a positive whole number when you need an explicit cap.
 
-If the host cannot measure available memory, Omnipus holds agent concurrency at a floor of **two** turns. It refuses to grow, never to run: the first two turns can start, while a third concurrent turn is refused. Set `performance.max_parallel_agents` explicitly if the host can safely support more.
+When available memory cannot be measured, or the host reports high memory pressure, the live memory gate allows at most **two** concurrent turns. An explicit smaller cap still applies; setting a larger `performance.max_parallel_agents` value does not bypass this memory gate. Check the host's memory reporting and available memory before expecting more turns to run at once.
 
 The rate limits live in Settings, Protection. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank for no limit. A change is stored when you press **Save changes** and applies to running agents without a restart; if the save fails, the error appears under the field. For scripts, the same two numbers are `max_agent_llm_calls_per_hour` and `max_agent_tool_calls_per_minute` on `GET` / `PUT /api/v1/security/rate-limits`. A time limit for a single command and a time limit for background processes are not offered in Settings for now, because Omnipus does not apply them yet.
 
@@ -188,7 +202,7 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 
 **Settings → System agents** lists Judge, Plan Supervisor and Omnipus. Judge and Plan Supervisor are internal engine agents and cannot join workspace teams. Omnipus is a hidden member of the default workspace only; open its fixed sidebar entry rather than looking for it in Team. These built-in agents cannot be deleted.
 
-**Edit** opens the shared agent editor, including Omnipus's model setting. You can repair its model here without a working model conversation. Judge and Plan Supervisor also have editable instructions; their capabilities remain fixed. There is no default-agent setting. The editor saves on its own; if the answer to a save is lost, it says **Save not confirmed — it may or may not have been stored.** with **Retry** instead of claiming it saved. The Omnipus chat's gear button opens this tab directly. While the list loads it says **Loading system agents…**; if it cannot load, the tab says **Could not load the system agents.** with **Retry**; if a refresh fails after it loaded, the rows stay with **Could not refresh — this list may be out of date.** and **Retry**.
+**Edit** opens the shared agent editor, including Omnipus's model setting. You can repair its model here without a working model conversation. Judge and Plan Supervisor also have editable instructions; their capabilities remain fixed. There is no default-agent setting. The editor saves on its own; if the answer to a save is lost, it says **Save not confirmed — it may or may not have been stored.** with **Retry** instead of claiming it saved. The Omnipus chat's gear button opens this tab directly. While the list loads it says **Loading System agents…**; if it cannot load, the tab says **The system agents could not be loaded** with **Retry**; if a refresh fails after it loaded, the rows stay with **Could not refresh — this list may be out of date.** and **Retry**.
 
 ## Third-party agents
 
@@ -208,8 +222,8 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 - Omnipus checks every row before it writes anything. If a field fails, the reason appears under that field, for example "The program path for Codex was not saved: it must be an absolute path.", the cursor moves to it, and **nothing is saved, the other rows included**. What you typed stays in place, so you can correct the field and save again.
 - The path is stored exactly as you typed it.
 - If your session has ended, the tab says to sign in again and keeps what you typed.
-- A successful save shows **Saved third-party agent settings.** Saving the same section from two browser tabs keeps the last save.
-- If the change reached disk but Omnipus could not refresh its running settings, the tab says **third-party agent settings were saved, but they are not applied yet; save again or restart Omnipus to apply them**. The change is already in the audit log and what you typed stays in place. Saving the same values again applies them and adds no second audit entry; saving different values adds their own entry.
+- A successful save uses the common **Saved at** indicator. Saving this whole section from two tabs keeps the last save.
+- If the values were saved but are not yet in use, the section shows **Saved, but not in use yet. Restart the gateway to apply it.** The submitted values remain visible as saved; matching drafts are no longer counted as unsaved. Newer edits stay unsaved. Use the restart offer or banner to apply the stored values. Do not assume a clean form offers a second Save of the same values.
 
 **Checks on every run.** The program is checked again each time a worker starts or continues, so a folder mounted into a workspace after the save counts from the next run. A continued run keeps the tool's own conversation but uses the program and parameters saved now, never the ones from its earlier run. If no program is saved for that tool, or it no longer passes the checks, the run is refused before anything starts — for a delegation, no worker session is created — and the person or agent that started it sees the reason — for example "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex." A program that fails a check is refused with the program's name and the check's name, for example "This agent cannot run: the program set for Codex in Settings → Third-party agents does not pass its checks (not_found). A person can fix it there." The refusal never contains a file path or an operating-system error; the path that failed is written to the server log. There is no fallback to a program found on the system path. The file that was checked is the file that runs. The command preview and **Send a test message** on a worker's **Runtime** tab use the same saved program and show the same refusal. They use your standard parameters too: the preview shows them at the end of the command, and a test message passes them to the tool. The runner connection check (`POST /api/v1/agents/{id}/runner/test`) uses the same saved program: when a run would be refused it returns that refusal and starts nothing. Otherwise it runs the program with `--version` and looks for its sign-in credentials on this machine; Omnipus sends no model request for it, so it spends no usage. Its result is fixed text for each outcome, for example `handshake-failed` when the program cannot start or prints nothing that looks like a version number. The program's own output and any operating-system error go to the server log only. An external worker's page does not show a Test Connection button. **Send a test message** is the real model test and does spend usage.
 
@@ -222,9 +236,17 @@ Every change is recorded in the audit log: a changed path or changed parameters,
 Each worker's **Runtime** tab shows the saved program and parameters read-only, with a link back to this tab. See [agents](agents.md) for what the worker keeps per agent.
 
 
+## Tool loading
+
+**Settings → Limits → Agents and goals → Tool loading** is on by default. It keeps each request smaller by advertising common tools first and loading additional tool definitions when needed. Turning it off sends the full available tool definitions with each request instead. See [Loaded tools stay with the conversation](tools.md#loaded-tools-stay-with-the-conversation) for how an on-demand load is retained.
+
+This switch changes the tool definitions sent to the model, not tool permissions or connected-server assignments. It is separate from MCP discovery settings. Changing it edits a draft: press **Save changes** to store it. The Save asks for your password once on a local install, or confirmation where there is no local password. Cancelling keeps the draft without storing it.
+
+For scripts, the switch is `tools_on_demand` on `GET` / `PUT /api/v1/performance` and `tools.manifest.compressed` in `config.json`: `true` means on-demand loading; `false` means the full available tool definitions.
+
 ## Goal timers
 
-The goal timer controls live in **Settings → Limits**, beside the goal completion budget. They govern when the existing keeper can start another work turn, not how long that turn may run.
+The goal timer controls live in **Settings → Limits → Agents and goals**, beside **Tries per goal**. They govern when the existing keeper can start another work turn, not how long that turn may run.
 
 | Control | Default | Accepted values | What it controls |
 |---|---|---|---|
@@ -401,18 +423,18 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 ## Data & retention
 
-**How long data is kept** holds two settings. Both are cleaned up each night.
+**How long data is kept** holds two settings. Cleanup runs daily while the gateway is running, not at a fixed nighttime hour. Chat-history cleanup also runs when the gateway starts. A successful retention change is read by subsequent cleanup passes.
 
 | Setting | Range | Default |
 |---|---|---|
 | Keep chat history for | 1 to 365 days | 90 |
 | Keep memory for | 1 to 730 days | 180 |
 
-**Keep forever**, next to the memory day count, stops the nightly clean-up of memory (the agents' reflections on past chats); the day count is switched off and kept for later. When you turn it off again, older reflections are deleted at the next nightly clean-up. If `config.json` sets the older `storage.retention.disabled` switch, nothing is deleted at all: the section says chat history and memory are both kept forever because of a setting in the configuration file, and that the day counts apply once it is removed. You can still change the day counts.
+**Keep forever**, next to the memory day count, stops age-based cleanup of memory (the agents' reflections on past chats); the day count is switched off and kept for later. When you turn it off again, older reflections are deleted at the next cleanup pass. If `config.json` sets the older `storage.retention.disabled` switch, nothing is deleted at all: the section says chat history and memory are both kept forever because of a setting in the configuration file, and that the day counts apply once it is removed. You can still change the day counts.
 
 These values are written only through Settings (or `GET` / `PUT /api/v1/settings/retention`); a whole-configuration `PUT /api/v1/config` that would change them is refused.
 
-**Clear all chat history** deletes every chat transcript after one confirmation. It cannot be undone.
+**Clear all chat history** asks for one confirmation and attempts to delete ordinary chats. Main chats and their helper sessions are kept. A running chat is stopped first; a chat that cannot be stopped, read or removed is kept and reported in the result. Deletion cannot be undone.
 
 ## Keys & secrets
 
@@ -424,7 +446,7 @@ The gateway token, under Gateway → Access, is used by apps and programs to sig
 
 - Usage is measured in tokens. If a provider bill surprises you, the Usage screen tells you which agent and which model drove it, not what it cost.
 - Session retention is 90 days by default, adjustable from 1 to 365 days in Data & retention. Older transcripts are deleted automatically, and that deletion is permanent.
-- **Clear all chat history** in Data & retention deletes every ordinary chat at once. There is no undo; if you need to keep the history, copy the data folder outside the app before clearing it. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
+- **Clear all chat history** in Data & retention attempts to delete ordinary chats. There is no undo; if you need to keep the history, copy the data folder outside the app before clearing it. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
 - **Backup and Restore has been removed** from Settings → Data & retention and the API. Existing backup files on disk are not deleted. Use the [Export & Import](export-import.md) page (or the command line) to move agents between installations; packages are not a full backup of the data folder.
 - A sign-in can expire. The provider row shows the state, and signing in again the same way restores it.
 - Changes in Limits apply on the next turn, with no restart; gateway port changes do need a restart.
@@ -435,6 +457,6 @@ The gateway token, under Gateway → Access, is used by apps and programs to sig
 - [security](security.md) — Protection, Sandbox & network and Keys & secrets: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
 - [agents](agents.md) — giving one agent its own model instead of the default, the agent roster, and external workers.
-- [memory](memory.md) — what the team remembers between chats, behind the Memory tab.
+- [memory](memory.md) — what the team remembers between chats, configured in Memory & recaps.
 - [connectors](connectors.md) — connector accounts and their credentials, managed on the Connectors screen.
 - [providers and models](providers-and-models.md) — how providers, sign-in methods, models, and defaults fit together.

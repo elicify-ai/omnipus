@@ -25,23 +25,15 @@ For example: `write_file` is set to Ask. With Auto-approve off, every file write
 
 ### Set tool policies
 
-1. Open **Skills & Tools**. Tool permissions moved there from Settings; Settings → Protection shows a notice linking to it.
-2. Open the tool permissions. Choose Allow, Ask or Deny for each tool. Changes save immediately using your signed-in session, with no second password prompt. Changing a tool to **Allow** can enable it for every agent that follows the global setting; stricter per-agent **Ask** or **Deny** settings still apply. This exception does not remove the existing confirmation checks on Integrations, Providers, Sandbox, Credentials or Performance saves.
-3. To tighten one agent, open that agent's **Tools & Permissions** panel. An agent's setting can only be stricter than the global one, never looser. See [tools](tools.md) for how the two combine.
+The installation-wide tool-permission editor and the unverified-skill trust control are temporarily unavailable in the web app until the Skills & Tools update lands. Neither is in the new Settings, and Skills & Tools has no replacement controls yet. Existing configured values still apply.
 
-A global policy change must also be applied to running agents. If the save result
-says the settings were saved but could not be applied, the saved change has not
-been undone, but running agents may still use the previous permissions. Retry
-applying the change, or restart Omnipus before relying on it. The global-policy
-API returns HTTP 503 for this result, rather than reporting a successful update.
+To tighten one agent, open that agent's **Tools & Permissions** panel. This does not change the installation-wide ceiling: an agent's setting can only be stricter, never looser. See [tools](tools.md) for how the two combine.
 
-The global policy auto-save indicator shows the server's recovery message for
-this result, not just a generic server-unavailable message. It remains an error,
-not a successful-save confirmation.
+For scripts, saving a global policy and applying it to running agents are separate steps. A saved-but-not-applied response from `PUT /api/v1/security/tool-policies` means running agents may still use the previous policies. See [Replacing tool policies through the API](tools.md#replacing-tool-policies-through-the-api) for the response and recovery steps. There is no global-policy auto-save indicator in the current web app.
 
 On a new installation the shell tool, `bash`, is set to **Ask**.
 
-On a new installation `install_skill` is also set to **Ask**: you approve each skill install, and the card keeps appearing even with Auto-approve on (see the always-ask list below). An installation that already saved `install_skill` as Allow keeps that setting; change it in **Tool Access — Global Policies** if you want the prompt.
+On a new installation `install_skill` is also set to **Ask**: you approve each skill install, and the card keeps appearing even with Auto-approve on (see the always-ask list below). An installation that already saved `install_skill` as Allow keeps that setting. The temporary absence of the installation-wide editor does not reset it.
 
 ### Turn Auto-approve on or off
 
@@ -168,11 +160,11 @@ Changing God Mode always asks you to re-type your password. After that:
 - Turning it on shows a warning-styled "God-mode enabled" message — or, on a boot not yet authorized, "God-mode authorized — restart the gateway to activate it."
 - Turning it off shows "God-mode disabled."
 
-While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — and when the sidebar is hidden, a small red dot sits at the left edge of the screen instead, just below the header bar (clear of the sidebar-open button, and above full-screen panels on phones). Clicking either opens **Settings**, **Protection**, scrolled to and focused on the **Turn on God Mode…** button, even if Settings is already open on another section. The chat header does not repeat God Mode; the composer **Auto** button stays pressed and disabled while God Mode is on, and its tooltip says so. In every other state — off, still loading, unknown, fetch error, or development-mode bypass — neither indicator shows anything at all: there is no amber "God Mode ?" unknown variant.
+While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — and when the sidebar is hidden, a small red dot sits at the left edge of the screen instead, just below the header bar (clear of the sidebar-open button, and above full-screen panels on phones). Clicking either indicator opens **Settings → Protection**, scrolled to and focused on the God Mode control, even if Settings is already open on another section. While God Mode is on, the button is **Turn off God Mode…**. The chat header does not repeat God Mode; the composer **Auto** button stays pressed and disabled while God Mode is on, and its tooltip says so. In every other state — off, still loading, unknown, fetch error, or development-mode bypass — neither indicator shows anything at all: there is no amber "God Mode ?" unknown variant.
 
 The health summary in Settings → Protection also raises a high-severity "God-mode is armed" warning whenever it is switched on, or authorized and waiting for a restart. Turn it off with the **Turn off God Mode…** button in **Settings**, **Protection**, after Approvals.
 
-In an agent's **Tools & Permissions** panel and in **Tool Access — Global Policies**, each tool set to Ask carries a small marker showing what Auto-approve does with it:
+In an agent's **Tools & Permissions** panel, each tool set to Ask carries a small marker showing what Auto-approve does with it:
 
 | Marker | Meaning |
 |---|---|
