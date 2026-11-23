@@ -46,10 +46,11 @@
 // every child kind of the current slice's mandatory inventory (bash
 // foreground, bash background, God Mode, environment_setup, account check,
 // git version probe) with the D-9 sentinel through its real harness and
-// asserts the sentinel reaches no sink. The env-injection seam (the agent
-// environment builder handing program variables to each kind's harness,
-// FR-011) does not exist at RED: each kind reports BLOCKED naming its seam,
-// never a skip.
+// asserts the sentinel reaches no sink. Foreground/background share the actual
+// seven-sink campaign in pkg/gateway::TestProgramMasking_ActualSevenSinks;
+// account check runs here. The other three mandatory kinds retain loud,
+// specific unfinished-fixture markers, never skips. Token delivery alone is
+// not every-sink coverage.
 //
 // Oracle: I-1 (Attach is the only way to add program variables to a child;
 // one masking writer per output stream in the same call) and S-106.
@@ -767,29 +768,27 @@ func aliasedExec(set *programs.ProgramVariables) {
 			"the aliased os/exec constructor must still be tracked")
 	})
 
-	// Part (b): every child kind of the current slice's mandatory inventory
-	// with the sentinel, asserting the sentinel reaches no sink. Each kind's
-	// harness needs the env-injection seam (the agent environment builder
-	// handing program variables to the kind, FR-011 runtime); where the seam
-	// is missing the kind reports BLOCKED — never a skip.
-	const s106Seam = "the agent environment builder cannot hand program variables to this child kind (FR-011 runtime attach) — required by S-106(b)"
-	t.Run("b_bash_foreground_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; the bash foreground harness has no program-variable seam yet", s106Seam)
-	})
-	t.Run("b_bash_background_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; the bash background harness has no program-variable seam yet", s106Seam)
-	})
+	// Part (b): every mandatory kind needs actual execution and real sink
+	// observations, not just a source guard. These two former marker rows are
+	// relocated, not removed: b_bash_foreground_sentinel_reaches_no_sink and
+	// b_bash_background_sentinel_reaches_no_sink both map to
+	// pkg/gateway::TestProgramMasking_ActualSevenSinks/S48_every_sink_value_free.
+	// That single real registered-child campaign covers each kind's success
+	// and error paths, rotation and all seven sinks, including nonvacuous
+	// transcript/model/published-output assertions. Do not replace its real
+	// persistence failure with empty passing wrappers here.
+	const s106Seam = "this mandatory child kind still needs a combined real runtime/sink fixture — required by S-106(b)"
 	t.Run("b_bash_god_mode_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; the God Mode shell path has no program-variable seam yet", s106Seam)
+		t.Fatalf("BLOCKED: %s; ordinary foreground/background coverage does not exercise the actual God Mode path through all seven sinks", s106Seam)
 	})
 	t.Run("b_environment_setup_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; the environment_setup runner has no program-variable seam yet", s106Seam)
+		t.Fatalf("BLOCKED: %s; actual setup token-delivery coverage is not a setup-child seven-sink campaign", s106Seam)
 	})
 	t.Run("b_account_check_sentinel_reaches_no_sink", func(t *testing.T) {
 		assertAccountCheckSinks(t)
 	})
 	t.Run("b_git_version_probe_sentinel_reaches_no_sink", func(t *testing.T) {
-		t.Fatalf("BLOCKED: %s; the git version probe (FR-014) is not implemented yet", s106Seam)
+		t.Fatalf("BLOCKED: %s; account-check and ordinary bash observations do not exercise the actual FR-014 git probe through all seven sinks", s106Seam)
 	})
 }
 

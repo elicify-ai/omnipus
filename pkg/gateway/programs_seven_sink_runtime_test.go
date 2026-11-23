@@ -5,6 +5,8 @@
 package gateway
 
 // S48 all seven sinks belong to this single real runtime/rotation/export campaign.
+// S106's foreground and background mandatory-kind rows share this actual child
+// campaign: each executes success/error paths; neither is a source-only guard.
 // Absence is checked only after every sink's nonsecret presence control is seen.
 import (
 	"bytes"
