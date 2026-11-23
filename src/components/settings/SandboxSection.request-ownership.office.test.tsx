@@ -77,7 +77,9 @@ beforeEach(() => {
 })
 
 describe('Office Settings refusal request ownership (SFH-03)', () => {
-  it('restores A while B is staged, then restores B on B own refusal without cancelling its confirmation', async () => {
+  it('leaves staged B draft and input alone on A refusal, then restores B on its own refusal without cancelling its confirmation', async () => {
+    // Dispatcher decision 2026-11-24: an older failure cannot restore A over
+    // newer staged B. A's path and reason belong in the shared save error.
     const first = deferred<SandboxConfigResponse>()
     const second = deferred<SandboxConfigResponse>()
     vi.mocked(updateSandboxConfig).mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
@@ -91,9 +93,14 @@ describe('Office Settings refusal request ownership (SFH-03)', () => {
       const pendingB = await stage(B)
       expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
       expect(pendingB.input).toHaveValue('')
+      const draftPaths = () => screen.getAllByRole('button', { name: /^Delete path /, hidden: true }).map(button => button.getAttribute('aria-label'))
+      const stagedPaths = draftPaths()
+      expect(stagedPaths, 'instrument: B really joined the newer staged draft').toContain(`Delete path ${B}`)
 
       await refuse(first, REASON_A)
-      expect.soft(pendingB.input, 'SFH-03: A refusal must restore A, not take B from a shared pending ref').toHaveValue(A)
+      expect.soft(pendingB.input, 'SFH-03: A refusal must leave the newer staged B input alone').toHaveValue('')
+      expect(draftPaths(), 'SFH-03: A refusal cannot roll back any part of the newer staged draft').toEqual(stagedPaths)
+      expect(screen.getByText('Save failed')).toHaveAttribute('title', `allowed_paths[1]: ${REASON_A}`)
       expect(pendingB.dialog, 'B confirmation survives A outcome').toBeVisible()
       expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
       await confirm(pendingB.dialog)
@@ -102,7 +109,7 @@ describe('Office Settings refusal request ownership (SFH-03)', () => {
       expect(bodyB.allowed_paths, 'instrument: retained confirmation still sends its own B edit').toContain(B)
       expect(bodyB.ssrf).toEqual({ allow_internal: [] })
       expect(tokenB).toBe('office-consent-B')
-      // Clearing the returned A draft is an ordinary input action, not a
+      // Keep the empty-input action before B's own refusal; this is not a
       // manual deletion of any failed list row. B must retain its own data.
       fireEvent.change(pendingB.input, { target: { value: '' } })
       const rowB = bodyB.allowed_paths?.indexOf(B) ?? -1
