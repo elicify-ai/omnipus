@@ -44,12 +44,11 @@ func TestProgramProvenance_HandOn(t *testing.T) {
 	// real gateway admission/router/ledger and running Ops turn, exact count0
 	// and Telegram notice after the connected Ops count16 positive control.
 
-	t.Run("S77_telegram_to_new_board_task_ui_task_independent", func(t *testing.T) {
-		// GREEN asserts here (spec S-77): the task run outputs 0 with the
-		// telegram notice; a task with the same text created by the person
-		// in the UI follows A-1 and outputs 16.
-		t.Fatalf("BLOCKED: %s — required by S-77's two-task assertion", s1HandOnSeam)
-	})
+	// S77_telegram_to_new_board_task_ui_task_independent migrated intact to
+	// pkg/gateway::TestProgramProvenance_ActualBoardTasks: actual Telegram
+	// create_task versus the person's real REST create with the same prompt,
+	// actual Board start/executor/launcher/commands, exact count0/Telegram
+	// notice versus count16 and exact lineage/receiving origin sets.
 
 	t.Run("S78_provenance_survives_restart", func(t *testing.T) {
 		// GREEN asserts here (spec S-78): a helper launched from a Telegram
