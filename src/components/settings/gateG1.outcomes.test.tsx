@@ -2,9 +2,10 @@
 // Inputs and expected outcomes are the spec/gate scenarios. Only fetch is
 // replaced: serializers, generated validators, QueryClient and sections are real.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { jsonG1, retentionG1, sectionG1, thirdPartyG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
+import { SettingsScreen } from '@/components/screens/SettingsScreen'
+import { heldG1, jsonG1, renderG1, retentionG1, sectionG1, thirdPartyG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 const save = () => screen.getByRole('button', { name: 'Save changes' })
@@ -80,6 +81,47 @@ describe('F7 C-6 — lost answers use canonical pending keys', () => {
     expect(await screen.findByText(notInUse), `F7: ${key} must match the UI row and prevent false not-saved/in-use claims`).toBeVisible()
     expect(screen.queryByText(/This change was not saved/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument()
+  })
+
+  // G2-F2, FR-033 and docs/settings.md, Saving changes. Recovering a
+  // restart-gated save must drive the REAL shell offer, not a callback spy.
+  it.each(['immediate', 'retry'] as const)('G2-F2 %s recovery opens Restart now? with Bind address, never while unknown', async (recovery) => {
+    const t = transportG1()
+    const pending = heldG1()
+    let persisted = false
+    let checkingAgain = false
+    let postWriteReads = 0
+    const entry = { key: 'gateway.host', persisted_value: '0.0.0.0', applied_value: '127.0.0.1', reason: 'restart_required' }
+    t.on('PUT', '/config', () => { persisted = true; throw new TypeError('G2 bind response lost after persistence') })
+    t.on('GET', '/config/pending-restart', () => {
+      if (!persisted) return jsonG1([])
+      postWriteReads += 1
+      return recovery === 'retry' && !checkingAgain
+        ? jsonG1({ error: 'G2 saved-state read unavailable' }, 500)
+        : pending.promise.then((response) => response.clone())
+    })
+    const { client } = renderG1(<SettingsScreen section="gateway" requestedTab="gateway" />)
+    await waitFor(() => expect(client.getQueryData(['pending-restart'])).toEqual([]))
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Bind address' }), '0.0.0.0')
+    await userEvent.click(save())
+    await userEvent.click(await screen.findByRole('button', { name: 'Listen on all interfaces' }))
+    await waitFor(() => expect(postWriteReads, 'instrument: canonical pending read must run after the lost PUT').toBeGreaterThan(0))
+    expect(screen.queryByRole('dialog', { name: 'Restart now?' }), 'G2-F2: an unknown outcome cannot offer a restart yet').not.toBeInTheDocument()
+    if (recovery === 'retry') {
+      await screen.findByText('1 change may not have been saved')
+      checkingAgain = true
+      // The shell banner may also offer Retry; use the actual Save bar retry.
+      await userEvent.click(within(screen.getByTestId('settings-save-bar')).getByRole('button', { name: 'Retry' }))
+      expect(screen.queryByRole('dialog', { name: 'Restart now?' }), 'G2-F2: a held Retry is still unknown').not.toBeInTheDocument()
+    }
+    await act(async () => { pending.resolve(jsonG1([entry])) })
+    expect(await screen.findByText(notInUse), 'instrument: recovery must have established saved, not in use').toBeVisible()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Restart now?' }), 'G2-F2/FR-033: recovered restart_required save must immediately open the real Restart now? offer').not.toBeNull())
+    const offer = screen.getByRole('dialog', { name: 'Restart now?' })
+    expect(within(offer!).getByTestId('restart-labels')).toHaveTextContent('Bind address')
+    expect(within(offer!).getByRole('button', { name: 'Later' })).toBeEnabled()
+    expect(within(offer!).getByRole('button', { name: 'Restart now' })).toBeEnabled()
+    expect(t.writes('/config').map((c) => c.body)).toEqual([{ gateway: { host: '0.0.0.0' } }])
   })
 })
 
