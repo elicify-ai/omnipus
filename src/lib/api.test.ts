@@ -30,6 +30,7 @@ import {
   resetConfigCoercionCount,
   fetchCommands,
 } from './api'
+import type { PendingRestartEntry, RetentionSettings, RetentionSettingsUpdate } from './api/generated/openapi-types'
 import * as telemetry from './telemetry'
 import { wireAvailableDetail, wireHistoryPage } from '../../tests/chat-history-paging/legacy-wire'
 import { expectAvailableHistoryDetail, expectHistoryPage } from '../../tests/chat-history-paging/legacy-fixtures'
@@ -388,7 +389,10 @@ describe('Security API helpers', () => {
 
   describe('fetchPendingRestart', () => {
     it('GET /api/v1/config/pending-restart — happy path', async () => {
-      const payload = [{ key: 'security.prompt_guard', applied_value: 'low', persisted_value: 'high' }]
+      // Settings #1519 C-2: reason is required; gateway.port is restart-gated.
+      const payload: PendingRestartEntry[] = [{
+        key: 'gateway.port', applied_value: 8080, persisted_value: 9090, reason: 'restart_required',
+      }]
       fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
 
       const { fetchPendingRestart } = await import('./api')
@@ -1180,31 +1184,44 @@ describe('updateConfig: sends wire shape to backend', () => {
     expect(gw.bind_address).toBeUndefined()
   })
 
-  it('translates data.session_retention_days → storage.retention.session_days', async () => {
+  it('keeps retention out of Gateway PUT and saves it only through /settings/retention (FR-044)', async () => {
+    // Settings #1519 C-3 / FR-044 supersedes the old generic-config writer.
+    // 30 is a representative valid day count, not a numeric-boundary oracle.
     const rawConfigResponse = {
       gateway: { host: '127.0.0.1', port: 8080 },
       security: {},
-      storage: { retention: { session_days: 30 } },
+      storage: { retention: { session_days: 90 } },
     }
+    const retention: RetentionSettings = {
+      session_days: 30, memory_retros_days: 180,
+      memory_retros_forever: false, keep_everything_forever: false,
+    }
+    const update: RetentionSettingsUpdate = { session_days: 30 }
+    fetchSpy.mockResolvedValueOnce(makeOkResponse(rawConfigResponse))
+      .mockResolvedValueOnce(makeOkResponse(retention))
 
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify(rawConfigResponse), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-
-    const { updateConfig } = await import('./api')
-    await updateConfig({ data: { session_retention_days: 30 } })
-
-    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const { updateConfig, updateRetentionSettings } = await import('./api')
+    await updateConfig({
+      gateway: { bind_address: '127.0.0.1', port: 8080 },
+      data: { session_retention_days: 30 },
+    })
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [configUrl, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const body = JSON.parse(init.body as string) as Record<string, unknown>
-
-    // storage.retention.session_days must be present; data.session_retention_days must not.
-    const storage = body.storage as Record<string, unknown>
-    const retention = storage.retention as Record<string, unknown>
-    expect(retention.session_days).toBe(30)
+    expect(configUrl).toBe('/api/v1/config')
+    expect(init.method).toBe('PUT')
+    expect(body).toEqual({ gateway: { host: '127.0.0.1', port: 8080 } })
     expect(body.data).toBeUndefined()
+    expect(body.storage).toBeUndefined()
+
+    // Preserve the positive retention-save proof at its one authorized path.
+    const result = await updateRetentionSettings(update)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const [retentionUrl, retentionInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    expect(retentionUrl).toBe('/api/v1/settings/retention')
+    expect(retentionInit.method).toBe('PUT')
+    expect(JSON.parse(retentionInit.body as string)).toEqual(update)
+    expect(result).toEqual(retention)
   })
 
   it('does not include dev_mode_bypass in the PUT body (blocked server-side)', async () => {

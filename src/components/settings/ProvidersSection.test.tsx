@@ -151,6 +151,35 @@ const PLATFORM_APP_STATE = {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Settings #1519 D-9 ids6/7 move the existing actions into More actions.
+// Keep every action/result oracle below; only the route to the action changes.
+async function providerMenu(id: string) {
+  const row = await screen.findByTestId(`provider-row-${id}`)
+  expect(within(row).queryByRole('button', { name: 'Set as default model…' })).not.toBeInTheDocument()
+  expect(within(row).queryByRole('button', { name: 'Check with my account' })).not.toBeInTheDocument()
+  await userEvent.click(within(row).getByRole('button', { name: /^More actions/i }))
+  return screen.findByRole('menu')
+}
+
+async function providerMenuAction(id: string, name: 'Set as default model…' | 'Check with my account') {
+  const menu = await providerMenu(id)
+  await userEvent.click(within(menu).getByRole('menuitem', { name }))
+}
+
+async function expectNoProviderAction(id: string, name: 'Set as default model…' | 'Check with my account') {
+  const row = await screen.findByTestId(`provider-row-${id}`)
+  expect(within(row).queryByRole('button', { name })).not.toBeInTheDocument()
+  const more = within(row).queryByRole('button', { name: /^More actions/i })
+  if (more) {
+    await userEvent.click(more)
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).queryByRole('menuitem', { name })).not.toBeInTheDocument()
+  } else {
+    // No menu at all is valid when neither secondary action is available.
+    expect(within(row).queryByRole('button', { name: /^More actions/i })).toBeNull()
+  }
+}
+
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
@@ -1083,7 +1112,7 @@ describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
     await waitFor(() => screen.getByTestId('provider-config-sheet'))
 
     // Click the Test button (inside the Sheet)
-    fireEvent.click(screen.getByRole('button', { name: /^test$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('test-validation-banner-openrouter')).toBeInTheDocument()
@@ -1107,7 +1136,7 @@ describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
     fireEvent.click(screen.getByTestId('configure-btn-openrouter'))
     await waitFor(() => screen.getByTestId('provider-config-sheet'))
 
-    fireEvent.click(screen.getByRole('button', { name: /^test$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith(
@@ -1127,7 +1156,7 @@ describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
     fireEvent.click(screen.getByTestId('configure-btn-openrouter'))
     await waitFor(() => screen.getByTestId('provider-config-sheet'))
 
-    fireEvent.click(screen.getByRole('button', { name: /^test$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith(
@@ -1150,7 +1179,7 @@ describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
     fireEvent.click(screen.getByTestId('configure-btn-openrouter'))
     await waitFor(() => screen.getByTestId('provider-config-sheet'))
 
-    fireEvent.click(screen.getByRole('button', { name: /^test$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith(
@@ -1795,7 +1824,7 @@ describe('ProvidersSection — Set as default from the provider row (FR-019)', (
     renderSection()
 
     await screen.findByTestId('provider-row-anthropic')
-    fireEvent.click(screen.getByTestId('set-default-btn-anthropic'))
+    await providerMenuAction('anthropic', 'Set as default model…')
 
     await waitFor(() => expect(screen.getByTestId('default-model-select')).toBeInTheDocument())
     // Pre-filtered: OpenRouter's models are not on offer even though it is connected.
@@ -1825,6 +1854,7 @@ describe('ProvidersSection — Set as default from the provider row (FR-019)', (
 
     await screen.findByTestId('provider-row-openrouter')
     expect(screen.queryByTestId('set-default-btn-openrouter')).not.toBeInTheDocument()
+    await expectNoProviderAction('openrouter', 'Set as default model…')
   })
 })
 
@@ -1999,7 +2029,7 @@ describe('ProvidersSection — Check with my account (FR-031)', () => {
     renderSection()
 
     await screen.findByTestId('provider-row-openai')
-    fireEvent.click(screen.getByTestId('check-entitlement-btn-openai'))
+    await providerMenuAction('openai', 'Check with my account')
     await waitFor(() => expect(api.checkEntitlement).toHaveBeenCalledWith('openai'))
 
     await expandRow('openai')
@@ -2021,7 +2051,7 @@ describe('ProvidersSection — Check with my account (FR-031)', () => {
     // Exactly one upstream request; a second click is a client-side no-op —
     // the result already in hand is shown, nothing new is requested.
     expect(api.checkEntitlement).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByTestId('check-entitlement-btn-openai'))
+    await providerMenuAction('openai', 'Check with my account')
     expect(api.checkEntitlement).toHaveBeenCalledTimes(1)
   })
 
@@ -2032,7 +2062,7 @@ describe('ProvidersSection — Check with my account (FR-031)', () => {
     renderSection()
 
     await screen.findByTestId('provider-row-openai')
-    fireEvent.click(screen.getByTestId('check-entitlement-btn-openai'))
+    await providerMenuAction('openai', 'Check with my account')
 
     await waitFor(() => {
       expect(screen.getByTestId('entitlement-error-openai')).toHaveTextContent(
@@ -2054,6 +2084,7 @@ describe('ProvidersSection — Check with my account (FR-031)', () => {
     renderSection()
     await screen.findByTestId('provider-row-my-custom')
     expect(screen.queryByTestId('check-entitlement-btn-my-custom')).not.toBeInTheDocument()
+    await expectNoProviderAction('my-custom', 'Check with my account')
   })
 
   it('discards an in-flight result if the row is deleted before it resolves', async () => {
@@ -2069,7 +2100,7 @@ describe('ProvidersSection — Check with my account (FR-031)', () => {
     renderSection()
 
     await screen.findByTestId('provider-row-openai')
-    fireEvent.click(screen.getByTestId('check-entitlement-btn-openai'))
+    await providerMenuAction('openai', 'Check with my account')
     await waitFor(() => expect(api.checkEntitlement).toHaveBeenCalledWith('openai'))
 
     // Provider removed while the check is still in flight — GET /providers
