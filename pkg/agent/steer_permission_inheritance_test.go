@@ -18,6 +18,15 @@
 // inheritSessionPermissions by hand — so a regression that breaks only the
 // WIRING (reintroducing exactly this defect) fails these tests even though
 // it would leave the isolated unit tests green.
+//
+// C-26 (Skills & Tools redesign, founder R2-Q1, 2026-11-22) retires the GRANT
+// half of this hand-over. An allowance is keyed by the agent alone, so a
+// self-helper looks it up with no copy at spawn and a delegation to another
+// agent inherits nothing (rows Key and Covers; code-path row
+// ApprovalGrantStore.InheritFrom, "copies no grants"). The per-chat
+// Auto-approve modifier half is unchanged (the first two tests below). The
+// grant tests at the end of this file were migrated accordingly; each one's
+// own comment names its old test and the row that ordered the change.
 
 package agent
 
@@ -157,24 +166,102 @@ func TestSteerLauncher_PermissionInheritance_ParentChatOnRunsUnprompted(t *testi
 	require.Equal(t, int32(1), stub.calls.Load(), "the RUNS tool must run under the inherited Auto-ON modifier")
 }
 
-// TestSteerLauncher_PermissionInheritance_StandingGrantHonoured proves the
-// other half of the hand-over: ApprovalGrantStore.InheritFrom, not only the
-// SessionModeStore modifier. A parent's earlier "Always Allow" grant for
-// this EXACT call — recorded, in production, by the gateway's tool-approval
-// REST handler (rest_tool_registry.go's approvalGrantRecorder) after a human
-// clicks Always Allow — must be honoured by a delegate spawned afterward,
-// with no second prompt. Global Auto stays off throughout and no per-chat
-// modifier is set, so only the standing grant can be responsible for the
-// delegate's call running unprompted.
-func TestSteerLauncher_PermissionInheritance_StandingGrantHonoured(t *testing.T) {
+// TestSteerLauncher_PermissionInheritance_StandingGrantNotCopiedToAnotherAgent
+// replaces TestSteerLauncher_PermissionInheritance_StandingGrantHonoured.
+//
+// FLIPPED by C-26 (row Covers): the old test expected a parent chat's standing
+// grant for mia to be honoured by a delegate of ANOTHER agent ("worker") with
+// no second prompt, because SteerLauncher.inheritDelegatePermissions copied it
+// through ApprovalGrantStore.InheritFrom. C-26 deletes that copy. Row Covers:
+// "A helper of another agent, or a delegation to another agent, is not covered
+// and asks as usual"; code-path row ApprovalGrantStore.InheritFrom: "copies no
+// grants (self-helpers share the key; other agents get nothing)"; security
+// point 5: "a delegation to another agent no longer inherits the delegating
+// chat's grants"; test row 60: "a delegation to another agent asks". A correct
+// GREEN fails the old test.
+//
+// KEPT: the real Launch+Dispatch wiring; global Auto off and no per-chat
+// modifier, so only the allowance question can decide whether the delegate
+// prompts; the same tool and the same empty arguments; and the instrument that
+// the allowance really exists for the parent's own agent, so a prompt below can
+// never be explained by a missing record. The scripted approver denies, so the
+// tool must not run behind an answer nobody gave. The old "delegate honours a
+// standing grant" check lives on in its only C-26-valid form, the next test.
+func TestSteerLauncher_PermissionInheritance_StandingGrantNotCopiedToAnotherAgent(t *testing.T) {
 	al, launcher, parentSessionID, approver, stub := steerInheritanceFixture(t, false) // global Auto OFF, plain Ask everywhere
+	args := map[string]any{}
 
-	require.True(t, al.ApprovalGrants().Record(parentSessionID, testDefaultAgentID, "knowledge_edit", map[string]any{}),
-		"recording the parent's Always Allow grant under its own session+agent key")
+	require.True(t, al.ApprovalGrants().Record(parentSessionID, testDefaultAgentID, "knowledge_edit", args),
+		"recording the parent agent's standing allowance")
+	require.True(t, al.ApprovalGrants().IsAllowed(parentSessionID, testDefaultAgentID, "knowledge_edit", args),
+		"instrument: the parent's own agent holds the allowance")
 
 	launchWorkerDelegate(t, al, launcher, parentSessionID, approver, stub, "call-grant")
 
-	require.Zero(t, approver.countFor("knowledge_edit"),
-		"the delegate must inherit the parent's standing grant and skip the prompt")
-	require.Equal(t, int32(1), stub.calls.Load(), "the tool must run once the inherited grant settles the call")
+	require.Equal(t, 1, approver.countFor("knowledge_edit"),
+		"C-26 Covers: a delegation to ANOTHER agent is not covered by the parent agent's allowance and asks as usual")
+	require.Zero(t, stub.calls.Load(), "the tool must not run before the (denied) prompt resolves")
+}
+
+// TestSteerLauncher_PermissionInheritance_SelfDelegateSharesTheAgentAllowance
+// is the positive half of C-26's Covers row ("helpers the agent starts for
+// itself are covered", test row 60: "a self-helper shares the allowance ... no
+// grant copy at spawn"), driven through the real Launch+Dispatch path. The
+// delegating chat belongs to "worker" and so does the delegate, so the
+// delegation is a self-helper, and the scripted approver would deny any prompt.
+//
+// It carries what the old StandingGrantHonoured test guarded (a delegate
+// honours a standing allowance, with no second prompt and the tool running once)
+// in the only form C-26 still allows, and adds the case the old copy could not
+// serve.
+//
+//   - "recorded in the delegating chat": a control. Today's InheritFrom copy and
+//     C-26's shared key both settle it, so it passes before and after.
+//   - "recorded in another chat of the same agent": C-26 row Key ("The session id
+//     is no longer part of the key") and row Covers ("every session of that
+//     agent"). No spawn copy can reach an allowance recorded in a chat that is
+//     not the delegating one, so today's delegate asks; C-26's delegate does not.
+func TestSteerLauncher_PermissionInheritance_SelfDelegateSharesTheAgentAllowance(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		recordInParent bool
+		why            string
+	}{
+		{
+			name:           "recorded in the delegating chat",
+			recordInParent: true,
+			why:            "a self-helper must honour the allowance its own agent already holds, with no prompt",
+		},
+		{
+			name:           "recorded in another chat of the same agent",
+			recordInParent: false,
+			why: "C-26 Key and Covers: the allowance belongs to the agent, so a self-helper holds it " +
+				"although it was recorded in a chat that is not the delegating one and nothing was copied",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			al, launcher, _, approver, stub := steerInheritanceFixture(t, false) // global Auto OFF, plain Ask everywhere
+			args := map[string]any{}
+
+			// The delegating chat is owned by "worker", which is also the delegation's
+			// target: a self-helper.
+			delegatingChat := newTestSteeringSessionOwnedBy(t, al, "", "worker")
+			otherWorkerChat := newTestSteeringSessionOwnedBy(t, al, "", "worker")
+			recordedIn := otherWorkerChat
+			if tc.recordInParent {
+				recordedIn = delegatingChat
+			}
+			require.NotEqual(t, delegatingChat, otherWorkerChat, "fixture defect: the two worker chats must be distinct")
+
+			require.True(t, al.ApprovalGrants().Record(recordedIn, "worker", "knowledge_edit", args),
+				"recording the worker agent's standing allowance")
+			require.True(t, al.ApprovalGrants().IsAllowed(recordedIn, "worker", "knowledge_edit", args),
+				"instrument: the store sees the record before any delegation")
+
+			launchWorkerDelegate(t, al, launcher, delegatingChat, approver, stub, "call-self")
+
+			require.Zero(t, approver.countFor("knowledge_edit"), tc.why)
+			require.Equal(t, int32(1), stub.calls.Load(), "the tool must run once the agent's allowance settles the call")
+		})
+	}
 }
