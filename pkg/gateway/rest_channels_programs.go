@@ -11,7 +11,6 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
 
@@ -40,7 +39,7 @@ func (a *restAPI) getChannelPrograms(w http.ResponseWriter, id string) {
 		jsonErr(w, http.StatusNotFound, "unknown instance")
 		return
 	}
-	jsonOK(w, gen.ChannelProgramsSetting{Allowed: inst.ProgramsAllowed, Revision: config.ChannelConfigRevision(live, id)})
+	jsonOK(w, gen.ChannelProgramsSetting{Allowed: inst.ProgramsAllowed, Revision: channelProgramsRevision(live, id)})
 }
 
 func (a *restAPI) putChannelPrograms(w http.ResponseWriter, r *http.Request, id string) {
@@ -53,7 +52,7 @@ func (a *restAPI) putChannelPrograms(w http.ResponseWriter, r *http.Request, id 
 		if _, ok := live.Channels[id]; !ok {
 			return &programsWriteError{status: http.StatusNotFound, message: "unknown instance"}
 		}
-		if req.Revision != config.ChannelConfigRevision(live, id) {
+		if req.Revision != channelProgramsRevision(live, id) {
 			return &programsWriteError{status: http.StatusConflict,
 				message: "This connection changed since this page was loaded. Check the current state before saving again."}
 		}

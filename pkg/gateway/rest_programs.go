@@ -12,6 +12,8 @@ package gateway
 // answered 403 before the body is read.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,7 +170,22 @@ func readProgramsBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 // programsRevision is the ConfigurationRevision of the programs settings.
 func programsRevision(cfg *config.Config) string {
-	return config.RevisionHash(cfg.Programs)
+	return contractRevision(config.RevisionHash(cfg.Programs))
+}
+
+// channelProgramsRevision is the ConfigurationRevision of one channel's
+// programs setting: it changes whenever the channel's configuration does.
+func channelProgramsRevision(cfg *config.Config, id string) string {
+	return contractRevision(config.ChannelConfigRevision(cfg, id))
+}
+
+// contractRevision widens a short config revision token to the contract's
+// ConfigurationRevision form, 64 lowercase hex characters (SHA-256), which
+// the SPA's generated schema enforces. Equal tokens stay equal and different
+// tokens stay different, so the write precondition is unchanged.
+func contractRevision(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // programEntryView renders one entry with its connection (value-free).
