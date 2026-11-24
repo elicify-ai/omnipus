@@ -139,7 +139,8 @@ func (t *ToolsTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	// Next: query present and non-empty → search+auto-load path.
 	query, _ := args["query"].(string)
 	if strings.TrimSpace(query) != "" {
-		return t.execSearchAndLoad(ctx, query)
+		// C-17: the granted, not-denied skills of the agent are found too.
+		return withSkillHits(t.execSearchAndLoad(ctx, query), searchAgentSkills(ctx, query, t.maxSearchResults))
 	}
 
 	// Neither provided.

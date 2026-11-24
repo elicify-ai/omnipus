@@ -970,7 +970,33 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 		ex.ruleAskSettled = ruleAsk
 		return agentLoopRunTurnToolsExecuteNext
 	}
+	ex.discardApprovalPin()
 	return ex.denyAskedCall(tc, denialReason)
+}
+
+// discardApprovalPin lets the tool drop what it prepared for a card that
+// was denied, timed out or refused (install_skill removes its staged copy,
+// C-12 rows 6 and 8). A failure is logged; the call is denied either way.
+func (ex *agentLoopRunTurnToolsExecute) discardApprovalPin() {
+	pin := ex.approvalPin
+	ex.approvalPin = nil
+	if pin == nil {
+		return
+	}
+	rt := ex.rx.rr.rq.ri.rf.rt
+	if rt.ts.agent == nil || rt.ts.agent.Tools == nil {
+		return
+	}
+	tool, ok := rt.ts.agent.Tools.Get(ex.toolName)
+	if !ok {
+		return
+	}
+	if d, ok := tool.(tools.ApprovalPinDiscarder); ok {
+		if err := d.DiscardApprovalPin(pin); err != nil {
+			logger.WarnCF("agent", "approval: prepared state of a denied call was not discarded",
+				map[string]any{"tool": ex.toolName, "agent_id": rt.ts.agentID, "error": err.Error()})
+		}
+	}
 }
 
 // autoDenyHeadlessAsk refuses an ask-policy call in a headless run that no

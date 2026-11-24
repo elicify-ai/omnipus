@@ -196,160 +196,227 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 	}
 }
 
-func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (res *ToolResult) {
-	// FR-030: every result carries the outcome fields; refusals before the
-	// publish step changed nothing.
-	defer func() { res = FinalizeChangeResult(t.Name(), res) }()
-	// Install lock to prevent concurrent directory operations.
-	// Ideally this should be done at a `slug` level, currently, its at the
-	// (single, global) skills-directory level.
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// installRequest is one validated install_skill call.
+type installRequest struct {
+	slug, registryName, version, revision, ownerHandle, category string
+	force, replaceLocal, alreadyInstalled                        bool
+	onDisk, targetDir                                            string
+	registry                                                     skills.SkillRegistry
+}
 
+// stagedInstall is a downloaded, unpublished skill in the staging area: the
+// pin of an approval card (C-12 rows 6 and 8). The approved call publishes
+// exactly this folder; a denied, timed-out or refused card discards it.
+type stagedInstall struct {
+	slug, registryName, dir, revision string
+	result                            *skills.InstallResult
+}
+
+// validateInstall runs every check that needs no download. Caller holds t.mu.
+func (t *InstallSkillTool) validateInstall(ctx context.Context, args map[string]any) (*installRequest, *ToolResult) {
 	// A github registry is refused up front (#1574): it takes an owner/repo
 	// reference, which the slug rule below can never accept, and its installer
 	// bypasses the staging, scan and publish steps this tool relies on. Say so
 	// before the slug check, whose "invalid slug" message hides the real reason.
 	if name, _ := args["registry"].(string); t.isGitHubRegistry(name) {
-		return ErrorResult(fmt.Sprintf(
+		return nil, ErrorResult(fmt.Sprintf(
 			"registry %q is a github registry: installing from github is %s; install from a clawhub registry instead",
 			name, githubNotSupportedText,
 		))
 	}
-
-	// Validate slug
-	slug, _ := args["slug"].(string)
-	if err := utils.ValidateSkillIdentifier(slug); err != nil {
-		return ErrorResult(fmt.Sprintf("invalid slug %q: error: %s", slug, err.Error()))
+	req := &installRequest{}
+	req.slug, _ = args["slug"].(string)
+	if err := utils.ValidateSkillIdentifier(req.slug); err != nil {
+		return nil, ErrorResult(fmt.Sprintf("invalid slug %q: error: %s", req.slug, err.Error()))
 	}
-
-	// Validate registry
-	registryName, _ := args["registry"].(string)
-	if err := utils.ValidateSkillIdentifier(registryName); err != nil {
-		return ErrorResult(fmt.Sprintf("invalid registry %q: error: %s", registryName, err.Error()))
+	req.registryName, _ = args["registry"].(string)
+	if err := utils.ValidateSkillIdentifier(req.registryName); err != nil {
+		return nil, ErrorResult(fmt.Sprintf("invalid registry %q: error: %s", req.registryName, err.Error()))
 	}
-
-	category, _ := args["category"].(string)
-	if category != "" && !skills.IsSkillCategory(category) {
-		return ErrorResult(skills.UnknownCategoryError(category).Error() + ". Nothing was installed.")
+	req.category, _ = args["category"].(string)
+	if req.category != "" && !skills.IsSkillCategory(req.category) {
+		return nil, ErrorResult(skills.UnknownCategoryError(req.category).Error() + ". Nothing was installed.")
 	}
-
-	version, _ := args["version"].(string)
-	force, _ := args["force"].(bool)
-	revision, _ := args["revision"].(string)
-	if force && revision == "" {
-		return ErrorResult("revision is required when replacing an installed skill")
+	req.version, _ = args["version"].(string)
+	req.force, _ = args["force"].(bool)
+	req.revision, _ = args["revision"].(string)
+	if req.force && req.revision == "" {
+		return nil, ErrorResult("revision is required when replacing an installed skill")
 	}
-
-	// Validate ownerHandle, if supplied (disambiguates a slug published by
-	// more than one owner — see Parameters()).
-	ownerHandle, _ := args["ownerHandle"].(string)
-	if ownerHandle != "" {
-		if err := utils.ValidateSkillIdentifier(ownerHandle); err != nil {
-			return ErrorResult(fmt.Sprintf("invalid ownerHandle %q: error: %s", ownerHandle, err.Error()))
+	// ownerHandle disambiguates a slug published by more than one owner.
+	req.ownerHandle, _ = args["ownerHandle"].(string)
+	if req.ownerHandle != "" {
+		if err := utils.ValidateSkillIdentifier(req.ownerHandle); err != nil {
+			return nil, ErrorResult(fmt.Sprintf("invalid ownerHandle %q: error: %s", req.ownerHandle, err.Error()))
 		}
 	}
-
-	// Check if already installed. skillsDir is the fixed GLOBAL skills
-	// directory (ADR-046 FR-009) — NOT a per-agent workspace path — so an
+	// skillsDir is the fixed GLOBAL skills directory (ADR-046 FR-009), so an
 	// install from one agent is discoverable by every other agent. A target
 	// that matches an installed skill only by letter case is a replacement
-	// of that skill (§5.6).
+	// of that skill (§5.6). A built-in name is reserved for every install:
+	// refuse it before the "already installed" check, which a built-in
+	// folder would trip.
 	skillsDir := t.globalSkillsDir
-	// A built-in name is reserved for every install (§5.6): refuse it before
-	// the "already installed" check, which a built-in folder would trip.
 	if refusal := skills.RefuseBuiltinTarget(skills.ChangeRequest{
-		Kind: skills.KindInstall, Slug: slug,
+		Kind: skills.KindInstall, Slug: req.slug,
 		Actor: skills.ChangeActor{
 			Kind: "agent", AgentID: ToolAgentID(ctx), SessionID: ToolTranscriptSessionID(ctx),
 			WorkspaceID: ToolWorkspaceID(ctx), Tool: t.Name(),
 		},
 	}); refusal != nil {
-		return ErrorResult(refusal.Error())
+		return nil, ErrorResult(refusal.Error())
 	}
-	onDisk, alreadyInstalled, err := skills.ResolveInstalledSlug(skillsDir, slug)
+	onDisk, alreadyInstalled, err := skills.ResolveInstalledSlug(skillsDir, req.slug)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("could not read the skills directory: %v", err))
+		return nil, ErrorResult(fmt.Sprintf("could not read the skills directory: %v", err))
 	}
-	targetDir := filepath.Join(skillsDir, onDisk)
-	if alreadyInstalled && revision == "" {
-		return ErrorResult(
-			fmt.Sprintf("skill %q already installed at %s. Read it and provide its revision to replace it.", onDisk, targetDir),
+	req.onDisk, req.alreadyInstalled = onDisk, alreadyInstalled
+	req.targetDir = filepath.Join(skillsDir, onDisk)
+	if alreadyInstalled && req.revision == "" {
+		return nil, ErrorResult(
+			fmt.Sprintf("skill %q already installed at %s. Read it and provide its revision to replace it.", onDisk, req.targetDir),
 		)
 	}
-	replaceLocal, _ := args["replace_local_changes"].(bool)
-
-	// Resolve which registry to use BEFORE touching anything on disk: a
-	// typo'd registry name (or any other resolution failure) must fail
-	// closed with an existing install left exactly as it was, not after
-	// that install has already been deleted.
-	registry := t.registryMgr.GetRegistry(registryName)
-	if registry == nil {
-		return ErrorResult(fmt.Sprintf("registry %q not found", registryName))
+	req.replaceLocal, _ = args["replace_local_changes"].(bool)
+	// Resolve the registry BEFORE touching anything on disk: a typo'd name
+	// must fail closed with an existing install left exactly as it was.
+	req.registry = t.registryMgr.GetRegistry(req.registryName)
+	if req.registry == nil {
+		return nil, ErrorResult(fmt.Sprintf("registry %q not found", req.registryName))
 	}
+	return req, nil
+}
 
-	// Ensure skills directory exists.
+// stage downloads the skill into a fresh folder under skillsDir/.staging (a
+// non-scanned subdirectory on the same filesystem, so the publish rename
+// stays atomic and a concurrent listing never sees a half-written skill).
+// The existing install is never touched. On failure nothing is left behind.
+func (t *InstallSkillTool) stage(ctx context.Context, req *installRequest) (*stagedInstall, *ToolResult) {
+	skillsDir := t.globalSkillsDir
 	if mkErr := os.MkdirAll(skillsDir, 0o755); mkErr != nil {
-		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", mkErr))
+		return nil, ErrorResult(fmt.Sprintf("failed to create skills directory: %v", mkErr))
 	}
-
-	// Download to a staging directory and only swap it into place once
-	// everything below has succeeded. This is what makes force=true safe:
-	// an ordinary failure (bad version, network error, moderation block)
-	// never touches the existing install, because the existing install is
-	// only ever removed immediately before the verified replacement is
-	// renamed into its place.
-	//
-	// The staging directory lives under skillsDir/.staging — a dedicated,
-	// non-scanned subdirectory — rather than directly inside the live global
-	// skills directory. pkg/skills/loader.go's ListSkills iterates every
-	// direct subdirectory of skillsDir and accepts any containing a
-	// SKILL.md; a staging directory created directly inside skillsDir was
-	// visible to a concurrent list_skills call or a system-prompt build
-	// between extraction and the rename below, and — if the process died in
-	// that window — was never cleaned up, leaving a permanent phantom skill
-	// in every agent's skill list. .staging itself has no SKILL.md at
-	// skillsDir's top level, so the scan never descends into it; it stays on
-	// the same filesystem as skillsDir, so the final os.Rename below remains
-	// an atomic, cheap rename.
 	stagingRoot := filepath.Join(skillsDir, stagingDirName)
 	if mkErr := os.MkdirAll(stagingRoot, 0o755); mkErr != nil {
-		return ErrorResult(fmt.Sprintf("failed to create the staging directory for %q: %v", slug, mkErr))
+		return nil, ErrorResult(fmt.Sprintf("failed to create the staging directory for %q: %v", req.slug, mkErr))
 	}
-	stageDir, err := os.MkdirTemp(stagingRoot, slug+".install-")
+	stageDir, err := os.MkdirTemp(stagingRoot, req.slug+".install-")
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create a staging directory for %q: %v", slug, err))
+		return nil, ErrorResult(fmt.Sprintf("failed to create a staging directory for %q: %v", req.slug, err))
 	}
-	// If we return before the rename below, stageDir was never moved and
-	// this cleans it up; if the rename succeeded, stageDir no longer
-	// exists and this is a harmless no-op.
-	defer os.RemoveAll(stageDir)
-
-	// Download and install (handles metadata, version resolution, extraction)
-	// into the staging directory. When ownerHandle is supplied, route through
-	// the registry's owner-scoped install path (if it supports one) so an
-	// ambiguous slug can actually be resolved — a bare DownloadAndInstall
-	// would hit the same ambiguity again.
-	var result *skills.InstallResult
-	if ownerHandle != "" {
-		scoped, ok := registry.(skills.OwnerScopedRegistry)
-		if !ok {
-			return ErrorResult(fmt.Sprintf(
-				"registry %q does not support ownerHandle-scoped installs", registryName,
-			))
+	fail := func(r *ToolResult) (*stagedInstall, *ToolResult) {
+		if rmErr := os.RemoveAll(stageDir); rmErr != nil {
+			logger.WarnCF("tool", "install_skill: staged copy not removed",
+				map[string]any{"skill": req.slug, "dir": stageDir, "error": rmErr.Error()})
 		}
-		result, err = scoped.DownloadAndInstallForOwner(ctx, slug, ownerHandle, version, stageDir)
+		return nil, r
+	}
+	var result *skills.InstallResult
+	if req.ownerHandle != "" {
+		scoped, ok := req.registry.(skills.OwnerScopedRegistry)
+		if !ok {
+			return fail(ErrorResult(fmt.Sprintf(
+				"registry %q does not support ownerHandle-scoped installs", req.registryName,
+			)))
+		}
+		result, err = scoped.DownloadAndInstallForOwner(ctx, req.slug, req.ownerHandle, req.version, stageDir)
 	} else {
-		result, err = registry.DownloadAndInstall(ctx, slug, version, stageDir)
+		result, err = req.registry.DownloadAndInstall(ctx, req.slug, req.version, stageDir)
 	}
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to install %q: %v", slug, err))
+		return fail(ErrorResult(fmt.Sprintf("failed to install %q: %v", req.slug, err)))
 	}
-
-	// Moderation: block malware. The existing install (if any) is untouched.
 	if result.IsMalwareBlocked {
-		return ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", slug))
+		return fail(ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", req.slug)))
 	}
+	revision, err := skills.ContentRevision(stageDir)
+	if err != nil {
+		return fail(ErrorResult(fmt.Sprintf("could not read the downloaded skill %q: %v", req.slug, err)))
+	}
+	return &stagedInstall{slug: req.slug, registryName: req.registryName, dir: stageDir, revision: revision, result: result}, nil
+}
+
+// PrepareForApproval stages the skill before its approval card (C-12 rows 6
+// and 8) and returns the facts the card shows: the skill, its staged
+// revision and the verification result. The pin is the staged copy.
+func (t *InstallSkillTool) PrepareForApproval(ctx context.Context, args map[string]any) (map[string]any, any, *ToolResult) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	req, refusal := t.validateInstall(ctx, args)
+	if refusal != nil {
+		return nil, nil, refusal
+	}
+	staged, refusal := t.stage(ctx, req)
+	if refusal != nil {
+		return nil, nil, refusal
+	}
+	verification := "no_registry_hash"
+	if staged.result.Verified {
+		verification = "matched"
+	}
+	facts := map[string]any{
+		"skill":        req.slug,
+		"revision":     staged.revision,
+		"unverified":   !staged.result.Verified,
+		"verification": verification,
+		"version":      staged.result.Version,
+	}
+	return facts, staged, nil
+}
+
+// DiscardStaged removes the staged copy of a card that was denied, timed
+// out or refused. A pin that is not an install_skill staging folder is
+// refused.
+func (t *InstallSkillTool) DiscardStaged(pin any) error {
+	staged, ok := pin.(*stagedInstall)
+	if !ok || staged == nil {
+		return fmt.Errorf("install_skill: not a staged install: %T", pin)
+	}
+	stagingRoot := filepath.Join(t.globalSkillsDir, stagingDirName)
+	if filepath.Dir(staged.dir) != filepath.Clean(stagingRoot) {
+		return fmt.Errorf("install_skill: staged copy %q is outside the staging area", staged.dir)
+	}
+	if err := os.RemoveAll(staged.dir); err != nil {
+		return fmt.Errorf("install_skill: remove staged copy: %w", err)
+	}
+	return nil
+}
+
+// DiscardApprovalPin is the loop hook for a denied, timed-out or refused
+// card (tools.ApprovalPinDiscarder).
+func (t *InstallSkillTool) DiscardApprovalPin(pin any) error { return t.DiscardStaged(pin) }
+
+func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (res *ToolResult) {
+	// FR-030: every result carries the outcome fields; refusals before the
+	// publish step changed nothing.
+	defer func() { res = FinalizeChangeResult(t.Name(), res) }()
+	// Install lock to prevent concurrent directory operations (one global
+	// skills directory).
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	req, refusal := t.validateInstall(ctx, args)
+	if refusal != nil {
+		return refusal
+	}
+	slug, registry, skillsDir, targetDir := req.slug, req.registry, t.globalSkillsDir, req.targetDir
+	onDisk, alreadyInstalled, revision, replaceLocal, category := req.onDisk, req.alreadyInstalled, req.revision, req.replaceLocal, req.category
+
+	// An approved card publishes exactly the folder it reviewed (S-118);
+	// otherwise the skill is downloaded now.
+	staged, _ := ApprovalPinFrom(ctx).(*stagedInstall)
+	if staged != nil && (staged.slug != slug || staged.registryName != req.registryName) {
+		return ErrorResult(fmt.Sprintf("the approved install was for %q; this call names %q. Nothing was installed.", staged.slug, slug))
+	}
+	if staged == nil {
+		if staged, refusal = t.stage(ctx, req); refusal != nil {
+			return refusal
+		}
+	}
+	// If we return before the publish rename, the staged copy is removed;
+	// after a successful publish it no longer exists and this is a no-op.
+	defer os.RemoveAll(staged.dir)
+	stageDir, result := staged.dir, staged.result
 
 	// Everything above succeeded: only now is the change pipeline asked to
 	// publish the verified package (§5.6). The precondition is the request's

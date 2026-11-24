@@ -22,6 +22,7 @@ import (
 )
 
 func init() {
+	discardStagedInstallSkill = (*InstallSkillTool).DiscardStaged
 	skillOutcomeOf = func(in skillOutcomeInput) (string, string) {
 		d := ResolveSkillDecision(SkillDecisionInput{
 			Key: "skill-under-test", Granted: in.granted,
