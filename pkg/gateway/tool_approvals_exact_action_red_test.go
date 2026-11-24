@@ -32,12 +32,13 @@ import (
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	browsertools "github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // The new list is absent; a nil binding is loud RED, not an empty-list pass.
-var exactActionToolsOf func(t testing.TB) []string
+var exactActionToolsOf func() []string
 
 type exactActionRow struct {
 	tool, duration, exactKey string
@@ -238,10 +239,9 @@ func assertExactActionCard(t *testing.T, h *exactActionHarness, entry *approvalE
 
 func TestToolApprovals_ExactActionNoTimeChoice(t *testing.T) {
 	t.Run("C-26 exact-action list contains exactly five names", func(t *testing.T) {
-		if exactActionToolsOf == nil {
-			t.Fatal("BLOCKED: ExactActionTools is not implemented — required by C-26 point 9 and D17#21–25")
-		}
-		require.ElementsMatch(t, []string{"browser_evaluate", "environment_setup", "request_mount", "send_email", "set_config"}, exactActionToolsOf(t))
+		path := nativebinding.Require(t, "pkg/tools", exactActionToolsOf, "C-26 point 9/D17#21–25: pkg/tools/exact_action.go::ExactActionTools")
+		require.Contains(t, path, "pkg/tools/exact_action.go::github.com/elicify-ai/omnipus/pkg/tools.ExactActionTools", "read the spec-named production catalog, not a test-owned five-name list")
+		require.ElementsMatch(t, []string{"browser_evaluate", "environment_setup", "request_mount", "send_email", "set_config"}, exactActionToolsOf())
 	})
 	rows := []exactActionRow{
 		{"environment_setup", "1d", "command", "apt-get install -y poppler-utils", map[string]any{"command": "apt-get install -y poppler-utils"}},

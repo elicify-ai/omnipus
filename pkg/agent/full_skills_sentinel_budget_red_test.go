@@ -40,6 +40,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )
@@ -95,11 +96,24 @@ type tokenEstimators struct {
 	message       int
 }
 
-// fixLoopTokenEstimators is the test-local seam that pins the loop's C-14
-// token estimators for one test, so the budget boundary is deterministic on
-// the real send path. GREEN wires it to the production estimator injection;
-// nil keeps the RED run loud (BLOCKED), never a skip.
-var fixLoopTokenEstimators func(t testing.TB, al *AgentLoop, e tokenEstimators)
+// Bind only a DIRECT named production estimator-input function on the loop.
+// Primitive arguments let a native function bind without importing test-only
+// types. It must control context_budget.go's real estimator consumers on the
+// send path; model sends and refusal text below remain independent observers.
+// There is no such native input at this revision: nil is a loud obligation.
+var nativeLoopTokenEstimators func(al *AgentLoop, contextTokens, maxTokens, pinnedCore, fullSkills, toolDefs, message int)
+
+func requireNativeEstimators(t *testing.T) {
+	t.Helper()
+	nativebinding.Require(t, "pkg/agent", nativeLoopTokenEstimators,
+		"C-14/D9#7–10/S-90: actual contextBudget, pinnedCoreOverheadTokens, estimateToolDefsTokens and estimateMessageTokens inputs at the native send boundary")
+}
+
+func fixLoopTokenEstimators(t *testing.T, al *AgentLoop, e tokenEstimators) {
+	t.Helper()
+	requireNativeEstimators(t)
+	nativeLoopTokenEstimators(al, e.contextTokens, e.maxTokens, e.pinnedCore, e.fullSkills, e.toolDefs, e.message)
+}
 
 // d9Harness is one continuing loop with the granted notes-helper skill
 // installed (its instructions carry the sentinel).
@@ -129,6 +143,10 @@ func newD9Harness(t *testing.T) *d9Harness {
 	body := "---\nname: notes-helper\ndescription: Notes helper.\n---\n\nZEBRA-NOTES-3 hidden marker.\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o600))
 
+	t.Setenv(config.EnvHome, tmp)
+	t.Setenv(config.EnvConfig, filepath.Join(tmp, "config.json"))
+	cfg.Agents.List[0] = persistSkillGrantFixture(t, tmp, cfg.Agents.List[0])
+	cfg.Sandbox.ToolPolicies = map[string]string{"read_file": "allow", "write_file": "allow", "Skill": "allow"}
 	provider := &capturingProvider{}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	return &d9Harness{t: t, al: al, provider: provider, home: tmp}
@@ -294,11 +312,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 	// send when toolDefs + message ≤ B. Row 7's exact numbers are D9#7's.
 	t.Run("D9#7 S-90: budget B=1600 with toolDefs 1400 + message 200 sends the request", func(t *testing.T) {
 		h := newD9Harness(t)
-		if fixLoopTokenEstimators == nil {
-			t.Fatal("BLOCKED: the fixed-estimator injection for the C-14 budget check is not " +
-				"implemented — the loop must stop sending when the Full skills no longer fit " +
-				"(D9 rows 7-10, S-90, ST-Q1 A)")
-		}
+		requireNativeEstimators(t)
 		requireStateSeam(t, "required by D9 row 7 (a Full skill must exist to be charged)")
 		seedSkillState(t, h.home, "notes-helper", d9SkillState{
 			policy: "allow", level: "full", verified: true, trust: "allow",
@@ -316,9 +330,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 
 	t.Run("D9#8 S-90: one token over (Full skills 3001) stops the turn with the C-14 text", func(t *testing.T) {
 		h := newD9Harness(t)
-		if fixLoopTokenEstimators == nil {
-			t.Fatal("BLOCKED: the fixed-estimator injection for the C-14 budget check is not implemented — required by D9 row 8")
-		}
+		requireNativeEstimators(t)
 		requireStateSeam(t, "required by D9 row 8")
 		seedSkillState(t, h.home, "notes-helper", d9SkillState{
 			policy: "allow", level: "full", verified: true, trust: "allow",
@@ -337,9 +349,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 
 	t.Run("D9#9 S-90: a model switch to a smaller context stops sending", func(t *testing.T) {
 		h := newD9Harness(t)
-		if fixLoopTokenEstimators == nil {
-			t.Fatal("BLOCKED: the fixed-estimator injection for the C-14 budget check is not implemented — required by D9 row 9")
-		}
+		requireNativeEstimators(t)
 		requireStateSeam(t, "required by D9 row 9")
 		seedSkillState(t, h.home, "notes-helper", d9SkillState{
 			policy: "allow", level: "full", verified: true, trust: "allow",
@@ -366,9 +376,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 
 	t.Run("D9#10 S-90: a Full skill growing past the limit stops the next turn", func(t *testing.T) {
 		h := newD9Harness(t)
-		if fixLoopTokenEstimators == nil {
-			t.Fatal("BLOCKED: the fixed-estimator injection for the C-14 budget check is not implemented — required by D9 row 10")
-		}
+		requireNativeEstimators(t)
 		requireStateSeam(t, "required by D9 row 10")
 		seedSkillState(t, h.home, "notes-helper", d9SkillState{
 			policy: "allow", level: "full", verified: true, trust: "allow",

@@ -34,6 +34,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,9 +60,8 @@ func allowanceStoreStart() time.Time {
 func newTimedStoreWithClock(t *testing.T, c *allowanceStoreClock) *security.ApprovalGrantStore {
 	t.Helper()
 	store := security.NewApprovalGrantStore()
-	if injectTimedStoreClock == nil {
-		t.Fatal("BLOCKED: C-26 duration-taking Record* and controlled wall/monotonic store clock are not implemented — required by S-120/S-122; no timed record or lookup is claimed")
-	}
+	nativebinding.Require(t, "pkg/security", injectTimedStoreClock,
+		"C-26 / S-120/S-122: ApprovalGrantStore's actual wall/monotonic clock input (duration-taking Record* remains absent)")
 	injectTimedStoreClock(store, func() time.Time { return c.wall }, func() time.Duration { return c.elapsed })
 	return store
 }

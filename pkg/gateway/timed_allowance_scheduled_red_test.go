@@ -37,6 +37,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -152,10 +153,10 @@ func newScheduledAllowanceHarness(t *testing.T, global, own string) *scheduledAl
 			require.NoError(t, err)
 			var literal map[string]any
 			require.NoError(t, json.Unmarshal(raw, &literal))
-			tools, _ := literal["tools"].(map[string]any)
+			tools, _ := literal["tools_cfg"].(map[string]any)
 			if tools == nil {
 				tools = map[string]any{}
-				literal["tools"] = tools
+				literal["tools_cfg"] = tools
 			}
 			tools["skills"] = map[string]any{"policies": map[string]string{"weather": own}}
 			raw, err = json.Marshal(literal)
@@ -317,9 +318,8 @@ func TestTimedAllowance_ReachesScheduledRun(t *testing.T) {
 			// card, this new card's specified actions do not include Cancel.
 			assert.Equal(t, []string{"allow_once", "allow_for", "deny"}, snap.OfferedActions)
 			assert.Equal(t, []string{"1h", "3h", "1d"}, snap.AllowDurations)
-			if injectScheduledAllowanceClock == nil {
-				t.Fatal("BLOCKED: controlled monotonic/wall allowance clock is not implemented — required by C-26/S-109; the card was raised by the real loop, not inserted by the test")
-			}
+			nativebinding.Require(t, "pkg/agent", injectScheduledAllowanceClock,
+				"C-26/S-109: named loop-to-ApprovalGrantStore wall/monotonic input; actual card/handler/store are not replaceable")
 			clock := &scheduledAllowanceClock{wall: time.Date(2026, time.November, 22, 12, 0, 0, 0, time.UTC)}
 			injectScheduledAllowanceClock(h.al, clock.wallNow, clock.elapsedNow)
 			before := h.storedPolicyBytes(t)
@@ -364,10 +364,14 @@ func TestTimedAllowance_ReachesScheduledRun(t *testing.T) {
 			if record.ID != "mia" {
 				continue
 			}
-			raw, err = json.Marshal(record.Tools)
+			raw, err = json.Marshal(record)
 			require.NoError(t, err)
-			var tools map[string]json.RawMessage
-			require.NoError(t, json.Unmarshal(raw, &tools))
+			var entity map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(raw, &entity))
+			tools := map[string]json.RawMessage{}
+			if len(entity["tools_cfg"]) != 0 {
+				require.NoError(t, json.Unmarshal(entity["tools_cfg"], &tools))
+			}
 			if len(tools["skills"]) == 0 {
 				t.Fatal("BLOCKED: agent tools.skills.policies is not implemented — required by C-4/C-26 point 5; a global Ask alone does not prove own-Ask retention")
 			}

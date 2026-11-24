@@ -31,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -154,9 +155,8 @@ func answerTimedCard(t *testing.T, h *timedCardHarness, duration string) (gen.To
 func controlledTimedCardClock(t *testing.T, h *timedCardHarness) *scheduledAllowanceClock {
 	t.Helper()
 	clock := &scheduledAllowanceClock{wall: time.Date(2026, time.November, 22, 12, 0, 0, 0, time.UTC)}
-	if injectScheduledAllowanceClock == nil {
-		t.Fatal("BLOCKED: controlled wall/monotonic clock for the actual loop-owned timed store is not implemented — required by C-26 Length/S-124; no ±5-minute approximation or synthetic end is accepted")
-	}
+	nativebinding.Require(t, "pkg/agent", injectScheduledAllowanceClock,
+		"C-26 Length/S-124: named production loop-to-store wall/monotonic input; no approximate or synthetic end")
 	injectScheduledAllowanceClock(h.api.agentLoop, clock.wallNow, clock.elapsedNow)
 	return clock
 }
@@ -372,9 +372,9 @@ func timedCardHomeTree(t *testing.T, home string) map[string]timedHomeEntry {
 		item := timedHomeEntry{Mode: info.Mode()}
 		switch {
 		case info.Mode().IsRegular():
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
 			}
 			item.Bytes = string(raw)
 		case info.Mode()&os.ModeSymlink != 0:

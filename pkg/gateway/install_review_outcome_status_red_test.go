@@ -26,6 +26,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -365,9 +366,8 @@ var bindNativeInstallReviewClock func(*restAPI, func() time.Time) func()
 
 func testNativeReviewExpiry(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
-	if bindNativeInstallReviewClock == nil {
-		t.Fatal("BLOCKED: native review clock input is not implemented — required by C-13 15-minute expiry and terminal retention, D15#1")
-	}
+	nativebinding.Require(t, "pkg/gateway", bindNativeInstallReviewClock,
+		"C-13/D15#1: named native review-store clock used by HandleSkills review/stage/status/submit and retention")
 	start := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	var clockNanos atomic.Int64 // Native expiry workers may also read this input.
 	clockNanos.Store(start.UnixNano())

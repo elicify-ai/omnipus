@@ -42,6 +42,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )
@@ -160,18 +161,15 @@ func TestInstallSkill_OneCard(t *testing.T) {
 	})
 
 	t.Run("S-118 leg 3: denying installs nothing and removes the staged copy", func(t *testing.T) {
-		if discardStagedInstallSkill == nil {
-			t.Fatal("BLOCKED: the denial-path discard of a staged install (C-12 rows 6–8: \"a staged " +
-				"copy that is denied, times out or is refused is discarded\") has no entry point — " +
-				"required by S-118 leg 3")
-		}
+		nativebinding.Require(t, "pkg/tools", discardStagedInstallSkill,
+			"S-118 leg 3 / C-12 rows 6–8: actual InstallSkillTool denial-path discard; no test RemoveAll")
 		tool, _, globalSkills := newOneCardTool(t)
 		preparer, ok := any(tool).(ApprovalPreparer)
 		require.True(t, ok, "S-118: install_skill must implement ApprovalPreparer (leg 1)")
 
 		_, pin, refusal := preparer.PrepareForApproval(context.Background(), installArgs())
 		require.Nil(t, refusal)
-		discardStagedInstallSkill(t, tool, pin)
+		require.NoError(t, discardStagedInstallSkill(tool, pin), "native installer must discard the actual prepared pin")
 
 		_, statErr := os.Stat(filepath.Join(globalSkills, "weather"))
 		require.True(t, os.IsNotExist(statErr), "S-118 leg 3: denying installs nothing")
@@ -203,8 +201,9 @@ func TestInstallSkill_OneCard(t *testing.T) {
 	})
 }
 
-// discardStagedInstallSkill discards the staged copy a denied (or timed-out)
-// install approval pinned. GREEN wires it to the denial path's discard (the
-// tool-side twin of the pin); nil keeps the RED run loud (BLOCKED), never a
-// skip.
-var discardStagedInstallSkill func(t testing.TB, tool *InstallSkillTool, pin any)
+// Bind a DIRECT named production installer function/method expression. There
+// is no testing.TB argument: production must not import a test helper to bind.
+// Native provenance is enforced above; actual pin/file observers stay real.
+// No native discard operation exists at this revision; reconciliation must
+// name its actual production symbol before this component test can turn green.
+var discardStagedInstallSkill func(tool *InstallSkillTool, pin any) error

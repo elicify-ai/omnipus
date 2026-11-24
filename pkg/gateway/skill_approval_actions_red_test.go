@@ -28,6 +28,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,14 +45,15 @@ type nativeSkillEffectInputs struct {
 	beforeWaitingRelease  func()
 }
 
-var bindNativeSkillEffectInputs func(*agent.AgentLoop, nativeSkillEffectInputs) func()
+// Flatten input callbacks so this can be assigned a direct production method
+// expression, not a test closure that fabricates the sequence of effects.
+var bindNativeSkillEffectInputs func(*agent.AgentLoop, func() error, func() error, func()) func()
 
 func nativeSkillInputs(t *testing.T, h *nativeSkillHarness, in nativeSkillEffectInputs) func() {
 	t.Helper()
-	if bindNativeSkillEffectInputs == nil {
-		t.Fatal("BLOCKED: native C-24 trust-write/allowance-record/waiter-release failure-and-pause inputs are not implemented — required by F18, S-114 and C-24 Order of effects; no callback may supply the effects")
-	}
-	restore := bindNativeSkillEffectInputs(h.api.agentLoop, in)
+	nativebinding.Require(t, "pkg/agent", bindNativeSkillEffectInputs,
+		"F18/S-114/C-24 Order of effects: actual trust-write, allowance-record and waiting-call release inputs, not effects supplied by tests")
+	restore := bindNativeSkillEffectInputs(h.api.agentLoop, in.beforeTrustWrite, in.beforeAllowanceRecord, in.beforeWaitingRelease)
 	require.NotNil(t, restore)
 	var once sync.Once
 	reset := func() { once.Do(restore) }
@@ -155,6 +157,10 @@ func assertNativeSkillAnswer(t *testing.T, w *httptest.ResponseRecorder, entry *
 func testNativeSkillEffectOrder(t *testing.T) {
 	h := newNativeSkillHarness(t, "ask", "ask")
 	clock := controlledTimedCardClock(t, h.timedCardHarness)
+	end := clock.wallNow().Add(3 * time.Hour)
+	// Record the controlled input even when an absent native observer blocks
+	// the effect phases; this is not a claim that an allowance was recorded.
+	t.Logf("C-24 controlled-clock input: 3h allowance must expire at %s", end.Format(time.RFC3339Nano))
 	type phase struct {
 		entered, release chan struct{}
 		once             sync.Once
@@ -168,7 +174,6 @@ func testNativeSkillEffectOrder(t *testing.T) {
 	run := h.begin(t)
 	entry := h.pending(t, run)
 	h.combined(t, entry)
-	end := clock.wallNow().Add(3 * time.Hour)
 	answered := make(chan *httptest.ResponseRecorder, 1)
 	finished := make(chan struct{})
 	go func() {
@@ -231,6 +236,7 @@ func testNativeSkillTrustFailure(t *testing.T) {
 	h := newNativeSkillHarness(t, "ask", "ask")
 	prior := seedNativePriorTrust(t, h)
 	reset := nativeSkillInputs(t, h, nativeSkillEffectInputs{beforeTrustWrite: func() error { return errors.New("F18 trust device unavailable") }})
+	defer reset()
 	run := h.begin(t)
 	entry := h.pending(t, run)
 	h.combined(t, entry)
